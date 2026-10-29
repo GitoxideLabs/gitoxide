@@ -5,6 +5,8 @@ pub use super::loose::reflog::create_or_update;
 ///
 pub mod iter;
 mod line;
+/// Atomically filter reflog entries under the reference lock.
+pub mod retain;
 
 /// A parsed ref log line.
 #[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone, Copy)]

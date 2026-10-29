@@ -50,6 +50,34 @@ fn public_errors_use_the_crate_result_and_preserve_diagnostics() -> gix_testtool
 }
 
 #[test]
+fn malformed_objects_return_peeling_errors() -> gix_testtools::TestResult {
+    let repo = crate::basic_repo()?;
+    for kind in [gix::objs::Kind::Commit, gix::objs::Kind::Tag] {
+        let object = gix::ObjectDetached {
+            id: repo.object_hash().null(),
+            kind,
+            data: b"invalid object".to_vec(),
+        }
+        .attach(&repo);
+        let error = object
+            .clone()
+            .peel_to_kind(gix::objs::Kind::Tree)
+            .expect_err("malformed objects must return a peeling error");
+        assert!(
+            error.downcast_any_ref::<gix_error::Message>().is_some(),
+            "peeling retains the concrete object-decoding diagnostic"
+        );
+        if kind == gix::objs::Kind::Tag {
+            assert!(
+                object.peel_tags_to_end().is_err(),
+                "tag-only peeling also returns malformed-target errors"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn failed_object_conversions_return_the_original_object() -> gix_testtools::TestResult {
     use gix::objs::Kind;
 

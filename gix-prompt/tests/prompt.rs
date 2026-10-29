@@ -1,5 +1,57 @@
 mod options;
 
+#[test]
+#[cfg(unix)]
+fn relative_askpass_uses_the_operation_directory_like_git() -> gix_testtools::TestResult {
+    use std::{io::Write, process::Stdio};
+
+    let fixture = gix_testtools::scripted_fixture_read_only("make_relative_askpass.sh")?;
+    let working_dir = fixture.join("working directory").canonicalize()?;
+    let mut reference = gix_testtools::git_command(&working_dir)
+        .current_dir(&working_dir)
+        .args(["-c", "credential.helper=", "credential", "fill"])
+        .env("GIT_ASKPASS", "./askpass")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    reference
+        .stdin
+        .take()
+        .expect("stdin is piped")
+        .write_all(b"url=https://example.com\n")?;
+    let reference = reference.wait_with_output()?;
+    assert!(
+        reference.status.success(),
+        "Git's relative askpass succeeds: {reference:?}"
+    );
+    let reference = String::from_utf8(reference.stdout)?;
+    let expected = reference
+        .lines()
+        .find_map(|line| line.strip_prefix("password="))
+        .expect("Git prompted for a password");
+    let process_dir = std::env::current_dir()?;
+    let actual = gix_prompt::ask(
+        "Password: ",
+        &gix_prompt::Options {
+            askpass: Some("./askpass".into()),
+            current_dir: Some(working_dir),
+            mode: gix_prompt::Mode::Disable,
+        },
+    )?;
+    assert_eq!(
+        actual, expected,
+        "askpass resolves its executable and files from the operation directory"
+    );
+    assert_eq!(
+        std::env::current_dir()?,
+        process_dir,
+        "askpass does not change the process directory"
+    );
+    Ok(())
+}
+
 #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))]
 mod ask {
     use gix_testtools::bstr::ByteSlice;
@@ -12,6 +64,7 @@ mod ask {
             &gix_prompt::Options {
                 mode: gix_prompt::Mode::Disable,
                 askpass: None,
+                current_dir: None,
             },
         )
         .expect_err("terminal prompting is disabled");

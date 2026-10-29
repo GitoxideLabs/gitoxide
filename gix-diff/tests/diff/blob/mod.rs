@@ -1,5 +1,6 @@
 use bstr::ByteSlice;
 
+mod hunk_header;
 pub(crate) mod pipeline;
 mod platform;
 mod slider;

@@ -2,6 +2,41 @@ use crate::TestResult;
 use bstr::ByteSlice;
 
 #[test]
+fn tracing_omits_command_arguments_and_environment() -> TestResult {
+    let directory = gix_testtools::tempfile::tempdir()?;
+    let log_path = directory.path().join("trace");
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::DEBUG)
+        .with_writer(std::fs::File::create(&log_path)?)
+        .finish();
+    tracing::subscriber::with_default(subscriber, || -> TestResult {
+        let output = gix_command::prepare(r#"printf '%s:%s' "$GIX_TEST_SECRET""#)
+            .with_shell()
+            .arg("argument-secret")
+            .env("GIX_TEST_SECRET", "environment-secret")
+            .spawn()?
+            .wait_with_output()?;
+        assert!(output.status.success(), "the child still receives its original inputs");
+        assert_eq!(output.stdout, b"environment-secret:argument-secret");
+        Ok(())
+    })?;
+    let trace = std::fs::read_to_string(log_path)?;
+    assert!(
+        trace.contains("program="),
+        "tracing retains the executed program identity: {trace}"
+    );
+    for sensitive in ["environment-secret", "argument-secret", "GIX_TEST_SECRET", "printf"] {
+        assert!(
+            !trace.contains(sensitive),
+            "tracing must not disclose command inputs: {trace}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn environment_variables_are_passed_one_by_one() -> TestResult {
     let out = gix_command::prepare("echo $FIRST $SECOND")
         .env("FIRST", "first")
@@ -43,8 +78,8 @@ fn script_with_dollar_at() -> TestResult {
     .wait_with_output()?;
     assert_eq!(
         out.stdout.to_str_lossy().trim(),
-        "arg",
-        "the argument is just mentioned once"
+        "arg arg",
+        "Git appends arguments even when the script already expands them"
     );
     Ok(())
 }
@@ -195,23 +230,22 @@ mod with_shell {
 
     #[cfg(unix)]
     #[test]
-    fn dollar_zero_in_minus_c_is_basename_of_default_shell() -> TestResult {
+    fn dollar_zero_in_minus_c_is_the_original_command() -> TestResult {
         let out = gix_command::prepare(r#"printf %s "$0""#)
             .command_may_be_shell_script()
             .spawn()?
             .wait_with_output()?;
         assert_eq!(
             out.stdout.as_bstr(),
-            "sh",
-            "with the default shell on Unix, $0 should be the shell's basename, \
-                 since that is the command_name passed after the -c operand"
+            r#"printf %s "$0""#,
+            "Git passes the original command as the shell's argument zero"
         );
         Ok(())
     }
 
     #[cfg(unix)]
     #[test]
-    fn dollar_zero_in_minus_c_reflects_with_shell_program() -> TestResult {
+    fn dollar_zero_in_minus_c_is_independent_of_the_shell_program() -> TestResult {
         let out = std::process::Command::try_from(
             gix_command::prepare(r#"printf %s "$0""#)
                 .command_may_be_shell_script()
@@ -221,10 +255,75 @@ mod with_shell {
         .wait_with_output()?;
         assert_eq!(
             out.stdout.as_bstr(),
-            "bash",
-            "$0 should be the basename of the shell selected via with_shell_program, \
-                 so a configured bash identifies as 'bash' rather than as some other shell"
+            r#"printf %s "$0""#,
+            "selecting a different shell does not change the command passed as argument zero"
         );
         Ok(())
     }
+}
+
+#[test]
+fn shell_arguments_match_git() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let root = gix_testtools::scripted_fixture_read_only("shell-arguments.sh")?.join("repo");
+    for script in [r#"printf '<%s>\n' "$0""#, r#"printf '<%s>\n' "$0" "$@""#] {
+        for arguments in [&[][..], &["one argument", "literal $value"][..]] {
+            let reference = gix_testtools::git_command(&root)
+                .args(["-c", &format!("alias.inspect=!{script}"), "inspect"])
+                .args(arguments)
+                .output()?;
+            assert!(reference.status.success(), "Git's shell alias runs: {reference:?}");
+            let output = gix_command::prepare(script)
+                .command_may_be_shell_script()
+                .args(arguments.iter().copied())
+                .spawn()?
+                .wait_with_output()?;
+            assert!(output.status.success(), "the prepared shell command runs");
+            assert_eq!(
+                output.stdout, reference.stdout,
+                "$0 and automatic argument forwarding match Git for {script:?} with {arguments:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn child_directory_is_anchored_during_preparation() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let root = gix_testtools::scripted_fixture_read_only("shell-arguments.sh")?.canonicalize()?;
+    let _cwd = gix_testtools::set_current_dir(&root)?;
+    let script = "test -f .git/config && printf matched";
+    let mut command = std::process::Command::try_from(
+        gix_command::prepare(script)
+            .command_may_be_shell_script()
+            .current_dir("repo"),
+    )?;
+    let _moved = gix_testtools::set_current_dir(root.join("repo/.git"))?;
+    assert_eq!(
+        command.get_current_dir(),
+        Some(root.join("repo").as_path()),
+        "relative child directories are captured before the parent moves"
+    );
+    let actual = command.output()?;
+    let expected = gix_testtools::git_command(root.join("repo"))
+        .args(["-c", &format!("alias.inspect=!{script}"), "inspect"])
+        .output()?;
+    assert!(
+        actual.status.success() && expected.status.success(),
+        "both commands run from the selected repository"
+    );
+    assert_eq!(
+        actual.stdout, expected.stdout,
+        "child-directory shell execution matches Git -C"
+    );
+    assert_eq!(
+        actual.stdout, b"matched",
+        "the shell can read the repository config from its working directory"
+    );
+    Ok(())
 }

@@ -39,3 +39,20 @@ fn decode() -> TestResult {
     assert_eq!(commit.decode()?.message, "c2\n");
     Ok(())
 }
+
+#[test]
+fn decode_with_signed_data_checks_object_kind() -> TestResult {
+    let repo = basic_repo()?;
+    let object = repo.head_id()?.object()?;
+    let (commit, signed_data) = object.try_to_commit_ref_with_signed_data()?;
+    assert_eq!(commit, object.try_to_commit_ref()?);
+    assert!(signed_data.is_none(), "the fixture commit is unsigned");
+
+    let mut wrong_kind = object.detached();
+    wrong_kind.kind = gix::objs::Kind::Blob;
+    assert!(
+        wrong_kind.attach(&repo).try_to_commit_ref_with_signed_data().is_err(),
+        "commit-shaped bytes in a blob are rejected"
+    );
+    Ok(())
+}

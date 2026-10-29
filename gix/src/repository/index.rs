@@ -198,6 +198,22 @@ impl crate::Repository {
         })
     }
 
+    /// Write `index` as trees and return the root tree ID, without changing the index or worktree.
+    ///
+    /// Like `git write-tree`, unmerged entries and missing non-gitlink objects are rejected, while
+    /// intent-to-add entries are omitted and sparse directories are reused. Repository path protection
+    /// applies. See [`gix_index::State::write_tree()`] for validation and cache behavior.
+    pub fn write_index_tree(&self, index: &gix_index::State) -> Result<crate::Id<'_>> {
+        use crate::error::{ensure, validation};
+        use crate::prelude::ObjectIdExt;
+
+        ensure!(
+            index.object_hash() == self.object_hash(),
+            validation("Index and repository must use the same object hash")
+        );
+        Ok(index.write_tree(self, self.config.protect_options()?)?.attach(self))
+    }
+
     /// Create new index-file, which would live at the correct location, in memory from the given `tree`.
     ///
     /// Note that this is an expensive operation as it requires recursively traversing the entire tree to unpack it into the index.
@@ -205,6 +221,30 @@ impl crate::Repository {
         Ok(gix_index::File::from_state(
             gix_index::State::from_tree(tree, self, self.config.protect_options()?)
                 .or_raise(|| gix_error::message!("Could not create index from tree at {tree}"))?,
+            self.index_path(),
+        ))
+    }
+
+    /// Create an in-memory index from `tree`, reusing worktree metadata from `previous`.
+    ///
+    /// Unchanged entries retain non-racy stat and assume-valid flags. Skip-worktree marks are retained by path,
+    /// including descendants of sparse directories, without reevaluating sparse-checkout patterns.
+    /// This does not write the index or modify `previous`; see [`gix_index::State::from_tree_with_index()`]
+    /// for the cache reuse and validation rules.
+    pub fn index_from_tree_with_index(
+        &self,
+        tree: &gix_hash::oid,
+        previous: &gix_index::State,
+    ) -> Result<gix_index::File> {
+        Ok(gix_index::File::from_state(
+            gix_index::State::from_tree_with_index(
+                tree,
+                self,
+                self.config.protect_options()?,
+                previous,
+                self.stat_options()?,
+            )
+            .or_raise(|| gix_error::message!("Could not create index from tree at {tree}"))?,
             self.index_path(),
         ))
     }

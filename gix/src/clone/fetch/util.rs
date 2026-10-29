@@ -199,7 +199,7 @@ pub(super) fn update_remote_head(
     let head_name =
         gix_ref::FullName::try_from(BString::from(format!("refs/remotes/{remote_name}/HEAD"))).or_error()?;
     repo.edit_reference(gix_ref::transaction::RefEdit::update_with_log(
-        head_name.clone(),
+        head_name,
         gix_ref::FullName::try_from(tracking_branch.clone()).or_error()?,
         gix_ref::transaction::PreviousValue::Any,
         LogChange {
@@ -209,27 +209,6 @@ pub(super) fn update_remote_head(
         },
     ))
     .or_raise(|| message("Failed to record the remote default branch"))?;
-    if repo
-        .find_reference(head_name.as_ref())?
-        .log_iter()
-        .all()
-        .or_error()?
-        .is_none()
-        && let Some(commit_id) = mapping.remote.as_id()
-    {
-        // shortcut: symref reflogs lose the previous OID on HEAD-name collisions; fix in gix-ref when it supports symbolic logging.
-        repo.edit_reference(gix_ref::transaction::RefEdit::update_with_log(
-            head_name,
-            commit_id.to_owned(),
-            gix_ref::transaction::PreviousValue::Any,
-            LogChange {
-                mode: RefLog::Only,
-                force_create_reflog: false,
-                message: reflog_message.to_owned(),
-            },
-        ))
-        .or_raise(|| message("Failed to record the remote default branch's reflog"))?;
-    }
     Ok(())
 }
 
@@ -329,18 +308,6 @@ pub fn update_head(
             ))
             .or_raise(|| message("Failed to update HEAD with values from remote"))?;
             if !repo.is_bare() {
-                // Git logs the existing peer when linking HEAD, then the update through HEAD.
-                if let Some(mut reference) = repo.try_find_reference(referent.as_ref())? {
-                    let commit_id = reference.follow_to_object()?;
-                    let mut log = reflog_message();
-                    log.mode = RefLog::Only;
-                    repo.edit_reference(RefEdit::update_with_log(
-                        head.clone(),
-                        commit_id.detach(),
-                        PreviousValue::Any,
-                        log,
-                    ))?;
-                }
                 if let Some(head_peeled_id) = head_peeled_id {
                     let mut edit = RefEdit::update_with_log(
                         head.clone(),

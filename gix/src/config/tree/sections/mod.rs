@@ -41,6 +41,11 @@ pub mod core;
 pub struct Credential;
 pub mod credential;
 
+/// The `credentialStore` top-level section.
+#[derive(Copy, Clone, Default)]
+pub struct CredentialStore;
+mod credential_store;
+
 /// The `diff` top-level section.
 #[derive(Copy, Clone, Default)]
 #[cfg(feature = "blob-diff")]
@@ -67,6 +72,11 @@ pub mod gitoxide;
 #[derive(Copy, Clone, Default)]
 pub struct Gpg;
 pub mod gpg;
+
+/// The `hook` top-level section.
+#[derive(Copy, Clone, Default)]
+pub struct Hook;
+mod hook;
 
 /// The `http` top-level section.
 #[derive(Copy, Clone, Default)]

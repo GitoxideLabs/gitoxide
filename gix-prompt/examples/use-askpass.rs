@@ -6,6 +6,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         &Options {
             askpass: Some(std::env::current_exe()?.parent().unwrap().join("askpass")),
             mode: Mode::Disable,
+            current_dir: None,
         },
     )?;
     eprintln!("{pass:?}");

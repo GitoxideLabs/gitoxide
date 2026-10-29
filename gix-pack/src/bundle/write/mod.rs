@@ -333,7 +333,15 @@ impl crate::Bundle {
                     } else {
                         let keep_path = data_path.with_extension("keep");
 
-                        std::fs::write(&keep_path, b"").or_raise(|| message("Could not create pack keep file"))?;
+                        let keep_path = match std::fs::OpenOptions::new()
+                            .write(true)
+                            .create_new(true)
+                            .open(&keep_path)
+                        {
+                            Ok(_) => Some(keep_path),
+                            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => None,
+                            Err(err) => return Err(err).or_raise(|| message("Could not create pack keep file")),
+                        };
                         Arc::try_unwrap(data_file)
                             .expect("only one handle left after pack was consumed")
                             .into_inner()
@@ -341,7 +349,7 @@ impl crate::Bundle {
                             .or_error()?
                             .persist(&data_path)
                             .or_raise(|| message("Could not persist pack file"))?;
-                        Some(keep_path)
+                        keep_path
                     };
                     if !index_path.is_file() {
                         index_file

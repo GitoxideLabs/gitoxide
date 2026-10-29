@@ -197,3 +197,54 @@ fn windows_foreign_owned_path_is_not_owned_by_current_user() -> Result {
     );
     Ok(())
 }
+
+#[test]
+fn executable_paths_follow_links_and_check_user_permissions() -> Result {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("program");
+    assert!(
+        !gix_sec::identity::is_path_executable_by_current_user(&path)?,
+        "missing files cannot be executed"
+    );
+    assert!(
+        !gix_sec::identity::is_path_executable_by_current_user(dir.path())?,
+        "searchable directories are not executable files"
+    );
+    std::fs::write(&path, b"#!/bin/sh\n")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        assert!(
+            !gix_sec::identity::is_path_executable_by_current_user(&path)?,
+            "a file without executable permission cannot run"
+        );
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o610))?;
+        // SAFETY: getuid takes no arguments and has no failure mode.
+        if unsafe { libc::getuid() } != 0 {
+            assert!(
+                !gix_sec::identity::is_path_executable_by_current_user(&path)?,
+                "group execution does not grant execution to the file's owner"
+            );
+        }
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))?;
+        let link = dir.path().join("link");
+        symlink(&path, &link)?;
+        assert!(
+            gix_sec::identity::is_path_executable_by_current_user(&link)?,
+            "executable symlink targets are followed"
+        );
+        std::fs::remove_file(&path)?;
+        assert!(
+            !gix_sec::identity::is_path_executable_by_current_user(&link)?,
+            "dangling symlinks cannot be executed"
+        );
+        std::fs::write(&path, b"#!/bin/sh\n")?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))?;
+    }
+    assert!(
+        gix_sec::identity::is_path_executable_by_current_user(&path)?,
+        "an executable regular file can run"
+    );
+    Ok(())
+}

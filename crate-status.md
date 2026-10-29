@@ -175,6 +175,7 @@ The top-level crate that acts as hub to all functionality provided by the `gix-*
         * [ ] run transaction hooks and handle special repository states like quarantine
         * [ ] support for different backends like `files` and `reftable`
     * **main or linked worktree**
+        * [x] clean untracked and ignored contents, with dry-run and nested-repository protection
         * [ ] add files with `.gitignore` handling
         * [ ] checkout with conversions like clean + smudge as in `.gitattributes`
         * [ ] _diff_ index with working tree
@@ -665,8 +666,9 @@ A basic crate for comon error types and utilities, changed as needed to replace 
 
 Provide discovery and execution of Git hooks for client and receive-side workflows.
 
-* [ ] discover hooks in `$GIT_DIR/hooks` and [`core.hooksPath`](https://git-scm.com/docs/git-config#Documentation/git-config.txt-corehooksPath)
-* [ ] execute hooks with Git-compatible cwd, env, argv and stdin
+* [x] discover hooks in `$GIT_DIR/hooks` and [`core.hooksPath`](https://git-scm.com/docs/git-config#Documentation/git-config.txt-corehooksPath)
+* [x] execute hooks with Git-compatible cwd, env, argv and stdin
+* [x] resolve configured hook events and execute them serially
 * [ ] client-side hooks for commit, checkout, rebase, merge, am and push
 * [ ] receive-side hooks and [`reference-transaction`](https://git-scm.com/docs/githooks#_reference_transaction)
 * [ ] [quarantine](https://git-scm.com/docs/git-receive-pack#_quarantine_environment)-aware hook execution
@@ -882,6 +884,7 @@ The git staging area.
       * [x] 'sdir'
       * [ ] 'link'
           - **note** that we currently **dissolve** any shared index we read so when writing this extension is removed.
+* [x] write stage-zero indexes as trees, including sparse directories and intent-to-add handling
 * `stat` update
     * [ ] optional threaded `stat` based on thread_cost (aka preload)
 * [x] handling of `.gitignore` and system file exclude configuration

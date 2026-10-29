@@ -39,6 +39,16 @@ pub fn message<'a>(i: &mut &'a [u8]) -> Result<&'a BStr> {
 /// the final message parse fails, `i` may already have been advanced past
 /// earlier successfully parsed fields.
 pub fn commit<'a>(i: &mut &'a [u8], object_hash: gix_hash::Kind) -> Result<CommitRef<'a>> {
+    commit_with_signed_data::<false>(i, object_hash).map(|(commit, _)| commit)
+}
+
+pub(super) fn commit_with_signed_data<'a, const WITH_SIGNED_DATA: bool>(
+    i: &mut &'a [u8],
+    object_hash: gix_hash::Kind,
+) -> Result<(CommitRef<'a>, Option<crate::signature::SignedData<'a>>)> {
+    let data = *i;
+    let mut signature_ranges = SmallVec::<[std::ops::Range<usize>; 2]>::new();
+    let mut has_signature = false;
     let tree = parse::header_field(i, b"tree", |value| parse::hex_hash(value, object_hash))?;
 
     let mut parents = SmallVec::new();
@@ -74,7 +84,19 @@ pub fn commit<'a>(i: &mut &'a [u8], object_hash: gix_hash::Kind) -> Result<Commi
                 *i = before;
                 parse::any_header_field(i).map(|(k, v)| (k.as_bstr(), Cow::Borrowed(v.as_bstr())))
             }) {
-            Ok(header) => extra_headers.push(header),
+            Ok(header) => {
+                if WITH_SIGNED_DATA && super::is_signature_field(header.0) {
+                    if header.0 == super::signature_field_name(object_hash) {
+                        gix_error::ensure!(
+                            !has_signature,
+                            gix_error::validation("Duplicate active commit signature header")
+                        );
+                        has_signature = true;
+                    }
+                    signature_ranges.push(data.len() - before.len()..data.len() - i.len());
+                }
+                extra_headers.push(header);
+            }
             Err(_) => {
                 *i = before;
                 break;
@@ -85,13 +107,18 @@ pub fn commit<'a>(i: &mut &'a [u8], object_hash: gix_hash::Kind) -> Result<Commi
     let message = message(i)?;
     gix_error::ensure!(i.is_empty(), crate::decode::empty_error());
 
-    Ok(CommitRef {
-        tree,
-        parents,
-        author,
-        committer,
-        encoding,
-        message,
-        extra_headers,
-    })
+    Ok((
+        CommitRef {
+            tree,
+            parents,
+            author,
+            committer,
+            encoding,
+            message,
+            extra_headers,
+        },
+        has_signature
+            .then(|| crate::signature::SignedData::excluding(data, signature_ranges))
+            .flatten(),
+    ))
 }

@@ -109,9 +109,17 @@ impl BodyData {
     }
 
     pub(crate) fn values_in(&self, backing: &[u8], value_name: &str) -> Vec<BString> {
+        self.values_implicit_in(backing, value_name)
+            .into_iter()
+            .map(Option::unwrap_or_default)
+            .collect()
+    }
+
+    pub(crate) fn values_implicit_in(&self, backing: &[u8], value_name: &str) -> Vec<Option<BString>> {
         let key = &ValueName::from_str_unchecked(value_name);
         let mut values = Vec::new();
         let mut expect_value = false;
+        let mut has_separator = false;
         let mut concatenated_value = BString::default();
 
         for event in &self.0 {
@@ -120,10 +128,14 @@ impl BodyData {
                     if event_key.as_bstr_in(backing).eq_ignore_ascii_case(key.0.as_slice()) =>
                 {
                     expect_value = true;
+                    has_separator = false;
+                }
+                Event::KeyValueSeparator if expect_value => {
+                    has_separator = true;
                 }
                 Event::Value(v) if expect_value => {
                     expect_value = false;
-                    values.push(normalize(v.as_slice_in(backing)).into_owned());
+                    values.push(has_separator.then(|| normalize(v.as_slice_in(backing)).into_owned()));
                 }
                 Event::ValueNotDone(v) if expect_value => {
                     concatenated_value.push_str(v.as_slice_in(backing));
@@ -132,7 +144,7 @@ impl BodyData {
                     expect_value = false;
                     concatenated_value.push_str(v.as_slice_in(backing));
                     let concatenated_value = std::mem::take(&mut concatenated_value);
-                    values.push(normalize(&concatenated_value).into_owned());
+                    values.push(Some(normalize(&concatenated_value).into_owned()));
                 }
                 _ => (),
             }
@@ -232,10 +244,30 @@ impl BodyData {
     }
 }
 
-/// An iterator over a section body view, yielding un-normalized (`key`, `value`) pairs.
+/// An iterator over a section body view, yielding normalized (`key`, `value`) pairs.
+/// Implicit values without `=` are returned as empty strings.
 pub struct BodyRefIter<'a> {
+    inner: BodyRefIterImplicit<'a>,
+}
+
+/// An iterator over a section body view, yielding normalized (`key`, `value`) pairs.
+/// Implicit values without `=` are returned as `None`.
+pub struct BodyRefIterImplicit<'a> {
     iter: slice::Iter<'a, Event>,
     backing: &'a [u8],
+}
+
+impl<'a> BodyRef<'a> {
+    /// Visit all key-value pairs in order, preserving key spelling and repeated keys.
+    ///
+    /// Explicit values are normalized, including unquoting and escape processing. Implicit values
+    /// without `=` are returned as `None`, while explicit empty values are `Some` empty strings.
+    pub fn into_iter_implicit(self) -> BodyRefIterImplicit<'a> {
+        BodyRefIterImplicit {
+            iter: self.body.0.iter(),
+            backing: self.backing,
+        }
+    }
 }
 
 impl<'a> IntoIterator for BodyRef<'a> {
@@ -245,8 +277,7 @@ impl<'a> IntoIterator for BodyRef<'a> {
 
     fn into_iter(self) -> Self::IntoIter {
         BodyRefIter {
-            iter: self.body.0.iter(),
-            backing: self.backing,
+            inner: self.into_iter_implicit(),
         }
     }
 }
@@ -255,9 +286,18 @@ impl Iterator for BodyRefIter<'_> {
     type Item = (String, BString);
 
     fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|(key, value)| (key, value.unwrap_or_default()))
+    }
+}
+
+impl Iterator for BodyRefIterImplicit<'_> {
+    type Item = (String, Option<BString>);
+
+    fn next(&mut self) -> Option<Self::Item> {
         let mut key = None;
         let mut partial_value = BString::default();
         let mut value = None;
+        let mut has_separator = false;
 
         for event in self.iter.by_ref() {
             match event {
@@ -269,6 +309,7 @@ impl Iterator for BodyRefIter<'_> {
                             .to_owned(),
                     );
                 }
+                Event::KeyValueSeparator => has_separator = true,
                 Event::Value(v) => {
                     value = Some(Cow::Borrowed(v.as_bstr_in(self.backing)));
                     break;
@@ -283,8 +324,9 @@ impl Iterator for BodyRefIter<'_> {
             }
         }
 
-        key.zip(value.map(|value| normalize(value.as_ref()).into_owned()))
+        key.zip(value.map(|value| has_separator.then(|| normalize(value.as_ref()).into_owned())))
     }
 }
 
 impl FusedIterator for BodyRefIter<'_> {}
+impl FusedIterator for BodyRefIterImplicit<'_> {}

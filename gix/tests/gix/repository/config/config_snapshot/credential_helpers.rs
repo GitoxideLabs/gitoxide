@@ -1,6 +1,65 @@
 use crate::remote;
 use gix_testtools::TestResult;
 
+#[cfg(unix)]
+#[test]
+fn native_cache_launcher_from_open_options() -> TestResult {
+    use gix::credentials::program::cache::DaemonCommand;
+
+    let command = DaemonCommand {
+        executable: "/explicit/helper with spaces".into(),
+        args: vec!["credential-cache--daemon".into()],
+    };
+    let repo = gix::open_opts(
+        remote::repo_path("empty-core-askpass"),
+        gix::open::Options::isolated()
+            .config_overrides(["credential.helper=cache"])
+            .credential_cache_daemon(command.clone()),
+    )?;
+    assert_native_cache_launcher(&repo, &command)
+}
+
+#[cfg(unix)]
+#[test]
+fn native_cache_launcher_survives_clone_preparation() -> TestResult {
+    let command = gix::credentials::program::cache::DaemonCommand {
+        executable: "/explicit/helper with spaces".into(),
+        args: vec!["credential-cache--daemon".into()],
+    };
+    let tmp = gix_testtools::tempfile::tempdir()?;
+    let repo = gix::clone::PrepareFetch::new(
+        "https://example.com/repository",
+        tmp.path().join("clone"),
+        gix::create::Kind::Bare,
+        gix::create::Options::default(),
+        gix::open::Options::isolated()
+            .config_overrides(["credential.helper=cache"])
+            .credential_cache_daemon(command.clone()),
+    )?
+    .persist();
+    assert_native_cache_launcher(&repo, &command)
+}
+
+#[cfg(unix)]
+fn assert_native_cache_launcher(
+    repo: &gix::Repository,
+    command: &gix::credentials::program::cache::DaemonCommand,
+) -> TestResult {
+    let (cascade, _, _) = repo
+        .config_snapshot()
+        .credential_helpers("https://example.com".try_into()?)?;
+    let actual = cascade.programs[0]
+        .cache_daemon
+        .as_ref()
+        .expect("opening and clone preparation preserve the explicit launcher");
+    assert_eq!(actual.executable, command.executable, "the executable is not inferred");
+    assert_eq!(
+        actual.args, command.args,
+        "daemon arguments remain separate from the executable"
+    );
+    Ok(())
+}
+
 #[test]
 fn legacy_credential_paths_are_canonical() -> TestResult {
     let path = gix_testtools::scripted_fixture_read_only("make_legacy_config_consumers.sh")?;
@@ -310,5 +369,38 @@ fn core_askpass_interpolation_errors_are_not_ignored() -> TestResult {
             0: home dir is missing,
     ]
     ");
+    Ok(())
+}
+
+#[test]
+fn native_store_uses_the_configured_lock_timeout() -> TestResult {
+    use gix_lock::acquire::Fail;
+    use std::time::Duration;
+
+    for (value, expected) in [
+        (None, Fail::AfterDurationWithBackoff(Duration::from_secs(1))),
+        (Some("0"), Fail::Immediately),
+        (Some("25"), Fail::AfterDurationWithBackoff(Duration::from_millis(25))),
+        (
+            Some("-1"),
+            Fail::AfterDurationWithBackoff(Duration::from_secs(u64::MAX)),
+        ),
+    ] {
+        let mut overrides = vec!["credential.helper=store".to_owned()];
+        if let Some(value) = value {
+            overrides.push(format!("credentialStore.lockTimeoutMS={value}"));
+        }
+        let repo = gix::open_opts(
+            remote::repo_path("empty-core-askpass"),
+            gix::open::Options::isolated().config_overrides(overrides),
+        )?;
+        let (cascade, _, _) = repo
+            .config_snapshot()
+            .credential_helpers("https://example.com".try_into()?)?;
+        assert_eq!(
+            cascade.programs[0].store_lock_timeout, expected,
+            "native storage receives Git's configured locking policy"
+        );
+    }
     Ok(())
 }

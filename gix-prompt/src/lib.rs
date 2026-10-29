@@ -28,12 +28,27 @@ mod imp {
 
 /// Ask the user given a `prompt`, returning the result.
 pub fn ask(prompt: &str, opts: &Options) -> Result<String> {
+    ask_with_environment(prompt, opts, &[])
+}
+
+/// Ask like [`ask()`], applying `environment` only to the askpass child process.
+///
+/// Repeated keys use their last value. The current process environment is never modified.
+pub fn ask_with_environment(
+    prompt: &str,
+    opts: &Options,
+    environment: &[(std::ffi::OsString, std::ffi::OsString)],
+) -> Result<String> {
     if let Some(askpass) = opts.askpass.as_deref() {
-        match gix_command::prepare(askpass).arg(prompt).spawn() {
+        let mut command = gix_command::prepare(askpass).arg(prompt);
+        command.env.extend_from_slice(environment);
+        command.current_dir.clone_from(&opts.current_dir);
+        match command.spawn() {
             Ok(cmd) => {
                 if let Some(mut stdout) = cmd
                     .wait_with_output()
                     .ok()
+                    .filter(|out| out.status.success())
                     .and_then(|out| String::from_utf8(out.stdout).ok())
                 {
                     if stdout.ends_with('\n') {
@@ -63,6 +78,7 @@ pub fn openly(prompt: impl AsRef<str>) -> Result<String> {
         &Options {
             mode: Mode::Visible,
             askpass: None,
+            current_dir: None,
         },
     )
 }
@@ -76,6 +92,7 @@ pub fn securely(prompt: impl AsRef<str>) -> Result<String> {
         &Options {
             mode: Mode::Hidden,
             askpass: None,
+            current_dir: None,
         },
     )
 }

@@ -207,3 +207,40 @@ pub(crate) mod utils {
         Ok(diff_cache)
     }
 }
+
+/// The diff attribute and driver selected for a path.
+///
+/// Keeping the attribute state lets callers distinguish explicit text or binary treatment,
+/// unknown named drivers, and unspecified attributes. Language inference is left to callers.
+#[cfg(feature = "blob-diff")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DriverSelection {
+    /// The effective value of the path's `diff` attribute.
+    pub attribute: gix_attributes::State,
+    /// The configured or built-in driver, if the attribute names a known driver.
+    pub driver: Option<gix_diff::blob::Driver>,
+}
+
+#[cfg(feature = "blob-diff")]
+impl DriverSelection {
+    /// Compile the selected hunk-header matcher, or return `None` for binary-only paths.
+    ///
+    /// A text-conversion command permits hunk headers even if a named driver declares its input
+    /// binary. Callers must apply that conversion before matching lines. Unspecified attributes,
+    /// explicit text attributes, and unknown driver names use the default identifier matcher.
+    pub fn hunk_header(&self) -> Result<Option<gix_diff::blob::hunk_header::Matcher>> {
+        if self.attribute == gix_attributes::State::Unset
+            || self
+                .driver
+                .as_ref()
+                .is_some_and(|driver| driver.is_binary == Some(true) && driver.binary_to_text_command.is_none())
+        {
+            return Ok(None);
+        }
+        self.driver
+            .as_ref()
+            .map(gix_diff::blob::Driver::hunk_header)
+            .transpose()
+            .map(|matcher| Some(matcher.unwrap_or_default()))
+    }
+}

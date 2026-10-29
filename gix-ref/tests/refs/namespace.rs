@@ -66,3 +66,14 @@ mod expand {
         ));
     }
 }
+
+#[test]
+fn partial_names_roundtrip_through_namespace_expansion() -> gix_testtools::TestResult {
+    for name in ["team", "team/project", "refs/namespaces", "refs/namespaces/nested"] {
+        let expanded = gix_ref::namespace::expand(name)?;
+        let partial = expanded.to_partial_name();
+        assert_eq!(partial.as_ref().as_bstr(), name);
+        assert_eq!(gix_ref::namespace::expand(partial.as_ref())?, expanded);
+    }
+    Ok(())
+}

@@ -9,17 +9,9 @@ impl Remote<'_> {
     /// and the last `remote "<name>"` section will be containing all relevant values so that reloading the remote
     /// from `config` would yield the same in-memory state.
     pub fn save_to(&self, config: &mut gix_config::File) -> Result<()> {
-        let name = self.name().ok_or_else(|| {
-            let url = self
-                .urls
-                .first()
-                .or_else(|| self.push_urls.first())
-                .expect("one url is always set")
-                .to_bstring();
-            Error::from_error(gix_error::message!(
-                "The remote pointing to {url} is anonymous and can't be saved."
-            ))
-        })?;
+        let name = self
+            .name()
+            .ok_or_else(|| Error::from_error(gix_error::message("The remote is anonymous and can't be saved.")))?;
         let target_meta = config.meta().clone();
         let mut needs_url_reset = false;
         let mut needs_push_url_reset = false;

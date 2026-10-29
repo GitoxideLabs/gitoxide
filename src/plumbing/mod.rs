@@ -6,3 +6,6 @@ mod progress_impl;
 pub use progress_impl::show_progress;
 
 mod options;
+
+#[cfg(unix)]
+mod credential_cache;

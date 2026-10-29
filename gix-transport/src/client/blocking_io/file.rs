@@ -2,7 +2,7 @@ use gix_error::Result;
 use std::{
     any::Any,
     borrow::Cow,
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     io::Write,
     process::{self, Stdio},
 };
@@ -38,6 +38,15 @@ const ENV_VARS_TO_REMOVE: &[&str] = &[
     "GIT_CONFIG_COUNT",
 ];
 
+/// Configuration for local and SSH transports created by [`connect()`] or SSH connection helpers.
+#[derive(Clone, Debug, Default)]
+pub struct Options {
+    /// Override the service command, such as `git-upload-pack` or `git-receive-pack`.
+    /// Local commands use shell syntax; SSH commands are interpreted by the remote shell.
+    /// An explicitly configured command never falls back to another executable.
+    pub command: Option<OsString>,
+}
+
 /// A utility to spawn a helper process to actually transmit data, possibly over `ssh`.
 ///
 /// It can only be instantiated using the local [`connect()`] or [ssh connect][super::ssh::connect()].
@@ -48,13 +57,26 @@ pub struct SpawnProcessOnDemand {
     ssh_cmd: Option<(OsString, ssh::ProgramKind)>,
     /// The environment variables to set in the invoked command.
     envs: Vec<(&'static str, String)>,
+    command_environment: Vec<(OsString, OsString)>,
+    working_dir: Option<std::path::PathBuf>,
     ssh_disallow_shell: bool,
+    service_command: Option<OsString>,
     connection: Option<Connection<Box<dyn std::io::Read + Send>, process::ChildStdin>>,
     child: Option<process::Child>,
     trace: bool,
 }
 
 impl SpawnProcessOnDemand {
+    pub(crate) fn with_environment(mut self, environment: &[(OsString, OsString)]) -> Self {
+        self.command_environment.extend_from_slice(environment);
+        self
+    }
+
+    pub(crate) fn with_working_dir(mut self, directory: Option<std::path::PathBuf>) -> Self {
+        self.working_dir = directory;
+        self
+    }
+
     pub(crate) fn new_ssh(
         url: gix_url::Url,
         program: impl Into<OsString>,
@@ -70,6 +92,9 @@ impl SpawnProcessOnDemand {
             ssh_cmd: Some((program.into(), ssh_kind)),
             envs: Default::default(),
             ssh_disallow_shell,
+            command_environment: Vec::new(),
+            working_dir: None,
+            service_command: None,
             child: None,
             connection: None,
             desired_version: version,
@@ -89,6 +114,9 @@ impl SpawnProcessOnDemand {
                 Default::default()
             },
             ssh_disallow_shell: false,
+            command_environment: Vec::new(),
+            working_dir: None,
+            service_command: None,
             child: None,
             connection: None,
             desired_version: version,
@@ -100,6 +128,10 @@ impl SpawnProcessOnDemand {
         &self,
         service: Service,
     ) -> std::result::Result<(gix_command::Prepare, Option<ssh::ProgramKind>, OsString), client::Error> {
+        let service_command = self
+            .service_command
+            .as_deref()
+            .unwrap_or_else(|| OsStr::new(service.as_str()));
         let (mut cmd, ssh_kind, cmd_name) = match &self.ssh_cmd {
             Some((command, kind)) => (
                 kind.prepare_invocation(command, &self.url, self.desired_version, self.ssh_disallow_shell)
@@ -108,11 +140,15 @@ impl SpawnProcessOnDemand {
                 Some(*kind),
                 command.to_owned(),
             ),
-            None => (
-                gix_command::prepare(service.as_str()).stderr(Stdio::null()),
-                None,
-                OsString::from(service.as_str()),
-            ),
+            None => {
+                let command = gix_command::prepare(service_command);
+                let command = if self.service_command.is_some() {
+                    command.with_shell()
+                } else {
+                    command
+                };
+                (command.stderr(Stdio::null()), None, service_command.to_owned())
+            }
         };
         if self.path.trim().first() == Some(&b'-') {
             return Err(client::Error::AmbiguousPath {
@@ -120,7 +156,7 @@ impl SpawnProcessOnDemand {
             });
         }
         let repo_path = if self.ssh_cmd.is_some() {
-            cmd.args.push(service.as_str().into());
+            cmd.args.push(service_command.to_owned());
             gix_quote::single(self.path.as_ref()).to_os_str_lossy().into_owned()
         } else {
             self.path.to_os_str_lossy().into_owned()
@@ -136,8 +172,28 @@ impl SpawnProcessOnDemand {
     /// Prefer the same program from git's own `--exec-path`, which is where `git` itself finds it, and
     /// otherwise let the `git` itself run it as subcommand.
     /// This is only used for local repositories - remote shells keep the standard invocation.
-    fn prepare_fallback_command(&self, service: Service) -> (gix_command::Prepare, OsString) {
-        let (mut cmd, cmd_name) = match gix_path::env::core_dir_program(service.as_str()) {
+    fn prepare_fallback_command(
+        &self,
+        service: Service,
+        environment: &[(OsString, OsString)],
+    ) -> (gix_command::Prepare, OsString) {
+        let program = match self.working_dir.as_deref() {
+            Some(directory) => gix_path::env::core_dir_from_environment(
+                |name| {
+                    environment
+                        .iter()
+                        .rev()
+                        .find(|(key, _)| key == name)
+                        .map(|(_, value)| value.clone())
+                        .or_else(|| std::env::var_os(name))
+                },
+                directory,
+            )
+            .map(|core| core.join(format!("{}{}", service.as_str(), std::env::consts::EXE_SUFFIX)))
+            .filter(|path| path.is_file()),
+            None => gix_path::env::core_dir_program(service.as_str()),
+        };
+        let (mut cmd, cmd_name) = match program {
             Some(program) => {
                 let cmd_name = program.clone().into_os_string();
                 (gix_command::prepare(program).stderr(Stdio::null()), cmd_name)
@@ -177,7 +233,10 @@ impl client::TransportWithoutIO for SpawnProcessOnDemand {
         true
     }
 
-    fn configure(&mut self, _config: &dyn Any) -> Result {
+    fn configure(&mut self, config: &dyn Any) -> Result {
+        if let Some(options) = config.downcast_ref::<Options>() {
+            self.service_command.clone_from(&options.command);
+        }
         Ok(())
     }
 }
@@ -271,9 +330,12 @@ impl client::blocking_io::Transport for SpawnProcessOnDemand {
     ) -> std::result::Result<SetServiceResponse<'_>, client::Error> {
         let (cmd, ssh_kind, cmd_name) = self.prepare_command(service)?;
         let envs = std::mem::take(&mut self.envs);
+        let command_environment = std::mem::take(&mut self.command_environment);
         let into_std_command = |mut cmd: gix_command::Prepare, command: &std::ffi::OsStr| {
             cmd.stdin = Stdio::piped();
             cmd.stdout = Stdio::piped();
+            cmd.current_dir.clone_from(&self.working_dir);
+            cmd.env.splice(0..0, command_environment.iter().cloned());
 
             let mut cmd = std::process::Command::try_from(cmd).map_err(|err| client::Error::InvokeProgram {
                 source: std::io::Error::new(std::io::ErrorKind::InvalidInput, err),
@@ -287,15 +349,19 @@ impl client::blocking_io::Transport for SpawnProcessOnDemand {
         };
 
         let mut cmd = into_std_command(cmd, &cmd_name)?;
-        gix_trace::debug!(command = ?cmd, "gix_transport::SpawnProcessOnDemand");
+        gix_trace::debug!(program = ?cmd.get_program(), "gix_transport::SpawnProcessOnDemand");
         let mut child = match cmd.spawn() {
             Ok(child) => child,
-            Err(err) if ssh_kind.is_none() && err.kind() == std::io::ErrorKind::NotFound => {
+            Err(err)
+                if ssh_kind.is_none()
+                    && self.service_command.is_none()
+                    && err.kind() == std::io::ErrorKind::NotFound =>
+            {
                 // The service program wasn't found in `PATH`, but as `git` itself can be found,
                 // the service can still be run through it (#2313).
-                let (cmd, cmd_name) = self.prepare_fallback_command(service);
+                let (cmd, cmd_name) = self.prepare_fallback_command(service, &command_environment);
                 let mut cmd = into_std_command(cmd, &cmd_name)?;
-                gix_trace::debug!(command = ?cmd, "gix_transport::SpawnProcessOnDemand (fallback)");
+                gix_trace::debug!(program = ?cmd.get_program(), "gix_transport::SpawnProcessOnDemand (fallback)");
                 cmd.spawn().map_err(|err| client::Error::InvokeProgram {
                     source: err,
                     command: cmd_name,
@@ -336,10 +402,13 @@ impl client::blocking_io::Transport for SpawnProcessOnDemand {
         on_into_read: MessageKind,
         trace: bool,
     ) -> std::result::Result<RequestWriter<'_>, client::Error> {
-        self.connection
+        let child = self.child.as_mut().ok_or(client::Error::MissingHandshake)?;
+        Ok(self
+            .connection
             .as_mut()
             .ok_or(client::Error::MissingHandshake)?
-            .request(write_mode, on_into_read, trace)
+            .request(write_mode, on_into_read, trace)?
+            .with_abort(|| child.kill()))
     }
 }
 
@@ -363,7 +432,7 @@ mod tests {
         #[test]
         fn fallback_command_prefers_the_core_dir_program_and_can_always_run_git_itself() {
             let transport = SpawnProcessOnDemand::new_local("/repo/path".into(), Protocol::V2, false);
-            let (cmd, name) = transport.prepare_fallback_command(Service::UploadPack);
+            let (cmd, name) = transport.prepare_fallback_command(Service::UploadPack, &[]);
 
             assert!(!cmd.use_shell, "a shell is never used to run the local service program");
             assert_eq!(

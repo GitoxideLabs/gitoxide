@@ -1,12 +1,12 @@
 use gix_testtools::TestResult;
 
-fn stack() -> gix_status::SymlinkCheck {
+fn stack() -> gix_fs::SymlinkCheck {
     stack_in("base")
 }
 
-fn stack_in(dir: &str) -> gix_status::SymlinkCheck {
-    gix_status::SymlinkCheck::new(
-        crate::scripted_fixture_read_only("symlink_stack.sh")
+fn stack_in(dir: &str) -> gix_fs::SymlinkCheck {
+    gix_fs::SymlinkCheck::new(
+        gix_testtools::scripted_fixture_read_only("symlink_stack.sh")
             .expect("valid script")
             .join(dir),
     )
@@ -38,6 +38,15 @@ fn paths_not_going_through_symlink_directories_are_ok_and_point_to_correct_item(
 #[test]
 fn leaf_file_does_not_have_to_exist() -> TestResult {
     assert!(!stack().verified_path("dir/does-not-exist")?.exists());
+    let mut stack = stack();
+    let expected = stack.inner.root().join("absent/parent/file");
+    assert_eq!(
+        stack
+            .verified_path_allow_nonexisting("absent/parent/file".into())?
+            .as_ref(),
+        expected,
+        "allowing missing parents still anchors paths inside the root"
+    );
     Ok(())
 }
 
@@ -49,6 +58,10 @@ fn intermediate_directories_have_to_exist_or_not_found_error() -> TestResult {
         .expect_err("the operation must fail");
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "intermediate directories have to exist or not found error", @"NotFound");
     assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    assert!(
+        !gix_fs::SymlinkCheck::is_symlink_step_error(&err),
+        "missing parents are distinct from rejected symlinks"
+    );
     Ok(())
 }
 
@@ -69,6 +82,10 @@ fn paths_leading_through_symlinks_are_rejected() {
     let err = stack
         .verified_path("root-dirlink/file-in-dir")
         .expect_err("the operation must fail");
+    assert!(
+        gix_fs::SymlinkCheck::is_symlink_step_error(&err),
+        "callers can classify a rejected symlink without losing its concrete I/O error"
+    );
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[]), "root-dirlink is a symlink to a directory", @r#"
     Custom {
         kind: Other,

@@ -1,18 +1,48 @@
 use std::{io, io::Write};
 
+use gix_error::Result;
+
 use crate::{
     client::{MessageKind, WriteMode, blocking_io::ExtendedBufRead},
     packetline::blocking_io::{Writer, encode},
 };
+
+/// Close an in-progress request after a producer or consumer fails.
+///
+/// The callback must interrupt pending I/O in either direction. Dropping it
+/// without calling it leaves the connection intact.
+pub type Abort<'a> = Box<dyn FnOnce() -> io::Result<()> + Send + 'a>;
 
 /// A [`Write`][io::Write] implementation optimized for writing packet lines.
 /// A type implementing `Write` for packet lines, which when done can be transformed into a `Read` for
 /// obtaining the response.
 pub struct RequestWriter<'a> {
     on_into_read: MessageKind,
-    writer: Writer<Box<dyn io::Write + 'a>>,
+    writer: Writer<WriterKind<'a>>,
     reader: Box<dyn ExtendedBufRead<'a> + Unpin + 'a>,
     trace: bool,
+    abort: Option<Abort<'a>>,
+}
+
+enum WriterKind<'a> {
+    Local(Box<dyn io::Write + 'a>),
+    Send(Box<dyn io::Write + Send + 'a>),
+}
+
+impl io::Write for WriterKind<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            Self::Local(writer) => writer.write(buf),
+            Self::Send(writer) => writer.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Self::Local(writer) => writer.flush(),
+            Self::Send(writer) => writer.flush(),
+        }
+    }
 }
 
 impl io::Write for RequestWriter<'_> {
@@ -41,7 +71,43 @@ impl<'a> RequestWriter<'a> {
         on_into_read: MessageKind,
         trace: bool,
     ) -> Self {
-        let mut writer = Writer::new(Box::new(writer) as Box<dyn io::Write>);
+        Self::with_writer(
+            WriterKind::Local(Box::new(writer)),
+            reader,
+            write_mode,
+            on_into_read,
+            trace,
+        )
+    }
+
+    /// Like [`Self::new_from_bufread()`], retaining the writer's `Send` bound so
+    /// [`Self::into_parts_with_send()`] can upload data on another thread while
+    /// the calling thread drains the response. This avoids deadlocks when the
+    /// remote emits progress before the upload finishes.
+    pub fn new_from_bufread_with_send<W: io::Write + Send + 'a>(
+        writer: W,
+        reader: Box<dyn ExtendedBufRead<'a> + Unpin + 'a>,
+        write_mode: WriteMode,
+        on_into_read: MessageKind,
+        trace: bool,
+    ) -> Self {
+        Self::with_writer(
+            WriterKind::Send(Box::new(writer)),
+            reader,
+            write_mode,
+            on_into_read,
+            trace,
+        )
+    }
+
+    fn with_writer(
+        writer: WriterKind<'a>,
+        reader: Box<dyn ExtendedBufRead<'a> + Unpin + 'a>,
+        write_mode: WriteMode,
+        on_into_read: MessageKind,
+        trace: bool,
+    ) -> Self {
+        let mut writer = Writer::new(writer);
         match write_mode {
             WriteMode::Binary => writer.enable_binary_mode(),
             WriteMode::OneLfTerminatedLinePerWriteCall => writer.enable_text_mode(),
@@ -51,7 +117,20 @@ impl<'a> RequestWriter<'a> {
             writer,
             reader,
             trace,
+            abort: None,
         }
+    }
+
+    /// Install a callback that closes the connection if a concurrent upload or
+    /// response fails. Callers obtain it with [`Self::take_abort()`].
+    pub fn with_abort(mut self, abort: impl FnOnce() -> io::Result<()> + Send + 'a) -> Self {
+        self.abort = Some(Box::new(abort));
+        self
+    }
+
+    /// Remove the abort callback, without invoking it.
+    pub fn take_abort(&mut self) -> Option<Abort<'a>> {
+        self.abort.take()
     }
 
     /// Write the given message as packet line.
@@ -105,6 +184,30 @@ impl<'a> RequestWriter<'a> {
     /// the underlying transport mechanism. Failure to do so may result in a deadlock depending on how the write and read mechanism
     /// is implemented.
     pub fn into_parts(self) -> (Box<dyn io::Write + 'a>, Box<dyn ExtendedBufRead<'a> + Unpin + 'a>) {
-        (self.writer.into_inner(), self.reader)
+        let writer: Box<dyn io::Write + 'a> = match self.writer.into_inner() {
+            WriterKind::Local(writer) => writer,
+            WriterKind::Send(writer) => writer,
+        };
+        (writer, self.reader)
+    }
+
+    /// Like [`Self::into_parts()`], retaining the writer's `Send` bound for
+    /// concurrent uploads. No delimiter is written and bytes written to the
+    /// returned writer are sent verbatim.
+    ///
+    /// Returns an unsupported-operation error if this request was constructed
+    /// without [`Self::new_from_bufread_with_send()`].
+    pub fn into_parts_with_send(
+        self,
+    ) -> Result<(
+        Box<dyn io::Write + Send + 'a>,
+        Box<dyn ExtendedBufRead<'a> + Unpin + 'a>,
+    )> {
+        match self.writer.into_inner() {
+            WriterKind::Send(writer) => Ok((writer, self.reader)),
+            WriterKind::Local(_) => {
+                Err(gix_error::message("The transport does not support concurrent request writes").unsupported_error())
+            }
+        }
     }
 }

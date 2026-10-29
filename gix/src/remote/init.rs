@@ -41,6 +41,8 @@ impl<'repo> Remote<'repo> {
             fetch_specs,
             push_specs,
             fetch_tags,
+            command_environment: Vec::new(),
+            working_dir: None,
             repo,
         })
     }
@@ -70,6 +72,8 @@ impl<'repo> Remote<'repo> {
             fetch_specs: Vec::new(),
             push_specs: Vec::new(),
             fetch_tags: Default::default(),
+            command_environment: Vec::new(),
+            working_dir: None,
             repo,
         })
     }
@@ -90,7 +94,7 @@ pub(crate) fn rewrite_url(
                     remote::Direction::Fetch => "fetch",
                     remote::Direction::Push => "push",
                 };
-                gix_error::message!("The rewritten {kind} url {url:?} failed to parse")
+                gix_error::message!("The rewritten {kind} URL failed to parse")
             })
         })
         .transpose()

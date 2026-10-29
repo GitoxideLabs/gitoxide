@@ -506,13 +506,20 @@ fn parse_git_bash_version() -> Result<(u8, u8, u8)> {
 
 fn git_version_from_bytes(bytes: &[u8]) -> Result<(u8, u8, u8)> {
     let mut numbers = bytes
-        .split(|b| *b == b' ' || *b == b'\n')
+        .split(u8::is_ascii_whitespace)
         .nth(2)
         .expect("git version <version>")
         .split(|b| *b == b'.')
         .take(3)
         .map(|n| std::str::from_utf8(n).expect("valid utf8 in version number"))
-        .map(u8::from_str);
+        .enumerate()
+        .map(|(index, number)| {
+            if index == 2 && number == "GIT" {
+                Ok(0)
+            } else {
+                u8::from_str(number)
+            }
+        });
 
     Ok((|| -> Result<_> {
         Ok((

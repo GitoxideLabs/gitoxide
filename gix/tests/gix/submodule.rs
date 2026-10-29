@@ -1207,3 +1207,292 @@ mod advisory {
         Ok(())
     }
 }
+#[cfg(feature = "worktree-mutation")]
+mod restore {
+    use std::{fs, sync::atomic::AtomicBool};
+
+    use gix::progress;
+    use gix_testtools::{TestResult, git};
+
+    #[test]
+    fn restores_head_and_replaces_staged_index_without_recursing() -> TestResult {
+        for detached in [false, true] {
+            let mut states = Vec::new();
+            for use_git in [true, false] {
+                let fixture = gix_testtools::scripted_fixture_writable("make_submodule_restore.sh")?;
+                let parent = gix::open_opts(fixture.path().join("parent"), crate::restricted())?;
+                let module = parent.submodules()?.expect("one module").next().expect("one module");
+                let repo = gix::open_opts(module.git_dir()?.canonicalize()?, crate::restricted())?;
+                let workdir = repo.workdir().expect("module worktree");
+                if detached {
+                    git(workdir, "checkout --detach")?;
+                }
+                let head_before = repo.head()?.referent_name().map(ToOwned::to_owned);
+                let head_commit_id = repo.head_id()?.detach();
+                fs::write(workdir.join("file"), "staged\n")?;
+                fs::write(workdir.join("staged-addition"), "discarded\n")?;
+                git(workdir, "add file staged-addition")?;
+                fs::remove_dir_all(workdir)?;
+                if use_git {
+                    git(
+                        parent.workdir().expect("parent worktree"),
+                        "submodule update --init --no-fetch --checkout dir/module",
+                    )?;
+                } else {
+                    module
+                        .restore_worktree(progress::Discard, &AtomicBool::new(false))?
+                        .expect("existing local clone is restored");
+                    assert_eq!(
+                        repo.head()?.referent_name().map(ToOwned::to_owned),
+                        head_before,
+                        "restoration preserves HEAD attachment"
+                    );
+                }
+                assert_eq!(repo.head_id()?, head_commit_id, "restoration does not move HEAD");
+                let reopened = gix::open_opts(workdir, crate::restricted())?;
+                assert_eq!(
+                    reopened.head_id()?,
+                    head_commit_id,
+                    "the recreated gitfile opens the clone"
+                );
+                assert!(
+                    workdir.join("nested").is_dir() && !workdir.join("nested/file").exists(),
+                    "nested submodules remain unpopulated"
+                );
+                states.push(gix_testtools::repository::snapshot(workdir)?);
+            }
+            assert_eq!(states[0].index, states[1].index, "restored index agrees with Git");
+            assert_eq!(states[0].worktree, states[1].worktree, "restored files agree with Git");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn restores_empty_gitfile_only_and_old_form_worktrees() -> TestResult {
+        for case in ["empty", "gitfile-only", "old-form"] {
+            let fixture = gix_testtools::scripted_fixture_writable("make_submodule_restore.sh")?;
+            let parent = gix::open_opts(fixture.path().join("parent"), crate::restricted())?;
+            let module = parent.submodules()?.expect("one module").next().expect("one module");
+            let repo = gix::open_opts(module.git_dir()?.canonicalize()?, crate::restricted())?;
+            let workdir = repo.workdir().expect("module worktree").canonicalize()?;
+            let head_commit_id = repo.head_id()?.detach();
+            for entry in fs::read_dir(&workdir)? {
+                let entry = entry?;
+                if entry.file_name() != ".git" {
+                    if entry.file_type()?.is_dir() {
+                        fs::remove_dir_all(entry.path())?;
+                    } else {
+                        fs::remove_file(entry.path())?;
+                    }
+                }
+            }
+            if case != "gitfile-only" {
+                fs::remove_file(workdir.join(".git"))?;
+            }
+            if case == "old-form" {
+                fs::rename(repo.git_dir(), workdir.join(".git"))?;
+                git(&workdir, "--git-dir=.git --work-tree=. config core.worktree ..")?;
+            }
+            module
+                .restore_worktree(progress::Discard, &AtomicBool::new(false))?
+                .expect("local clone is reused");
+            let reopened = gix::open_opts(&workdir, crate::restricted())?;
+            assert_eq!(reopened.head_id()?, head_commit_id, "{case}: HEAD is unchanged");
+            assert_eq!(
+                fs::read(workdir.join("file"))?,
+                b"tracked\n",
+                "{case}: files are restored"
+            );
+            assert_eq!(
+                workdir.join(".git").is_dir(),
+                case == "old-form",
+                "old-form clones stay in place"
+            );
+            assert_eq!(
+                gix::open_opts(reopened.git_dir(), crate::restricted())?
+                    .workdir()
+                    .expect("core.worktree")
+                    .canonicalize()?,
+                workdir,
+                "core.worktree reconnects the clone independently of the gitfile"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn missing_clones_remain_uninitialized_and_unborn_clones_get_an_empty_index() -> TestResult {
+        for missing_clone in [false, true] {
+            let fixture = gix_testtools::scripted_fixture_writable("make_submodule_restore.sh")?;
+            let parent = gix::open_opts(fixture.path().join("parent"), crate::restricted())?;
+            let module = parent.submodules()?.expect("one module").next().expect("one module");
+            let repo = gix::open_opts(module.git_dir()?.canonicalize()?, crate::restricted())?;
+            let workdir = repo.workdir().expect("module worktree");
+            if missing_clone {
+                fs::remove_dir_all(repo.git_dir())?;
+            } else {
+                git(workdir, "symbolic-ref HEAD refs/heads/unborn")?;
+            }
+            fs::remove_dir_all(workdir)?;
+            let outcome = module.restore_worktree(progress::Discard, &AtomicBool::new(false))?;
+            assert_eq!(
+                outcome.is_none(),
+                missing_clone,
+                "restoration never creates a new clone"
+            );
+            if missing_clone {
+                assert!(
+                    !workdir.exists(),
+                    "an unavailable clone leaves the missing worktree alone"
+                );
+            } else {
+                let reopened = gix::open_opts(workdir, crate::restricted())?;
+                assert!(reopened.head()?.is_unborn(), "an unborn branch stays unborn");
+                assert!(
+                    reopened.open_index()?.entries().is_empty(),
+                    "the initial index is empty"
+                );
+                assert_eq!(fs::read_dir(workdir)?.count(), 1, "only the gitfile is created");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn preflight_refusals_preserve_index_and_destination() -> TestResult {
+        for case in ["nonempty", "foreign-link", "index-lock", "config-lock", "cancelled"] {
+            let fixture = gix_testtools::scripted_fixture_writable("make_submodule_restore.sh")?;
+            let parent = gix::open_opts(fixture.path().join("parent"), crate::restricted())?;
+            let module = parent.submodules()?.expect("one module").next().expect("one module");
+            let repo = gix::open_opts(module.git_dir()?.canonicalize()?, crate::restricted())?;
+            let workdir = repo.workdir().expect("module worktree");
+            fs::remove_dir_all(workdir)?;
+            match case {
+                "nonempty" => {
+                    fs::create_dir(workdir)?;
+                    fs::write(workdir.join("keep"), "preserved\n")?;
+                }
+                "foreign-link" => {
+                    fs::create_dir(workdir)?;
+                    fs::write(
+                        workdir.join(".git"),
+                        format!("gitdir: {}\n", parent.git_dir().display()),
+                    )?;
+                }
+                "index-lock" => fs::write(repo.index_path().with_extension("lock"), "held\n")?,
+                "config-lock" => fs::write(repo.git_dir().join("config.lock"), "held\n")?,
+                "cancelled" => {}
+                _ => unreachable!(),
+            }
+            let before = gix_testtools::repository::snapshot(parent.workdir().expect("parent worktree"))?;
+            let index_before = fs::read(repo.index_path())?;
+            let config_before = fs::read(repo.git_dir().join("config"))?;
+            module
+                .restore_worktree(progress::Discard, &AtomicBool::new(case == "cancelled"))
+                .expect_err("the refusal happens before any mutation");
+            assert_eq!(
+                before,
+                gix_testtools::repository::snapshot(parent.workdir().expect("parent worktree"))?,
+                "{case}: worktree contents are preserved"
+            );
+            assert_eq!(
+                fs::read(repo.index_path())?,
+                index_before,
+                "{case}: staged state is preserved"
+            );
+            assert_eq!(
+                fs::read(repo.git_dir().join("config"))?,
+                config_before,
+                "{case}: metadata is preserved"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn filters_are_applied_and_failures_preserve_the_previous_index() -> TestResult {
+        for fail in [false, true] {
+            let fixture = gix_testtools::scripted_fixture_writable("make_submodule_restore.sh")?;
+            let parent = gix::open_opts(fixture.path().join("parent"), crate::restricted())?;
+            let module = parent.submodules()?.expect("one module").next().expect("one module");
+            let repo = gix::open_opts(module.git_dir()?.canonicalize()?, crate::restricted())?;
+            let workdir = repo.workdir().expect("module worktree");
+            fs::write(repo.git_dir().join("info/attributes"), "file filter=restore\n")?;
+            let mut config = repo.config_file_mut(repo.git_dir().join("config"))?;
+            config.set_raw_value("filter.restore.smudge", if fail { "false" } else { "printf filtered" })?;
+            config.set_raw_value("filter.restore.required", "true")?;
+            config.commit()?;
+            let index_before = fs::read(repo.index_path())?;
+            let head_before = fs::read(repo.git_dir().join("HEAD"))?;
+            fs::remove_dir_all(workdir)?;
+            let outcome = module.restore_worktree(progress::Discard, &AtomicBool::new(false));
+            assert_eq!(outcome.is_err(), fail, "required filter failures are reported");
+            assert_eq!(
+                fs::read(repo.git_dir().join("HEAD"))?,
+                head_before,
+                "HEAD never changes"
+            );
+            assert!(
+                !repo.index_path().with_extension("lock").exists(),
+                "index locks are released"
+            );
+            if fail {
+                assert_eq!(
+                    fs::read(repo.index_path())?,
+                    index_before,
+                    "the original index survives failure"
+                );
+            } else {
+                assert_eq!(fs::read(workdir.join("file"))?, b"filtered", "the smudge filter runs");
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn destination_and_parent_symlinks_are_never_followed() -> TestResult {
+        for case in ["destination", "parent", "gitfile"] {
+            let fixture = gix_testtools::scripted_fixture_writable("make_submodule_restore.sh")?;
+            let parent = gix::open_opts(fixture.path().join("parent"), crate::restricted())?;
+            let module = parent.submodules()?.expect("one module").next().expect("one module");
+            let repo = gix::open_opts(module.git_dir()?.canonicalize()?, crate::restricted())?;
+            let workdir = repo.workdir().expect("module worktree");
+            fs::remove_dir_all(workdir)?;
+            let outside = gix_testtools::tempfile::tempdir()?;
+            fs::write(outside.path().join("keep"), "preserved\n")?;
+            match case {
+                "destination" => std::os::unix::fs::symlink(outside.path(), workdir)?,
+                "parent" => {
+                    fs::remove_dir(workdir.parent().expect("nested path"))?;
+                    std::os::unix::fs::symlink(outside.path(), workdir.parent().expect("nested path"))?;
+                }
+                "gitfile" => {
+                    fs::create_dir(workdir)?;
+                    std::os::unix::fs::symlink(repo.git_dir(), workdir.join(".git"))?;
+                }
+                _ => unreachable!(),
+            }
+            let index_before = fs::read(repo.index_path())?;
+            module
+                .restore_worktree(progress::Discard, &AtomicBool::new(false))
+                .expect_err("symlinks must not redirect checkout");
+            assert_eq!(
+                fs::read(repo.index_path())?,
+                index_before,
+                "{case}: the index is untouched"
+            );
+            assert_eq!(
+                fs::read(outside.path().join("keep"))?,
+                b"preserved\n",
+                "outside content survives"
+            );
+            assert_eq!(
+                fs::read_dir(outside.path())?.count(),
+                1,
+                "no entries are written outside"
+            );
+        }
+        Ok(())
+    }
+}

@@ -59,8 +59,9 @@ pub trait Http {
     type Headers: std::io::BufRead + Unpin;
     /// A type providing the response.
     type ResponseBody: std::io::BufRead;
-    /// A type allowing to write the content to post.
-    type PostBody: std::io::Write;
+    /// A type allowing to write the content to post, including on an upload
+    /// thread while the caller drains the server's response.
+    type PostBody: std::io::Write + Send;
 
     /// Initiate a `GET` request to `url` provided the given `headers`, where `base_url` is so that `base_url + tail == url`.
     ///

@@ -94,7 +94,7 @@ pub mod store {
 
     /// A thread-local handle for interacting with a [`Store`][crate::Store] to find and iterate references.
     #[derive(Clone)]
-    #[expect(
+    #[allow(
         dead_code,
         reason = "the general reference-store handle is scaffolding for planned ref-table support"
     )]
@@ -104,7 +104,7 @@ pub mod store {
         state: handle::State,
     }
 
-    #[expect(
+    #[allow(
         dead_code,
         reason = "the general reference-store state is scaffolding for planned ref-table support"
     )]
@@ -124,7 +124,7 @@ pub mod store {
 
 /// The git reference store.
 /// TODO: Figure out if handles are needed at all, which depends on the ref-table implementation.
-#[expect(
+#[allow(
     dead_code,
     reason = "callers still use file::Store directly while this general store awaits ref-table support"
 )]

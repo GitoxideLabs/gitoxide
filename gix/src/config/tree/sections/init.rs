@@ -4,6 +4,9 @@ use crate::{
 };
 
 impl Init {
+    /// The `init.templateDir` key.
+    pub const TEMPLATE_DIR: keys::Path =
+        keys::Path::new_path("templateDir", &config::Tree::INIT).with_environment_override("GIT_TEMPLATE_DIR");
     /// The `init.defaultBranch` key.
     // TODO: review its usage for cases where this key is not set - sometimes it's 'master', sometimes it's 'main'.
     pub const DEFAULT_BRANCH: keys::Any = keys::Any::new("defaultBranch", &config::Tree::INIT)
@@ -21,6 +24,6 @@ impl Section for Init {
     }
 
     fn keys(&self) -> &[&dyn Key] {
-        &[&Self::DEFAULT_BRANCH, &Self::DEFAULT_OBJECT_FORMAT]
+        &[&Self::DEFAULT_BRANCH, &Self::DEFAULT_OBJECT_FORMAT, &Self::TEMPLATE_DIR]
     }
 }

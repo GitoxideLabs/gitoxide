@@ -104,6 +104,10 @@ pub mod main_worktree {
 
             let mut opts = repo.checkout_options(gix_worktree::stack::state::attributes::Source::IdMapping)?;
             opts.destination_is_initially_empty = true;
+            opts.filters
+                .driver_state_mut()
+                .environment
+                .clone_from(&self.command_environment);
 
             let mut files = progress.add_child_with_id("checkout".to_string(), ProgressId::CheckoutFiles.into());
             let mut bytes = progress.add_child_with_id("writing".to_string(), ProgressId::BytesWritten.into());
@@ -129,6 +133,21 @@ pub mod main_worktree {
             index.write(Default::default())?;
             Ok((self.repo.take().expect("still present").clone(), outcome))
         }
+    }
+}
+
+/// Configuration
+impl PrepareCheckout {
+    /// Set environment values for checkout filter commands without modifying the current process.
+    ///
+    /// Repeated keys use their last value. Repository context takes precedence. These values are
+    /// not persisted and do not reinterpret Git configuration from `GIT_CONFIG_*`.
+    pub fn with_command_environment(
+        mut self,
+        environment: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+    ) -> Self {
+        self.command_environment = environment.into_iter().collect();
+        self
     }
 }
 

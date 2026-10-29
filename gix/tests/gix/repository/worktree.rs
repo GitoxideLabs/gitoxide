@@ -1,6 +1,85 @@
 use gix_ref::bstr;
 use gix_testtools::{Result, TestResult};
 
+#[test]
+fn checked_out_branches_includes_main_and_symbolic_referents() -> TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_indirect_head_repos.sh")?;
+    for state in ["committed", "packed", "empty", "staged"] {
+        let occupied_path = fixture.join(state);
+        let mut callers = vec![occupied_path.clone()];
+        if matches!(state, "committed" | "packed") {
+            callers.push(fixture.join(format!("linked-{state}")));
+        }
+        for caller in callers {
+            let repo = gix::open_opts(caller, crate::restricted())?;
+            let branches = repo.checked_out_branches()?;
+            for name in ["main", "alias", "topic"] {
+                let name = gix::refs::FullName::try_from(format!("refs/heads/{name}"))?;
+                let paths = branches.get(&name).expect("every symbolic referent is reserved");
+                assert_eq!(paths.len(), 1, "each occupied worktree is reported once");
+                assert_eq!(
+                    paths[0].canonicalize()?,
+                    occupied_path.canonicalize()?,
+                    "main and linked callers identify the same occupied worktree, even with an unborn HEAD"
+                );
+            }
+        }
+    }
+    let repo = gix::open_opts(fixture.join("malformed"), crate::restricted())?;
+    assert!(
+        repo.checked_out_branches().is_err(),
+        "an unreadable symbolic referent cannot be ignored when protecting branches"
+    );
+    Ok(())
+}
+
+#[test]
+fn checked_out_branches_reserves_rebase_update_refs() -> TestResult {
+    for occupied in ["main", "linked"] {
+        let Some(fixture) = gix_testtools::scripted_fixture_read_only_with_args_with_git_version(
+            "make_worktree_reserved_branches.sh",
+            ["rebase-update-refs", occupied],
+            |version| version >= (2, 38, 0),
+        )?
+        else {
+            return Ok(());
+        };
+        for caller in ["main", "linked"] {
+            let repo = gix::open_opts(fixture.join(caller), crate::restricted())?;
+            let branches = repo.checked_out_branches()?;
+            let name = gix::refs::FullName::try_from("refs/heads/intermediate")?;
+            let paths = branches.get(&name).expect("rebase reserves its intermediate branches");
+            assert_eq!(paths.len(), 1, "the rebase worktree is reported once");
+            assert_eq!(
+                paths[0].canonicalize()?,
+                fixture.join(occupied).canonicalize()?,
+                "both callers locate the rebase's worktree"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn checked_out_branches_rejects_invalid_rebase_update_refs() -> TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_invalid_rebase_update_refs.sh")?;
+    for name in [
+        "missing-before",
+        "missing-after",
+        "invalid-before",
+        "invalid-after",
+        "invalid-ref",
+        "wrong-hash",
+    ] {
+        let repo = gix::open_opts(fixture.join(name), crate::restricted())?;
+        assert!(
+            repo.checked_out_branches().is_err(),
+            "{name}: unreadable reservations must not allow a branch to be overwritten"
+        );
+    }
+    Ok(())
+}
+
 #[cfg(feature = "worktree-mutation")]
 mod lock {
     use gix::bstr::ByteSlice;
@@ -101,6 +180,178 @@ mod lock {
 
 #[cfg(feature = "worktree-mutation")]
 mod add {
+    #[test]
+    fn registration_preserves_existing_contents_and_git_reads_its_links() -> gix_testtools::TestResult {
+        for relative in [false, true] {
+            let (mut repo, _fixture) = crate::basic_rw_repo()?;
+            repo.config_snapshot_mut()
+                .set_raw_value("worktree.useRelativePaths", if relative { "true" } else { "false" })?;
+            let work_dir = repo.workdir().expect("main checkout").to_owned();
+            for name in ["first", "second"] {
+                let destination = work_dir.join(name);
+                std::fs::create_dir_all(destination.join("nested"))?;
+                std::fs::write(destination.join("nested/keep"), b"existing contents")?;
+                let linked = repo.register_worktree(
+                    &destination,
+                    gix::worktree::add::Head::Unborn("refs/custom/unborn".try_into()?),
+                    &AtomicBool::default(),
+                )?;
+                assert_eq!(
+                    std::fs::read(destination.join("nested/keep"))?,
+                    b"existing contents",
+                    "registration preserves all caller data"
+                );
+                assert!(
+                    !linked.index_path().exists(),
+                    "registration performs no checkout or index creation"
+                );
+                assert_eq!(
+                    gix_testtools::git(&destination, "symbolic-ref HEAD")?,
+                    "refs/custom/unborn\n",
+                    "Git recognizes the unborn worktree"
+                );
+                assert!(
+                    gix_testtools::git(&work_dir, "worktree list --porcelain")?.contains(name),
+                    "Git reads the registration backlink"
+                );
+                assert_eq!(
+                    gix_path::realpath(repo.worktree_proxy_by_id(name)?.expect("new registration").base()?)?,
+                    gix_path::realpath(&destination)?,
+                    "registration points at the caller's populated directory"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn failed_registration_preserves_populated_destination() -> gix_testtools::TestResult {
+        let (mut repo, _fixture) = crate::basic_rw_repo()?;
+        let destination = repo.workdir().expect("main checkout").join("populated");
+        std::fs::create_dir(&destination)?;
+        std::fs::write(destination.join("keep"), b"caller data")?;
+        repo.config_snapshot_mut()
+            .set_raw_value("extensions.worktreeConfig", "true")?;
+        std::fs::create_dir(repo.git_dir().join("config.worktree"))?;
+        repo.register_worktree(
+            &destination,
+            gix::worktree::add::Head::Unborn(branch("unborn")),
+            &AtomicBool::default(),
+        )
+        .expect_err("an unreadable worktree config fails after link preparation");
+        assert_eq!(
+            std::fs::read(destination.join("keep"))?,
+            b"caller data",
+            "failed initialization preserves caller contents"
+        );
+        assert!(
+            !destination.join(".git").exists(),
+            "failed registration removes its own link"
+        );
+        assert!(
+            repo.worktrees()?.is_empty(),
+            "failed registration leaves no private administration"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unborn_heads_match_git_and_do_not_create_a_branch_or_reflog() -> gix_testtools::TestResult {
+        let (repo, _fixture) = crate::basic_rw_repo()?;
+        let work_dir = repo.workdir().expect("main checkout");
+        gix_testtools::git(work_dir, "worktree add --orphan -b git-unborn git-created")?;
+        let git_created = gix::open_opts(work_dir.join("git-created"), crate::restricted())?;
+        let (created, outcome) = repo.add_worktree(
+            work_dir.join("gix-created"),
+            gix::worktree::add::Head::Unborn(branch("gix-unborn")),
+            gix::progress::Discard,
+            &AtomicBool::default(),
+        )?;
+        assert_eq!(outcome.files_updated, 0, "an unborn HEAD has nothing to check out");
+        for (repository, name) in [(&git_created, "git-unborn"), (&created, "gix-unborn")] {
+            assert_eq!(
+                repository.head_name()?,
+                Some(branch(name)),
+                "HEAD retains its unborn name"
+            );
+            assert!(
+                repository.head()?.is_unborn(),
+                "neither implementation creates a commit"
+            );
+            assert!(
+                repository.try_find_reference(branch(name).as_ref())?.is_none(),
+                "the branch does not exist yet"
+            );
+            assert!(
+                !repository.git_dir().join("logs/HEAD").exists(),
+                "no initial HEAD reflog exists"
+            );
+            assert!(
+                repository.index()?.entries().is_empty(),
+                "orphan creation leaves the index empty"
+            );
+            assert_eq!(
+                gix_testtools::git(repository.workdir().expect("linked checkout"), "status --porcelain")?,
+                "",
+                "Git reads an empty worktree with no staged changes"
+            );
+        }
+        let prepared = repo.prepare_add_worktree(
+            work_dir.join("custom-unborn"),
+            gix::worktree::add::Head::Unborn("refs/custom/unborn".try_into()?),
+            &AtomicBool::default(),
+        )?;
+        assert_eq!(
+            prepared.repo().head_name()?.expect("symbolic HEAD").as_bstr(),
+            "refs/custom/unborn",
+            "registration accepts any full symbolic HEAD target beneath refs/"
+        );
+        assert!(
+            !prepared.repo().index_path().exists(),
+            "preparation defers index creation"
+        );
+        let custom = prepared.persist()?;
+        custom
+            .worktree()
+            .expect("linked worktree")
+            .checkout(gix::progress::Discard, &AtomicBool::default())?;
+        assert!(
+            custom.index()?.entries().is_empty(),
+            "deferred checkout also supports unborn HEAD"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unborn_heads_reject_existing_and_occupied_references() -> gix_testtools::TestResult {
+        let (repo, _fixture) = crate::basic_rw_repo()?;
+        let work_dir = repo.workdir().expect("main checkout");
+        gix_testtools::git(work_dir, "branch existing")?;
+        gix_testtools::git(work_dir, "worktree add --orphan -b reserved reserved")?;
+        for name in ["existing", "reserved"] {
+            if name == "existing" {
+                gix_testtools::git(work_dir, &format!("worktree add --orphan -b {name} git-rejected"))
+                    .expect_err("Git rejects existing branch names");
+            }
+            // Git currently allows two worktrees to reserve the same unborn branch. Keep the
+            // occupancy invariant here so their first commits cannot unexpectedly share a branch.
+            let destination = work_dir.join("gix-rejected");
+            let err = repo
+                .prepare_add_worktree(
+                    &destination,
+                    gix::worktree::add::Head::Unborn(branch(name)),
+                    &AtomicBool::default(),
+                )
+                .expect_err("unborn creation must not replace or share a branch");
+            assert!(
+                err.is_conflict(),
+                "reference conflicts are recoverable by selecting another name: {err:?}"
+            );
+            assert!(!destination.exists(), "reference validation precedes registration");
+        }
+        Ok(())
+    }
+
     #[test]
     fn returned_repositories_and_preparation_have_absolute_paths() -> gix_testtools::TestResult {
         let (source, _fixture) = crate::basic_rw_repo()?;
@@ -975,6 +1226,7 @@ mod add {
         config.set_raw_value("filter.shared.required", "true")?;
         config.commit()?;
         source.reload()?;
+        std::fs::create_dir_all(source.common_dir().join("info"))?;
         std::fs::write(
             source.common_dir().join("info/attributes"),
             b"this text eol=crlf filter=shared\n",
@@ -1840,6 +2092,142 @@ mod add {
 
 #[cfg(feature = "worktree-mutation")]
 mod remove {
+    #[test]
+    fn unlink_preserves_dirty_files_and_other_worktree_registrations() -> gix_testtools::TestResult {
+        let (repo, _fixture) = crate::basic_rw_repo()?;
+        let work_dir = repo.workdir().expect("main checkout");
+        let destination = work_dir.join("unlink-me");
+        let (linked, _) = repo.add_worktree(
+            &destination,
+            gix::worktree::add::Head::Detached(repo.head_id()?.detach()),
+            gix::progress::Discard,
+            &AtomicBool::default(),
+        )?;
+        std::fs::write(destination.join("a"), b"modified tracked content")?;
+        std::fs::create_dir(destination.join("nested"))?;
+        std::fs::write(destination.join("nested/keep"), b"untracked contents")?;
+        let missing = repo.register_worktree(
+            work_dir.join("missing"),
+            gix::worktree::add::Head::Detached(repo.head_id()?.detach()),
+            &AtomicBool::default(),
+        )?;
+        std::fs::remove_dir_all(missing.workdir().expect("linked checkout"))?;
+
+        repo.unlink_worktree(&destination, gix::worktree::remove::Force::Never)?;
+        assert_eq!(
+            std::fs::read(destination.join("a"))?,
+            b"modified tracked content",
+            "unlinking preserves modified tracked files"
+        );
+        assert_eq!(
+            std::fs::read(destination.join("nested/keep"))?,
+            b"untracked contents",
+            "unlinking preserves untracked directories"
+        );
+        assert!(
+            !destination.join(".git").exists(),
+            "only the worktree link is removed from the checkout"
+        );
+        assert!(
+            !linked.git_dir().exists(),
+            "the selected private administration is removed"
+        );
+        assert!(
+            missing.git_dir().is_dir(),
+            "unlinking never prunes unrelated missing worktrees"
+        );
+        let listed = gix_testtools::git(work_dir, "worktree list --porcelain")?;
+        assert!(
+            !listed.contains("unlink-me"),
+            "Git no longer lists the unlinked worktree"
+        );
+        assert!(
+            listed.contains("missing"),
+            "Git still lists unrelated stale registrations"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unlink_rejects_foreign_links_and_respects_locks() -> gix_testtools::TestResult {
+        let (repo, _fixture) = crate::basic_rw_repo()?;
+        let destination = repo.workdir().expect("main checkout").join("linked");
+        let linked = repo.register_worktree(
+            &destination,
+            gix::worktree::add::Head::Unborn("refs/custom/unborn".try_into()?),
+            &AtomicBool::default(),
+        )?;
+        let original_link = std::fs::read(destination.join(".git"))?;
+        let proxy = repo.worktree_proxy_by_id("linked")?.expect("registered worktree");
+        proxy.set_lock(Some("retain registration".into()))?;
+        for force in [
+            gix::worktree::remove::Force::Never,
+            gix::worktree::remove::Force::DiscardChanges,
+        ] {
+            let err = repo
+                .unlink_worktree(&destination, force)
+                .expect_err("unlinking respects worktree locks");
+            assert!(err.is_conflict(), "the retained lock is reported as a conflict");
+        }
+        std::fs::write(
+            destination.join(".git"),
+            format!("gitdir: {}\n", repo.git_dir().display()),
+        )?;
+        repo.unlink_worktree(&destination, gix::worktree::remove::Force::OverrideLock)
+            .expect_err("overriding locks never bypasses link validation");
+        assert!(
+            linked.git_dir().is_dir(),
+            "a foreign link preserves the selected registration"
+        );
+        std::fs::write(destination.join(".git"), original_link)?;
+        proxy.unlink(gix::worktree::remove::Force::OverrideLock)?;
+        assert!(
+            destination.is_dir(),
+            "overriding a lock still retains the checkout directory"
+        );
+        assert!(!linked.git_dir().exists(), "the selected registration is unlinked");
+        Ok(())
+    }
+
+    #[test]
+    fn unlink_cleans_missing_links_and_rejects_the_main_worktree() -> gix_testtools::TestResult {
+        let (repo, _fixture) = crate::basic_rw_repo()?;
+        let destination = repo.workdir().expect("main checkout").join("linked");
+        for missing_directory in [false, true] {
+            let linked = repo.register_worktree(
+                &destination,
+                gix::worktree::add::Head::Unborn("refs/custom/unborn".try_into()?),
+                &AtomicBool::default(),
+            )?;
+            if missing_directory {
+                std::fs::remove_dir_all(&destination)?;
+            } else {
+                std::fs::remove_file(destination.join(".git"))?;
+                std::fs::write(destination.join("keep"), b"caller contents")?;
+            }
+            repo.prepare_remove_worktree(&destination)?
+                .unlink(gix::worktree::remove::Force::Never)?;
+            assert!(
+                !linked.git_dir().exists(),
+                "missing checkout links still allow removing stale registration"
+            );
+            if !missing_directory {
+                assert_eq!(
+                    std::fs::read(destination.join("keep"))?,
+                    b"caller contents",
+                    "unlinking preserves the remaining checkout"
+                );
+            }
+        }
+        repo.unlink_worktree(
+            repo.workdir().expect("main checkout"),
+            gix::worktree::remove::Force::OverrideLock,
+        )
+        .expect_err("the main worktree cannot be unlinked");
+        assert!(repo.git_dir().is_dir(), "main Git metadata is retained");
+        Ok(())
+    }
+
     /// Writes once after each removal root has been scanned, through its existing progress API.
     struct LateWriter {
         name: String,
@@ -2291,6 +2679,18 @@ mod remove {
             err.downcast_any_ref::<gix::worktree::remove::Error>(),
             Some(gix::worktree::remove::Error::ContainsSubmodule { .. })
         ));
+
+        let err = repo
+            .unlink_worktree(&destination, Force::Never)
+            .expect_err("unlinking must not discard private submodule metadata without force");
+        assert!(matches!(
+            err.downcast_any_ref::<gix::worktree::remove::Error>(),
+            Some(gix::worktree::remove::Error::ContainsSubmodule { .. })
+        ));
+        assert!(
+            destination.join(".git").is_file(),
+            "submodule rejection preserves the worktree link"
+        );
 
         repo.remove_worktree(&destination, Force::DiscardChanges, gix::progress::Discard)?;
         Ok(())

@@ -217,6 +217,8 @@ pub mod commit;
 #[cfg(feature = "dirwalk")]
 pub mod dirwalk;
 pub mod head;
+#[cfg(feature = "command")]
+pub use gix_hook as hook;
 pub mod id;
 pub mod object;
 #[cfg(feature = "attributes")]

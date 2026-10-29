@@ -105,3 +105,6 @@ where
         missing_cb(oid, Kind::Blob);
     }
 }
+
+/// Raw object structure checks and Git-compatible diagnostic policy.
+pub mod objects;

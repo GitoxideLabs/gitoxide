@@ -148,6 +148,82 @@ mod is_missing_required_mapping {
         assert!(!map.is_missing_required_mapping());
     }
 
+    #[test]
+    fn a_missing_exact_source_is_required_even_when_another_spec_matches() -> gix_testtools::TestResult {
+        let capabilities = gix_transport::client::Capabilities::from_bytes(b"\0object-format=sha1")?.0;
+        let map = RefMap::from_refs(
+            vec![Ref::Direct {
+                full_ref_name: "refs/heads/main".into(),
+                object: gix_hash::ObjectId::null(gix_hash::Kind::Sha1),
+            }],
+            &capabilities,
+            gix_protocol::fetch::refmap::init::Context {
+                fetch_refspecs: vec![fetch_spec("refs/heads/main"), fetch_spec("refs/heads/absent")],
+                extra_refspecs: Vec::new(),
+            },
+        )?;
+        assert!(
+            map.is_missing_required_mapping(),
+            "every exact requested source must exist before fetching"
+        );
+        assert_eq!(
+            map.missing_source_refs().collect::<Vec<_>>(),
+            ["refs/heads/absent"],
+            "the missing request is named"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unmatched_wildcards_allow_unrelated_advertisements() -> gix_testtools::TestResult {
+        let capabilities = gix_transport::client::Capabilities::from_bytes(b"\0object-format=sha1")?.0;
+        let map = RefMap::from_refs(
+            vec![Ref::Direct {
+                full_ref_name: "refs/tags/v1".into(),
+                object: gix_hash::ObjectId::null(gix_hash::Kind::Sha1),
+            }],
+            &capabilities,
+            gix_protocol::fetch::refmap::init::Context {
+                fetch_refspecs: vec![fetch_spec("refs/heads/*:refs/remotes/origin/*")],
+                extra_refspecs: Vec::new(),
+            },
+        )?;
+        assert!(
+            !map.is_missing_required_mapping(),
+            "a wildcard namespace can be empty even when other namespaces exist"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn duplicate_partial_and_excluded_sources_are_still_advertised() -> gix_testtools::TestResult {
+        let capabilities = gix_transport::client::Capabilities::from_bytes(b"\0object-format=sha1")?.0;
+        let map = RefMap::from_refs(
+            vec![Ref::Direct {
+                full_ref_name: "refs/heads/main".into(),
+                object: gix_hash::ObjectId::null(gix_hash::Kind::Sha1),
+            }],
+            &capabilities,
+            gix_protocol::fetch::refmap::init::Context {
+                fetch_refspecs: vec![
+                    fetch_spec("refs/heads/main"),
+                    fetch_spec("main"),
+                    fetch_spec("^refs/heads/main"),
+                ],
+                extra_refspecs: Vec::new(),
+            },
+        )?;
+        assert!(
+            map.mappings.is_empty(),
+            "the negative refspec removes all selected mappings"
+        );
+        assert!(
+            !map.is_missing_required_mapping(),
+            "selection excludes an existing source, so it isn't missing"
+        );
+        Ok(())
+    }
+
     /// Once at least one explicit refspec produced a mapping, the helper must report success.
     ///
     /// This is the common case of an exact refspec matching as intended, so callers should continue with
@@ -166,5 +242,85 @@ mod is_missing_required_mapping {
         };
 
         assert!(!map.is_missing_required_mapping());
+    }
+}
+
+mod remote_head_candidates {
+    use gix_protocol::{fetch::RefMap, handshake::Ref};
+
+    fn direct(name: &str, object: gix_hash::ObjectId) -> Ref {
+        Ref::Direct {
+            full_ref_name: name.into(),
+            object,
+        }
+    }
+
+    #[test]
+    fn advertised_head_candidates_distinguish_symbolic_detached_and_unborn_heads() {
+        let commit_id = gix_hash::ObjectId::from_hex(b"1111111111111111111111111111111111111111").expect("valid id");
+        let other_id = gix_hash::ObjectId::from_hex(b"2222222222222222222222222222222222222222").expect("valid id");
+        let branches = [direct("refs/heads/\"", commit_id), direct("refs/heads/other", other_id)];
+        let cases = [
+            (None, Vec::new()),
+            (Some(direct("HEAD", commit_id)), vec!["refs/heads/\""]),
+            (
+                Some(Ref::Symbolic {
+                    full_ref_name: "HEAD".into(),
+                    target: "refs/heads/other".into(),
+                    tag: None,
+                    object: other_id,
+                }),
+                vec!["refs/heads/other"],
+            ),
+            (
+                Some(Ref::Symbolic {
+                    full_ref_name: "HEAD".into(),
+                    target: "refs/heads/hidden".into(),
+                    tag: None,
+                    object: commit_id,
+                }),
+                Vec::new(),
+            ),
+            (
+                Some(Ref::Unborn {
+                    full_ref_name: "HEAD".into(),
+                    target: "refs/heads/missing".into(),
+                }),
+                Vec::new(),
+            ),
+        ];
+        for (head, expected) in cases {
+            let map = RefMap {
+                remote_refs: head
+                    .into_iter()
+                    .chain(branches.clone())
+                    .chain([direct("refs/tags/tag", commit_id)])
+                    .collect(),
+                ..Default::default()
+            };
+            let actual: Vec<_> = map
+                .remote_head_candidates()
+                .map(|reference| reference.unpack().0)
+                .collect();
+            let expected: Vec<&bstr::BStr> = expected.iter().map(|name| (*name).into()).collect();
+            assert_eq!(
+                actual, expected,
+                "only advertised branches can identify the remote HEAD"
+            );
+        }
+
+        let map = RefMap {
+            remote_refs: vec![
+                direct("HEAD", commit_id),
+                direct("refs/heads/one", commit_id),
+                direct("refs/heads/two", commit_id),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            map.remote_head_candidates().count(),
+            2,
+            "ambiguous detached HEADs retain all candidates"
+        );
     }
 }

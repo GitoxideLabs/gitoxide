@@ -2,7 +2,18 @@ use gix::{
     Result,
     error::{OptionExt, ResultExt, message},
 };
-pub fn function(repo: Option<gix::Repository>, action: gix::credentials::program::main::Action) -> Result<()> {
+#[derive(Default)]
+pub struct Options {
+    pub config: Vec<gix::bstr::BString>,
+    #[cfg(unix)]
+    pub cache_daemon: Option<gix::credentials::program::cache::DaemonCommand>,
+}
+
+pub fn function(
+    repo: Option<gix::Repository>,
+    action: gix::credentials::program::main::Action,
+    options: Options,
+) -> Result<()> {
     use gix::credentials::program::main::Action::*;
     gix::credentials::program::main(
         Some(action.as_str().into()),
@@ -21,8 +32,11 @@ pub fn function(repo: Option<gix::Repository>, action: gix::credentials::program
                     .credential_helpers(url)
                     .or_raise(|| message("Could not configure credential helpers"))?,
                 None => {
-                    let config = gix::config::File::from_globals()
-                        .or_raise(|| message("Could not load global configuration"))?;
+                    let config = gix::config(
+                        None,
+                        &gix::open::Options::default().cli_overrides(options.config.clone()),
+                    )
+                    .or_raise(|| message("Could not load global configuration"))?;
                     let environment = gix::open::permissions::Environment::all();
                     gix::config::credential_helpers(
                         url,
@@ -35,6 +49,12 @@ pub fn function(repo: Option<gix::Repository>, action: gix::credentials::program
                     .or_raise(|| message("Could not configure credential helpers"))?
                 }
             };
+            #[cfg(unix)]
+            if let Some(command) = &options.cache_daemon {
+                for program in &mut cascade.programs {
+                    program.cache_daemon = Some(command.clone());
+                }
+            }
             cascade
                 .invoke(
                     match action {

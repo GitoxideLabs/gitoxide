@@ -40,6 +40,41 @@ fn byte_lines_without_terminator() -> TestResult {
 }
 
 #[test]
+fn cached_blob_conversion_respects_path_attributes() -> TestResult {
+    let mut platform = new_platform(
+        Some(gix_diff::blob::Driver {
+            name: "a".into(),
+            is_binary: Some(true),
+            ..Default::default()
+        }),
+        pipeline::Mode::ToGit,
+    );
+    platform.filter.roots = Default::default();
+    let db = object_db();
+    let blob_id = insert(&db, "same stored bytes")?;
+    platform.set_resource(blob_id, EntryKind::Blob, "a".into(), ResourceKind::OldOrSource, &db)?;
+    platform.set_resource(
+        blob_id,
+        EntryKind::Blob,
+        "unconfigured".into(),
+        ResourceKind::NewOrDestination,
+        &db,
+    )?;
+    let (old, new) = platform.resources().expect("both resources were set");
+    assert!(
+        old.data.as_slice().is_none(),
+        "the configured driver marks path a as binary"
+    );
+    assert_eq!(
+        new.data.as_slice(),
+        Some(b"same stored bytes".as_slice()),
+        "the same blob at another path has independent conversion attributes"
+    );
+    assert_eq!(new.driver_index, None);
+    Ok(())
+}
+
+#[test]
 fn resources_of_worktree_and_odb_and_check_link() -> TestResult {
     let mut platform = new_platform(
         Some(gix_diff::blob::Driver {
@@ -206,6 +241,62 @@ fn resources_of_worktree_and_odb_and_check_link() -> TestResult {
         "after a proper clearing, the free-list is also emptied, and it won't be recreated"
     );
 
+    Ok(())
+}
+
+#[test]
+fn external_diff_shell_commands_receive_protocol_arguments() -> TestResult {
+    let mut platform = new_platform(None, Default::default());
+    platform.set_resource(
+        gix_hash::Kind::Sha1.null(),
+        EntryKind::Blob,
+        "a".into(),
+        ResourceKind::OldOrSource,
+        &gix_object::find::Never,
+    )?;
+    let db = object_db();
+    let new_id = insert(&db, "new content")?;
+    let new_path = "renamed ' $* &.txt";
+    platform.set_resource(
+        new_id,
+        EntryKind::BlobExecutable,
+        new_path.into(),
+        ResourceKind::NewOrDestination,
+        &db,
+    )?;
+
+    let mut command = platform.prepare_diff_command(
+        r#"printf '%s\n' "$GIT_DIFF_PATH_COUNTER" "$GIT_DIFF_PATH_TOTAL" 'fixed argument'"#.into(),
+        Default::default(),
+        1,
+        3,
+    )?;
+    let output = command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()?;
+    assert!(output.status.success(), "{}", output.stderr.as_bstr());
+    let lines: Vec<_> = output.stdout.lines().map(ByteSlice::as_bstr).collect();
+    assert_eq!(lines.len(), 11, "the shell receives all eight external-diff arguments");
+    assert_eq!(
+        lines,
+        [
+            "2".as_bytes().as_bstr(),
+            "3".as_bytes().as_bstr(),
+            "fixed argument".as_bytes().as_bstr(),
+            "a".as_bytes().as_bstr(),
+            lines[4],
+            gix_hash::Kind::Sha1.null().to_string().as_bytes().as_bstr(),
+            "100644".as_bytes().as_bstr(),
+            lines[7],
+            new_id.to_string().as_bytes().as_bstr(),
+            "100755".as_bytes().as_bstr(),
+            new_path.as_bytes().as_bstr(),
+        ],
+        "configured arguments precede the literal external-diff protocol arguments"
+    );
+    assert_eq!(std::fs::read(gix_path::from_bstr(lines[4])?)?, b"a\n");
+    assert_eq!(std::fs::read(gix_path::from_bstr(lines[7])?)?, b"new content");
     Ok(())
 }
 

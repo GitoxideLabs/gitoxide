@@ -22,8 +22,7 @@ pub(crate) mod function {
             gix_url::Scheme::Git => {
                 if url.user().is_some() {
                     bail!(
-                        "The url {:?} contains information that would not be used by the {} protocol".validation(),
-                        url.to_bstring(),
+                        "The URL contains authority information that would not be used by the {} protocol".validation(),
                         url.scheme
                     );
                 }

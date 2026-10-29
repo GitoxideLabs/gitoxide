@@ -34,6 +34,106 @@ fn from_tree() -> gix_testtools::TestResult {
 }
 
 #[test]
+fn from_tree_with_index_reuses_git_cache_metadata() -> TestResult {
+    let fixture = scripted_fixture_read_only("make_tree_with_index_cache.sh")?;
+    let read_index = |name| {
+        gix_index::File::at(
+            fixture.join(name),
+            gix_testtools::object_hash(),
+            false,
+            Default::default(),
+        )
+    };
+    let previous = read_index("previous.index")?;
+    let expected = read_index("expected.index")?;
+    let odb = odb_at(fixture.join(".git/objects"))?;
+    let actual = State::from_tree_with_index(
+        &tree_id(&fixture),
+        &odb,
+        Default::default(),
+        &previous,
+        Default::default(),
+    )?;
+    compare_states(&actual, &expected, "Git read-tree --reset");
+    for (actual, expected) in actual.entries().iter().zip(expected.entries()) {
+        assert_eq!(
+            actual.stat, expected.stat,
+            "only unchanged entries retain their filesystem cache"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn from_tree_with_index_does_not_reuse_racy_or_unmerged_entries() -> TestResult {
+    use gix_index::entry::{Flags, Stage};
+
+    let fixture = scripted_fixture_read_only("make_tree_with_index_cache.sh")?;
+    let odb = odb_at(fixture.join(".git/objects"))?;
+    let tree_id = tree_id(&fixture);
+    let mut previous = State::from_tree(&tree_id, &odb, Default::default())?;
+    previous.set_timestamp(filetime::FileTime::from_unix_time(42, 0));
+    for entry in previous.entries_mut() {
+        entry.stat.mtime.secs = 42;
+        entry.stat.size = 123;
+        entry.flags |= Flags::INTENT_TO_ADD | Flags::UPTODATE | Flags::FSMONITOR_VALID;
+    }
+    previous
+        .entry_mut_by_path_and_stage("mode".into(), Stage::Unconflicted)
+        .expect("fixture contains mode")
+        .flags = Flags::from_stage(Stage::Ours) | Flags::ASSUME_VALID;
+    let actual = State::from_tree_with_index(&tree_id, &odb, Default::default(), &previous, Default::default())?;
+    for entry in actual.entries() {
+        assert_eq!(
+            entry.stat,
+            Default::default(),
+            "racy and conflict cache entries are invalidated"
+        );
+        assert_eq!(
+            entry.flags,
+            Flags::empty(),
+            "conflict, intent-to-add and transient flags are not copied"
+        );
+    }
+    assert_eq!(
+        previous.entries()[0].stat.size,
+        123,
+        "cache reuse never mutates the previous index"
+    );
+    Ok(())
+}
+
+#[test]
+fn from_tree_with_index_keeps_expanded_sparse_directories_skipped() -> TestResult {
+    use gix_index::entry::Flags;
+
+    let fixture = scripted_fixture_read_only("make_index/v3_sparse_index.sh")?;
+    let previous = gix_index::File::at(
+        fixture.join(".git/index"),
+        gix_testtools::object_hash(),
+        false,
+        Default::default(),
+    )?;
+    assert!(
+        previous.is_sparse(),
+        "the fixture uses compressed sparse-directory entries"
+    );
+    let tree_id: gix_hash::ObjectId = gix_testtools::git(&fixture, "rev-parse HEAD^{tree}")?.trim().parse()?;
+    let odb = odb_at(fixture.join(".git/objects"))?;
+    let actual = State::from_tree_with_index(&tree_id, &odb, Default::default(), &previous, Default::default())?;
+    assert!(!actual.is_sparse(), "tree construction expands sparse directories");
+    for entry in actual.entries() {
+        let path = entry.path(&actual);
+        assert_eq!(
+            entry.flags.contains(Flags::SKIP_WORKTREE),
+            path.starts_with(b"d/") || path.starts_with(b"c1/c3/"),
+            "expanded entries retain their sparse directory's exclusion: {path}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn from_tree_validation() -> TestResult {
     let mut error_snapshots = Vec::new();
     use gix_index::validate::path::component::Error;

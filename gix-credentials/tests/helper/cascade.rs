@@ -28,6 +28,7 @@ mod invoke {
                         ..Default::default()
                     }),
                     gix_prompt::Options {
+                        current_dir: None,
                         mode: gix_prompt::Mode::Disable,
                         askpass: None,
                     },
@@ -72,15 +73,15 @@ mod invoke {
             I/O error (Other)
             
             Caused by:
-                0: "wwwauth[]"="Basic realm=\"a\rb\"" must not contain null bytes or newlines neither in key nor in value., input="Basic realm=\"a\rb\"",
+                0: Credential fields must not contain null bytes or newlines,
             I/O error (Other)
             
             Caused by:
-                0: "wwwauth[]"="Basic\nusername=other" must not contain null bytes or newlines neither in key nor in value., input="Basic\nusername=other",
+                0: Credential fields must not contain null bytes or newlines,
             I/O error (Other)
             
             Caused by:
-                0: "wwwauth[]"="Basic\0realm=example" must not contain null bytes or newlines neither in key nor in value., input="Basic\0realm=example",
+                0: Credential fields must not contain null bytes or newlines,
         ]
         "#);
     }
@@ -102,6 +103,7 @@ mod invoke {
                     ..Default::default()
                 }),
                 gix_prompt::Options {
+                    current_dir: None,
                     mode: gix_prompt::Mode::Disable,
                     askpass: None,
                 },
@@ -137,6 +139,7 @@ mod invoke {
                     ..Default::default()
                 }),
                 gix_prompt::Options {
+                    current_dir: None,
                     mode: gix_prompt::Mode::Disable,
                     askpass: None,
                 },
@@ -174,6 +177,7 @@ mod invoke {
         .invoke(
             action_get(),
             gix_prompt::Options {
+                current_dir: None,
                 mode: gix_prompt::Mode::Disable,
                 askpass: None,
             },
@@ -290,6 +294,61 @@ mod invoke {
     }
 
     #[test]
+    fn helpers_can_quit_before_prompting_for_incomplete_credentials() -> TestResult {
+        use std::{io::Write, process::Stdio};
+
+        let definition = "!f() { cat >/dev/null; echo quit=true; }; f";
+        let askpass = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/askpass.sh");
+        let temporary = gix_testtools::tempfile::tempdir()?;
+        let mut git = gix_testtools::git_command(temporary.path())
+            .args([
+                "-c",
+                "credential.helper=",
+                "-c",
+                &format!("credential.helper={definition}"),
+                "credential",
+                "fill",
+            ])
+            .env("GIT_ASKPASS", &askpass)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        git.stdin
+            .take()
+            .expect("piped input")
+            .write_all(b"url=https://example.com\n\n")?;
+        let output = git.wait_with_output()?;
+        assert!(!output.status.success(), "Git honors a helper's request to quit");
+        assert!(
+            output.stdout.is_empty(),
+            "Git returns no prompted identity after quitting"
+        );
+        assert!(
+            output.stderr.contains_str("told us to quit"),
+            "the reference failed due to the helper's quit request"
+        );
+
+        let err = Cascade::default()
+            .extend([Program::from_custom_definition(definition)?])
+            .invoke(
+                Action::get_for_url("https://example.com"),
+                gix_prompt::Options {
+                    current_dir: None,
+                    mode: gix_prompt::Mode::Hidden,
+                    askpass: Some(askpass),
+                },
+            )
+            .expect_err("a helper can stop authentication before the prompt supplies credentials");
+        assert!(
+            err.is_cancelled(),
+            "a helper's quit request remains a cancellation: {err}"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn expired_credentials_are_not_returned() -> TestResult {
         let actual = invoke_cascade(
             ["expired", "oauth-token", "custom-helper"],
@@ -316,6 +375,7 @@ mod invoke {
             .invoke(
                 Action::get_for_url("ssh://git@host/repo"),
                 gix_prompt::Options {
+                    current_dir: None,
                     mode: gix_prompt::Mode::Disable,
                     askpass: None,
                 },
@@ -344,6 +404,7 @@ mod invoke {
         Cascade::default().use_http_path(true).extend(fixtures(names)).invoke(
             action,
             gix_prompt::Options {
+                current_dir: None,
                 mode: gix_prompt::Mode::Disable,
                 askpass: None,
             },
@@ -353,4 +414,308 @@ mod invoke {
     fn fixtures<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<Program> {
         names.into_iter().map(crate::helper::script_helper).collect()
     }
+}
+
+#[test]
+fn operation_environment_reaches_helpers_without_changing_the_process() -> gix_testtools::TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _environment = gix_testtools::Env::new().set("GIX_TEST_CREDENTIAL_VALUE", "process-value");
+    let mut cascade =
+        gix_credentials::helper::Cascade::default().extend([gix_credentials::Program::from_custom_definition(
+            "!f() { printf 'username=user\\npassword=%s\\n' \"$GIX_TEST_CREDENTIAL_VALUE\"; }; f",
+        )?]);
+    let action = gix_credentials::helper::Action::get_for_url("https://example.com");
+    let prompt = gix_prompt::Options {
+        current_dir: None,
+        mode: gix_prompt::Mode::Disable,
+        ..Default::default()
+    };
+    let outcome = cascade
+        .invoke_with_environment(
+            action.clone(),
+            prompt.clone(),
+            &[("GIX_TEST_CREDENTIAL_VALUE".into(), "operation-value".into())],
+        )?
+        .expect("helper supplies identity");
+    assert_eq!(outcome.identity.password, "operation-value");
+    assert_eq!(std::env::var("GIX_TEST_CREDENTIAL_VALUE")?, "process-value");
+    let outcome = cascade.invoke(action, prompt)?.expect("helper supplies identity");
+    assert_eq!(
+        outcome.identity.password, "process-value",
+        "per-operation values do not persist in reused cascades"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn operation_environment_reaches_askpass() -> gix_testtools::TestResult {
+    use std::os::unix::fs::PermissionsExt;
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let directory = gix_testtools::tempfile::tempdir()?;
+    let askpass = directory.path().join("askpass");
+    std::fs::write(
+        &askpass,
+        "#!/bin/sh
+test \"$GIX_TEST_ASKPASS_VALUE\" != fail || exit 1
+printf '%s\\n' \"$GIX_TEST_ASKPASS_VALUE\"
+",
+    )?;
+    std::fs::set_permissions(&askpass, std::fs::Permissions::from_mode(0o755))?;
+    let outcome = gix_credentials::helper::Cascade::default()
+        .invoke_with_environment(
+            gix_credentials::helper::Action::get_for_url("https://user@example.com"),
+            gix_prompt::Options {
+                current_dir: None,
+                askpass: Some(askpass.clone()),
+                mode: gix_prompt::Mode::Disable,
+            },
+            &[("GIX_TEST_ASKPASS_VALUE".into(), "per-operation-secret".into())],
+        )?
+        .expect("askpass supplies password");
+    assert_eq!(outcome.identity.password, "per-operation-secret");
+    assert!(
+        gix_credentials::helper::Cascade::default()
+            .invoke_with_environment(
+                gix_credentials::helper::Action::get_for_url("https://user@example.com"),
+                gix_prompt::Options {
+                    current_dir: None,
+                    askpass: Some(askpass),
+                    mode: gix_prompt::Mode::Disable
+                },
+                &[("GIX_TEST_ASKPASS_VALUE".into(), "fail".into())],
+            )
+            .is_err(),
+        "a failing askpass cannot enable a disabled terminal prompt or supply empty credentials"
+    );
+    Ok(())
+}
+
+mod invoke_with_prompt {
+    use gix_credentials::{
+        Program,
+        helper::{Action, Cascade},
+        protocol::Context,
+    };
+    use gix_prompt::{Mode, Options};
+    use gix_testtools::TestResult;
+
+    #[test]
+    fn supplies_missing_fields_with_their_visibility() -> TestResult {
+        let mut prompts = Vec::new();
+        let outcome = Cascade::default()
+            .invoke_with_prompt(
+                Action::Get(Context {
+                    url: Some("https://example.com/repo".into()),
+                    www_authenticate: vec!["Basic realm=example".into()],
+                    ..Default::default()
+                }),
+                Options::default(),
+                |message, options| {
+                    prompts.push((message.to_owned(), options.mode));
+                    Ok(match options.mode {
+                        Mode::Visible => "user",
+                        Mode::Hidden => "password",
+                        Mode::Disable => unreachable!("disabled prompts must not invoke the callback"),
+                    }
+                    .into())
+                },
+            )?
+            .expect("the callback supplies a complete identity");
+        assert_eq!(
+            prompts,
+            [
+                ("Username for 'https://example.com': ".into(), Mode::Visible),
+                ("Password for 'https://user@example.com': ".into(), Mode::Hidden),
+            ],
+            "prompts use the normalized context, including the username just obtained"
+        );
+        assert_eq!(
+            outcome.identity.username, "user",
+            "the username comes from the visible prompt"
+        );
+        assert_eq!(
+            outcome.identity.password, "password",
+            "the password comes from the hidden prompt"
+        );
+        let saved = Context::try_from(&outcome.next)?;
+        assert_eq!(
+            saved.username,
+            Some("user".into()),
+            "follow-up actions retain the identity"
+        );
+        assert_eq!(
+            saved.password,
+            Some("password".into()),
+            "follow-up actions retain the password"
+        );
+        assert_eq!(
+            saved.www_authenticate,
+            vec![bstr::BString::from("Basic realm=example")],
+            "prompted credentials retain authentication challenges like Git's credential response"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn helpers_run_before_the_prompt() -> TestResult {
+        let outcome = Cascade::default()
+            .extend([Program::from_custom_definition(
+                "!f() { cat >/dev/null; echo username=helper; }; f",
+            )?])
+            .invoke_with_prompt(
+                Action::get_for_url("https://example.com/repo"),
+                Options::default(),
+                |message, options| {
+                    assert_eq!(
+                        message, "Password for 'https://helper@example.com': ",
+                        "only the missing password is requested"
+                    );
+                    assert_eq!(options.mode, Mode::Hidden, "password input is secret");
+                    Ok("password".into())
+                },
+            )?
+            .expect("the helper and callback jointly supply an identity");
+        assert_eq!(outcome.identity.username, "helper", "the helper's username is retained");
+        Ok(())
+    }
+
+    #[test]
+    fn disabled_complete_cancelled_and_followup_actions_do_not_prompt() -> TestResult {
+        let never_prompt =
+            |_: &str, _: &Options| -> gix_error::Result<String> { panic!("this action must not prompt") };
+        let err = Cascade::default()
+            .invoke_with_prompt(
+                Action::get_for_url("https://example.com"),
+                Options {
+                    current_dir: None,
+                    mode: Mode::Disable,
+                    askpass: None,
+                },
+                never_prompt,
+            )
+            .expect_err("disabled prompting leaves credentials incomplete");
+        assert!(
+            err.is_unauthenticated(),
+            "disabled prompting reports the missing identity"
+        );
+        let outcome = Cascade::default()
+            .invoke_with_prompt(
+                Action::get_for_url("https://user:password@example.com"),
+                Options::default(),
+                never_prompt,
+            )?
+            .expect("the URL contains complete credentials");
+        for action in [outcome.next.clone().store(), outcome.next.erase()] {
+            assert!(
+                Cascade::default()
+                    .invoke_with_prompt(action, Options::default(), never_prompt)?
+                    .is_none(),
+                "follow-up actions have no identity outcome"
+            );
+        }
+        let err = Cascade::default()
+            .extend([Program::from_custom_definition(
+                "!f() { cat >/dev/null; echo quit=true; }; f",
+            )?])
+            .invoke_with_prompt(
+                Action::get_for_url("https://example.com"),
+                Options::default(),
+                never_prompt,
+            )
+            .expect_err("the helper cancels authentication");
+        assert!(err.is_cancelled(), "the helper's cancellation remains classified");
+        Ok(())
+    }
+
+    #[test]
+    fn callback_errors_and_invalid_responses_do_not_produce_an_identity() {
+        let err = Cascade::default()
+            .invoke_with_prompt(
+                Action::get_for_url("https://example.com"),
+                Options::default(),
+                |_, _| Err(gix_error::message("user cancelled the prompt").cancelled_error()),
+            )
+            .expect_err("a cancelled prompt aborts authentication");
+        assert!(err.is_cancelled(), "the callback error keeps its classification");
+        let err = Cascade::default()
+            .invoke_with_prompt(
+                Action::get_for_url("https://user@example.com"),
+                Options::default(),
+                |_, _| Ok("secret\npassword".into()),
+            )
+            .expect_err("responses cannot inject fields into the credential protocol");
+        assert!(
+            err.is_validation(),
+            "invalid prompt responses are rejected before constructing follow-up actions"
+        );
+        assert!(
+            !format!("{err:?}").contains("secret"),
+            "diagnostics do not expose the rejected password"
+        );
+    }
+}
+
+#[test]
+fn operation_environment_combines_with_custom_prompt() -> gix_testtools::TestResult {
+    use gix_credentials::{
+        Program,
+        helper::{Action, Cascade},
+    };
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _environment = gix_testtools::Env::new().set("GIX_TEST_CREDENTIAL_USER", "process-user");
+    let mut cascade = Cascade::default().extend([Program::from_custom_definition(
+        "!f() { printf 'username=%s\\n' \"$GIX_TEST_CREDENTIAL_USER\"; }; f",
+    )?]);
+    let outcome = cascade
+        .invoke_with_environment_and_prompt(
+            Action::get_for_url("https://example.com"),
+            gix_prompt::Options::default(),
+            &[("GIX_TEST_CREDENTIAL_USER".into(), "operation-user".into())],
+            |message, options| {
+                assert_eq!(
+                    message, "Password for 'https://operation-user@example.com': ",
+                    "the helper uses operation environment before prompting"
+                );
+                assert_eq!(
+                    options.mode,
+                    gix_prompt::Mode::Hidden,
+                    "only the missing password is requested"
+                );
+                Ok("secret".into())
+            },
+        )?
+        .expect("helper and callback supply the identity");
+    assert_eq!(
+        outcome.identity.username, "operation-user",
+        "native helper output reaches the result"
+    );
+    assert_eq!(
+        std::env::var("GIX_TEST_CREDENTIAL_USER")?,
+        "process-user",
+        "operation environment stays local"
+    );
+    let error = Cascade::default()
+        .invoke_with_environment_and_prompt(
+            Action::get_for_url("https://example.com"),
+            gix_prompt::Options {
+                current_dir: None,
+                mode: gix_prompt::Mode::Disable,
+                askpass: Some("unused-askpass".into()),
+            },
+            &[],
+            |_, _| panic!("a configured askpass does not enable a disabled custom prompt"),
+        )
+        .expect_err("disabled custom prompting leaves the identity incomplete");
+    assert!(
+        error.is_unauthenticated(),
+        "the missing identity retains its classification"
+    );
+    Ok(())
 }

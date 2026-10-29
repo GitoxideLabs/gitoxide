@@ -22,6 +22,23 @@ mod component {
         protect_ntfs: true,
     };
 
+    #[test]
+    fn nul_bytes_are_invalid_regardless_of_platform_protections() {
+        for flags in 0..8 {
+            let options = component::Options {
+                protect_windows: flags & 1 != 0,
+                protect_hfs: flags & 2 != 0,
+                protect_ntfs: flags & 4 != 0,
+            };
+            for input in [b"\0".as_slice(), b"\0start", b"mid\0dle", b"end\0"] {
+                assert!(
+                    matches!(component(input.into(), None, options), Err(component::Error::Nul)),
+                    "NUL is invalid on every filesystem, even with optional protections disabled: {options:?}"
+                );
+            }
+        }
+    }
+
     mod valid {
         use bstr::ByteSlice;
         use gix_validate::path::{component, component::Mode::Symlink};
@@ -340,6 +357,35 @@ mod component {
                 gix_validate::path::component(valid.into(), Some(Symlink), ALL_OPTS)
                     .unwrap_or_else(|_| panic!("{valid:?} should have been valid"));
             }
+        }
+    }
+}
+
+#[test]
+fn special_components_match_filesystem_aliases_without_rejecting_other_names() {
+    use gix_validate::path::SpecialComponent;
+    for (component, literal, short) in [
+        (SpecialComponent::Git, ".git", "git~1"),
+        (SpecialComponent::GitModules, ".gitmodules", "gi7eba~1"),
+        (SpecialComponent::GitAttributes, ".gitattributes", "gi7d29~1"),
+        (SpecialComponent::GitIgnore, ".gitignore", "gi250a~1"),
+        (SpecialComponent::Mailmap, ".mailmap", "maba30~1"),
+    ] {
+        assert!(component.matches(literal.into()), "canonical component");
+        assert!(component.matches(short.into()), "NTFS short name");
+        assert!(
+            component.matches_hfs(format!(".\u{200c}{}", &literal[1..]).as_str().into()),
+            "HFS ignorable characters"
+        );
+        assert!(
+            component.matches_ntfs(format!("{literal} .:stream").as_str().into()),
+            "NTFS spaces, dots, and streams"
+        );
+        for other in ["CON", "unrelated:stream", "name.", "name\\path", ".gitmodules-more"] {
+            assert!(
+                !component.matches(other.into()),
+                "unrelated Windows-special names do not match {literal}"
+            );
         }
     }
 }

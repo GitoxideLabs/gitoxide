@@ -64,3 +64,36 @@ impl AttributeStack<'_> {
         self.inner.at_path(relative, mode, &self.repo.objects).or_error()
     }
 }
+
+#[cfg(feature = "blob-diff")]
+impl AttributeStack<'_> {
+    /// Select a configured or built-in diff driver for a repository-relative path.
+    ///
+    /// Attribute precedence and the source of attribute files follow this stack's configuration.
+    /// Unknown driver names are retained in the returned attribute state, while the driver is absent.
+    /// This does not compile hunk-header patterns or infer a language from a file extension.
+    ///
+    /// # Panics
+    ///
+    /// If this stack was configured without attributes.
+    pub fn diff_driver(
+        &mut self,
+        relative: impl ToNormalPathComponents,
+        mode: Option<gix_index::entry::Mode>,
+    ) -> Result<crate::diff::DriverSelection> {
+        let mut outcome = self.selected_attribute_matches(["diff"]);
+        self.at_entry(relative, mode)?.matching_attributes(&mut outcome);
+        let attribute = outcome
+            .iter_selected()
+            .next()
+            .expect("the diff attribute was selected")
+            .assignment
+            .state
+            .to_owned();
+        let driver = match &attribute {
+            gix_attributes::State::Value(name) => self.repo.diff_driver(name.as_ref().as_bstr())?,
+            _ => None,
+        };
+        Ok(crate::diff::DriverSelection { attribute, driver })
+    }
+}

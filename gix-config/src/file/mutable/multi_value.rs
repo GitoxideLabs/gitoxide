@@ -1,4 +1,4 @@
-use gix_error::Result;
+use gix_error::{Result, ensure, validation};
 use std::{collections::HashMap, ops::DerefMut};
 
 use bstr::{BStr, BString, ByteVec};
@@ -122,6 +122,26 @@ impl MultiValueMut<'_> {
             offset_index,
             value.as_bstr(),
         )
+    }
+
+    /// Replace the selected occurrences with one `value` at the last selected index.
+    ///
+    /// Indices refer to the current order returned by [`get()`][Self::get()] and must be
+    /// strictly increasing, unique, and in range. The whole selection is validated before mutation.
+    /// An empty selection does nothing. Unselected entries keep their relative positions.
+    pub fn replace_at_indices(&mut self, indices: &[usize], value: impl crate::AsBStr) -> Result {
+        ensure!(
+            indices.windows(2).all(|pair| pair[0] < pair[1]) && indices.last().is_none_or(|&index| index < self.len()),
+            validation("Selected value indices must be strictly increasing and in range")
+        );
+        let Some((&last, earlier)) = indices.split_last() else {
+            return Ok(());
+        };
+        self.set_at(last, value)?;
+        for &index in earlier.iter().rev() {
+            self.delete(index);
+        }
+        Ok(())
     }
 
     /// Sets all values to the provided ones. Note that this follows [`zip`]

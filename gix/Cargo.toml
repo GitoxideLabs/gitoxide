@@ -75,6 +75,7 @@ extras = [
     "blame",
     "merge",
     "notes",
+    "pack-generate",
 ]
 
 ## Various progress-related features that improve the look of progress message units.
@@ -94,6 +95,7 @@ progress-unit-bytes = ["gix-utils/progress-unit-bytes"]
 
 ## Enable support for the SHA-1 hash throughout the `gix` stack.
 sha1 = [
+    "gix-hook?/sha1",
     "gix-hash/sha1",
     "gix-pack/sha1",
     "gix-note?/sha1",
@@ -102,6 +104,7 @@ sha1 = [
 
 ## Enable support for the SHA-256 hash throughout the `gix` stack.
 sha256 = [
+    "gix-hook?/sha256",
     "gix-hash/sha256",
     "gix-object/sha256",
     "gix-pack/sha256",
@@ -115,7 +118,7 @@ sha256 = [
 #! Providers of libraries should only activate the components they need.
 
 ## Provide a top-level `command` module that helps with spawning commands similarly to `git`.
-command = ["dep:gix-command", "gix-object/signature"]
+command = ["dep:gix-command", "dep:gix-hook", "gix-object/signature"]
 
 ## Obtain information similar to `git status`.
 status = ["gix-status", "dirwalk", "index", "blob-diff", "gix-diff/index"]
@@ -171,7 +174,7 @@ blob-diff = ["gix-diff/blob", "attributes"]
 merge = ["blob-diff", "dep:gix-merge", "attributes"]
 
 ## Add blame command similar to `git blame`.
-blame = ["dep:gix-blame", "blob-diff"]
+blame = ["dep:gix-blame", "blob-diff", "gix-diff/index"]
 
 ## Make it possible to turn a tree into a stream of bytes, which can be decoded to entries and turned into various other formats.
 ##
@@ -184,6 +187,12 @@ worktree-stream = ["gix-worktree-stream", "attributes", "parallel"]
 ## Note that we disable all default features which strips it off all container support, like `tar` and `zip`.
 ## Your application should add it as dependency and re-activate the desired features.
 worktree-archive = ["gix-archive", "worktree-stream", "attributes"]
+
+## Generate self-contained packs and bundles from repository objects.
+pack-generate = ["gix-pack/generate"]
+
+## Repack local objects and expire unreachable objects while preserving repository recovery roots.
+object-maintenance = ["index", "pack-generate", "gix-pack/streaming-input", "command"]
 
 #! #### Mutually Exclusive Network Client
 #!
@@ -206,9 +215,14 @@ async-network-client-async-std = [
     "gix-transport/async-std",
 ]
 ## Make `gix-protocol` available along with a blocking client, providing access to the `file://`, `git://` and `ssh://` transports.
+## Push streams packs on an upload thread while receiving server progress, requiring `parallel` repository handles.
 blocking-network-client = [
+    "dep:gix-fsck",
+    "dep:tempfile",
     "gix-protocol/blocking-client",
     "gix-pack/streaming-input",
+    "pack-generate",
+    "parallel",
     "dep:gix-transport",
     "attributes",
     "credentials",
@@ -340,11 +354,13 @@ cache-efficiency-debug = ["gix-utils/cache-efficiency-debug"]
 
 [dependencies]
 gix-parallel = { version = "^0.50.1", path = "../gix-parallel", features = ["once_cell"] }
+gix-fsck = { version = "^0.27.1", path = "../gix-fsck", optional = true }
 gix-error = { version = "^0.5.2", path = "../gix-error", features = ["bstr"] }
 gix-utils = { version = "^0.5.2", path = "../gix-utils", features = ["bstr", "interrupt", "progress"] }
 gix-fs = { version = "^0.24.1", path = "../gix-fs" }
 gix-ref = { version = "^0.69.1", path = "../gix-ref" }
 gix-discover = { version = "^0.57.1", path = "../gix-discover" }
+tempfile = { version = "3.26.0", optional = true }
 gix-tempfile = { version = "^26.0.0", path = "../gix-tempfile", default-features = false }
 gix-lock = { version = "^26.0.0", path = "../gix-lock" }
 gix-validate = { version = "^0.13.1", path = "../gix-validate" }
@@ -394,6 +410,7 @@ gix-status = { version = "^0.37.0", path = "../gix-status", optional = true, fea
     "worktree-rewrites",
 ] }
 gix-command = { version = "^0.12.1", path = "../gix-command", optional = true }
+gix-hook = { version = "^0.1.0", path = "../gix-hook", optional = true }
 
 gix-worktree-stream = { version = "^0.39.0", path = "../gix-worktree-stream", optional = true }
 gix-archive = { version = "^0.39.0", path = "../gix-archive", default-features = false, optional = true }

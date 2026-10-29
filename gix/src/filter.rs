@@ -1,5 +1,10 @@
 //! lower-level access to filters which are applied to create working tree checkouts or to 'clean' working tree contents for storage in git.
-use crate::error::{ErrorExt, ResultExt, bail, message};
+use std::{
+    io::Read,
+    sync::atomic::{AtomicBool, Ordering},
+};
+
+use crate::error::{ErrorExt, ResultExt, bail, cancelled, ensure, message, validation};
 pub use gix_filter as plumbing;
 use gix_object::Find;
 
@@ -10,7 +15,6 @@ use crate::{
         cache::util::{ApplyLeniency, ApplyLeniencyDefaultValue},
         tree::Core,
     },
-    prelude::ObjectIdExt,
 };
 
 /// A git pipeline for transforming data *to-git* and *to-worktree*, based
@@ -19,6 +23,7 @@ use crate::{
 pub struct Pipeline<'repo> {
     inner: gix_filter::Pipeline,
     cache: gix_worktree::Stack,
+    path_check: gix_fs::SymlinkCheck,
     /// The repository this pipeline is associated with.
     pub repo: &'repo Repository,
 }
@@ -66,6 +71,7 @@ impl<'repo> Pipeline<'repo> {
         Ok(Pipeline {
             inner: pipeline,
             cache,
+            path_check: gix_fs::SymlinkCheck::new(repo.current_dir().join(repo.workdir().unwrap_or(repo.git_dir()))),
             repo,
         })
     }
@@ -149,18 +155,63 @@ impl Pipeline<'_> {
     /// and it should match the state used when [instantiating this instance](Self::new()).
     ///
     /// Return `Ok(None)` the file didn't exist in the worktree, or if it was of an untrackable type.
+    /// Parent paths are verified by [`gix_fs::SymlinkCheck`], with its platform limitations. Callers must
+    /// keep leading directories stable while reusing the pipeline. Final symlinks are read as links.
     pub fn worktree_file_to_object(
         &mut self,
         rela_path: &BStr,
         index: &gix_index::State,
     ) -> Result<Option<(gix_hash::ObjectId, gix_object::tree::EntryKind, std::fs::Metadata)>> {
+        self.worktree_file_to_object_inner(rela_path, index, &self.repo.objects, &AtomicBool::new(false))
+    }
+
+    /// Return the ID, tree entry kind and metadata of `rela_path` without storing an object.
+    ///
+    /// This reads and filters files exactly like [`Self::worktree_file_to_object()`], including index
+    /// fallback for automatic CRLF conversion and raw symlink targets. Directories containing repositories
+    /// resolve to their current commit; missing and untrackable entries return `None`. Other I/O and filter
+    /// errors are propagated. The repository's hash algorithm is used.
+    ///
+    /// Parent verification has the same platform limitations as [`gix_fs::SymlinkCheck`], and callers must
+    /// keep leading directories stable while reusing this pipeline. Interruption is checked before I/O
+    /// and between stream reads; it cannot interrupt a blocked filesystem or filter-process read.
+    /// Plain files stream without buffering. Unknown-length filter output is buffered to determine its
+    /// size before hashing, like other to-Git conversions.
+    pub fn worktree_file_to_id(
+        &mut self,
+        rela_path: &BStr,
+        index: &gix_index::State,
+        should_interrupt: &AtomicBool,
+    ) -> Result<Option<(gix_hash::ObjectId, gix_object::tree::EntryKind, std::fs::Metadata)>> {
+        self.worktree_file_to_object_inner(
+            rela_path,
+            index,
+            &gix_odb::sink(self.repo.object_hash()),
+            should_interrupt,
+        )
+    }
+
+    fn worktree_file_to_object_inner(
+        &mut self,
+        rela_path: &BStr,
+        index: &gix_index::State,
+        objects: &impl gix_object::Write,
+        should_interrupt: &AtomicBool,
+    ) -> Result<Option<(gix_hash::ObjectId, gix_object::tree::EntryKind, std::fs::Metadata)>> {
+        ensure!(
+            !should_interrupt.load(Ordering::Relaxed),
+            cancelled("Worktree file hashing interrupted")
+        );
         let rela_path_as_path = gix_path::from_bstr(rela_path)?;
         let repo = self.repo;
-        let worktree_dir = repo
-            .workdir()
+        repo.workdir()
             .ok_or_else(|| Error::from_error(message("Cannot add worktree files in bare repositories")))?;
-        let path = worktree_dir.join(&rela_path_as_path);
-        let md = match std::fs::symlink_metadata(&path) {
+        let path = match self.path_check.verified_path_allow_nonexisting(rela_path) {
+            Ok(path) => path.into_owned(),
+            Err(err) if gix_fs::io_err::is_not_found(err.kind(), err.raw_os_error()) => return Ok(None),
+            Err(err) => return Err(err).or_error(),
+        };
+        let mut md = match std::fs::symlink_metadata(&path) {
             Ok(md) => md,
             Err(err) => {
                 if gix_fs::io_err::is_not_found(err.kind(), err.raw_os_error()) {
@@ -173,21 +224,51 @@ impl Pipeline<'_> {
                 }
             }
         };
+        let write_buf = |bytes: &[u8]| {
+            ensure!(
+                !should_interrupt.load(Ordering::Relaxed),
+                cancelled("Worktree file hashing interrupted")
+            );
+            objects.write_buf(gix_object::Kind::Blob, bytes)
+        };
         let (id, kind) = if md.is_symlink() {
             let target = std::fs::read_link(&path)
                 .or_raise(|| message!("Failed to perform IO for object creation for \"{}\"", path.display()))?;
-            let id = repo.write_blob(gix_path::into_bstr(target)?.as_ref())?;
+            let id = write_buf(gix_path::into_bstr(target)?.as_ref())?;
             (id, gix_object::tree::EntryKind::Link)
         } else if md.is_file() {
             use gix_filter::pipeline::convert::ToGitOutcome;
 
-            let file = std::fs::File::open(&path)
-                .or_raise(|| message!("Failed to perform IO for object creation for \"{}\"", path.display()))?;
-            let file_for_git = self.convert_to_git(file, rela_path_as_path.as_ref(), index)?;
+            let file = match gix_fs::open_read_only_no_follow(&path)
+                .or_raise(|| message!("Failed to open worktree file \"{}\"", path.display()))?
+            {
+                gix_fs::FileOrSymlink::File(file) => file,
+                gix_fs::FileOrSymlink::Symlink => bail!(validation("Worktree file changed to a symlink while reading")),
+            };
+            md = file.metadata().or_error()?;
+            let file_for_git = self.convert_to_git(
+                gix_utils::interrupt::Read {
+                    inner: file,
+                    should_interrupt,
+                },
+                rela_path_as_path.as_ref(),
+                index,
+            )?;
             let id = match file_for_git {
-                ToGitOutcome::Unchanged(mut file) => repo.write_blob_stream(&mut file)?,
-                ToGitOutcome::Buffer(buf) => repo.write_blob(buf)?,
-                ToGitOutcome::Process(mut read) => repo.write_blob_stream(&mut read)?,
+                ToGitOutcome::Unchanged(mut file) => {
+                    objects.write_stream(gix_object::Kind::Blob, md.len(), &mut file)?
+                }
+                ToGitOutcome::Buffer(buf) => write_buf(buf)?,
+                ToGitOutcome::Process(read) => {
+                    let mut buf = repo.empty_reusable_buffer();
+                    gix_utils::interrupt::Read {
+                        inner: read,
+                        should_interrupt,
+                    }
+                    .read_to_end(&mut buf)
+                    .or_error()?;
+                    write_buf(&buf)?
+                }
             };
 
             let kind = if gix_fs::is_executable(&md) {
@@ -203,13 +284,13 @@ impl Pipeline<'_> {
             let Some(id) = submodule_repo.head_id().ok() else {
                 return Ok(None);
             };
-            (id.detach().attach(repo), gix_object::tree::EntryKind::Commit)
+            (id.detach(), gix_object::tree::EntryKind::Commit)
         } else {
             // This is probably a type-change to something we can't track.
             return Ok(None);
         };
 
-        Ok(Some((id.detach(), kind, md)))
+        Ok(Some((id, kind, md)))
     }
 
     /// Retrieve the static context that is made available to the process filters.

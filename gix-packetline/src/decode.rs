@@ -58,11 +58,8 @@ pub fn hex_prefix(four_bytes: &[u8]) -> Result<PacketLineOrWantedSize<'_>> {
     if wanted_bytes == 3 {
         bail!(validation("Received an invalid line of length 3"));
     }
-    if wanted_bytes == 4 {
-        bail!(validation("Received an invalid empty line"));
-    }
     debug_assert!(
-        wanted_bytes as usize > U16_HEX_BYTES,
+        wanted_bytes as usize >= U16_HEX_BYTES,
         "by now there should be more wanted bytes than prefix bytes"
     );
     Ok(PacketLineOrWantedSize::Wanted(wanted_bytes - U16_HEX_BYTES as u16))

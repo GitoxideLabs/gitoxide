@@ -15,7 +15,7 @@ pub use cat::function::cat;
 pub mod blame;
 pub mod commit;
 pub mod config;
-mod credential;
+pub mod credential;
 pub use credential::function as credential;
 pub mod attributes;
 #[cfg(feature = "clean")]

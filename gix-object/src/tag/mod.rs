@@ -4,7 +4,7 @@ use gix_error::Result;
 use crate::parse::parse_signature;
 use crate::{Tag, TagRef};
 
-mod decode;
+pub(crate) mod decode;
 
 ///
 pub mod write;

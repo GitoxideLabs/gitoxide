@@ -41,6 +41,7 @@ pub(super) mod function {
             since: None,
             rewrites: Some(gix::diff::Rewrites::default()),
             debug_track_path: true,
+            ..Default::default()
         };
 
         let index = repo.index_or_empty()?;

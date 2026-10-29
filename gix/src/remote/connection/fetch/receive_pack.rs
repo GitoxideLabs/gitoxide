@@ -77,8 +77,29 @@ where
         P: gix_utils::progress::NestedProgress,
         P::SubProgress: 'static,
     {
+        self.receive_with_remote_progress(progress, |_, _| Ok(()), should_interrupt)
+            .await
+    }
+
+    /// Like [`Self::receive()`], additionally forwarding unmodified server sideband packets.
+    ///
+    /// `remote_progress(is_error, bytes)` sees bytes before progress parsing, including partial
+    /// lines and non-UTF-8 data. Returning an error stops the transfer and preserves its cause.
+    #[gix_protocol::bisync::bisync]
+    pub async fn receive_with_remote_progress<P>(
+        self,
+        progress: P,
+        remote_progress: impl FnMut(bool, &[u8]) -> std::io::Result<()>,
+        should_interrupt: &AtomicBool,
+    ) -> Result<Outcome>
+    where
+        P: gix_utils::progress::NestedProgress,
+        P::SubProgress: 'static,
+    {
         let Prepare { inner, repo } = self;
-        inner.receive(repo, progress, should_interrupt).await
+        inner
+            .receive_with_remote_progress(repo, progress, remote_progress, should_interrupt)
+            .await
     }
 }
 
@@ -88,7 +109,7 @@ where
 {
     #[gix_protocol::bisync::bisync]
     pub(crate) async fn receive<P>(
-        mut self,
+        self,
         repo: &crate::Repository,
         progress: P,
         should_interrupt: &AtomicBool,
@@ -97,20 +118,24 @@ where
         P: gix_utils::progress::NestedProgress,
         P::SubProgress: 'static,
     {
+        self.receive_with_remote_progress(repo, progress, |_, _| Ok(()), should_interrupt)
+            .await
+    }
+
+    #[gix_protocol::bisync::bisync]
+    pub(crate) async fn receive_with_remote_progress<P>(
+        mut self,
+        repo: &crate::Repository,
+        progress: P,
+        remote_progress: impl FnMut(bool, &[u8]) -> std::io::Result<()>,
+        should_interrupt: &AtomicBool,
+    ) -> Result<Outcome>
+    where
+        P: gix_utils::progress::NestedProgress,
+        P::SubProgress: 'static,
+    {
         let ref_map = &self.ref_map;
-        if ref_map.is_missing_required_mapping() {
-            let mut specs = ref_map.refspecs.clone();
-            specs.extend(ref_map.extra_refspecs.clone());
-            bail!(gix_error::validation(format!(
-                "None of the refspec(s) {} matched any of the {} refs on the remote",
-                specs
-                    .iter()
-                    .map(|spec| spec.to_ref().instruction().to_bstring().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                ref_map.remote_refs.len()
-            )));
-        }
+        super::validate_required_refs(ref_map, self.missing_refs_allowed)?;
 
         let mut con = self.con.take().expect("receive() can only be called once");
         let mut handshake = con.handshake.take().expect("receive() can only be called once");
@@ -127,6 +152,7 @@ where
             shallow_file: repo.shallow_file()?,
             shallow: &self.shallow,
             tags: con.remote.fetch_tags,
+            filter: self.filter,
             reject_shallow_remote: Clone::REJECT_SHALLOW
                 .enrich_error(
                     repo.config
@@ -184,7 +210,7 @@ where
         };
         let mut write_pack_bundle = None;
 
-        let res = gix_protocol::fetch(
+        let res = gix_protocol::fetch_with_remote_progress(
             &mut negotiate,
             |reader, progress, should_interrupt| -> Result<bool> {
                 let mut may_read_to_end = false;
@@ -213,8 +239,15 @@ where
             should_interrupt,
             context,
             fetch_options,
+            remote_progress,
         )
         .await?;
+        if self.filter.is_some()
+            && let Some(path) = write_pack_bundle.as_ref().and_then(|bundle| bundle.data_path.as_ref())
+        {
+            std::fs::write(path.with_extension("promisor"), [])
+                .or_raise(|| message("Could not mark the received pack as promisor"))?;
+        }
         let negotiate = res.map(|v| outcome::Negotiate {
             graph: graph.detach(),
             rounds: v.negotiate.rounds,
@@ -226,6 +259,16 @@ where
                 .ok();
         }
 
+        let pruned = if self.prune {
+            repo.prune_fetch_refs(
+                &self.ref_map,
+                fetch::prune::Options {
+                    dry_run: matches!(self.dry_run, fetch::DryRun::Yes),
+                },
+            )?
+        } else {
+            Vec::new()
+        };
         let update_refs = refs::update(
             repo,
             self.reflog_message
@@ -248,6 +291,7 @@ where
 
         let out = Outcome {
             handshake,
+            pruned,
             ref_map: std::mem::take(&mut self.ref_map),
             status: match write_pack_bundle {
                 Some(write_pack_bundle) => Status::Change {

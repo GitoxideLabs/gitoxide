@@ -7,7 +7,7 @@ use gix_error::{ClassificationMarker, ErrorExt, OptionExt, ResultExt, bail, ensu
 use gix_utils::progress::{NestedProgress, Progress};
 
 use crate::{Result, repository::FormatVersion};
-use gix_ref::transaction::{LogChange, PreviousValue, RefEdit, RefLog};
+use gix_ref::transaction::{PreviousValue, RefEdit};
 
 use crate::config::{
     cache::util::ApplyLeniency,
@@ -21,6 +21,11 @@ pub enum Head {
     Attached(gix_ref::FullName),
     /// Check out a commit with a detached `HEAD`.
     Detached(gix_hash::ObjectId),
+    /// Install a symbolic `HEAD` whose full target beneath `refs/` does not exist yet.
+    ///
+    /// Local branches must not be reserved by another worktree. Other symbolic targets may be shared.
+    /// No branch, commit, or initial HEAD reflog is created.
+    Unborn(gix_ref::FullName),
 }
 
 /// A rejection reported by [`Repository::add_worktree()`][crate::Repository::add_worktree()].
@@ -40,6 +45,9 @@ pub enum Error {
     DestinationRegistered {
         destination: std::path::PathBuf,
     },
+    ReferenceExists {
+        name: gix_ref::FullName,
+    },
     Interrupted,
 }
 
@@ -57,6 +65,7 @@ impl std::fmt::Display for Error {
                     destination.display()
                 )
             }
+            Error::ReferenceExists { name } => write!(f, "The unborn HEAD target {name:?} already exists"),
             Error::Interrupted => f.write_str("Adding the worktree was interrupted"),
         }
     }
@@ -66,7 +75,9 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         Some(match self {
             Error::NotLocalBranch { .. } => const { &ClassificationMarker::VALIDATION },
-            Error::CheckedOut { .. } | Error::DestinationRegistered { .. } => const { &ClassificationMarker::CONFLICT },
+            Error::CheckedOut { .. } | Error::DestinationRegistered { .. } | Error::ReferenceExists { .. } => {
+                const { &ClassificationMarker::CONFLICT }
+            }
             Error::Interrupted => const { &ClassificationMarker::CANCELLED },
         })
     }
@@ -76,7 +87,8 @@ impl crate::Repository {
     /// Add and check out a linked worktree at `destination` with the given `head`.
     ///
     /// Attached heads must name an existing local branch which isn't checked out or reserved by an ongoing
-    /// bisect or rebase in any worktree.
+    /// bisect or rebase in any worktree. Unborn heads leave the worktree and index empty without creating a
+    /// branch or HEAD reflog. Their target must not exist, and local branches must not be reserved.
     /// Reference namespaces are ignored for branch lookup, occupancy checks, and the returned repository, like
     /// `git worktree add`. The source repository's namespace is preserved.
     /// The destination must either not exist or be an empty, unregistered directory. Any files created by this
@@ -127,8 +139,35 @@ impl crate::Repository {
         head: Head,
         should_interrupt: &AtomicBool,
     ) -> Result<PrepareCheckout> {
+        self.prepare_worktree(destination.as_ref(), head, should_interrupt, false)
+    }
+
+    /// Register a linked worktree without checking out files, retaining any existing destination contents.
+    ///
+    /// The destination may be absent, empty, or populated, but must not contain a `.git` entry and must not
+    /// already be registered. HEAD validation and configuration inheritance match [`Self::add_worktree()`].
+    /// Only the `.git` link and private administration are created; no index or working files are written.
+    /// On failure, existing contents are retained and newly created registration files are removed.
+    /// The caller is responsible for preventing concurrent changes to the destination and its `.git` entry.
+    /// To check out an initially empty destination later, use [`crate::Worktree::checkout()`].
+    pub fn register_worktree(
+        &self,
+        destination: impl AsRef<Path>,
+        head: Head,
+        should_interrupt: &AtomicBool,
+    ) -> Result<crate::Repository> {
+        self.prepare_worktree(destination.as_ref(), head, should_interrupt, true)?
+            .persist()
+    }
+
+    fn prepare_worktree(
+        &self,
+        destination: &Path,
+        head: Head,
+        should_interrupt: &AtomicBool,
+        preserve_contents: bool,
+    ) -> Result<PrepareCheckout> {
         let repo = self.with_absolute_paths()?;
-        let destination = destination.as_ref();
         let relative_paths = Worktree::USE_RELATIVE_PATHS
             .enrich_error(repo.config.resolved.boolean(Worktree::USE_RELATIVE_PATHS))
             .with_leniency(repo.config.lenient_config)?
@@ -152,7 +191,7 @@ impl crate::Repository {
                     .or_raise(|| message("The local branch could not be found"))?;
                 let commit = reference.peel_to_commit()?;
                 let root_tree_id = commit.tree_id()?.detach();
-                (gix_ref::Target::Symbolic(name), commit.id, root_tree_id)
+                (gix_ref::Target::Symbolic(name), Some(commit.id), root_tree_id)
             }
             Head::Detached(commit_id) => {
                 let root_tree_id = repo
@@ -160,7 +199,29 @@ impl crate::Repository {
                     .or_raise(|| message("The detached target is not an existing commit"))?
                     .tree_id()?
                     .detach();
-                (gix_ref::Target::Object(commit_id), commit_id, root_tree_id)
+                (gix_ref::Target::Object(commit_id), Some(commit_id), root_tree_id)
+            }
+            Head::Unborn(name) => {
+                ensure!(
+                    name.as_bstr().starts_with(b"refs/"),
+                    validation("An unborn HEAD must point to a full reference beneath refs/")
+                );
+                let mut source = repo.as_ref().clone();
+                source.clear_namespace();
+                ensure!(
+                    source.try_find_reference(name.as_ref())?.is_none(),
+                    Error::ReferenceExists { name: name.clone() }
+                );
+                if name.category() == Some(gix_ref::Category::LocalBranch)
+                    && let Some(worktree_dirs) = source.checked_out_branches_without_namespace()?.remove(&name)
+                {
+                    bail!(Error::CheckedOut { name, worktree_dirs });
+                }
+                (
+                    gix_ref::Target::Symbolic(name),
+                    None,
+                    gix_hash::ObjectId::empty_tree(repo.object_hash()),
+                )
             }
         };
         ensure!(!should_interrupt.load(Ordering::Relaxed), Error::Interrupted);
@@ -178,14 +239,16 @@ impl crate::Repository {
                     .or_raise(|| message("Failed to read or iterate worktree directories"))?,
             );
         }
-        let prepared = gix_worktree::add::prepare(
-            destination,
-            gix_worktree::add::Context {
-                common_dir: repo.common_dir(),
-                git_dir: sparse_checkout_git_dir(&repo)?,
-            },
-            gix_worktree::add::Options { relative_paths },
-        )
+        let context = gix_worktree::add::Context {
+            common_dir: repo.common_dir(),
+            git_dir: sparse_checkout_git_dir(&repo)?,
+        };
+        let options = gix_worktree::add::Options { relative_paths };
+        let prepared = if preserve_contents {
+            gix_worktree::add::prepare_in_place(destination, context, options)
+        } else {
+            gix_worktree::add::prepare(destination, context, options)
+        }
         .or_raise(|| message("Could not prepare the linked worktree"))?;
         // `prepare()` already applied `gix_path::realpath()`, but that preserves component spelling.
         // Canonicalize the existing destination to also match Windows casing and short-name aliases.
@@ -238,23 +301,21 @@ impl crate::Repository {
                     .or_raise(|| message("Could not enable relative worktrees in the shared configuration"))?;
             }
         }
-        // Opening the repository requires HEAD. Preserve symbolic targets so conditional configuration
-        // can see the branch; detached HEADs start at null so their first update records initialization.
+        // Opening the repository requires HEAD. Preserve symbolic targets in this bootstrap file
+        // so conditional configuration can see the branch before the real reference is created.
         let mut head_contents = Vec::new();
-        let reflog_mode = match &head_target {
+        match &head_target {
             gix_ref::Target::Object(_) => {
                 repo.object_hash()
                     .null()
                     .write_hex_to(&mut head_contents)
                     .or_raise(|| message("Could not write the linked worktree HEAD"))?;
-                RefLog::AndReference
             }
             gix_ref::Target::Symbolic(name) => {
                 head_contents.extend_from_slice(b"ref: ");
                 head_contents.extend_from_slice(name.as_bstr());
-                RefLog::Only
             }
-        };
+        }
         head_contents.push(b'\n');
         std::fs::write(prepared.git_dir().join("HEAD"), head_contents)
             .or_raise(|| message("Could not write the linked worktree HEAD"))?;
@@ -279,17 +340,18 @@ impl crate::Repository {
             .or_raise(|| message("Could not open a worktree repository"))?
             .to_thread_local();
         repo.clear_namespace();
-        // Like clone, initialize a symbolic HEAD's log without dereferencing or updating its branch.
-        repo.edit_reference(RefEdit::update_with_log(
-            "HEAD".try_into().expect("valid reference name"),
-            commit_id,
-            PreviousValue::Any,
-            LogChange {
-                mode: reflog_mode,
-                ..Default::default()
-            },
-        ))
-        .or_raise(|| message("Could not initialize the linked worktree HEAD and its reflog"))?;
+        if commit_id.is_some() {
+            // The bootstrap HEAD is not a predecessor of the new worktree's initial reference.
+            std::fs::remove_file(repo.git_dir().join("HEAD"))
+                .or_raise(|| message("Could not remove the linked worktree's bootstrap HEAD"))?;
+            repo.edit_reference(RefEdit::update(
+                "HEAD".try_into().expect("valid reference name"),
+                head_target,
+                PreviousValue::MustNotExist,
+                "",
+            ))
+            .or_raise(|| message("Could not initialize the linked worktree HEAD and its reflog"))?;
+        }
         Ok(PrepareCheckout {
             repo,
             prepared,
@@ -356,7 +418,7 @@ impl PrepareCheckout {
         P: NestedProgress,
         P::SubProgress: NestedProgress + 'static,
     {
-        match checkout_tree(&self.repo, &self.root_tree_id, progress, should_interrupt) {
+        match checkout_tree(&self.repo, &self.root_tree_id, progress, should_interrupt, None) {
             Ok(outcome) => Ok((self.persist()?, outcome)),
             Err(err) => {
                 if let Err(cleanup) = self.rollback() {
@@ -373,6 +435,7 @@ pub(crate) fn checkout_tree<P>(
     root_tree_id: &gix_hash::oid,
     mut progress: P,
     should_interrupt: &AtomicBool,
+    index_lock: Option<gix_lock::File>,
 ) -> Result<gix_worktree_state::checkout::Outcome>
 where
     P: NestedProgress,
@@ -380,6 +443,17 @@ where
 {
     ensure!(!should_interrupt.load(Ordering::Relaxed), Error::Interrupted);
     let repo = repo.with_absolute_paths()?;
+    let index_lock = match index_lock {
+        Some(lock) => lock,
+        None => gix_lock::File::acquire(
+            repo.index_path(),
+            gix_lock::acquire::Fail::Immediately,
+            None,
+            0,
+            Some(&gix_lock::acquire::resolve_symlink),
+        )
+        .or_raise(|| message("Could not lock the index for initial checkout"))?,
+    };
     let work_dir = repo
         .workdir()
         .ok_or_raise(|| validation("A bare repository has no worktree to check out"))?;
@@ -433,9 +507,21 @@ where
     files.show_throughput(started);
     bytes.show_throughput(started);
     ensure!(!should_interrupt.load(Ordering::Relaxed), Error::Interrupted);
-    index
-        .write(Default::default())
-        .or_raise(|| message("Could not write the linked worktree index"))?;
+    ensure!(
+        outcome.errors.is_empty()
+            && outcome.collisions.is_empty()
+            && outcome.delayed_paths_unknown.is_empty()
+            && outcome.delayed_paths_unprocessed.is_empty(),
+        message!("Initial checkout was incomplete: {outcome:?}")
+    );
+    let mut index_writer = std::io::BufWriter::with_capacity(64 * 1024, index_lock);
+    index.write_to(&mut index_writer, Default::default())?;
+    index_writer
+        .into_inner()
+        .map_err(std::io::IntoInnerError::into_error)
+        .or_raise(|| message("Could not flush the initial checkout index"))?
+        .commit()
+        .or_raise(|| message("Could not install the initial checkout index"))?;
     Ok(outcome)
 }
 

@@ -57,6 +57,7 @@ doc $RUSTDOCFLAGS='-D warnings':
 unit-tests:
     cargo nextest run --no-fail-fast
     cargo nextest run -p gix-attributes --features serde --no-fail-fast
+    cargo nextest run -p gix-regex --features no_std --no-fail-fast
     # Exercise both zlib backends independently of workspace feature unification.
     cargo nextest run -p gix-zlib --no-fail-fast
     cargo nextest run -p gix-zlib --features sirocco --no-fail-fast

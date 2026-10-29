@@ -158,6 +158,30 @@ mod write_to_directory {
         Ok(())
     }
 
+    #[test]
+    fn existing_keep_files_remain_owned_by_their_creator() -> gix_testtools::TestResult {
+        let dir = TempDir::new()?;
+        let keep_path = dir
+            .path()
+            .join(format!("pack-{}.keep", expected_outcome()?.index.data_hash));
+        fs::write(&keep_path, b"another writer is installing this pack")?;
+        let outcome = write_pack(Some(&dir), SMALL_PACK)?;
+        assert!(
+            outcome.keep_path.is_none(),
+            "an existing keep file does not belong to this writer"
+        );
+        assert_eq!(
+            fs::read(&keep_path)?,
+            b"another writer is installing this pack",
+            "existing contents survive installation"
+        );
+        assert!(
+            outcome.to_bundle().transpose()?.is_some(),
+            "the pack is still installed"
+        );
+        Ok(())
+    }
+
     /// A forward reference is a `REF_DELTA` stored before the object named as its base.
     /// Unlike `OFS_DELTA`, its object ID can name an object at any position in the pack.
     ///

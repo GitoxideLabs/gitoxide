@@ -19,11 +19,11 @@ pub(super) struct WindowsExecutable {
 /// with the leading `/` separator removed, except that this does not list `usr` itself.
 ///
 /// On Windows, we prefer to use `sh` as provided by Git for Windows, when present. To find it, we
-/// run `git --exec-path` to get a path that is usually `<platform>/libexec/git-core` in the Git
+/// run native Git helper-directory discovery to get a path that is usually `<platform>/libexec/git-core` in the Git
 /// for Windows installation, where `<platform>` is something like `ucrt64`. It is also acceptable
 /// to find `sh` in an environment not provided by Git for Windows, such as an independent MSYS2
 /// environment in which a `git` package has been installed. However, in an unusual installation,
-/// or if the user has set a custom value of `GIT_EXEC_PATH`, the output of `git --exec-path` may
+/// or if the user has set a custom value of `GIT_EXEC_PATH`, the output of native Git helper-directory discovery may
 /// take a form other than `<platform>/libexec/git-core`, such that finding shell at a location
 /// like `../../../bin/sh.exe` relative to it should not be attempted. We lower the risk by
 /// checking that `<platform>` is a plausible value that is not likely to have any other meaning.
@@ -50,7 +50,7 @@ pub(super) struct WindowsExecutable {
 /// further research finds the risk is low enough, `usr` may be added. But for now it is omitted.
 const MSYS_USR_VARIANTS: &[&str] = &["clangarm64", "ucrt64", "mingw64", "mingw32", "clang64", "clang32"];
 
-/// Find a Git for Windows installation directory based on `git --exec-path` output.
+/// Find a Git for Windows installation directory using native helper-directory discovery.
 ///
 /// Currently this is used only for finding the path to an `sh.exe` associated with Git. This is
 /// separate from `installation_config()` and `installation_config_prefix()` in `gix_path::env`.
@@ -87,7 +87,7 @@ const BIN_DIR_FRAGMENTS: &[&str] = &["bin", "usr/bin"];
 
 /// Obtain a path to an executable command on Windows associated with Git, if one can be found.
 ///
-/// The resulting path uses only `/` separators so long as the path obtained from `git --exec-path`
+/// The resulting path uses only `/` separators so long as the path obtained from native Git helper-directory discovery
 /// does, which is the case unless it is overridden by setting `GIT_EXEC_PATH` to an unusual value.
 ///
 /// This is used for finding `sh.exe` and by [`super::installation_program()`]. Depending on desired
