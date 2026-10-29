@@ -558,3 +558,127 @@ fn path_is_directory_icase_with_clashes() {
         "x is a symlink, not a directory"
     );
 }
+
+#[test]
+fn entry_mutations_invalidate_the_tree_cache() -> gix_testtools::TestResult {
+    let dir = gix_testtools::tempfile::TempDir::new()?;
+    let root = dir.path();
+    gix_testtools::git(root, "init")?;
+    std::fs::write(root.join("a"), "first\n")?;
+    std::fs::write(root.join("b"), "second\n")?;
+    gix_testtools::git(root, "add a b")?;
+    gix_testtools::git(root, "write-tree")?;
+    let index_path = root.join(".git/index");
+    let original = std::fs::read(&index_path)?;
+    for operation in 0..10 {
+        std::fs::write(&index_path, &original)?;
+        let mut index = gix_index::File::at(&index_path, gix_testtools::object_hash(), false, Default::default())?;
+        assert!(index.tree().is_some(), "the original index has a cached tree");
+        match operation {
+            0 => {
+                index.entries_mut()[0].mode = gix_index::entry::Mode::FILE_EXECUTABLE;
+            }
+            1 => {
+                index.entries_mut_and_pathbacking().0[0].id = index.entries()[1].id;
+            }
+            2 => {
+                index.entries_mut_with_paths().next().expect("two entries").0.mode =
+                    gix_index::entry::Mode::FILE_EXECUTABLE;
+            }
+            3 => {
+                let backing = index.take_path_backing();
+                index
+                    .entries_mut_with_paths_in(&backing)
+                    .next()
+                    .expect("two entries")
+                    .0
+                    .mode = gix_index::entry::Mode::FILE_EXECUTABLE;
+                index.return_path_backing(backing);
+            }
+            4 => {
+                index
+                    .entry_mut_by_path_and_stage("a".into(), Stage::Unconflicted)
+                    .expect("entry exists")
+                    .mode = gix_index::entry::Mode::FILE_EXECUTABLE;
+            }
+            5 => {
+                let entry = index.entries()[0].clone();
+                index.dangerously_push_entry(entry.stat, entry.id, entry.flags, entry.mode, "c".into());
+            }
+            6 => {
+                index.remove_entries(|_, _, entry| {
+                    entry.mode = gix_index::entry::Mode::FILE_EXECUTABLE;
+                    false
+                });
+            }
+            7 => {
+                index.remove_entry_at_index(0);
+            }
+            8 => {
+                index.entries_mut()[0].flags.insert(gix_index::entry::Flags::REMOVE);
+            }
+            9 => {
+                let mut backing = index.take_path_backing();
+                backing[0] = b'c';
+                index.return_path_backing(backing);
+                index.sort_entries();
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            index.tree().is_none(),
+            "mutation {operation} must discard the cached tree"
+        );
+        index.write(Default::default())?;
+        gix_testtools::git(root, "fsck --cache --no-reflogs")?;
+    }
+    Ok(())
+}
+
+#[test]
+fn writing_mutated_entries_matches_git_write_tree() -> gix_testtools::TestResult {
+    let dir = gix_testtools::tempfile::TempDir::new()?;
+    let root = dir.path();
+    gix_testtools::git(root, "init")?;
+    std::fs::write(root.join("a"), "first\n")?;
+    std::fs::write(root.join("b"), "second\n")?;
+    gix_testtools::git(root, "add a b")?;
+    let original_tree = gix_testtools::git(root, "write-tree")?;
+    let index_path = root.join(".git/index");
+    let original = std::fs::read(&index_path)?;
+    for operation in 0..3 {
+        std::fs::write(&index_path, &original)?;
+        let mut index = gix_index::File::at(&index_path, gix_testtools::object_hash(), false, Default::default())?;
+        let second_blob_id = index.entries()[1].id;
+        match operation {
+            0 => {
+                index.entries_mut()[0].id = second_blob_id;
+                gix_testtools::git(root, &format!("update-index --cacheinfo 100644,{second_blob_id},a"))?;
+            }
+            1 => {
+                index.remove_entries(|_, path, entry| {
+                    if path == "a" {
+                        entry.mode = gix_index::entry::Mode::FILE_EXECUTABLE;
+                    }
+                    false
+                });
+                gix_testtools::git(root, "update-index --chmod=+x a")?;
+            }
+            2 => {
+                index.entries_mut()[0].flags.insert(gix_index::entry::Flags::REMOVE);
+                gix_testtools::git(root, "update-index --force-remove a")?;
+            }
+            _ => unreachable!(),
+        }
+        let expected_tree = gix_testtools::git(root, "write-tree")?;
+        assert_ne!(expected_tree, original_tree, "each edit changes the tree");
+        index.write(Default::default())?;
+        assert_eq!(
+            gix_testtools::git(root, "write-tree")?,
+            expected_tree,
+            "mutation {operation} must not reuse the old tree"
+        );
+        gix_testtools::git(root, "fsck --cache --no-reflogs")?;
+    }
+    Ok(())
+}
