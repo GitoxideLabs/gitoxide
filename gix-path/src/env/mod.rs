@@ -121,6 +121,7 @@ pub fn shell_command() -> std::process::Command {
 /// `GIT_INSTALL_ROOT`. Installation roots must be absolute paths.
 /// Also searched is `ChocolateyToolsLocation/git/cmd`.
 /// WinGet's user and machine `Links` directories are also searched.
+/// The active Conda/Mamba environment is searched via `CONDA_PREFIX/Library/bin`.
 pub fn exe_invocation() -> &'static Path {
     if cfg!(windows) {
         /// The path to the Git executable as located in the `PATH` or in other locations that it's

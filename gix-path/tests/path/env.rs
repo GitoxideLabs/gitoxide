@@ -31,6 +31,11 @@ mod windows_installations {
     }
 
     #[test]
+    fn active_conda_environment() -> gix_error::TestResult {
+        discover("CONDA_PREFIX", "conda", "conda/Library/bin/git.exe", false, false)
+    }
+
+    #[test]
     fn winget_user_links() -> gix_error::TestResult {
         discover(
             "LocalAppData",
@@ -126,13 +131,18 @@ mod windows_installations {
             "USERPROFILE",
             "ProgramData",
             "ChocolateyToolsLocation",
+            "CONDA_PREFIX",
             "PATH",
         ] {
             env = env.unset(variable);
         }
         env = env.set(variable, fixture.join(root).to_str().expect("UTF-8 fixture path"));
         if on_path {
-            for (variable, root) in [("ChocolateyToolsLocation", "chocolatey"), ("LocalAppData", "winget")] {
+            for (variable, root) in [
+                ("CONDA_PREFIX", "conda"),
+                ("ChocolateyToolsLocation", "chocolatey"),
+                ("LocalAppData", "winget"),
+            ] {
                 env = env.set(variable, fixture.join(root).to_str().expect("UTF-8 fixture path"));
             }
         }

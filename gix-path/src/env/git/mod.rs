@@ -118,6 +118,7 @@ fn locations_under_scoop(var_os: impl Fn(&str) -> Option<std::ffi::OsString>) ->
 fn locations_under_package_managers(var_os: impl Fn(&str) -> Option<std::ffi::OsString>) -> Vec<PathBuf> {
     // Stable package entry points remain available when their PATH entries are missing.
     [
+        ("CONDA_PREFIX", "Library/bin"),
         ("ChocolateyToolsLocation", "git/cmd"),
         ("LocalAppData", "Microsoft/WinGet/Links"),
         ("ProgramW6432", "WinGet/Links"),
