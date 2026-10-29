@@ -20,6 +20,11 @@ impl Action {
 
 /// Invoke the given `helper` with `action` in `context`.
 ///
+/// Static `store` helpers are executed natively, using Git's plaintext credential-file format and
+/// `--file` option. Without `--file`, the home credential file precedes the XDG credential file.
+/// On Unix, new credential files and their locks are private from creation (`0o600`).
+/// Lookup skips unreadable files, but updates abort if existing credentials cannot be read.
+///
 /// Usually the first call is performed with [`Action::Get`] to obtain `Some` identity, which subsequently can be used if it is complete.
 /// Note that it may also only contain the username _or_ password, and should start out with everything the helper needs.
 /// On successful usage, use [`NextAction::store()`], otherwise [`NextAction::erase()`], which is when this function
@@ -69,6 +74,9 @@ pub(crate) fn raw_with_environment(
     action: &Action,
     environment: &[(std::ffi::OsString, std::ffi::OsString)],
 ) -> Result<Option<Vec<u8>>> {
+    if let Some(result) = crate::program::store::invoke(helper, action, environment) {
+        return result.map_err(|err| HelperFailure(std::io::Error::other(err)).raise());
+    }
     let communication_error = || message("An IO error occurred while communicating to the credentials helper");
     let (mut stdin, stdout) = helper.start(action, environment).or_raise(communication_error)?;
     if let (Action::Get(_), None) = (&action, &stdout) {

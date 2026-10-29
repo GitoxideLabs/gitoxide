@@ -1,6 +1,7 @@
 mod cascade;
 mod context;
 mod invoke;
+mod store;
 
 mod invoke_outcome_to_helper_result {
     use gix_credentials::{helper, protocol, protocol::helper_outcome_to_result};
