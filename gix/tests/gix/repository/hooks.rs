@@ -22,6 +22,15 @@ fn discovery_uses_shared_hooks_and_configured_worktree_relative_paths() -> TestR
             fixture.join(expected).canonicalize()?,
             "default hooks belong to the common repository, including from linked worktrees"
         );
+        assert_eq!(
+            repo.hooks_directory()?.canonicalize()?,
+            fixture
+                .join(expected)
+                .parent()
+                .expect("hook has a directory")
+                .canonicalize()?,
+            "directory access uses the same common directory as executable hook discovery"
+        );
         assert!(repo.find_hook("missing")?.is_none(), "absent hooks are not configured");
     }
     for name in ["repo", "linked"] {
@@ -58,6 +67,11 @@ fn discovery_uses_shared_hooks_and_configured_worktree_relative_paths() -> TestR
     assert!(
         repo.find_hook("pre-commit")?.is_none(),
         "a configured path does not fall back to common hooks"
+    );
+    assert_eq!(
+        repo.hooks_directory()?,
+        fixture.join("repo/absent"),
+        "directory access also supports inspecting or installing hooks that are not present"
     );
     Ok(())
 }
