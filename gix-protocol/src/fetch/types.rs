@@ -13,9 +13,27 @@ pub struct Options<'a> {
     pub shallow: &'a Shallow,
     /// Describe how to handle tags when fetching.
     pub tags: Tags,
+    /// Omit blobs from the received graph, except explicitly requested blob tips.
+    pub filter: Option<Filter>,
     /// If `true`, if we fetch from a remote that only offers shallow clones, the operation will fail with an error
     /// instead of writing the shallow boundary to the shallow file.
     pub reject_shallow_remote: bool,
+}
+
+/// Object selection for a partial fetch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Filter {
+    /// Receive commits and trees, omitting blobs unless explicitly wanted.
+    BlobNone,
+}
+
+impl Filter {
+    /// Return the Git protocol spelling of this filter.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::BlobNone => "blob:none",
+        }
+    }
 }
 
 /// For use in [`crate::Handshake::prepare_lsrefs_or_extract_refmap()`] and [`fetch`](crate::fetch()).
