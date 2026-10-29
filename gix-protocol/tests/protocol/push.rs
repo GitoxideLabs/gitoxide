@@ -5,6 +5,8 @@ use gix_protocol::{
 };
 
 use crate::TestResult;
+#[cfg(feature = "blocking-client")]
+use gix_error::ResultExt;
 
 fn command(name: &str, old: u8, new: u8) -> Command {
     Command {
@@ -329,6 +331,190 @@ fn requests_and_reports_interoperate_with_git_receive_pack() -> TestResult {
         refs.trim(),
         "refs/tags/stale",
         "the successful deletion is independent of the stale one"
+    );
+    Ok(())
+}
+
+#[cfg(feature = "blocking-client")]
+#[test]
+fn native_push_transfers_a_pack_and_empty_push_options_with_sidebands() -> TestResult {
+    use gix_protocol::push::SendOptions;
+    use std::{io::Write, process::Stdio, sync::atomic::AtomicBool};
+
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let directory = gix_testtools::tempfile::tempdir()?;
+    let source = directory.path().join("source");
+    let destination = directory.path().join("destination");
+    std::fs::create_dir(&source)?;
+    std::fs::create_dir(&destination)?;
+    gix_testtools::git(&source, "init --bare")?;
+    gix_testtools::git(&destination, "init --bare")?;
+    gix_testtools::git(&destination, "config receive.advertisePushOptions true")?;
+    let blob_id = gix_testtools::git(&source, "hash-object -w --stdin")?;
+    let mut pack = gix_testtools::git_command(&source)
+        .args(["pack-objects", "--stdout", "--revs"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()?;
+    pack.stdin.take().expect("piped input").write_all(blob_id.as_bytes())?;
+    let pack = pack.wait_with_output()?;
+    assert!(pack.status.success());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let hook = destination.join("hooks/pre-receive");
+        std::fs::write(
+            &hook,
+            r#"#!/bin/sh
+printf 'options:%s|%s|%s\n' "$GIT_PUSH_OPTION_COUNT" "$GIT_PUSH_OPTION_0" "$GIT_PUSH_OPTION_1"
+cat >/dev/null
+"#,
+        )?;
+        std::fs::set_permissions(hook, std::fs::Permissions::from_mode(0o755))?;
+    }
+    let mut transport = gix_transport::client::blocking_io::file::connect(
+        destination.to_string_lossy().as_bytes().as_bstr().to_owned(),
+        gix_transport::Protocol::V1,
+        false,
+    )?;
+    let handshake = gix_protocol::handshake(
+        &mut transport,
+        gix_transport::Service::ReceivePack,
+        |_| Ok(None),
+        Vec::new(),
+        &mut gix_utils::progress::Discard,
+    )?;
+    let mut update = command("refs/tags/new", 0, 1);
+    update.new_id = gix_hash::ObjectId::from_hex(blob_id.trim().as_bytes())?;
+    let request = Request::new(
+        vec![update],
+        gix_hash::Kind::Sha1,
+        &handshake.capabilities,
+        Options {
+            atomic: true,
+            push_options: &["".into(), "ci.skip".into()],
+            ..Options::default()
+        },
+    )?;
+    let mut sideband = Vec::new();
+    let response = request
+        .send(
+            &mut transport,
+            move |writer| {
+                writer.write_all(&pack.stdout).or_error()?;
+                Ok(())
+            },
+            |_, text| {
+                sideband.extend_from_slice(text);
+                Ok(())
+            },
+            &AtomicBool::new(false),
+            SendOptions {
+                server_protocol: handshake.server_protocol_version,
+                ..SendOptions::default()
+            },
+        )?
+        .expect("one command receives a status report");
+    assert_eq!(response.unpack_error, None);
+    assert_eq!(response.refs[0].error, None);
+    assert_eq!(gix_testtools::git(&destination, "rev-parse refs/tags/new")?, blob_id);
+    #[cfg(unix)]
+    assert!(
+        sideband.contains_str("options:2||ci.skip"),
+        "receive hooks observe empty options and their output is delivered over sideband"
+    );
+    #[cfg(unix)]
+    std::fs::remove_file(destination.join("hooks/pre-receive"))?;
+    let mut transport = gix_transport::client::blocking_io::file::connect(
+        destination.to_string_lossy().as_bytes().as_bstr().to_owned(),
+        gix_transport::Protocol::V1,
+        false,
+    )?;
+    gix_protocol::handshake(
+        &mut transport,
+        gix_transport::Service::ReceivePack,
+        |_| Ok(None),
+        Vec::new(),
+        &mut gix_utils::progress::Discard,
+    )?;
+    let mut deletion = command("refs/tags/new", 1, 0);
+    deletion.old_id = gix_hash::ObjectId::from_hex(blob_id.trim().as_bytes())?;
+    let request = Request::new(
+        vec![deletion],
+        gix_hash::Kind::Sha1,
+        &capabilities("report-status delete-refs"),
+        Options::default(),
+    )?;
+    let response = request
+        .send(
+            &mut transport,
+            |_| panic!("deletion-only pushes must not request a pack"),
+            |_, _| Ok(()),
+            &AtomicBool::new(false),
+            SendOptions::default(),
+        )?
+        .expect("deletion is reported");
+    assert_eq!(
+        response.refs[0].error, None,
+        "plain report-status works without sidebands"
+    );
+    assert!(
+        gix_testtools::git(&destination, "for-each-ref")?.is_empty(),
+        "the remote confirms a deletion without pack data"
+    );
+
+    Ok(())
+}
+
+#[cfg(feature = "blocking-client")]
+#[test]
+fn failed_pack_production_aborts_receive_pack_without_hanging() -> TestResult {
+    use std::sync::atomic::AtomicBool;
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let directory = gix_testtools::tempfile::tempdir()?;
+    gix_testtools::git(directory.path(), "init --bare")?;
+    let mut transport = gix_transport::client::blocking_io::file::connect(
+        directory.path().to_string_lossy().as_bytes().as_bstr().to_owned(),
+        gix_transport::Protocol::V1,
+        false,
+    )?;
+    let handshake = gix_protocol::handshake(
+        &mut transport,
+        gix_transport::Service::ReceivePack,
+        |_| Ok(None),
+        Vec::new(),
+        &mut gix_utils::progress::Discard,
+    )?;
+    let request = Request::new(
+        vec![command("refs/tags/new", 0, 1)],
+        gix_hash::Kind::Sha1,
+        &handshake.capabilities,
+        Options::default(),
+    )?;
+    let start = std::time::Instant::now();
+    let error = request
+        .send(
+            &mut transport,
+            |writer| {
+                writer.write_all(b"PACK").or_error()?;
+                Err(gix_error::message("pack producer failed").validation_error())
+            },
+            |_, _| Ok(()),
+            &AtomicBool::new(false),
+            gix_protocol::push::SendOptions::default(),
+        )
+        .expect_err("a truncated pack must fail");
+    assert!(
+        format!("{error:#}").contains("pack producer failed"),
+        "the producer's error is retained: {error:#}"
+    );
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(10),
+        "the blocked receive-pack process is interrupted promptly"
     );
     Ok(())
 }
