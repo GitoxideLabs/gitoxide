@@ -890,3 +890,83 @@ fn relative_native_deepening_matches_git_without_git_in_path() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn relative_deepening_preserves_merge_depth_and_unrelated_boundaries() -> TestResult {
+    use gix::remote::fetch::{Options, Shallow};
+
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let fixture = gix_testtools::scripted_fixture_read_only("make_shallow_merge_fetch.sh")?.canonicalize()?;
+    let source = fixture.join("source");
+    let foreign = fixture.join("foreign");
+    let dir = gix_testtools::tempfile::tempdir()?;
+    let local = gix::init_bare(dir.path().join("native"))?;
+    let expected = dir.path().join("git");
+    gix_testtools::git(dir.path(), "init --bare git")?;
+    for (branch, source, shallow, flag) in [
+        ("other", &foreign, Shallow::DepthAtRemote(1.try_into()?), "--depth=1"),
+        ("unrelated", &source, Shallow::DepthAtRemote(1.try_into()?), "--depth=1"),
+        ("main", &source, Shallow::DepthAtRemote(2.try_into()?), "--depth=2"),
+        ("main", &source, Shallow::Deepen(1), "--deepen=1"),
+        ("main", &source, Shallow::Deepen(1), "--deepen=1"),
+        ("main", &source, Shallow::Deepen(1), "--deepen=1"),
+        ("main", &source, Shallow::undo(), "--unshallow"),
+    ] {
+        let spec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
+        let output = gix_testtools::git_command(&expected)
+            .args(["fetch", "--no-tags", flag])
+            .arg(&source)
+            .arg(&spec)
+            .output()?;
+        assert!(
+            output.status.success(),
+            "Git's {branch} {flag} oracle: {}",
+            output.stderr.as_bstr()
+        );
+        let mut remote = local
+            .remote_at(gix::path::into_bstr(source)?)?
+            .with_fetch_tags(gix::remote::fetch::Tags::None);
+        remote.replace_refspecs([spec.as_bytes().as_bstr()], Direction::Fetch)?;
+        let guard = gix_testtools::Env::new().set("PATH", "");
+        remote.fetch(
+            Options {
+                shallow,
+                ..Default::default()
+            },
+            gix::progress::Discard,
+            &std::sync::atomic::AtomicBool::default(),
+        )?;
+        drop(guard);
+        let read_boundary = |path: &Path| -> std::io::Result<std::collections::BTreeSet<String>> {
+            match std::fs::read_to_string(path.join("shallow")) {
+                Ok(content) => Ok(content.lines().map(str::to_owned).collect()),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Default::default()),
+                Err(err) => Err(err),
+            }
+        };
+        assert_eq!(
+            read_boundary(local.git_dir())?,
+            read_boundary(&expected)?,
+            "same boundary for {branch} {flag}"
+        );
+        for name in ["main", "unrelated", "other"] {
+            let reference = format!("refs/remotes/origin/{name}");
+            let Some(mut local_ref) = local.try_find_reference(&reference)? else {
+                continue;
+            };
+            let tip = local_ref.peel_to_id()?;
+            let output = gix_testtools::git_command(&expected)
+                .args(["rev-list", "--count", &reference])
+                .output()?;
+            assert!(output.status.success(), "Git can walk the fetched {name} history");
+            assert_eq!(
+                local.rev_walk([tip]).all()?.count(),
+                String::from_utf8(output.stdout)?.trim().parse::<usize>()?,
+                "same reachable {name} history after {branch} {flag}"
+            );
+        }
+    }
+    Ok(())
+}

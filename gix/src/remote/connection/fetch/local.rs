@@ -287,12 +287,16 @@ where
                 .get(&ref_map.refspecs, &ref_map.extra_refspecs)
                 .is_some_and(|spec| Some(spec.to_ref()) == remote.fetch_tags.to_refspec())
     };
-    let tips: Vec<_> = ref_map
+    let mut tips: Vec<_> = ref_map
         .mappings
         .iter()
         .filter(|mapping| !is_implicit_tag(mapping))
         .filter_map(|mapping| mapping.remote.as_id().map(ToOwned::to_owned))
         .collect();
+    // Unshallow also completes known client boundaries outside the selected refs.
+    if options.shallow == fetch::Shallow::undo() && source_shallow.is_empty() {
+        tips.extend(previous.iter().filter(|id| source.objects.exists(id)).copied());
+    }
     let (boundary, traversal_boundary) = boundary(
         source,
         &destination,
