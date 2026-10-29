@@ -22,9 +22,13 @@ impl Repository {
     /// Repository hooks require full repository trust. This method only discovers traditional hooks;
     /// it does not inspect configured `hook.<name>.event` commands or run receive-side hooks with a different directory.
     pub fn find_hook(&self, name: &str) -> Result<Option<PathBuf>> {
+        self.find_hook_in(name, &self.hook_working_directory(None))
+    }
+
+    fn find_hook_in(&self, name: &str, working_dir: &Path) -> Result<Option<PathBuf>> {
         gix_hook::validate_name(name)?;
         self.require_hook_trust()?;
-        gix_hook::find(name, &self.hooks_directory()?)
+        gix_hook::find(name, &self.hooks_directory_in(working_dir)?)
     }
 
     /// Prepare the traditional hook at `path` for execution with this repository's environment and working directory.
@@ -42,7 +46,7 @@ impl Repository {
     /// [`run_hook()`][Self::run_hook()] for that.
     pub fn prepare_hook(&self, path: impl AsRef<Path>) -> Result<Command> {
         self.require_hook_trust()?;
-        let working_dir = self.current_dir().join(self.workdir().unwrap_or(self.git_dir()));
+        let working_dir = self.hook_working_directory(None);
         gix_hook::prepare(
             path.as_ref(),
             &gix_hook::Context {
@@ -67,7 +71,7 @@ impl Repository {
     /// launch and communication failures are errors. The caller decides how a failed hook affects its operation.
     pub fn run_hook(&self, path: impl AsRef<Path>, options: crate::hook::Options<'_>) -> Result<std::process::Output> {
         self.require_hook_trust()?;
-        let working_dir = self.current_dir().join(self.workdir().unwrap_or(self.git_dir()));
+        let working_dir = self.hook_working_directory(None);
         gix_hook::run(
             path.as_ref(),
             &gix_hook::Context {
@@ -77,6 +81,59 @@ impl Repository {
             },
             options,
         )
+    }
+
+    /// Run enabled configured and traditional hooks for `event`, serially, and return their outputs in execution order.
+    ///
+    /// Trusted `hook.<name>.event` registrations run in the order they were last encountered, using each name's last
+    /// `command`. Empty event values clear earlier registrations. Per-hook `enabled` settings select individual hooks;
+    /// an event-wide disable suppresses both configured and traditional hooks. The traditional hook runs last.
+    /// Known hook event names cannot serve as configured hook names. All active registrations require a command.
+    ///
+    /// The working directory is the worktree root, or the Git directory for bare repositories and receive-side events.
+    /// Relative `core.hooksPath` and command paths use that directory. Commands may contain shell syntax; arguments and
+    /// environment values in `options` remain literal, and stdin is replayed independently for every hook.
+    ///
+    /// This always runs one hook at a time, regardless of `hook.jobs` and `hook.<name>.parallel`. Nonzero exit statuses
+    /// do not stop subsequent hooks and are retained in the outputs. Configuration, launch, and communication errors
+    /// stop execution and are returned. An empty vector means no enabled hooks. Full repository trust is required.
+    pub fn run_hook_event_serially(
+        &self,
+        event: &str,
+        options: crate::hook::Options<'_>,
+    ) -> Result<Vec<std::process::Output>> {
+        gix_hook::validate_name(event)?;
+        self.require_hook_trust()?;
+        let Some(configured) =
+            gix_hook::configured_commands(&self.config.resolved, self.filter_config_section(), event)?
+        else {
+            return Ok(Vec::new());
+        };
+        let working_dir = self.hook_working_directory(Some(event));
+        let hooks_directory = self.hooks_directory_in(&working_dir)?;
+        if configured.is_empty() && gix_hook::find(event, &hooks_directory)?.is_none() {
+            return Ok(Vec::new());
+        }
+        gix_hook::run_event_serially(
+            event,
+            Some(&configured),
+            &hooks_directory,
+            &gix_hook::Context {
+                working_dir: &working_dir,
+                common_dir: &self.current_dir().join(self.common_dir()),
+                command: self.command_context()?,
+            },
+            options,
+        )
+    }
+
+    fn hook_working_directory(&self, event: Option<&str>) -> PathBuf {
+        let receive_event = event.is_some_and(gix_hook::is_receive_event);
+        self.current_dir().join(if receive_event {
+            self.git_dir()
+        } else {
+            self.workdir().unwrap_or(self.git_dir())
+        })
     }
 
     fn require_hook_trust(&self) -> Result<()> {
@@ -97,6 +154,10 @@ impl Repository {
     /// This resolves the directory only. Use [`find_hook()`][Self::find_hook()] to validate a hook name,
     /// check repository trust, and find an executable hook.
     pub fn hooks_directory(&self) -> Result<PathBuf> {
+        self.hooks_directory_in(&self.hook_working_directory(None))
+    }
+
+    fn hooks_directory_in(&self, working_dir: &Path) -> Result<PathBuf> {
         let default = self.current_dir().join(self.common_dir()).join("hooks");
         let Some(value) = self
             .config
@@ -114,14 +175,11 @@ impl Repository {
         let install_dir = crate::path::install_dir().ok();
         let home = config::cache::access::home_dir(self.open_options().permissions.env);
         let context = config::cache::interpolate_context(install_dir.as_deref(), home.as_deref());
-        let path = self
-            .current_dir()
-            .join(self.workdir().unwrap_or(self.git_dir()))
-            .join(if path.is_empty() {
-                PathBuf::new()
-            } else {
-                path.interpolate(context)?
-            });
+        let path = working_dir.join(if path.is_empty() {
+            PathBuf::new()
+        } else {
+            path.interpolate(context)?
+        });
         if optional {
             match path.metadata() {
                 Ok(_) => {}

@@ -75,6 +75,11 @@ pub mod gitoxide;
 pub struct Gpg;
 pub mod gpg;
 
+/// The `hook` top-level section.
+#[derive(Copy, Clone, Default)]
+pub struct Hook;
+mod hook;
+
 /// The `http` top-level section.
 #[derive(Copy, Clone, Default)]
 pub struct Http;
