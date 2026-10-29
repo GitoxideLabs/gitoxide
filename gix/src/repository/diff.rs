@@ -5,6 +5,29 @@ use crate::{Repository, Result, Tree};
 
 /// Diff-utilities
 impl Repository {
+    /// Look up a configured or built-in diff driver by its case-sensitive name.
+    ///
+    /// Custom values override the built-in language definition. Hunk-header patterns
+    /// remain uncompiled until the caller asks the driver for its matcher.
+    pub fn diff_driver(&self, name: impl AsRef<[u8]>) -> Result<Option<gix_diff::blob::Driver>> {
+        let name = name.as_ref();
+        if let Some(driver) = self
+            .config
+            .diff_drivers()?
+            .into_iter()
+            .find(|driver| driver.name == name)
+        {
+            return Ok(Some(driver));
+        }
+        Ok(
+            gix_diff::blob::hunk_header::Definition::builtin(name).map(|definition| gix_diff::blob::Driver {
+                name: name.into(),
+                hunk_header: Some(definition),
+                ..Default::default()
+            }),
+        )
+    }
+
     /// Create a resource cache for diffable objects, and configured with everything it needs to know to perform diffs
     /// faithfully just like `git` would.
     /// `mode` controls what version of a resource should be diffed.
