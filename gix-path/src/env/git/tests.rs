@@ -830,6 +830,72 @@ mod locations {
             );
         }
     }
+
+    #[test]
+    fn msys_paths_and_companions_use_the_selected_runtime() -> gix_error::TestResult {
+        let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only(
+            "windows-git-installations.sh",
+        )?)?;
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let bin = fixture.join("msys/usr/bin");
+        let executable = bin.join("git.exe");
+        let _env = gix_testtools::Env::new().set("PATH", bin.to_str().expect("UTF-8 fixture path"));
+        assert_eq!(
+            super::super::msys_bin_at(&executable),
+            Some(bin.as_path()),
+            "identify the selected MSYS runtime"
+        );
+        let mixed_case_bin = fixture.join("msys/UsR/BiN");
+        assert_eq!(
+            super::super::msys_bin_at(&mixed_case_bin.join("git.exe")),
+            Some(mixed_case_bin.as_path()),
+            "Windows PATH spelling does not change the selected MSYS runtime"
+        );
+        assert_eq!(
+            super::super::msys_bin_at(Path::new("usr/bin/git.exe")),
+            None,
+            "relative roots are not trusted"
+        );
+        assert_eq!(
+            super::super::msys_bin_at(&fixture.join("path/git.exe")),
+            None,
+            "ordinary Git is not an MSYS runtime"
+        );
+        for path in ["/usr/lib/git-core", "/etc/gitconfig", "/a directory with spaces "] {
+            let actual = super::super::native_path(Path::new(path)).expect("the bundled cygpath runs");
+            assert_eq!(
+                actual,
+                fixture.join("msys").join(&path[1..]),
+                "Unix paths are mapped by the same runtime, preserving spaces"
+            );
+        }
+        for path in ["relative", r"C:\custom\git-core"] {
+            assert_eq!(
+                super::super::native_path(Path::new(path)).as_deref(),
+                Some(Path::new(path)),
+                "non-Unix overrides are preserved"
+            );
+        }
+        for stem in ["bash", "sh"] {
+            assert_eq!(
+                crate::env::installation_program(stem),
+                Some(bin.join(format!("{stem}.exe"))),
+                "companions come from the selected runtime"
+            );
+        }
+        assert!(
+            !crate::env::shell().to_string_lossy().contains('\\'),
+            "the shell path uses forward slashes"
+        );
+        assert_eq!(
+            crate::env::shell_command().get_args().count(),
+            0,
+            "MSYS sh is not a Git for Windows shim"
+        );
+        Ok(())
+    }
 }
 
 #[cfg(not(windows))]

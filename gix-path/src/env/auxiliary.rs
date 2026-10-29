@@ -95,6 +95,22 @@ const BIN_DIR_FRAGMENTS: &[&str] = &["bin", "usr/bin"];
 /// `<platform>/bin`, for any applicable variants (such as `mingw64`); and `super::core_dir()` itself,
 /// which it could safely check even if its value is not safe for inferring other paths.
 pub(super) fn find_git_associated_windows_executable(stem: &str) -> Option<WindowsExecutable> {
+    #[cfg(windows)]
+    if let Some(bin) = super::git::msys_bin() {
+        // Stay inside the selected MSYS runtime's bin directory. In particular, do not infer
+        // a sibling of an arbitrary `usr` directory from GIT_EXEC_PATH.
+        let program = bin.join(format!("{stem}.exe"));
+        if !program.is_file() {
+            return None;
+        }
+        let program = crate::from_bstr(crate::to_unix_separators(crate::into_bstr(program).ok()?))
+            .ok()?
+            .into_owned();
+        return Some(WindowsExecutable {
+            program: program.into(),
+            is_shim: false,
+        });
+    }
     let git_root = git_for_windows_root()?;
 
     BIN_DIR_FRAGMENTS

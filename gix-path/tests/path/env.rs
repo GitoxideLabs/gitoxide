@@ -52,6 +52,11 @@ mod windows_installations {
     }
 
     #[test]
+    fn msys_install_root() -> gix_error::TestResult {
+        discover("GIT_INSTALL_ROOT", "msys", "msys/usr/bin/git.exe", false, false)
+    }
+
+    #[test]
     fn default_user_installation() -> gix_error::TestResult {
         discover(
             "USERPROFILE",
@@ -142,6 +147,7 @@ mod windows_installations {
                 ("CONDA_PREFIX", "conda"),
                 ("ChocolateyToolsLocation", "chocolatey"),
                 ("LocalAppData", "winget"),
+                ("GIT_INSTALL_ROOT", "msys"),
             ] {
                 env = env.set(variable, fixture.join(root).to_str().expect("UTF-8 fixture path"));
             }

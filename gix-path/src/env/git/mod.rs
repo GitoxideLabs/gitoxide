@@ -116,13 +116,15 @@ fn locations_under_scoop(var_os: impl Fn(&str) -> Option<std::ffi::OsString>) ->
 
 #[cfg(windows)]
 fn locations_under_package_managers(var_os: impl Fn(&str) -> Option<std::ffi::OsString>) -> Vec<PathBuf> {
-    // Stable package entry points remain available when their PATH entries are missing.
+    // These are stable entry points, including WinGet's links for custom portable roots.
+    // Only the active Conda/Mamba environment participates; do not pick an inactive environment.
     [
         ("CONDA_PREFIX", "Library/bin"),
         ("ChocolateyToolsLocation", "git/cmd"),
         ("LocalAppData", "Microsoft/WinGet/Links"),
         ("ProgramW6432", "WinGet/Links"),
         ("ProgramFiles", "WinGet/Links"),
+        ("GIT_INSTALL_ROOT", "usr/bin"),
     ]
     .into_iter()
     .filter_map(|(variable, suffix)| {
@@ -132,6 +134,61 @@ fn locations_under_package_managers(var_os: impl Fn(&str) -> Option<std::ffi::Os
             .map(|root| root.join(suffix))
     })
     .collect()
+}
+
+/// Keep the selected path internally even when the public invocation is just `git.exe`.
+pub(super) fn exe_path() -> Option<&'static Path> {
+    static PATH: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
+        env::var_os("PATH")
+            .iter()
+            .flat_map(env::split_paths)
+            .chain(ALTERNATIVE_LOCATIONS.iter().cloned())
+            .map(|prefix| prefix.join(EXE_NAME))
+            .find(|path| path.is_file())
+            .and_then(|path| std::path::absolute(path).ok())
+    });
+    PATH.as_deref()
+}
+
+/// MSYS Git uses Unix paths. Bind conversion and companion lookup to its own runtime.
+#[cfg(windows)]
+pub(super) fn msys_bin() -> Option<&'static Path> {
+    msys_bin_at(exe_path()?)
+}
+
+#[cfg(windows)]
+fn msys_bin_at(executable: &Path) -> Option<&Path> {
+    let bin = executable.parent()?;
+    let mut components = bin.components().rev();
+    let is_msys_bin = [b"bin", b"usr"].into_iter().all(|name| {
+        components
+            .next()
+            .is_some_and(|component| component.as_os_str().as_encoded_bytes().eq_ignore_ascii_case(name))
+    });
+    (bin.is_absolute() && is_msys_bin && bin.join("msys-2.0.dll").is_file() && bin.join("cygpath.exe").is_file())
+        .then_some(bin)
+}
+
+/// Convert paths emitted by MSYS Git to paths usable by native Windows callers.
+pub(super) fn native_path(path: &Path) -> Option<PathBuf> {
+    #[cfg(windows)]
+    if let Some(bin) =
+        msys_bin().filter(|_| !path.is_absolute() && path.as_os_str().as_encoded_bytes().starts_with(b"/"))
+    {
+        use std::os::windows::process::CommandExt;
+        let output = Command::new(bin.join("cygpath.exe"))
+            .args(["-am", "--"])
+            .arg(path)
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let path = output.stdout.strip_suffix(b"\n")?.to_path().ok()?.to_owned();
+        return path.is_absolute().then_some(path);
+    }
+    Some(path.to_owned())
 }
 
 #[cfg(windows)]
@@ -194,13 +251,16 @@ fn config_paths_from_executable_at(executable: PathBuf) -> std::io::Result<Confi
     let mut cmd = git_cmd(executable.clone(), true);
     gix_trace::debug!(cmd = ?cmd, "invoking git for configuration paths");
     let output = cmd.output()?;
+    let native = |path: &BStr| {
+        native_path(crate::from_byte_slice(path).ok()?).and_then(|path| crate::os_string_into_bstring(path.into()).ok())
+    };
 
     if !output.status.success() {
         let mut cmd = git_cmd(executable, false);
         gix_trace::debug!(cmd = ?cmd, "invoking git for configuration paths (pre Git 2.26)");
         let output = cmd.output()?;
         return Ok(ConfigPaths {
-            installation: first_file_from_config_with_origin(output.stdout.as_slice().into()).map(ToOwned::to_owned),
+            installation: first_file_from_config_with_origin(output.stdout.as_slice().into()).and_then(native),
             ..Default::default()
         });
     }
@@ -208,9 +268,9 @@ fn config_paths_from_executable_at(executable: PathBuf) -> std::io::Result<Confi
     let (installation, installation_is_system, system) =
         config_paths_from_config_with_origin(output.stdout.as_slice().into());
     Ok(ConfigPaths {
-        installation: installation.map(ToOwned::to_owned),
+        installation: installation.and_then(native),
         installation_is_system,
-        system: system.map(ToOwned::to_owned),
+        system: system.and_then(native),
     })
 }
 

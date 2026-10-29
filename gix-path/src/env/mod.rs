@@ -119,32 +119,24 @@ pub fn shell_command() -> std::process::Command {
 /// These include standard Git for Windows installations and Scoop's user and global installations
 /// (`SCOOP`/`SCOOP_GLOBAL`, defaulting to `USERPROFILE/scoop` and `ProgramData/scoop`), as well as
 /// `GIT_INSTALL_ROOT`. Installation roots must be absolute paths.
-/// Also searched is `ChocolateyToolsLocation/git/cmd`.
-/// WinGet's user and machine `Links` directories are also searched.
-/// The active Conda/Mamba environment is searched via `CONDA_PREFIX/Library/bin`.
+/// Also searched are `ChocolateyToolsLocation/git/cmd`, the active Conda/Mamba environment's
+/// `CONDA_PREFIX/Library/bin`, and WinGet's user and machine `Links` directories. For an MSYS2
+/// installation outside `PATH`, set `GIT_INSTALL_ROOT` to its root (containing `usr/bin`).
 pub fn exe_invocation() -> &'static Path {
     if cfg!(windows) {
         /// The path to the Git executable as located in the `PATH` or in other locations that it's
         /// known to be installed to. It's `None` if no executable could be found.
         static EXECUTABLE_PATH: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
-            std::env::var_os("PATH")
-                .iter()
-                .flat_map(std::env::split_paths)
-                .chain(git::ALTERNATIVE_LOCATIONS.iter().map(Into::into))
-                .find_map(|prefix| {
-                    let full_path = prefix.join(EXE_NAME);
-                    full_path.is_file().then_some(full_path)
-                })
-                .map(|exe_path| {
-                    let is_in_alternate_location = git::ALTERNATIVE_LOCATIONS
-                        .iter()
-                        .any(|prefix| exe_path.strip_prefix(prefix).is_ok());
-                    if is_in_alternate_location {
-                        exe_path
-                    } else {
-                        EXE_NAME.into()
-                    }
-                })
+            git::exe_path().map(|exe_path| {
+                let is_in_alternate_location = git::ALTERNATIVE_LOCATIONS
+                    .iter()
+                    .any(|prefix| exe_path.strip_prefix(prefix).is_ok());
+                if is_in_alternate_location {
+                    exe_path.to_owned()
+                } else {
+                    EXE_NAME.into()
+                }
+            })
         });
         EXECUTABLE_PATH.as_deref().unwrap_or(Path::new(git::EXE_NAME))
     } else {
@@ -191,17 +183,13 @@ static GIT_CORE_DIR: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
         return None;
     }
 
-    BString::new(output.stdout)
-        .strip_suffix(b"\n")?
-        .to_path()
-        .ok()?
-        .to_owned()
-        .into()
+    git::native_path(BString::new(output.stdout).strip_suffix(b"\n")?.to_path().ok()?)
 });
 
 /// Return the directory obtained by calling `git --exec-path`.
 ///
-/// Returns `None` if Git could not be found or if it returned an error.
+/// MSYS2 paths are translated for native Windows callers using the same installation's `cygpath`.
+/// Returns `None` if Git could not be found, returned an error, or its path could not be translated.
 pub fn core_dir() -> Option<&'static Path> {
     GIT_CORE_DIR.as_deref()
 }
@@ -259,7 +247,7 @@ where
 {
     core_dir_func()?
         .ancestors()
-        .find(|path| path.file_name() == Some(OsStr::new("libexec")))?
+        .find(|path| path.file_name() == Some(OsStr::new("libexec")) || (cfg!(windows) && path.ends_with("usr/lib")))?
         .parent()
         .filter(|prefix| !prefix.as_os_str().is_empty())
         .map(Path::to_path_buf)
