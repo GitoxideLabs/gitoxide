@@ -462,6 +462,10 @@ features = [
     "serde",
 ]
 
+[package.metadata.smart-release]
+api-check = ["etc/scripts/check-api.sh"]
+unstable-features = ["unstable"]
+
 [package.metadata.api-check]
 profiles = [
     { default-features = false, features = ["sha1"] },

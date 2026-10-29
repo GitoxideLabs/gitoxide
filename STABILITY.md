@@ -23,13 +23,11 @@ Stability covers all reachable public types and implementations, including input
 types, fields, callbacks, associated types, generic bounds and trait conversions.
 An unstable dependency used only internally does not require a breaking release
 of its consumer. Re-exporting a type does not hide its dependency identity.
-Foundational crates such as `gix-hash` and `gix-trace` therefore need their own
-stability commitments before APIs exposing them can be stabilized.
-
-TODO: stabilize `gix-error`. Its errors, metadata, classifications and helpers are
-temporarily permitted in the baseline so this migration does not hide every
-fallible operation. This exception does not claim compatibility across future
-breaking versions of `gix-error`. Concrete plumbing causes remain diagnostic
+Foundational plumbing needs compatibility commitments before `gix` reaches 1.0.
+Until then, stable consumers declare temporary type exceptions in their Cargo
+manifests, as described below. These exceptions permit useful operations while
+their dependencies remain pre-1.0; they do not waive breaking dependency identity
+or signature checks. Concrete plumbing causes remain diagnostic
 details unless a gated API explicitly documents the supported downcast.
 
 For each public type, decide whether construction and exhaustive matching are
@@ -42,11 +40,42 @@ foundational crates to version 1.0.
 
 ## Checking a release boundary
 
-The `gix-lock` and `gix-tempfile` manifests opt into the API checker through
+`it check-api` uses the shared checker from `cargo-smart-release-core`. Until that crate
+is published, the internal tool depends on cargo-smart-release's
+`stability-support` Git branch, with the exact revision recorded in `Cargo.lock`.
+CI builds the library as part of `it`; it does not need a separate
+`cargo-smart-release` binary or checkout.
+
+Run `just check-api` to check local changes against the same stable API
+checks as CI. It tests the release checker, compiles isolated stable and experimental
+consumers, and recursively audits the supported members of `gix`'s reachable
+workspace plumbing types against its manifest exceptions in each supported profile.
+It checks the current working tree, including uncommitted changes, and respects
+`CARGO_TARGET_DIR`. Use Rust 1.99, which produces the supported rustdoc JSON format
+(for example, `RUSTUP_TOOLCHAIN=1.99.0 just check-api`). It also compares against
+the newest reachable `gix-v*` release tag whose manifest declares an API baseline.
+CI fetches full history and tags for this comparison. Until the first supported
+release exists, the command reports that there is no release baseline and still
+runs the boundary checks. Ungated releases are skipped because introducing the
+initial gates is intentionally breaking.
+
+Run `just check-api HEAD` to compare uncommitted changes against the current commit,
+or replace `HEAD` with any intended baseline revision. Explicit revisions are always
+compared, including ungated predecessors. The command also runs baseline/current
+regression fixtures for the release guard, so it requires `cargo-semver-checks` as
+described below.
+
+The `gix`, `gix-lock` and `gix-tempfile` manifests opt into the API checker through
 `package.metadata.smart-release`. A version of `cargo smart-release` with API
 checker support invokes `etc/scripts/check-api.sh` before release mutations.
 The normal release command remains the entry point. Crates without this metadata
 retain conservative dependency-based version bumps.
+
+This is useful before 1.0: a supported `gix` API break requires the next minor
+release, while a verified private dependency update can remain a patch release.
+Release planning compares against the latest published release, including an
+ungated predecessor; the first release introducing the gates is intentionally
+breaking. Unlike automatic local checks, release planning does not skip that baseline.
 
 The checker compares each manifest's explicit stable feature profile against the
 previous release, excluding `unstable`. It combines `cargo-semver-checks`, type
@@ -55,6 +84,32 @@ planned incompatible update of a public dependency remains breaking even when
 its types have the same spelling. Private dependency updates can stop propagating
 through a verified compatible boundary. Tool failures abort the release plan;
 they never count as compatibility.
+
+With `api-check.recursive = true`, release mode collects the same supported graph
+as the boundary audit in both revisions. It compares the supported signatures and
+dependency identities throughout that graph, and runs `cargo-semver-checks` on
+each workspace dependency's supported subset. This protects exempt plumbing types'
+fields, methods, bounds, associated types, trait implementations and auto traits.
+Experimental members and unrelated dependency APIs are excluded. Removing an
+exception, marking an existing member experimental, disabling recursion or dropping
+a supported feature profile cannot erase a promise made by the baseline. New
+profiles are audited before becoming part of the next baseline.
+
+To run the shared API check, including uncommitted changes, without the regression
+tests and downstream compile probes, use:
+
+```sh
+bash etc/scripts/check-api-compare.sh HEAD
+```
+
+The script delegates to `it check-api compare gix --baseline HEAD`, using the same
+baseline selection and checks as `cargo api-check gix`. Omit `HEAD` to select the
+latest supported release automatically, or audit the current boundary if none exists.
+Use `it check-api compare <crate>` directly to check another workspace crate.
+The local command checks the versions currently in the manifests; the release
+planner also supplies planned breaking dependency updates. The script shares the
+existing Cargo target directory with the archived baseline, honoring
+`CARGO_TARGET_DIR` when set.
 
 Install `cargo-semver-checks` 0.51.0 or newer on `PATH` (for example,
 `cargo install cargo-semver-checks --version 0.51.0 --locked`). The checker relies
@@ -70,7 +125,9 @@ Capture the initial baseline after gating. Subsequently compare against the
 latest release so later stabilizations also become protected. The first gated
 release will correctly differ incompatibly from its ungated predecessor.
 `etc/scripts/check-gix-api.sh` separately checks downstream access with the feature
-both disabled and enabled, outside workspace feature unification.
+both disabled and enabled, outside workspace feature unification. Boundary audits
+apply the consuming manifest's exceptions to workspace plumbing; other dependencies
+remain subject to release signature and identity checks.
 
 ## Terminology
 
@@ -186,7 +243,9 @@ This exception permits exposure; it does not establish compatibility across brea
 dependency releases. Compatible `0.x` dependency updates remain allowed. Incompatible
 updates that change a supported public API or exposed type identity still require
 a breaking release of the affected crate; release API checks must retain those checks.
-Establish compatibility commitments for the exempt APIs before releasing `gix` 1.0.
+Recursive release checks protect the supported subset even while its defining crate
+remains `0.x`; changes to that subset must respect the consuming crate's release
+contract. Establish these commitments before releasing `gix` 1.0.
 
 A crate may offer additional experimental APIs behind a non-default `unstable` feature. These APIs are excluded
 from its compatibility guarantee; consumers using them must pin an exact version. `gix_macros::unstable` keeps
@@ -211,7 +270,8 @@ also follow the supported members of reachable plumbing types; this is enabled f
 the porcelain crate. Experimental members are excluded using the documentation
 markers emitted by `gix_macros::unstable`, regardless of whether feature unification
 made them public. Dependency rustdoc is generated with the features resolved for each
-consumer profile. These boundary checks supplement release compatibility checks.
+consumer profile. Release comparisons reuse this same graph for baseline and current
+APIs, rather than maintaining a separate list of protected plumbing types.
 
 Breaking changes are collected and may be released no more often than every 4 weeks by incrementing the major version number.
 
