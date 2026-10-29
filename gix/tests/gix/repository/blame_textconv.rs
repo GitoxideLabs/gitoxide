@@ -93,3 +93,24 @@ fn textconv_is_opt_in_skips_symlinks_and_propagates_failure() -> TestResult {
     assert_eq!(repo.head_id()?.detach(), head, "blame never changes the repository tip");
     Ok(())
 }
+
+#[test]
+fn relative_textconv_commands_run_at_the_repository_root() -> TestResult {
+    let mut repo = crate::named_repo("make_blame_textconv.sh")?;
+    repo.config_snapshot_mut()
+        .set_raw_value("diff.render.textconv", "./render")?;
+    let options = gix::repository::blame_file::Options {
+        textconv: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        repo.blame_file("history.dat".into(), repo.head_id()?, options.clone())?
+            .blob,
+        b"first\nSECOND\nTHIRD\n"
+    );
+    assert_eq!(
+        repo.blame_worktree_file("history.dat".into(), options)?.blob,
+        b"first\nSECOND\nTHIRD\nfourth\n"
+    );
+    Ok(())
+}
