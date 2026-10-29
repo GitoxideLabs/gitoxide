@@ -32,7 +32,8 @@ use crate::{
 /// * `cache`
 ///    - Optionally, the commitgraph cache.
 /// * `resource_cache`
-///    - Used for diffing trees.
+///    - Provides attributes and blob conversion, including optional textconv. Rename similarity
+///      uses stored blobs independently of the conversion used for line attribution.
 /// * `file_path`
 ///    - A *slash-separated* worktree-relative path to the file to blame.
 /// * `options`
@@ -77,6 +78,13 @@ pub fn file(
 ) -> Result<Outcome> {
     let _span = gix_trace::coarse!("gix_blame::file()", ?file_path, ?start);
 
+    // Rename similarity is measured on stored blobs, even when blame compares textconv output.
+    let mut rewrite_resource_cache = (resource_cache.filter_mode != gix_diff::blob::pipeline::Mode::ToGit).then(|| {
+        let mut cache = resource_cache.clone();
+        cache.filter_mode = gix_diff::blob::pipeline::Mode::ToGit;
+        cache.clear_resource_cache();
+        cache
+    });
     let mut stats = Statistics::default();
     let (mut buf, mut buf2, mut buf3) = (Vec::new(), Vec::new(), Vec::new());
 
@@ -88,6 +96,7 @@ pub fn file(
         previous,
     } = initial_state(
         &odb,
+        resource_cache,
         start,
         cache.as_ref(),
         file_path,
@@ -222,7 +231,13 @@ pub fn file(
         // identical to the corresponding lines in the *Source File*.
         #[cfg(debug_assertions)]
         {
-            let source_blob = odb.find_blob(&entry_id, &mut buf)?.data.to_vec();
+            let source_blob = diffable_blob(
+                &odb,
+                resource_cache,
+                entry_id,
+                entry_mode.kind(),
+                current_file_path.as_ref(),
+            )?;
             let mut source_interner = gix_diff::blob::Interner::new(source_blob.len() / 100);
             let source_lines_as_tokens: Vec<_> = tokens_for_diffing(&source_blob)
                 .tokenize()
@@ -287,7 +302,7 @@ pub fn file(
                 cache.as_ref(),
                 &mut stats,
                 &mut diff_state,
-                resource_cache,
+                rewrite_resource_cache.as_mut().unwrap_or(resource_cache),
                 &mut buf,
                 &mut buf2,
                 &mut buf3,
@@ -341,8 +356,9 @@ pub fn file(
                         resource_cache,
                         id,
                         previous_id,
-                        file_path,
-                        file_path,
+                        entry_mode.kind(),
+                        current_file_path.as_ref(),
+                        current_file_path.as_ref(),
                         options.diff_algorithm,
                         &mut stats,
                     )?;
@@ -377,7 +393,8 @@ pub fn file(
                         resource_cache,
                         id,
                         source_id,
-                        file_path,
+                        entry_mode.kind(),
+                        current_file_path.as_ref(),
                         source_location.as_ref(),
                         options.diff_algorithm,
                         &mut stats,
@@ -817,35 +834,37 @@ fn blob_changes(
     resource_cache: &mut gix_diff::blob::Platform,
     oid: ObjectId,
     previous_oid: ObjectId,
+    mode: gix_object::tree::EntryKind,
     file_path: &BStr,
     previous_file_path: &BStr,
     diff_algorithm: gix_diff::blob::Algorithm,
     stats: &mut Statistics,
 ) -> Result<Vec<Change>> {
-    resource_cache.set_resource(
-        previous_oid,
-        // TODO(blame): add a test to show of symlink blaming works.
-        gix_object::tree::EntryKind::Blob,
-        previous_file_path,
-        gix_diff::blob::ResourceKind::OldOrSource,
-        &odb,
-    )?;
-    resource_cache.set_resource(
-        oid,
-        gix_object::tree::EntryKind::Blob,
-        file_path,
-        gix_diff::blob::ResourceKind::NewOrDestination,
-        &odb,
-    )?;
+    let old = diffable_blob(&odb, resource_cache, previous_oid, mode, previous_file_path)?;
+    let new = diffable_blob(&odb, resource_cache, oid, mode, file_path)?;
+    Ok(blob_changes_from_data(&old, &new, diff_algorithm, stats))
+}
 
-    let outcome = resource_cache.prepare_diff()?;
-
-    Ok(blob_changes_from_data(
-        outcome.old.data.as_slice().unwrap_or_default(),
-        outcome.new.data.as_slice().unwrap_or_default(),
-        diff_algorithm,
-        stats,
-    ))
+/// Blame treats binary contents as lines too, and never textconverts symlink targets.
+fn diffable_blob(
+    odb: &impl gix_object::FindObjectOrHeader,
+    resource_cache: &mut gix_diff::blob::Platform,
+    blob_id: ObjectId,
+    mode: gix_object::tree::EntryKind,
+    file_path: &BStr,
+) -> Result<Vec<u8>> {
+    if mode != gix_object::tree::EntryKind::Link {
+        resource_cache.set_resource(blob_id, mode, file_path, gix_diff::blob::ResourceKind::OldOrSource, odb)?;
+        if let Some(data) = resource_cache
+            .resource(gix_diff::blob::ResourceKind::OldOrSource)
+            .and_then(|resource| resource.data.as_slice())
+        {
+            return Ok(data.to_vec());
+        }
+    }
+    let mut data = Vec::new();
+    odb.find_blob(&blob_id, &mut data)?;
+    Ok(data)
 }
 
 fn blob_changes_from_data(
@@ -985,7 +1004,8 @@ struct InitialState {
 
 #[expect(clippy::too_many_arguments)]
 fn initial_state(
-    odb: &impl gix_object::Find,
+    odb: &impl gix_object::FindObjectOrHeader,
+    resource_cache: &mut gix_diff::blob::Platform,
     start: Start<'_>,
     cache: Option<&gix_commitgraph::Graph>,
     file_path: &BStr,
@@ -996,16 +1016,12 @@ fn initial_state(
 ) -> Result<InitialState> {
     match start {
         Start::Commit(suspect) => {
-            let (blamed_file_entry_id, _) =
+            let (blamed_file_entry_id, mode) =
                 find_path_entry_in_commit(&odb, &suspect, file_path, cache, buf, buf2, stats)?.ok_or_raise(|| {
                     message!("The file to blame at \"{file_path}\" wasn't found in the first commit at {suspect}")
                         .not_found()
                 })?;
-            let blamed_file_blob = odb
-                .find_blob(&blamed_file_entry_id, buf)
-                .or_raise(|| message("Could not find existing blob or commit"))?
-                .data
-                .to_vec();
+            let blamed_file_blob = diffable_blob(odb, resource_cache, blamed_file_entry_id, mode.kind(), file_path)?;
             let num_lines_in_blamed = tokens_for_diffing(&blamed_file_blob).tokenize().count() as u32;
 
             // Binary or otherwise empty?
@@ -1059,7 +1075,7 @@ fn initial_state(
 
             let mut out = Vec::new();
 
-            let Some((first_suspect_entry_id, _)) =
+            let Some((first_suspect_entry_id, mode)) =
                 find_path_entry_in_commit(odb, &first_suspect, file_path, cache, buf, buf2, stats)?.filter(
                     |(_, mode)| {
                         same_blob_type(
@@ -1089,11 +1105,8 @@ fn initial_state(
                 });
             };
 
-            let first_suspect_blob = odb
-                .find_blob(&first_suspect_entry_id, buf)
-                .or_raise(|| message("Could not find existing blob or commit"))?
-                .data
-                .to_vec();
+            let first_suspect_blob =
+                diffable_blob(odb, resource_cache, first_suspect_entry_id, mode.kind(), file_path)?;
 
             let changes = blob_changes_from_data(&first_suspect_blob, &blamed_file_blob, options.diff_algorithm, stats);
             hunks_to_blame = process_changes(hunks_to_blame, changes, null_id, first_suspect);
