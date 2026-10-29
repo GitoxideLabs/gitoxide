@@ -95,6 +95,8 @@ pub enum Token {
         list: Vec<Collation>,
     },
     Root,
+    /// A non-capturing wrapper for another repetition.
+    Repetition,
     Start,
     WordEnd,
     WordStart,
@@ -116,6 +118,7 @@ impl fmt::Debug for Token {
             Token::Group(id) => write!(f, "Group({})", id),
             Token::OneOf { invert, ref list } => write!(f, "{{invert: {}, {:?}}}", invert, list),
             Token::Root => write!(f, "Root"),
+            Token::Repetition => write!(f, "Repetition"),
             Token::Start => write!(f, "^"),
             Token::WordEnd => write!(f, ">"),
             Token::WordStart => write!(f, "<"),
@@ -256,7 +259,22 @@ impl<'a> PosixRegexBuilder<'a> {
         self.builder.start_internal(Token::Root, Range(1, Some(1)));
         self.parse(false)?;
         self.builder.finish_internal();
-        Ok(self.builder.finish())
+        let tree = self.builder.finish();
+        // Repetition wrappers can add depth outside a deeply nested parsed group.
+        // Check the final tree iteratively so their combined depth stays bounded.
+        let mut pending = vec![(tree.root, 0)];
+        while let Some((id, mut depth)) = pending.pop() {
+            if matches!(tree[id].token, Token::Group(_) | Token::Repetition) {
+                depth += 1;
+                if depth > self.nesting_limit {
+                    return Err(Error::NestingTooDeep {
+                        limit: self.nesting_limit,
+                    });
+                }
+            }
+            pending.extend(tree[id].children(&tree).map(|child| (child, depth)));
+        }
+        Ok(tree)
     }
 
     fn consume(&mut self, amount: usize) {
@@ -310,6 +328,34 @@ impl<'a> PosixRegexBuilder<'a> {
         };
         self.consume(consumed);
         Ok(range)
+    }
+
+    fn has_repetition(&self) -> bool {
+        matches!(self.input.first(), Some(b'*'))
+            || if self.extended {
+                matches!(self.input.first(), Some(b'+' | b'?' | b'{'))
+            } else {
+                matches!(self.input, [b'\\', b'+' | b'?' | b'{', ..])
+            }
+    }
+
+    fn wrap_repetitions(&mut self, checkpoint: Checkpoint) -> Result<(), Error> {
+        let mut wrappers = 0;
+        while self.has_repetition() {
+            if !self.extended && (self.input.starts_with(b"*") || self.input.starts_with(br"\{")) {
+                return Err(Error::LeadingRepetition);
+            }
+            wrappers += 1;
+            if self.nesting + wrappers > self.nesting_limit {
+                return Err(Error::NestingTooDeep {
+                    limit: self.nesting_limit,
+                });
+            }
+            let range = self.parse_range()?;
+            self.builder.start_internal_at(checkpoint, Token::Repetition, range);
+            self.builder.finish_internal();
+        }
+        Ok(())
     }
 
     fn parse_interval(&mut self) -> Result<Range, Error> {
@@ -439,6 +485,7 @@ impl<'a> PosixRegexBuilder<'a> {
                         let range = self.parse_range()?;
                         self.builder.start_internal_at(checkpoint, Token::Group(id), range);
                         self.builder.finish_internal();
+                        self.wrap_repetitions(checkpoint)?;
                         at_start = false;
                         continue;
                     }
@@ -449,6 +496,7 @@ impl<'a> PosixRegexBuilder<'a> {
                         closed = true;
                         break;
                     }
+                    b'{' if !self.extended => return Err(Error::LeadingRepetition),
                     b'|' if !self.extended => {
                         self.builder.finish_internal();
                         self.builder.start_internal(Token::Alternative, Range(1, Some(1)));
@@ -485,6 +533,7 @@ impl<'a> PosixRegexBuilder<'a> {
                     let range = self.parse_range()?;
                     self.builder.start_internal_at(checkpoint, Token::Group(id), range);
                     self.builder.finish_internal();
+                    self.wrap_repetitions(checkpoint)?;
                     at_start = false;
                     continue;
                 }
@@ -500,8 +549,30 @@ impl<'a> PosixRegexBuilder<'a> {
                 }
                 c => Token::Char(c),
             };
-            let range = self.parse_range()?;
+            let assertion = matches!(
+                token,
+                Token::Start
+                    | Token::End
+                    | Token::WordStart
+                    | Token::WordEnd
+                    | Token::WordBoundary
+                    | Token::NotWordBoundary
+                    | Token::AbsoluteStart
+                    | Token::AbsoluteEnd
+            );
+            let checkpoint = self.builder.checkpoint();
+            let range = if assertion {
+                if self.extended && self.has_repetition() {
+                    return Err(Error::LeadingRepetition);
+                }
+                Range(1, Some(1))
+            } else {
+                self.parse_range()?
+            };
             self.builder.leaf(token, range);
+            if !assertion {
+                self.wrap_repetitions(checkpoint)?;
+            }
             at_start = false;
         }
         if !closed {
