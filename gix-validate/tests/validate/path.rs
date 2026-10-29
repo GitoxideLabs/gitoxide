@@ -343,3 +343,32 @@ mod component {
         }
     }
 }
+
+#[test]
+fn special_components_match_filesystem_aliases_without_rejecting_other_names() {
+    use gix_validate::path::SpecialComponent;
+    for (component, literal, short) in [
+        (SpecialComponent::Git, ".git", "git~1"),
+        (SpecialComponent::GitModules, ".gitmodules", "gi7eba~1"),
+        (SpecialComponent::GitAttributes, ".gitattributes", "gi7d29~1"),
+        (SpecialComponent::GitIgnore, ".gitignore", "gi250a~1"),
+        (SpecialComponent::Mailmap, ".mailmap", "maba30~1"),
+    ] {
+        assert!(component.matches(literal.into()), "canonical component");
+        assert!(component.matches(short.into()), "NTFS short name");
+        assert!(
+            component.matches_hfs(format!(".\u{200c}{}", &literal[1..]).as_str().into()),
+            "HFS ignorable characters"
+        );
+        assert!(
+            component.matches_ntfs(format!("{literal} .:stream").as_str().into()),
+            "NTFS spaces, dots, and streams"
+        );
+        for other in ["CON", "unrelated:stream", "name.", "name\\path", ".gitmodules-more"] {
+            assert!(
+                !component.matches(other.into()),
+                "unrelated Windows-special names do not match {literal}"
+            );
+        }
+    }
+}
