@@ -349,3 +349,52 @@ fn capture_initialization_and_copying_consume_matching_work() -> TestResult {
     );
     Ok(())
 }
+
+#[test]
+fn nested_quantifiers_keep_the_inner_repetition_unit() -> TestResult {
+    for (pattern, input, extended, end) in [
+        (b"a{2}*".as_slice(), b"aaa".as_slice(), true, 2),
+        (b"a{2}{3}", b"aaaaaaa", true, 6),
+        (b"a*+", b"aaa", true, 3),
+        (b"a+?", b"", true, 0),
+        (br"a\+\?", b"", false, 0),
+        (br"a\{2\}\+", b"aaa", false, 2),
+    ] {
+        let regex = PosixRegexBuilder::new(pattern).extended(extended).compile()?;
+        let captures = regex.matches(input, Some(1))?;
+        assert_eq!(
+            captures.first().and_then(|captures| captures[0]),
+            Some((0, end)),
+            "outer repetition preserves the inner unit for {pattern:?}"
+        );
+        assert_eq!(regex.count_groups(), 1, "repetition wrappers are not capturing groups");
+    }
+    for (pattern, extended) in [
+        (b"^*".as_slice(), true),
+        (br"\b+", true),
+        (br"a**", false),
+        (br"a*\{2\}", false),
+        (br"\{1\}", false),
+    ] {
+        assert!(
+            PosixRegexBuilder::new(pattern).extended(extended).compile().is_err(),
+            "invalid repeated assertions or BRE repetition operators: {pattern:?}"
+        );
+    }
+    assert!(
+        matches!(
+            PosixRegexBuilder::new(b"(a)??")
+                .extended(true)
+                .nesting_limit(1)
+                .compile(),
+            Err(gix_regex::compile::Error::NestingTooDeep { limit: 1 })
+        ),
+        "the final depth includes wrappers outside already-nested groups"
+    );
+    let regex = PosixRegexBuilder::new(b"^*a").compile()?;
+    assert!(
+        regex.matches_exact(b"*a")?.is_some(),
+        "a BRE star after an anchor is literal"
+    );
+    Ok(())
+}
