@@ -149,13 +149,19 @@ impl Cache {
         )?;
 
         #[cfg(feature = "revision")]
-        {
-            let object_kind_hint = util::disambiguate_hint(config, self.lenient_config)?;
-            self.object_kind_hint = object_kind_hint;
-        }
+        let object_kind_hint = util::disambiguate_hint(config, self.lenient_config)?;
         let reflog = util::query_refupdates(config, self.lenient_config)?;
         let refs_namespace = util::query_refs_namespace(config, self.lenient_config)?;
+        let object_caches = util::parse_object_caches(config, self.lenient_config, self.filter_config_section)?;
+        let object_refresh_mode =
+            util::parse_object_refresh_mode(config, self.lenient_config, self.filter_config_section)?;
+        let loose_compression =
+            super::access::loose_compression(config, self.lenient_config, self.filter_config_section)?;
 
+        #[cfg(feature = "revision")]
+        {
+            self.object_kind_hint = object_kind_hint;
+        }
         self.hex_len = hex_len;
         self.ignore_case = ignore_case;
         self.reflog = reflog;
@@ -174,11 +180,8 @@ impl Cache {
             self.pack_cache_bytes,
             self.object_cache_bytes,
             self.alloc_limit_bytes,
-        ) = util::parse_object_caches(config, self.lenient_config, self.filter_config_section)?;
-        self.object_refresh_mode =
-            util::parse_object_refresh_mode(config, self.lenient_config, self.filter_config_section)?;
-        let loose_compression =
-            super::access::loose_compression(config, self.lenient_config, self.filter_config_section)?;
+        ) = object_caches;
+        self.object_refresh_mode = object_refresh_mode;
         self.loose_compression = loose_compression;
         #[cfg(any(feature = "blocking-network-client", feature = "async-network-client"))]
         {
