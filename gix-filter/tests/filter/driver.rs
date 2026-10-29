@@ -522,7 +522,7 @@ pub(crate) mod apply {
         Custom {
             kind: Other,
             error: Message {
-                message: "Driver process \"/bin/sh\" \"-c\" \"'<filter-driver>' smudge 'do/fail'\" \"sh\" failed",
+                message: "Driver process \"/bin/sh\" \"-c\" \"'<filter-driver>' smudge 'do/fail'\" \"'<filter-driver>' smudge 'do/fail'\" failed",
                 values: {exit_code: I64(101), exit_status: String("exit status: 101"), program: Path("/bin/sh")},
             },
         }

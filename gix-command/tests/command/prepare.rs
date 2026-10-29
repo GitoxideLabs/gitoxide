@@ -38,10 +38,11 @@ fn native_shell_inspection_preserves_bytes_and_quoting_reports_encoding_errors()
         "ASCII shell syntax is recognized beside an unpaired surrogate"
     );
     let command = std::process::Command::try_from(prepare.with_shell_program("unused-shell").arg("arg"))?;
+    script.push(r#" "$@""#);
     assert_eq!(
         command.get_args().nth(1),
         Some(script.as_os_str()),
-        "an existing $@ is detected without changing the native script"
+        "automatic argument forwarding preserves native script encoding"
     );
     let err = std::process::Command::try_from(
         gix_command::prepare(native)
@@ -85,12 +86,6 @@ fn default_shell() -> &'static str {
     SH.to_str()
         .expect("`prepare` tests must be run where 'sh' path is valid Unicode")
 }
-
-// The basename of the default shell, used as the `command_name` operand
-// after `-c <script>` and observable inside the shell as `$0`. The default
-// shell command uses `/bin/sh` on Unix and a path ending in `sh.exe` on
-// Windows.
-const SH_BASENAME: &str = if cfg!(windows) { "sh.exe" } else { "sh" };
 
 fn quoted(input: &[&str]) -> String {
     // These assertions cover argument parsing. Windows resolves the program before spawning, so
@@ -140,7 +135,7 @@ fn whitespace_only_commands_with_auto_split_fall_back_to_shell() -> TestResult {
     let cmd = std::process::Command::try_from(
         gix_command::prepare("   ").command_may_be_shell_script_allow_manual_argument_splitting(),
     )?;
-    assert_eq!(format!("{cmd:?}"), quoted_default_shell(&["-c", "   ", SH_BASENAME]));
+    assert_eq!(format!("{cmd:?}"), quoted_default_shell(&["-c", "   ", "   "]));
     Ok(())
 }
 
@@ -338,7 +333,7 @@ fn assignment_only_input_is_left_to_the_shell() -> TestResult {
     )?;
     assert_eq!(
         format!("{cmd:?}"),
-        quoted_default_shell(&["-c", "tool=name", SH_BASENAME])
+        quoted_default_shell(&["-c", "tool=name", "tool=name"])
     );
     Ok(())
 }
@@ -410,7 +405,7 @@ fn single_and_multiple_arguments_as_part_of_command_with_shell() -> TestResult {
         if cfg!(windows) {
             quoted(&["ls", "first", "second", "third"])
         } else {
-            quoted(&[default_shell(), "-c", "ls first second third", SH_BASENAME])
+            quoted(&[default_shell(), "-c", "ls first second third", "ls first second third"])
         },
         "with shell, this works as it performs word splitting"
     );
@@ -429,7 +424,12 @@ fn single_and_multiple_arguments_as_part_of_command_with_given_shell() -> TestRe
         if cfg!(windows) {
             quoted(&["ls", "first", "second", "third"])
         } else {
-            quoted(&["/somepath/to/bash", "-c", "ls first second third", "bash"])
+            quoted(&[
+                "/somepath/to/bash",
+                "-c",
+                "ls first second third",
+                "ls first second third",
+            ])
         },
         "with shell, this works as it performs word splitting on Windows, but on linux (or without splitting) it uses the given shell"
     );
@@ -449,7 +449,7 @@ fn single_and_complex_arguments_as_part_of_command_with_shell() -> TestResult {
             quoted(&["ls", "--foo", "a b", "additional"])
         } else {
             let sh = default_shell();
-            format!(r#""{sh}" "-c" "ls --foo \"a b\" \"$@\"" "{SH_BASENAME}" "additional""#)
+            format!(r#""{sh}" "-c" "ls --foo \"a b\" \"$@\"" "ls --foo \"a b\"" "additional""#)
         },
         "with shell, this works as it performs word splitting, on windows we can avoid the shell"
     );
@@ -476,7 +476,7 @@ fn single_and_complex_arguments_without_auto_split() -> TestResult {
     )?;
     assert_eq!(
         format!("{cmd:?}"),
-        quoted_default_shell(&["-c", r#"ls --foo=\"a b\""#, SH_BASENAME])
+        quoted_default_shell(&["-c", r#"ls --foo=\"a b\""#, r#"ls --foo=\"a b\""#])
     );
     Ok(())
 }
@@ -486,7 +486,7 @@ fn single_and_simple_arguments_without_auto_split_with_shell() -> TestResult {
     let cmd = std::process::Command::try_from(gix_command::prepare("ls").arg("--foo=a b").with_shell())?;
     assert_eq!(
         format!("{cmd:?}"),
-        quoted_default_shell(&["-c", r#"ls \"$@\""#, SH_BASENAME, "--foo=a b"])
+        quoted_default_shell(&["-c", r#"ls \"$@\""#, "ls", "--foo=a b"])
     );
     Ok(())
 }
@@ -501,7 +501,7 @@ fn quoted_command_without_argument_splitting() -> TestResult {
     )?;
     assert_eq!(
         format!("{cmd:?}"),
-        quoted_default_shell(&["-c", r#"'ls' \"$@\""#, SH_BASENAME, "--foo=a b"]),
+        quoted_default_shell(&["-c", r#"'ls' \"$@\""#, "ls", "--foo=a b"]),
         "looks strange thanks to debug printing, but is the right amount of quotes actually"
     );
     Ok(())
@@ -520,7 +520,7 @@ fn quoted_windows_command_without_argument_splitting() -> TestResult {
         quoted_default_shell(&[
             "-c",
             r#"'C:\\Users\\O'\\''Shaughnessy\\with space.exe' \"$@\""#,
-            SH_BASENAME,
+            r"C:\\Users\\O'Shaughnessy\\with space.exe",
             r"--foo='a b'"
         ]),
         "again, a lot of extra backslashes, but it's correct outside of the debug formatting"
@@ -535,7 +535,7 @@ fn single_and_complex_arguments_will_not_auto_split_on_special_characters() -> T
     )?;
     assert_eq!(
         format!("{cmd:?}"),
-        quoted_default_shell(&["-c", "ls --foo=~/path", SH_BASENAME]),
+        quoted_default_shell(&["-c", "ls --foo=~/path", "ls --foo=~/path"]),
         "splitting can also handle quotes"
     );
     Ok(())
@@ -548,7 +548,7 @@ fn tilde_path_and_multiple_arguments_as_part_of_command_with_shell() -> TestResu
     )?;
     assert_eq!(
         format!("{cmd:?}"),
-        quoted_default_shell(&["-c", r#"~/bin/exe --foo \"a b\""#, SH_BASENAME]),
+        quoted_default_shell(&["-c", r#"~/bin/exe --foo \"a b\""#, r#"~/bin/exe --foo \"a b\""#]),
         "this always needs a shell as we need tilde expansion"
     );
     Ok(())
@@ -563,16 +563,15 @@ fn script_with_dollar_at() -> TestResult {
     )?;
     assert_eq!(
         format!("{cmd:?}"),
-        quoted_default_shell(&["-c", r#"echo \"$@\" >&2"#, SH_BASENAME, "store"]),
-        "this is how credential helpers have to work as for some reason they don't get '$@' added in Git.\
-            We deal with it by not doubling the '$@' argument, which seems more flexible."
+        quoted_default_shell(&["-c", r#"echo \"$@\" >&2 \"$@\""#, r#"echo \"$@\" >&2"#, "store"]),
+        "Git appends arguments even when the command already expands them"
     );
     Ok(())
 }
 
 #[test]
 #[cfg(unix)]
-fn non_utf8_script_with_dollar_at_does_not_duplicate_arguments() -> TestResult {
+fn non_utf8_shell_scripts_keep_both_argument_expansions() -> TestResult {
     use bstr::ByteSlice;
     use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
@@ -588,45 +587,34 @@ fn non_utf8_script_with_dollar_at_does_not_duplicate_arguments() -> TestResult {
             .expect("the script follows -c")
             .as_bytes()
             .as_bstr(),
-        script.as_bytes().as_bstr(),
-        "the existing byte-encoded $@ is retained without appending another one"
+        [script.as_bytes(), br#" "$@""#].concat().as_bstr(),
+        "automatic forwarding retains the original non-UTF-8 script"
     );
     Ok(())
 }
 
 #[test]
-fn script_with_dollar_at_has_no_quoting() -> TestResult {
-    let cmd = std::process::Command::try_from(
-        gix_command::prepare(r#"echo "$@" >&2"#)
-            .command_may_be_shell_script()
-            .with_quoted_command()
-            .arg("store"),
-    )?;
-    assert_eq!(
-        format!("{cmd:?}"),
-        quoted_default_shell(&["-c", r#"echo \"$@\" >&2"#, SH_BASENAME, "store"])
-    );
-    Ok(())
-}
-
-#[test]
-fn shell_program_with_no_basename_uses_underscore_placeholder() -> TestResult {
-    // Defensive fallback for degenerate input that should not occur in
-    // practice. If a caller passes a shell path whose `file_name()` is
-    // `None` (empty string, `/`, etc.), the `command_name` operand falls
-    // back to `_`, the conventional placeholder for an unused `$0` used
-    // in shell one-liners. Such a "shell" would not produce a runnable
-    // command — the fallback only keeps the construction total in the
-    // face of bad input, without making a false claim about the shell.
-    let cmd = std::process::Command::try_from(
-        gix_command::prepare("echo hi")
-            .command_may_be_shell_script_disallow_manual_argument_splitting()
-            .with_shell_program(""),
-    )?;
-    assert_eq!(
-        format!("{cmd:?}"),
-        quoted(&["", "-c", "echo hi", "_"]),
-        "with no basename available, the command_name operand is '_', not a guessed shell name"
-    );
+fn quoted_commands_keep_dollar_at_literal_with_or_without_arguments() -> TestResult {
+    use std::ffi::OsStr;
+    for arguments in [&[][..], &["argument"][..]] {
+        let cmd = std::process::Command::try_from(
+            gix_command::prepare("some $@ path")
+                .with_shell()
+                .with_quoted_command()
+                .args(arguments.iter().copied()),
+        )?;
+        let script = if arguments.is_empty() {
+            "'some $@ path'"
+        } else {
+            r#"'some $@ path' "$@""#
+        };
+        let mut expected = vec![OsStr::new("-c"), OsStr::new(script), OsStr::new("some $@ path")];
+        expected.extend(arguments.iter().map(OsStr::new));
+        assert_eq!(
+            cmd.get_args().skip_while(|arg| *arg != "-c").collect::<Vec<_>>(),
+            expected,
+            "quoted program paths remain literal, including without additional arguments"
+        );
+    }
     Ok(())
 }
