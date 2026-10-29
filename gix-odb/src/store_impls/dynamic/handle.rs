@@ -17,11 +17,13 @@ pub(crate) enum SingleOrMultiIndex {
     Single {
         index: Arc<gix_pack::index::File>,
         data: Option<Arc<gix_pack::data::File>>,
+        retained: bool,
     },
     Multi {
         index: Arc<gix_pack::multi_index::File>,
         data: Vec<Option<Arc<gix_pack::data::File>>>,
         pack_id_to_index: HashMap<gix_pack::data::Id, gix_pack::multi_index::PackIndex>,
+        retained: Vec<bool>,
     },
 }
 
@@ -103,6 +105,8 @@ pub(crate) mod index_lookup {
         pub index_file: IntraPackLookup<'a>,
         pub pack: &'a mut Option<Arc<gix_pack::data::File>>,
         pub pack_id_to_index: Option<&'a mut HashMap<gix_pack::data::Id, gix_pack::multi_index::PackIndex>>,
+        /// Whether this snapshot has retained the pack for its handle's clone family.
+        pub retained: &'a mut bool,
         pub slot: &'a types::MutableIndexAndPack,
         pub slot_id: usize,
     }
@@ -114,7 +118,7 @@ pub(crate) mod index_lookup {
             pack_id: gix_pack::data::Id,
         ) -> Option<Box<dyn Iterator<Item = Result<gix_pack::index::Entry>> + '_>> {
             match &self.file {
-                handle::SingleOrMultiIndex::Single { index, data } => (data.as_ref()?.id == pack_id).then(
+                handle::SingleOrMultiIndex::Single { index, data, .. } => (data.as_ref()?.id == pack_id).then(
                     || -> Box<dyn Iterator<Item = Result<gix_pack::index::Entry>> + '_> { Box::new(index.iter()) },
                 ),
                 handle::SingleOrMultiIndex::Multi {
@@ -236,7 +240,7 @@ pub(crate) mod index_lookup {
             let slot = &*self.slot;
             let slot_id = self.slot_id;
             Ok(match &mut self.file {
-                handle::SingleOrMultiIndex::Single { index, data } => {
+                handle::SingleOrMultiIndex::Single { index, data, retained } => {
                     let Some(idx) = index.lookup(object_id) else {
                         return Ok(None);
                     };
@@ -249,6 +253,7 @@ pub(crate) mod index_lookup {
                         index_file: IntraPackLookup::Single(index),
                         pack: data,
                         pack_id_to_index: None,
+                        retained,
                         slot,
                         slot_id,
                     })
@@ -257,6 +262,7 @@ pub(crate) mod index_lookup {
                     index,
                     data,
                     pack_id_to_index,
+                    retained,
                 } => {
                     let Some(idx) = index.lookup(object_id) else {
                         return Ok(None);
@@ -273,6 +279,7 @@ pub(crate) mod index_lookup {
                         },
                         pack: &mut data[pack_index as usize],
                         pack_id_to_index: Some(pack_id_to_index),
+                        retained: &mut retained[pack_index as usize],
                         slot,
                         slot_id,
                     })

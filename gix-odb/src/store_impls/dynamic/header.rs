@@ -55,6 +55,7 @@ where
                         index_file,
                         pack: possibly_pack,
                         pack_id_to_index,
+                        retained: _,
                         slot,
                         slot_id,
                     }) = index.lookup(id)?
