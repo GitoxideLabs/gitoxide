@@ -84,3 +84,45 @@ fn corrupt_edges_and_malformed_objects_are_errors_even_if_seen_before() -> gix_e
     }
     Ok(())
 }
+
+#[test]
+fn missing_objects_can_be_skipped_without_hiding_corruption() -> gix_error::TestResult {
+    struct Without<'a, F> {
+        db: &'a F,
+        missing: ObjectId,
+    }
+    impl<F: gix_object::Find> gix_object::Find for Without<'_, F> {
+        fn try_find<'a>(
+            &self,
+            id: &gix_hash::oid,
+            buffer: &'a mut Vec<u8>,
+        ) -> gix_error::Result<Option<gix_object::Data<'a>>> {
+            if id == self.missing {
+                Ok(None)
+            } else {
+                self.db.try_find(id, buffer)
+            }
+        }
+    }
+    let root = gix_testtools::scripted_fixture_read_only("make_object_graph.sh")?;
+    let db = gix_odb::at(root.join(".git/objects"), gix_testtools::object_hash())?;
+    let missing = ids(&root.join("blob"))?[0];
+    let finder = Without { db: &db, missing };
+    let mut tips = vec![missing, missing];
+    tips.extend(ids(&root.join("tips"))?);
+    let actual = BreadthFirst::new(tips, &finder)
+        .with_missing_objects_ignored(true)
+        .map(|entry| entry.map(|entry| entry.id))
+        .collect::<gix_error::Result<std::collections::BTreeSet<_>>>()?;
+    let mut expected: std::collections::BTreeSet<_> = ids(&root.join("reachable"))?.into_iter().collect();
+    expected.remove(&missing);
+    assert_eq!(
+        actual, expected,
+        "both missing tips and missing tree/tag edges are skipped"
+    );
+    BreadthFirst::new(ids(&root.join("malformed"))?, &finder)
+        .with_missing_objects_ignored(true)
+        .collect::<gix_error::Result<Vec<_>>>()
+        .expect_err("ignoring missing objects does not ignore malformed objects");
+    Ok(())
+}
