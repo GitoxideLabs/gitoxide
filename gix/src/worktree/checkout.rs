@@ -2,6 +2,23 @@ use gix_error::validation;
 
 use crate::{Result, Worktree};
 
+/// Options for [`crate::Repository::checkout_index_with_baseline()`].
+#[derive(Default, Debug, Clone, Copy)]
+pub struct Options {
+    /// Restore changed or missing baseline-tracked files, including paths unchanged in the target.
+    /// Untracked and ignored obstructions remain protected.
+    pub overwrite_tracked: bool,
+}
+
+/// The result of [`crate::Repository::checkout_index_with_baseline()`].
+#[derive(Debug)]
+pub struct Outcome {
+    /// Counts from writing the selected worktree entries.
+    pub worktree: gix_worktree_state::checkout::Outcome,
+    /// Whether the caller's in-memory staging index changed and should be persisted.
+    pub index_changed: bool,
+}
+
 impl Worktree<'_> {
     /// Perform the initial checkout of a persisted linked worktree's current `HEAD`.
     ///
