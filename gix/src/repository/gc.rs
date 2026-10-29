@@ -47,6 +47,17 @@ pub struct Outcome {
     pub removed_loose_objects: usize,
 }
 
+/// Results of [`Repository::gc()`], including reference and reflog maintenance.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MaintenanceOutcome {
+    /// Object retention and repacking results.
+    pub objects: Outcome,
+    /// Reflog entries retained or expired before collecting objects.
+    pub reflogs: crate::repository::reflog::Outcome,
+    /// Reference packing results, absent when `gc.packRefs` disables packing.
+    pub references: Option<crate::repository::pack_refs::Outcome>,
+}
+
 #[derive(Default)]
 struct Inventory {
     times: BTreeMap<ObjectId, SystemTime>,
@@ -84,6 +95,27 @@ impl Repository {
     /// Reflogs and references are not expired or packed by this operation. Precious object stores
     /// and partial clones currently reject collection rather than risk losing protected objects.
     pub fn collect_garbage(&self, options: Options, should_interrupt: &AtomicBool) -> Result<Outcome> {
+        Ok(self.run_gc(options, false, should_interrupt)?.objects)
+    }
+
+    /// Expire reflogs, compact shared references, and collect unreachable objects.
+    ///
+    /// Hold the garbage-collection lock for the entire operation. Reference packing
+    /// honors `gc.packRefs` (true by default, or `notbare`), and reflog expiry uses
+    /// the configured age and reachability policies. Object retention is computed
+    /// after expired reflogs have been removed. See [`Self::collect_garbage()`] for
+    /// object safety, grace periods, and limitations, and [`Self::expire_reflogs()`]
+    /// for reflog policy.
+    ///
+    /// A dry run writes nothing. Its object counts conservatively include objects
+    /// protected by reflog entries selected for expiry, since those entries remain
+    /// present during the simulation. Errors can leave earlier maintenance stages
+    /// completed; every stage preserves live references and objects.
+    pub fn gc(&self, options: Options, should_interrupt: &AtomicBool) -> Result<MaintenanceOutcome> {
+        self.run_gc(options, true, should_interrupt)
+    }
+
+    fn run_gc(&self, options: Options, full: bool, should_interrupt: &AtomicBool) -> Result<MaintenanceOutcome> {
         check_interrupt(should_interrupt)?;
         let mut repo = self.clone();
         repo.make_paths_absolute()?;
@@ -122,6 +154,32 @@ impl Repository {
         }
         let objects_directory = repo.objects.store_ref().path();
         let inventory = inventory(&repo, objects_directory, should_interrupt)?;
+        let mut maintenance = MaintenanceOutcome::default();
+        if full {
+            let config = repo.config_snapshot();
+            let pack_refs = if config.string("gc.packRefs").is_some_and(|value| value == "notbare") {
+                !repo.is_bare()
+            } else {
+                config.try_boolean("gc.packRefs")?.unwrap_or(true)
+            };
+            if pack_refs {
+                maintenance.references = Some(repo.pack_references(
+                    crate::repository::pack_refs::Options {
+                        all: true,
+                        dry_run: options.dry_run,
+                        ..Default::default()
+                    },
+                    should_interrupt,
+                )?);
+            }
+            maintenance.reflogs = repo.expire_reflogs(
+                crate::repository::reflog::Options {
+                    dry_run: options.dry_run,
+                    ..Default::default()
+                },
+                should_interrupt,
+            )?;
+        }
         let shallow: Vec<_> = repo
             .shallow_commits()?
             .map(|ids| ids.iter().copied().collect())
@@ -180,7 +238,8 @@ impl Repository {
             ..Outcome::default()
         };
         if options.dry_run {
-            return Ok(outcome);
+            maintenance.objects = outcome;
+            return Ok(maintenance);
         }
         check_interrupt(should_interrupt)?;
         let pack_directory = objects_directory.join("pack");
@@ -250,7 +309,8 @@ impl Repository {
                 remove_regular_file(&path)?;
             }
         }
-        Ok(outcome)
+        maintenance.objects = outcome;
+        Ok(maintenance)
     }
 }
 
