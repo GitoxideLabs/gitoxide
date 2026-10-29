@@ -1,6 +1,28 @@
 use gix_error::validation;
 
-use crate::{Result, Worktree};
+use crate::{Result, Worktree, bstr::BString};
+
+/// A checkout conflict detected before changing the worktree or staging index.
+/// Intrinsically classified as [`gix_error::Class::Validation`].
+#[derive(Debug)]
+pub struct Conflict {
+    /// The repository-relative path which could not be checked out safely.
+    pub path: BString,
+    /// Why the checkout would overwrite protected content or collide with another path.
+    pub reason: &'static str,
+}
+
+impl std::fmt::Display for Conflict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {:?}", self.reason, self.path)
+    }
+}
+
+impl std::error::Error for Conflict {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(const { &gix_error::ClassificationMarker::VALIDATION })
+    }
+}
 
 /// Options for [`crate::Repository::checkout_index_with_baseline()`].
 #[derive(Default, Debug, Clone, Copy)]
