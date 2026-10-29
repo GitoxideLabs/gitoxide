@@ -22,8 +22,15 @@ fn push_to_checkout_matches_git_for_main_and_linked_worktrees() -> TestResult {
         "main-reject",
         "linked-accept",
         "linked-reject",
+        "main-configured-accept",
+        "main-configured-reject",
+        "linked-configured-accept",
+        "linked-configured-reject",
         "missing",
     ] {
+        if mode.contains("configured") && *gix_testtools::GIT_VERSION < (2, 55, 0) {
+            continue;
+        }
         let native_path = fixture.path().join(format!("native-{mode}"));
         let expected_path = fixture.path().join(format!("git-{mode}"));
         let branch = if mode.starts_with("linked") { "deploy" } else { "main" };

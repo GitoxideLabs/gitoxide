@@ -15,7 +15,7 @@ use std::{
 mod config;
 mod run;
 pub use config::configured_commands;
-pub use run::{prepare, run, run_event_serially, run_prepared};
+pub use run::{prepare, run, run_event_serially, run_event_serially_with, run_prepared};
 
 /// How a hook's stdout and stderr are connected to the output callback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
