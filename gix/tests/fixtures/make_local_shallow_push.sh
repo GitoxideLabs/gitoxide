@@ -91,9 +91,9 @@ git rev-list --count "$3" >>update-log
 HOOK
         chmod +x "$target/hooks/pre-receive" "$target/hooks/update"
     done
-    args=()
+    args=("$PWD/git-hook-$mode")
     if test "$mode" = atomic; then
-        args+=(--atomic)
+        args=(--atomic "${args[@]}")
     fi
     # Git 2.53's per-command shallow connectivity can traverse another
     # incoming branch before its boundary is installed. Independent pushes
@@ -103,7 +103,7 @@ HOOK
         git -C multi-source push "$PWD/git-hook-$mode" main:refs/heads/accept >"hook-$mode-first-output" 2>&1
         refs=(other:refs/heads/reject)
     fi
-    if git -C multi-source push "${args[@]}" "$PWD/git-hook-$mode" "${refs[@]}" >"hook-$mode-output" 2>&1; then
+    if git -C multi-source push "${args[@]}" "${refs[@]}" >"hook-$mode-output" 2>&1; then
         echo 'the hook must reject at least one update' >&2
         exit 1
     fi
