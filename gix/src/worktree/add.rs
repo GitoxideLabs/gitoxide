@@ -418,7 +418,7 @@ impl PrepareCheckout {
         P: NestedProgress,
         P::SubProgress: NestedProgress + 'static,
     {
-        match checkout_tree(&self.repo, &self.root_tree_id, progress, should_interrupt) {
+        match checkout_tree(&self.repo, &self.root_tree_id, progress, should_interrupt, None) {
             Ok(outcome) => Ok((self.persist()?, outcome)),
             Err(err) => {
                 if let Err(cleanup) = self.rollback() {
@@ -435,6 +435,7 @@ pub(crate) fn checkout_tree<P>(
     root_tree_id: &gix_hash::oid,
     mut progress: P,
     should_interrupt: &AtomicBool,
+    index_lock: Option<gix_lock::File>,
 ) -> Result<gix_worktree_state::checkout::Outcome>
 where
     P: NestedProgress,
@@ -442,6 +443,17 @@ where
 {
     ensure!(!should_interrupt.load(Ordering::Relaxed), Error::Interrupted);
     let repo = repo.with_absolute_paths()?;
+    let index_lock = match index_lock {
+        Some(lock) => lock,
+        None => gix_lock::File::acquire(
+            repo.index_path(),
+            gix_lock::acquire::Fail::Immediately,
+            None,
+            0,
+            Some(&gix_lock::acquire::resolve_symlink),
+        )
+        .or_raise(|| message("Could not lock the index for initial checkout"))?,
+    };
     let work_dir = repo
         .workdir()
         .ok_or_raise(|| validation("A bare repository has no worktree to check out"))?;
@@ -495,9 +507,21 @@ where
     files.show_throughput(started);
     bytes.show_throughput(started);
     ensure!(!should_interrupt.load(Ordering::Relaxed), Error::Interrupted);
-    index
-        .write(Default::default())
-        .or_raise(|| message("Could not write the linked worktree index"))?;
+    ensure!(
+        outcome.errors.is_empty()
+            && outcome.collisions.is_empty()
+            && outcome.delayed_paths_unknown.is_empty()
+            && outcome.delayed_paths_unprocessed.is_empty(),
+        message!("Initial checkout was incomplete: {outcome:?}")
+    );
+    let mut index_writer = std::io::BufWriter::with_capacity(64 * 1024, index_lock);
+    index.write_to(&mut index_writer, Default::default())?;
+    index_writer
+        .into_inner()
+        .map_err(std::io::IntoInnerError::into_error)
+        .or_raise(|| message("Could not flush the initial checkout index"))?
+        .commit()
+        .or_raise(|| message("Could not install the initial checkout index"))?;
     Ok(outcome)
 }
 
