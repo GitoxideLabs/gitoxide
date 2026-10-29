@@ -237,3 +237,119 @@ async fn ls_remote_handshake_failure_due_to_downgrade() -> TestResult {
     .await?;
     Ok(())
 }
+
+#[cfg(feature = "blocking-client")]
+#[test]
+fn raw_fetch_sideband_preserves_bytes_and_callback_errors() -> TestResult {
+    use gix_error::{Result, ResultExt};
+    use gix_protocol::fetch::{self, negotiate};
+    struct Negotiation;
+    impl fetch::Negotiate for Negotiation {
+        fn mark_complete_and_common_ref(&mut self) -> Result<negotiate::Action> {
+            Ok(negotiate::Action::MustNegotiate {
+                remote_ref_target_known: vec![false],
+            })
+        }
+        fn add_wants(&mut self, arguments: &mut fetch::Arguments, _: &[bool]) -> bool {
+            arguments.want(oid("6504930888c9c5337e7e065c964f87b60d16a7d7"));
+            true
+        }
+        fn one_round(
+            &mut self,
+            _: &mut negotiate::one_round::State,
+            _: &mut fetch::Arguments,
+            _: Option<&fetch::Response>,
+        ) -> Result<(negotiate::Round, bool)> {
+            Ok((
+                negotiate::Round {
+                    haves_sent: 0,
+                    in_vain: 0,
+                    haves_to_send: 16,
+                    previous_response_had_at_least_one_in_common: false,
+                },
+                true,
+            ))
+        }
+    }
+    let custom = b"notice: \xff\0\nCounting objects: 50% (1/2)\rsecond line\n";
+    let mut response = crate::fixture_bytes("v1/fetch.response");
+    let mut offset = 0;
+    while offset < response.len() {
+        let length = usize::from_str_radix(std::str::from_utf8(&response[offset..offset + 4])?, 16)?;
+        if response.get(offset + 4) == Some(&1) {
+            let mut packet = format!("{:04x}", custom.len() + 5).into_bytes();
+            packet.push(2);
+            packet.extend_from_slice(custom);
+            response.splice(offset..offset, packet);
+            break;
+        }
+        offset += length.max(4);
+    }
+    assert!(offset < response.len(), "fixture has a sideband pack");
+    let directory = gix_testtools::tempfile::tempdir()?;
+    for fail in [false, true] {
+        let capabilities = "\0multi_ack_detailed side-band-64k no-done";
+        let mut handshake = gix_protocol::Handshake {
+            server_protocol_version: Protocol::V1,
+            capabilities: gix_transport::client::Capabilities::from_bytes(capabilities.as_bytes())?.0,
+            refs: None,
+            v1_shallow_updates: None,
+        };
+        let mut transport = gix_transport::client::git::blocking_io::Connection::new(
+            std::io::Cursor::new(response.clone()),
+            Vec::new(),
+            Protocol::V1,
+            "/repo",
+            None::<(&str, Option<u16>)>,
+            gix_transport::client::git::ConnectMode::Process,
+            false,
+        );
+        let mut observed = Vec::new();
+        let result = gix_protocol::fetch_with_remote_progress(
+            &mut Negotiation,
+            |reader, _, _| {
+                std::io::copy(reader, &mut std::io::sink()).or_error()?;
+                Ok(true)
+            },
+            progress::Discard,
+            &std::sync::atomic::AtomicBool::default(),
+            fetch::Context {
+                handshake: &mut handshake,
+                transport: &mut transport,
+                user_agent: ("agent", None),
+                trace_packetlines: false,
+            },
+            fetch::Options {
+                shallow_file: directory.path().join("shallow"),
+                shallow: &fetch::Shallow::NoChange,
+                tags: fetch::Tags::None,
+                reject_shallow_remote: false,
+            },
+            |_, bytes| {
+                observed.push(bytes.to_vec());
+                if fail {
+                    Err(std::io::Error::other("raw sideband stopped"))
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        if fail {
+            let error = result.expect_err("callback aborts the transfer");
+            assert_eq!(
+                error
+                    .downcast_any_ref::<std::io::Error>()
+                    .expect("callback error preserved")
+                    .to_string(),
+                "raw sideband stopped"
+            );
+        } else {
+            result?;
+            assert!(
+                observed.iter().any(|bytes| bytes == custom),
+                "arbitrary bytes and mixed progress/text survive unchanged"
+            );
+        }
+    }
+    Ok(())
+}

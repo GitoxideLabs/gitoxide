@@ -68,7 +68,7 @@ pub mod fetch;
 /// Sending reference updates and packs to a receive-pack service.
 pub mod push;
 #[cfg(any(feature = "blocking-client", feature = "async-client"))]
-pub use fetch::function::fetch;
+pub use fetch::function::{fetch, fetch_with_remote_progress};
 
 mod remote_progress;
 pub use remote_progress::RemoteProgress;

@@ -26,7 +26,25 @@ impl Remote<'_> {
     pub fn fetch<P>(
         &self,
         options: fetch::Options,
+        progress: P,
+        should_interrupt: &AtomicBool,
+    ) -> Result<fetch::Outcome>
+    where
+        P: gix_utils::progress::NestedProgress,
+        P::SubProgress: 'static,
+    {
+        self.fetch_with_remote_progress(options, progress, |_, _| Ok(()), should_interrupt)
+    }
+
+    /// Like [`Self::fetch()`], additionally forwarding raw server sideband packets.
+    ///
+    /// The callback receives the error flag and unchanged packet bytes. Local fetches have no
+    /// server sideband; network fetches retain the behavior of [`fetch::Prepare::receive_with_remote_progress()`].
+    pub fn fetch_with_remote_progress<P>(
+        &self,
+        options: fetch::Options,
         mut progress: P,
+        remote_progress: impl FnMut(bool, &[u8]) -> std::io::Result<()>,
         should_interrupt: &AtomicBool,
     ) -> Result<fetch::Outcome>
     where
@@ -47,7 +65,7 @@ impl Remote<'_> {
         if let Some(message) = options.reflog_message {
             prepare = prepare.with_reflog_message(message);
         }
-        prepare.receive(progress, should_interrupt)
+        prepare.receive_with_remote_progress(progress, remote_progress, should_interrupt)
     }
 }
 
