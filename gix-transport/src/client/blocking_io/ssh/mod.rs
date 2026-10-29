@@ -8,7 +8,6 @@ use gix_url::{ArgumentSafety::*, Url};
 use crate::{Protocol, client::blocking_io::file::SpawnProcessOnDemand};
 
 /// The error used in [`connect()`].
-#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
     UnsupportedScheme(gix_url::Url),
@@ -16,14 +15,20 @@ pub enum Error {
     PrepareCommand(gix_error::Error),
 }
 
+impl std::fmt::Debug for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::UnsupportedScheme(url) => f.debug_tuple("UnsupportedScheme").field(&url.scheme).finish(),
+            Error::AmbiguousHostName { host } => f.debug_struct("AmbiguousHostName").field("host", host).finish(),
+            Error::PrepareCommand(err) => f.debug_tuple("PrepareCommand").field(err).finish(),
+        }
+    }
+}
+
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::UnsupportedScheme(url) => write!(
-                f,
-                "The scheme in \"{}\" is not usable for an ssh connection",
-                url.to_bstring()
-            ),
+            Error::UnsupportedScheme(url) => write!(f, "The scheme {} is not usable for an ssh connection", url.scheme),
             Error::AmbiguousHostName { host } => {
                 write!(f, "Host name '{host}' could be mistaken for a command-line argument")
             }
