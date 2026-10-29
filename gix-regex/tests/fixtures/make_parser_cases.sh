@@ -87,3 +87,16 @@ make_case repeated-long-alternative xfuncname '(aa|a)*' aa
 make_case repeated-short-alternative xfuncname '(a|aa)*' aa
 make_case incomplete-interval xfuncname 'a{' a
 make_case textual-interval xfuncname 'a{foo}' a
+
+make_case nested-interval xfuncname 'a{2}{3}' aaaaaaa
+make_case repeated-pair xfuncname 'a{2}*' aaa
+make_case nested-star-plus xfuncname 'a*+' aaa
+make_case nested-plus-question xfuncname '(a+?)b' b
+make_case basic-nested-plus-question funcname '\(a\+\?\)b' b
+make_case basic-repeated-pair funcname 'a\{2\}\+' aaa
+make_case repeated-anchor xfuncname '^*' a
+make_case repeated-word-boundary xfuncname '\b+' a
+make_case basic-nested-stars funcname 'a**' aaa
+make_case basic-nested-interval funcname 'a*\{2\}' aaa
+make_case basic-leading-interval funcname '\{1\}' a
+make_case basic-star-after-anchor funcname '^*a' '*a'

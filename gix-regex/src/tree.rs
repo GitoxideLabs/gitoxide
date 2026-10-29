@@ -60,6 +60,7 @@ impl Iterator for NodeIter<'_> {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct Checkpoint {
     cursor: Option<NodeId>,
 }
