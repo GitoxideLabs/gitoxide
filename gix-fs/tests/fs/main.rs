@@ -8,6 +8,7 @@ mod read_dir;
 mod snapshot;
 mod stack;
 mod symlink;
+mod symlink_check;
 #[cfg(feature = "walkdir")]
 mod walkdir;
 
