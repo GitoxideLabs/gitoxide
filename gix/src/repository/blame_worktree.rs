@@ -151,6 +151,11 @@ impl Repository {
                     &file_path,
                 );
                 current.sort_entries();
+                if current.is_sparse() {
+                    let validate = self.config.protect_options()?;
+                    let tree_id = current.write_tree(&objects, validate)?;
+                    current = gix_index::State::from_tree(&tree_id, &objects, validate)?;
+                }
                 let mut cache = self.diff_resource_cache_for_tree_diff()?;
                 gix_diff::index(
                     &baseline,
