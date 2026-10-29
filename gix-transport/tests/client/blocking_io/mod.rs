@@ -1,6 +1,8 @@
 #[cfg(any(feature = "http-client-curl", feature = "http-client-reqwest"))]
 mod http;
 
+mod request;
+
 #[test]
 fn ssh_username_password_credentials_update_or_clear_username() -> gix_error::TestResult {
     use gix_transport::{
