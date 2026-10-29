@@ -1,3 +1,6 @@
+#[cfg(feature = "blocking-network-client")]
+use crate::Result;
+
 ///
 pub mod negotiate {
     #[cfg(feature = "credentials")]
@@ -46,6 +49,10 @@ pub struct Options {
     pub dry_run: bool,
     /// Delete stale destinations covered by explicit refspecs before updating fetched refs.
     pub prune: bool,
+    /// Add `refs/tags/*:refs/tags/*` to the explicit fetch refspecs.
+    /// This fetches all tags even when automatic tag following is disabled, and permits
+    /// pruning stale tags when `prune` is also enabled. It does not force tag updates.
+    pub prune_tags: bool,
     /// Replace the worktree's `FETCH_HEAD` with the refs received by this fetch.
     ///
     /// Explicit refspecs are merge candidates, as with `git fetch <remote> <refspec>…`;
@@ -61,4 +68,41 @@ pub struct Options {
     pub reflog_message: Option<RefLogMessage>,
     /// How to adjust the shallow boundary.
     pub shallow: Shallow,
+}
+
+#[cfg(feature = "blocking-network-client")]
+impl crate::Remote<'_> {
+    /// Return fetch options with the configured pruning policy for this remote.
+    ///
+    /// `remote.<name>.prune` and `remote.<name>.pruneTags` override `fetch.prune` and
+    /// `fetch.pruneTags`, respectively. Unspecified values are false. Other options retain
+    /// their defaults; tag following is already configured on the remote itself.
+    /// Callers issuing explicit command-line refspecs may disable `prune_tags`, as Git does.
+    pub fn fetch_options(&self) -> Result<Options> {
+        use crate::config::tree::{Fetch, Key, Remote, keys};
+
+        let config = &self.repo.config.resolved;
+        let configured = |remote_key: &'static keys::Boolean, global_key: &'static keys::Boolean| -> Result<bool> {
+            let remote = self
+                .name()
+                .map(|name| {
+                    remote_key.enrich_error(config.boolean_filter_by(
+                        "remote",
+                        Some(name.as_bstr()),
+                        remote_key.name(),
+                        self.repo.filter_config_section(),
+                    ))
+                })
+                .transpose()?
+                .flatten();
+            let global =
+                global_key.enrich_error(config.boolean_filter(global_key, self.repo.filter_config_section()))?;
+            Ok(remote.or(global).unwrap_or(false))
+        };
+        Ok(Options {
+            prune: configured(&Remote::PRUNE, &Fetch::PRUNE)?,
+            prune_tags: configured(&Remote::PRUNE_TAGS, &Fetch::PRUNE_TAGS)?,
+            ..Default::default()
+        })
+    }
 }

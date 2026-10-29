@@ -727,3 +727,29 @@ fn fetch_head_lock_failure_dry_run_and_missing_sources_preserve_state() -> TestR
     );
     Ok(())
 }
+
+#[test]
+fn configured_pruning_and_tag_overrides_match_git() -> TestResult {
+    for hash in gix::hash::Kind::all() {
+        let fixture = gix_testtools::scripted_fixture_writable_with_args(
+            "make_configured_fetch.sh",
+            [hash.to_string()],
+            gix_testtools::Creation::Execute,
+        )?;
+        for case in ["global", "remote", "no-prune", "prune-tags", "remote-tags-disabled"] {
+            let local = repo(fixture.path().join(format!("native-{case}")))?;
+            let remote = local.find_remote("origin")?;
+            remote.fetch(
+                remote.fetch_options()?,
+                gix::progress::Discard,
+                &std::sync::atomic::AtomicBool::new(false),
+            )?;
+            assert_eq!(
+                gix_testtools::git(local.git_dir(), "show-ref")?,
+                gix_testtools::git(fixture.path().join(format!("git-{case}")), "show-ref")?,
+                "{case} produces Git's ref set for {hash}"
+            );
+        }
+    }
+    Ok(())
+}

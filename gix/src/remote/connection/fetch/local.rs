@@ -54,10 +54,18 @@ impl Remote<'_> {
         P::SubProgress: 'static,
     {
         check_interrupt(should_interrupt)?;
+        let with_tags = options
+            .prune_tags
+            .then(|| {
+                self.clone()
+                    .with_refspecs(["refs/tags/*:refs/tags/*"], Direction::Fetch)
+            })
+            .transpose()?;
+        let remote = with_tags.as_ref().unwrap_or(self);
         let fetch_head = if options.write_fetch_head && !options.dry_run {
             Some(
                 gix_lock::File::acquire_to_update_resource(
-                    self.repo.current_dir().join(self.repo.git_dir()).join("FETCH_HEAD"),
+                    remote.repo.current_dir().join(remote.repo.git_dir()).join("FETCH_HEAD"),
                     gix_lock::acquire::Fail::Immediately,
                     None,
                     0,
@@ -67,10 +75,10 @@ impl Remote<'_> {
         } else {
             None
         };
-        let outcome = if let Some(prepare) = PrepareLocal::new(self, options.ref_map.clone())? {
-            prepare.receive(self.repo, options, progress, should_interrupt)?
+        let outcome = if let Some(prepare) = PrepareLocal::new(remote, options.ref_map.clone())? {
+            prepare.receive(remote.repo, options, progress, should_interrupt)?
         } else {
-            let mut prepare = self
+            let mut prepare = remote
                 .connect(Direction::Fetch)?
                 .prepare_fetch(&mut progress, options.ref_map)?
                 .with_dry_run(options.dry_run)
@@ -84,7 +92,7 @@ impl Remote<'_> {
             prepare.receive_with_remote_progress(progress, remote_progress, should_interrupt)?
         };
         if let Some(file) = fetch_head {
-            write_fetch_head(self, &outcome, file, should_interrupt)?;
+            write_fetch_head(remote, &outcome, file, should_interrupt)?;
         }
         Ok(outcome)
     }
