@@ -48,6 +48,7 @@ pub struct SpawnProcessOnDemand {
     ssh_cmd: Option<(OsString, ssh::ProgramKind)>,
     /// The environment variables to set in the invoked command.
     envs: Vec<(&'static str, String)>,
+    command_environment: Vec<(OsString, OsString)>,
     ssh_disallow_shell: bool,
     connection: Option<Connection<Box<dyn std::io::Read + Send>, process::ChildStdin>>,
     child: Option<process::Child>,
@@ -55,6 +56,11 @@ pub struct SpawnProcessOnDemand {
 }
 
 impl SpawnProcessOnDemand {
+    pub(crate) fn with_environment(mut self, environment: &[(OsString, OsString)]) -> Self {
+        self.command_environment.extend_from_slice(environment);
+        self
+    }
+
     pub(crate) fn new_ssh(
         url: gix_url::Url,
         program: impl Into<OsString>,
@@ -70,6 +76,7 @@ impl SpawnProcessOnDemand {
             ssh_cmd: Some((program.into(), ssh_kind)),
             envs: Default::default(),
             ssh_disallow_shell,
+            command_environment: Vec::new(),
             child: None,
             connection: None,
             desired_version: version,
@@ -89,6 +96,7 @@ impl SpawnProcessOnDemand {
                 Default::default()
             },
             ssh_disallow_shell: false,
+            command_environment: Vec::new(),
             child: None,
             connection: None,
             desired_version: version,
@@ -271,9 +279,11 @@ impl client::blocking_io::Transport for SpawnProcessOnDemand {
     ) -> std::result::Result<SetServiceResponse<'_>, client::Error> {
         let (cmd, ssh_kind, cmd_name) = self.prepare_command(service)?;
         let envs = std::mem::take(&mut self.envs);
+        let command_environment = std::mem::take(&mut self.command_environment);
         let into_std_command = |mut cmd: gix_command::Prepare, command: &std::ffi::OsStr| {
             cmd.stdin = Stdio::piped();
             cmd.stdout = Stdio::piped();
+            cmd.env.splice(0..0, command_environment.iter().cloned());
 
             let mut cmd = std::process::Command::try_from(cmd).map_err(|err| client::Error::InvokeProgram {
                 source: std::io::Error::new(std::io::ErrorKind::InvalidInput, err),

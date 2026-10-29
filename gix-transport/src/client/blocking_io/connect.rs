@@ -24,6 +24,23 @@ pub(crate) mod function {
         Url: TryInto<gix_url::Url, Error = E>,
         E: std::error::Error + Send + Sync + 'static,
     {
+        connect_with_environment(url, options, &[])
+    }
+
+    /// Connect like [`connect()`], applying `environment` to transport child processes.
+    ///
+    /// Repeated keys use their last value; required protocol and locale settings take precedence.
+    /// Repository-local variables are removed from transport children, as with [`connect()`].
+    /// HTTP and Git-protocol transports do not launch children and ignore these values.
+    pub fn connect_with_environment<Url, E>(
+        url: Url,
+        options: super::Options,
+        environment: &[(std::ffi::OsString, std::ffi::OsString)],
+    ) -> Result<Box<dyn Transport + Send>>
+    where
+        Url: TryInto<gix_url::Url, Error = E>,
+        E: std::error::Error + Send + Sync + 'static,
+    {
         let mut url = url.try_into().or_raise(|| message("Could not parse URL"))?;
         Ok(match url.scheme {
             gix_url::Scheme::Ext | gix_url::Scheme::Helper(_) | gix_url::Scheme::HelperUrl(_) => {
@@ -39,12 +56,19 @@ pub(crate) mod function {
                 }
                 Box::new(
                     crate::client::blocking_io::file::connect(url.path, options.version, options.trace)
-                        .or_raise(|| message("connection failed"))?,
+                        .or_raise(|| message("connection failed"))?
+                        .with_environment(environment),
                 )
             }
             gix_url::Scheme::Ssh => Box::new({
-                crate::client::blocking_io::ssh::connect(url, options.version, options.ssh, options.trace)
-                    .or_raise(|| message("connection failed"))?
+                crate::client::blocking_io::ssh::connect_with_environment(
+                    url,
+                    options.version,
+                    options.ssh,
+                    options.trace,
+                    environment,
+                )
+                .or_raise(|| message("connection failed"))?
             }),
             gix_url::Scheme::Git => {
                 if url.user().is_some() {
@@ -88,4 +112,4 @@ pub(crate) mod function {
     }
 }
 
-pub use function::connect;
+pub use function::{connect, connect_with_environment};
