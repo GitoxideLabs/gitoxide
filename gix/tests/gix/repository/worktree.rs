@@ -102,6 +102,103 @@ mod lock {
 #[cfg(feature = "worktree-mutation")]
 mod add {
     #[test]
+    fn unborn_heads_match_git_and_do_not_create_a_branch_or_reflog() -> gix_testtools::TestResult {
+        let (repo, _fixture) = crate::basic_rw_repo()?;
+        let work_dir = repo.workdir().expect("main checkout");
+        gix_testtools::git(work_dir, "worktree add --orphan -b git-unborn git-created")?;
+        let git_created = gix::open_opts(work_dir.join("git-created"), crate::restricted())?;
+        let (created, outcome) = repo.add_worktree(
+            work_dir.join("gix-created"),
+            gix::worktree::add::Head::Unborn(branch("gix-unborn")),
+            gix::progress::Discard,
+            &AtomicBool::default(),
+        )?;
+        assert_eq!(outcome.files_updated, 0, "an unborn HEAD has nothing to check out");
+        for (repository, name) in [(&git_created, "git-unborn"), (&created, "gix-unborn")] {
+            assert_eq!(
+                repository.head_name()?,
+                Some(branch(name)),
+                "HEAD retains its unborn name"
+            );
+            assert!(
+                repository.head()?.is_unborn(),
+                "neither implementation creates a commit"
+            );
+            assert!(
+                repository.try_find_reference(branch(name).as_ref())?.is_none(),
+                "the branch does not exist yet"
+            );
+            assert!(
+                !repository.git_dir().join("logs/HEAD").exists(),
+                "no initial HEAD reflog exists"
+            );
+            assert!(
+                repository.index()?.entries().is_empty(),
+                "orphan creation leaves the index empty"
+            );
+            assert_eq!(
+                gix_testtools::git(repository.workdir().expect("linked checkout"), "status --porcelain")?,
+                "",
+                "Git reads an empty worktree with no staged changes"
+            );
+        }
+        let prepared = repo.prepare_add_worktree(
+            work_dir.join("custom-unborn"),
+            gix::worktree::add::Head::Unborn("refs/custom/unborn".try_into()?),
+            &AtomicBool::default(),
+        )?;
+        assert_eq!(
+            prepared.repo().head_name()?.expect("symbolic HEAD").as_bstr(),
+            "refs/custom/unborn",
+            "registration accepts any full symbolic HEAD target beneath refs/"
+        );
+        assert!(
+            !prepared.repo().index_path().exists(),
+            "preparation defers index creation"
+        );
+        let custom = prepared.persist()?;
+        custom
+            .worktree()
+            .expect("linked worktree")
+            .checkout(gix::progress::Discard, &AtomicBool::default())?;
+        assert!(
+            custom.index()?.entries().is_empty(),
+            "deferred checkout also supports unborn HEAD"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unborn_heads_reject_existing_and_occupied_references() -> gix_testtools::TestResult {
+        let (repo, _fixture) = crate::basic_rw_repo()?;
+        let work_dir = repo.workdir().expect("main checkout");
+        gix_testtools::git(work_dir, "branch existing")?;
+        gix_testtools::git(work_dir, "worktree add --orphan -b reserved reserved")?;
+        for name in ["existing", "reserved"] {
+            if name == "existing" {
+                gix_testtools::git(work_dir, &format!("worktree add --orphan -b {name} git-rejected"))
+                    .expect_err("Git rejects existing branch names");
+            }
+            // Git currently allows two worktrees to reserve the same unborn branch. Keep the
+            // occupancy invariant here so their first commits cannot unexpectedly share a branch.
+            let destination = work_dir.join("gix-rejected");
+            let err = repo
+                .prepare_add_worktree(
+                    &destination,
+                    gix::worktree::add::Head::Unborn(branch(name)),
+                    &AtomicBool::default(),
+                )
+                .expect_err("unborn creation must not replace or share a branch");
+            assert!(
+                err.is_conflict(),
+                "reference conflicts are recoverable by selecting another name: {err:?}"
+            );
+            assert!(!destination.exists(), "reference validation precedes registration");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn returned_repositories_and_preparation_have_absolute_paths() -> gix_testtools::TestResult {
         let (source, _fixture) = crate::basic_rw_repo()?;
         let destinations = gix_testtools::tempfile::TempDir::new()?;
