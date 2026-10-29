@@ -198,7 +198,7 @@ mod to_prompt {
                 ..Default::default()
             }
             .to_prompt("Password"),
-            "Password for https://host: "
+            "Password for 'https://host': "
         );
     }
 }
