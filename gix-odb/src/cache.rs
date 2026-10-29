@@ -18,15 +18,15 @@ pub type ObjectCache = dyn gix_pack::cache::Object + Send + 'static;
 pub type NewObjectCacheFn = dyn Fn() -> Box<ObjectCache> + Send + Sync + 'static;
 
 impl Cache<crate::store::Handle<Rc<crate::Store>>> {
-    /// Convert this cache's handle into one that keeps its store in an arc. This creates an entirely new store,
-    /// so should be done early to avoid unnecessary work (and mappings).
+    /// Convert this cache's handle into one that keeps its store in an arc. This creates an entirely new store
+    /// and decoded-pack cache, so should be done early to avoid unnecessary work (and mappings).
     pub fn into_arc(self) -> std::io::Result<Cache<crate::store::Handle<Arc<crate::Store>>>> {
         let inner = self.inner.into_arc()?;
         Ok(Cache {
             inner,
+            pack_cache: self.new_pack_cache.as_ref().map(|create| RefCell::new(create())),
             new_pack_cache: self.new_pack_cache,
             new_object_cache: self.new_object_cache,
-            pack_cache: self.pack_cache,
             object_cache: self.object_cache,
         })
     }
