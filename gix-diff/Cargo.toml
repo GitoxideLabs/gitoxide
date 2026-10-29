@@ -21,6 +21,7 @@ sha256 = ["gix-hash/sha256"]
 blob = [
     "dep:imara-diff",
     "dep:regex",
+    "dep:gix-regex",
     "dep:gix-filter",
     "dep:gix-worktree",
     "dep:gix-path",
@@ -65,6 +66,7 @@ gix-attributes = { version = "^0.37.1", path = "../gix-attributes", optional = t
 gix-hash = { version = "^0.28.1", path = "../gix-hash" }
 gix-error = { version = "^0.5.2", path = "../gix-error" }
 gix-object = { version = "^0.66.1", path = "../gix-object" }
+gix-regex = { version = "^0.1.0", path = "../gix-regex", optional = true }
 gix-filter = { version = "^0.36.1", path = "../gix-filter", optional = true }
 gix-worktree = { version = "^0.59.0", path = "../gix-worktree", default-features = false, features = ["attributes"], optional = true }
 gix-command = { version = "^0.12.1", path = "../gix-command", optional = true }

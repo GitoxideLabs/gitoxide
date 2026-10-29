@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -eu -o pipefail
+export LC_ALL=C
 
 # Create one isolated diff per matcher case. The source declaration precedes an
 # indented change, so Git's zero-context hunk header reveals exactly the selected
@@ -13,9 +14,11 @@ make_case() {
         cd "cases/$name"
         git init -q
         printf '%s\n' 'file diff=header' >.gitattributes
-        if [[ $# -eq 3 ]]; then
+        if [[ $# -ge 3 ]]; then
+            local syntax=${4:-xfuncname}
             printf '%s' "$3" >pattern
-            git config diff.header.xfuncname "$3"
+            printf '%s' "$syntax" >syntax
+            git config "diff.header.$syntax" "$3"
         fi
         printf '%s\n' "$line" >source
         printf '%s\n    same\n    before\n' "$line" >file
@@ -35,3 +38,9 @@ make_case capture-form-feed $'prefix form_feed\x0c' '^prefix (.*)$'
 make_case negative 'skip declaration' '!^skip.*
 ^prefix (.*)$'
 make_case crlf $'other declaration\r' '^other.*'
+
+make_case longest 'aa' '^a|^aa'
+make_case basic-backreference 'prefix namename' '^prefix \([a-z]\+\)\1$' funcname
+make_case negative-backreference 'skipskip' '!^(skip)\1$
+^prefix (.*)$'
+make_case fallback-capture 'fallback' '^(optional)?fallback$'

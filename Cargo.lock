@@ -1829,6 +1829,7 @@ dependencies = [
  "gix-odb",
  "gix-path",
  "gix-pathspec",
+ "gix-regex",
  "gix-tempfile",
  "gix-testtools",
  "gix-trace",

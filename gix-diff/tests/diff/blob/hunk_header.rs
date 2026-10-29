@@ -1,23 +1,24 @@
-use gix_diff::blob::hunk_header::Matcher;
+use gix_diff::blob::hunk_header::{Definition, Matcher, Options, Syntax};
 use gix_error::TestResult;
 
 #[test]
-fn default_matches_identifiers_at_the_start_of_a_line() {
+fn default_matches_identifiers_at_the_start_of_a_line() -> TestResult {
     let matcher = Matcher::default();
     for line in [b"function() {\n".as_slice(), b"_private\r\n", b"$variable\t "] {
         assert_eq!(
-            matcher.find(line),
+            matcher.find(line)?,
             Some(line.trim_ascii_end()),
             "the default recognizes an identifier and removes trailing whitespace"
         );
     }
     for line in [b"".as_slice(), b"    function()", b"42", b"\xffname"] {
         assert_eq!(
-            matcher.find(line),
+            matcher.find(line)?,
             None,
             "the default requires an ASCII identifier at column zero"
         );
     }
+    Ok(())
 }
 
 #[test]
@@ -27,14 +28,14 @@ fn regexes_are_ordered_and_select_the_first_capture() -> TestResult {
 ^prefix (.*)
 ^other.*",
     )?;
-    assert_eq!(matcher.find(b"skip this"), None, "a negative match rejects the line");
+    assert_eq!(matcher.find(b"skip this")?, None, "a negative match rejects the line");
     assert_eq!(
-        matcher.find(b"prefix declaration\t \r\n"),
+        matcher.find(b"prefix declaration\t \r\n")?,
         Some(b"declaration".as_slice()),
         "the first capture excludes the prefix and trailing whitespace"
     );
     assert_eq!(
-        matcher.find(b"other declaration"),
+        matcher.find(b"other declaration")?,
         Some(b"other declaration".as_slice()),
         "without captures the complete match is returned"
     );
@@ -44,7 +45,7 @@ fn regexes_are_ordered_and_select_the_first_capture() -> TestResult {
 ^other",
     )?;
     assert_eq!(
-        matcher.find(b"prefix declaration"),
+        matcher.find(b"prefix declaration")?,
         Some(b"prefix declaration".as_slice()),
         "a later negative expression does not override the first positive match"
     );
@@ -55,23 +56,23 @@ fn regexes_are_ordered_and_select_the_first_capture() -> TestResult {
 fn regexes_match_bytes_and_strip_only_line_endings_before_matching() -> TestResult {
     let matcher = Matcher::from_regex("^([^ ]+)$")?;
     assert_eq!(
-        matcher.find(b"name\xff\r\n"),
+        matcher.find(b"name\xff\r\n")?,
         Some(b"name\xff".as_slice()),
         "invalid UTF-8 remains byte oriented"
     );
     assert_eq!(
-        matcher.find(b"name \n"),
+        matcher.find(b"name \n")?,
         None,
         "trailing spaces participate in matching"
     );
     assert_eq!(
-        matcher.find(b"name\r"),
+        matcher.find(b"name\r")?,
         Some(b"name".as_slice()),
         "a lone CR participates in matching and is then trimmed"
     );
     let matcher = Matcher::from_regex("^(optional)?fallback$")?;
     assert_eq!(
-        matcher.find(b"fallback"),
+        matcher.find(b"fallback")?,
         Some(b"fallback".as_slice()),
         "an unmatched first capture falls back to the whole match"
     );
@@ -102,7 +103,7 @@ fn matching_lines_keeps_line_numbers_and_borrows_source_bytes() -> TestResult {
 }
 fn second() {
 ";
-    let lines: Vec<_> = matcher.lines(source).collect();
+    let lines: Vec<_> = matcher.lines(source).collect::<Result<_, _>>()?;
     assert_eq!(
         lines,
         [(0, b"fn first() {".as_slice()), (3, b"fn second() {".as_slice())],
@@ -113,7 +114,7 @@ fn second() {
 }
 
 #[test]
-fn default_and_shared_regex_syntax_agree_with_git_hunk_headers() -> TestResult {
+fn default_and_posix_patterns_agree_with_git_hunk_headers() -> TestResult {
     let fixture = gix_testtools::scripted_fixture_read_only("make_hunk_header_repo.sh")?;
     for case in std::fs::read_dir(fixture.join("cases"))? {
         let case = case?.path();
@@ -122,11 +123,22 @@ fn default_and_shared_regex_syntax_agree_with_git_hunk_headers() -> TestResult {
             .exists()
             .then(|| std::fs::read_to_string(pattern_path))
             .transpose()?;
-        let matcher = pattern
-            .as_deref()
-            .map(Matcher::from_regex)
-            .transpose()?
-            .unwrap_or_default();
+        let matcher = if let Some(pattern) = pattern.as_ref() {
+            let syntax = std::fs::read_to_string(case.join("syntax"))?;
+            Matcher::from_posix(
+                pattern.as_bytes(),
+                Options {
+                    syntax: if syntax == "funcname" {
+                        Syntax::Basic
+                    } else {
+                        Syntax::Extended
+                    },
+                    ..Options::default()
+                },
+            )?
+        } else {
+            Matcher::default()
+        };
         let line = std::fs::read(case.join("source"))?;
         let baseline = std::fs::read(case.join("baseline.diff"))?;
         let git = baseline
@@ -140,11 +152,86 @@ fn default_and_shared_regex_syntax_agree_with_git_hunk_headers() -> TestResult {
             + 3;
         let expected = git[header_start..].strip_prefix(b" ");
         assert_eq!(
-            matcher.find(&line),
+            matcher.find(&line)?,
             expected,
             "matching agrees with Git for case {} and pattern {pattern:?}",
             case.display()
         );
     }
+    Ok(())
+}
+
+#[test]
+fn posix_syntax_captures_backreferences_and_longest_matches() -> TestResult {
+    let extended = Options {
+        syntax: Syntax::Extended,
+        ..Options::default()
+    };
+    let matcher = Matcher::from_posix(b"a|aa", extended)?;
+    assert_eq!(
+        matcher.find(b"aa")?,
+        Some(b"aa".as_slice()),
+        "POSIX chooses the longest complete match"
+    );
+    let definition = Definition {
+        pattern: br"^prefix \([a-z]\+\)\1$".as_slice().into(),
+        options: Options {
+            case_insensitive: true,
+            ..Options::default()
+        },
+    };
+    assert_eq!(
+        definition.to_matcher()?.find(b"prefix nameNAME\r\n")?,
+        Some(b"name".as_slice()),
+        "basic groups and case-insensitive backreferences preserve original capture bytes"
+    );
+    let matcher = Matcher::from_posix(
+        br"!^(skip)\1$
+^prefix (.*)$",
+        extended,
+    )?;
+    assert_eq!(
+        matcher.find(b"skipskip")?,
+        None,
+        "a negative POSIX expression excludes its line"
+    );
+    assert_eq!(
+        matcher.find(b"prefix \xff")?,
+        Some(b"\xff".as_slice()),
+        "captures borrow arbitrary source bytes"
+    );
+    let matcher = Matcher::from_posix(b"^(optional)?fallback$", extended)?;
+    assert_eq!(
+        matcher.find(b"fallback")?,
+        Some(b"fallback".as_slice()),
+        "an absent capture falls back to the full match"
+    );
+    assert!(
+        Matcher::from_posix(b"!exclude", extended).is_err(),
+        "the final expression must be positive"
+    );
+    assert!(
+        Matcher::from_posix(b"(", extended).is_err(),
+        "invalid POSIX configuration has a diagnostic"
+    );
+    Ok(())
+}
+
+#[test]
+fn posix_match_errors_retain_the_resource_limit_cause() -> TestResult {
+    let matcher = Matcher::from_posix(
+        b"^(a|aa)*b",
+        Options {
+            syntax: Syntax::Extended,
+            ..Options::default()
+        },
+    )?;
+    let err = matcher
+        .find(&[b'a'; 40])
+        .expect_err("ambiguous paths exhaust the finite matching budget");
+    assert!(
+        err.downcast_any_ref::<gix_regex::matcher::Error>().is_some(),
+        "callers can distinguish matching resource exhaustion from invalid configuration"
+    );
     Ok(())
 }
