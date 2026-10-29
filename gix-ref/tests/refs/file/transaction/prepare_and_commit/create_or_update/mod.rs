@@ -1452,3 +1452,62 @@ fn packed_refs_deletion_in_deletions_and_updates_mode() -> TestResult {
     );
     Ok(())
 }
+
+#[cfg(unix)]
+#[test]
+fn filesystem_symbolic_references_update_like_git() -> TestResult {
+    for name in ["HEAD", "ORIG_HEAD"] {
+        for deref in [false, true] {
+            let mut results = Vec::new();
+            for use_git in [true, false] {
+                let tmp = gix_testtools::scripted_fixture_writable_with_args(
+                    "make_filesystem_symrefs.sh",
+                    None::<String>,
+                    gix_testtools::Creation::Execute,
+                )?;
+                let store = gix_ref::file::Store::at(tmp.path().join(".git"), crate::fixture_hash_kind());
+                let desired = if name == "HEAD" { "first" } else { "main" };
+                let new_id = store.find(desired)?.target.into_id();
+                if use_git {
+                    let mut command = gix_testtools::git_command(tmp.path());
+                    command.arg("update-ref");
+                    if !deref {
+                        command.arg("--no-deref");
+                    }
+                    let output = command
+                        .args(["-m", "update symlink", name, &new_id.to_string()])
+                        .output()?;
+                    assert!(output.status.success(), "Git accepts the update: {output:?}");
+                } else {
+                    store
+                        .transaction()
+                        .prepare(
+                            [
+                                RefEdit::update(name.try_into()?, new_id, PreviousValue::Any, "update symlink")
+                                    .with_deref(deref),
+                            ],
+                            Fail::Immediately,
+                            Fail::Immediately,
+                        )?
+                        .commit(committer().to_ref(&mut TimeBuf::default()))?;
+                }
+                let path = store.git_dir().join(name);
+                assert_eq!(
+                    path.is_symlink(),
+                    deref,
+                    "Git={use_git}: only a direct replacement removes the {name} symlink"
+                );
+                results.push((
+                    store.find(name)?.target,
+                    store.find("main")?.target,
+                    store.find("first")?.target,
+                ));
+            }
+            assert_eq!(
+                results[0], results[1],
+                "{name}, deref={deref}: reference updates agree with Git"
+            );
+        }
+    }
+    Ok(())
+}
