@@ -10,7 +10,7 @@ pub mod from_tree {
 
     use crate::{
         Entry, PathStorage, State, Version,
-        entry::{Flags, Mode, Stat},
+        entry::{Flags, Mode, Stage, Stat, stat},
     };
 
     /// Initialization
@@ -57,8 +57,43 @@ pub mod from_tree {
         where
             Find: gix_object::Find,
         {
+            Self::from_tree_inner(tree, objects, validate, None)
+        }
+
+        /// Like [`Self::from_tree()`], but reuse worktree metadata from `previous` while collecting entries.
+        ///
+        /// Entries with the same path, object ID and mode retain their non-racy stat cache and assume-valid flag.
+        /// `stat_options` determine whether cached timestamps are racy; racy stat is discarded so writing the new
+        /// index cannot make an unverified worktree modification appear clean.
+        /// Skip-worktree flags are retained by path, including descendants of expanded sparse-directory entries.
+        /// Sparse-checkout patterns are not reevaluated. Conflicts, intent-to-add, removal and transient flags,
+        /// and all extensions are discarded. `previous` is never changed and must have sorted entries.
+        ///
+        /// The path-validation limitations of [`Self::from_tree()`] also apply here.
+        pub fn from_tree_with_index<Find>(
+            tree: &gix_hash::oid,
+            objects: Find,
+            validate: gix_validate::path::component::Options,
+            previous: &State,
+            stat_options: stat::Options,
+        ) -> Result<Self>
+        where
+            Find: gix_object::Find,
+        {
+            Self::from_tree_inner(tree, objects, validate, Some((previous, stat_options)))
+        }
+
+        fn from_tree_inner<Find>(
+            tree: &gix_hash::oid,
+            objects: Find,
+            validate: gix_validate::path::component::Options,
+            previous: Option<(&State, stat::Options)>,
+        ) -> Result<Self>
+        where
+            Find: gix_object::Find,
+        {
             let _span = gix_trace::coarse!("gix_index::State::from_tree()");
-            let mut delegate = CollectEntries::new(validate);
+            let mut delegate = CollectEntries::new(validate, previous);
             let traversal = depthfirst(tree.to_owned(), depthfirst::State::default(), &objects, &mut delegate);
 
             if let Some((path, err)) = delegate.invalid_path.take() {
@@ -73,6 +108,7 @@ pub mod from_tree {
                 path_deque: _,
                 validate: _,
                 invalid_path: _,
+                previous: _,
             } = delegate;
 
             Ok(State {
@@ -93,17 +129,21 @@ pub mod from_tree {
         }
     }
 
-    struct CollectEntries {
+    struct CollectEntries<'a> {
         entries: Vec<Entry>,
         path_backing: PathStorage,
         path: BString,
         path_deque: VecDeque<BString>,
         validate: gix_validate::path::component::Options,
         invalid_path: Option<(BString, gix_validate::path::component::Error)>,
+        previous: Option<(&'a State, stat::Options)>,
     }
 
-    impl CollectEntries {
-        pub fn new(validate: gix_validate::path::component::Options) -> CollectEntries {
+    impl<'a> CollectEntries<'a> {
+        pub fn new(
+            validate: gix_validate::path::component::Options,
+            previous: Option<(&'a State, stat::Options)>,
+        ) -> Self {
             CollectEntries {
                 entries: Vec::new(),
                 path_backing: Vec::new(),
@@ -111,6 +151,7 @@ pub mod from_tree {
                 path_deque: VecDeque::new(),
                 validate,
                 invalid_path: None,
+                previous,
             }
         }
 
@@ -153,7 +194,7 @@ pub mod from_tree {
             let path_start = self.path_backing.len();
             self.path_backing.extend_from_slice(&self.path);
 
-            let new_entry = Entry {
+            let mut new_entry = Entry {
                 stat: Stat::default(),
                 id: entry.oid.into(),
                 flags: Flags::empty(),
@@ -161,6 +202,33 @@ pub mod from_tree {
                 path: path_start..self.path_backing.len(),
             };
 
+            if let Some((previous, stat_options)) = self.previous {
+                if let Some(old) = previous
+                    .entry_by_path_and_stage(self.path.as_ref(), Stage::Unconflicted)
+                    .filter(|entry| !entry.flags.contains(Flags::REMOVE))
+                {
+                    new_entry.flags |= old.flags & Flags::SKIP_WORKTREE;
+                    if old.id == new_entry.id && old.mode == new_entry.mode {
+                        new_entry.flags |= old.flags & Flags::ASSUME_VALID;
+                        if !old.stat.is_racy(previous.timestamp(), stat_options) {
+                            new_entry.stat = old.stat;
+                        }
+                    }
+                } else if let Err(position) = previous.entry_index_by_path(self.path.as_ref())
+                    && let Some(old) = position
+                        .checked_sub(1)
+                        .and_then(|position| previous.entries().get(position))
+                    && old.mode == Mode::DIR
+                    && old.flags.contains(Flags::SKIP_WORKTREE)
+                    && !old.flags.contains(Flags::REMOVE)
+                    && self.path.starts_with(old.path(previous))
+                {
+                    new_entry.flags |= Flags::SKIP_WORKTREE;
+                }
+                if new_entry.flags.contains(Flags::SKIP_WORKTREE) {
+                    new_entry.flags |= Flags::EXTENDED;
+                }
+            }
             self.entries.push(new_entry);
         }
 
@@ -173,7 +241,7 @@ pub mod from_tree {
         }
     }
 
-    impl Visit for CollectEntries {
+    impl Visit for CollectEntries<'_> {
         fn pop_back_tracked_path_and_set_current(&mut self) {
             self.path = self.path_deque.pop_back().unwrap_or_default();
         }
