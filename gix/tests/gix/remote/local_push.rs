@@ -229,3 +229,6 @@ fn reference_lock_failure_is_per_ref_unless_atomic() -> TestResult {
     }
     Ok(())
 }
+
+#[path = "local_shallow_push.rs"]
+mod shallow;
