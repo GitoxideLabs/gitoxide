@@ -63,3 +63,18 @@ make_case basic-second-start funcname '^^a' '^a'
 make_case basic-alternative-start funcname 'a\|^b' b
 make_case basic-alternative-end funcname 'a$\|b' a
 make_case basic-group-anchors funcname '\(^a$\)' a
+
+make_case leading-star xfuncname '*a' a
+make_case leading-plus xfuncname '+a' a
+make_case leading-question xfuncname '?a' a
+make_case leading-range xfuncname '{1}a' a
+make_case excessive-lower-bound xfuncname 'a{32768}' a
+make_case excessive-upper-bound xfuncname 'a{1,32768}' a
+make_case incorrect-basic-delimiter funcname 'a\{1}' a
+make_case incorrect-extended-delimiter xfuncname 'a{1\}' a
+make_case empty-range xfuncname 'a{}' a
+make_case descending-range xfuncname 'a{2,1}' a
+make_case omitted-lower-bound xfuncname 'a{,1}' a
+make_case omitted-basic-lower-bound funcname 'a\{,1\}' a
+make_case omitted-upper-bound xfuncname 'a{1,}' a
+make_case omitted-basic-upper-bound funcname 'a\{1,\}' a

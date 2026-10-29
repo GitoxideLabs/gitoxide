@@ -127,7 +127,7 @@ Root 1..1
 "
     );
     assert_eq!(
-        compile(br"ye\{2}"),
+        compile(br"ye\{2\}"),
         "\
 Root 1..1
   Alternative 1..1
@@ -136,7 +136,7 @@ Root 1..1
 "
     );
     assert_eq!(
-        compile(br"ye\{2,}"),
+        compile(br"ye\{2,\}"),
         "\
 Root 1..1
   Alternative 1..1
@@ -145,7 +145,7 @@ Root 1..1
 "
     );
     assert_eq!(
-        compile(br"ye\{2,3}"),
+        compile(br"ye\{2,3\}"),
         "\
 Root 1..1
   Alternative 1..1
