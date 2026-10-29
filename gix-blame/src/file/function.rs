@@ -9,7 +9,7 @@ use gix_error::{ErrorExt, OptionExt, ResultExt, message};
 use gix_hash::ObjectId;
 use gix_object::{
     FindExt,
-    bstr::{BStr, BString},
+    bstr::{BStr, BString, ByteSlice},
     tree::EntryMode,
 };
 use gix_traverse::commit::find as find_commit;
@@ -138,14 +138,17 @@ pub fn file(
     }
 
     let mut diff_state = gix_diff::tree::State::default();
-    let mut previous_entry: Option<(ObjectId, (ObjectId, EntryMode))> = None;
+    let mut previous_entry: Option<(ObjectId, BString, (ObjectId, EntryMode))> = None;
     let mut blame_path = if options.debug_track_path {
         Some(Vec::new())
     } else {
         None
     };
 
-    'outer: while let Some(suspect) = queue.pop_value() {
+    let mut deferred_hunks = Vec::new();
+    'outer: loop {
+        hunks_to_blame.append(&mut deferred_hunks);
+        let Some(suspect) = queue.pop_value() else { break };
         stats.commits_traversed += 1;
         if hunks_to_blame.is_empty() {
             break;
@@ -165,11 +168,21 @@ pub fn file(
 
         let commit = find_commit(cache.as_ref(), &odb, &suspect, &mut buf)?;
         let commit_time = commit.commit_time()?;
+        // A commit can be reached through different source paths. Scope every transfer to this
+        // origin so it cannot rename or attribute hunks which arrived through another history.
+        (hunks_to_blame, deferred_hunks) = std::mem::take(&mut hunks_to_blame).into_iter().partition(|hunk| {
+            hunk.has_suspect(&suspect)
+                && hunk.source_file_name.as_ref().map_or(file_path, |path| path.as_bstr())
+                    == current_file_path.as_bstr()
+        });
+        if deferred_hunks.iter().any(|hunk| hunk.has_suspect(&suspect)) {
+            queue.insert(commit_time, suspect);
+        }
 
         if let Some(since) = options.since
             && commit_time < since.seconds
         {
-            if unblamed_to_out_is_done(&mut hunks_to_blame, &mut out, suspect) {
+            if unblamed_to_out_is_done(&mut hunks_to_blame, &mut out, suspect) && deferred_hunks.is_empty() {
                 break 'outer;
             }
 
@@ -183,41 +196,31 @@ pub fn file(
         };
 
         if parent_ids.is_empty() {
-            if queue.is_empty() {
-                // I’m not entirely sure if this is correct yet. `suspect`, at this point, is the
-                // `id` of the last `item` that was yielded by `queue`, so it makes sense to assign
-                // the remaining lines to it, even though we don’t explicitly check whether that is
-                // true here. We could perhaps use diff-tree-to-tree to compare `suspect` against
-                // an empty tree to validate this assumption.
-                if unblamed_to_out_is_done(&mut hunks_to_blame, &mut out, suspect) {
-                    if let Some(ref mut blame_path) = blame_path {
-                        let entry = previous_entry
-                            .take()
-                            .filter(|(id, _)| *id == suspect)
-                            .map(|(_, entry)| entry);
-
-                        let blame_path_entry = BlamePathEntry {
-                            source_file_path: current_file_path.clone(),
-                            previous_source_file_path: None,
-                            commit_id: suspect,
-                            blob_id: entry.map_or(gix_hash::Kind::shortest().null(), |(id, _)| id),
-                            previous_blob_id: gix_hash::Kind::shortest().null(),
-                            parent_index: 0,
-                        };
-                        blame_path.push(blame_path_entry);
-                    }
-
-                    break 'outer;
-                }
+            let done = unblamed_to_out_is_done(&mut hunks_to_blame, &mut out, suspect);
+            if let Some(ref mut blame_path) = blame_path {
+                let entry = previous_entry
+                    .take()
+                    .filter(|(id, path, _)| *id == suspect && path == &current_file_path)
+                    .map(|(_, _, entry)| entry);
+                blame_path.push(BlamePathEntry {
+                    source_file_path: current_file_path.clone(),
+                    previous_source_file_path: None,
+                    commit_id: suspect,
+                    blob_id: entry.map_or(gix_hash::Kind::shortest().null(), |(id, _)| id),
+                    previous_blob_id: gix_hash::Kind::shortest().null(),
+                    parent_index: 0,
+                });
             }
-            // There is more, keep looking.
+            if done && deferred_hunks.is_empty() {
+                break 'outer;
+            }
             continue;
         }
 
         let mut entry = previous_entry
             .take()
-            .filter(|(id, _)| *id == suspect)
-            .map(|(_, entry)| entry);
+            .filter(|(id, path, _)| *id == suspect && path == &current_file_path)
+            .map(|(_, _, entry)| entry);
         if entry.is_none() {
             entry = find_path_entry_in_commit(
                 &odb,
@@ -294,7 +297,11 @@ pub fn file(
             )? {
                 let no_change_in_entry = entry_id == parent_entry_id && same_blob_type(entry_mode, parent_entry_mode);
                 if pid == 0 {
-                    previous_entry = Some((*parent_id, (parent_entry_id, parent_entry_mode)));
+                    previous_entry = Some((
+                        *parent_id,
+                        current_file_path.clone(),
+                        (parent_entry_id, parent_entry_mode),
+                    ));
                 }
                 if no_change_in_entry {
                     pass_blame_from_to(suspect, *parent_id, &mut hunks_to_blame);
@@ -343,7 +350,9 @@ pub fn file(
                         // Do nothing under the assumption that this always (or almost always)
                         // implies that the file comes from a different parent, compared to which
                         // it was modified, not added.
-                    } else if unblamed_to_out_is_done(&mut hunks_to_blame, &mut out, suspect) {
+                    } else if unblamed_to_out_is_done(&mut hunks_to_blame, &mut out, suspect)
+                        && deferred_hunks.is_empty()
+                    {
                         if let Some(ref mut blame_path) = blame_path {
                             let blame_path_entry = BlamePathEntry {
                                 source_file_path: current_file_path.clone(),
@@ -511,6 +520,7 @@ pub fn file(
         }
     }
 
+    hunks_to_blame.append(&mut deferred_hunks);
     debug_assert_eq!(
         hunks_to_blame,
         vec![],
@@ -581,6 +591,7 @@ fn coalesce_blame_entries(lines_blamed: Vec<BlameEntry>) -> Vec<BlameEntry> {
                 let previous_source_range = previous_entry.range_in_source_file();
                 let current_source_range = entry.range_in_source_file();
                 if previous_entry.commit_id == entry.commit_id
+                    && previous_entry.source_file_name == entry.source_file_name
                     && previous_blamed_range.end == current_blamed_range.start
                     // As of 2024-09-19, the check below only is in `git`, but not in `libgit2`.
                     && previous_source_range.end == current_source_range.start
