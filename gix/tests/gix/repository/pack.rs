@@ -114,3 +114,29 @@ fn replacement_refs_do_not_change_packed_objects_and_corruption_is_rejected() ->
     assert!(err.is_corrupted(), "checksum failures retain corruption classification");
     Ok(())
 }
+
+#[test]
+fn the_implicit_empty_tree_is_materialized_in_a_pack() -> TestResult {
+    use gix_object::Exists;
+
+    let repo = crate::named_subrepo_opts("make_basic_repo.sh", "unborn", gix::open::Options::isolated())?;
+    let tree_id = gix::ObjectId::empty_tree(repo.object_hash());
+    assert!(!repo.objects.exists(&tree_id), "the source has no physical empty tree");
+    let mut bytes = Vec::new();
+    let outcome = repo.write_pack([tree_id], &mut bytes, &AtomicBool::default())?;
+    assert_eq!(outcome.num_objects, 1);
+    let destination = gix_testtools::tempfile::tempdir()?;
+    gix_testtools::git(destination.path(), "init --bare")?;
+    let pack_path = destination.path().join("empty-tree.pack");
+    std::fs::write(&pack_path, bytes)?;
+    let output = gix_testtools::git_command(destination.path())
+        .args(["index-pack", "--strict", "--stdin"])
+        .stdin(std::fs::File::open(pack_path)?)
+        .output()?;
+    assert!(output.status.success(), "Git accepts the materialized tree");
+    assert_eq!(
+        gix_testtools::git(destination.path(), &format!("cat-file -t {tree_id}"))?.trim(),
+        "tree"
+    );
+    Ok(())
+}
