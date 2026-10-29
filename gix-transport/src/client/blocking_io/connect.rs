@@ -55,8 +55,7 @@ pub(crate) mod function {
             gix_url::Scheme::File => {
                 if url.user().is_some() || url.password().is_some() || url.host().is_some() || url.port.is_some() {
                     bail!(
-                        "The url {:?} contains information that would not be used by the {} protocol".validation(),
-                        url.to_bstring(),
+                        "The URL contains authority information that would not be used by the {} protocol".validation(),
                         url.scheme
                     );
                 }
@@ -81,8 +80,7 @@ pub(crate) mod function {
             gix_url::Scheme::Git => {
                 if url.user().is_some() {
                     bail!(
-                        "The url {:?} contains information that would not be used by the {} protocol".validation(),
-                        url.to_bstring(),
+                        "The URL contains authority information that would not be used by the {} protocol".validation(),
                         url.scheme
                     );
                 }
