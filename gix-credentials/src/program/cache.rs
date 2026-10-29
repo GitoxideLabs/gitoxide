@@ -35,10 +35,13 @@ pub struct DaemonCommand {
 /// Resolve Git's default cache socket from the home and XDG cache directories.
 /// The legacy home directory takes precedence when it already exists.
 pub fn default_socket() -> Result<PathBuf> {
-    default_socket_with_environment(&[])
+    default_socket_with_environment(&[], None)
 }
 
-fn default_socket_with_environment(environment: &[(OsString, OsString)]) -> Result<PathBuf> {
+fn default_socket_with_environment(
+    environment: &[(OsString, OsString)],
+    current_dir: Option<&Path>,
+) -> Result<PathBuf> {
     let env_var = |name: &str| {
         environment
             .iter()
@@ -49,7 +52,7 @@ fn default_socket_with_environment(environment: &[(OsString, OsString)]) -> Resu
     };
     let home = env_var("HOME").map(PathBuf::from);
     if let Some(legacy) = home.as_ref().map(|home| home.join(".git-credential-cache"))
-        && legacy.is_dir()
+        && current_dir.unwrap_or(Path::new("")).join(&legacy).is_dir()
     {
         return Ok(legacy.join("socket"));
     }
@@ -74,9 +77,10 @@ pub fn request(
     input: &[u8],
     launcher: Option<&DaemonCommand>,
 ) -> Result<Vec<u8>> {
-    request_inner(socket, action, timeout, input, launcher, true, &[])
+    request_inner(socket, action, timeout, input, launcher, true, &[], None)
 }
 
+#[expect(clippy::too_many_arguments)]
 fn request_inner(
     socket: &Path,
     action: &str,
@@ -85,6 +89,7 @@ fn request_inner(
     launcher: Option<&DaemonCommand>,
     stderr: bool,
     environment: &[(OsString, OsString)],
+    current_dir: Option<&Path>,
 ) -> Result<Vec<u8>> {
     if action == "capability" {
         return Ok(b"version 0\ncapability authtype\n".to_vec());
@@ -106,7 +111,7 @@ fn request_inner(
             let launcher = launcher.ok_or_else(|| {
                 message("Credential cache daemon is not running and no daemon launcher is configured").raise()
             })?;
-            let launched = launch(launcher, socket, stderr, environment);
+            let launched = launch(launcher, socket, stderr, environment, current_dir);
             // Another client may have won a concurrent startup, in which case its daemon serves us.
             let response = send(socket, &payload);
             match response {
@@ -144,8 +149,18 @@ fn send(socket: &Path, payload: &[u8]) -> io::Result<Vec<u8>> {
     }
 }
 
-fn launch(launcher: &DaemonCommand, socket: &Path, stderr: bool, environment: &[(OsString, OsString)]) -> Result<()> {
-    let mut child = Command::new(&launcher.executable)
+fn launch(
+    launcher: &DaemonCommand,
+    socket: &Path,
+    stderr: bool,
+    environment: &[(OsString, OsString)],
+    current_dir: Option<&Path>,
+) -> Result<()> {
+    let mut command = Command::new(&launcher.executable);
+    if let Some(current_dir) = current_dir {
+        command.current_dir(current_dir);
+    }
+    let mut child = command
         .args(&launcher.args)
         .arg(socket)
         .envs(environment.iter().map(|(key, value)| (key, value)))
@@ -224,7 +239,7 @@ pub(crate) fn invoke(
         }
         let socket = match socket {
             Some(socket) => socket,
-            None => default_socket_with_environment(environment)?,
+            None => default_socket_with_environment(environment, helper.current_dir.as_deref())?,
         };
         let mut input = Vec::new();
         action
@@ -238,6 +253,7 @@ pub(crate) fn invoke(
             helper.cache_daemon.as_ref(),
             helper.stderr,
             environment,
+            helper.current_dir.as_deref(),
         )?;
         Ok(matches!(action, Action::Get(_)).then_some(response))
     })())

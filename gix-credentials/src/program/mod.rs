@@ -81,6 +81,7 @@ impl Program {
         Program {
             kind,
             child: None,
+            current_dir: None,
             stderr: true,
             store_lock_timeout: std::time::Duration::from_secs(1).into(),
             #[cfg(unix)]
@@ -113,6 +114,7 @@ impl Program {
             Ok(Program {
                 kind,
                 child: None,
+                current_dir: None,
                 stderr: true,
                 store_lock_timeout: std::time::Duration::from_secs(1).into(),
                 #[cfg(unix)]
@@ -154,6 +156,7 @@ impl Program {
             }
         };
         prepare.env.extend_from_slice(environment);
+        prepare.current_dir.clone_from(&self.current_dir);
         if matches!(self.kind, Kind::ExternalName { .. }) {
             let effective_env = |name: &str| {
                 environment
@@ -163,7 +166,10 @@ impl Program {
                     .map(|(_, value)| value.clone())
                     .or_else(|| std::env::var_os(name))
             };
-            if let Ok(cwd) = std::env::current_dir()
+            if let Ok(cwd) = self
+                .current_dir
+                .as_deref()
+                .map_or_else(std::env::current_dir, std::path::absolute)
                 && let Some(core) = gix_path::env::core_dir_from_environment(effective_env, &cwd)
             {
                 let path = effective_env("PATH").unwrap_or_default();
