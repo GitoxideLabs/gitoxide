@@ -197,6 +197,15 @@ pub(crate) fn push(
             &mut remote_progress,
         )? {
             update.status = Status::Rejected(Rejection::Server("hook declined".into()));
+            remote_progress(
+                true,
+                format!(
+                    "error: hook declined to update {}\n",
+                    update.update.destination.as_bstr()
+                )
+                .as_bytes(),
+            )
+            .or_error()?;
         } else if let Some(worktree) = policy.worktree_to_update(destination, update)? {
             let new_id = update.update.new_id.unwrap_or_else(|| source.object_hash().null());
             match hooks.push_to_checkout(&worktree, new_id, &mut remote_progress)? {
