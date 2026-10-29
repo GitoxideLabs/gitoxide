@@ -307,3 +307,34 @@ fi
     }
     Ok(())
 }
+
+#[test]
+fn pushes_an_in_memory_commit_with_an_implicit_empty_tree() -> TestResult {
+    use gix_object::Exists;
+
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let mut commit = crate::remote::repo("base").head_commit()?.decode()?.to_owned()?;
+    let repo =
+        crate::named_subrepo_opts("make_basic_repo.sh", "unborn", gix::open::Options::isolated())?.with_object_memory();
+    commit.tree = ObjectId::empty_tree(repo.object_hash());
+    commit.parents.clear();
+    let commit_id = repo.write_object(&commit)?.detach();
+    assert!(
+        !repo.objects.exists(&commit.tree),
+        "the empty tree is synthesized by the repository"
+    );
+    let destination = gix_testtools::tempfile::tempdir()?;
+    gix_testtools::git(destination.path(), "init --bare")?;
+    let outcome = push(
+        &repo,
+        destination.path(),
+        vec![update("refs/heads/main", Some(commit_id))?],
+        Options::default(),
+    )?;
+    assert!(matches!(outcome.updates[0].status, Status::Updated { .. }));
+    assert_eq!(remote_id(destination.path(), "refs/heads/main")?, Some(commit_id));
+    gix_testtools::git(destination.path(), "fsck --strict --no-reflogs")?;
+    Ok(())
+}

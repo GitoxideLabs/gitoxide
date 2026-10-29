@@ -25,7 +25,8 @@ impl Repository {
     /// Write a self-contained version-2 pack containing the given `object_ids` to `output`.
     ///
     /// Duplicate IDs are removed, preserving their first occurrence. Each object's checksum is
-    /// verified before compression, and replacement refs are ignored. Objects are compressed using `pack.compression`,
+    /// verified before compression, and replacement refs are ignored. The implicit empty tree
+    /// is materialized even when it is absent from the object database. Objects are compressed using `pack.compression`,
     /// falling back to `core.compression`; no deltas or external bases are used. This uses memory
     /// proportional to the number of object IDs and the largest object, without buffering the pack.
     ///
@@ -55,12 +56,12 @@ impl Repository {
         }
         let num_objects =
             u32::try_from(unique.len()).or_raise(|| message("A pack cannot contain more than 2^32 - 1 objects"))?;
-        let mut objects = self.objects.clone();
-        objects.ignore_replacements = true;
+        let mut repo = self.clone();
+        repo.objects.ignore_replacements = true;
         let mut buffer = Vec::new();
         let entries = unique.into_iter().map(|object_id| {
             check_interrupt(should_interrupt)?;
-            let data = objects
+            let data = repo
                 .find(&object_id, &mut buffer)
                 .or_raise(|| message!("Could not read object {object_id} for packing"))?;
             data.verify_checksum(&object_id)?;
