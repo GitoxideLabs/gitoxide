@@ -209,7 +209,7 @@ pub enum Start<'a> {
     /// i.e. "not committed yet".
     ///
     /// It is assumed that the data in `contents` is ready to be used for diffing, in particular
-    /// that it has been run through the configured worktree filters.
+    /// that it has been run through the configured worktree filters and any enabled textconv driver.
     ///
     /// See [Pipeline::convert_to_diffable()](gix_diff::blob::Pipeline::convert_to_diffable) for
     /// how to obtain the contents of a worktree file by running them through the configured
@@ -218,8 +218,6 @@ pub enum Start<'a> {
         /// The commit to start from after it has been compared to `contents`.
         first_suspect: ObjectId,
         /// The contents to start the blame from, typically read from the worktree.
-        // TODO(blame): add a type so rename tracking can avoid comparing blobs with symlinks.
-        //              Blob is hard-coded in at least once place.
         contents: std::borrow::Cow<'a, [u8]>,
     },
 }

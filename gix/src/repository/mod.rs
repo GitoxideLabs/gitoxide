@@ -173,5 +173,8 @@ pub mod blame_file {
         /// The kind of supplied [`gix_blame::Start::Contents`], defaulting to a regular blob.
         /// Ignored when blaming a commit.
         pub contents_mode: Option<gix_object::tree::EntryKind>,
+        /// Apply configured textconv drivers to committed blobs. Disabled by default.
+        /// Supplied contents must already be converted to the same text representation.
+        pub textconv: bool,
     }
 }
