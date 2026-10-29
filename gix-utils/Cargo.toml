@@ -19,6 +19,8 @@ name = "precompose"
 harness = false
 
 [features]
+## Git-compatible display column layouts.
+column = ["dep:unicode-width"]
 ## Byte-string conversion utilities.
 bstr = ["dep:bstr"]
 ## Progress traits, types, and I/O wrappers backed by `prodash`.
@@ -46,6 +48,7 @@ io-pipe = ["dep:bytes"]
 cache-efficiency-debug = []
 
 [dependencies]
+unicode-width = { version = "0.2.2", optional = true }
 gix-error = { version = "^0.5.2", path = "../gix-error", optional = true }
 prodash = { version = "31.0.1", optional = true }
 bytesize = { version = "2.3.1", optional = true }
@@ -78,3 +81,8 @@ required-features = ["io-pipe"]
 [package.metadata.docs.rs]
 all-features = true
 features = ["document-features"]
+
+[[test]]
+name = "column"
+path = "tests/column.rs"
+required-features = ["column"]
