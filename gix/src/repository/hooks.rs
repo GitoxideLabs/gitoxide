@@ -86,7 +86,16 @@ impl Repository {
         Ok(())
     }
 
-    fn hooks_directory(&self) -> Result<PathBuf> {
+    /// Return the absolute directory for traditional hook files, whether or not it exists.
+    ///
+    /// Trusted `core.hooksPath` values take precedence over `hooks` in the common Git directory.
+    /// Relative paths start at the worktree root, or the Git directory in a bare repository.
+    /// Optional missing paths fall back to the default directory; invalid configuration and other
+    /// filesystem errors are returned. Symlinks are retained.
+    ///
+    /// This resolves the directory only. Use [`find_hook()`][Self::find_hook()] to validate a hook name,
+    /// check repository trust, and find an executable hook.
+    pub fn hooks_directory(&self) -> Result<PathBuf> {
         let default = self.current_dir().join(self.common_dir()).join("hooks");
         let Some(value) = self
             .config
