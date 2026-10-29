@@ -209,6 +209,62 @@ fn resources_of_worktree_and_odb_and_check_link() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn external_diff_shell_commands_receive_protocol_arguments() -> TestResult {
+    let mut platform = new_platform(None, Default::default());
+    platform.set_resource(
+        gix_hash::Kind::Sha1.null(),
+        EntryKind::Blob,
+        "a".into(),
+        ResourceKind::OldOrSource,
+        &gix_object::find::Never,
+    )?;
+    let db = object_db();
+    let new_id = insert(&db, "new content")?;
+    let new_path = "renamed ' $* &.txt";
+    platform.set_resource(
+        new_id,
+        EntryKind::BlobExecutable,
+        new_path.into(),
+        ResourceKind::NewOrDestination,
+        &db,
+    )?;
+
+    let mut command = platform.prepare_diff_command(
+        r#"printf '%s\n' "$GIT_DIFF_PATH_COUNTER" "$GIT_DIFF_PATH_TOTAL" 'fixed argument'"#.into(),
+        Default::default(),
+        1,
+        3,
+    )?;
+    let output = command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()?;
+    assert!(output.status.success(), "{}", output.stderr.as_bstr());
+    let lines: Vec<_> = output.stdout.lines().map(ByteSlice::as_bstr).collect();
+    assert_eq!(lines.len(), 11, "the shell receives all eight external-diff arguments");
+    assert_eq!(
+        lines,
+        [
+            "2".as_bytes().as_bstr(),
+            "3".as_bytes().as_bstr(),
+            "fixed argument".as_bytes().as_bstr(),
+            "a".as_bytes().as_bstr(),
+            lines[4],
+            gix_hash::Kind::Sha1.null().to_string().as_bytes().as_bstr(),
+            "100644".as_bytes().as_bstr(),
+            lines[7],
+            new_id.to_string().as_bytes().as_bstr(),
+            "100755".as_bytes().as_bstr(),
+            new_path.as_bytes().as_bstr(),
+        ],
+        "configured arguments precede the literal external-diff protocol arguments"
+    );
+    assert_eq!(std::fs::read(gix_path::from_bstr(lines[4])?)?, b"a\n");
+    assert_eq!(std::fs::read(gix_path::from_bstr(lines[7])?)?, b"new content");
+    Ok(())
+}
+
 fn comparable_ext_diff(cmd: gix_error::Result<gix_diff::blob::platform::prepare_diff_command::Command>) -> String {
     let cmd = cmd.expect("no error");
     let command = format!("{:?}", *cmd);
