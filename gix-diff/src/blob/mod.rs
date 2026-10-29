@@ -7,6 +7,9 @@ pub use imara_diff::*;
 
 /// Facilities to render a computed [`Diff`] as unified diff output.
 pub mod unified_diff;
+
+/// Match source lines for the optional section shown after unified diff hunk headers.
+pub mod hunk_header;
 pub use unified_diff::impls::UnifiedDiff;
 
 /// Compute a diff with Git's slider heuristics to produce more intuitive diffs.
