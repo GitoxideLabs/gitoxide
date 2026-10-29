@@ -188,6 +188,31 @@ impl crate::Repository {
     }
 }
 
+#[cfg(feature = "worktree-mutation")]
+impl crate::Repository {
+    pub(super) fn clear_reset_state(&self) -> Result<()> {
+        let mut finished_pick = false;
+        for name in ["CHERRY_PICK_HEAD", "REVERT_HEAD"] {
+            if let Some(reference) = self.try_find_reference(name)? {
+                delete_reference(self, &reference)?;
+                finished_pick = true;
+            }
+        }
+        if finished_pick
+            && let Some(todo) = read_state_file(&self.git_dir().join("sequencer/todo"))?
+            && todo
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .is_none_or(|position| position + 1 == todo.len())
+        {
+            std::fs::remove_dir_all(self.git_dir().join("sequencer"))
+                .or_raise(|| message("Could not remove the completed sequence after hard reset"))?;
+        }
+        remove_state_file(&self.git_dir().join("SQUASH_MSG"))?;
+        self.clear_merge_state()
+    }
+}
+
 fn save_autostash(repo: &crate::Repository, stash_commit_id: gix_hash::ObjectId) -> Result<()> {
     // Match `git stash store`'s stash-like check: the working tree and first two parents must
     // resolve to trees. A regular commit must not silently be turned into an unusable stash entry.
