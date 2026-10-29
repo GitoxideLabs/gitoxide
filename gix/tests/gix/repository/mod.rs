@@ -360,7 +360,13 @@ fn size_in_memory() {
     // which grows the type by one more cached cell.
     // The ODB handle's sharing policy brings the Windows workspace layout to 1504 bytes.
     // The related-repository callback in `open::Options` brings the limit to 1512 bytes.
-    let limit = 1512;
+    // A Unix credential-cache launcher occupies one pointer in `open::Options`.
+    let limit = 1512
+        + if cfg!(all(unix, feature = "credentials")) {
+            std::mem::size_of::<usize>()
+        } else {
+            0
+        };
     assert!(
         actual_size <= limit,
         "size of Repository shouldn't change without us noticing, it's meant to be cloned: should have been at most {limit:?}, was {actual_size}"

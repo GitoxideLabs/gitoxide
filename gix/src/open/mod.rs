@@ -122,6 +122,8 @@ pub struct Options {
     /// [`Self::clone_without_trust()`] retains it so the policy applies to subsequent related opens.
     /// Set it with [`Self::configure_related_repository()`].
     configure_related_repository: Option<Arc<ConfigureRelatedRepository>>,
+    #[cfg(all(unix, feature = "credentials"))]
+    pub(crate) credential_cache_daemon: Option<Box<gix_credentials::program::cache::DaemonCommand>>,
 }
 
 mod options;
