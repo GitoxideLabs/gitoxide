@@ -819,6 +819,17 @@ mod locations {
         let locations = &super::super::ALTERNATIVE_LOCATIONS[..program_files_count];
         RelativeGitBinPaths::assert_from(&pf, locations).assert_architectures();
     }
+
+    #[test]
+    fn package_manager_locations_reject_relative_roots() {
+        for invalid in ["", "relative", r"C:relative", r"\rooted"] {
+            let locations = super::super::locations_under_package_managers(|_| Some(invalid.into()));
+            assert!(
+                locations.is_empty(),
+                "{invalid:?} must not enable discovery relative to the working directory"
+            );
+        }
+    }
 }
 
 #[cfg(not(windows))]

@@ -12,6 +12,7 @@ use std::sync::LazyLock;
 pub(super) static ALTERNATIVE_LOCATIONS: LazyLock<Vec<PathBuf>> = LazyLock::new(|| {
     let mut locations = locations_under_program_files(|key| std::env::var_os(key));
     locations.extend(locations_under_scoop(|key| std::env::var_os(key)));
+    locations.extend(locations_under_package_managers(|key| std::env::var_os(key)));
     locations
 });
 #[cfg(not(windows))]
@@ -111,6 +112,20 @@ fn locations_under_scoop(var_os: impl Fn(&str) -> Option<std::ffi::OsString>) ->
         }
     }
     locations
+}
+
+#[cfg(windows)]
+fn locations_under_package_managers(var_os: impl Fn(&str) -> Option<std::ffi::OsString>) -> Vec<PathBuf> {
+    // Stable package entry points remain available when their PATH entries are missing.
+    [("ChocolateyToolsLocation", "git/cmd")]
+        .into_iter()
+        .filter_map(|(variable, suffix)| {
+            var_os(variable)
+                .map(PathBuf::from)
+                .filter(|root| root.is_absolute())
+                .map(|root| root.join(suffix))
+        })
+        .collect()
 }
 
 #[cfg(windows)]

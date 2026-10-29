@@ -18,7 +18,18 @@ fn shell() {
 }
 
 #[cfg(windows)]
-mod scoop {
+mod windows_installations {
+    #[test]
+    fn chocolatey_tools_location() -> gix_error::TestResult {
+        discover(
+            "ChocolateyToolsLocation",
+            "chocolatey",
+            "chocolatey/git/cmd/git.exe",
+            false,
+            false,
+        )
+    }
+
     #[test]
     fn default_user_installation() -> gix_error::TestResult {
         discover(
@@ -81,7 +92,9 @@ mod scoop {
     fn discover(variable: &str, root: &str, expected: &str, on_path: bool, unset_path: bool) -> gix_error::TestResult {
         // Fixture creation can invoke Git and initialize discovery caches. Complete it in the
         // parent so the isolated child only reads the fixture before setting its environment.
-        let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only("scoop-installation.sh")?)?;
+        let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only(
+            "windows-git-installations.sh",
+        )?)?;
         if gix_testtools::run_in_isolated_process()? {
             return Ok(());
         }
@@ -96,11 +109,17 @@ mod scoop {
             "GIT_INSTALL_ROOT",
             "USERPROFILE",
             "ProgramData",
+            "ChocolateyToolsLocation",
             "PATH",
         ] {
             env = env.unset(variable);
         }
         env = env.set(variable, fixture.join(root).to_str().expect("UTF-8 fixture path"));
+        if on_path {
+            for (variable, root) in [("ChocolateyToolsLocation", "chocolatey")] {
+                env = env.set(variable, fixture.join(root).to_str().expect("UTF-8 fixture path"));
+            }
+        }
         if !unset_path {
             env = env.set(
                 "PATH",
@@ -119,7 +138,7 @@ mod scoop {
         assert_eq!(
             gix_path::env::exe_invocation(),
             expected,
-            "Scoop is a fallback when no Git executable is on PATH, including when PATH is unset"
+            "Package installations are fallbacks when Git is absent from PATH, including when PATH is unset"
         );
         drop(env);
         Ok(())
