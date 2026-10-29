@@ -331,6 +331,12 @@ impl<'a, 'pattern> Search<'a, 'pattern> {
     fn atom(&mut self, node: NodeId, mut state: State) -> Result<Vec<State>, Error> {
         self.budget.step(1)?;
         let token = &self.regex.tree[node].token;
+        if *token == Token::Repetition {
+            let child = self.regex.tree[node]
+                .child
+                .expect("parsed repetition wrappers have one child");
+            return self.repeated(child, state);
+        }
         if let Token::Group(id) = *token {
             let start = state.offset;
             let mut result = self.alternatives(node, &state)?;
@@ -393,7 +399,7 @@ impl<'a, 'pattern> Search<'a, 'pattern> {
             Token::NotWordBoundary => (previous_word == next_word, 0),
             Token::AbsoluteStart => (state.offset == 0, 0),
             Token::AbsoluteEnd => (next.is_none(), 0),
-            Token::Root | Token::Alternative | Token::Group(_) | Token::InternalStart => {
+            Token::Root | Token::Alternative | Token::Group(_) | Token::Repetition | Token::InternalStart => {
                 unreachable!("only parsed expression atoms are matched")
             }
         };
