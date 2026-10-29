@@ -32,7 +32,23 @@ impl Transaction<'_, '_> {
             .and_then(|buf| loose::Reference::try_from_path(name.to_owned(), &buf, store.object_hash).ok())
             .map(Reference::from);
         match (loose, packed) {
-            (None, Some(packed)) => packed.try_find(name).map(|reference| reference.map(Into::into)),
+            (None, Some(packed)) => {
+                let namespaced_name;
+                let name = match &store.namespace {
+                    Some(namespace) => {
+                        namespaced_name = namespace.to_owned().into_namespaced_name(name);
+                        namespaced_name.as_ref()
+                    }
+                    None => name,
+                };
+                Ok(packed.try_find(name)?.map(|reference| {
+                    let mut reference: Reference = reference.into();
+                    if let Some(namespace) = &store.namespace {
+                        reference.strip_namespace(namespace);
+                    }
+                    reference
+                }))
+            }
             (reference, _) => Ok(reference),
         }
     }
