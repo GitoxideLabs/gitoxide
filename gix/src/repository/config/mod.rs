@@ -280,7 +280,11 @@ impl crate::Repository {
                 self.filter_config_section(),
             )?
             .map(|enabled| !enabled),
-            ref_namespace: self.refs.namespace.as_ref().map(|ns| ns.as_bstr().to_owned()),
+            ref_namespace: self
+                .refs
+                .namespace
+                .as_ref()
+                .map(|ns| ns.to_partial_name().as_ref().as_bstr().to_owned()),
             literal_pathspecs: pathspec_boolean(&gitoxide::Pathspec::LITERAL)?,
             glob_pathspecs: pathspec_boolean(&gitoxide::Pathspec::GLOB)?
                 .or(pathspec_boolean(&gitoxide::Pathspec::NOGLOB)?),

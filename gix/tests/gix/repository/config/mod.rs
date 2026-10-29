@@ -176,3 +176,15 @@ pub fn repo_opts(name: &str, modify: impl FnOnce(gix::open::Options) -> gix::ope
     let dir = gix_testtools::scripted_fixture_read_only("make_config_repos.sh").unwrap();
     gix::open_opts(dir.join(name), modify(gix::open::Options::isolated())).unwrap()
 }
+
+#[cfg(feature = "command")]
+#[test]
+fn command_context_preserves_the_unexpanded_namespace() -> TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_basic_repo.sh")?;
+    let mut repo = gix::open_opts(fixture, gix::open::Options::isolated())?;
+    for name in ["team", "team/project", "refs/namespaces"] {
+        repo.set_namespace(name)?;
+        assert_eq!(repo.command_context()?.ref_namespace, Some(name.into()));
+    }
+    Ok(())
+}
