@@ -52,17 +52,11 @@ mod data_to_write {
     #[crate::bisync::bisync]
     #[cfg_attr(feature = "blocking-io", test)]
     #[cfg_attr(all(feature = "async-io", not(feature = "blocking-io")), async_std::test)]
-    async fn error_if_data_is_empty() {
-        let err = (data_to_write(&[], io::sink()).await).expect_err("the packet line is invalid");
-        insta::assert_debug_snapshot!(err, "error if data is empty", @r#"
-        Custom {
-            kind: Other,
-            error: Message {
-                message: "Empty lines are invalid",
-                class: Validation,
-            },
-        }
-        "#);
+    async fn empty_data_is_encoded_without_flushing() -> gix_testtools::TestResult {
+        let mut output = Vec::new();
+        assert_eq!(data_to_write(&[], &mut output).await?, 4);
+        assert_eq!(output, b"0004", "an empty data packet differs from a flush packet");
+        Ok(())
     }
 }
 

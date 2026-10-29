@@ -141,9 +141,18 @@ mod streaming {
     }
 
     #[test]
-    fn error_on_empty_line() {
-        let err = (streaming(b"0004")).expect_err("the packet line is invalid");
-        insta::assert_debug_snapshot!(err, "error on empty line", @"Received an invalid empty line");
+    fn empty_data_is_distinct_from_flush() -> gix_testtools::TestResult {
+        assert!(
+            matches!(
+                streaming(b"00040000")?,
+                Stream::Complete {
+                    line: gix_packetline::PacketLineRef::Data(b""),
+                    bytes_consumed: 4,
+                }
+            ),
+            "0004 carries an empty payload without ending the exchange"
+        );
+        Ok(())
     }
 
     mod incomplete {
