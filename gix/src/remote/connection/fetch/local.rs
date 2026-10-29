@@ -143,9 +143,7 @@ where
     if ref_map.refspecs.is_empty() && ref_map.extra_refspecs.is_empty() {
         bail!(message("Cannot fetch without any refspecs").validation());
     }
-    if !options.missing_refs_allowed && ref_map.is_missing_required_mapping() {
-        bail!(message("None of the fetch refspecs matched a remote reference").validation());
-    }
+    super::validate_required_refs(&ref_map, options.missing_refs_allowed)?;
     let source_shallow: BTreeSet<_> = source
         .shallow_commits()?
         .map(|ids| ids.iter().copied().collect())
