@@ -302,7 +302,7 @@ fn inherited_repository_paths_cannot_redirect_prepared_hooks() -> TestResult {
         let hook = repo
             .find_hook("pre-auto-gc")?
             .expect("the fixture installs the environment hook");
-        let output = repo.prepare_hook(hook)?.output()?;
+        let output = repo.prepare_hook(&hook)?.output()?;
         assert!(output.status.success(), "the environment hook completes");
         let expected = format!(
             "{}\n{}\n",
@@ -316,6 +316,20 @@ fn inherited_repository_paths_cannot_redirect_prepared_hooks() -> TestResult {
             output.stdout,
             expected.as_bytes(),
             "the hook belongs to its repository, even if inherited Git paths name another repository"
+        );
+        let output = repo.run_hook(
+            &hook,
+            gix::hook::Options {
+                environment: &[
+                    (OsStr::new("GIT_COMMON_DIR"), OsStr::new("literal common directory")),
+                    (OsStr::new("GIT_WORK_TREE"), OsStr::new("literal worktree directory")),
+                ],
+                ..Default::default()
+            },
+        )?;
+        assert_eq!(
+            output.stdout, b"literal common directory\nliteral worktree directory\n",
+            "explicit hook options still override repository context, including bare worktree removal"
         );
     }
     Ok(())
@@ -505,6 +519,44 @@ fn execution_retains_hook_failures_and_ignores_early_stdin_close() -> TestResult
     assert!(
         repo.run_hook(".git/hooks/post-commit", Default::default()).is_err(),
         "permission failures are not bypassed with a shell"
+    );
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn interpreter_lookup_uses_the_hook_directory_and_environment() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let fixture = fixture()?;
+    let repo = gix::open_opts(fixture.join("repo"), crate::restricted())?;
+    let shell_directory = Path::new(gix_path::env::shell())
+        .parent()
+        .expect("Git for Windows provides an absolute shell path");
+    let _environment = gix_testtools::Env::new().set("PATH", "hook-interpreter");
+    let command = repo.prepare_hook(".git/hooks/pre-commit")?;
+    assert_eq!(
+        command.get_program(),
+        fixture.join("repo/hook-interpreter/sh.exe"),
+        "relative interpreter PATH entries start at the hook's working directory"
+    );
+    let output = repo.run_hook(
+        ".git/hooks/pre-commit",
+        gix::hook::Options {
+            arguments: &[OsStr::new("one argument"), OsStr::new("two")],
+            environment: &[(OsStr::new("PATH"), shell_directory.as_os_str())],
+            ..Default::default()
+        },
+    )?;
+    assert!(
+        output.status.success(),
+        "execution resolves the real interpreter from options"
+    );
+    assert_eq!(
+        output.stdout,
+        std::fs::read(fixture.join("expected-output"))?,
+        "the interpreter selected before launch receives the literal arguments"
     );
     Ok(())
 }

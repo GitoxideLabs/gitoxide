@@ -32,7 +32,8 @@ impl Repository {
     /// Relative paths start at the worktree root, or the Git directory in a bare repository. Repository paths are
     /// anchored to the working directory captured when this repository was opened. `GIT_COMMON_DIR` names this repository,
     /// and bare repositories explicitly unset inherited `GIT_WORK_TREE`. Arguments and I/O can be set on
-    /// the returned command. By default, stdin is closed, stdout is captured, and stderr follows
+    /// the returned command. On Windows executable and interpreter lookup is already complete; use
+    /// [`run_hook()`][Self::run_hook()] to supply environment overrides that also affect lookup. By default, stdin is closed, stdout is captured, and stderr follows
     /// [`command_context()`][Self::command_context()]. Per-hook variables, such as `GIT_INDEX_FILE` and `GIT_EDITOR`, remain caller choices.
     ///
     /// Full repository trust is required. The path is used literally, without shell interpretation or an executable

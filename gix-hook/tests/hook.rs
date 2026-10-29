@@ -267,3 +267,31 @@ fn input_and_output_do_not_deadlock_and_broken_pipe_keeps_status() -> TestResult
     assert_eq!(output.stderr, b"early stderr\n");
     Ok(())
 }
+
+#[cfg(windows)]
+#[test]
+fn interpreter_lookup_uses_working_directory_and_explicit_path() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let fixture = fixture()?;
+    let workdir = fixture.join("repo");
+    let gitdir = workdir.join(".git");
+    let context = context(&workdir, &gitdir);
+    let _environment = gix_testtools::Env::new().set("PATH", "hook-interpreter");
+    let command = gix_hook::prepare(Path::new(".git/hooks/pre-commit"), &context, Options::default())?;
+    assert_eq!(command.get_program(), workdir.join("hook-interpreter/sh.exe"));
+    let shell_dir = Path::new(gix_path::env::shell())
+        .parent()
+        .expect("absolute Windows shell path");
+    let options = Options {
+        environment: &[(OsStr::new("PATH"), shell_dir.as_os_str())],
+        ..Default::default()
+    };
+    let output = gix_hook::run(Path::new(".git/hooks/pre-commit"), &context, options)?;
+    assert!(
+        output.status.success(),
+        "explicit PATH reaches interpreter lookup before spawning"
+    );
+    Ok(())
+}
