@@ -232,6 +232,8 @@ Follow "purposeful conventional commits" style:
 - Crate status: crate-status.md
 - Stability guide: STABILITY.md
 - Always update docs if directly related to code changes
+- Updating any `CHANGELOG.md` file, at the repository root or in a crate, is forbidden.
+  These files are generated from conventional commits; express changelog-worthy changes through commit messages instead.
 
 ## CI and Releases
 
