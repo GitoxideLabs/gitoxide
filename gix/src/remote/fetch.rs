@@ -35,9 +35,9 @@ pub(crate) enum WritePackedRefs {
     Only,
 }
 
+pub use gix_protocol::fetch::{Filter, Shallow, Tags};
 #[cfg(any(feature = "blocking-network-client", feature = "async-network-client"))]
 pub use gix_protocol::fetch::{RefMap, refmap};
-pub use gix_protocol::fetch::{Shallow, Tags};
 
 /// Options for [`crate::Remote::fetch()`].
 #[cfg(feature = "blocking-network-client")]
@@ -68,6 +68,8 @@ pub struct Options {
     pub reflog_message: Option<RefLogMessage>,
     /// How to adjust the shallow boundary.
     pub shallow: Shallow,
+    /// Select objects for a partial fetch. Received packs are marked as promisor packs.
+    pub filter: Option<Filter>,
 }
 
 #[cfg(feature = "blocking-network-client")]

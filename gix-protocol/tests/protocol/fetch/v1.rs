@@ -86,6 +86,7 @@ async fn fetch_receives_pack_after_ready_with_no_done() -> TestResult {
             fetch::Options {
                 shallow_file: temp.path().join("shallow"),
                 shallow: &fetch::Shallow::NoChange,
+                filter: None,
                 tags: fetch::Tags::None,
                 reject_shallow_remote: false,
             },
@@ -322,6 +323,7 @@ fn raw_fetch_sideband_preserves_bytes_and_callback_errors() -> TestResult {
             fetch::Options {
                 shallow_file: directory.path().join("shallow"),
                 shallow: &fetch::Shallow::NoChange,
+                filter: None,
                 tags: fetch::Tags::None,
                 reject_shallow_remote: false,
             },

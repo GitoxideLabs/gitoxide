@@ -756,3 +756,81 @@ fn configured_pruning_and_tag_overrides_match_git() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn native_blobless_fetch_and_explicit_hydration_without_git_in_path() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let fixture = gix_testtools::scripted_fixture_read_only("make_native_local_fetch_repo.sh")?.canonicalize()?;
+    let dir = gix_testtools::tempfile::tempdir()?;
+    let local = gix::init_bare(dir.path())?;
+    let source = repo(fixture.join("source"))?;
+    let tip = source.head_commit()?;
+    let mut blobs = Vec::new();
+    for entry in gix_traverse::object::BreadthFirst::new([tip.id], &source) {
+        let entry = entry?;
+        if entry.kind == gix_object::Kind::Blob {
+            blobs.push(entry.id);
+        }
+    }
+    assert!(!blobs.is_empty(), "the fixture contains blobs to omit");
+    let _guard = gix_testtools::Env::new().set("PATH", dir.path().to_string_lossy());
+    let outcome = fetch(
+        &local,
+        &fixture.join("source"),
+        gix::remote::fetch::Options {
+            filter: Some(gix::remote::fetch::Filter::BlobNone),
+            ..Default::default()
+        },
+    )?;
+    assert_eq!(local.head_id().ok(), None, "fetch does not create local HEAD");
+    assert!(local.find_commit(tip.id).is_ok(), "metadata commits are available");
+    assert!(
+        blobs.iter().all(|blob_id| !local.objects.exists(blob_id)),
+        "blobs are promised"
+    );
+    assert!(
+        matches!(outcome.status, gix::remote::fetch::Status::Change { .. }),
+        "filtered fetch transfers a pack"
+    );
+    assert!(
+        std::fs::read_dir(local.objects.store_ref().path().join("pack"))?
+            .filter_map(Result::ok)
+            .any(|entry| entry.path().extension().is_some_and(|ext| ext == "promisor")),
+        "the partial pack is marked promisor"
+    );
+    let mut remote = local
+        .remote_at(gix::path::into_bstr(fixture.join("source"))?)?
+        .with_fetch_tags(gix::remote::fetch::Tags::None);
+    remote.replace_refspecs(
+        blobs
+            .iter()
+            .map(|blob_id| gix::bstr::BString::from(blob_id.to_string())),
+        Direction::Fetch,
+    )?;
+    remote.fetch(
+        gix::remote::fetch::Options {
+            filter: Some(gix::remote::fetch::Filter::BlobNone),
+            ..Default::default()
+        },
+        gix::progress::Discard,
+        &std::sync::atomic::AtomicBool::default(),
+    )?;
+    assert!(
+        blobs.iter().all(|blob_id| local.objects.exists(blob_id)),
+        "explicitly wanted blobs are hydrated"
+    );
+    remote.replace_refspecs(["ffffffffffffffffffffffffffffffffffffffff"], Direction::Fetch)?;
+    assert!(
+        remote
+            .fetch(
+                Default::default(),
+                gix::progress::Discard,
+                &std::sync::atomic::AtomicBool::default()
+            )
+            .is_err(),
+        "unavailable object wants fail"
+    );
+    Ok(())
+}

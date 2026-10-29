@@ -85,7 +85,8 @@ impl Remote<'_> {
                 .with_prune(options.prune)
                 .with_missing_refs_allowed(options.missing_refs_allowed)
                 .with_write_packed_refs_only(options.write_packed_refs_only)
-                .with_shallow(options.shallow);
+                .with_shallow(options.shallow)
+                .with_filter(options.filter);
             if let Some(message) = options.reflog_message {
                 prepare = prepare.with_reflog_message(message);
             }
@@ -300,6 +301,17 @@ where
         interrupt,
     )?;
     let mut objects = collect_objects(source, tips.iter().copied(), &traversal_boundary, interrupt)?;
+    if options.filter == Some(fetch::Filter::BlobNone) {
+        let mut buffer = Vec::new();
+        let mut selected = BTreeSet::new();
+        for object_id in objects {
+            check_interrupt(interrupt)?;
+            if tips.contains(&object_id) || source.find(&object_id, &mut buffer)?.kind != Kind::Blob {
+                selected.insert(object_id);
+            }
+        }
+        objects = selected;
+    }
     for mapping in ref_map.mappings.iter().filter(|mapping| is_implicit_tag(mapping)) {
         let fetch::refmap::Source::Ref(reference) = &mapping.remote else {
             continue;
@@ -334,6 +346,12 @@ where
     } else {
         None
     };
+    if options.filter.is_some()
+        && let Some(path) = pack.as_ref().and_then(|bundle| bundle.data_path.as_ref())
+    {
+        std::fs::write(path.with_extension("promisor"), [])
+            .or_raise(|| message("Could not mark the received pack as promisor"))?;
+    }
     if let Some(lock) = shallow_lock {
         let updates: Vec<_> = previous
             .difference(&boundary)
