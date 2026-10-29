@@ -135,19 +135,7 @@ where
         P::SubProgress: 'static,
     {
         let ref_map = &self.ref_map;
-        if !self.missing_refs_allowed && ref_map.is_missing_required_mapping() {
-            let mut specs = ref_map.refspecs.clone();
-            specs.extend(ref_map.extra_refspecs.clone());
-            bail!(gix_error::validation(format!(
-                "None of the refspec(s) {} matched any of the {} refs on the remote",
-                specs
-                    .iter()
-                    .map(|spec| spec.to_ref().instruction().to_bstring().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                ref_map.remote_refs.len()
-            )));
-        }
+        super::validate_required_refs(ref_map, self.missing_refs_allowed)?;
 
         let mut con = self.con.take().expect("receive() can only be called once");
         let mut handshake = con.handshake.take().expect("receive() can only be called once");
