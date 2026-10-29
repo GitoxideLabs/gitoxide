@@ -44,7 +44,7 @@ impl Iterator for SortedLoosePaths {
         for entry in self.file_walk.as_mut()?.by_ref() {
             match entry {
                 Ok(entry) => {
-                    if !entry.file_type().is_ok_and(|ft| ft.is_file()) {
+                    if !entry.file_type().is_ok_and(|ft| ft.is_file() || ft.is_symlink()) {
                         continue;
                     }
                     let full_path = entry.path().into_owned();
