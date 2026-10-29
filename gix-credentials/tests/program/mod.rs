@@ -42,3 +42,49 @@ fn named_helpers_run_without_git_and_preserve_operation_environment() -> gix_tes
     }
     Ok(())
 }
+
+#[test]
+#[cfg(unix)]
+fn explicit_dispatcher_handles_builtin_and_shell_expanded_native_helpers_without_git() -> gix_testtools::TestResult {
+    use gix_credentials::{Program, helper::Action, program::Kind};
+
+    let fixture = gix_testtools::scripted_fixture_read_only("make_named_helpers.sh")?.canonicalize()?;
+    let dispatcher = fixture.join("installation with spaces/libexec/git-core/git-credential-sample");
+    for (mut helper, expected) in [
+        (
+            Program::from_kind(Kind::Builtin),
+            "username=dispatcher\npassword=credential:fill\n",
+        ),
+        (
+            Program::from_custom_definition(r#"store --file="$GIX_HELPER_ARGUMENT""#)?,
+            "username=dispatcher\npassword=credential-store:--file=a b\n",
+        ),
+        (
+            Program::from_custom_definition(r#"cache --socket="$GIX_HELPER_ARGUMENT""#)?,
+            "username=dispatcher\npassword=credential-cache:--socket=a b\n",
+        ),
+    ] {
+        helper.builtin_dispatcher = Some(dispatcher.clone());
+        let output = helper
+            .to_command_with_environment(
+                &Action::Get(Default::default()),
+                &[
+                    ("PATH".into(), "".into()),
+                    ("GIT_EXEC_PATH".into(), "".into()),
+                    ("GIX_HELPER_USER".into(), "dispatcher".into()),
+                    ("GIX_HELPER_ARGUMENT".into(), "a b".into()),
+                ],
+            )?
+            .output()?;
+        assert!(
+            output.status.success(),
+            "the explicit dispatcher works without Git in PATH"
+        );
+        assert_eq!(
+            output.stdout,
+            expected.as_bytes(),
+            "helper arguments reach the dispatcher"
+        );
+    }
+    Ok(())
+}
