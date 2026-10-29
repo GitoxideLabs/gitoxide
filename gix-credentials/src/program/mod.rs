@@ -7,14 +7,39 @@ use crate::{Program, helper};
 
 /// Prefix a helper name while preserving the shell syntax of its optional arguments.
 fn external_name_command(name_and_args: &bstr::BStr, action: &helper::Action) -> Result<gix_command::Prepare> {
-    let mut command = BString::from("git-credential-");
+    let name = name_and_args
+        .split(|byte| matches!(*byte, b' ' | b'\t' | b'\n'))
+        .next()
+        .unwrap_or_default();
+    let name = if cfg!(windows) {
+        name.strip_suffix(b".exe").unwrap_or(name)
+    } else {
+        name
+    };
+    let builtin = matches!(name, b"store" | b"cache" | b"cache--daemon");
+    // Keep builtin precedence until these helper implementations move into this crate.
+    let mut command = if builtin {
+        let program = gix_path::to_unix_separators_on_windows(gix_path::into_bstr(gix_path::env::exe_invocation())?);
+        let mut command = gix_quote::single(program.as_ref());
+        command.push_str(" credential-");
+        command
+    } else {
+        BString::from(if cfg!(windows) {
+            "git-credential-"
+        } else {
+            "command git-credential-"
+        })
+    };
     command.push_str(name_and_args);
     command.push(b' ');
     command.push_str(action.as_arg(true));
-    Ok(
-        gix_command::prepare(gix_path::from_bstr(command.as_bstr())?.into_owned())
-            .command_may_be_shell_script_allow_manual_argument_splitting(),
-    )
+    let command = gix_command::prepare(gix_path::from_bstring(command)?);
+    Ok(if builtin || cfg!(windows) {
+        command.command_may_be_shell_script_allow_manual_argument_splitting()
+    } else {
+        // Preserve Git's ENOEXEC fallback for executable scripts without a shebang.
+        command.with_shell()
+    })
 }
 
 /// The kind of helper program to use.
@@ -26,7 +51,8 @@ pub enum Kind {
     ExternalName {
         /// The name like `foo` along with optional args, like `foo --arg --bar="a b"`, with arguments using `sh` shell quoting rules.
         /// The program executed will be `git-credential-foo [args]` if `name_and_args` starts with `foo [args]`.
-        /// Note that a shell is only used if it's needed.
+        /// Named helpers use Git's exec-path followed by `PATH`, without a Git dispatcher.
+        /// Builtin helpers still use Git until their implementations are provided natively.
         name_and_args: BString,
     },
     /// A custom credentials helper, as identified just by the absolute path to the program and optional arguments. The program is executed through a shell.
@@ -202,7 +228,12 @@ mod tests {
             .nth(1)
             .expect("a shell invocation has its script after the '-c' argument");
         assert_eq!(
-            script, "git-credential-manager --config=~/credentials get",
+            script,
+            if cfg!(windows) {
+                "git-credential-manager --config=~/credentials get"
+            } else {
+                "command git-credential-manager --config=~/credentials get"
+            },
             "the fixed action is appended to the script, without shell positional parameters"
         );
         Ok(())
