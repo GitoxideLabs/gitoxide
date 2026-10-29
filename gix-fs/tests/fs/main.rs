@@ -8,6 +8,7 @@ mod snapshot;
 mod stack;
 #[cfg(windows)]
 mod symlink;
+mod symlink_check;
 #[cfg(feature = "walkdir")]
 mod walkdir;
 

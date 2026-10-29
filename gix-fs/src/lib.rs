@@ -265,3 +265,15 @@ pub fn is_executable(_metadata: &std::fs::Metadata) -> bool {
 
 ///
 pub mod stack;
+
+/// A read-only stack that rejects paths through parent symlinks.
+///
+/// Sorted queries let shared leading directories be checked only once. Callers must ensure
+/// those directories do not change while the checker is in use. The root itself may be a symlink.
+#[derive(Clone)]
+pub struct SymlinkCheck {
+    /// Supports querying additional information, like the stack root.
+    pub inner: Stack,
+}
+
+mod symlink_check;

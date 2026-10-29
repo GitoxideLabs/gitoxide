@@ -3,25 +3,24 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::{Stack, SymlinkCheck, stack::ToNormalPathComponents};
 use bstr::BStr;
 use gix_error::Message;
-use gix_fs::{Stack, stack::ToNormalPathComponents};
-
-use crate::SymlinkCheck;
 
 const CANNOT_STEP_THROUGH_SYMLINK: &str = "Cannot step through symlink to perform an lstat";
 
-pub(crate) fn is_symlink_step_error(err: &std::io::Error) -> bool {
-    err.get_ref()
-        .and_then(|source| source.downcast_ref::<Message>())
-        .is_some_and(|err| gix_error::classify(err).is_validation() && err.message == CANNOT_STEP_THROUGH_SYMLINK)
-}
-
 impl SymlinkCheck {
+    /// Return whether `err` reports a parent symlink rejected by this checker.
+    pub fn is_symlink_step_error(err: &std::io::Error) -> bool {
+        err.get_ref()
+            .and_then(|source| source.downcast_ref::<Message>())
+            .is_some_and(|err| gix_error::classify(err).is_validation() && err.message == CANNOT_STEP_THROUGH_SYMLINK)
+    }
+
     /// Create a new stack that starts operating at `root`.
     pub fn new(root: PathBuf) -> Self {
         Self {
-            inner: gix_fs::Stack::new(root),
+            inner: Stack::new(root),
         }
     }
 
@@ -61,7 +60,7 @@ impl SymlinkCheck {
 
 struct Delegate;
 
-impl gix_fs::stack::Delegate for Delegate {
+impl crate::stack::Delegate for Delegate {
     fn push_directory(&mut self, _stack: &Stack) -> std::io::Result<()> {
         Ok(())
     }
