@@ -189,7 +189,7 @@ impl Prepare {
     pub fn spawn(self) -> std::io::Result<std::process::Child> {
         let mut cmd =
             Command::try_from(self).map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?;
-        gix_trace::debug!(cmd = ?cmd);
+        gix_trace::debug!(program = ?cmd.get_program());
         cmd.spawn()
     }
 }
