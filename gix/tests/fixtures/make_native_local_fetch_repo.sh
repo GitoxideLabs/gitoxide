@@ -19,5 +19,10 @@ git init -b main source
     git config --add uploadpack.hideRefs '!refs/heads/private/visible'
     git symbolic-ref refs/heads/alias refs/heads/main
     git symbolic-ref refs/heads/dangling refs/heads/missing
+    # Object transfer must use the original object graph, not this local view.
+    git replace HEAD HEAD~1
 )
 git init -b unborn empty
+
+# Upload-pack suppresses replacement refs and honors this truncated source boundary.
+git clone --depth 2 "file://$(pwd)/source" shallow
