@@ -3,6 +3,8 @@ mod http;
 
 mod request;
 
+mod environment;
+
 #[test]
 fn ssh_username_password_credentials_update_or_clear_username() -> gix_error::TestResult {
     use gix_transport::{
