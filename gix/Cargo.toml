@@ -209,9 +209,12 @@ async-network-client-async-std = [
     "gix-transport/async-std",
 ]
 ## Make `gix-protocol` available along with a blocking client, providing access to the `file://`, `git://` and `ssh://` transports.
+## Push streams packs on an upload thread while receiving server progress, requiring `parallel` repository handles.
 blocking-network-client = [
     "gix-protocol/blocking-client",
     "gix-pack/streaming-input",
+    "pack-generate",
+    "parallel",
     "dep:gix-transport",
     "attributes",
     "credentials",
