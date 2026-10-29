@@ -110,6 +110,9 @@ pub mod filter;
 pub mod freelist;
 #[cfg(feature = "fsmonitor-server")]
 mod fsmonitor;
+/// Repack and expire local objects.
+#[cfg(feature = "object-maintenance")]
+pub mod gc;
 mod graph;
 pub(crate) mod identity;
 mod impls;
@@ -117,11 +120,11 @@ mod impls;
 mod index;
 pub(crate) mod init;
 mod location;
+#[cfg(feature = "mailmap")]
+mod mailmap;
 /// Repository object retention and maintenance.
 #[cfg(feature = "index")]
 pub mod maintenance;
-#[cfg(feature = "mailmap")]
-mod mailmap;
 ///
 #[cfg(feature = "merge")]
 mod merge;
