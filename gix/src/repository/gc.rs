@@ -401,7 +401,12 @@ fn install_pack(
         gix_tempfile::AutoRemove::Tempfile,
     )
     .or_raise(|| message("Could not create temporary generated pack"))?;
-    repo.write_pack(object_ids.iter().copied(), &mut file, interrupt)?;
+    repo.write_pack(
+        object_ids.iter().copied(),
+        &mut file,
+        crate::progress::Discard,
+        interrupt,
+    )?;
     file.rewind().or_error()?;
     let outcome = gix_pack::Bundle::write_to_directory(
         &mut io::BufReader::new(file),
