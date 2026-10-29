@@ -22,6 +22,7 @@ impl Remote<'_> {
     /// its built-in worktree update is currently unsupported when no enabled hook is present.
     /// Incoming objects honor `receive.fsckObjects` and `receive.fsck` severity and skip-list policy.
     /// Namespaces and `receive.hideRefs` rules are applied to advertisements, transactions, and hooks.
+    /// Reference-transaction hooks can reject during `preparing` before locks or `prepared` after locking.
     /// Advanced receive policies that cannot be enforced are rejected before modifying references.
     pub fn push(
         &self,

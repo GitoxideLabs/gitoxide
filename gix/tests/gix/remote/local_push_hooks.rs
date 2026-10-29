@@ -162,8 +162,6 @@ case $event in
         test \"$event\" != post-receive
         ;;
     reference-transaction)
-        # Compare the phases supported by both implementations.
-        case $1 in prepared|committed|aborted) ;; *) exit 0 ;; esac
         while read old new name; do
             printf '%s %s %s\\n' \"$label\" \"$1\" \"$name\" >>\"$event-log\"
         done
@@ -371,7 +369,10 @@ test \"$1\" != prepared
     assert!(remote.try_find_reference("refs/heads/two")?.is_none());
     assert_eq!(
         std::fs::read_to_string(destination.path().join("transaction-log"))?,
-        "prepared
+        "preparing
+refs/heads/one
+refs/heads/two
+prepared
 refs/heads/one
 refs/heads/two
 aborted
@@ -379,6 +380,82 @@ refs/heads/one
 refs/heads/two
 "
     );
+    Ok(())
+}
+
+#[test]
+fn reference_transaction_preparing_hook_rejects_before_locks_like_git() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let repo = crate::remote::repo("base");
+    let tip_id = repo.head_id()?.detach();
+    for native in [false, true] {
+        if !native && *gix_testtools::GIT_VERSION < (2, 55, 0) {
+            continue;
+        }
+        let destination = gix_testtools::tempfile::tempdir()?;
+        gix_testtools::git(destination.path(), "init --bare")?;
+        configured_hook(
+            destination.path(),
+            "reference-transaction",
+            "before-locks",
+            "#!/bin/sh
+set -eu
+printf '%s\\n' \"$1\" >>transaction-log
+while read old new name; do printf '%s\\n' \"$name\" >>transaction-log; done
+if test \"$1\" = preparing; then
+    test ! -e refs/heads/one.lock
+    test ! -e refs/heads/two.lock
+    printf 'unlocked\\n' >>transaction-log
+    exit 1
+fi
+",
+        )?;
+        if native {
+            let outcome = push(
+                &repo,
+                destination.path(),
+                &["refs/heads/one", "refs/heads/two"],
+                Options {
+                    atomic: true,
+                    ..Options::default()
+                },
+                |_| Ok(()),
+            )?;
+            assert!(
+                outcome
+                    .updates
+                    .iter()
+                    .all(|update| matches!(update.status, Status::Rejected(Rejection::Server(_)))),
+                "the preparing hook rejects the whole transaction"
+            );
+        } else {
+            let output = gix_testtools::git_command(repo.git_dir())
+                .args(["push", "--atomic"])
+                .arg(destination.path())
+                .args([format!("{tip_id}:refs/heads/one"), format!("{tip_id}:refs/heads/two")])
+                .output()?;
+            assert!(!output.status.success(), "Git rejects before taking reference locks");
+        }
+        let remote = gix::open_opts(destination.path(), gix::open::Options::isolated())?;
+        for name in ["one", "two"] {
+            assert!(remote.try_find_reference(&format!("refs/heads/{name}"))?.is_none());
+            assert!(!destination.path().join(format!("refs/heads/{name}.lock")).exists());
+        }
+        assert_eq!(
+            std::fs::read_to_string(destination.path().join("transaction-log"))?,
+            "preparing
+refs/heads/one
+refs/heads/two
+unlocked
+aborted
+refs/heads/one
+refs/heads/two
+",
+            "preparing and aborted receive the original queued updates, matching Git"
+        );
+    }
     Ok(())
 }
 
