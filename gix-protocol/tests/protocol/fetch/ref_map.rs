@@ -168,3 +168,83 @@ mod is_missing_required_mapping {
         assert!(!map.is_missing_required_mapping());
     }
 }
+
+mod remote_head_candidates {
+    use gix_protocol::{fetch::RefMap, handshake::Ref};
+
+    fn direct(name: &str, object: gix_hash::ObjectId) -> Ref {
+        Ref::Direct {
+            full_ref_name: name.into(),
+            object,
+        }
+    }
+
+    #[test]
+    fn advertised_head_candidates_distinguish_symbolic_detached_and_unborn_heads() {
+        let commit_id = gix_hash::ObjectId::from_hex(b"1111111111111111111111111111111111111111").expect("valid id");
+        let other_id = gix_hash::ObjectId::from_hex(b"2222222222222222222222222222222222222222").expect("valid id");
+        let branches = [direct("refs/heads/\"", commit_id), direct("refs/heads/other", other_id)];
+        let cases = [
+            (None, Vec::new()),
+            (Some(direct("HEAD", commit_id)), vec!["refs/heads/\""]),
+            (
+                Some(Ref::Symbolic {
+                    full_ref_name: "HEAD".into(),
+                    target: "refs/heads/other".into(),
+                    tag: None,
+                    object: other_id,
+                }),
+                vec!["refs/heads/other"],
+            ),
+            (
+                Some(Ref::Symbolic {
+                    full_ref_name: "HEAD".into(),
+                    target: "refs/heads/hidden".into(),
+                    tag: None,
+                    object: commit_id,
+                }),
+                Vec::new(),
+            ),
+            (
+                Some(Ref::Unborn {
+                    full_ref_name: "HEAD".into(),
+                    target: "refs/heads/missing".into(),
+                }),
+                Vec::new(),
+            ),
+        ];
+        for (head, expected) in cases {
+            let map = RefMap {
+                remote_refs: head
+                    .into_iter()
+                    .chain(branches.clone())
+                    .chain([direct("refs/tags/tag", commit_id)])
+                    .collect(),
+                ..Default::default()
+            };
+            let actual: Vec<_> = map
+                .remote_head_candidates()
+                .map(|reference| reference.unpack().0)
+                .collect();
+            let expected: Vec<&bstr::BStr> = expected.iter().map(|name| (*name).into()).collect();
+            assert_eq!(
+                actual, expected,
+                "only advertised branches can identify the remote HEAD"
+            );
+        }
+
+        let map = RefMap {
+            remote_refs: vec![
+                direct("HEAD", commit_id),
+                direct("refs/heads/one", commit_id),
+                direct("refs/heads/two", commit_id),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            map.remote_head_candidates().count(),
+            2,
+            "ambiguous detached HEADs retain all candidates"
+        );
+    }
+}

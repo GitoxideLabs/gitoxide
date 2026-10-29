@@ -141,6 +141,31 @@ mod with_fetch {
     }
 
     impl RefMap {
+        /// Return the advertised branches that can identify the remote's born `HEAD`.
+        ///
+        /// A symbolic `HEAD` selects its advertised branch target. A detached `HEAD`
+        /// selects every branch with the same direct object ID, preserving ambiguity
+        /// as `git remote show` does. Unborn, missing, or hidden targets yield no candidates.
+        /// Tags and other namespaces are never candidates.
+        ///
+        /// Request both `HEAD` and `refs/heads/*` when creating this map, so protocol v2
+        /// servers advertise the branches needed for inference. Results retain advertisement order.
+        pub fn remote_head_candidates(&self) -> impl Iterator<Item = &crate::handshake::Ref> {
+            use crate::handshake::Ref;
+            let head = self.remote_refs.iter().find(|reference| reference.unpack().0 == "HEAD");
+            self.remote_refs.iter().filter(move |reference| {
+                let (name, object_id, _) = reference.unpack();
+                if !name.starts_with(b"refs/heads/") || object_id.is_none() {
+                    return false;
+                }
+                match head {
+                    Some(Ref::Symbolic { target, .. }) => name == target,
+                    Some(Ref::Direct { .. } | Ref::Peeled { .. }) => object_id == head.and_then(|head| head.unpack().1),
+                    Some(Ref::Unborn { .. }) | None => false,
+                }
+            })
+        }
+
         /// Return `true` if the explicit fetch refspecs represented by this mapping failed to match the remote in a way
         /// that should typically be reported as "no mapping".
         ///

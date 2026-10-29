@@ -295,3 +295,42 @@ fn relative_remote_paths_match_explicit_git_dir_from_another_working_directory()
     assert_eq!(actual_id, expected_id);
     Ok(())
 }
+
+#[test]
+fn remote_head_candidates_match_git_remote_show() -> TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_remote_head_candidates.sh")?.canonicalize()?;
+    let local = repo(fixture.join("local"))?;
+    for case in ["symbolic", "ambiguous", "unique", "unborn"] {
+        let mut remote = local
+            .remote_at(gix::path::into_bstr(fixture.join(case))?)?
+            .with_fetch_tags(gix::remote::fetch::Tags::None);
+        remote.replace_refspecs(["HEAD", "+refs/heads/*:refs/remotes/origin/*"], Direction::Fetch)?;
+        let (map, _) = remote.ref_map(gix::progress::Discard, Default::default())?;
+        let mut actual: Vec<_> = map
+            .remote_head_candidates()
+            .map(|reference| reference.unpack().0.to_string())
+            .collect();
+        let output = std::fs::read_to_string(fixture.join(format!("{case}-remote-show")))?;
+        let mut expected = Vec::new();
+        let mut ambiguous = false;
+        for line in output.lines() {
+            if let Some(name) = line.strip_prefix("  HEAD branch: ") {
+                if name != "(unknown)" {
+                    expected.push(format!("refs/heads/{name}"));
+                }
+            } else if line.starts_with("  HEAD branch (remote HEAD is ambiguous,") {
+                ambiguous = true;
+            } else if ambiguous {
+                if let Some(name) = line.strip_prefix("    ") {
+                    expected.push(format!("refs/heads/{name}"));
+                } else {
+                    ambiguous = false;
+                }
+            }
+        }
+        actual.sort();
+        expected.sort();
+        assert_eq!(actual, expected, "HEAD candidates match Git for {case}");
+    }
+    Ok(())
+}
