@@ -43,6 +43,10 @@ impl Repository {
         mode: gix_diff::blob::pipeline::Mode,
         worktree_roots: gix_diff::blob::pipeline::WorktreeRoots,
     ) -> Result<gix_diff::blob::Platform> {
+        let worktree_roots = gix_diff::blob::pipeline::WorktreeRoots {
+            old_root: worktree_roots.old_root.map(|root| self.current_dir().join(root)),
+            new_root: worktree_roots.new_root.map(|root| self.current_dir().join(root)),
+        };
         let index = self.index_or_load_from_head_or_empty()?;
         crate::diff::resource_cache(
             self,

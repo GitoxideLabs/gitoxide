@@ -78,3 +78,53 @@ fn read_id(path: &Path) -> Result<gix_hash::ObjectId> {
 
     Ok(gix_hash::ObjectId::from_hex(hex.trim().as_bytes())?)
 }
+
+#[test]
+fn textconv_uses_the_filter_repository_context_for_objects_and_worktree_files() -> gix_testtools::TestResult {
+    let workdir = crate::scripted_fixture_read_only("make_blob_textconv_repo.sh")?.canonicalize()?;
+    let new_file_id = read_id(&workdir.join("new-file.id"))?;
+    let attributes = crate::blob::new_attributes_stack(&workdir);
+    let pipeline = gix_diff::blob::Pipeline::new(
+        WorktreeRoots {
+            old_root: None,
+            new_root: Some(workdir.clone()),
+        },
+        gix_filter::Pipeline::new(
+            gix_diff::command::Context {
+                git_dir: Some(workdir.join(".git")),
+                worktree_dir: Some(workdir.clone()),
+                ..Default::default()
+            },
+            gix_testtools::object_hash(),
+            Default::default(),
+        ),
+        vec![gix_diff::blob::Driver {
+            name: "bin".into(),
+            binary_to_text_command: Some(
+                "test \"$PWD\" = \"$GIT_WORK_TREE\" && test -d \"$GIT_DIR\" && tr '\\000' '\\n' <".into(),
+            ),
+            ..Default::default()
+        }],
+        default_options(),
+    );
+    let odb = gix_odb::at(workdir.join(".git/objects"), gix_testtools::object_hash())?;
+    let mut cache = gix_diff::blob::Platform::new(
+        Default::default(),
+        pipeline,
+        gix_diff::blob::pipeline::Mode::ToGitUnlessBinaryToTextIsPresent,
+        attributes,
+    );
+    for kind in [ResourceKind::OldOrSource, ResourceKind::NewOrDestination] {
+        cache.set_resource(
+            new_file_id,
+            gix_object::tree::EntryKind::Blob,
+            "sample.bin".into(),
+            kind,
+            &odb,
+        )?;
+    }
+    let (old, new) = cache.resources().expect("both resources were set");
+    assert_eq!(old.data.as_slice(), Some(b"3\n4\n".as_slice()));
+    assert_eq!(new.data.as_slice(), Some(b"1\n2\n3\n4\n5\n6\n".as_slice()));
+    Ok(())
+}
