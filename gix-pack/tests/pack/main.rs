@@ -86,5 +86,5 @@ mod data;
 mod index;
 mod iter;
 mod malformed;
-mod multi_index;
 mod mtimes;
+mod multi_index;
