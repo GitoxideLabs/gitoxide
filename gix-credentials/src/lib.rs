@@ -20,6 +20,10 @@ pub struct Program {
     /// How long the native `store` helper waits for its file lock. Defaults to one second.
     /// Corresponds to Git's `credentialStore.lockTimeoutMS`.
     pub store_lock_timeout: gix_lock::acquire::Fail,
+    /// The executable and arguments used to start a native cache daemon when needed.
+    /// Without a launcher, existing daemons can be queried, but an absent daemon cannot store credentials.
+    #[cfg(unix)]
+    pub cache_daemon: Option<program::cache::DaemonCommand>,
     /// `Some(…)` if the process is running.
     child: Option<std::process::Child>,
 }

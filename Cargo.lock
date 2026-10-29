@@ -1803,6 +1803,7 @@ dependencies = [
  "gix-url",
  "insta",
  "percent-encoding",
+ "rustix",
  "serde",
 ]
 

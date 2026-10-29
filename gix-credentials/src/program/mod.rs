@@ -5,7 +5,12 @@ use gix_error::{Result, ResultExt};
 
 use crate::{Program, helper};
 
+mod builtin;
 pub(crate) mod store;
+
+/// Git-compatible in-memory credential caching over Unix sockets.
+#[cfg(unix)]
+pub mod cache;
 
 /// Prefix a helper name while preserving the shell syntax of its optional arguments.
 fn external_name_command(name_and_args: &bstr::BStr, action: &helper::Action) -> Result<gix_command::Prepare> {
@@ -54,8 +59,9 @@ pub enum Kind {
         /// The name like `foo` along with optional args, like `foo --arg --bar="a b"`, with arguments using `sh` shell quoting rules.
         /// The program executed will be `git-credential-foo [args]` if `name_and_args` starts with `foo [args]`.
         /// Named helpers use Git's exec-path followed by `PATH`, without a Git dispatcher.
-        /// [`helper::invoke()`] runs static `store` definitions natively. [`Program::to_command()`]
-        /// always returns a subprocess command, including for `store`. Other builtins still use Git.
+        /// [`helper::invoke()`] runs static `store` definitions natively, and `cache` on Unix.
+        /// Native cache startup needs an explicitly configured `Program::cache_daemon` on Unix.
+        /// [`Program::to_command()`] always returns a subprocess command, including for native helpers.
         name_and_args: BString,
     },
     /// A custom credentials helper, as identified just by the absolute path to the program and optional arguments. The program is executed through a shell.
@@ -77,6 +83,8 @@ impl Program {
             child: None,
             stderr: true,
             store_lock_timeout: std::time::Duration::from_secs(1).into(),
+            #[cfg(unix)]
+            cache_daemon: None,
         }
     }
 
@@ -107,6 +115,8 @@ impl Program {
                 child: None,
                 stderr: true,
                 store_lock_timeout: std::time::Duration::from_secs(1).into(),
+                #[cfg(unix)]
+                cache_daemon: None,
             })
         }
         from_custom_definition_inner(input.into())
