@@ -59,6 +59,9 @@ pub(crate) fn push(
             }
         }
     }
+    if let Some(hook) = options.pre_push_hook {
+        hook(&updates)?;
+    }
     let requested: Vec<_> = updates
         .iter()
         .enumerate()
