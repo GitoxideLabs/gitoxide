@@ -229,3 +229,49 @@ fn skips_bom() {
         Events::from_bytes(bytes_with_gb18030_bom.as_bytes(), None).map(|events| render_events(&events))
     );
 }
+
+#[test]
+fn partial_parsing_retains_complete_values_before_errors() -> gix_testtools::TestResult {
+    fn render_events(events: &Events) -> Vec<u8> {
+        let mut out = Vec::new();
+        for event in events.iter() {
+            event.write_to(&mut out).expect("writing to memory succeeds");
+        }
+        out
+    }
+    let prefix = r#"[submodule "ok"]
+url = -unsafe
+"#;
+    for suffix in [
+        "[broken",
+        "path = \"unfinished",
+        r"path = first\
+  second\q",
+    ] {
+        let input = format!("{prefix}{suffix}");
+        let expected = prefix;
+        let (events, error) = Events::from_bytes_partial(input.as_bytes(), None);
+        assert!(error.is_some(), "invalid input retains its parse error: {input:?}");
+        assert_eq!(
+            render_events(&events),
+            expected.as_bytes(),
+            "unfinished entries are discarded"
+        );
+        let config = gix_config::File::from_parse_events_no_includes(events, gix_config::file::Metadata::api());
+        assert_eq!(config.raw_value("submodule.ok.url")?, b"-unsafe".as_slice());
+        assert!(config.raw_value("submodule.ok.path").is_err());
+    }
+    let (events, error) = Events::from_bytes_partial(b"[broken", None);
+    assert!(error.is_some());
+    assert!(
+        events.iter().next().is_none(),
+        "an invalid initial header emits no events"
+    );
+    let input = b"[core]
+key = value
+";
+    let (events, error) = Events::from_bytes_partial(input, None);
+    assert!(error.is_none(), "valid partial parsing reports success");
+    assert_eq!(render_events(&events), input);
+    Ok(())
+}
