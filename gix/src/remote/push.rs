@@ -11,7 +11,8 @@ impl Remote<'_> {
     ///
     /// URL rewriting and protocol permissions are the same as [`Self::connect()`]. Network URLs
     /// use [`crate::remote::Connection::push()`] with configured credentials. Local paths do not
-    /// launch Git and protect advertised values with reference transactions.
+    /// launch Git and protect advertised values with reference transactions, unless a receive-pack
+    /// command is explicitly configured, in which case that command handles the receive operation.
     ///
     /// Like the connection API, this does not expand push refspecs, run local pre-push hooks, or
     /// update local tracking refs. Use [`Self::urls()`] to handle additional configured push URLs.
@@ -33,7 +34,7 @@ impl Remote<'_> {
         should_interrupt: &AtomicBool,
     ) -> Result<Outcome> {
         let (url, _) = self.sanitized_url_and_version(Direction::Push)?;
-        if url.scheme != gix_url::Scheme::File {
+        if url.scheme != gix_url::Scheme::File || self.service_command(Direction::Push)?.is_some() {
             return self
                 .connect(Direction::Push)?
                 .push(updates, options, progress, remote_progress, should_interrupt);

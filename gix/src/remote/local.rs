@@ -12,7 +12,8 @@ impl Remote<'_> {
     /// `uploadpack.hideRefs` and `transfer.hideRefs`, advertise peeled tags and symbolic refs,
     /// and report unborn `HEAD`. Per-operation `GIT_NAMESPACE` selects the remote namespace;
     /// `^`-prefixed hideRefs rules match physical names before stripping that namespace.
-    /// URL rewrites and protocol permissions match [`Self::connect()`].
+    /// URL rewrites and protocol permissions match [`Self::connect()`]. A configured upload-pack
+    /// command uses the process transport instead of native repository access.
     pub fn ref_map(
         &self,
         progress: impl Progress,
@@ -27,7 +28,7 @@ impl Remote<'_> {
 
 pub(super) fn open(remote: &Remote<'_>) -> Result<Option<Repository>> {
     let (url, _) = remote.sanitized_url_and_version(Direction::Fetch)?;
-    if url.scheme != gix_url::Scheme::File {
+    if url.scheme != gix_url::Scheme::File || remote.service_command(Direction::Fetch)?.is_some() {
         return Ok(None);
     }
     let mut options = remote.repo.options.clone().without_repository_environment_overrides();
