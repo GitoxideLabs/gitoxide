@@ -3,12 +3,39 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
+use gix_object::Exists;
+
 use super::{Lease, Rejection, Status, Update, UpdateOutcome};
 use crate::{
     ObjectId, Repository, Result,
     bstr::ByteSlice,
     error::{bail, message},
 };
+
+pub(crate) fn advertised_objects(
+    source: &Repository,
+    refs: &[gix_protocol::handshake::Ref],
+    shallow: &[ObjectId],
+    interrupt: &AtomicBool,
+) -> Result<gix_hashtable::HashSet<ObjectId>> {
+    // Senders exclude advertised histories they can resolve locally. Merely
+    // existing in the receiver's store does not exclude an object from the
+    // incoming pack: dangling and hidden objects can be retransmitted.
+    let tips = refs
+        .iter()
+        .filter_map(|reference| reference.unpack().1)
+        .filter(|object_id| source.objects.exists(object_id))
+        .map(ToOwned::to_owned);
+    let mut advertised = gix_hashtable::HashSet::default();
+    for entry in gix_traverse::object::BreadthFirst::new(tips, source)
+        .with_object_validation(false)
+        .with_shallow_commits(shallow.iter().copied())
+    {
+        check_interrupt(interrupt)?;
+        advertised.insert(entry?.id);
+    }
+    Ok(advertised)
+}
 
 pub(crate) fn updates(
     repo: &Repository,
@@ -105,7 +132,9 @@ fn peel_commit(repo: &Repository, mut object_id: ObjectId) -> Result<Option<Obje
         let object = repo.find_object(object_id)?;
         match object.kind {
             gix_object::Kind::Commit => return Ok(Some(object_id)),
-            gix_object::Kind::Tag => object_id = object.try_to_tag_ref()?.target(),
+            gix_object::Kind::Tag => {
+                object_id = gix_object::TagRefIter::from_bytes(&object.data, repo.object_hash()).target_id()?;
+            }
             _ => return Ok(None),
         }
     }
@@ -129,7 +158,15 @@ pub(crate) fn is_ancestor(
             continue;
         }
         let object = repo.find_object(commit_id)?;
-        pending.extend(object.try_to_commit_ref()?.parents());
+        if object.kind != gix_object::Kind::Commit {
+            bail!(message("A commit parent has the wrong object kind").corrupted());
+        }
+        for edge in gix_object::Data::new(&object.data, object.kind, repo.object_hash()).references() {
+            let edge = edge?;
+            if edge.kind == gix_object::Kind::Commit {
+                pending.push_back(edge.id);
+            }
+        }
     }
     Ok(false)
 }

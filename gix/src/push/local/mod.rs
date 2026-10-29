@@ -9,6 +9,7 @@ use crate::{
     push::{self, Options, Outcome, Rejection, Status, Update},
 };
 
+mod fsck;
 mod hooks;
 mod policy;
 mod quarantine;
@@ -61,6 +62,10 @@ pub(crate) fn push(
         .enumerate()
         .filter_map(|(index, update)| matches!(update.status, Status::WouldUpdate { .. }).then_some(index))
         .collect();
+    // Configuration is parsed during negotiation, but skip lists and fatal-message
+    // overrides are consumed only when receiving object data, as in receive-pack.
+    let receive_objects = !options.dry_run && requested.iter().any(|&index| updates[index].update.new_id.is_some());
+    let mut fsck = fsck::Fsck::new(destination, receive_objects, &mut remote_progress)?;
     // Reuse wire-level validation for atomic/push-option capabilities and packet-safe options.
     gix_protocol::push::Request::new(
         requested
@@ -91,6 +96,16 @@ pub(crate) fn push(
         });
     }
     policy.ensure_supported(destination)?;
+    let advertised = if receive_objects {
+        push::plan::advertised_objects(
+            &source,
+            handshake.refs.as_deref().unwrap_or_default(),
+            &shallow,
+            should_interrupt,
+        )?
+    } else {
+        Default::default()
+    };
     // Installing a fallback identity refreshes configuration, including its reference namespace.
     // Preserve the receiver namespace selected for this operation.
     let namespace = destination.refs.namespace.clone();
@@ -99,17 +114,65 @@ pub(crate) fn push(
     let quarantine = quarantine::Quarantine::new(destination)?;
     let tips = requested.iter().filter_map(|&index| updates[index].update.new_id);
     let mut buffer = Vec::new();
-    for entry in gix_traverse::object::BreadthFirst::new(tips, &source).with_shallow_commits(shallow.iter().copied()) {
+    let mut existing_buffer = Vec::new();
+    for entry in gix_traverse::object::BreadthFirst::new(tips, &source)
+        .with_object_validation(false)
+        .with_shallow_commits(shallow.iter().copied())
+    {
         push::plan::check_interrupt(should_interrupt)?;
         let entry = entry?;
-        if !destination.objects.exists(&entry.id) {
+        if !advertised.contains(&entry.id) {
             let object = source.find(&entry.id, &mut buffer)?;
             object.verify_checksum(&entry.id)?;
-            quarantine
-                .objects
-                .write_buf_with_known_id(object.kind, object.data, entry.id)?;
+            let missing = !destination.objects.exists(&entry.id);
+            if !missing {
+                let existing = destination
+                    .find(&entry.id, &mut existing_buffer)
+                    .or_raise(|| message!("Could not read receiver's existing object {}", entry.id))?;
+                if existing.kind != object.kind || existing.data != object.data {
+                    bail!(message!("Source and receiver disagree on object {}", entry.id).corrupted());
+                }
+            }
+            if let Some(fsck) = fsck.as_mut() {
+                fsck.validate(entry.id, object, &mut remote_progress)?;
+            }
+            if missing {
+                quarantine
+                    .objects
+                    .write_buf_with_known_id(object.kind, object.data, entry.id)?;
+            }
         }
         progress.inc();
+    }
+    if let Some(fsck) = fsck.as_mut()
+        && !fsck.finish(
+            &quarantine::Incoming {
+                destination,
+                incoming: &quarantine.objects,
+            },
+            should_interrupt,
+            &mut remote_progress,
+        )?
+    {
+        for &index in &requested {
+            updates[index].status = Status::Rejected(Rejection::Server("unpacker error".into()));
+        }
+        let response = gix_protocol::push::Response {
+            unpack_error: Some("fsck error".into()),
+            refs: requested
+                .iter()
+                .map(|&index| gix_protocol::push::RefStatus {
+                    name: updates[index].update.destination.clone(),
+                    error: Some("unpacker error".into()),
+                    report: Default::default(),
+                })
+                .collect(),
+        };
+        return Ok(Outcome {
+            handshake,
+            updates,
+            response: Some(response),
+        });
     }
     let shallow = shallow::Shallow::prepare(
         destination,
