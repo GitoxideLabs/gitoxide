@@ -46,20 +46,20 @@ impl<'repo> Remote<'repo> {
         let (url, version) = self.sanitized_url_and_version(direction)?;
         #[cfg(feature = "blocking-network-client")]
         let scheme_is_ssh = url.scheme == gix_url::Scheme::Ssh;
-        let transport = connect::connect(
-            url,
-            connect::Options {
-                version,
-                #[cfg(feature = "blocking-network-client")]
-                ssh: scheme_is_ssh
-                    .then(|| self.repo.ssh_connect_options())
-                    .transpose()
-                    .or_raise(|| message("Could not obtain options for connecting via ssh"))?
-                    .unwrap_or_default(),
-                trace: self.repo.config.trace_packet(),
-            },
-        )
-        .await?;
+        let options = connect::Options {
+            version,
+            #[cfg(feature = "blocking-network-client")]
+            ssh: scheme_is_ssh
+                .then(|| self.ssh_connect_options())
+                .transpose()
+                .or_raise(|| message("Could not obtain options for connecting via ssh"))?
+                .unwrap_or_default(),
+            trace: self.repo.config.trace_packet(),
+        };
+        #[cfg(feature = "blocking-network-client")]
+        let transport = connect::connect_with_environment(url, options, &self.command_environment)?;
+        #[cfg(feature = "async-network-client")]
+        let transport = connect::connect(url, options).await?;
         Ok(self.to_connection_with_transport(transport))
     }
 
@@ -124,5 +124,33 @@ impl<'repo> Remote<'repo> {
             );
         }
         Ok((sanitize(url)?, version))
+    }
+}
+
+#[cfg(feature = "blocking-network-client")]
+impl Remote<'_> {
+    fn ssh_connect_options(&self) -> Result<gix_transport::client::blocking_io::ssh::connect::Options> {
+        let mut options = self.repo.ssh_connect_options()?;
+        let value = |name: &str| {
+            self.command_environment
+                .iter()
+                .rev()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value)
+        };
+        if let Some(command) = value("GIT_SSH_COMMAND") {
+            options.command = Some(command.clone());
+            options.disallow_shell = false;
+        } else if (options.command.is_none() || options.disallow_shell)
+            && let Some(command) = value("GIT_SSH")
+        {
+            options.command = Some(command.clone());
+            options.disallow_shell = true;
+        }
+        if let Some(variant) = value("GIT_SSH_VARIANT") {
+            options.kind = crate::config::tree::Ssh::VARIANT
+                .try_into_variant(gix_path::into_bstr(std::path::Path::new(variant))?)?;
+        }
+        Ok(options)
     }
 }

@@ -243,6 +243,8 @@ pub struct Remote<'repo> {
     pub(crate) push_specs: Vec<gix_refspec::RefSpec>,
     /// Tell us what to do with tags when fetched.
     pub(crate) fetch_tags: remote::fetch::Tags,
+    /// Per-operation environment passed to transport, credential, and receive-hook children.
+    pub(crate) command_environment: Vec<(std::ffi::OsString, std::ffi::OsString)>,
     // /// Delete local tracking branches that don't exist on the remote anymore.
     // pub(crate) prune: bool,
     // /// Delete tags that don't exist on the remote anymore, equivalent to pruning the refspec `refs/tags/*:refs/tags/*`.
@@ -269,6 +271,8 @@ pub(crate) struct RemoteDetached {
     pub(crate) fetch_specs: Vec<gix_refspec::RefSpec>,
     /// Tell us what to do with tags when fetched.
     pub(crate) fetch_tags: remote::fetch::Tags,
+    /// Per-operation environment passed to transport, credential, and receive-hook children.
+    pub(crate) command_environment: Vec<(std::ffi::OsString, std::ffi::OsString)>,
 }
 
 /// A utility to make matching against pathspecs simple.

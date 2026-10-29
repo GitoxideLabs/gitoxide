@@ -266,6 +266,7 @@ impl From<Remote<'_>> for RemoteDetached {
             url_push_aliases: _,
             fetch_specs,
             fetch_tags,
+            command_environment,
             push_urls: _,
             push_url_aliases: _,
             push_specs: _,
@@ -278,6 +279,7 @@ impl From<Remote<'_>> for RemoteDetached {
             url_aliases,
             fetch_specs,
             fetch_tags,
+            command_environment,
         }
     }
 }

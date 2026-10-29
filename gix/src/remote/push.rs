@@ -38,7 +38,7 @@ impl Remote<'_> {
         open.cli_config_overrides.clear();
         let mut destination = crate::open_opts(gix_path::from_bstr(url.path)?.into_owned(), open)?;
         crate::push::local::push(
-            self.repo,
+            self,
             &mut destination,
             updates,
             options,

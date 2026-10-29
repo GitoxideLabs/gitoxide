@@ -145,3 +145,6 @@ mod name {
         assert!(gix::remote::name::validated("").is_err());
     }
 }
+
+#[cfg(feature = "blocking-network-client")]
+mod environment;
