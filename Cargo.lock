@@ -1713,6 +1713,8 @@ dependencies = [
  "gix-testtools",
  "gix-trace",
  "insta",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

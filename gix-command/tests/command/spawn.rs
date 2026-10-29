@@ -2,6 +2,41 @@ use crate::TestResult;
 use bstr::ByteSlice;
 
 #[test]
+fn tracing_omits_command_arguments_and_environment() -> TestResult {
+    let directory = gix_testtools::tempfile::tempdir()?;
+    let log_path = directory.path().join("trace");
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::DEBUG)
+        .with_writer(std::fs::File::create(&log_path)?)
+        .finish();
+    tracing::subscriber::with_default(subscriber, || -> TestResult {
+        let output = gix_command::prepare(r#"printf '%s:%s' "$GIX_TEST_SECRET""#)
+            .with_shell()
+            .arg("argument-secret")
+            .env("GIX_TEST_SECRET", "environment-secret")
+            .spawn()?
+            .wait_with_output()?;
+        assert!(output.status.success(), "the child still receives its original inputs");
+        assert_eq!(output.stdout, b"environment-secret:argument-secret");
+        Ok(())
+    })?;
+    let trace = std::fs::read_to_string(log_path)?;
+    assert!(
+        trace.contains("program="),
+        "tracing retains the executed program identity: {trace}"
+    );
+    for sensitive in ["environment-secret", "argument-secret", "GIX_TEST_SECRET", "printf"] {
+        assert!(
+            !trace.contains(sensitive),
+            "tracing must not disclose command inputs: {trace}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn environment_variables_are_passed_one_by_one() -> TestResult {
     let out = gix_command::prepare("echo $FIRST $SECOND")
         .env("FIRST", "first")

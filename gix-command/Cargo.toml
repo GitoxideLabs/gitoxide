@@ -25,3 +25,6 @@ bstr = { version = "1.12.0", default-features = false, features = ["std", "unico
 [dev-dependencies]
 insta = "1.46.3"
 gix-testtools = { path = "../tests/tools", features = ["sha1"] }
+gix-trace = { path = "../gix-trace", features = ["tracing"] }
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3.22", default-features = false, features = ["fmt"] }

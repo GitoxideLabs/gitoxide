@@ -349,7 +349,7 @@ impl client::blocking_io::Transport for SpawnProcessOnDemand {
         };
 
         let mut cmd = into_std_command(cmd, &cmd_name)?;
-        gix_trace::debug!(command = ?cmd, "gix_transport::SpawnProcessOnDemand");
+        gix_trace::debug!(program = ?cmd.get_program(), "gix_transport::SpawnProcessOnDemand");
         let mut child = match cmd.spawn() {
             Ok(child) => child,
             Err(err)
@@ -361,7 +361,7 @@ impl client::blocking_io::Transport for SpawnProcessOnDemand {
                 // the service can still be run through it (#2313).
                 let (cmd, cmd_name) = self.prepare_fallback_command(service, &command_environment);
                 let mut cmd = into_std_command(cmd, &cmd_name)?;
-                gix_trace::debug!(command = ?cmd, "gix_transport::SpawnProcessOnDemand (fallback)");
+                gix_trace::debug!(program = ?cmd.get_program(), "gix_transport::SpawnProcessOnDemand (fallback)");
                 cmd.spawn().map_err(|err| client::Error::InvokeProgram {
                     source: err,
                     command: cmd_name,
