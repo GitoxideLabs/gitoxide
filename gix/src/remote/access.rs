@@ -172,6 +172,24 @@ impl<'repo> Remote<'repo> {
 /// Access
 #[cfg(any(feature = "blocking-network-client", feature = "async-network-client"))]
 impl RemoteDetached {
+    /// Attach the fetch configuration to `repo`, preserving transient clone settings.
+    #[cfg(feature = "blocking-network-client")]
+    pub(crate) fn attach_for_fetch(self, repo: &crate::Repository) -> Remote<'_> {
+        Remote {
+            name: self.name,
+            url_push_aliases: vec![None; self.urls.len()],
+            urls: self.urls,
+            url_aliases: self.url_aliases,
+            push_urls: Vec::new(),
+            push_url_aliases: Vec::new(),
+            push_specs: Vec::new(),
+            fetch_specs: self.fetch_specs,
+            fetch_tags: self.fetch_tags,
+            command_environment: self.command_environment,
+            repo,
+        }
+    }
+
     /// Return the name of this remote or `None` if it wasn't persisted to disk yet.
     pub(crate) fn name(&self) -> Option<&remote::Name<'static>> {
         self.name.as_ref()

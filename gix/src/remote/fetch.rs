@@ -7,6 +7,11 @@ pub mod negotiate {
 #[cfg(any(feature = "blocking-network-client", feature = "async-network-client"))]
 pub use super::connection::fetch::{Outcome, Prepare, ProgressId, RefLogMessage, Status, outcome, prune, refs};
 
+#[cfg(any(feature = "blocking-network-client", feature = "async-network-client-async-std"))]
+pub(crate) use super::connection::fetch::PrepareDetached;
+#[cfg(feature = "blocking-network-client")]
+pub(crate) use super::connection::fetch::PrepareLocal;
+
 /// If `Yes`, don't really make changes but do as much as possible to get an idea of what would be done.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[cfg(any(feature = "blocking-network-client", feature = "async-network-client"))]
