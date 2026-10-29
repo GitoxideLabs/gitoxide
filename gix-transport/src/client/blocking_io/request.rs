@@ -7,6 +7,12 @@ use crate::{
     packetline::blocking_io::{Writer, encode},
 };
 
+/// Close an in-progress request after a producer or consumer fails.
+///
+/// The callback must interrupt pending I/O in either direction. Dropping it
+/// without calling it leaves the connection intact.
+pub type Abort<'a> = Box<dyn FnOnce() -> io::Result<()> + Send + 'a>;
+
 /// A [`Write`][io::Write] implementation optimized for writing packet lines.
 /// A type implementing `Write` for packet lines, which when done can be transformed into a `Read` for
 /// obtaining the response.
@@ -15,6 +21,7 @@ pub struct RequestWriter<'a> {
     writer: Writer<WriterKind<'a>>,
     reader: Box<dyn ExtendedBufRead<'a> + Unpin + 'a>,
     trace: bool,
+    abort: Option<Abort<'a>>,
 }
 
 enum WriterKind<'a> {
@@ -110,7 +117,20 @@ impl<'a> RequestWriter<'a> {
             writer,
             reader,
             trace,
+            abort: None,
         }
+    }
+
+    /// Install a callback that closes the connection if a concurrent upload or
+    /// response fails. Callers obtain it with [`Self::take_abort()`].
+    pub fn with_abort(mut self, abort: impl FnOnce() -> io::Result<()> + Send + 'a) -> Self {
+        self.abort = Some(Box::new(abort));
+        self
+    }
+
+    /// Remove the abort callback, without invoking it.
+    pub fn take_abort(&mut self) -> Option<Abort<'a>> {
+        self.abort.take()
     }
 
     /// Write the given message as packet line.

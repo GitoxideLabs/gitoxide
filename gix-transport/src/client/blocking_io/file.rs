@@ -49,7 +49,8 @@ pub struct SpawnProcessOnDemand {
     /// The environment variables to set in the invoked command.
     envs: Vec<(&'static str, String)>,
     ssh_disallow_shell: bool,
-    connection: Option<Connection<Box<dyn std::io::Read + Send>, process::ChildStdin>>,
+    connection: Option<Connection<Box<dyn std::io::Read + Send>, Box<dyn std::io::Write + Send>>>,
+    service: Option<Service>,
     child: Option<process::Child>,
     trace: bool,
 }
@@ -72,6 +73,7 @@ impl SpawnProcessOnDemand {
             ssh_disallow_shell,
             child: None,
             connection: None,
+            service: None,
             desired_version: version,
             trace,
         }
@@ -91,6 +93,7 @@ impl SpawnProcessOnDemand {
             ssh_disallow_shell: false,
             child: None,
             connection: None,
+            service: None,
             desired_version: version,
             trace,
         }
@@ -318,12 +321,13 @@ impl client::blocking_io::Transport for SpawnProcessOnDemand {
         };
         self.connection = Some(Connection::new_for_spawned_process(
             stdout,
-            child.stdin.take().expect("stdin configured"),
+            Box::new(child.stdin.take().expect("stdin configured")),
             self.desired_version,
             self.path.clone(),
             self.trace,
         ));
         self.child = Some(child);
+        self.service = Some(service);
         self.connection
             .as_mut()
             .expect("connection to be there right after setting it")
@@ -336,10 +340,22 @@ impl client::blocking_io::Transport for SpawnProcessOnDemand {
         on_into_read: MessageKind,
         trace: bool,
     ) -> std::result::Result<RequestWriter<'_>, client::Error> {
-        self.connection
-            .as_mut()
-            .ok_or(client::Error::MissingHandshake)?
-            .request(write_mode, on_into_read, trace)
+        let child = self.child.as_mut().ok_or(client::Error::MissingHandshake)?;
+        let connection = self.connection.as_mut().ok_or(client::Error::MissingHandshake)?;
+        let request = if self.service == Some(Service::ReceivePack) {
+            // Receive-pack is one exchange: closing stdin also releases surviving helper processes.
+            let writer = std::mem::replace(&mut connection.writer, Box::new(std::io::sink()));
+            RequestWriter::new_from_bufread_with_send(
+                writer,
+                Box::new(connection.line_provider.as_read_without_sidebands()),
+                write_mode,
+                on_into_read,
+                trace,
+            )
+        } else {
+            connection.request(write_mode, on_into_read, trace)?
+        };
+        Ok(request.with_abort(|| child.kill()))
     }
 }
 
