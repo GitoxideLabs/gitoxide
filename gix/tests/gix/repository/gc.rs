@@ -134,6 +134,84 @@ fn kept_packs_protect_their_loose_dependencies() -> TestResult {
 }
 
 #[test]
+fn retain_all_repacking_preserves_objects_and_cruft_ages() -> TestResult {
+    for storage in ["loose", "cruft"] {
+        let fixture = fixture()?;
+        let path = fixture.path().join(storage);
+        let repo = gix::open_opts(&path, crate::restricted())?;
+        let outcome = repo.repack_objects(&AtomicBool::default())?;
+        assert_eq!(outcome.objects, 7, "even unreachable expired objects are repacked");
+        assert_retention(&path, true, true)?;
+        assert_eq!(
+            gix::odb::loose::Store::at(path.join("objects"), repo.object_hash())
+                .iter()
+                .count(),
+            0
+        );
+        gix_testtools::git(&path, "fsck --strict --no-reflogs")?;
+        repo.collect_garbage(
+            Options {
+                expire: time(1_009_843_200),
+                dry_run: false,
+            },
+            &AtomicBool::default(),
+        )?;
+        assert_retention(&path, true, false)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn retain_all_repacking_preserves_promisor_boundaries_and_hydrated_objects() -> TestResult {
+    let fixture = fixture()?;
+    let path = fixture.path().join("loose");
+    let repo = gix::open_opts(&path, crate::restricted())?;
+    let live = ids(&path, "live-ids")?;
+    let recent = ids(&path, "recent-ids")?;
+    let input = path.join("promised-objects");
+    fs::write(&input, format!("{}\n{}\n", live[1], live[2]))?;
+    let output = gix_testtools::git_command(&path)
+        .args(["pack-objects", "objects/pack/pack"])
+        .stdin(fs::File::open(input)?)
+        .output()?;
+    assert!(output.status.success());
+    let pack_name = String::from_utf8(output.stdout)?;
+    let promisor = path
+        .join("objects/pack")
+        .join(format!("pack-{}.promisor", pack_name.trim()));
+    fs::write(&promisor, b"origin")?;
+    for object_id in &live {
+        let hex = object_id.to_string();
+        fs::remove_file(path.join("objects").join(&hex[..2]).join(&hex[2..]))?;
+    }
+    gix_testtools::git(&path, "config remote.origin.promisor true")?;
+    let outcome = repo.repack_objects(&AtomicBool::default())?;
+    assert_eq!(
+        outcome.objects, 6,
+        "missing promised objects need not be hydrated to repack"
+    );
+    let repo = gix::open_opts(&path, crate::restricted())?;
+    assert!(repo.try_find_object(live[0])?.is_none());
+    assert!(
+        repo.try_find_object(recent[0])?.is_some(),
+        "hydrated objects outside the available graph survive"
+    );
+    for entry in fs::read_dir(path.join("objects/pack"))? {
+        let path = entry?.path();
+        if path.extension().is_some_and(|ext| ext == "idx") {
+            let index = gix::odb::pack::index::File::at(&path, repo.object_hash())?;
+            if path.with_extension("promisor").exists() {
+                assert_eq!(index.num_objects(), 2, "local objects must not acquire promisor status");
+            } else {
+                assert_eq!(index.num_objects(), 4);
+            }
+        }
+    }
+    gix_testtools::git(&path, "fsck --strict --no-reflogs")?;
+    Ok(())
+}
+
+#[test]
 fn failures_and_interrupts_do_not_remove_objects() -> TestResult {
     for failure in [
         "interrupt",
@@ -186,6 +264,10 @@ fn failures_and_interrupts_do_not_remove_objects() -> TestResult {
             &AtomicBool::new(failure == "interrupt"),
         )
         .expect_err("invalid or concurrently maintained state fails before deletion");
+        if !matches!(failure, "partial-clone" | "promisor-remote") {
+            repo.repack_objects(&AtomicBool::new(failure == "interrupt"))
+                .expect_err("repacking has the same validation and collector exclusion");
+        }
         assert_eq!(
             fs::read_dir(&pack_directory)?.count(),
             before,
