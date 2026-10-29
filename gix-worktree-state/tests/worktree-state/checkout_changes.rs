@@ -218,6 +218,46 @@ fn invalid_actions_are_rejected_before_any_mutation() -> TestResult {
 }
 
 #[test]
+fn unsupported_modes_are_rejected_before_any_mutation() -> TestResult {
+    for mode in [
+        Mode::empty(),
+        Mode::FILE | Mode::SYMLINK,
+        Mode::from_bits_retain(u32::MAX),
+    ] {
+        let dir = gix_testtools::tempfile::tempdir()?;
+        fs::write(dir.path().join("canary"), b"untouched")?;
+        let (mut index, objects) = index(&[("invalid", "new", mode)])?;
+        let previous = index.entries().to_vec();
+        let err = apply_changes(
+            &mut index,
+            &[
+                Change::Remove { path: "canary".into() },
+                Change::Write { entry_index: 0 },
+            ],
+            dir.path(),
+            objects,
+            &progress::Discard,
+            &progress::Discard,
+            &AtomicBool::default(),
+            options(),
+        )
+        .expect_err("unsupported modes are rejected before executing any action");
+        assert!(err.is_validation(), "unsupported modes are validation errors: {err}");
+        assert_eq!(
+            fs::read(dir.path().join("canary"))?,
+            b"untouched",
+            "mode validation precedes removal"
+        );
+        assert!(
+            index.entries() == previous,
+            "mode validation leaves the index untouched"
+        );
+        assert!(!dir.path().join("invalid").exists(), "mode validation precedes writes");
+    }
+    Ok(())
+}
+
+#[test]
 fn refuses_conflict_stages_before_removing_files() -> TestResult {
     let dir = gix_testtools::tempfile::tempdir()?;
     fs::write(dir.path().join("canary"), b"untouched")?;
