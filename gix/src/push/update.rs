@@ -9,6 +9,15 @@ pub enum Lease {
     /// Require this value; `None` requires that the reference does not exist.
     /// A matching lease allows replacing the value, even without a fast-forward.
     MustMatch(Option<ObjectId>),
+    /// Derive the expected value from the first matching fetch refspec's local tracking reference.
+    /// A missing mapping or tracking reference requires that the destination does not exist.
+    Tracking {
+        /// Also require the advertised commit to be reachable from the destination-named local
+        /// reference's recent reflog, like `git push --force-with-lease --force-if-includes`.
+        /// The source revision or object ID does not select this reflog. This check applies only
+        /// when a tracking tip exists, and also applies to deletions if requested.
+        force_if_includes: bool,
+    },
 }
 
 /// An explicit update to a reference on a remote.
@@ -45,6 +54,8 @@ pub struct Options<'a> {
 pub enum Rejection {
     /// The advertised value differs from the lease.
     StaleLease,
+    /// The tracking tip matches, but the destination-named local reflog does not include it.
+    RemoteUpdated,
     /// Replacing an existing tag requires force or a matching lease.
     AlreadyExists,
     /// The previous remote object is not available locally to check its ancestry.

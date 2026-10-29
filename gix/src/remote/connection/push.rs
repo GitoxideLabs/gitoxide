@@ -68,6 +68,7 @@ impl<T: Transport> Connection<'_, '_, '_, T> {
         }
         let mut updates = push::plan::updates(
             &repo,
+            self.remote,
             updates,
             handshake.refs.as_deref().unwrap_or_default(),
             &shallow,
