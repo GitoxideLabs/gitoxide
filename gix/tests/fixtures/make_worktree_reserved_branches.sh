@@ -35,6 +35,18 @@ case "$operation" in
       exit 1
     fi
     ;;
+  rebase-update-refs)
+    git branch intermediate HEAD~1
+    if git rebase --update-refs --onto onto HEAD~3; then
+      echo 'expected the rebase to stop with a conflict' >&2
+      exit 1
+    fi
+    # The branch is not checked out, but the sequencer will update it on success.
+    if git branch -f intermediate onto; then
+      echo 'expected the intermediate branch to remain reserved' >&2
+      exit 1
+    fi
+    ;;
   rebase-interactive)
     if git -c sequence.editor=true rebase -i --onto onto HEAD~3; then
       echo 'expected the interactive rebase to stop with a conflict' >&2

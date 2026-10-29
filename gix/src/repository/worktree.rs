@@ -14,8 +14,9 @@ impl crate::Repository {
     /// Each key maps to the worktree directories in which it is checked out. Besides branch names,
     /// `HEAD` is recorded for every worktree with a readable head, and all symbolic references in
     /// the chain from `HEAD` to its referent are included. Bisect and rebase also reserve their original
-    /// branch while `HEAD` is detached. Bare repositories and worktrees whose `HEAD` itself cannot be read are ignored;
-    /// invalid referents are errors.
+    /// branch while `HEAD` is detached; rebases with `--update-refs` also reserve their intermediate branches.
+    /// Bare repositories and worktrees whose `HEAD` itself cannot be read are ignored;
+    /// invalid referents and malformed update-ref records are errors.
     ///
     /// The repository's current reference namespace is used for every inspected worktree.
     pub fn checked_out_branches(&self) -> Result<BTreeMap<gix_ref::FullName, Vec<PathBuf>>> {
@@ -294,6 +295,32 @@ fn insert_head(head: Option<crate::Head<'_>>, out: &mut BTreeMap<gix_ref::FullNa
         let Ok(name) = gix_ref::FullName::try_from(name.as_bstr()) else {
             continue;
         };
+        let workdirs = out.entry(name).or_default();
+        if !workdirs.iter().any(|path| path == workdir) {
+            workdirs.push(workdir.to_owned());
+        }
+    }
+    let path = git_dir.join("rebase-merge/update-refs");
+    let contents = match std::fs::read(&path) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err.and_raise(message!("Failed to read rebase reservations at {path:?}"))),
+    };
+    let mut lines = contents.lines();
+    while let Some(name) = lines.next() {
+        let name = gix_ref::FullName::try_from(name.as_bstr())
+            .or_raise(|| message!("Invalid reserved reference in {path:?}"))?;
+        // Each sequencer record has a reference followed by its before and after object IDs.
+        for _ in 0..2 {
+            let hex = lines
+                .next()
+                .ok_or_else(|| message!("Incomplete rebase reservation in {path:?}").raise())?;
+            let object_id = gix_hash::ObjectId::from_hex(hex)
+                .or_raise(|| message!("Invalid rebase reservation object ID in {path:?}"))?;
+            if object_id.kind() != repo.object_hash() {
+                bail!(message!("Unexpected object hash in rebase reservations at {path:?}"));
+            }
+        }
         let workdirs = out.entry(name).or_default();
         if !workdirs.iter().any(|path| path == workdir) {
             workdirs.push(workdir.to_owned());
