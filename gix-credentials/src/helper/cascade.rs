@@ -183,20 +183,24 @@ impl Cascade {
             }
         }
 
-        if prompt.mode != gix_prompt::Mode::Disable
+        if (prompt.mode != gix_prompt::Mode::Disable || prompt.askpass.is_some())
             && let Some(ctx) = action.context_mut()
         {
             ctx.url = url;
             if ctx.username.is_none() {
                 let message = ctx.to_prompt("Username");
-                prompt.mode = gix_prompt::Mode::Visible;
+                if prompt.mode != gix_prompt::Mode::Disable {
+                    prompt.mode = gix_prompt::Mode::Visible;
+                }
                 ctx.username = gix_prompt::ask_with_environment(&message, &prompt, environment)
                     .or_raise(|| gix_error::message!("Couldn't obtain {message}"))?
                     .into();
             }
             if ctx.password.is_none() {
                 let message = ctx.to_prompt("Password");
-                prompt.mode = gix_prompt::Mode::Hidden;
+                if prompt.mode != gix_prompt::Mode::Disable {
+                    prompt.mode = gix_prompt::Mode::Hidden;
+                }
                 ctx.password = gix_prompt::ask_with_environment(&message, &prompt, environment)
                     .or_raise(|| gix_error::message!("Couldn't obtain {message}"))?
                     .into();
