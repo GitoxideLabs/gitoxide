@@ -24,6 +24,11 @@ impl Repository {
     /// [`Start::Contents`] can represent uncommitted worktree changes; its contents must already
     /// have passed through the configured worktree filters and, when enabled, textconv drivers.
     /// Newly introduced lines carry the null id.
+    /// By default, revisions in `blame.ignoreRevsFile` are excluded using line similarity.
+    /// Relative file names resolve from the repository worktree, or the Git directory for bare
+    /// repositories. Empty configuration values clear earlier exclusions. Unavailable objects
+    /// and non-commits in these files are skipped; unreadable files and malformed IDs are errors.
+    /// [`blame_file::Options::ignored_revisions`] can override the configured files.
     /// No objects or references are written. See [`gix_blame::file()`] for details and errors.
     pub fn blame_file_from(
         &self,
@@ -56,6 +61,7 @@ impl Repository {
             rewrites,
             contents_mode,
             textconv: _,
+            ignored_revisions,
         } = options;
         let diff_algorithm = match diff_algorithm {
             Some(diff_algorithm) => diff_algorithm,
@@ -69,6 +75,7 @@ impl Repository {
             rewrites,
             debug_track_path: false,
             contents_mode,
+            ignored_revisions: super::blame_ignore::revisions(self, ignored_revisions)?,
             boundary_commits: self
                 .shallow_commits()?
                 .map(|commits| commits.iter().copied().collect())

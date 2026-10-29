@@ -3,7 +3,10 @@ use gix_error::{bail, validation};
 use gix_hash::ObjectId;
 use gix_object::bstr::BString;
 use smallvec::SmallVec;
-use std::{collections::BTreeMap, ops::RangeInclusive};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::RangeInclusive,
+};
 use std::{
     num::NonZeroU32,
     ops::{AddAssign, Range, SubAssign},
@@ -170,6 +173,9 @@ pub struct Options {
     /// Treat these commits as roots, even if their parent objects are available.
     /// Use this for shallow boundaries or an explicitly limited traversal.
     pub boundary_commits: Vec<ObjectId>,
+    /// Reassign changes in these commits to their parents using line similarity.
+    /// Unmatched additions remain attributed to the ignored commit.
+    pub ignored_revisions: Vec<ObjectId>,
     /// The kind of supplied [`Start::Contents`], defaulting to a regular blob.
     /// This prevents attribution across a worktree file-type change.
     pub contents_mode: Option<gix_object::tree::EntryKind>,
@@ -280,6 +286,10 @@ pub struct Outcome {
     /// Previous origins keyed by [`BlameEntry::commit_id`] and [`BlameEntry::source_file_name`].
     /// Roots and file additions have no previous origin. Supplied contents use the null commit id.
     pub previous_origins: BTreeMap<(ObjectId, Option<BString>), PreviousOrigin>,
+    /// Zero-based final line indices reassigned through an ignored revision.
+    pub ignored_lines: BTreeSet<u32>,
+    /// Zero-based final line indices that could not be reassigned through an ignored revision.
+    pub unblamable_lines: BTreeSet<u32>,
 }
 
 /// Additional information about the performed operations.
@@ -387,7 +397,7 @@ impl SubAssign<u32> for Offset {
 /// A mapping of a section of the *Blamed File* to the section in a *Source File* that introduced it.
 ///
 /// Both ranges are of the same size, but may use different [starting points](Range::start). Naturally,
-/// they have the same content, which is the reason they are in what is returned by [`file()`](crate::file()).
+/// they have the same content, except when lines are reassigned through [`Options::ignored_revisions`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct BlameEntry {
     /// The index of the token in the *Blamed File* (typically lines) where this entry begins.
@@ -462,7 +472,8 @@ pub struct UnblamedHunk {
     /// The range in the file that is being blamed that this hunk represents.
     pub range_in_blamed_file: Range<u32>,
     /// Maps a commit to the range in a source file (i.e. *Blamed File* at a revision) that is
-    /// equal to `range_in_blamed_file`. Since `suspects` rarely contains more than 1 item, it can
+    /// the same length as `range_in_blamed_file`. The content also matches unless attribution passed
+    /// through an ignored revision. Since `suspects` rarely contains more than 1 item, it can
     /// efficiently be stored as a `SmallVec`.
     pub suspects: SmallVec<[(ObjectId, Range<u32>); 1]>,
     /// The *Source File*'s name, in case it differs from *Blamed File*'s name.
