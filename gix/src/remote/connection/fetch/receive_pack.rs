@@ -98,7 +98,7 @@ where
         P::SubProgress: 'static,
     {
         let ref_map = &self.ref_map;
-        if ref_map.is_missing_required_mapping() {
+        if !self.missing_refs_allowed && ref_map.is_missing_required_mapping() {
             let mut specs = ref_map.refspecs.clone();
             specs.extend(ref_map.extra_refspecs.clone());
             bail!(gix_error::validation(format!(
@@ -226,6 +226,16 @@ where
                 .ok();
         }
 
+        let pruned = if self.prune {
+            repo.prune_fetch_refs(
+                &self.ref_map,
+                fetch::prune::Options {
+                    dry_run: matches!(self.dry_run, fetch::DryRun::Yes),
+                },
+            )?
+        } else {
+            Vec::new()
+        };
         let update_refs = refs::update(
             repo,
             self.reflog_message
@@ -248,6 +258,7 @@ where
 
         let out = Outcome {
             handshake,
+            pruned,
             ref_map: std::mem::take(&mut self.ref_map),
             status: match write_pack_bundle {
                 Some(write_pack_bundle) => Status::Change {
