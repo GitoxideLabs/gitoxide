@@ -172,6 +172,22 @@ impl<'repo> Object<'repo> {
             })
     }
 
+    /// Decode this commit and obtain its exact signed bytes in one parsing pass.
+    ///
+    /// See [`gix_object::CommitRef::from_bytes_with_signed_data()`] for the signature selection.
+    pub fn try_to_commit_ref_with_signed_data(
+        &self,
+    ) -> Result<(gix_object::CommitRef<'_>, Option<gix_object::signature::SignedData<'_>>)> {
+        if self.kind != Kind::Commit {
+            return Err(Error::from_error(gix_error::validation(format!(
+                "Expected object type {}, but got {}",
+                Kind::Commit,
+                self.kind
+            ))));
+        }
+        gix_object::CommitRef::from_bytes_with_signed_data(&self.data, self.id.kind())
+    }
+
     /// Obtain an iterator over commit tokens like in [`to_commit_iter()`][Object::try_to_commit_ref_iter()].
     ///
     /// # Panic
