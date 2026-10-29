@@ -126,7 +126,8 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url> {
         .position(|b| *b == b'/' || is_http && matches!(*b, b'?' | b'#'))
         .unwrap_or(input_after_protocol.len());
     if bytes_to_path > MAX_LEN || protocol_end > MAX_LEN {
-        let truncated_url = &input[..(protocol_end + "://".len() + MAX_LEN).min(input.len())];
+        let diagnostic = diagnostic_input(input);
+        let truncated_url = &diagnostic[..(protocol_end + "://".len() + MAX_LEN).min(diagnostic.len())];
         bail!(
             validation(format!(
                 "The host portion of the URL is too long ({} bytes shown, {} bytes total)",
@@ -157,7 +158,7 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url> {
         bail!(
             "{} does not specify a path to a repository"
                 .validation()
-                .with_input(input.as_bytes()),
+                .with_input(diagnostic_input(input.as_bytes())),
             UrlKind::Url.as_str()
         );
     }
@@ -221,7 +222,7 @@ pub(crate) fn scp(input: &BStr, colon: usize) -> Result<crate::Url> {
         bail!(
             "{} does not specify a path to a repository"
                 .validation()
-                .with_input(input.as_bytes()),
+                .with_input(diagnostic_input(input.as_bytes())),
             UrlKind::Scp.as_str()
         );
     }
@@ -238,7 +239,8 @@ pub(crate) fn scp(input: &BStr, colon: usize) -> Result<crate::Url> {
     // In SCP-like syntax `%` is literal host data, but the synthesized URL parser treats it as an escape introducer.
     let url_string = format!("ssh://{}", host.replace('%', "%25"));
     let url = crate::simple_url::ParsedUrl::parse(&url_string).or_raise(|| {
-        validation(format!("{} can not be parsed as valid URL", UrlKind::Scp.as_str())).with_input(input.as_bytes())
+        validation(format!("{} can not be parsed as valid URL", UrlKind::Scp.as_str()))
+            .with_input(diagnostic_input(input.as_bytes()))
     })?;
 
     // For SCP-like SSH URLs, strip leading '/' from paths starting with '/~'
@@ -272,7 +274,7 @@ pub(crate) fn file_url(input: &BStr, protocol_colon: usize) -> Result<crate::Url
         bail!(
             "{} does not specify a path to a repository"
                 .validation()
-                .with_input(input.as_bytes()),
+                .with_input(diagnostic_input(input.as_bytes())),
             UrlKind::Url.as_str()
         );
     };
@@ -328,7 +330,7 @@ pub(crate) fn local(input: &BStr) -> Result<crate::Url> {
                 "{} is empty and does not specify a path to a repository",
                 UrlKind::Local.as_str()
             ))
-            .with_input(input.as_bytes())
+            .with_input(diagnostic_input(input.as_bytes()))
         );
     }
 
@@ -347,7 +349,7 @@ pub(crate) fn local(input: &BStr) -> Result<crate::Url> {
 fn input_to_utf8(input: &BStr, kind: UrlKind) -> Result<&str> {
     let kind = kind.as_str();
     std::str::from_utf8(input)
-        .or_raise(|| validation(format!("{kind} is not valid UTF-8")).with_input(input.as_bytes()))
+        .or_raise(|| validation(format!("{kind} is not valid UTF-8")).with_input(diagnostic_input(input.as_bytes())))
 }
 
 fn input_to_utf8_and_url(input: &BStr, kind: UrlKind) -> Result<(&str, crate::simple_url::ParsedUrl)> {
@@ -355,6 +357,16 @@ fn input_to_utf8_and_url(input: &BStr, kind: UrlKind) -> Result<(&str, crate::si
     crate::simple_url::ParsedUrl::parse(input)
         .map(|url| (input, url))
         .or_raise(|| {
-            validation(format!("{} can not be parsed as valid URL", kind.as_str())).with_input(input.as_bytes())
+            validation(format!("{} can not be parsed as valid URL", kind.as_str()))
+                .with_input(diagnostic_input(input.as_bytes()))
         })
+}
+
+/// Malformed URLs cannot reliably be parsed for redaction, so omit inputs that could contain user information.
+fn diagnostic_input(input: &[u8]) -> &[u8] {
+    if input.find(b"://").is_some() && input.contains(&b'@') {
+        b"<redacted URL>"
+    } else {
+        input
+    }
 }
