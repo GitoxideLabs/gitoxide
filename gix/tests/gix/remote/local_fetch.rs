@@ -431,3 +431,124 @@ fn native_namespaced_fetch_matches_git_with_relative_url_and_empty_path() -> Tes
     gix_testtools::git(local.git_dir(), "fsck --strict --no-reflogs")?;
     Ok(())
 }
+
+#[test]
+fn native_fetch_preserves_legacy_metadata_without_decoding_it() -> TestResult {
+    use gix::bstr::ByteSlice;
+
+    let fixture = gix_testtools::scripted_fixture_read_only("make_native_fetch_legacy.sh")?.canonicalize()?;
+    let source = fixture.join("source");
+    let commit_id = gix::ObjectId::from_hex(std::fs::read_to_string(fixture.join("commit-id"))?.trim().as_bytes())?;
+    let tag_id = gix::ObjectId::from_hex(std::fs::read_to_string(fixture.join("tag-id"))?.trim().as_bytes())?;
+    let root = gix_testtools::tempfile::tempdir()?;
+    for (name, depth) in [("full", None), ("shallow", Some(1))] {
+        let expected = root.path().join(format!("git-{name}"));
+        let native = root.path().join(format!("native-{name}"));
+        for path in [&expected, &native] {
+            let output = gix_testtools::git_command(root.path())
+                .arg("init")
+                .arg("--bare")
+                .arg(path)
+                .output()?;
+            assert!(output.status.success(), "{}", output.stderr.as_bstr());
+        }
+        let mut command = gix_testtools::git_command(&expected);
+        command.args(["fetch", "--no-write-fetch-head"]);
+        if let Some(depth) = depth {
+            command.arg(format!("--depth={depth}"));
+        }
+        let output = command
+            .arg(&source)
+            .arg("+refs/heads/main:refs/remotes/origin/main")
+            .output()?;
+        assert!(
+            output.status.success(),
+            "Git accepts historical identity metadata: {}",
+            output.stderr.as_bstr()
+        );
+        let destination = repo(&native)?;
+        let mut remote = destination
+            .remote_at(gix::path::into_bstr(&source)?)?
+            .with_fetch_tags(gix::remote::fetch::Tags::Included);
+        remote.replace_refspecs(["+refs/heads/main:refs/remotes/origin/main"], Direction::Fetch)?;
+        remote.fetch(
+            gix::remote::fetch::Options {
+                shallow: match depth {
+                    Some(depth) => gix::remote::fetch::Shallow::DepthAtRemote(depth.try_into()?),
+                    None => gix::remote::fetch::Shallow::NoChange,
+                },
+                ..Default::default()
+            },
+            gix::progress::Discard,
+            &std::sync::atomic::AtomicBool::default(),
+        )?;
+        assert_eq!(
+            destination
+                .find_reference("refs/remotes/origin/main")?
+                .target()
+                .try_id(),
+            Some(commit_id.as_ref())
+        );
+        assert_eq!(
+            destination.find_reference("refs/tags/legacy")?.target().try_id(),
+            Some(tag_id.as_ref())
+        );
+        assert_eq!(
+            std::fs::read(native.join("shallow")).ok(),
+            std::fs::read(expected.join("shallow")).ok()
+        );
+        let original = repo(&source)?;
+        for object_id in [commit_id, tag_id] {
+            assert_eq!(
+                destination.find_object(object_id)?.data,
+                original.find_object(object_id)?.data,
+                "raw metadata is transferred unchanged"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn native_clone_preserves_legacy_metadata_without_decoding_it() -> TestResult {
+    use gix::bstr::ByteSlice;
+
+    let fixture = gix_testtools::scripted_fixture_read_only("make_native_fetch_legacy.sh")?.canonicalize()?;
+    let root = gix_testtools::tempfile::tempdir()?;
+    for (name, depth) in [("full", None), ("shallow", Some(1))] {
+        let expected = root.path().join(format!("git-{name}"));
+        let native = root.path().join(format!("native-{name}"));
+        let mut command = gix_testtools::git_command(root.path());
+        command.args(["clone", "--no-local", "--no-checkout"]);
+        if let Some(depth) = depth {
+            command.arg(format!("--depth={depth}"));
+        }
+        let output = command.arg(fixture.join("source")).arg(&expected).output()?;
+        assert!(
+            output.status.success(),
+            "Git accepts old metadata: {}",
+            output.stderr.as_bstr()
+        );
+        let mut prepare = gix::clone::PrepareFetch::new(
+            fixture.join("source"),
+            &native,
+            gix::create::Kind::WithWorktree,
+            Default::default(),
+            gix::open::Options::isolated(),
+        )?;
+        if let Some(depth) = depth {
+            prepare = prepare.with_shallow(gix::remote::fetch::Shallow::DepthAtRemote(depth.try_into()?));
+        }
+        let destination = prepare
+            .fetch_only(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?
+            .0;
+        let expected = repo(&expected)?;
+        assert_eq!(destination.head_id()?.detach(), expected.head_id()?.detach());
+        assert_eq!(
+            std::fs::read(destination.git_dir().join("shallow")).ok(),
+            std::fs::read(expected.git_dir().join("shallow")).ok(),
+            "the clone retains Git's shallow boundary"
+        );
+    }
+    Ok(())
+}

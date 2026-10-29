@@ -4,7 +4,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use gix_object::{Exists, FindExt, ObjectRef};
+use gix_object::{Exists, FindExt, Kind};
 
 use crate::{
     ObjectId, Remote, Repository, Result,
@@ -167,9 +167,11 @@ where
                 check_interrupt(interrupt)?;
                 let data = source.find(&object_id, &mut buffer)?;
                 data.verify_checksum(&object_id)?;
-                match data.decode()? {
-                    ObjectRef::Tag(tag) => object_id = tag.target(),
-                    _ => break,
+                if data.kind != Kind::Tag {
+                    break;
+                }
+                for edge in data.references() {
+                    object_id = edge?.id;
                 }
             }
         }
@@ -286,10 +288,21 @@ fn boundary(
         }
         let data = source.find(&object_id, &mut buffer)?;
         data.verify_checksum(&object_id)?;
-        match data.decode()? {
-            ObjectRef::Tag(tag) => pending.push_front((tag.target(), distance)),
-            ObjectRef::Commit(commit) => {
-                let parents: Vec<_> = commit.parents().collect();
+        // Depth depends on graph edges, not on historical identity metadata.
+        match data.kind {
+            Kind::Tag => {
+                for edge in data.references() {
+                    pending.push_front((edge?.id, distance));
+                }
+            }
+            Kind::Commit => {
+                let mut parents = Vec::new();
+                for edge in data.references() {
+                    let edge = edge?;
+                    if edge.kind == Kind::Commit {
+                        parents.push(edge.id);
+                    }
+                }
                 if source_shallow.contains(&object_id) {
                     if !destination.objects.exists(&object_id) || previous.contains(&object_id) {
                         boundary.insert(object_id);
@@ -304,7 +317,7 @@ fn boundary(
                     pending.extend(parents.into_iter().map(|id| (id, distance.saturating_add(1))));
                 }
             }
-            ObjectRef::Tree(_) | ObjectRef::Blob(_) => {}
+            Kind::Tree | Kind::Blob => {}
         }
     }
     Ok((boundary, traversal))
@@ -317,6 +330,7 @@ fn collect_objects(
     interrupt: &AtomicBool,
 ) -> Result<BTreeSet<ObjectId>> {
     gix_traverse::object::BreadthFirst::new(tips, source)
+        .with_object_validation(false)
         .with_shallow_commits(shallow.iter().copied())
         .map(|entry| {
             check_interrupt(interrupt)?;

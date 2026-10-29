@@ -54,9 +54,10 @@ impl<Find> BreadthFirst<Find> {
 
     /// Control full object decoding, which is enabled by default.
     ///
-    /// Disable this only when object validation is handled separately, for example
-    /// by a configurable fsck policy. Graph edges are always decoded, and missing
-    /// objects or edges pointing to the wrong kind remain errors. Commit identities,
+    /// Disable this when only graph connectivity is needed or object validation is
+    /// handled separately, for example by a configurable fsck policy. Graph edges
+    /// are always decoded, and missing objects or edges pointing to the wrong kind
+    /// remain errors. Commit identities,
     /// tag names, and other metadata unrelated to connectivity are then ignored.
     pub fn with_object_validation(mut self, validate: bool) -> Self {
         self.validate_objects = validate;
