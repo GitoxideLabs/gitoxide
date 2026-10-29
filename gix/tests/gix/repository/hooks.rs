@@ -183,6 +183,12 @@ fn reduced_trust_does_not_offer_repository_hooks_for_execution() -> TestResult {
             .is_permission_denied(),
         "preparation cannot bypass repository trust"
     );
+    assert!(
+        repo.run_hook("pre-commit", Default::default())
+            .expect_err("hook execution requires full trust")
+            .is_permission_denied(),
+        "execution cannot bypass repository trust"
+    );
     Ok(())
 }
 
@@ -310,6 +316,181 @@ fn discovery_checks_the_callers_execute_permission() -> TestResult {
         repo.find_hook("applypatch-msg")?.is_some(),
         fixture.join("mode-hook-executable").exists(),
         "Git and gitoxide honor the caller's permissions, not merely any executable bit"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn execution_falls_back_for_scripts_and_preserves_native_arguments() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let fixture = fixture()?;
+    let repo = gix::open_opts(fixture.join("repo"), crate::restricted())?;
+    assert!(
+        fixture.join("no-shebang-supported").exists(),
+        "Git supports shell fallback on Unix"
+    );
+    let environment = [(OsStr::new("HOOK_VALUE"), OsStr::new("literal $value"))];
+    let output = repo.run_hook(
+        "hook $@ space/pre-rebase",
+        gix::hook::Options {
+            arguments: &[OsStr::new("one argument"), OsStr::new("$(touch unexpected)")],
+            environment: &environment,
+            ..Default::default()
+        },
+    )?;
+    assert!(
+        output.status.success(),
+        "an executable no-shebang script runs through the shell"
+    );
+    assert_eq!(
+        output.stdout, b"literal $value\none argument\n$(touch unexpected)\n",
+        "shell metacharacters remain literal"
+    );
+    assert_eq!(output.stderr, b"hook-stderr\n", "stderr is captured separately");
+    assert_eq!(
+        [output.stdout, output.stderr].concat(),
+        std::fs::read(fixture.join("no-shebang-output"))?,
+        "Git uses the same shell fallback and arguments"
+    );
+    let output = repo.run_hook(
+        "hook $@ space/pre-rebase",
+        gix::hook::Options {
+            environment: &environment,
+            ..Default::default()
+        },
+    )?;
+    assert_eq!(
+        output.stdout, b"literal $value\n",
+        "a literal hook path also works without arguments"
+    );
+    assert!(output.status.success(), "missing input supplies EOF");
+
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let output = repo.run_hook(
+            "hook $@ space/pre-rebase",
+            gix::hook::Options {
+                arguments: &[OsStr::from_bytes(b"non-utf8-\xff")],
+                environment: &environment,
+                stdin: Some(b"hook input\n"),
+            },
+        )?;
+        assert!(output.status.success(), "the fallback retains piped input");
+        assert_eq!(
+            output.stdout, b"literal $value\nnon-utf8-\xff\nhook input\n",
+            "fallback input and native argument bytes are retained"
+        );
+    }
+
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn execution_rejects_scripts_without_a_shebang_on_windows() -> TestResult {
+    let fixture = fixture()?;
+    let repo = gix::open_opts(fixture.join("repo"), crate::restricted())?;
+    assert!(
+        !fixture.join("no-shebang-supported").exists(),
+        "Git requires a shebang on Windows"
+    );
+    assert!(
+        repo.run_hook("hook $@ space/pre-rebase", Default::default()).is_err(),
+        "gitoxide also rejects scripts without a shebang on Windows"
+    );
+    Ok(())
+}
+
+#[test]
+fn execution_preserves_native_executables() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let repo = gix::open_opts(fixture()?.join("repo"), crate::restricted())?;
+    let output = repo.run_hook(
+        std::env::current_exe()?,
+        gix::hook::Options {
+            arguments: &[OsStr::new("--list")],
+            ..Default::default()
+        },
+    )?;
+    assert!(
+        output.status.success(),
+        "native executables are not interpreted as shell scripts"
+    );
+    assert!(
+        String::from_utf8(output.stdout)?.contains("repository::hooks::execution_preserves_native_executables"),
+        "the native executable received its arguments"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn execution_drains_output_while_feeding_input() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let repo = gix::open_opts(fixture()?.join("repo"), crate::restricted())?;
+    let input = vec![b'x'; 1024 * 1024];
+    let output = repo.run_hook(
+        ".git/hooks/pre-merge-commit",
+        gix::hook::Options {
+            stdin: Some(&input),
+            ..Default::default()
+        },
+    )?;
+    assert!(
+        output.status.success(),
+        "large simultaneous input and output complete without blocking"
+    );
+    assert_eq!(output.stdout.len(), 2 * input.len(), "all stdout is captured");
+    assert_eq!(output.stderr, vec![0; input.len()], "all stderr is captured");
+    assert_eq!(
+        &output.stdout[..input.len()],
+        vec![0; input.len()],
+        "the hook writes before reading"
+    );
+    assert_eq!(&output.stdout[input.len()..], &input, "all input reaches the hook");
+    Ok(())
+}
+
+#[test]
+fn execution_retains_hook_failures_and_ignores_early_stdin_close() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let repo = gix::open_opts(fixture()?.join("repo"), crate::restricted())?;
+    let input = vec![b'x'; 1024 * 1024];
+    let output = repo.run_hook(
+        ".git/hooks/pre-applypatch",
+        gix::hook::Options {
+            stdin: Some(&input),
+            ..Default::default()
+        },
+    )?;
+    assert_eq!(
+        output.status.code(),
+        Some(23),
+        "a broken input pipe does not hide the hook's status"
+    );
+    assert_eq!(output.stdout, b"early stdout\n", "failed hooks retain stdout");
+    assert_eq!(output.stderr, b"early stderr\n", "failed hooks retain stderr");
+    assert!(
+        repo.run_hook("missing", Default::default()).is_err(),
+        "missing executables are not retried as shell scripts"
+    );
+    assert!(
+        repo.run_hook(".git/hooks/pre-receive", Default::default()).is_err(),
+        "a missing interpreter is not bypassed with a shell"
+    );
+    #[cfg(unix)]
+    assert!(
+        repo.run_hook(".git/hooks/post-commit", Default::default()).is_err(),
+        "permission failures are not bypassed with a shell"
     );
     Ok(())
 }

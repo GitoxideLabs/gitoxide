@@ -2008,8 +2008,10 @@ version = "0.1.0"
 dependencies = [
  "gix-command",
  "gix-error",
+ "gix-path",
  "gix-sec",
  "gix-testtools",
+ "libc",
 ]
 
 [[package]]
