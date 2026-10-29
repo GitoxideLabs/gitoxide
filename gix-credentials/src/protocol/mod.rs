@@ -92,3 +92,15 @@ fn identity_missing(context: Context) -> gix_error::Error {
 
 ///
 pub mod context;
+
+/// Read one credential request, ending at an empty LF/CRLF line or end of input.
+/// The terminating empty line is retained. Input failures before it are returned.
+pub fn read(mut input: impl std::io::BufRead) -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    loop {
+        let start = bytes.len();
+        if input.read_until(b'\n', &mut bytes)? == 0 || matches!(&bytes[start..], b"\n" | b"\r\n") {
+            return Ok(bytes);
+        }
+    }
+}
