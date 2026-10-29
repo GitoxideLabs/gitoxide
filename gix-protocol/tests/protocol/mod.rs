@@ -8,6 +8,7 @@ pub fn fixture_bytes(path: &str) -> Vec<u8> {
 mod command;
 pub mod fetch;
 mod handshake;
+mod push;
 pub(crate) use fetch::_impl::fetch;
 pub mod remote_progress;
 
