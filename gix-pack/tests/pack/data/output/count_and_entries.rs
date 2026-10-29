@@ -480,6 +480,50 @@ fn traversals() -> gix_testtools::TestResult {
 }
 
 #[test]
+fn malformed_objects_are_errors_during_expansion() -> gix_testtools::TestResult {
+    use gix_object::Write;
+
+    let object_hash = object_hash();
+    let mut objects = gix_odb::memory::Proxy::new(gix_odb::sink(object_hash), object_hash);
+    let invalid_commit_id = objects.write_buf(gix_object::Kind::Commit, b"not a commit")?;
+    let invalid_tag_id = objects.write_buf(gix_object::Kind::Tag, b"not a tag")?;
+    let tree_id = objects.write(&gix_object::Tree::empty())?;
+    let child_commit_id = objects.write(&gix_object::Commit {
+        tree: tree_id,
+        parents: [invalid_commit_id].into(),
+        author: Default::default(),
+        committer: Default::default(),
+        encoding: None,
+        message: "valid child of an invalid parent".into(),
+        extra_headers: Vec::new(),
+    })?;
+    let db = gix_pack::testing::Memory::new(objects.take_object_memory().expect("memory is enabled").drain());
+    for mode in [
+        count::objects::ObjectExpansion::TreeContents,
+        count::objects::ObjectExpansion::TreeAdditionsComparedToAncestor,
+    ] {
+        for object_id in [invalid_commit_id, invalid_tag_id].into_iter().chain(
+            matches!(mode, count::objects::ObjectExpansion::TreeAdditionsComparedToAncestor).then_some(child_commit_id),
+        ) {
+            let err = output::count::objects_unthreaded(
+                &db,
+                &mut std::iter::once(Ok(object_id)),
+                &progress::Discard,
+                &AtomicBool::new(false),
+                mode,
+            )
+            .expect_err("malformed commit and tag headers must return errors instead of panicking");
+            assert_eq!(
+                err.to_string(),
+                "object parsing failed",
+                "the original parser diagnostic is preserved"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn tree_additions_from_each_merge_parent_are_kept() -> gix_testtools::TestResult {
     use gix_object::Write;
 
