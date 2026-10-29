@@ -359,6 +359,50 @@ fn tracking_leases_handle_absence_deletion_staleness_and_literal_first_mapping()
 }
 
 #[test]
+#[cfg(feature = "revision")]
+fn exact_refspec_updates_resolve_revisions_and_reject_implicit_destinations() -> TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only_with_args("make_push_tracking.sh", ["sha1"])?;
+    let repo = gix::open_opts(fixture.join("source"), gix::open::Options::isolated())?;
+    let tip = repo.find_reference("refs/heads/source")?.id().detach();
+    let parent = repo.rev_parse_single("source^")?.detach();
+    for (spec, destination, new_id, force) in [
+        ("source:refs/heads/topic", "refs/heads/topic", Some(tip), false),
+        ("+source^:refs/heads/topic", "refs/heads/topic", Some(parent), true),
+        ("refs/heads/source", "refs/heads/source", Some(tip), false),
+        (":refs/heads/topic", "refs/heads/topic", None, false),
+        (
+            "source:refs/for/main%topic=test",
+            "refs/for/main%topic=test",
+            Some(tip),
+            false,
+        ),
+    ] {
+        let parsed = gix::refspec::parse(spec.into(), gix::refspec::parse::Operation::Push)?;
+        let update = Update::from_refspec(&repo, parsed)?;
+        assert_eq!(update.destination, destination);
+        assert_eq!(update.new_id, new_id, "{spec}");
+        assert_eq!(update.force, force, "{spec}");
+        assert_eq!(update.lease, Lease::Any, "constructing an update does not add a lease");
+    }
+    for spec in [":", "source:topic", "refs/heads/*:refs/heads/*", "^refs/heads/source"] {
+        let parsed = gix::refspec::parse(spec.into(), gix::refspec::parse::Operation::Push)?;
+        assert!(
+            Update::from_refspec(&repo, parsed)
+                .expect_err("implicit or patterned destinations need advertisement-aware selection")
+                .is_unsupported(),
+            "{spec}"
+        );
+    }
+    let missing = gix::refspec::parse("absent:refs/heads/topic".into(), gix::refspec::parse::Operation::Push)?;
+    assert!(
+        Update::from_refspec(&repo, missing)
+            .expect_err("missing source refs are errors")
+            .is_not_found()
+    );
+    Ok(())
+}
+
+#[test]
 fn dry_run_and_atomic_local_rejections_do_not_change_refs() -> TestResult {
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
