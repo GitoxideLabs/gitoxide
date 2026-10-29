@@ -12,16 +12,10 @@ use super::git::{self, ConfigPaths};
 
 mod auxiliary;
 mod msys;
-mod registry;
+pub(in crate::env) mod registry;
 mod scoop;
 
 pub(super) const EXE_NAME: &str = "git.exe";
-
-// There are a number of ways to refer to the null device on Windows, but they are not all equally
-// well supported. Git for Windows rejects `\\.\NUL` and `\\.\nul`. On Windows 11 ARM64 (and maybe
-// some others), it rejects even the legacy name `NUL`, when capitalized. But it always accepts the
-// lower-case `nul`, handling it in various path checks, some of which are done case-sensitively.
-pub(super) const NULL_DEVICE: &str = "nul";
 
 /// Try fixed paths before registry queries and directory scans, preferring common installers
 /// within each cost tier. Each source is only probed after earlier candidates are exhausted.
@@ -32,7 +26,7 @@ fn alternative_locations<G: IntoIterator<Item = PathBuf>, M: IntoIterator<Item =
 ) -> impl Iterator<Item = PathBuf> {
     std::iter::once_with(move || locations_under_program_files(var_os))
         .flatten()
-        .chain(locations_under_package_managers(var_os))
+        .chain(std::iter::once_with(move || locations_under_package_managers(var_os)).flatten())
         .chain(std::iter::once_with(registered_git).flatten())
         .chain(locations_under_scoop_without_junctions(var_os))
         .chain(std::iter::once_with(registered_msys).flatten())
@@ -51,9 +45,9 @@ pub(super) fn alternative_executable() -> Option<&'static Path> {
     EXECUTABLE.as_deref()
 }
 
-fn locations_under_program_files<F>(var_os_func: F) -> Vec<PathBuf>
+pub(in crate::env) fn locations_under_program_files<F>(mut var_os_func: F) -> Vec<PathBuf>
 where
-    F: Fn(&str) -> Option<std::ffi::OsString>,
+    F: FnMut(&str) -> Option<std::ffi::OsString>,
 {
     // Should give a 64-bit program files path from a 32-bit or 64-bit process on a 64-bit system.
     let varname_64bit = "ProgramW6432";
@@ -129,7 +123,9 @@ where
     locations
 }
 
-fn locations_under_scoop(var_os: impl Fn(&str) -> Option<std::ffi::OsString>) -> impl Iterator<Item = PathBuf> {
+pub(in crate::env) fn locations_under_scoop(
+    var_os: impl FnMut(&str) -> Option<std::ffi::OsString>,
+) -> impl Iterator<Item = PathBuf> {
     scoop_roots(var_os).map(|root| root.join("apps/git/current/cmd"))
 }
 
@@ -145,8 +141,8 @@ fn locations_under_scoop_without_junctions(
     })
 }
 
-fn scoop_roots(var_os: impl Fn(&str) -> Option<std::ffi::OsString>) -> impl Iterator<Item = PathBuf> {
-    let absolute = move |name| var_os(name).map(PathBuf::from).filter(|path| path.is_absolute());
+fn scoop_roots(mut var_os: impl FnMut(&str) -> Option<std::ffi::OsString>) -> impl Iterator<Item = PathBuf> {
+    let mut absolute = move |name| var_os(name).map(PathBuf::from).filter(|path| path.is_absolute());
     [("SCOOP", "USERPROFILE"), ("SCOOP_GLOBAL", "ProgramData")]
         .into_iter()
         .filter_map(move |(variable, default_base)| {
@@ -178,31 +174,38 @@ fn scoop_version_without_junction(app: &Path) -> Option<PathBuf> {
         .map(|(_, directory)| directory.join("cmd"))
 }
 
-fn locations_under_package_managers(
-    var_os: impl Fn(&str) -> Option<std::ffi::OsString> + Copy,
+pub(in crate::env) fn locations_under_package_managers(
+    mut var_os: impl FnMut(&str) -> Option<std::ffi::OsString>,
 ) -> impl Iterator<Item = PathBuf> {
     // Honor a known Git root, including the one Scoop exports, before guessing package roots.
     // These are all fixed paths, ordered by expected prevalence within the cheap tier.
-    locations_from_env(
-        var_os,
-        [
-            ("GIT_INSTALL_ROOT", "cmd"),
-            ("LocalAppData", "Microsoft/WinGet/Links"),
-            ("ProgramW6432", "WinGet/Links"),
-            ("ProgramFiles", "WinGet/Links"),
-            ("ChocolateyToolsLocation", "git/cmd"),
-        ],
+    let root = var_os("GIT_INSTALL_ROOT")
+        .map(PathBuf::from)
+        .filter(|root| root.is_absolute());
+    root.as_ref().map(|root| root.join("cmd")).into_iter().chain(
+        std::iter::once_with(move || {
+            let mut locations: Vec<_> = locations_from_env(
+                &mut var_os,
+                [
+                    ("LocalAppData", "Microsoft/WinGet/Links"),
+                    ("ProgramW6432", "WinGet/Links"),
+                    ("ProgramFiles", "WinGet/Links"),
+                    ("ChocolateyToolsLocation", "git/cmd"),
+                ],
+            )
+            .collect();
+            locations.extend(locations_under_scoop(&mut var_os));
+            // Only an active Conda/Mamba environment participates.
+            locations.extend(locations_from_env(&mut var_os, [("CONDA_PREFIX", "Library/bin")]));
+            locations.extend(root.map(|root| root.join("usr/bin")));
+            locations
+        })
+        .flatten(),
     )
-    .chain(locations_under_scoop(var_os))
-    .chain(locations_from_env(
-        var_os,
-        // Only an active Conda/Mamba environment participates; do not pick inactive environments.
-        [("CONDA_PREFIX", "Library/bin"), ("GIT_INSTALL_ROOT", "usr/bin")],
-    ))
 }
 
 fn locations_from_env(
-    var_os: impl Fn(&str) -> Option<std::ffi::OsString>,
+    mut var_os: impl FnMut(&str) -> Option<std::ffi::OsString>,
     roots: impl IntoIterator<Item = (&'static str, &'static str)>,
 ) -> impl Iterator<Item = PathBuf> {
     roots.into_iter().filter_map(move |(variable, suffix)| {
@@ -282,9 +285,6 @@ pub(super) fn msys_bin() -> Option<&'static Path> {
 
 /// The pacman Git package uses this compiled path, translated by its own mount table.
 pub(super) fn msys_core_dir() -> Option<PathBuf> {
-    if env::var_os("GIT_EXEC_PATH").is_some() {
-        return None;
-    }
     let core = &msys::paths()?.core;
     core.is_dir().then(|| core.clone())
 }
@@ -302,10 +302,12 @@ fn msys_bin_at(executable: &Path) -> Option<&Path> {
 }
 
 /// Convert paths emitted by MSYS Git to paths usable by native Windows callers.
+#[cfg(test)]
 pub(super) fn native_path(path: &Path) -> Option<PathBuf> {
     native_path_with(path, msys_bin)
 }
 
+#[cfg(test)]
 fn native_path_with<'a>(path: &Path, msys_bin: impl FnOnce() -> Option<&'a Path>) -> Option<PathBuf> {
     if path.is_absolute() || !path.as_os_str().as_encoded_bytes().starts_with(b"/") {
         return Some(path.to_owned());
@@ -355,9 +357,9 @@ where
         .map(Path::to_path_buf)
 }
 
-fn system_prefix_from_exepath_var<F>(var_os_func: F) -> Option<PathBuf>
+pub(in crate::env) fn system_prefix_from_exepath_var<F>(mut var_os_func: F) -> Option<PathBuf>
 where
-    F: Fn(&str) -> Option<OsString>,
+    F: FnMut(&str) -> Option<OsString>,
 {
     // Only attempt this optimization if the `EXEPATH` variable is set to an absolute path.
     let root = var_os_func("EXEPATH").map(PathBuf::from).filter(|r| r.is_absolute())?;
@@ -379,7 +381,7 @@ fn system_prefix_from_git_launcher(executable: &Path) -> Option<PathBuf> {
 }
 
 /// A runtime binary selects its own prefix even if other runtimes are installed alongside it.
-fn system_prefix_from_git_executable(executable: &Path) -> Option<PathBuf> {
+pub(in crate::env) fn system_prefix_from_git_executable(executable: &Path) -> Option<PathBuf> {
     let bin = executable.parent().filter(|_| executable.is_absolute())?;
     let prefix = bin.parent()?;
     if bin.file_name()?.eq_ignore_ascii_case("bin")
@@ -411,20 +413,46 @@ fn unambiguous_runtime_prefix(root: &Path) -> Option<PathBuf> {
 /// Return the system prefix if it can be told from the environment, which is much faster than running Git.
 fn system_prefix_without_running_git() -> Option<PathBuf> {
     // Read EXEPATH when each public API first needs it, independently of the cached executable.
-    system_prefix_from_exepath_var(|key| std::env::var_os(key))
-        .or_else(|| system_prefix_from_git_in_path().map(ToOwned::to_owned))
+    system_prefix_from_exepath_var(|key| std::env::var_os(key)).or_else(|| {
+        exec_path_override()
+            .is_none()
+            .then(prefix_from_selected_installation)
+            .flatten()
+    })
 }
 
 fn system_prefix_from_git_in_path() -> Option<&'static Path> {
-    // Git reports `GIT_EXEC_PATH` as its own location, which the executable's location can't tell.
-    if std::env::var_os("GIT_EXEC_PATH").is_none() {
-        static PREFIX: LazyLock<Option<PathBuf>> = LazyLock::new(|| system_prefix_from_git_executable(exe_path()?));
-        return PREFIX.as_deref();
-    }
-    None
+    static PREFIX: LazyLock<Option<PathBuf>> = LazyLock::new(|| system_prefix_from_git_executable(exe_path()?));
+    PREFIX.as_deref()
+}
+
+fn exec_path_override() -> Option<OsString> {
+    env::var_os("GIT_EXEC_PATH").filter(|path| !path.is_empty())
+}
+
+fn helper_dir_in_path() -> Option<&'static Path> {
+    static CORE: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
+        let cwd = env::current_dir().ok()?;
+        env::split_paths(&env::var_os("PATH")?)
+            .map(|directory| cwd.join(directory))
+            // Once an executable is selected, only its resolved layout can describe its helpers.
+            .take_while(|directory| !directory.join(EXE_NAME).is_file())
+            .find_map(|directory| super::installation::core_from_bin(&directory))
+    });
+    CORE.as_deref()
+}
+
+fn prefix_from_selected_installation() -> Option<PathBuf> {
+    system_prefix_from_core_dir(helper_dir_in_path).or_else(|| system_prefix_from_git_in_path().map(ToOwned::to_owned))
 }
 
 pub(super) fn core_dir() -> Option<PathBuf> {
+    if let Some(path) = exec_path_override() {
+        return Some(env::current_dir().ok()?.join(path));
+    }
+    if let Some(core) = helper_dir_in_path() {
+        return Some(core.to_owned());
+    }
     if let Some(core) = system_prefix_from_git_in_path()
         .map(|prefix| prefix.join("libexec/git-core"))
         .filter(|core| core.is_dir())
@@ -436,14 +464,12 @@ pub(super) fn core_dir() -> Option<PathBuf> {
                 .into_owned(),
         );
     }
-    if let Some(core) = msys_core_dir() {
-        return Some(core);
-    }
-    git::core_dir_from_executable()
+    msys_core_dir()
 }
 
 pub(super) fn config_paths_without_git() -> Option<ConfigPaths> {
-    if let Some(config) = system_prefix_without_running_git()
+    if let Some(config) = system_prefix_from_exepath_var(|key| std::env::var_os(key))
+        .or_else(prefix_from_selected_installation)
         .map(|prefix| config_path_from_system_prefix(&prefix))
         // Older Git for Windows uses mingw*/etc/gitconfig and ProgramData/Git/config.
         // A runtime directory alone cannot establish the modern configuration layout.
@@ -485,8 +511,9 @@ pub(super) fn system_prefix() -> Option<&'static Path> {
 pub(super) fn system_config() -> Option<&'static Path> {
     let _span = gix_trace::detail!("gix_path::git::system_config_path()");
     static FALLBACK: LazyLock<Option<BString>> = LazyLock::new(|| {
-        super::system_prefix()
-            .map(config_path_from_system_prefix)
+        system_prefix_from_exepath_var(|key| std::env::var_os(key))
+            .or_else(prefix_from_selected_installation)
+            .map(|prefix| config_path_from_system_prefix(&prefix))
             .and_then(|path| crate::os_string_into_bstring(path.into()).ok())
     });
     git::GIT_CONFIG_PATHS
@@ -506,23 +533,6 @@ pub(super) fn shell() -> super::Shell {
 
 pub(super) fn associated_program(name: &str) -> Option<PathBuf> {
     auxiliary::find_git_associated_windows_executable(name).map(|executable| executable.program.into())
-}
-
-pub(super) fn command(executable: impl AsRef<OsStr>) -> Command {
-    use std::os::windows::process::CommandExt;
-    let mut cmd = Command::new(executable);
-    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    cmd
-}
-
-pub(super) fn config_query_cwd() -> PathBuf {
-    // We try the Windows directory (usually `C:\Windows`) first. It is given by `SystemRoot`,
-    // except in rare cases where our own parent has not passed down that environment variable.
-    env::var_os("SystemRoot")
-        .or_else(|| env::var_os("windir"))
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .unwrap_or_else(env::temp_dir)
 }
 
 #[cfg(test)]

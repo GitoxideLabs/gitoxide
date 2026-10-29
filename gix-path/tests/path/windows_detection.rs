@@ -181,8 +181,8 @@ fn exepath_configuration_does_not_bypass_a_core_override() -> gix_error::TestRes
     );
     assert_eq!(
         gix_path::env::core_dir(),
-        None,
-        "the core override requires querying the nonlaunchable selected executable"
+        Some(std::env::current_dir()?.join("custom/git-core").as_path()),
+        "the relative override selects the helper path without launching Git"
     );
     assert_eq!(
         Path::new(gix_path::env::shell()),
@@ -207,13 +207,13 @@ fn a_known_native_prefix_does_not_hide_a_later_core_override() -> gix_error::Tes
     let _override = gix_testtools::Env::new().set("GIT_EXEC_PATH", "custom/git-core");
     assert_eq!(
         gix_path::env::core_dir(),
-        None,
+        Some(std::env::current_dir()?.join("custom/git-core").as_path()),
         "a later core lookup must honor its override even when the native layout is already known"
     );
     assert_eq!(
         gix_path::env::installation_config(),
-        None,
-        "without EXEPATH, the override also prevents inferring configuration from the known layout"
+        Some(root.join("etc/gitconfig").as_path()),
+        "the core override does not change configuration discovery"
     );
     assert_eq!(
         Path::new(gix_path::env::shell()),
@@ -288,7 +288,7 @@ fn core_directory_uses_the_selected_executable_instead_of_exepath() -> gix_error
 }
 
 #[test]
-fn core_directory_override_requires_querying_git() -> gix_error::TestResult {
+fn core_directory_override_is_resolved_without_git() -> gix_error::TestResult {
     let fixture = fixture()?;
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
@@ -296,19 +296,19 @@ fn core_directory_override_requires_querying_git() -> gix_error::TestResult {
     let _env = select(&fixture.join("mixed/ucrt64/bin")).set("GIT_EXEC_PATH", "custom/git-core");
     assert_eq!(
         gix_path::env::core_dir(),
-        None,
-        "an override disables inference, and the placeholder executable cannot answer the query"
+        Some(std::env::current_dir()?.join("custom/git-core").as_path()),
+        "the relative override selects the helper path without launching Git"
     );
     Ok(())
 }
 
 #[test]
-fn incomplete_core_directory_requires_querying_git() -> gix_error::TestResult {
+fn incomplete_core_directory_does_not_select_another_installation() -> gix_error::TestResult {
     unrecognized_core("incomplete/ucrt64/bin")
 }
 
 #[test]
-fn unknown_core_directory_requires_querying_git() -> gix_error::TestResult {
+fn unknown_core_directory_does_not_select_another_installation() -> gix_error::TestResult {
     unrecognized_core("unknown")
 }
 
@@ -321,7 +321,7 @@ fn unrecognized_core(bin: &str) -> gix_error::TestResult {
     assert_eq!(
         gix_path::env::core_dir(),
         None,
-        "without an established core directory, discovery must query the placeholder Git and fail"
+        "an unknown layout must not select helpers from a different Git installation"
     );
     Ok(())
 }
@@ -372,7 +372,7 @@ fn symlink_location_does_not_override_unknown_target_layout() -> gix_error::Test
     assert_eq!(
         gix_path::env::core_dir(),
         None,
-        "an unknown symlink target must be queried instead of using the link's apparent layout"
+        "the link's apparent layout does not describe the unknown target"
     );
     Ok(())
 }
@@ -399,7 +399,7 @@ fn scoop_shim(directory: &str, installation: &str) -> gix_error::TestResult {
 }
 
 #[test]
-fn scoop_shim_with_arguments_requires_querying_git() -> gix_error::TestResult {
+fn scoop_shim_with_arguments_has_no_inferred_layout() -> gix_error::TestResult {
     let fixture = gix_testtools::scripted_fixture_read_only("windows-scoop-shims.sh")?;
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
@@ -408,7 +408,7 @@ fn scoop_shim_with_arguments_requires_querying_git() -> gix_error::TestResult {
     assert_eq!(
         gix_path::env::core_dir(),
         None,
-        "arguments can change Git's behavior, so the placeholder shim must be queried"
+        "arguments can change Git's behavior, so its layout cannot be inferred"
     );
     assert_eq!(
         gix_path::env::installation_config(),
@@ -468,7 +468,7 @@ fn msys_missing_mounted_core_does_not_hide_configuration() -> gix_error::TestRes
     assert_eq!(
         gix_path::env::core_dir(),
         None,
-        "a missing translated core directory requires querying the nonlaunchable Git executable"
+        "an absent mounted core directory cannot supply helpers"
     );
     assert_eq!(
         gix_path::env::installation_config(),
@@ -508,7 +508,7 @@ fn msys_package(installation: &str, core: &str, config: &str, config_exists: boo
 }
 
 #[test]
-fn msys_core_override_requires_querying_git() -> gix_error::TestResult {
+fn msys_core_override_is_resolved_without_git() -> gix_error::TestResult {
     let fixture = gix_testtools::scripted_fixture_read_only("windows-msys-git.sh")?;
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
@@ -521,8 +521,8 @@ fn msys_core_override_requires_querying_git() -> gix_error::TestResult {
     );
     assert_eq!(
         gix_path::env::core_dir(),
-        None,
-        "an override still requires querying the nonlaunchable Git executable"
+        Some(std::env::current_dir()?.join("/custom/git-core").as_path()),
+        "the core override takes precedence over package defaults"
     );
     Ok(())
 }
@@ -542,20 +542,24 @@ fn msys_cached_defaults_do_not_hide_a_later_core_override() -> gix_error::TestRe
     let _override = gix_testtools::Env::new().set("GIT_EXEC_PATH", "/custom/git-core");
     assert_eq!(
         gix_path::env::core_dir(),
-        None,
+        Some(std::env::current_dir()?.join("/custom/git-core").as_path()),
         "core discovery still observes its override after configuration populated the cache"
     );
     Ok(())
 }
 
 #[test]
-fn unregistered_msys_git_requires_querying_git() -> gix_error::TestResult {
+fn unregistered_msys_git_has_no_inferred_layout() -> gix_error::TestResult {
     let fixture = gix_testtools::scripted_fixture_read_only("windows-msys-git.sh")?;
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
     }
     let _env = select(&fixture.join("unregistered/usr/bin"));
-    assert_eq!(gix_path::env::core_dir(), None, "an unknown MSYS build must be queried");
+    assert_eq!(
+        gix_path::env::core_dir(),
+        None,
+        "an unknown MSYS build supplies no helpers"
+    );
     assert_eq!(
         gix_path::env::installation_config(),
         None,
