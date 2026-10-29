@@ -1,11 +1,11 @@
 use std::{path::Path, sync::atomic::AtomicBool};
 
+use gix::error::ErrorExt;
 use gix::{
     ObjectId, Repository,
     push::{Lease, Options, Outcome, Rejection, Status, Update},
 };
 use gix_testtools::TestResult;
-use gix::error::ErrorExt;
 
 fn update(name: &str, new_id: Option<ObjectId>) -> TestResult<Update> {
     Ok(Update {
