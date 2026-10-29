@@ -102,6 +102,81 @@ mod lock {
 #[cfg(feature = "worktree-mutation")]
 mod add {
     #[test]
+    fn registration_preserves_existing_contents_and_git_reads_its_links() -> gix_testtools::TestResult {
+        for relative in [false, true] {
+            let (mut repo, _fixture) = crate::basic_rw_repo()?;
+            repo.config_snapshot_mut()
+                .set_raw_value("worktree.useRelativePaths", if relative { "true" } else { "false" })?;
+            let work_dir = repo.workdir().expect("main checkout").to_owned();
+            for name in ["first", "second"] {
+                let destination = work_dir.join(name);
+                std::fs::create_dir_all(destination.join("nested"))?;
+                std::fs::write(destination.join("nested/keep"), b"existing contents")?;
+                let linked = repo.register_worktree(
+                    &destination,
+                    gix::worktree::add::Head::Unborn("refs/custom/unborn".try_into()?),
+                    &AtomicBool::default(),
+                )?;
+                assert_eq!(
+                    std::fs::read(destination.join("nested/keep"))?,
+                    b"existing contents",
+                    "registration preserves all caller data"
+                );
+                assert!(
+                    !linked.index_path().exists(),
+                    "registration performs no checkout or index creation"
+                );
+                assert_eq!(
+                    gix_testtools::git(&destination, "symbolic-ref HEAD")?,
+                    "refs/custom/unborn\n",
+                    "Git recognizes the unborn worktree"
+                );
+                assert!(
+                    gix_testtools::git(&work_dir, "worktree list --porcelain")?.contains(name),
+                    "Git reads the registration backlink"
+                );
+                assert_eq!(
+                    gix_path::realpath(repo.worktree_proxy_by_id(name)?.expect("new registration").base()?)?,
+                    gix_path::realpath(&destination)?,
+                    "registration points at the caller's populated directory"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn failed_registration_preserves_populated_destination() -> gix_testtools::TestResult {
+        let (mut repo, _fixture) = crate::basic_rw_repo()?;
+        let destination = repo.workdir().expect("main checkout").join("populated");
+        std::fs::create_dir(&destination)?;
+        std::fs::write(destination.join("keep"), b"caller data")?;
+        repo.config_snapshot_mut()
+            .set_raw_value("extensions.worktreeConfig", "true")?;
+        std::fs::create_dir(repo.git_dir().join("config.worktree"))?;
+        repo.register_worktree(
+            &destination,
+            gix::worktree::add::Head::Unborn(branch("unborn")),
+            &AtomicBool::default(),
+        )
+        .expect_err("an unreadable worktree config fails after link preparation");
+        assert_eq!(
+            std::fs::read(destination.join("keep"))?,
+            b"caller data",
+            "failed initialization preserves caller contents"
+        );
+        assert!(
+            !destination.join(".git").exists(),
+            "failed registration removes its own link"
+        );
+        assert!(
+            repo.worktrees()?.is_empty(),
+            "failed registration leaves no private administration"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn unborn_heads_match_git_and_do_not_create_a_branch_or_reflog() -> gix_testtools::TestResult {
         let (repo, _fixture) = crate::basic_rw_repo()?;
         let work_dir = repo.workdir().expect("main checkout");

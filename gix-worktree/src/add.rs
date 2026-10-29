@@ -65,6 +65,7 @@ pub struct PreparedWorktree {
 
 #[derive(Debug)]
 enum WorkDirCleanup {
+    RemoveGitLink,
     ClearContents,
     RemoveDirectory,
 }
@@ -99,7 +100,9 @@ impl PreparedWorktree {
     ///
     /// If [`prepare()`] created the destination directory, remove it and all its contents. If the destination
     /// already existed, remove its contents but leave the directory itself in place. This includes files added
-    /// during checkout. Parent directories, including any created by [`prepare()`], remain in place.
+    /// during checkout. For an existing destination passed to [`prepare_in_place()`], only the `.git`
+    /// link created during preparation is removed; all other contents are preserved.
+    /// Parent directories, including any created by [`prepare()`], remain in place.
     ///
     /// Both worktree cleanup and private Git directory removal are attempted, returning the first error, if any.
     /// This consumes the value even on error; dropping it will not retry cleanup.
@@ -111,6 +114,7 @@ impl PreparedWorktree {
     fn rollback_inner(&self) -> io::Result<()> {
         let work_dir = match self.work_dir_cleanup {
             None => Ok(()),
+            Some(WorkDirCleanup::RemoveGitLink) => fs::remove_file(self.work_dir.join(".git")),
             Some(WorkDirCleanup::ClearContents) => remove_contents_non_recursively(&self.work_dir),
             Some(WorkDirCleanup::RemoveDirectory) => fs::remove_dir_all(&self.work_dir),
         };
@@ -144,12 +148,36 @@ impl Drop for PreparedWorktree {
 pub fn prepare(
     destination_dir: impl AsRef<Path>,
     context: Context<'_>,
+    options: Options,
+) -> io::Result<PreparedWorktree> {
+    prepare_inner(destination_dir.as_ref(), context, options, false)
+}
+
+/// Prepare the administrative files for a linked worktree while retaining existing destination contents.
+///
+/// Like [`prepare()`], but the destination may already contain files other than `.git`. An existing `.git`
+/// entry, including a symbolic link or directory, is never replaced. If the destination already existed,
+/// rollback removes only the newly created `.git` link and private administrative directory, preserving all
+/// other contents, including files added after preparation. A newly created destination is removed on rollback.
+/// The caller is responsible for preventing concurrent changes to the destination and its `.git` entry.
+/// This operation does not check out files or create HEAD or an index.
+pub fn prepare_in_place(
+    destination_dir: impl AsRef<Path>,
+    context: Context<'_>,
+    options: Options,
+) -> io::Result<PreparedWorktree> {
+    prepare_inner(destination_dir.as_ref(), context, options, true)
+}
+
+fn prepare_inner(
+    work_dir: &Path,
+    context: Context<'_>,
     Options { relative_paths }: Options,
+    preserve_contents: bool,
 ) -> io::Result<PreparedWorktree> {
     let common_dir = context.common_dir;
     ensure_directory(common_dir, "common Git directory")?;
-    let work_dir = destination_dir.as_ref();
-    let empty_destination_exists = validate_destination(work_dir)?;
+    let destination_exists = validate_destination(work_dir, preserve_contents)?;
     let common_dir = gix_path::realpath(common_dir).map_err(io::Error::other)?;
     let work_dir = gix_path::realpath(work_dir).map_err(io::Error::other)?;
 
@@ -177,7 +205,7 @@ pub fn prepare(
         rollback: true,
     };
 
-    if !empty_destination_exists {
+    if !destination_exists {
         if let Some(parent) = prepared.work_dir.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -196,8 +224,12 @@ pub fn prepare(
     fs::write(prepared.git_dir.join("commondir"), b"../..\n")?;
     let dot_git = prepared.work_dir.join(".git");
     let mut dot_git = fs::OpenOptions::new().write(true).create_new(true).open(dot_git)?;
-    if empty_destination_exists {
-        prepared.work_dir_cleanup = Some(WorkDirCleanup::ClearContents);
+    if destination_exists {
+        prepared.work_dir_cleanup = Some(if preserve_contents {
+            WorkDirCleanup::RemoveGitLink
+        } else {
+            WorkDirCleanup::ClearContents
+        });
     }
     write_path_to(
         &mut dot_git,
@@ -232,7 +264,7 @@ fn link_path(target: &Path, base: &Path, relative: bool) -> PathBuf {
     }
 }
 
-fn validate_destination(path: &Path) -> io::Result<bool> {
+fn validate_destination(path: &Path, allow_existing_contents: bool) -> io::Result<bool> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
@@ -242,6 +274,7 @@ fn validate_destination(path: &Path) -> io::Result<bool> {
             io::ErrorKind::AlreadyExists,
             format!("worktree destination \"{}\" is not a directory", path.display()),
         )),
+        Ok(_) if allow_existing_contents => Ok(true),
         Ok(_) => match fs::read_dir(path)?.next().transpose()? {
             Some(_) => Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
