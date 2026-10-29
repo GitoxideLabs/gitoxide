@@ -39,6 +39,7 @@ pub(crate) fn advertised_objects(
 
 pub(crate) fn updates(
     repo: &Repository,
+    remote: &crate::Remote<'_>,
     updates: impl IntoIterator<Item = Update>,
     remote_refs: &[gix_protocol::handshake::Ref],
     shallow: &[ObjectId],
@@ -55,7 +56,7 @@ pub(crate) fn updates(
             bail!(message!("Multiple updates target {}", update.destination.as_bstr()).validation());
         }
         let expected_id = match update.lease {
-            Lease::Any => None,
+            Lease::Any | Lease::Tracking { .. } => None,
             Lease::MustMatch(id) => id,
         };
         if update
@@ -73,7 +74,7 @@ pub(crate) fn updates(
                 (name == update.destination.as_bstr()).then(|| object_id.map(ToOwned::to_owned))
             })
             .flatten();
-        let status = status(repo, &update, old_id, shallow, should_interrupt)?;
+        let status = status(repo, remote, &update, old_id, shallow, should_interrupt)?;
         out.push(UpdateOutcome { update, old_id, status });
     }
     Ok(out)
@@ -81,6 +82,7 @@ pub(crate) fn updates(
 
 fn status(
     repo: &Repository,
+    remote: &crate::Remote<'_>,
     update: &Update,
     old_id: Option<ObjectId>,
     shallow: &[ObjectId],
@@ -89,10 +91,29 @@ fn status(
     if update.new_id.is_some() && old_id == update.new_id {
         return Ok(Status::UpToDate);
     }
-    if let Lease::MustMatch(expected) = update.lease
-        && expected != old_id
-    {
-        return Ok(Status::Rejected(Rejection::StaleLease));
+    match update.lease {
+        Lease::Any => {}
+        Lease::MustMatch(expected) if expected != old_id => return Ok(Status::Rejected(Rejection::StaleLease)),
+        Lease::MustMatch(_) => {}
+        Lease::Tracking { force_if_includes } => {
+            let tracking = super::tracking::tip(remote, repo, update.destination.as_ref())?;
+            if tracking.as_ref().map(|(_, id)| *id) != old_id {
+                return Ok(Status::Rejected(Rejection::StaleLease));
+            }
+            if force_if_includes
+                && let Some((name, commit_id)) = tracking
+                && !super::tracking::includes(
+                    repo,
+                    update.destination.as_ref(),
+                    name.as_ref(),
+                    commit_id,
+                    shallow,
+                    should_interrupt,
+                )?
+            {
+                return Ok(Status::Rejected(Rejection::RemoteUpdated));
+            }
+        }
     }
     let Some(new_id) = update.new_id else {
         return Ok(Status::WouldUpdate { forced: false });
@@ -116,14 +137,14 @@ fn status(
             _ => Some(Rejection::NeedsForce),
         }
     };
-    let forced = rejection.is_some() && (update.force || matches!(update.lease, Lease::MustMatch(_)));
+    let forced = rejection.is_some() && (update.force || !matches!(update.lease, Lease::Any));
     Ok(match rejection {
         Some(reason) if !forced => Status::Rejected(reason),
         _ => Status::WouldUpdate { forced },
     })
 }
 
-fn peel_commit(repo: &Repository, mut object_id: ObjectId) -> Result<Option<ObjectId>> {
+pub(super) fn peel_commit(repo: &Repository, mut object_id: ObjectId) -> Result<Option<ObjectId>> {
     let mut seen = gix_hashtable::HashSet::default();
     loop {
         if !seen.insert(object_id) {
@@ -147,7 +168,17 @@ pub(crate) fn is_ancestor(
     shallow: &[ObjectId],
     should_interrupt: &AtomicBool,
 ) -> Result<bool> {
-    let mut pending = VecDeque::from([new_id]);
+    is_ancestor_of_any(repo, old_id, [new_id], shallow, should_interrupt)
+}
+
+pub(super) fn is_ancestor_of_any(
+    repo: &Repository,
+    old_id: ObjectId,
+    new_ids: impl IntoIterator<Item = ObjectId>,
+    shallow: &[ObjectId],
+    should_interrupt: &AtomicBool,
+) -> Result<bool> {
+    let mut pending = VecDeque::from_iter(new_ids);
     let mut seen = gix_hashtable::HashSet::default();
     while let Some(commit_id) = pending.pop_front() {
         check_interrupt(should_interrupt)?;

@@ -195,6 +195,170 @@ fn push_enforces_leases_and_git_update_rules() -> TestResult {
 }
 
 #[test]
+fn tracking_lease_includes_matches_git_for_raw_ids_and_destination_reflogs() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    for hash in gix::hash::Kind::all() {
+        let fixture = gix_testtools::scripted_fixture_read_only_with_args("make_push_tracking.sh", [hash.to_string()])?;
+        let source = fixture.join("source");
+        let destination = fixture.join("destination");
+        let repo = gix::open_opts(&source, gix::open::Options::isolated())?;
+        let remote = repo.find_remote("origin")?.with_push_url(destination.as_path())?;
+        let new_id = repo.find_reference("refs/heads/source")?.id().detach();
+        for (branch, included) in [
+            ("included", true),
+            ("descendant", true),
+            ("boundary", true),
+            ("too-old", false),
+            ("not-included", false),
+            ("no-local", false),
+        ] {
+            for force_if_includes in [false, true] {
+                let mut request = update(&format!("refs/heads/{branch}"), Some(new_id))?;
+                request.lease = Lease::Tracking { force_if_includes };
+                let options = Options {
+                    dry_run: true,
+                    ..Options::default()
+                };
+                let outcome = remote.push(
+                    [request.clone()],
+                    options,
+                    gix::progress::Discard,
+                    |_, _| Ok(()),
+                    &AtomicBool::new(false),
+                )?;
+                let wire = remote.connect(gix::remote::Direction::Push)?.push(
+                    [request],
+                    options,
+                    gix::progress::Discard,
+                    |_, _| Ok(()),
+                    &AtomicBool::new(false),
+                )?;
+                assert_eq!(
+                    wire.updates, outcome.updates,
+                    "local and transport planners share tracking-lease policy"
+                );
+                if force_if_includes && !included {
+                    assert_eq!(outcome.updates[0].status, Status::Rejected(Rejection::RemoteUpdated));
+                }
+                for source_spec in [new_id.to_string(), "source".into()] {
+                    let mut git = gix_testtools::git_command(&source);
+                    git.args(["push", "--dry-run", "--porcelain", "--no-verify", "--force-with-lease"]);
+                    if force_if_includes {
+                        git.arg("--force-if-includes");
+                    }
+                    let git = git
+                        .arg("origin")
+                        .arg(format!("{source_spec}:refs/heads/{branch}"))
+                        .output()?;
+                    let should_succeed = !force_if_includes || included;
+                    assert_eq!(
+                        git.status.success(),
+                        should_succeed,
+                        "Git oracle for {branch}, source={source_spec}, includes={force_if_includes}: {git:?}"
+                    );
+                    assert_eq!(
+                        matches!(outcome.updates[0].status, Status::WouldUpdate { forced: true }),
+                        should_succeed,
+                        "native push agrees for {branch}, source={source_spec}, includes={force_if_includes}"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn tracking_leases_handle_absence_deletion_staleness_and_literal_first_mapping() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let fixture = gix_testtools::scripted_fixture_writable_with_args(
+        "make_push_tracking.sh",
+        ["sha1"],
+        gix_testtools::Creation::Execute,
+    )?;
+    let repo = gix::open_opts(fixture.path().join("source"), gix::open::Options::isolated())?;
+    let destination = fixture.path().join("destination");
+    let remote = repo.find_remote("origin")?.with_push_url(destination.as_path())?;
+    let rewritten_id = repo.find_reference("refs/heads/source")?.id().detach();
+    let old_id = repo.find_reference("refs/remotes/origin/included")?.id().detach();
+    let request = |branch: &str, id: Option<ObjectId>, force_if_includes| -> TestResult<Update> {
+        let mut update = update(&format!("refs/heads/{branch}"), id)?;
+        update.lease = Lease::Tracking { force_if_includes };
+        Ok(update)
+    };
+    let push = |remote: &gix::Remote<'_>, update| {
+        remote.push(
+            [update],
+            Options::default(),
+            gix::progress::Discard,
+            |_, _| Ok(()),
+            &AtomicBool::new(false),
+        )
+    };
+    let outcome = push(&remote, request("fresh", Some(rewritten_id), true)?)?;
+    assert_eq!(
+        outcome.updates[0].status,
+        Status::Updated { forced: false },
+        "no tracking tip means expected absence, with no reflog check"
+    );
+    let outcome = push(&remote, request("fresh", None, false)?)?;
+    assert_eq!(
+        outcome.updates[0].status,
+        Status::Rejected(Rejection::StaleLease),
+        "expected absence protects a newly created remote ref"
+    );
+    let outcome = push(&remote, request("fresh", Some(rewritten_id), true)?)?;
+    assert_eq!(
+        outcome.updates[0].status,
+        Status::UpToDate,
+        "unchanged tips bypass even a missing tracking lease"
+    );
+
+    let outcome = push(&remote, request("included", Some(rewritten_id), true)?)?;
+    assert_eq!(outcome.updates[0].status, Status::Updated { forced: true });
+    let outcome = push(&remote, request("included", Some(old_id), true)?)?;
+    assert_eq!(
+        outcome.updates[0].status,
+        Status::Rejected(Rejection::StaleLease),
+        "the stale lease takes precedence over reachability"
+    );
+
+    let outcome = push(&remote, request("not-included", None, true)?)?;
+    assert_eq!(
+        outcome.updates[0].status,
+        Status::Rejected(Rejection::RemoteUpdated),
+        "Git's includes check also applies to deletion when requested"
+    );
+    let outcome = push(&remote, request("not-included", None, false)?)?;
+    assert!(
+        matches!(outcome.updates[0].status, Status::Updated { .. }),
+        "a matching tracking lease is enough to protect deletion"
+    );
+    assert_eq!(remote_id(&destination, "refs/heads/not-included")?, None);
+
+    for specs in [
+        vec!["refs/heads/*:refs/missing/*", "refs/heads/*:refs/remotes/origin/*"],
+        vec!["descendant:refs/remotes/origin/descendant"],
+        vec!["refs/heads/*:refs/remotes/origin/*", "^refs/heads/descendant"],
+        Vec::new(),
+    ] {
+        let mut selected = remote.clone();
+        selected.replace_refspecs(specs.iter().copied(), gix::remote::Direction::Fetch)?;
+        let outcome = push(&selected, request("descendant", Some(rewritten_id), false)?)?;
+        assert_eq!(
+            outcome.updates[0].status,
+            Status::Rejected(Rejection::StaleLease),
+            "mapping selection is literal, first-match and exclusion-aware: {specs:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn dry_run_and_atomic_local_rejections_do_not_change_refs() -> TestResult {
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());

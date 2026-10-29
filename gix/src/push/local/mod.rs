@@ -41,6 +41,7 @@ pub(crate) fn push(
         .unwrap_or_default();
     let mut updates = push::plan::updates(
         &source,
+        remote,
         updates,
         handshake.refs.as_deref().unwrap_or_default(),
         &shallow,
