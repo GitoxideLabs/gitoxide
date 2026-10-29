@@ -236,11 +236,15 @@ fn inline_path_assignment_controls_lookup() -> TestResult {
 #[test]
 #[cfg(windows)]
 fn builder_path_controls_lookup() -> TestResult {
-    let root = gix_testtools::scripted_fixture_read_only("win_path_lookup.sh")?;
-    let joined_paths = root.join("b").to_string_lossy().replace('\\', "/");
-    let script = std::path::PathBuf::from(&joined_paths).join("exe");
-    let cmd = std::process::Command::try_from(gix_command::prepare("exe").env("Path", joined_paths.as_str()))?;
-    assert_eq!(cmd.get_program(), std::path::Path::new("/b/exe"));
+    let root = gix_testtools::scripted_fixture_read_only("windows_shebang.sh")?;
+    let joined_paths = std::env::join_paths([root.join("first"), root.join("second")])?;
+    let script = root.join("first").join("hook");
+    let cmd = std::process::Command::try_from(gix_command::prepare("hook").env("Path", joined_paths))?;
+    assert_eq!(
+        std::path::Path::new(cmd.get_program()),
+        root.join("second").join("sh.exe"),
+        "builder PATH selects the .exe interpreter as well as the script"
+    );
     assert_eq!(
         cmd.get_args().collect::<Vec<_>>(),
         [script.as_os_str()],
@@ -252,13 +256,18 @@ fn builder_path_controls_lookup() -> TestResult {
 #[test]
 #[cfg(windows)]
 fn manually_split_commands_retain_shebang_dispatch() -> TestResult {
-    let root = gix_testtools::scripted_fixture_read_only("win_path_lookup.sh")?;
-    let script = root.join("b").join("exe").to_string_lossy().replace('\\', "/");
-    let input = format!(r#"FOO=bar "{script}" arg"#);
+    let root = gix_testtools::scripted_fixture_read_only("windows_shebang.sh")?;
+    let script = root.join("hook").to_string_lossy().replace('\\', "/");
+    let paths = root.join("second").to_string_lossy().replace('\\', "/");
+    let input = format!(r#"PATH="{paths}" FOO=bar "{script}" arg"#);
     let cmd = std::process::Command::try_from(
         gix_command::prepare(input).command_may_be_shell_script_allow_manual_argument_splitting(),
     )?;
-    assert_eq!(cmd.get_program(), std::path::Path::new("/b/exe"));
+    assert_eq!(
+        std::path::Path::new(cmd.get_program()),
+        root.join("second").join("sh.exe"),
+        "inline PATH also selects the interpreter"
+    );
     assert_eq!(
         cmd.get_args().collect::<Vec<_>>(),
         [std::ffi::OsStr::new(&script), std::ffi::OsStr::new("arg")],
@@ -270,6 +279,34 @@ fn manually_split_commands_retain_shebang_dispatch() -> TestResult {
             .and_then(|(_, value)| value),
         Some(std::ffi::OsStr::new("bar")),
         "inline assignments are retained during shebang dispatch"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg(windows)]
+fn shebang_execution_matches_git_for_windows() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let root = gix_testtools::scripted_fixture_read_only("windows_shebang.sh")?;
+    let shell_directory = std::path::Path::new(gix_path::env::shell())
+        .parent()
+        .expect("Git for Windows provides an absolute shell path");
+    let mut command = std::process::Command::try_from(
+        gix_command::prepare(root.join("reference.git/hooks/pre-commit"))
+            .env("PATH", shell_directory)
+            .args(["one argument", "literal $value"]),
+    )?;
+    let output = command.output()?;
+    assert!(
+        output.status.success(),
+        "the interpreter found in PATH executes the hook"
+    );
+    assert_eq!(
+        output.stdout,
+        std::fs::read(root.join("reference-output"))?,
+        "Git and gitoxide ignore the shebang directory and options while retaining arguments"
     );
     Ok(())
 }
