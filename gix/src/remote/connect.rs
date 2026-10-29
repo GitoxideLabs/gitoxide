@@ -32,7 +32,8 @@ impl<'repo> Remote<'repo> {
     /// Connect to the url suitable for `direction` and return a handle through which operations can be performed.
     ///
     /// Note that the `protocol.version` configuration key affects the transport protocol used to connect,
-    /// with `2` being the default.
+    /// with `2` being the default. Trusted `remote.<name>.uploadpack` and `receivepack`
+    /// override the service command for local and SSH transports.
     ///
     /// The transport used for connection can be configured via `transport_mut().configure()` assuming the actually
     /// used transport is well known. If that's not the case, the transport can be created by hand and passed to
@@ -46,6 +47,12 @@ impl<'repo> Remote<'repo> {
         let (url, version) = self.sanitized_url_and_version(direction)?;
         #[cfg(feature = "blocking-network-client")]
         let scheme_is_ssh = url.scheme == gix_url::Scheme::Ssh;
+        #[cfg(feature = "blocking-network-client")]
+        let service_command = if scheme_is_ssh || url.scheme == gix_url::Scheme::File {
+            self.service_command(direction)?
+        } else {
+            None
+        };
         let options = connect::Options {
             version,
             #[cfg(feature = "blocking-network-client")]
@@ -57,7 +64,11 @@ impl<'repo> Remote<'repo> {
             trace: self.repo.config.trace_packet(),
         };
         #[cfg(feature = "blocking-network-client")]
-        let transport = connect::connect_with_environment(url, options, &self.command_environment)?;
+        let mut transport = connect::connect_with_environment(url, options, &self.command_environment)?;
+        #[cfg(feature = "blocking-network-client")]
+        if let Some(command) = service_command {
+            transport.configure(&gix_transport::client::blocking_io::file::Options { command: Some(command) })?;
+        }
         #[cfg(feature = "async-network-client")]
         let transport = connect::connect(url, options).await?;
         Ok(self.to_connection_with_transport(transport))
@@ -67,7 +78,8 @@ impl<'repo> Remote<'repo> {
     ///
     /// This can be useful when using custom transports to allow additional configuration.
     /// Repository path resolution failures and denied protocols include the path or URL bytes as `input`
-    /// [metadata](gix_error::Error::metadata()).
+    /// [metadata](gix_error::Error::metadata()). A local URL with a configured service command
+    /// is passed to that command without requiring it to name an existing repository.
     pub fn sanitized_url_and_version(
         &self,
         direction: crate::remote::Direction,
@@ -123,7 +135,37 @@ impl<'repo> Remote<'repo> {
                 url.scheme
             );
         }
-        Ok((sanitize(url)?, version))
+        let url = if url.scheme == gix_url::Scheme::File && self.service_command(direction)?.is_some() {
+            url
+        } else {
+            sanitize(url)?
+        };
+        Ok((url, version))
+    }
+}
+
+impl Remote<'_> {
+    pub(crate) fn service_command(&self, direction: crate::remote::Direction) -> Result<Option<std::ffi::OsString>> {
+        use crate::config::tree::{Key, Remote};
+
+        let Some(name) = self.name() else {
+            return Ok(None);
+        };
+        let key = match direction {
+            crate::remote::Direction::Fetch => &Remote::UPLOAD_PACK,
+            crate::remote::Direction::Push => &Remote::RECEIVE_PACK,
+        };
+        self.repo
+            .config
+            .resolved
+            .string_filter_by(
+                "remote",
+                Some(name.as_bstr()),
+                key.name(),
+                self.repo.filter_config_section(),
+            )
+            .map(|command| gix_path::from_bstr(&command).map(|path| path.into_owned().into_os_string()))
+            .transpose()
     }
 }
 

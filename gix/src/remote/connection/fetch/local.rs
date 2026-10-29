@@ -20,7 +20,7 @@ impl Remote<'_> {
     /// transfer verified raw objects in a self-contained pack, obey tag and ref visibility
     /// policies, and protect reference updates with transactions. Replacement refs do not
     /// affect transferred objects. `FETCH_HEAD` is written only when requested by `options`;
-    /// neither path runs maintenance.
+    /// neither path runs maintenance. A configured upload-pack command uses the process transport.
     ///
     /// Native local fetch currently supports preserving the shallow boundary and setting an
     /// absolute depth. Shallow source boundaries are preserved, as with `git fetch --update-shallow`;
