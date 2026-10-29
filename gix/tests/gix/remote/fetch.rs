@@ -876,7 +876,17 @@ mod blocking_and_async_io {
             .await
             .unwrap_err();
 
-        insta::assert_debug_snapshot!(err, "fetching a missing explicit ref fails even if ls refs returns nothing", @"None of the refspec(s) refs/heads/does-not-exist matched any of the 0 refs on the remote");
+        assert!(
+            err.is_not_found(),
+            "a missing source can be classified without parsing diagnostics"
+        );
+        assert_eq!(
+            err.metadata_merged().get("ref"),
+            Some(&gix::error::MetadataValue::from(
+                b"refs/heads/does-not-exist".as_slice()
+            )),
+            "the failure identifies the requested source"
+        );
         Ok(())
     }
 

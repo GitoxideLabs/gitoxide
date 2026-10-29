@@ -552,3 +552,42 @@ fn native_clone_preserves_legacy_metadata_without_decoding_it() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn native_fetch_rejects_a_partial_missing_selection_before_updates() -> TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_native_local_fetch_repo.sh")?.canonicalize()?;
+    let tmp = gix_testtools::tempfile::tempdir()?;
+    let local = gix::ThreadSafeRepository::init_opts(
+        tmp.path(),
+        gix::create::Kind::Bare,
+        Default::default(),
+        gix::open::Options::isolated(),
+    )?
+    .to_thread_local();
+    let remote = local
+        .remote_at(gix::path::into_bstr(fixture.join("source"))?)?
+        .with_refspecs(
+            ["refs/heads/main:refs/remotes/origin/main", "refs/heads/absent"],
+            Direction::Fetch,
+        )?;
+    let error = remote
+        .fetch(
+            Default::default(),
+            gix::progress::Discard,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .expect_err("all exact refs must exist before updating any reference");
+    assert!(
+        error.is_not_found(),
+        "missing exact refs retain a recoverable error kind"
+    );
+    assert_eq!(
+        error.metadata_merged().get("ref"),
+        Some(&gix::error::MetadataValue::from(b"refs/heads/absent".as_slice()))
+    );
+    assert!(
+        local.try_find_reference("refs/remotes/origin/main")?.is_none(),
+        "no partial update is made"
+    );
+    Ok(())
+}

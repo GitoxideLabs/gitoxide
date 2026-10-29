@@ -294,3 +294,10 @@ where
         self
     }
 }
+
+fn validate_required_refs(ref_map: &RefMap, missing_refs_allowed: bool) -> Result<()> {
+    if !missing_refs_allowed && let Some(source) = ref_map.missing_source_refs().next() {
+        bail!(gix_error::not_found(format!("Could not find remote ref {source}")).with("ref", source));
+    }
+    Ok(())
+}

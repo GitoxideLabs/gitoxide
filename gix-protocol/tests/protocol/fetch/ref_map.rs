@@ -148,6 +148,82 @@ mod is_missing_required_mapping {
         assert!(!map.is_missing_required_mapping());
     }
 
+    #[test]
+    fn a_missing_exact_source_is_required_even_when_another_spec_matches() -> gix_testtools::TestResult {
+        let capabilities = gix_transport::client::Capabilities::from_bytes(b"\0object-format=sha1")?.0;
+        let map = RefMap::from_refs(
+            vec![Ref::Direct {
+                full_ref_name: "refs/heads/main".into(),
+                object: gix_hash::ObjectId::null(gix_hash::Kind::Sha1),
+            }],
+            &capabilities,
+            gix_protocol::fetch::refmap::init::Context {
+                fetch_refspecs: vec![fetch_spec("refs/heads/main"), fetch_spec("refs/heads/absent")],
+                extra_refspecs: Vec::new(),
+            },
+        )?;
+        assert!(
+            map.is_missing_required_mapping(),
+            "every exact requested source must exist before fetching"
+        );
+        assert_eq!(
+            map.missing_source_refs().collect::<Vec<_>>(),
+            ["refs/heads/absent"],
+            "the missing request is named"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unmatched_wildcards_allow_unrelated_advertisements() -> gix_testtools::TestResult {
+        let capabilities = gix_transport::client::Capabilities::from_bytes(b"\0object-format=sha1")?.0;
+        let map = RefMap::from_refs(
+            vec![Ref::Direct {
+                full_ref_name: "refs/tags/v1".into(),
+                object: gix_hash::ObjectId::null(gix_hash::Kind::Sha1),
+            }],
+            &capabilities,
+            gix_protocol::fetch::refmap::init::Context {
+                fetch_refspecs: vec![fetch_spec("refs/heads/*:refs/remotes/origin/*")],
+                extra_refspecs: Vec::new(),
+            },
+        )?;
+        assert!(
+            !map.is_missing_required_mapping(),
+            "a wildcard namespace can be empty even when other namespaces exist"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn duplicate_partial_and_excluded_sources_are_still_advertised() -> gix_testtools::TestResult {
+        let capabilities = gix_transport::client::Capabilities::from_bytes(b"\0object-format=sha1")?.0;
+        let map = RefMap::from_refs(
+            vec![Ref::Direct {
+                full_ref_name: "refs/heads/main".into(),
+                object: gix_hash::ObjectId::null(gix_hash::Kind::Sha1),
+            }],
+            &capabilities,
+            gix_protocol::fetch::refmap::init::Context {
+                fetch_refspecs: vec![
+                    fetch_spec("refs/heads/main"),
+                    fetch_spec("main"),
+                    fetch_spec("^refs/heads/main"),
+                ],
+                extra_refspecs: Vec::new(),
+            },
+        )?;
+        assert!(
+            map.mappings.is_empty(),
+            "the negative refspec removes all selected mappings"
+        );
+        assert!(
+            !map.is_missing_required_mapping(),
+            "selection excludes an existing source, so it isn't missing"
+        );
+        Ok(())
+    }
+
     /// Once at least one explicit refspec produced a mapping, the helper must report success.
     ///
     /// This is the common case of an exact refspec matching as intended, so callers should continue with
