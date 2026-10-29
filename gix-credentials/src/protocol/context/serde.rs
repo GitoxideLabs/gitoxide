@@ -85,6 +85,41 @@ pub mod decode {
     use crate::protocol::{Context, ContextOptions, context::serde::validate};
 
     impl Context {
+        /// Decode Git credential input, expanding each `url` at its position in the input.
+        ///
+        /// URL fields replace all earlier fields; later fields override individual components.
+        /// Empty lines end the request. Invalid fields are rejected even when a later URL replaces them.
+        pub fn from_credential_input(input: &[u8], options: ContextOptions) -> Result<Self> {
+            Self::from_bytes(input, options)?;
+            let mut fields = Vec::new();
+            for line in input.lines().take_while(|line| !line.is_empty()) {
+                if let Some(url) = line.strip_prefix(b"url=") {
+                    let url = crate::program::builtin::parse_url(url)
+                        .ok_or_else(|| validation("Invalid credential URL").raise())?;
+                    fields.clear();
+                    for (key, value) in [
+                        ("protocol", Some(url.protocol)),
+                        ("host", Some(url.host)),
+                        ("path", url.path),
+                        ("username", url.username),
+                        ("password", url.password),
+                    ] {
+                        if let Some(value) = value {
+                            fields.extend_from_slice(key.as_bytes());
+                            fields.push(b'=');
+                            fields.extend_from_slice(&value);
+                            fields.push(b'\n');
+                        }
+                    }
+                    Self::from_bytes(&fields, options)?;
+                } else {
+                    fields.extend_from_slice(line);
+                    fields.push(b'\n');
+                }
+            }
+            Self::from_bytes(&fields, options)
+        }
+
         /// Decode ourselves from `input` which is the format written by [`write_to()`][Self::write_to()].
         /// `options` control what to support during deserialization.
         /// Invalid line or value bytes are stored as `input` in [`gix_error::Message::values`].
