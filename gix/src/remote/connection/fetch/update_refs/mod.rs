@@ -156,6 +156,9 @@ pub(crate) fn update(
                                             if local.kind == gix_object::Kind::Commit
                                                 && repo.find_header(remote_id)?.kind() == gix_object::Kind::Commit
                                             {
+                                                // The old target may not be visited by the walk. Validate it
+                                                // before permitting even explicitly forced updates.
+                                                local.try_into_commit()?.decode()?;
                                                 // Parent timestamps need not be monotonic. Use repository traversal
                                                 // so shallow commits remain roots even when their parents exist.
                                                 let mut ancestors = repo.rev_walk([remote_id.to_owned()]).all()?;
