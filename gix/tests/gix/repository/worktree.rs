@@ -1226,6 +1226,7 @@ mod add {
         config.set_raw_value("filter.shared.required", "true")?;
         config.commit()?;
         source.reload()?;
+        std::fs::create_dir_all(source.common_dir().join("info"))?;
         std::fs::write(
             source.common_dir().join("info/attributes"),
             b"this text eol=crlf filter=shared\n",
