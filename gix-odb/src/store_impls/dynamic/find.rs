@@ -510,14 +510,14 @@ where
             "BUG: handle must be configured to `prevent_pack_unload()` before using this method"
         );
         let pack = self
-            .retained_indices
-            .lock()
+            .snapshot
+            .borrow()
+            .indices
             .iter()
             .find_map(|index| index.pack(location.pack_id).cloned())
             .or_else(|| {
-                self.snapshot
-                    .borrow()
-                    .indices
+                self.retained_indices
+                    .lock()
                     .iter()
                     .find_map(|index| index.pack(location.pack_id).cloned())
             })?;
@@ -570,6 +570,51 @@ where
 mod tests {
     use super::*;
     use gix_pack::Find;
+
+    #[test]
+    fn local_pack_entries_do_not_lock_shared_retention() -> gix_error::TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only_needs_archive("make_repo_multi_index.sh")?;
+        let objects_dir = fixture.join(".git/objects");
+        let index = gix_pack::multi_index::File::at(objects_dir.join("pack/multi-pack-index"), None)?;
+        let object_id = index.oid_at_index(0).to_owned();
+        for use_multi_pack_index in [false, true] {
+            let store = Arc::new(crate::Store::at_opts(
+                objects_dir.clone(),
+                index.object_hash(),
+                &mut std::iter::empty(),
+                crate::store::init::Options {
+                    use_multi_pack_index,
+                    ..Default::default()
+                },
+            )?);
+            let mut parent = store.to_handle_arc();
+            parent.prevent_pack_unload();
+            let location = parent
+                .location_by_oid(&object_id, &mut Vec::new())?
+                .expect("the fixture object is packed");
+            let expected = parent.entry_by_location(&location).expect("the pack is retained").data;
+            for handle in [parent.clone(), parent] {
+                let location = location.clone();
+                let retained = Arc::clone(&handle.retained_indices);
+                let lock = retained.lock();
+                let (sender, receiver) = std::sync::mpsc::channel();
+                let worker = std::thread::spawn(move || {
+                    sender
+                        .send(handle.entry_by_location(&location).map(|entry| entry.data))
+                        .expect("the test waits for the local entry lookup");
+                });
+                let result = receiver.recv_timeout(std::time::Duration::from_secs(5));
+                drop(lock);
+                worker.join().expect("the entry lookup worker does not panic");
+                assert_eq!(
+                    result.expect("a local pack lookup does not wait for shared retention"),
+                    Some(expected.clone()),
+                    "the local snapshot supplies the correct bytes for parent and cloned handles"
+                );
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn stable_handles_retain_one_lookup_per_multi_index() -> gix_testtools::Result {
