@@ -79,6 +79,16 @@ impl Options {
         }
         .without_repository_environment_overrides()
     }
+
+    /// Reuse these options to open a subrepository at a known path.
+    ///
+    /// Permissions, explicit configuration overrides, and configuration-source paths are retained.
+    /// Repository-local environment overrides, such as `GIT_WORK_TREE`, `GIT_INDEX_FILE`, and
+    /// `GIT_NAMESPACE`, are ignored, and trust is determined from the new repository's ownership.
+    /// Path interpretation and inferred-worktree settings are reset for the new repository.
+    pub fn for_subrepository(&self) -> Self {
+        self.clone_without_trust()
+    }
 }
 
 /// Generic modification
