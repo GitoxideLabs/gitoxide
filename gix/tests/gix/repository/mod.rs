@@ -17,6 +17,8 @@ mod excludes;
 #[cfg(feature = "attributes")]
 mod filter;
 mod location;
+#[cfg(feature = "index")]
+mod maintenance;
 #[cfg(feature = "mailmap")]
 mod mailmap;
 #[cfg(feature = "merge")]
