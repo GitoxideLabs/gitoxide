@@ -11,11 +11,19 @@ edition = "2024"
 rust-version = "1.88"
 include = ["/src/**/*", "/LICENSE-*", "/README.md"]
 
+[features]
+## Enable SHA-1 support in the configuration dependency.
+sha1 = ["gix-config/sha1"]
+## Enable SHA-256 support in the configuration dependency.
+sha256 = ["gix-config/sha256"]
+
 [dependencies]
 gix-error = { version = "^0.5.2", path = "../gix-error", features = ["bstr"] }
 gix-command = { version = "^0.12.1", path = "../gix-command" }
+gix-config = { version = "^0.62.2", path = "../gix-config" }
 gix-path = { version = "^0.14.1", path = "../gix-path" }
 gix-sec = { version = "^0.16.1", path = "../gix-sec" }
+bstr = { version = "1.12.0", default-features = false, features = ["std"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.186"
