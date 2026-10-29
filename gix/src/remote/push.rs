@@ -2,6 +2,8 @@ use std::{io, sync::atomic::AtomicBool};
 
 use crate::{
     Progress, Remote, Result,
+    bstr::BString,
+    error::{bail, message},
     push::{Options, Outcome, Update},
     remote::Direction,
 };
@@ -13,6 +15,9 @@ impl Remote<'_> {
     /// use [`crate::remote::Connection::push()`] with configured credentials. Local paths do not
     /// launch Git and protect advertised values with reference transactions, unless a receive-pack
     /// command is explicitly configured, in which case that command handles the receive operation.
+    /// An empty `options.push_options` uses `push.pushOption` defaults, including empty-value resets.
+    /// A nonempty slice, even one containing an empty option, overrides those defaults.
+    /// Named remotes with `remote.<name>.mirror=true` are rejected, as mirroring conflicts with explicit updates.
     ///
     /// Like the connection API, this does not expand push refspecs, run local pre-push hooks, or
     /// update local tracking refs. Use [`Self::update_tracking_refs()`] for the latter and
@@ -34,6 +39,45 @@ impl Remote<'_> {
         remote_progress: impl FnMut(bool, &[u8]) -> io::Result<()>,
         should_interrupt: &AtomicBool,
     ) -> Result<Outcome> {
+        let config = self.repo.config_snapshot();
+        if let Some(name) = self.name()
+            && config
+                .try_boolean(gix_config::KeyRef {
+                    section_name: "remote",
+                    subsection_name: Some(name.as_bstr()),
+                    value_name: "mirror",
+                })?
+                .unwrap_or(false)
+        {
+            bail!(message("Mirroring cannot be combined with explicit push updates").validation());
+        }
+        let mut configured_options = Vec::<BString>::new();
+        for section in config.plumbing().sections().filter(|section| {
+            section.header().subsection_name().is_none() && section.header().name().eq_ignore_ascii_case(b"push")
+        }) {
+            for (_, value) in section
+                .body()
+                .into_iter_implicit()
+                .filter(|(name, _)| name.eq_ignore_ascii_case("pushOption"))
+            {
+                let Some(value) = value else {
+                    bail!(message("push.pushOption requires an explicit value").validation());
+                };
+                if value.is_empty() {
+                    configured_options.clear();
+                } else {
+                    configured_options.push(value);
+                }
+            }
+        }
+        let options = Options {
+            push_options: if options.push_options.is_empty() {
+                &configured_options
+            } else {
+                options.push_options
+            },
+            ..options
+        };
         let (url, _) = self.sanitized_url_and_version(Direction::Push)?;
         if url.scheme != gix_url::Scheme::File || self.service_command(Direction::Push)?.is_some() {
             return self
