@@ -547,6 +547,7 @@ fn cancellation_after_preparation_leaves_no_change() -> TestResult {
     let (dir, store) = empty_store()?;
 
     let tx = store.transaction();
+    assert_eq!(tx.edits().count(), 0, "unprepared transactions have no edits");
 
     assert_eq!(
         std::fs::read_dir(dir.path())?.count(),
@@ -560,6 +561,10 @@ fn cancellation_after_preparation_leaves_no_change() -> TestResult {
         Fail::Immediately,
     )?;
     assert_eq!(std::fs::read_dir(dir.path())?.count(), 1, "the lock file was created");
+    assert_eq!(
+        tx.edits().cloned().collect::<Vec<_>>(),
+        vec![create_symbolic_at("HEAD", "refs/heads/main")]
+    );
 
     drop(tx);
     assert_eq!(std::fs::read_dir(dir.path())?.count(), 0, "everything vanished");
