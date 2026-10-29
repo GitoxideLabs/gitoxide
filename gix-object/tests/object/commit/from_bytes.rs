@@ -500,3 +500,32 @@ fn commit_fixture(path: &str) -> Result<Vec<u8>> {
 fn fixture_oid_hex(hex: &str) -> String {
     fixture_oid(hex).to_hex().to_string()
 }
+
+#[test]
+fn decoded_signed_data_preserves_original_bytes() -> gix_testtools::TestResult {
+    for fixture in [
+        "unsigned.txt",
+        "signed.txt",
+        "signed-singleline.txt",
+        "signed-with-encoding.txt",
+        "signed-whitespace.txt",
+        "two-multiline-headers.txt",
+    ] {
+        let data = commit_fixture(fixture)?;
+        let hash_kind = crate::fixture_hash_kind();
+        let (commit, signed_data) = CommitRef::from_bytes_with_signed_data(&data, hash_kind)?;
+        assert_eq!(commit, CommitRef::from_bytes(&data, hash_kind)?, "{fixture}");
+        let signature = CommitRefIter::signature(&data, hash_kind)?;
+        assert_eq!(
+            signed_data.as_ref().map(|data| data.to_bstring()),
+            signature.as_ref().map(|(_, data)| data.to_bstring()),
+            "the payload retains the original byte layout: {fixture}"
+        );
+        assert_eq!(
+            commit.extra_headers().pgp_signature(),
+            signature.as_ref().map(|(signature, _)| signature.as_ref()),
+            "the decoded signature corresponds to the payload: {fixture}"
+        );
+    }
+    Ok(())
+}

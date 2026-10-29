@@ -39,6 +39,15 @@ pub fn message<'a>(i: &mut &'a [u8]) -> Result<&'a BStr> {
 /// the final message parse fails, `i` may already have been advanced past
 /// earlier successfully parsed fields.
 pub fn commit<'a>(i: &mut &'a [u8], object_hash: gix_hash::Kind) -> Result<CommitRef<'a>> {
+    commit_with_signed_data(i, object_hash).map(|(commit, _)| commit)
+}
+
+pub(super) fn commit_with_signed_data<'a>(
+    i: &mut &'a [u8],
+    object_hash: gix_hash::Kind,
+) -> Result<(CommitRef<'a>, Option<crate::signature::SignedData<'a>>)> {
+    let data = *i;
+    let mut signature_range = None;
     let tree = parse::header_field(i, b"tree", |value| parse::hex_hash(value, object_hash))?;
 
     let mut parents = SmallVec::new();
@@ -74,7 +83,12 @@ pub fn commit<'a>(i: &mut &'a [u8], object_hash: gix_hash::Kind) -> Result<Commi
                 *i = before;
                 parse::any_header_field(i).map(|(k, v)| (k.as_bstr(), Cow::Borrowed(v.as_bstr())))
             }) {
-            Ok(header) => extra_headers.push(header),
+            Ok(header) => {
+                if signature_range.is_none() && header.0 == super::signature_field_name(object_hash) {
+                    signature_range = Some(data.len() - before.len()..data.len() - i.len());
+                }
+                extra_headers.push(header);
+            }
             Err(_) => {
                 *i = before;
                 break;
@@ -85,13 +99,16 @@ pub fn commit<'a>(i: &mut &'a [u8], object_hash: gix_hash::Kind) -> Result<Commi
     let message = message(i)?;
     gix_error::ensure!(i.is_empty(), crate::decode::empty_error());
 
-    Ok(CommitRef {
-        tree,
-        parents,
-        author,
-        committer,
-        encoding,
-        message,
-        extra_headers,
-    })
+    Ok((
+        CommitRef {
+            tree,
+            parents,
+            author,
+            committer,
+            encoding,
+            message,
+            extra_headers,
+        },
+        signature_range.map(|range| crate::signature::SignedData::new(data, range)),
+    ))
 }

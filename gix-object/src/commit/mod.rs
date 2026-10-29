@@ -51,6 +51,19 @@ impl<'a> CommitRef<'a> {
     pub fn from_bytes(mut data: &'a [u8], object_hash: gix_hash::Kind) -> Result<CommitRef<'a>> {
         decode::commit(&mut data, object_hash)
     }
+
+    /// Decode a commit and retain the exact bytes covered by its first signature for `object_hash`.
+    ///
+    /// The optional signed data excludes that signature header, including continuation lines, without
+    /// re-encoding any other fields. Obtain the corresponding signature from
+    /// [`extra_headers().pgp_signature()`][ExtraHeaders::pgp_signature]. Both results are produced in
+    /// one parsing pass; unsigned commits return `None` for the signed data.
+    pub fn from_bytes_with_signed_data(
+        mut data: &'a [u8],
+        object_hash: gix_hash::Kind,
+    ) -> Result<(CommitRef<'a>, Option<crate::signature::SignedData<'a>>)> {
+        decode::commit_with_signed_data(&mut data, object_hash)
+    }
 }
 
 /// Access
