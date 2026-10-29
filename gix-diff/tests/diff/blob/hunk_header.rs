@@ -235,3 +235,78 @@ fn posix_match_errors_retain_the_resource_limit_cause() -> TestResult {
     );
     Ok(())
 }
+
+#[test]
+fn builtin_names_are_sorted_unique_and_compile() -> TestResult {
+    let names: Vec<_> = Definition::builtin_names().collect();
+    assert!(
+        names.windows(2).all(|pair| pair[0] < pair[1]),
+        "driver names are unique and bytewise sorted"
+    );
+    assert!(
+        names.contains(&"rust") && names.contains(&"javascript"),
+        "the catalog includes common source languages"
+    );
+    for name in names {
+        Definition::builtin(name)
+            .ok_or("listed builtin must exist")?
+            .to_matcher()?;
+    }
+    assert!(Definition::builtin("Rust").is_none(), "driver names are case sensitive");
+    assert!(
+        Definition::builtin("unknown-language").is_none(),
+        "unknown drivers have no language definition"
+    );
+    Ok(())
+}
+
+#[test]
+fn builtin_declarations_and_exclusions_agree_with_git() -> TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_builtin_hunk_headers.sh")?;
+    for case in std::fs::read_dir(fixture.join("cases"))? {
+        let case = case?.path();
+        let name = std::fs::read(case.join("driver"))?;
+        let source = std::fs::read(case.join("source"))?;
+        let matcher = Definition::builtin(&name)
+            .ok_or("Git driver must have a built-in definition")?
+            .to_matcher()?;
+        let baseline = std::fs::read(case.join("baseline.diff"))?;
+        let hunk = baseline
+            .split(|byte| *byte == b'\n')
+            .find(|line| line.starts_with(b"@@ "))
+            .ok_or("missing Git hunk")?;
+        let end = hunk
+            .windows(3)
+            .position(|bytes| bytes == b" @@")
+            .ok_or("missing Git hunk terminator")?
+            + 3;
+        let expected = hunk[end..].strip_prefix(b" ");
+        assert_eq!(
+            matcher.find(&source)?,
+            expected,
+            "selected declaration for {}",
+            case.display()
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn builtins_recognize_complete_declarations_and_legal_modifier_combinations() -> TestResult {
+    for (name, line) in [
+        ("perl", "sub example($value) {"),
+        ("rust", "pub async unsafe fn run() {"),
+        ("javascript", "export async function run() {"),
+        ("javascript", "const_handler = async (value) => {"),
+        // Swift is present in Git's development sources, but not in Git 2.53's catalog.
+        ("swift", "public func run(value: Int) {"),
+    ] {
+        let matcher = Definition::builtin(name).ok_or("known builtin")?.to_matcher()?;
+        assert_eq!(
+            matcher.find(line.as_bytes())?,
+            Some(line.as_bytes()),
+            "the full declaration remains useful as a source header: {name}"
+        );
+    }
+    Ok(())
+}
