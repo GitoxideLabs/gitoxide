@@ -388,7 +388,7 @@ impl<'index> State<'_, 'index> {
     {
         let worktree_path = match self.path_stack.verified_path(gix_path::from_bstr(rela_path)?.as_ref()) {
             Ok(path) => path,
-            Err(err) if crate::stack::is_symlink_step_error(&err) => return Ok(Some(Change::Removed.into())),
+            Err(err) if SymlinkCheck::is_symlink_step_error(&err) => return Ok(Some(Change::Removed.into())),
             Err(err) if gix_fs::io_err::is_not_found(err.kind(), err.raw_os_error()) => {
                 return Ok(Some(Change::Removed.into()));
             }
