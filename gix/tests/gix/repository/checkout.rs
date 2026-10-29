@@ -22,6 +22,12 @@ fn checkout_updates_only_changed_paths_and_does_not_persist_the_index() -> TestR
         .entry_mut_by_path_and_stage("same".into(), Stage::Unconflicted)
         .expect("tracked")
         .id = repo.write_blob(b"staged")?.detach();
+    for path in ["change", "delete"] {
+        current
+            .entry_mut_by_path_and_stage(path.into(), Stage::Unconflicted)
+            .expect("tracked")
+            .id = repo.write_blob(b"staged at a changed path")?.detach();
+    }
     fs::write(workdir.join("change"), b"old")?;
     fs::write(workdir.join("delete"), b"old")?;
     fs::write(workdir.join("same"), b"unstaged")?;
@@ -30,7 +36,16 @@ fn checkout_updates_only_changed_paths_and_does_not_persist_the_index() -> TestR
     on_disk.write(Default::default())?;
     let index_before = fs::read(repo.index_path())?;
 
-    let out = checkout(&repo, &baseline, &mut target, &mut current, Options::default())?;
+    let out = checkout(
+        &repo,
+        &baseline,
+        &mut target,
+        &mut current,
+        Options {
+            overwrite_staged: true,
+            ..Default::default()
+        },
+    )?;
 
     assert!(out.index_changed, "the caller must persist the updated staging index");
     assert_eq!(
@@ -64,6 +79,181 @@ fn checkout_updates_only_changed_paths_and_does_not_persist_the_index() -> TestR
         index_before,
         "the API never persists the index"
     );
+    Ok(())
+}
+
+#[test]
+fn staged_changes_at_target_paths_match_git_read_tree() -> TestResult {
+    for case in [
+        "modified",
+        "deleted",
+        "added",
+        "staged-deletion",
+        "staged-mode",
+        "already-target",
+        "already-target-dirty",
+        "added-at-target",
+        "deleted-at-target",
+        "deleted-at-target-recreated",
+        "mode-at-target",
+        "file-to-directory-at-target",
+        "file-to-directory-at-target-empty",
+        "file-to-directory-at-target-missing",
+        "file-to-directory-at-target-dirty",
+        "file-to-directory-at-target-untracked",
+        "directory-to-file-at-target",
+        "directory-to-file-at-target-missing",
+        "directory-to-file-at-target-dirty",
+        "deleted-at-target-empty-directory",
+        "deleted-at-target-untracked-directory",
+        "gitlink-deleted-at-target-empty-directory",
+        "gitlink-deleted-at-target-populated-directory",
+        "gitlink-deleted-at-target-recreated-file",
+    ] {
+        let mut snapshots = Vec::new();
+        for use_git in [true, false] {
+            let (repo, _tmp) = crate::util::repo_rw("make_empty_repo.sh")?;
+            let workdir = repo.workdir().expect("non-bare");
+            let added = case.starts_with("added");
+            let deleted = case == "deleted" || case.contains("deleted-at-target");
+            let already_target = case.contains("target");
+            let file_to_directory = case.starts_with("file-to-directory");
+            let directory_to_file = case.starts_with("directory-to-file");
+            let gitlink = case.starts_with("gitlink");
+            let previous_path = if directory_to_file { "path/child" } else { "path" };
+            let desired_path = if file_to_directory { "path/child" } else { "path" };
+            let mut baseline_entries = vec![("a-delete", "old")];
+            if !added {
+                baseline_entries.push((previous_path, "old"));
+            }
+            let mut baseline = index(&repo, &baseline_entries)?;
+            if gitlink {
+                baseline
+                    .entry_mut_by_path_and_stage("path".into(), Stage::Unconflicted)
+                    .expect("baseline gitlink")
+                    .mode = Mode::COMMIT;
+            }
+            let target_entries = [(desired_path, "new")];
+            let mut target = index(&repo, if deleted { &[] } else { &target_entries })?;
+            if case == "mode-at-target" {
+                target.entries_mut()[0].id = repo.write_blob(b"old")?.detach();
+                target.entries_mut()[0].mode = Mode::FILE_EXECUTABLE;
+            }
+            gix::index::File::from_state(target.clone(), repo.index_path()).write(Default::default())?;
+            let target_tree_id = gix_testtools::git(workdir, "write-tree")?;
+            gix::index::File::from_state(baseline.clone(), repo.index_path()).write(Default::default())?;
+            let baseline_tree_id = gix_testtools::git(workdir, "write-tree")?;
+            gix_testtools::git(workdir, &format!("read-tree --reset -u {}", baseline_tree_id.trim()))?;
+            let mut current = (*repo.open_index()?).clone();
+            current.remove_tree();
+            current.remove_entries(|_, path, _| path == previous_path);
+            if case != "staged-deletion" && !(already_target && deleted) {
+                let (object_id, mode) = if already_target {
+                    (target.entries()[0].id, target.entries()[0].mode)
+                } else if case == "staged-mode" {
+                    (
+                        baseline.entry_by_path("path".into()).expect("baseline path").id,
+                        Mode::FILE_EXECUTABLE,
+                    )
+                } else {
+                    (repo.write_blob(b"staged only")?.detach(), Mode::FILE)
+                };
+                current.dangerously_push_entry(
+                    Default::default(),
+                    object_id,
+                    Flags::empty(),
+                    mode,
+                    desired_path.into(),
+                );
+                current.sort_entries();
+            }
+            if file_to_directory {
+                fs::remove_file(workdir.join("path"))?;
+                if !case.ends_with("-missing") {
+                    fs::create_dir(workdir.join("path"))?;
+                    if !case.ends_with("-empty") {
+                        fs::write(workdir.join("path/child"), "new")?;
+                    }
+                    if case.ends_with("-untracked") {
+                        fs::write(workdir.join("path/untracked"), "keep")?;
+                    }
+                }
+            } else if directory_to_file {
+                fs::remove_file(workdir.join("path/child"))?;
+                fs::remove_dir(workdir.join("path"))?;
+                if !case.ends_with("-missing") {
+                    fs::write(workdir.join("path"), "new")?;
+                }
+            } else if deleted && case.ends_with("-directory") {
+                if !gitlink {
+                    fs::remove_file(workdir.join("path"))?;
+                    fs::create_dir(workdir.join("path"))?;
+                }
+                if !case.ends_with("-empty-directory") {
+                    fs::write(workdir.join("path/untracked"), "keep")?;
+                }
+            } else if gitlink {
+                fs::remove_dir(workdir.join("path"))?;
+                fs::write(workdir.join("path"), "untracked")?;
+            } else if case == "already-target-dirty" {
+                fs::write(workdir.join("path"), "unstaged only")?;
+            } else if case == "deleted-at-target" {
+                fs::remove_file(workdir.join("path"))?;
+            }
+            gix::index::File::from_state(current.clone(), repo.index_path()).write(Default::default())?;
+            if file_to_directory || directory_to_file {
+                // Structural checks in read-tree require refreshed stat data for clean target entries.
+                gix_testtools::git(workdir, "update-index --ignore-missing --refresh")?;
+                current = (*repo.open_index()?).clone();
+                if case.ends_with("-dirty") {
+                    fs::write(workdir.join(desired_path), "dirty")?;
+                }
+            }
+            let before = gix_testtools::repository::snapshot(workdir)?;
+            let success = if use_git {
+                let output = gix_testtools::git_command(workdir)
+                    .args(["read-tree", "-m", "-u", baseline_tree_id.trim(), target_tree_id.trim()])
+                    .output()?;
+                assert!(
+                    output.status.success() || !String::from_utf8_lossy(&output.stderr).contains("a-delete"),
+                    "the oracle must reach the staged path check: {output:?}"
+                );
+                output.status.success()
+            } else {
+                let success = checkout(&repo, &baseline, &mut target, &mut current, Options::default()).is_ok();
+                gix::index::File::from_state(current, repo.index_path()).write(Default::default())?;
+                success
+            };
+            let expected_success = already_target
+                && !matches!(
+                    case,
+                    "deleted-at-target-recreated"
+                        | "file-to-directory-at-target-dirty"
+                        | "file-to-directory-at-target-untracked"
+                        | "directory-to-file-at-target-dirty"
+                        | "deleted-at-target-untracked-directory"
+                        | "gitlink-deleted-at-target-recreated-file"
+                );
+            assert_eq!(success, expected_success, "staged {case} refusal, Git: {use_git}");
+            let after = gix_testtools::repository::snapshot(workdir)?;
+            if !success {
+                assert_eq!(after.index, before.index, "refusal preserves staged {case}");
+                assert_eq!(
+                    after.worktree, before.worktree,
+                    "refusal precedes every worktree write for {case}"
+                );
+            }
+            snapshots.push(after);
+        }
+        assert_eq!(
+            snapshots[0].index, snapshots[1].index,
+            "staged entries agree with Git for {case}"
+        );
+        assert_eq!(
+            snapshots[0].worktree, snapshots[1].worktree,
+            "unstaged content agrees with Git for {case}"
+        );
+    }
     Ok(())
 }
 
@@ -292,6 +482,44 @@ fn force_restores_dirty_and_missing_tracked_files_even_without_a_tree_delta() ->
         fs::read(workdir.join("untracked"))?,
         b"keep",
         "force does not select untracked files"
+    );
+    fs::write(workdir.join("changed"), b"dirty again")?;
+    let staged_id = repo.write_blob(b"staged only")?.detach();
+    current
+        .entry_mut_by_path_and_stage("changed".into(), Stage::Unconflicted)
+        .expect("tracked")
+        .id = staged_id;
+    checkout(
+        &repo,
+        &baseline,
+        &mut target,
+        &mut current,
+        Options {
+            overwrite_tracked: true,
+            ..Default::default()
+        },
+    )
+    .expect_err("restoring the worktree does not implicitly discard staging");
+    assert_eq!(
+        current.entry_by_path("changed".into()).expect("tracked").id,
+        staged_id,
+        "refusal preserves staging even without a tree delta"
+    );
+    checkout(
+        &repo,
+        &baseline,
+        &mut target,
+        &mut current,
+        Options {
+            overwrite_tracked: true,
+            overwrite_staged: true,
+            ..Default::default()
+        },
+    )?;
+    assert_eq!(
+        current.entry_by_path("changed".into()).expect("tracked").id,
+        target.entry_by_path("changed".into()).expect("tracked").id,
+        "explicit staged overwrite restores unchanged-tree paths too"
     );
     Ok(())
 }

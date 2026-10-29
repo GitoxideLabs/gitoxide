@@ -1,6 +1,6 @@
 use crate::{Repository, Result};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::Path,
     sync::atomic::{AtomicBool, Ordering},
 };
@@ -28,9 +28,11 @@ impl Repository {
 
     /// Materialize `target` relative to an expected worktree `baseline`, updating the caller's staging `index`.
     ///
-    /// `baseline` describes expected worktree contents, which may differ from staged contents. `target` is
-    /// authoritative at changed paths and receives refreshed stat data for written entries. `index` retains
-    /// unrelated staged entries; entries at changed paths are replaced with the target, including deletions.
+    /// `baseline` describes expected worktree contents, which may differ from staged contents. `target`
+    /// receives refreshed stat data for written entries. Staged content must match the baseline or target
+    /// at changed paths unless `overwrite_staged` makes the target authoritative. Entries already staged
+    /// at the target keep their unstaged worktree changes unless `overwrite_tracked` requests restoration.
+    /// Unrelated staged entries remain intact.
     /// This operation does not choose merge or branch-switch policy and never persists an index or changes refs.
     ///
     /// Before any worktree write, changed tracked files must match either the baseline or target. With
@@ -140,6 +142,8 @@ impl Repository {
                 }
             }
         }
+        let mut retained_directories = BTreeSet::<BString>::new();
+        let mut check_against_target = BTreeMap::new();
         let mut check = baseline.clone();
         for entry in check.entries_mut() {
             entry
@@ -148,6 +152,55 @@ impl Repository {
         }
         for (path, item) in &mut pending {
             let path = path.as_bstr();
+            if !options.overwrite_staged {
+                let staged = index
+                    .entry_index_by_path(path)
+                    .ok()
+                    .map(|position| &index.entries()[position]);
+                ensure!(
+                    staged.is_none_or(
+                        |entry| entry.stage() == Stage::Unconflicted && !entry.flags.contains(Flags::INTENT_TO_ADD)
+                    ),
+                    conflict(path, "Unmerged or intent-to-add staging would be overwritten")
+                );
+                let content = |entry: &gix_index::Entry| (entry.id, entry.mode);
+                let staged = staged.map(content);
+                let previous = item.from.map(|position| content(&baseline.entries()[position]));
+                let desired = item.to.map(|position| content(&target.entries()[position]));
+                ensure!(
+                    staged == previous || staged == desired,
+                    conflict(path, "Staged content would be overwritten")
+                );
+                if staged == desired && !options.overwrite_tracked {
+                    item.changed = false;
+                    if staged.is_none() {
+                        if let Disk::Present(metadata) = inspect_path(workdir, path)? {
+                            ensure!(
+                                metadata.is_dir() && !metadata.is_symlink(),
+                                conflict(path, "Untracked worktree content would be removed")
+                            );
+                            if previous.is_none_or(|(_, mode)| mode != Mode::COMMIT) {
+                                retained_directories.insert(path.to_owned());
+                            }
+                        }
+                    } else if parents(path).any(|parent| retained_directories.contains(parent)) {
+                        // Git restores missing staged children when the replacement directory exists.
+                        item.changed = matches!(inspect_path(workdir, path)?, Disk::Missing);
+                    } else {
+                        let mut prefix = path.to_owned();
+                        prefix.push(b'/');
+                        if baseline.prefixed_entries(prefix.as_bstr()).is_some() {
+                            check_against_target.insert(path.to_owned(), true);
+                        }
+                    }
+                    if let Some(position) = item.from {
+                        check.entries_mut()[position].flags |= Flags::UPTODATE;
+                    }
+                    if !item.changed {
+                        continue;
+                    }
+                }
+            }
             item.skipped = item
                 .to
                 .is_some_and(|position| target.entries()[position].flags.contains(Flags::SKIP_WORKTREE))
@@ -168,6 +221,29 @@ impl Repository {
                 }
             }
         }
+        // A staged file-to-directory transition must preserve clean tracked children and reject
+        // untracked contents. Fold those children into the existing status and directory walks.
+        if !retained_directories.is_empty() {
+            check.remove_entries(|_, path, _| retained_directories.contains(path));
+            for directory in &retained_directories {
+                let mut prefix = directory.clone();
+                prefix.push(b'/');
+                for entry in index.prefixed_entries(prefix.as_bstr()).unwrap_or_default() {
+                    ensure!(
+                        entry.stage() == Stage::Unconflicted && !entry.flags.contains(Flags::INTENT_TO_ADD),
+                        conflict(
+                            entry.path(index),
+                            "Unmerged or intent-to-add staging would be overwritten"
+                        )
+                    );
+                    let mut flags = entry.flags;
+                    flags.remove(Flags::ASSUME_VALID | Flags::UPTODATE | Flags::FSMONITOR_VALID);
+                    check.dangerously_push_entry(entry.stat, entry.id, flags, entry.mode, entry.path(index));
+                }
+            }
+            check.sort_entries();
+        }
+        let in_retained_directory = |path: &BStr| parents(path).any(|parent| retained_directories.contains(parent));
         let mut recorded = gix_status::index_as_worktree_with_renames::Recorder { records: Vec::new() };
         if !pending.is_empty() {
             repo.index_worktree_status(
@@ -184,7 +260,6 @@ impl Repository {
                 },
             )?;
         }
-        let mut check_against_target = Vec::new();
         for record in recorded.records {
             let gix_status::index_as_worktree_with_renames::Entry::Modification {
                 entry,
@@ -195,10 +270,20 @@ impl Repository {
             else {
                 unreachable!("directory walking and rewrites are disabled")
             };
+            if in_retained_directory(rela_path) {
+                ensure!(
+                    matches!(
+                        status,
+                        EntryStatus::NeedsUpdate(_) | EntryStatus::Change(StatusChange::Removed)
+                    ),
+                    conflict(rela_path, "Tracked directory content would be overwritten")
+                );
+                continue;
+            }
             let Some(item) = pending.get_mut(rela_path) else {
                 continue;
             };
-            if item.skipped {
+            if item.skipped || (!options.overwrite_tracked && !item.changed) {
                 continue;
             }
             match status {
@@ -231,7 +316,7 @@ impl Repository {
                         StatusChange::Type { .. } => false,
                     };
                     if !safe && item.to.is_some() {
-                        check_against_target.push(rela_path.to_owned());
+                        check_against_target.insert(rela_path.to_owned(), false);
                         continue;
                     }
                     ensure!(
@@ -241,43 +326,6 @@ impl Repository {
                 }
                 EntryStatus::Conflict { .. } | EntryStatus::IntentToAdd => {
                     bail!(conflict(rela_path, "Checkout requires resolved baseline content"))
-                }
-            }
-        }
-        if !check_against_target.is_empty() {
-            // Type changes, including emulated symlinks, can require different content filters on each side.
-            check.clone_from(target);
-            for path in &check_against_target {
-                let entry = check
-                    .entry_mut_by_path_and_stage(path.as_bstr(), Stage::Unconflicted)
-                    .expect("fallback checks have a target entry");
-                entry
-                    .flags
-                    .remove(Flags::ASSUME_VALID | Flags::UPTODATE | Flags::FSMONITOR_VALID);
-                entry.stat = Default::default();
-            }
-            let mut recorded = gix_status::index_as_worktree_with_renames::Recorder { records: Vec::new() };
-            repo.index_worktree_status(
-                &check,
-                check_against_target.iter().map(|path| literal(path.as_bstr())),
-                &mut recorded,
-                gix_status::index_as_worktree::traits::HashEq,
-                NoSubmodules,
-                &mut progress.add_child("checking target content"),
-                should_interrupt,
-                crate::status::index_worktree::Options {
-                    dirwalk_options: None,
-                    ..Default::default()
-                },
-            )?;
-            for record in recorded.records {
-                if let gix_status::index_as_worktree_with_renames::Entry::Modification { rela_path, status, .. } =
-                    record
-                {
-                    ensure!(
-                        matches!(status, EntryStatus::NeedsUpdate(_)),
-                        conflict(rela_path, "Tracked worktree content would be overwritten")
-                    );
                 }
             }
         }
@@ -313,7 +361,7 @@ impl Repository {
             })
         };
         let mut changes = Vec::new();
-        let mut obstructions = Vec::new();
+        let mut obstructions: Vec<_> = retained_directories.iter().cloned().collect();
         for (path, item) in &pending {
             let path = path.as_bstr();
             if item.skipped {
@@ -388,7 +436,6 @@ impl Repository {
             }
         }
         if !obstructions.is_empty() {
-            check.clone_from(baseline);
             // Removed gitlinks must be classified from disk instead of acting as repository boundaries.
             check.remove_entries(|_, path, entry| {
                 entry.mode == Mode::COMMIT
@@ -416,9 +463,24 @@ impl Repository {
             )?;
             for (entry, _) in collect.into_entries_by_path() {
                 if entry.disk_kind == Some(gix_dir::entry::Kind::Directory) {
-                    if entry.property == Some(gix_dir::entry::Property::EmptyDirectory) {
+                    if entry.property == Some(gix_dir::entry::Property::EmptyDirectory)
+                        && !retained_directories.contains(entry.rela_path.as_bstr())
+                        && !in_retained_directory(entry.rela_path.as_bstr())
+                    {
                         changes.push(Change::Remove { path: entry.rela_path });
                     }
+                    continue;
+                }
+                if in_retained_directory(entry.rela_path.as_bstr()) {
+                    ensure!(
+                        matches!(entry.status, gix_dir::entry::Status::Tracked)
+                            || (options.overwrite_ignored
+                                && entry.status == gix_dir::entry::Status::Ignored(gix_ignore::Kind::Expendable)),
+                        conflict(
+                            entry.rela_path.as_bstr(),
+                            "Untracked directory content would be overwritten"
+                        )
+                    );
                     continue;
                 }
                 ensure!(
@@ -444,6 +506,45 @@ impl Repository {
                         "Untracked directory content would be overwritten"
                     )
                 );
+            }
+        }
+        if !check_against_target.is_empty() {
+            // Type changes, including emulated symlinks, can require different content filters on each side.
+            check.clone_from(target);
+            for path in check_against_target.keys() {
+                let entry = check
+                    .entry_mut_by_path_and_stage(path.as_bstr(), Stage::Unconflicted)
+                    .expect("fallback checks have a target entry");
+                entry
+                    .flags
+                    .remove(Flags::ASSUME_VALID | Flags::UPTODATE | Flags::FSMONITOR_VALID);
+                entry.stat = Default::default();
+            }
+            let mut recorded = gix_status::index_as_worktree_with_renames::Recorder { records: Vec::new() };
+            repo.index_worktree_status(
+                &check,
+                check_against_target.keys().map(|path| literal(path.as_bstr())),
+                &mut recorded,
+                gix_status::index_as_worktree::traits::HashEq,
+                NoSubmodules,
+                &mut progress.add_child("checking target content"),
+                should_interrupt,
+                crate::status::index_worktree::Options {
+                    dirwalk_options: None,
+                    ..Default::default()
+                },
+            )?;
+            for record in recorded.records {
+                if let gix_status::index_as_worktree_with_renames::Entry::Modification { rela_path, status, .. } =
+                    record
+                {
+                    ensure!(
+                        matches!(status, EntryStatus::NeedsUpdate(_))
+                            || (matches!(status, EntryStatus::Change(StatusChange::Removed))
+                                && check_against_target.get(rela_path) == Some(&true)),
+                        conflict(rela_path, "Tracked worktree content would be overwritten")
+                    );
+                }
             }
         }
         interrupted(should_interrupt)?;
