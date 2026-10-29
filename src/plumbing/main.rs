@@ -62,6 +62,8 @@ pub fn main() -> Result<()> {
     let config = args.config;
     let repository = args.repository;
     let repository_path = repository.clone();
+    #[cfg(unix)]
+    let cache_daemon = super::credential_cache::launcher(&config)?;
     enum Mode {
         Strict,
         StrictWithGitInstallConfig,
@@ -71,6 +73,8 @@ pub fn main() -> Result<()> {
 
     let repository = {
         let config = config.clone();
+        #[cfg(unix)]
+        let cache_daemon = cache_daemon.clone();
         move |mut mode: Mode| -> Result<gix::Repository> {
             if !config.is_empty() {
                 mode = match mode {
@@ -86,6 +90,10 @@ pub fn main() -> Result<()> {
             );
             let configure_open_options = |options: gix::open::Options| {
                 let mut options = options.strict_config(strict_toggle);
+                #[cfg(unix)]
+                {
+                    options = options.credential_cache_daemon(cache_daemon.clone());
+                }
                 options.permissions.config.git_binary = git_installation;
                 options.permissions.attributes.git_binary = git_installation;
                 if config.is_empty() {
@@ -129,13 +137,19 @@ pub fn main() -> Result<()> {
     let auto_verbose = !args.no_verbose;
 
     let should_interrupt = Arc::new(AtomicBool::new(false));
-    #[expect(unsafe_code)]
-    unsafe {
-        // SAFETY: The closure doesn't use mutexes or memory allocation, so it should be safe to call from a signal handler.
-        gix::interrupt::init_handler(1, {
-            let should_interrupt = Arc::clone(&should_interrupt);
-            move || should_interrupt.store(true, Ordering::SeqCst)
-        })?;
+    #[cfg(unix)]
+    let is_cache_daemon = matches!(&cmd, Subcommands::CredentialCacheDaemon(_));
+    #[cfg(not(unix))]
+    let is_cache_daemon = false;
+    if !is_cache_daemon {
+        #[expect(unsafe_code)]
+        unsafe {
+            // SAFETY: The closure doesn't use mutexes or memory allocation, so it should be safe to call from a signal handler.
+            gix::interrupt::init_handler(1, {
+                let should_interrupt = Arc::clone(&should_interrupt);
+                move || should_interrupt.store(true, Ordering::SeqCst)
+            })?;
+        }
     }
 
     match cmd {
@@ -599,6 +613,8 @@ pub fn main() -> Result<()> {
                 ref_name,
                 revision,
                 shallow: shallow.into(),
+                #[cfg(unix)]
+                cache_daemon: Some(cache_daemon),
             };
             prepare_and_run(
                 "clone",
@@ -647,8 +663,20 @@ pub fn main() -> Result<()> {
                     credential::Subcommands::Approve => gix::credentials::program::main::Action::Store,
                     credential::Subcommands::Reject => gix::credentials::program::main::Action::Erase,
                 },
+                core::repository::credential::Options {
+                    config,
+                    #[cfg(unix)]
+                    cache_daemon: Some(cache_daemon),
+                },
             )
         }),
+        #[cfg(unix)]
+        Subcommands::CredentialCache(options) => super::credential_cache::client(options, &cache_daemon),
+        #[cfg(unix)]
+        Subcommands::CredentialCacheDaemon(options) => {
+            let config = gix::config(None, &gix::open::Options::default().cli_overrides(config))?;
+            super::credential_cache::daemon(options, &config)
+        }
         #[cfg(any(feature = "gitoxide-core-async-client", feature = "gitoxide-core-blocking-client"))]
         Subcommands::Remote(crate::plumbing::options::remote::Platform {
             name,
