@@ -47,6 +47,26 @@ pub struct Outcome {
     pub removed_loose_objects: usize,
 }
 
+/// Results of [`Repository::repack_objects()`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RepackOutcome {
+    /// Distinct local objects retained, including unreachable and kept objects.
+    pub objects: usize,
+    /// Packs installed, excluding existing packs with identical contents.
+    pub written_packs: usize,
+    /// Superseded pack files removed.
+    pub removed_packs: usize,
+    /// Redundant loose object files removed.
+    pub removed_loose_objects: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    CollectObjects,
+    Full,
+    Repack,
+}
+
 /// Results of [`Repository::gc()`], including reference and reflog maintenance.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MaintenanceOutcome {
@@ -63,6 +83,7 @@ struct Inventory {
     times: BTreeMap<ObjectId, SystemTime>,
     loose: BTreeSet<ObjectId>,
     kept: BTreeSet<ObjectId>,
+    promisor: BTreeSet<ObjectId>,
     packs: Vec<Pack>,
 }
 
@@ -95,7 +116,7 @@ impl Repository {
     /// Reflogs and references are not expired or packed by this operation. Precious object stores
     /// and partial clones currently reject collection rather than risk losing protected objects.
     pub fn collect_garbage(&self, options: Options, should_interrupt: &AtomicBool) -> Result<Outcome> {
-        Ok(self.run_gc(options, false, should_interrupt)?.objects)
+        Ok(self.run_gc(options, Mode::CollectObjects, should_interrupt)?.objects)
     }
 
     /// Expire reflogs, compact shared references, and collect unreachable objects.
@@ -112,10 +133,39 @@ impl Repository {
     /// present during the simulation. Errors can leave earlier maintenance stages
     /// completed; every stage preserves live references and objects.
     pub fn gc(&self, options: Options, should_interrupt: &AtomicBool) -> Result<MaintenanceOutcome> {
-        self.run_gc(options, true, should_interrupt)
+        self.run_gc(options, Mode::Full, should_interrupt)
     }
 
-    fn run_gc(&self, options: Options, full: bool, should_interrupt: &AtomicBool) -> Result<MaintenanceOutcome> {
+    /// Compact every local object without traversing references or expiring unreachable objects.
+    ///
+    /// This also works in partial clones: missing promised objects are never fetched, and
+    /// promisor objects are packed separately so ordinary objects do not acquire promisor status.
+    /// Object ages are preserved in `.mtimes` tables for later garbage collection. Kept packs
+    /// and alternate stores are left untouched. Precious object stores reject repacking.
+    ///
+    /// Like [`Self::collect_garbage()`], this verifies input packs, excludes concurrent collectors,
+    /// and installs replacements before removing redundant files. It never deletes the last copy
+    /// of an inventoried object. Errors may leave installed packs or partially completed cleanup.
+    pub fn repack_objects(&self, should_interrupt: &AtomicBool) -> Result<RepackOutcome> {
+        let outcome = self
+            .run_gc(
+                Options {
+                    expire: SystemTime::now(),
+                    dry_run: false,
+                },
+                Mode::Repack,
+                should_interrupt,
+            )?
+            .objects;
+        Ok(RepackOutcome {
+            objects: outcome.objects_before,
+            written_packs: outcome.written_packs,
+            removed_packs: outcome.removed_packs,
+            removed_loose_objects: outcome.removed_loose_objects,
+        })
+    }
+
+    fn run_gc(&self, options: Options, mode: Mode, should_interrupt: &AtomicBool) -> Result<MaintenanceOutcome> {
         check_interrupt(should_interrupt)?;
         let mut repo = self.clone();
         repo.make_paths_absolute()?;
@@ -124,11 +174,12 @@ impl Repository {
         if repo.config_snapshot().try_boolean("extensions.preciousObjects")? == Some(true) {
             bail!(message("Cannot collect a repository with precious objects").unsupported());
         }
-        if repo.config.resolved.string("extensions.partialClone").is_some() {
+        if mode != Mode::Repack && repo.config.resolved.string("extensions.partialClone").is_some() {
             bail!(message("Cannot collect partial-clone promisor objects").unsupported());
         }
         for section in repo.config.resolved.sections() {
-            if section.header().name().eq_ignore_ascii_case(b"remote")
+            if mode != Mode::Repack
+                && section.header().name().eq_ignore_ascii_case(b"remote")
                 && repo
                     .config
                     .resolved
@@ -153,9 +204,13 @@ impl Repository {
             bail!(message("Another garbage collector may be running (gc.pid exists)").retryable());
         }
         let objects_directory = repo.objects.store_ref().path();
-        let inventory = inventory(&repo, objects_directory, should_interrupt)?;
+        let inventory = inventory(&repo, objects_directory, mode == Mode::Repack, should_interrupt)?;
         let mut maintenance = MaintenanceOutcome::default();
-        if full {
+        if mode == Mode::Repack {
+            maintenance.objects = repack_inventory(&repo, &inventory, options.expire, should_interrupt)?;
+            return Ok(maintenance);
+        }
+        if mode == Mode::Full {
             let config = repo.config_snapshot();
             let pack_refs = if config.string("gc.packRefs").is_some_and(|value| value == "notbare") {
                 !repo.is_bare()
@@ -257,64 +312,120 @@ impl Repository {
                 should_interrupt,
             )?);
         }
-        outcome.written_packs = installed.iter().filter(|pack| pack.keep_path.is_some()).count();
-        let installed_paths: BTreeSet<_> = installed.iter().filter_map(|pack| pack.data_path.as_deref()).collect();
-        // Removing an index before its packs lets future readers fall back to the individual indices.
-        let _midx_lock = gix_lock::Marker::acquire_to_hold_resource(
-            pack_directory.join("multi-pack-index"),
-            gix_lock::acquire::Fail::Immediately,
-            None,
-            0,
-        )?;
-        for name in ["multi-pack-index", "multi-pack-index.d/multi-pack-index-chain"] {
-            remove_regular_file(&pack_directory.join(name))?;
-        }
-        for pack in &inventory.packs {
-            check_interrupt(should_interrupt)?;
-            if pack.keep
-                || installed_paths.contains(pack.path.as_path())
-                || pack.path.with_extension("keep").try_exists().or_error()?
-            {
-                continue;
-            }
-            let Some(metadata) = regular_file(&pack.path)? else {
-                continue;
-            };
-            if metadata.len() != pack.metadata.len()
-                || metadata.modified().or_error()? != pack.metadata.modified().or_error()?
-            {
-                continue;
-            }
-            // Readers can still discover every retained object in the replacement indices.
-            remove_regular_file(&pack.path.with_extension("idx"))?;
-            remove_regular_file(&pack.path)?;
-            for extension in ["rev", "bitmap", "mtimes"] {
-                remove_regular_file(&pack.path.with_extension(extension))?;
-            }
-            outcome.removed_packs += 1;
-        }
-        let loose = gix_odb::loose::Store::at(objects_directory, repo.object_hash());
-        let pruned = loose.prune(
-            |object_id| !inventory.loose.contains(object_id),
-            gix_odb::loose::prune::Options {
-                expire: options.expire,
-                dry_run: false,
-            },
+        cleanup(
+            &repo,
+            &inventory,
+            installed,
+            options.expire,
             should_interrupt,
+            &mut outcome,
         )?;
-        outcome.removed_loose_objects = pruned.pruned_objects;
-        // Keep files created by this operation are relinquished only after every cleanup step succeeds.
-        for pack in installed {
-            if let Some(path) = pack.keep_path {
-                remove_regular_file(&path)?;
-            }
-        }
         maintenance.objects = outcome;
         Ok(maintenance)
     }
 }
 
-fn inventory(repo: &Repository, directory: &Path, interrupt: &AtomicBool) -> Result<Inventory> {
+fn repack_inventory(
+    repo: &Repository,
+    inventory: &Inventory,
+    expire: SystemTime,
+    interrupt: &AtomicBool,
+) -> Result<Outcome> {
+    let directory = repo.objects.store_ref().path().join("pack");
+    fs::create_dir_all(&directory).or_raise(|| message("Could not create pack directory"))?;
+    let mut installed = Vec::new();
+    for promisor in [false, true] {
+        let object_ids: Vec<_> = inventory
+            .times
+            .keys()
+            .copied()
+            .filter(|id| !inventory.kept.contains(id) && inventory.promisor.contains(id) == promisor)
+            .collect();
+        if object_ids.is_empty() {
+            continue;
+        }
+        let pack = install_pack(repo, &directory, &object_ids, Some(&inventory.times), interrupt)?;
+        if promisor {
+            let index_path = pack.index_path.as_ref().expect("nonempty pack has an index");
+            fs::write(index_path.with_extension("promisor"), b"")
+                .or_raise(|| message("Could not mark repacked promisor objects"))?;
+        }
+        installed.push(pack);
+    }
+    let mut outcome = Outcome {
+        objects_before: inventory.times.len(),
+        ..Outcome::default()
+    };
+    cleanup(repo, inventory, installed, expire, interrupt, &mut outcome)?;
+    Ok(outcome)
+}
+
+fn cleanup(
+    repo: &Repository,
+    inventory: &Inventory,
+    installed: Vec<gix_pack::bundle::write::Outcome>,
+    expire: SystemTime,
+    should_interrupt: &AtomicBool,
+    outcome: &mut Outcome,
+) -> Result<()> {
+    let objects_directory = repo.objects.store_ref().path();
+    let pack_directory = objects_directory.join("pack");
+    outcome.written_packs = installed.iter().filter(|pack| pack.keep_path.is_some()).count();
+    let installed_paths: BTreeSet<_> = installed.iter().filter_map(|pack| pack.data_path.as_deref()).collect();
+    // Removing an index before its packs lets future readers fall back to the individual indices.
+    let _midx_lock = gix_lock::Marker::acquire_to_hold_resource(
+        pack_directory.join("multi-pack-index"),
+        gix_lock::acquire::Fail::Immediately,
+        None,
+        0,
+    )?;
+    for name in ["multi-pack-index", "multi-pack-index.d/multi-pack-index-chain"] {
+        remove_regular_file(&pack_directory.join(name))?;
+    }
+    for pack in &inventory.packs {
+        check_interrupt(should_interrupt)?;
+        if pack.keep
+            || installed_paths.contains(pack.path.as_path())
+            || pack.path.with_extension("keep").try_exists().or_error()?
+        {
+            continue;
+        }
+        let Some(metadata) = regular_file(&pack.path)? else {
+            continue;
+        };
+        if metadata.len() != pack.metadata.len()
+            || metadata.modified().or_error()? != pack.metadata.modified().or_error()?
+        {
+            continue;
+        }
+        // Readers can still discover every retained object in the replacement indices.
+        remove_regular_file(&pack.path.with_extension("idx"))?;
+        remove_regular_file(&pack.path)?;
+        for extension in ["rev", "bitmap", "mtimes", "promisor"] {
+            remove_regular_file(&pack.path.with_extension(extension))?;
+        }
+        outcome.removed_packs += 1;
+    }
+    let loose = gix_odb::loose::Store::at(objects_directory, repo.object_hash());
+    let pruned = loose.prune(
+        |object_id| !inventory.loose.contains(object_id),
+        gix_odb::loose::prune::Options {
+            expire,
+            dry_run: false,
+        },
+        should_interrupt,
+    )?;
+    outcome.removed_loose_objects = pruned.pruned_objects;
+    // Keep files created by this operation are relinquished only after every cleanup step succeeds.
+    for pack in installed {
+        if let Some(path) = pack.keep_path {
+            remove_regular_file(&path)?;
+        }
+    }
+    Ok(())
+}
+
+fn inventory(repo: &Repository, directory: &Path, allow_promisor: bool, interrupt: &AtomicBool) -> Result<Inventory> {
     let mut out = Inventory::default();
     let loose = gix_odb::loose::Store::at(directory, repo.object_hash());
     for object_id in loose.iter() {
@@ -341,7 +452,8 @@ fn inventory(repo: &Repository, directory: &Path, interrupt: &AtomicBool) -> Res
         let Some(metadata) = regular_file(&pack_path)? else {
             continue;
         };
-        if pack_path.with_extension("promisor").try_exists().or_error()? {
+        let promisor = pack_path.with_extension("promisor").try_exists().or_error()?;
+        if promisor && !allow_promisor {
             bail!(message("Cannot collect partial-clone promisor objects").unsupported());
         }
         let index = gix_pack::index::File::at(&path, repo.object_hash())?;
@@ -377,6 +489,9 @@ fn inventory(repo: &Repository, directory: &Path, interrupt: &AtomicBool) -> Res
                 .or_insert(time);
             if keep {
                 out.kept.insert(entry.oid);
+            }
+            if promisor {
+                out.promisor.insert(entry.oid);
             }
         }
         out.packs.push(Pack {
