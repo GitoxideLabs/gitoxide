@@ -210,6 +210,7 @@ impl Cascade {
                             dst_ctx.clear_secrets();
                         }
                         if dst_ctx.username.is_some() && dst_ctx.password.is_some() {
+                            dst_ctx.www_authenticate.clear();
                             break;
                         }
                         if quit.unwrap_or_default() {
@@ -253,13 +254,6 @@ impl Cascade {
             }
             ctx.write_to(std::io::sink())
                 .map_err(|_| validation("Prompt response cannot be represented by the credential protocol").raise())?;
-        }
-
-        if let Some(ctx) = action.context_mut()
-            && ctx.username.is_some()
-            && ctx.password.is_some()
-        {
-            ctx.www_authenticate.clear();
         }
 
         protocol::helper_outcome_to_result(

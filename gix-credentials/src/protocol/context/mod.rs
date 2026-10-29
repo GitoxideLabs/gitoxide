@@ -97,7 +97,7 @@ mod access {
         /// Compute a prompt to obtain the given value.
         pub fn to_prompt(&self, field: &str) -> String {
             match self.to_url() {
-                Some(url) => format!("{field} for {url}: "),
+                Some(url) => format!("{field} for '{url}': "),
                 None => format!("{field}: "),
             }
         }
