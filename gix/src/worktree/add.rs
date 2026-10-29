@@ -7,7 +7,7 @@ use gix_error::{ClassificationMarker, ErrorExt, OptionExt, ResultExt, bail, ensu
 use gix_utils::progress::{NestedProgress, Progress};
 
 use crate::{Result, repository::FormatVersion};
-use gix_ref::transaction::{LogChange, PreviousValue, RefEdit, RefLog};
+use gix_ref::transaction::{PreviousValue, RefEdit};
 
 use crate::config::{
     cache::util::ApplyLeniency,
@@ -301,23 +301,21 @@ impl crate::Repository {
                     .or_raise(|| message("Could not enable relative worktrees in the shared configuration"))?;
             }
         }
-        // Opening the repository requires HEAD. Preserve symbolic targets so conditional configuration
-        // can see the branch; detached HEADs start at null so their first update records initialization.
+        // Opening the repository requires HEAD. Preserve symbolic targets in this bootstrap file
+        // so conditional configuration can see the branch before the real reference is created.
         let mut head_contents = Vec::new();
-        let reflog_mode = match &head_target {
+        match &head_target {
             gix_ref::Target::Object(_) => {
                 repo.object_hash()
                     .null()
                     .write_hex_to(&mut head_contents)
                     .or_raise(|| message("Could not write the linked worktree HEAD"))?;
-                RefLog::AndReference
             }
             gix_ref::Target::Symbolic(name) => {
                 head_contents.extend_from_slice(b"ref: ");
                 head_contents.extend_from_slice(name.as_bstr());
-                RefLog::Only
             }
-        };
+        }
         head_contents.push(b'\n');
         std::fs::write(prepared.git_dir().join("HEAD"), head_contents)
             .or_raise(|| message("Could not write the linked worktree HEAD"))?;
@@ -342,16 +340,15 @@ impl crate::Repository {
             .or_raise(|| message("Could not open a worktree repository"))?
             .to_thread_local();
         repo.clear_namespace();
-        // Like clone, initialize a symbolic HEAD's log without dereferencing or updating its branch.
-        if let Some(commit_id) = commit_id {
-            repo.edit_reference(RefEdit::update_with_log(
+        if commit_id.is_some() {
+            // The bootstrap HEAD is not a predecessor of the new worktree's initial reference.
+            std::fs::remove_file(repo.git_dir().join("HEAD"))
+                .or_raise(|| message("Could not remove the linked worktree's bootstrap HEAD"))?;
+            repo.edit_reference(RefEdit::update(
                 "HEAD".try_into().expect("valid reference name"),
-                commit_id,
-                PreviousValue::Any,
-                LogChange {
-                    mode: reflog_mode,
-                    ..Default::default()
-                },
+                head_target,
+                PreviousValue::MustNotExist,
+                "",
             ))
             .or_raise(|| message("Could not initialize the linked worktree HEAD and its reflog"))?;
         }
