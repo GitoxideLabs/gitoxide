@@ -9,7 +9,10 @@ use crate::{
     push::{self, Options, Outcome, Rejection, Status, Update},
 };
 
+mod hooks;
 mod policy;
+mod quarantine;
+mod transaction;
 
 pub(crate) fn push(
     source: &Repository,
@@ -89,20 +92,14 @@ pub(crate) fn push(
         bail!(message("Native local push does not yet support shallow sources").unsupported());
     }
     policy.ensure_supported(destination)?;
-    for &index in &requested {
-        let update = &mut updates[index];
-        if let Some(reason) = policy.reject_before_transfer(destination, update, &mut remote_progress)? {
-            update.status = Status::Rejected(Rejection::Server(reason));
-        }
-    }
-    if options.atomic {
-        reject_atomic(&mut updates);
-    }
-    let tips: Vec<_> = updates
-        .iter()
-        .filter(|update| matches!(update.status, Status::WouldUpdate { .. }))
-        .filter_map(|update| update.update.new_id)
-        .collect();
+    destination.committer_or_set_generic_fallback()?;
+    let hooks = hooks::Hooks::new(
+        destination,
+        policy.advertise_push_options.then_some(options.push_options),
+        should_interrupt,
+    )?;
+    let quarantine = quarantine::Quarantine::new(destination)?;
+    let tips = requested.iter().filter_map(|&index| updates[index].update.new_id);
     let mut buffer = Vec::new();
     for entry in gix_traverse::object::BreadthFirst::new(tips, &source) {
         push::plan::check_interrupt(should_interrupt)?;
@@ -110,21 +107,84 @@ pub(crate) fn push(
         if !destination.objects.exists(&entry.id) {
             let object = source.find(&entry.id, &mut buffer)?;
             object.verify_checksum(&entry.id)?;
-            destination
+            quarantine
                 .objects
                 .write_buf_with_known_id(object.kind, object.data, entry.id)?;
         }
         progress.inc();
     }
     for &index in &requested {
+        if policy.hidden(updates[index].update.destination.as_bstr()) {
+            let reason = if updates[index].update.new_id.is_some() {
+                "deny updating a hidden ref"
+            } else {
+                "deny deleting a hidden ref"
+            };
+            updates[index].status = Status::Rejected(Rejection::Server(reason.into()));
+        }
+    }
+    if !hooks.run(
+        "pre-receive",
+        [],
+        hooks::input(requested.iter().map(|&index| &updates[index]), source.object_hash()),
+        Some(quarantine.path()),
+        &mut remote_progress,
+    )? {
+        for &index in &requested {
+            if matches!(updates[index].status, Status::WouldUpdate { .. }) {
+                updates[index].status = Status::Rejected(Rejection::Server("pre-receive hook declined".into()));
+            }
+        }
+    }
+    if updates
+        .iter()
+        .any(|update| matches!(update.status, Status::WouldUpdate { .. }))
+    {
+        quarantine.migrate(destination, should_interrupt)?;
+    }
+    drop(quarantine);
+    for &index in &requested {
         let update = &mut updates[index];
-        if matches!(update.status, Status::WouldUpdate { .. })
-            && policy.deny_non_fast_forwards
+        if !matches!(update.status, Status::WouldUpdate { .. }) {
+            if options.atomic && matches!(update.status, Status::Rejected(_)) {
+                break;
+            }
+            continue;
+        }
+        if let Some(reason) = policy.reject_before_transfer(destination, update, &mut remote_progress)? {
+            update.status = Status::Rejected(Rejection::Server(reason));
+        } else if policy.deny_non_fast_forwards
             && update.update.destination.as_bstr().starts_with_str("refs/heads/")
             && let (Some(old_id), Some(new_id)) = (update.old_id, update.update.new_id)
             && !push::plan::is_ancestor(destination, old_id, new_id, &[], should_interrupt)?
         {
             update.status = Status::Rejected(Rejection::Server("non-fast-forward".into()));
+        } else if !hooks.run(
+            "update",
+            [
+                gix_path::from_bstr(update.update.destination.as_bstr())?
+                    .into_owned()
+                    .into_os_string(),
+                update
+                    .old_id
+                    .unwrap_or_else(|| source.object_hash().null())
+                    .to_string()
+                    .into(),
+                update
+                    .update
+                    .new_id
+                    .unwrap_or_else(|| source.object_hash().null())
+                    .to_string()
+                    .into(),
+            ],
+            Vec::new(),
+            None,
+            &mut remote_progress,
+        )? {
+            update.status = Status::Rejected(Rejection::Server("hook declined".into()));
+        }
+        if options.atomic && matches!(update.status, Status::Rejected(_)) {
+            break;
         }
     }
     if options.atomic {
@@ -135,22 +195,50 @@ pub(crate) fn push(
         .copied()
         .filter(|&index| matches!(updates[index].status, Status::WouldUpdate { .. }))
         .collect();
-    destination.committer_or_set_generic_fallback()?;
     if options.atomic && !selected.is_empty() {
         let edits = selected
             .iter()
             .map(|&index| edit(&updates[index], destination.object_hash()))
-            .collect::<Vec<_>>();
-        let result = destination.edit_references(edits);
+            .collect();
+        let result = transaction::commit(destination, edits, &hooks, &mut remote_progress);
         for index in selected {
             finish(&mut updates[index], &result, &mut remote_progress)?;
         }
     } else {
         for index in selected {
             push::plan::check_interrupt(should_interrupt)?;
-            let result = destination.edit_references([edit(&updates[index], destination.object_hash())]);
+            let result = transaction::commit(
+                destination,
+                vec![edit(&updates[index], destination.object_hash())],
+                &hooks,
+                &mut remote_progress,
+            );
             finish(&mut updates[index], &result, &mut remote_progress)?;
         }
+    }
+    let successful: Vec<_> = updates
+        .iter()
+        .filter(|update| {
+            matches!(update.status, Status::Updated { .. })
+                && (update.old_id.is_some() || update.update.new_id.is_some())
+        })
+        .collect();
+    if !successful.is_empty() {
+        hooks.run(
+            "post-receive",
+            [],
+            hooks::input(successful.iter().copied(), source.object_hash()),
+            None,
+            &mut remote_progress,
+        )?;
+        let names = successful
+            .iter()
+            .map(|update| {
+                gix_path::from_bstr(update.update.destination.as_bstr()).map(|path| path.into_owned().into_os_string())
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .or_error()?;
+        hooks.run("post-update", names, Vec::new(), None, &mut remote_progress)?;
     }
     let response = gix_protocol::push::Response {
         unpack_error: None,
