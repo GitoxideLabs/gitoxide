@@ -73,15 +73,15 @@ mod invoke {
             I/O error (Other)
             
             Caused by:
-                0: "wwwauth[]"="Basic realm=\"a\rb\"" must not contain null bytes or newlines neither in key nor in value., input="Basic realm=\"a\rb\"",
+                0: Credential fields must not contain null bytes or newlines,
             I/O error (Other)
             
             Caused by:
-                0: "wwwauth[]"="Basic\nusername=other" must not contain null bytes or newlines neither in key nor in value., input="Basic\nusername=other",
+                0: Credential fields must not contain null bytes or newlines,
             I/O error (Other)
             
             Caused by:
-                0: "wwwauth[]"="Basic\0realm=example" must not contain null bytes or newlines neither in key nor in value., input="Basic\0realm=example",
+                0: Credential fields must not contain null bytes or newlines,
         ]
         "#);
     }

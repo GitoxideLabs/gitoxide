@@ -102,15 +102,15 @@ mod write_to {
         [
             Custom {
                 kind: Other,
-                error: "url"="foo\0" must not contain null bytes or newlines neither in key nor in value., input="foo\0",
+                error: Credential fields must not contain null bytes or newlines,
             },
             Custom {
                 kind: Other,
-                error: "url"="foo\n" must not contain null bytes or newlines neither in key nor in value., input="foo\n",
+                error: Credential fields must not contain null bytes or newlines,
             },
             Custom {
                 kind: Other,
-                error: "url"="foo\r" must not contain null bytes or newlines neither in key nor in value., input="foo\r",
+                error: Credential fields must not contain null bytes or newlines,
             },
         ]
         "#);
@@ -189,7 +189,7 @@ username=bob";
     #[test]
     fn null_bytes_when_decoding() {
         let err = Context::from_bytes(b"url=https://foo\0", ContextOptions::default()).unwrap_err();
-        insta::assert_debug_snapshot!(err, "null bytes when decoding", @r#""url"="https://foo\0" must not contain null bytes or newlines neither in key nor in value., input="https://foo\0""#);
+        insta::assert_debug_snapshot!(err, "null bytes when decoding", @"Credential fields must not contain null bytes or newlines");
     }
 
     #[test]
@@ -214,4 +214,32 @@ username=bob";
         assert_eq!(out, b"url=https://example.com/with\rreturn\n");
         Ok(())
     }
+}
+
+#[test]
+fn credential_errors_do_not_retain_secret_input() {
+    for input in [
+        b"password=private-secret\rbad\n".as_slice(),
+        b"password=private-secret\xff\n",
+        b"oauth_refresh_token=private-secret\0bad\n",
+        b"private-secret-without-a-field-separator\n",
+        b"private-secret\0key=value\n",
+    ] {
+        let err = Context::from_bytes(input, ContextOptions::default()).expect_err("invalid credential input");
+        assert!(
+            !format!("{err:#} {err:?}").contains("private-secret"),
+            "credential decoding errors must not retain confidential values or malformed input"
+        );
+    }
+    let context = Context {
+        password: Some("private-secret\ninvalid".into()),
+        ..Default::default()
+    };
+    let err = context
+        .write_to(std::io::sink())
+        .expect_err("invalid credential output");
+    assert!(
+        !format!("{err:#} {err:?}").contains("private-secret"),
+        "credential encoding errors must not retain confidential values"
+    );
 }
