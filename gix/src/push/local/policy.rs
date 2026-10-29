@@ -36,16 +36,16 @@ impl Policy {
                 && (section.header().name().eq_ignore_ascii_case(b"receive")
                     || section.header().name().eq_ignore_ascii_case(b"transfer"))
             {
-                let values = section.values("hideRefs");
-                if values.len()
-                    != section
-                        .value_names()
-                        .filter(|name| name.eq_ignore_ascii_case("hideRefs"))
-                        .count()
+                for (_, value) in section
+                    .body()
+                    .into_iter_implicit()
+                    .filter(|(name, _)| name.eq_ignore_ascii_case("hideRefs"))
                 {
-                    bail!(message("hideRefs configuration requires an explicit value").validation());
+                    let Some(value) = value else {
+                        bail!(message("hideRefs configuration requires an explicit value").validation());
+                    };
+                    hidden.push(value);
                 }
-                hidden.extend(values);
             }
         }
         Ok(Self {
