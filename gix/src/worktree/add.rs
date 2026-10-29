@@ -21,6 +21,11 @@ pub enum Head {
     Attached(gix_ref::FullName),
     /// Check out a commit with a detached `HEAD`.
     Detached(gix_hash::ObjectId),
+    /// Install a symbolic `HEAD` whose full target beneath `refs/` does not exist yet.
+    ///
+    /// Local branches must not be reserved by another worktree. Other symbolic targets may be shared.
+    /// No branch, commit, or initial HEAD reflog is created.
+    Unborn(gix_ref::FullName),
 }
 
 /// A rejection reported by [`Repository::add_worktree()`][crate::Repository::add_worktree()].
@@ -40,6 +45,9 @@ pub enum Error {
     DestinationRegistered {
         destination: std::path::PathBuf,
     },
+    ReferenceExists {
+        name: gix_ref::FullName,
+    },
     Interrupted,
 }
 
@@ -57,6 +65,7 @@ impl std::fmt::Display for Error {
                     destination.display()
                 )
             }
+            Error::ReferenceExists { name } => write!(f, "The unborn HEAD target {name:?} already exists"),
             Error::Interrupted => f.write_str("Adding the worktree was interrupted"),
         }
     }
@@ -66,7 +75,9 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         Some(match self {
             Error::NotLocalBranch { .. } => const { &ClassificationMarker::VALIDATION },
-            Error::CheckedOut { .. } | Error::DestinationRegistered { .. } => const { &ClassificationMarker::CONFLICT },
+            Error::CheckedOut { .. } | Error::DestinationRegistered { .. } | Error::ReferenceExists { .. } => {
+                const { &ClassificationMarker::CONFLICT }
+            }
             Error::Interrupted => const { &ClassificationMarker::CANCELLED },
         })
     }
@@ -76,7 +87,8 @@ impl crate::Repository {
     /// Add and check out a linked worktree at `destination` with the given `head`.
     ///
     /// Attached heads must name an existing local branch which isn't checked out or reserved by an ongoing
-    /// bisect or rebase in any worktree.
+    /// bisect or rebase in any worktree. Unborn heads leave the worktree and index empty without creating a
+    /// branch or HEAD reflog. Their target must not exist, and local branches must not be reserved.
     /// Reference namespaces are ignored for branch lookup, occupancy checks, and the returned repository, like
     /// `git worktree add`. The source repository's namespace is preserved.
     /// The destination must either not exist or be an empty, unregistered directory. Any files created by this
@@ -152,7 +164,7 @@ impl crate::Repository {
                     .or_raise(|| message("The local branch could not be found"))?;
                 let commit = reference.peel_to_commit()?;
                 let root_tree_id = commit.tree_id()?.detach();
-                (gix_ref::Target::Symbolic(name), commit.id, root_tree_id)
+                (gix_ref::Target::Symbolic(name), Some(commit.id), root_tree_id)
             }
             Head::Detached(commit_id) => {
                 let root_tree_id = repo
@@ -160,7 +172,29 @@ impl crate::Repository {
                     .or_raise(|| message("The detached target is not an existing commit"))?
                     .tree_id()?
                     .detach();
-                (gix_ref::Target::Object(commit_id), commit_id, root_tree_id)
+                (gix_ref::Target::Object(commit_id), Some(commit_id), root_tree_id)
+            }
+            Head::Unborn(name) => {
+                ensure!(
+                    name.as_bstr().starts_with(b"refs/"),
+                    validation("An unborn HEAD must point to a full reference beneath refs/")
+                );
+                let mut source = repo.as_ref().clone();
+                source.clear_namespace();
+                ensure!(
+                    source.try_find_reference(name.as_ref())?.is_none(),
+                    Error::ReferenceExists { name: name.clone() }
+                );
+                if name.category() == Some(gix_ref::Category::LocalBranch)
+                    && let Some(worktree_dirs) = source.checked_out_branches_without_namespace()?.remove(&name)
+                {
+                    bail!(Error::CheckedOut { name, worktree_dirs });
+                }
+                (
+                    gix_ref::Target::Symbolic(name),
+                    None,
+                    gix_hash::ObjectId::empty_tree(repo.object_hash()),
+                )
             }
         };
         ensure!(!should_interrupt.load(Ordering::Relaxed), Error::Interrupted);
@@ -280,16 +314,18 @@ impl crate::Repository {
             .to_thread_local();
         repo.clear_namespace();
         // Like clone, initialize a symbolic HEAD's log without dereferencing or updating its branch.
-        repo.edit_reference(RefEdit::update_with_log(
-            "HEAD".try_into().expect("valid reference name"),
-            commit_id,
-            PreviousValue::Any,
-            LogChange {
-                mode: reflog_mode,
-                ..Default::default()
-            },
-        ))
-        .or_raise(|| message("Could not initialize the linked worktree HEAD and its reflog"))?;
+        if let Some(commit_id) = commit_id {
+            repo.edit_reference(RefEdit::update_with_log(
+                "HEAD".try_into().expect("valid reference name"),
+                commit_id,
+                PreviousValue::Any,
+                LogChange {
+                    mode: reflog_mode,
+                    ..Default::default()
+                },
+            ))
+            .or_raise(|| message("Could not initialize the linked worktree HEAD and its reflog"))?;
+        }
         Ok(PrepareCheckout {
             repo,
             prepared,
