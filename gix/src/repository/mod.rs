@@ -90,6 +90,8 @@ pub mod attributes;
 ///
 #[cfg(feature = "blame")]
 mod blame;
+#[cfg(feature = "blame")]
+mod blame_worktree;
 /// Local branch operations.
 pub mod branch;
 mod cache;
