@@ -1846,6 +1846,7 @@ dependencies = [
  "gix-worktree",
  "insta",
  "pretty_assertions",
+ "regex",
  "serde",
 ]
 
