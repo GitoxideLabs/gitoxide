@@ -17,6 +17,23 @@ pub(super) fn commit(
     progress: &mut impl FnMut(bool, &[u8]) -> io::Result<()>,
 ) -> Result<Vec<RefEdit>> {
     let (loose, packed) = repo.config.lock_timeout()?;
+    let queued_input = input(edits.iter(), repo.object_hash(), repo.namespace());
+    if !hooks.run(
+        "reference-transaction",
+        ["preparing".into()],
+        queued_input.clone(),
+        None,
+        progress,
+    )? {
+        hooks.run(
+            "reference-transaction",
+            ["aborted".into()],
+            queued_input,
+            None,
+            progress,
+        )?;
+        bail!(message("Reference transaction hook declined"));
+    }
     let transaction = repo.refs.transaction().prepare(edits, loose, packed)?;
     let input = input(transaction.edits(), repo.object_hash(), repo.namespace());
     if !hooks.run(
