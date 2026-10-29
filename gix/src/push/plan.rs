@@ -59,7 +59,7 @@ fn status(
     shallow: &[ObjectId],
     should_interrupt: &AtomicBool,
 ) -> Result<Status> {
-    if old_id == update.new_id {
+    if update.new_id.is_some() && old_id == update.new_id {
         return Ok(Status::UpToDate);
     }
     if let Lease::MustMatch(expected) = update.lease

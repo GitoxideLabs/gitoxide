@@ -338,3 +338,30 @@ fn pushes_an_in_memory_commit_with_an_implicit_empty_tree() -> TestResult {
     gix_testtools::git(destination.path(), "fsck --strict --no-reflogs")?;
     Ok(())
 }
+
+#[test]
+fn deletion_of_absent_refs_is_checked_by_the_receiver() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let repo = crate::remote::repo("base");
+    let destination = gix_testtools::tempfile::tempdir()?;
+    gix_testtools::git(destination.path(), "init --bare")?;
+    gix_testtools::git(destination.path(), "config receive.hideRefs refs/heads/private")?;
+    let outcome = push(
+        &repo,
+        destination.path(),
+        vec![update("refs/heads/private", None)?, update("refs/heads/absent", None)?],
+        Options::default(),
+    )?;
+    assert_eq!(
+        outcome.updates[0].status,
+        Status::Rejected(Rejection::Server("deny deleting a hidden ref".into()))
+    );
+    assert_eq!(outcome.updates[1].status, Status::Updated { forced: false });
+    assert_eq!(
+        outcome.response.expect("deletions receive a server report").refs.len(),
+        2
+    );
+    Ok(())
+}
