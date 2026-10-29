@@ -350,6 +350,53 @@ pub(crate) mod apply {
     }
 
     #[test]
+    fn operation_environment_is_inherited_only_by_filter_children() -> TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let temp = gix_testtools::tempfile::tempdir()?;
+        let worktree = temp.path().canonicalize()?;
+        let mut state = driver::State::new(gix_command::Context {
+            worktree_dir: Some(worktree.clone()),
+            git_dir: Some(worktree.join(".git")),
+            ..Default::default()
+        });
+        state.environment = vec![
+            ("GIX_FILTER_TEST_VALUE".into(), "first".into()),
+            ("GIX_FILTER_TEST_VALUE".into(), "literal $value".into()),
+            ("GIT_DIR".into(), "wrong".into()),
+        ];
+        let filter = Driver {
+            name: "environment".into(),
+            clean: Some("printf '%s\n%s\n' \"$GIX_FILTER_TEST_VALUE\" \"$GIT_DIR\"".into()),
+            smudge: None,
+            process: None,
+            required: true,
+        };
+        let mut output = String::new();
+        state
+            .clone()
+            .apply(
+                &filter,
+                &mut std::io::empty(),
+                Operation::Clean,
+                context_from_path("file"),
+            )?
+            .expect("a clean filter is configured")
+            .read_to_string(&mut output)?;
+        assert_eq!(
+            output,
+            format!("literal $value\n{}\n", worktree.join(".git").display()),
+            "cloned state keeps overrides and repository context wins"
+        );
+        assert!(
+            std::env::var_os("GIX_FILTER_TEST_VALUE").is_none(),
+            "filter overrides do not change the parent process environment"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn missing_driver_means_no_filter_is_applied() -> TestResult {
         let mut state = gix_filter::driver::State::default();
         let mut driver = driver_no_process();
