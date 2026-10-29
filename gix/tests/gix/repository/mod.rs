@@ -28,6 +28,8 @@ mod note;
 #[cfg(feature = "notify")]
 mod notify;
 mod object;
+#[cfg(feature = "pack-generate")]
+mod pack;
 mod open;
 #[cfg(feature = "attributes")]
 mod pathspec;
