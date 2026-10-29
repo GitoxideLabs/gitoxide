@@ -148,3 +148,6 @@ mod name {
 
 #[cfg(feature = "blocking-network-client")]
 mod environment;
+
+#[cfg(feature = "blocking-network-client")]
+mod local_push_namespace;
