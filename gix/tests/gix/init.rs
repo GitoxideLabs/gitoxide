@@ -7,7 +7,7 @@ mod bare {
     fn init_into_non_existing_directory_creates_it() -> TestResult {
         let _environment = gix_testtools::isolate_git_environment()?;
         let tmp = tempfile::tempdir()?;
-        let git_dir = tmp.path().join("bare.git");
+        let git_dir = tmp.path().join("missing/bare.git");
         let repo = gix::init_bare(&git_dir)?;
         assert_eq!(repo.kind(), gix::repository::Kind::Common);
         assert!(
