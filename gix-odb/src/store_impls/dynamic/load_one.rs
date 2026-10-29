@@ -23,16 +23,17 @@ impl super::Store {
         if index.generation != marker.generation {
             return Ok(None);
         }
-        fn load_pack(
-            path: &Path,
-            object_hash: gix_hash::Kind,
-            alloc_limit_bytes: Option<usize>,
-        ) -> std::io::Result<Arc<gix_pack::data::File>> {
-            gix_pack::data::File::at(path, object_hash)
-                .map(|pack| pack.with_alloc_limit_bytes(alloc_limit_bytes))
-                .map(Arc::new)
-                .map_err(super::error_to_io)
-        }
+        #[allow(deprecated)] // `try_update` is newer than our MSRV; keep using `fetch_update`.
+        let load_pack = |path: &Path| -> std::io::Result<Arc<gix_pack::data::File>> {
+            let mut pack = gix_pack::data::File::at(path, self.object_hash)
+                .map_err(super::error_to_io)?
+                .with_alloc_limit_bytes(self.alloc_limit_bytes);
+            pack.id = self
+                .next_pack_id
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+                .map_err(|_| std::io::Error::other("The object database exhausted its unique pack IDs"))?;
+            Ok(Arc::new(pack))
+        };
 
         // pin the current state before loading in the generation. That way we won't risk seeing the wrong value later.
         let slot_files = &**slot.files.load();
@@ -71,7 +72,7 @@ impl super::Store {
                                 let pack = match files_mut {
                                     Some(types::IndexAndPacks::Index(bundle)) => {
                                         bundle.data.load_with_recovery(|path| {
-                                            let res = load_pack(path, self.object_hash, self.alloc_limit_bytes);
+                                            let res = load_pack(path);
                                             #[cfg(feature = "test-support")]
                                             self.debug(crate::store::init::debug::Point::PackLoadCompleted {
                                                 slot: _slot_id,
@@ -136,7 +137,7 @@ impl super::Store {
                                             .get_mut(pack_index as usize)
                                             .expect("pack index came from this multi-pack index")
                                             .load_with_recovery(|path| {
-                                                let res = load_pack(path, self.object_hash, self.alloc_limit_bytes);
+                                                let res = load_pack(path);
                                                 #[cfg(feature = "test-support")]
                                                 self.debug(crate::store::init::debug::Point::PackLoadCompleted {
                                                     slot: _slot_id,
@@ -164,5 +165,35 @@ impl super::Store {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gix_object::FindHeader;
+
+    #[test]
+    fn exhausted_pack_ids_do_not_wrap() -> gix_error::TestResult {
+        let store = Arc::new(crate::Store::at_opts(
+            gix_testtools::fixture_path("objects"),
+            gix_hash::Kind::Sha1,
+            &mut std::iter::empty(),
+            Default::default(),
+        )?);
+        store.next_pack_id.store(u32::MAX, Ordering::Relaxed);
+        let handle = store.to_handle_arc();
+        let blob_id = gix_hash::ObjectId::from_hex(b"dd25c539efbb0ab018caa4cda2d133285634e9b5")?;
+        for _ in 0..2 {
+            handle
+                .try_header(&blob_id)
+                .expect_err("exhausted IDs prevent pack loading");
+            assert_eq!(
+                store.next_pack_id.load(Ordering::Relaxed),
+                u32::MAX,
+                "an exhausted counter never wraps and reuses an ID"
+            );
+        }
+        Ok(())
     }
 }
