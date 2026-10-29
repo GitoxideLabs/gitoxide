@@ -72,8 +72,8 @@ impl Worktree<'_> {
         P: gix_utils::progress::NestedProgress,
         P::SubProgress: gix_utils::progress::NestedProgress + 'static,
     {
-        use gix_error::{ErrorExt, ResultExt, bail, ensure, message};
-        use std::{fs, sync::atomic::Ordering};
+        use gix_error::{ResultExt, ensure};
+        use std::sync::atomic::Ordering;
         ensure!(
             !should_interrupt.load(Ordering::Relaxed),
             crate::worktree::add::Error::Interrupted
@@ -89,65 +89,88 @@ impl Worktree<'_> {
         );
         let work_dir = repo.current_dir().join(self.base());
         let git_dir = repo.current_dir().join(repo.git_dir());
-        match fs::symlink_metadata(&work_dir) {
-            Ok(meta) => {
-                ensure!(
-                    meta.is_dir() && !meta.file_type().is_symlink(),
-                    validation("Initial checkout destination must be a directory, not a symlink")
-                );
-                for entry in fs::read_dir(&work_dir).or_error()? {
-                    ensure!(
-                        entry.or_error()?.file_name() == ".git",
-                        validation("Initial checkout refuses existing worktree contents")
-                    );
-                }
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(err) => bail!(err.and_raise(message("Could not inspect the initial checkout destination"))),
-        }
-        let dot_git = work_dir.join(".git");
-        let recreate_git_link = match fs::symlink_metadata(&dot_git) {
-            Ok(meta) => {
-                ensure!(
-                    meta.is_file() && !meta.file_type().is_symlink(),
-                    validation("The worktree link must be a regular file")
-                );
-                let target = gix_discover::path::from_gitdir_file(&dot_git).or_error()?;
-                ensure!(
-                    gix_path::realpath(&target).or_error()? == gix_path::realpath(&git_dir).or_error()?,
-                    validation("The worktree link points to another repository")
-                );
-                false
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => true,
-            Err(err) => bail!(err.and_raise(message("Could not inspect the worktree link"))),
-        };
+        let recreate_git_link = validate_destination(&work_dir, &git_dir)?;
         let repo = repo.with_absolute_paths()?;
         let root_tree_id = repo.head_tree_id_or_empty()?.detach();
-        fs::create_dir_all(&work_dir).or_raise(|| message("Could not create the initial checkout destination"))?;
-        if recreate_git_link {
-            use std::io::Write;
-            let mut file = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&dot_git)
-                .or_raise(|| message("Could not recreate the worktree link"))?;
-            // Relative forward links work independently of the registration's original link style.
-            let git_dir = gix_path::realpath(&git_dir).or_error()?;
-            let work_dir = gix_path::realpath(&work_dir).or_error()?;
-            let relative = match work_dir
-                .ancestors()
-                .last()
-                .and_then(|root| Some((git_dir.strip_prefix(root).ok()?, work_dir.strip_prefix(root).ok()?)))
-            {
-                Some((target, base)) => gix_path::relativize_with_prefix(target, base).into_owned(),
-                None => git_dir,
-            };
-            file.write_all(b"gitdir: ").or_error()?;
-            file.write_all(gix_path::os_str_into_bstr(relative.as_os_str()).or_error()?)
-                .or_error()?;
-            file.write_all(b"\n").or_error()?;
+        connect(&work_dir, &git_dir, recreate_git_link)?;
+        crate::worktree::add::checkout_tree(&repo, &root_tree_id, progress, should_interrupt, None)
+    }
+}
+
+pub(crate) fn validate_destination(work_dir: &std::path::Path, git_dir: &std::path::Path) -> Result<bool> {
+    use gix_error::{ErrorExt, ResultExt, bail, ensure, message};
+    use std::fs;
+    match fs::symlink_metadata(work_dir) {
+        Ok(meta) => {
+            ensure!(
+                meta.is_dir() && !meta.file_type().is_symlink(),
+                validation("Initial checkout destination must be a directory, not a symlink")
+            );
+            for entry in fs::read_dir(work_dir).or_error()? {
+                ensure!(
+                    entry.or_error()?.file_name() == ".git",
+                    validation("Initial checkout refuses existing worktree contents")
+                );
+            }
         }
-        crate::worktree::add::checkout_tree(&repo, &root_tree_id, progress, should_interrupt)
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => bail!(err.and_raise(message("Could not inspect the initial checkout destination"))),
+    }
+    let dot_git = work_dir.join(".git");
+    let recreate_git_link = match fs::symlink_metadata(&dot_git) {
+        Ok(meta) => {
+            ensure!(
+                (meta.is_file() || meta.is_dir() && dot_git == git_dir) && !meta.file_type().is_symlink(),
+                validation("The worktree link must be a regular file")
+            );
+            let target = if meta.is_dir() {
+                dot_git.clone()
+            } else {
+                gix_discover::path::from_gitdir_file(&dot_git).or_error()?
+            };
+            ensure!(
+                gix_path::realpath(&target).or_error()? == gix_path::realpath(git_dir).or_error()?,
+                validation("The worktree link points to another repository")
+            );
+            false
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => true,
+        Err(err) => bail!(err.and_raise(message("Could not inspect the worktree link"))),
+    };
+    Ok(recreate_git_link)
+}
+
+pub(crate) fn connect(work_dir: &std::path::Path, git_dir: &std::path::Path, recreate_git_link: bool) -> Result<()> {
+    use gix_error::{ResultExt, message};
+    use std::fs;
+    let dot_git = work_dir.join(".git");
+    fs::create_dir_all(work_dir).or_raise(|| message("Could not create the initial checkout destination"))?;
+    if recreate_git_link {
+        use std::io::Write;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&dot_git)
+            .or_raise(|| message("Could not recreate the worktree link"))?;
+        // Relative forward links work independently of the registration's original link style.
+        let git_dir = gix_path::realpath(git_dir).or_error()?;
+        let work_dir = gix_path::realpath(work_dir).or_error()?;
+        let relative = relative_path(&git_dir, &work_dir);
+        file.write_all(b"gitdir: ").or_error()?;
+        file.write_all(gix_path::os_str_into_bstr(relative.as_os_str()).or_error()?)
+            .or_error()?;
+        file.write_all(b"\n").or_error()?;
+    }
+    Ok(())
+}
+
+pub(crate) fn relative_path(target: &std::path::Path, base: &std::path::Path) -> std::path::PathBuf {
+    match base
+        .ancestors()
+        .last()
+        .and_then(|root| Some((target.strip_prefix(root).ok()?, base.strip_prefix(root).ok()?)))
+    {
+        Some((target, base)) => gix_path::relativize_with_prefix(target, base).into_owned(),
+        None => target.to_owned(),
     }
 }

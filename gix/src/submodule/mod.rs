@@ -22,6 +22,8 @@ pub type ModulesSnapshot = gix_fs::SharedFileSnapshot<File>;
 /// The name of the file containing (sub) module information.
 pub(crate) const MODULES_FILE: &str = ".gitmodules";
 
+#[cfg(feature = "worktree-mutation")]
+mod checkout;
 mod url;
 
 /// A platform maintaining state needed to interact with submodules, created by [`Repository::submodules()].
