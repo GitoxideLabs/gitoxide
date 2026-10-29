@@ -20,6 +20,7 @@ where
 {
     state: State<'a, T>,
     handle_progress: Option<F>,
+    raw_progress: bool,
     pos: usize,
     cap: usize,
 }
@@ -47,6 +48,7 @@ where
         WithSidebands {
             state: State::Idle { parent: Some(parent) },
             handle_progress: None,
+            raw_progress: false,
             pos: 0,
             cap: 0,
         }
@@ -86,9 +88,17 @@ where
         WithSidebands {
             state: State::Idle { parent: Some(parent) },
             handle_progress: Some(handle_progress),
+            raw_progress: false,
             pos: 0,
             cap: 0,
         }
+    }
+
+    /// Create a sideband reader forwarding packet payloads unchanged, including trailing newlines.
+    pub fn with_raw_progress_handler(parent: &'a mut StreamingPeekableIter<T>, handle_progress: F) -> Self {
+        let mut reader = Self::with_progress_handler(parent, handle_progress);
+        reader.raw_progress = true;
+        reader
     }
 
     /// Create a new instance without a progress handler.
@@ -96,6 +106,7 @@ where
         WithSidebands {
             state: State::Idle { parent: Some(parent) },
             handle_progress: None,
+            raw_progress: false,
             pos: 0,
             cap: 0,
         }
@@ -127,6 +138,13 @@ where
     /// Set or unset the progress handler.
     pub fn set_progress_handler(&mut self, handle_progress: Option<F>) {
         self.handle_progress = handle_progress;
+        self.raw_progress = false;
+    }
+
+    /// Set a handler receiving unchanged progress/error payload bytes, including trailing newlines.
+    pub fn set_progress_handler_raw(&mut self, handle_progress: Option<F>) {
+        self.handle_progress = handle_progress;
+        self.raw_progress = true;
     }
 
     /// Effectively forwards to the parent [`StreamingPeekableIter::peek_line()`], allowing to see what would be returned
@@ -293,13 +311,13 @@ where
                                             break (U16_HEX_BYTES + ENCODED_BAND, d.len());
                                         }
                                         BandRef::Progress(d) => {
-                                            let text = TextRef::from(d).0;
+                                            let text = if this.raw_progress { d } else { TextRef::from(d).0 };
                                             if handle_progress(false, text).is_break() {
                                                 return Poll::Ready(Err(io::Error::other("interrupted by user")));
                                             }
                                         }
                                         BandRef::Error(d) => {
-                                            let text = TextRef::from(d).0;
+                                            let text = if this.raw_progress { d } else { TextRef::from(d).0 };
                                             if handle_progress(true, text).is_break() {
                                                 return Poll::Ready(Err(io::Error::other("interrupted by user")));
                                             }

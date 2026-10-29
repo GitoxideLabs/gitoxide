@@ -363,3 +363,30 @@ async fn empty_data_packets_do_not_end_a_byte_stream() -> gix_testtools::TestRes
     assert_eq!(reader.stopped_at(), Some(PacketLineRef::Flush));
     Ok(())
 }
+
+#[crate::bisync::bisync]
+#[cfg_attr(feature = "blocking-io", test)]
+#[cfg_attr(all(feature = "async-io", not(feature = "blocking-io")), async_std::test)]
+async fn raw_sideband_handlers_preserve_packet_bytes() -> gix_testtools::TestResult {
+    let payload = b"\xff\0one\nsecond\r\n";
+    let mut input = format!("{:04x}", payload.len() + 5).into_bytes();
+    input.push(2);
+    input.extend_from_slice(payload);
+    input.extend_from_slice(b"0000");
+    let mut rd = StreamingPeekableIter::new(&input[..], &[PacketLineRef::Flush], false);
+    let mut seen = Vec::new();
+    #[cfg(all(feature = "async-io", not(feature = "blocking-io")))]
+    use gix_packetline::async_io::WithSidebands;
+    #[cfg(feature = "blocking-io")]
+    use gix_packetline::blocking_io::WithSidebands;
+    let mut reader = WithSidebands::with_raw_progress_handler(&mut rd, |is_error, data: &[u8]| {
+        seen.push((is_error, data.to_vec()));
+        std::ops::ControlFlow::Continue(())
+    });
+    let mut pack = Vec::new();
+    reader.read_to_end(&mut pack).await?;
+    drop(reader);
+    assert_eq!(seen, [(false, payload.to_vec())]);
+    assert!(pack.is_empty());
+    Ok(())
+}
