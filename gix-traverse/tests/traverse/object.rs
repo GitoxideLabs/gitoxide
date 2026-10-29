@@ -126,3 +126,36 @@ fn missing_objects_can_be_skipped_without_hiding_corruption() -> gix_error::Test
         .expect_err("ignoring missing objects does not ignore malformed objects");
     Ok(())
 }
+
+#[test]
+fn metadata_validation_can_be_delegated_without_ignoring_connectivity() -> gix_error::TestResult {
+    let root = gix_testtools::scripted_fixture_read_only("make_object_graph.sh")?;
+    let db = gix_odb::at(root.join(".git/objects"), gix_testtools::object_hash())?;
+    for name in ["legacy-commit", "legacy-tag"] {
+        BreadthFirst::new(ids(&root.join(name))?, &db)
+            .collect::<gix_error::Result<Vec<_>>>()
+            .expect_err("full metadata validation remains the default");
+    }
+    let actual = BreadthFirst::new(ids(&root.join("legacy-tag"))?, &db)
+        .with_object_validation(false)
+        .map(|entry| entry.map(|entry| entry.id))
+        .collect::<gix_error::Result<std::collections::BTreeSet<_>>>()?;
+    assert_eq!(
+        actual,
+        ids(&root.join("legacy-reachable"))?.into_iter().collect(),
+        "Git traverses graph edges independently of identity validation"
+    );
+    for name in ["wrong-kind", "malformed", "malformed-commit", "malformed-tag"] {
+        let mut traversal = BreadthFirst::new(ids(&root.join(name))?, &db).with_object_validation(false);
+        traversal
+            .by_ref()
+            .collect::<gix_error::Result<Vec<_>>>()
+            .expect_err("delegating metadata validation never hides malformed edges or wrong object kinds");
+        assert!(traversal.next().is_none(), "connectivity errors fuse the iterator");
+    }
+    BreadthFirst::new([gix_testtools::object_hash().null()], &db)
+        .with_object_validation(false)
+        .collect::<gix_error::Result<Vec<_>>>()
+        .expect_err("missing objects are still rejected");
+    Ok(())
+}

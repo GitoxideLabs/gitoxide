@@ -31,3 +31,18 @@ printf '%s\n' "$blob" >blob
 printf 'object %s\ntype commit\ntag wrong-kind\n\nmessage\n' "$blob" |
     git hash-object -w --literally -t tag --stdin >wrong-kind
 printf '100644 file\0' | git hash-object -w --literally -t tree --stdin >malformed
+
+# Connectivity walks do not inspect identities or tag names. These historical
+# objects are traversable by Git even though ordinary full decoders reject them.
+tree=$(git rev-parse HEAD^{tree})
+parent=$(git rev-parse HEAD)
+printf 'tree %s\nparent %s\nauthor missing-email\ncommitter missing-email\n\nlegacy\n' "$tree" "$parent" |
+    git hash-object -w --literally -t commit --stdin >legacy-commit
+legacy=$(cat legacy-commit)
+printf 'object %s\ntype commit\ntag legacy\ntagger missing-email\n\nlegacy tag\n' "$legacy" |
+    git hash-object -w --literally -t tag --stdin >legacy-tag
+git rev-list --objects --no-object-names "$(cat legacy-tag)" >legacy-reachable
+printf 'tree invalid\n\nmalformed graph edge\n' |
+    git hash-object -w --literally -t commit --stdin >malformed-commit
+printf 'object %s\ntype nonsense\n\nmalformed graph edge\n' "$legacy" |
+    git hash-object -w --literally -t tag --stdin >malformed-tag
