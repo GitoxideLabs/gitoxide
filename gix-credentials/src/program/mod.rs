@@ -209,7 +209,7 @@ impl Program {
         let mut cmd = self
             .to_command_with_environment(action, environment)
             .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?;
-        gix_trace::debug!(cmd = ?cmd, "launching credential helper");
+        gix_trace::debug!(program = ?cmd.get_program(), "launching credential helper");
         let mut child = cmd.spawn()?;
         let stdin = child.stdin.take().expect("stdin to be configured");
         let stdout = child.stdout.take();
