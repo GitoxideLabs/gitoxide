@@ -283,42 +283,40 @@ fn slot_exhaustion_keeps_the_loaded_pack_usable() -> Result {
 }
 
 #[test]
-fn never_refresh_does_not_retry_failed_initial_scan() -> Result {
+fn failed_initial_scan_stays_visible_until_initialization_succeeds() -> gix_error::TestResult {
     let mut fixture = OdbFixture::from_script()?;
     fixture.install_pack(Database::Primary, Pack::A)?;
     fixture.install_pack(Database::Primary, Pack::B)?;
-    let mut never = open(&fixture, 1)?;
-    let strict = never.clone();
-    never.refresh_never();
-    let missing = fixture.manifest.missing_id();
+    let mut handle = open(&fixture, 1)?;
+    handle.refresh_never();
+    let missing_id = fixture.manifest.missing_id();
     let mut buffer = Vec::new();
 
-    let err = never
-        .try_find(&missing, &mut buffer)
-        .expect_err("one slot cannot hold two indices during lazy initialization");
-    assert!(
-        err.to_string().contains("slot"),
-        "the initial slot exhaustion is reported through the lookup error: {err}"
-    );
-    assert_eq!(
-        never.store_ref().metrics().num_refreshes,
-        1,
-        "the initial lookup scans the pack directory once"
-    );
-
-    assert_missing(&never, &missing)?;
-    assert_eq!(
-        never.store_ref().metrics().num_refreshes,
-        1,
-        "the never-refresh handle does not retry the failed scan"
-    );
+    for _ in 0..2 {
+        for error in [
+            handle.store_ref().structure().err(),
+            handle.store_ref().iter().err(),
+            handle.try_find(&missing_id, &mut buffer).err(),
+        ] {
+            let error =
+                error.expect("an incomplete catalog cannot report a successful structure, iteration, or lookup");
+            assert!(
+                error.to_string().contains("slot"),
+                "slot exhaustion remains visible: {error}"
+            );
+        }
+    }
 
     fixture.remove_pack(Database::Primary, Pack::B)?;
-    assert_object(&strict, &fixture.manifest.pack(Pack::A).object_ids[0])?;
+    assert_object(&handle, &fixture.manifest.pack(Pack::A).object_ids[0])?;
     assert_eq!(
-        strict.store_ref().metrics().num_refreshes,
-        2,
-        "a strict shared handle can reconcile once the remaining index fits"
+        handle.store_ref().iter()?.count(),
+        fixture.manifest.pack(Pack::A).object_ids.len(),
+        "initialization succeeds once all remaining indices fit"
+    );
+    assert!(
+        !handle.store_ref().structure()?.is_empty(),
+        "the successful catalog describes its files"
     );
     Ok(())
 }
