@@ -263,6 +263,7 @@ impl Store {
                 ),
             }),
             slot_limit,
+            next_pack_id: Default::default(),
             use_multi_pack_index,
             object_hash,
             alloc_limit_bytes,

@@ -72,6 +72,53 @@ fn db_with_all_object_sources() -> Result<(gix_odb::Handle, gix_testtools::tempf
 }
 
 #[test]
+fn stable_locations_distinguish_packs_with_colliding_path_crcs() -> gix_error::TestResult {
+    use gix_pack::Find;
+
+    let fixture = crate::scripted_fixture_read_only("make_pack_id_collision.sh")?;
+    let objects_dir = fixture.join("objects");
+    let mut handle = crate::odb_at(&objects_dir)?;
+    handle.prevent_pack_unload();
+    let object_hash = handle.store_ref().object_hash();
+    let packs = [
+        gix_pack::data::File::at(objects_dir.join("pack/pack-446fae5b7acbf932.pack"), object_hash)?,
+        gix_pack::data::File::at(objects_dir.join("pack/pack-da48020c4b9ad19b.pack"), object_hash)?,
+    ];
+    assert_eq!(packs[0].id, packs[1].id, "the fixture reproduces a path-CRC collision");
+
+    let mut locations = Vec::new();
+    for pack in &packs {
+        let index = gix_pack::index::File::at(pack.path().with_extension("idx"), object_hash)?;
+        assert_eq!(index.num_objects(), 1, "each fixture pack has its own single blob");
+        let object_id = index.oid_at_index(0).to_owned();
+        let location = handle
+            .location_by_oid(&object_id, &mut Vec::new())?
+            .expect("the packed fixture object is present");
+        locations.push((location, object_id));
+    }
+    assert_ne!(
+        locations[0].0.pack_id, locations[1].0.pack_id,
+        "locations identify distinct packs despite their colliding path CRCs"
+    );
+    for (pack, (location, object_id)) in packs.iter().zip(locations) {
+        assert_eq!(
+            handle.entry_by_location(&location).expect("the pack is retained").data,
+            pack.entry_slice(location.entry_range(location.pack_offset))
+                .expect("the location names a complete entry"),
+            "a retained location returns bytes from its own pack"
+        );
+        assert_eq!(
+            handle
+                .pack_offsets_and_oid(location.pack_id)?
+                .expect("the index is retained"),
+            vec![(location.pack_offset, object_id)],
+            "the retained index maps the location to the correct object"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn multi_index_access() -> gix_testtools::TestResult {
     let dir = crate::scripted_fixture_writable("make_repo_multi_index.sh")?;
     let expected = expected_pack_metrics(dir.path())?;

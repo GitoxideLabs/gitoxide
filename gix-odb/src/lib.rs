@@ -64,7 +64,10 @@
 use std::{
     cell::RefCell,
     path::PathBuf,
-    sync::{Arc, atomic::AtomicUsize},
+    sync::{
+        Arc,
+        atomic::{AtomicU32, AtomicUsize},
+    },
 };
 
 use arc_swap::ArcSwap;
@@ -169,6 +172,8 @@ pub struct Store {
     pub(crate) catalog: ArcSwap<types::Catalog>,
     /// The user-provided hard limit, or `None` if the slot map may grow as needed.
     slot_limit: Option<usize>,
+    /// Pack IDs are never reused, including across catalog generations with retained packs.
+    next_pack_id: AtomicU32,
 
     /// The amount of handles currently sharing this store.
     pub(crate) num_handles: AtomicUsize,
