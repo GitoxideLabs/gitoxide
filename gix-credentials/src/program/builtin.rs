@@ -26,7 +26,7 @@ pub(super) fn is_static(input: &[u8]) -> bool {
     quote.is_none()
 }
 
-pub(super) struct Url {
+pub(crate) struct Url {
     pub protocol: Vec<u8>,
     pub host: Vec<u8>,
     pub username: Option<Vec<u8>>,
@@ -34,7 +34,7 @@ pub(super) struct Url {
     pub path: Option<Vec<u8>>,
 }
 
-pub(super) fn parse_url(input: &[u8]) -> Option<Url> {
+pub(crate) fn parse_url(input: &[u8]) -> Option<Url> {
     // Credential keys are literal URL components: normalization would change their identity.
     let scheme_end = input.find(b"://")?;
     if scheme_end == 0 {
