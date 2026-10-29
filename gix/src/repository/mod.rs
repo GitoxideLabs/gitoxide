@@ -97,6 +97,8 @@ mod cache;
 mod checkout;
 mod config;
 
+#[cfg(feature = "pack-generate")]
+mod bundle;
 ///
 #[cfg(feature = "blob-diff")]
 mod diff;
