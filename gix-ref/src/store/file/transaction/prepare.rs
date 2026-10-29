@@ -271,7 +271,10 @@ impl Transaction<'_, '_> {
                 if log_mode == RefLog::Only {
                     continue;
                 }
-                let name = match possibly_adjust_name_for_prefixes(edit.update.name.as_ref()) {
+                let name = match possibly_adjust_name_for_prefixes(
+                    edit.update.name.as_ref(),
+                    matches!(edit.update.change, Change::Delete { .. }),
+                ) {
                     Some(n) => n,
                     None => continue,
                 };
@@ -432,12 +435,15 @@ fn reference_path_and_lock_boundary(store: &file::Store, name: &FullNameRef) -> 
     Ok((reference_path, lock_boundary))
 }
 
-fn possibly_adjust_name_for_prefixes(name: &FullNameRef) -> Option<FullName> {
+fn possibly_adjust_name_for_prefixes(name: &FullNameRef, deleting: bool) -> Option<FullName> {
     match name.category_and_short_name() {
         Some((c, sn)) => {
             use crate::Category::*;
             let sn = FullNameRef::new_unchecked(sn);
             match c {
+                // Older repositories may contain packed operation refs. Delete them where found,
+                // while continuing to keep new worktree-private references in loose storage.
+                Bisect | Rewritten if deleting => name.into(),
                 Bisect | Rewritten | WorktreePrivate | LinkedPseudoRef { .. } | PseudoRef | MainPseudoRef => None,
                 Tag | LocalBranch | RemoteBranch | Note => name.into(),
                 MainRef | LinkedRef { .. } => sn

@@ -482,3 +482,51 @@ fn all_contained_references_deletes_the_packed_ref_file_too() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn delete_legacy_packed_worktree_references_like_git() -> TestResult {
+    for name in ["refs/bisect/packed", "refs/rewritten/packed"] {
+        for use_git in [true, false] {
+            let (_keep, store) = store_writable("make_packed_ref_repository.sh")?;
+            let commit_id = store.find("main")?.target.id().to_owned();
+            std::fs::write(
+                store.packed_refs_path(),
+                format!(
+                    "# pack-refs with: peeled
+{commit_id} {name}
+{commit_id} refs/tags/keep
+"
+                ),
+            )?;
+            assert_eq!(
+                store.find(name)?.target.id(),
+                commit_id,
+                "the legacy reference is discoverable"
+            );
+            if use_git {
+                gix_testtools::git(store.git_dir(), &format!("update-ref -d {name} {commit_id}"))?;
+            } else {
+                store
+                    .transaction()
+                    .prepare(
+                        [RefEdit::delete(
+                            name.try_into()?,
+                            PreviousValue::MustExistAndMatch(commit_id.into()),
+                        )],
+                        Fail::Immediately,
+                        Fail::Immediately,
+                    )?
+                    .commit(None)?;
+            }
+            assert!(
+                store.try_find(name)?.is_none(),
+                "the legacy packed reference is deleted"
+            );
+            assert!(
+                store.try_find("refs/tags/keep")?.is_some(),
+                "unrelated packed references are retained"
+            );
+        }
+    }
+    Ok(())
+}
