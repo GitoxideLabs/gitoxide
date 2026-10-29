@@ -220,7 +220,7 @@ Root 1..1
 #[test]
 fn newline() {
     assert_eq!(
-        compile(br"\r\n"),
+        compile(b"\r\n"),
         "\
 Root 1..1
   Alternative 1..1
@@ -457,7 +457,7 @@ Root 1..1
 #[test]
 fn newline_extended() {
     assert_eq!(
-        compile_extended(br"\r\n"),
+        compile_extended(b"\r\n"),
         "\
 Root 1..1
   Alternative 1..1

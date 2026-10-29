@@ -46,3 +46,20 @@ make_case absent-reference xfuncname '(a)\2' aa
 make_case first-digit-ere xfuncname '(a)\10' aa0
 make_case first-digit-bre funcname '\(a\)\10' aa0
 make_case nested-captures xfuncname '((ab)*)*' abab
+
+make_case chained-range xfuncname '[a-b-c]' '-'
+make_case literal-escapes xfuncname '\a\d\n\r\t\0' adnrt0
+make_case word-class xfuncname '\w+' _word1
+make_case nonword-class xfuncname '\W+' '!@'
+make_case word-boundary xfuncname '\b(word)\b' word
+make_case inside-word xfuncname '\B(oo)\B' food
+make_case word-start-requires-word xfuncname '\<(!)' '!'
+make_case word-end-requires-word xfuncname '(!)\>' '!'
+make_case outside-word xfuncname '\B(!)' '!'
+make_case absolute-anchors xfuncname "\\\`(word)\\'" word
+make_case basic-middle-start funcname 'a^b' 'a^b'
+make_case basic-middle-end funcname 'a$b' 'a$b'
+make_case basic-second-start funcname '^^a' '^a'
+make_case basic-alternative-start funcname 'a\|^b' b
+make_case basic-alternative-end funcname 'a$\|b' a
+make_case basic-group-anchors funcname '\(^a$\)' a

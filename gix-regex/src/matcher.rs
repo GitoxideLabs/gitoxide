@@ -543,7 +543,16 @@ impl PosixRegexMatcher<'_> {
                     let node = branch.node();
 
                     match node.token {
-                        Token::End | Token::Start | Token::WordEnd | Token::WordStart => {
+                        Token::End
+                        | Token::Start
+                        | Token::WordEnd
+                        | Token::WordStart
+                        | Token::WordBoundary
+                        | Token::NotWordBoundary
+                        | Token::AbsoluteStart
+                        | Token::AbsoluteEnd => {
+                            let previous_is_word = prev.is_some_and(ctype::is_word);
+                            let next_is_word = next.is_some_and(ctype::is_word);
                             let accepts = match node.token {
                                 Token::End => {
                                     (!self.base.no_end && next.is_none()) || (self.base.newline && next == Some(b'\n'))
@@ -552,8 +561,12 @@ impl PosixRegexMatcher<'_> {
                                     (!self.base.no_start && self.offset == 0)
                                         || (self.base.newline && prev == Some(b'\n'))
                                 }
-                                Token::WordEnd => next.map(ctype::is_word_boundary).unwrap_or(true),
-                                Token::WordStart => prev.map(ctype::is_word_boundary).unwrap_or(true),
+                                Token::WordEnd => previous_is_word && !next_is_word,
+                                Token::WordStart => !previous_is_word && next_is_word,
+                                Token::WordBoundary => previous_is_word != next_is_word,
+                                Token::NotWordBoundary => previous_is_word == next_is_word,
+                                Token::AbsoluteStart => self.offset == 0,
+                                Token::AbsoluteEnd => next.is_none(),
                                 _ => unreachable!(),
                             };
                             if accepts {
@@ -604,14 +617,21 @@ impl PosixRegexMatcher<'_> {
                         Token::Any => next.map(|c| !self.base.newline || c != b'\n').unwrap_or(false),
                         Token::BackRef(_) => {
                             if let Some(ref backref) = branch.backref {
-                                next == Some(self.input[backref.offset + backref.index])
+                                next.is_some_and(|next| {
+                                    let expected = self.input[backref.offset + backref.index];
+                                    if self.base.case_insensitive {
+                                        expected.eq_ignore_ascii_case(&next)
+                                    } else {
+                                        expected == next
+                                    }
+                                })
                             } else {
                                 false
                             }
                         }
                         Token::Char(c) => {
                             if self.base.case_insensitive {
-                                next.map(|c2| c & !32 == c2 & !32).unwrap_or(false)
+                                next.is_some_and(|next| c.eq_ignore_ascii_case(&next))
                             } else {
                                 next == Some(c)
                             }
@@ -630,7 +650,11 @@ impl PosixRegexMatcher<'_> {
                         | Token::Root
                         | Token::Start
                         | Token::WordEnd
-                        | Token::WordStart => unreachable!(),
+                        | Token::WordStart
+                        | Token::WordBoundary
+                        | Token::NotWordBoundary
+                        | Token::AbsoluteStart
+                        | Token::AbsoluteEnd => unreachable!(),
                     };
 
                 if accepts {
