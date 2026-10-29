@@ -1,0 +1,15 @@
+# Derived from posix-regex 0.1.4; see README.md for provenance.
+[package]
+name = "gix-regex"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+authors = ["jD91mZM2 <me@krake.one>"]
+license = "MIT"
+description = "Byte-oriented POSIX regular expressions for gitoxide, derived from Redox posix-regex"
+repository = "https://github.com/GitoxideLabs/gitoxide"
+readme = "README.md"
+include = ["/src/**/*", "/LICENSE-MIT", "/README.md"]
+
+[features]
+no_std = []

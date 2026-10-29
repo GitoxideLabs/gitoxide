@@ -338,6 +338,7 @@ members = [
     "gix-object",
     "gix-glob",
     "gix-diff",
+    "gix-regex",
     "gix-imara-diff",
     "gix-merge",
     "gix-date",
