@@ -18,7 +18,7 @@ impl crate::Repository {
     /// invalid referents are errors.
     ///
     /// The repository's current reference namespace is used for every inspected worktree.
-    pub(crate) fn checked_out_branches(&self) -> Result<BTreeMap<gix_ref::FullName, Vec<PathBuf>>> {
+    pub fn checked_out_branches(&self) -> Result<BTreeMap<gix_ref::FullName, Vec<PathBuf>>> {
         self.checked_out_branches_inner(self.namespace())
     }
 
