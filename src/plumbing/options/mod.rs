@@ -115,6 +115,13 @@ pub enum Subcommands {
     /// A program just like `git credential`.
     #[clap(subcommand)]
     Credential(credential::Subcommands),
+    /// Cache credentials in memory using a native background daemon.
+    #[cfg(unix)]
+    CredentialCache(credential::Cache),
+    /// Serve the credential cache protocol on a private Unix socket.
+    #[cfg(unix)]
+    #[clap(name = "credential-cache--daemon", hide = true)]
+    CredentialCacheDaemon(credential::CacheDaemon),
     /// Fetch data from remotes and store it in the repository.
     #[cfg(feature = "gitoxide-core-blocking-client")]
     Fetch(fetch::Platform),
@@ -1146,6 +1153,29 @@ pub mod tag {
 }
 
 pub mod credential {
+    #[cfg(unix)]
+    #[derive(Debug, clap::Args)]
+    pub struct Cache {
+        /// Path of the daemon socket, defaulting to Git's XDG or legacy cache location.
+        #[clap(long)]
+        pub socket: Option<std::path::PathBuf>,
+        /// Number of seconds for which stored credentials remain available.
+        #[clap(long, default_value = "900", allow_hyphen_values = true)]
+        pub timeout: i32,
+        /// The helper action: get, store, erase, exit or capability. Unknown actions do nothing.
+        pub action: String,
+    }
+
+    #[cfg(unix)]
+    #[derive(Debug, clap::Args)]
+    pub struct CacheDaemon {
+        /// Keep stderr open after announcing readiness.
+        #[clap(long)]
+        pub debug: bool,
+        /// Absolute path of the Unix socket in a private directory.
+        pub socket: std::path::PathBuf,
+    }
+
     #[derive(Debug, clap::Subcommand)]
     pub enum Subcommands {
         /// Get the credentials fed for `url=<url>` via STDIN.

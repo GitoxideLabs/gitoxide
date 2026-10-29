@@ -3,6 +3,8 @@
 title plumbing "${kind}"
 snapshot="$snapshot/plumbing"
 
+source "$root/journey/credential-cache.sh"
+
 if test "$kind" != "small"; then
 title "gix tracing"
 (with "buffered traces on stderr"
