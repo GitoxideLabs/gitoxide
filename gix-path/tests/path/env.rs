@@ -17,6 +17,115 @@ fn shell() {
     );
 }
 
+#[cfg(windows)]
+mod scoop {
+    #[test]
+    fn default_user_installation() -> gix_error::TestResult {
+        discover(
+            "USERPROFILE",
+            "user",
+            "user/scoop/apps/git/current/cmd/git.exe",
+            false,
+            false,
+        )
+    }
+
+    #[test]
+    fn custom_installation() -> gix_error::TestResult {
+        discover("SCOOP", "custom", "custom/apps/git/current/cmd/git.exe", false, false)
+    }
+
+    #[test]
+    fn default_global_installation() -> gix_error::TestResult {
+        discover(
+            "ProgramData",
+            "global",
+            "global/scoop/apps/git/current/cmd/git.exe",
+            false,
+            false,
+        )
+    }
+
+    #[test]
+    fn custom_global_installation() -> gix_error::TestResult {
+        discover(
+            "SCOOP_GLOBAL",
+            "custom",
+            "custom/apps/git/current/cmd/git.exe",
+            false,
+            false,
+        )
+    }
+
+    #[test]
+    fn git_install_root() -> gix_error::TestResult {
+        discover("GIT_INSTALL_ROOT", "explicit", "explicit/cmd/git.exe", false, false)
+    }
+
+    #[test]
+    fn missing_path() -> gix_error::TestResult {
+        discover("SCOOP", "custom", "custom/apps/git/current/cmd/git.exe", false, true)
+    }
+
+    #[test]
+    fn path_takes_precedence() -> gix_error::TestResult {
+        discover("SCOOP", "custom", "git.exe", true, false)
+    }
+
+    /// Assert Git discovery in an isolated child process with host installation variables cleared.
+    ///
+    /// Set `variable` to the fixture-relative `root` to select the installation to discover.
+    /// Compare the invocation directly with `expected` when `on_path` is true; otherwise,
+    /// resolve `expected` relative to the fixture. Unless `unset_path` is true, set `PATH`
+    /// to the fixture's Git directory when `on_path` is true, or to an empty string otherwise.
+    fn discover(variable: &str, root: &str, expected: &str, on_path: bool, unset_path: bool) -> gix_error::TestResult {
+        // Fixture creation can invoke Git and initialize discovery caches. Complete it in the
+        // parent so the isolated child only reads the fixture before setting its environment.
+        let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only("scoop-installation.sh")?)?;
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let mut env = gix_testtools::Env::new();
+        for variable in [
+            "ProgramFiles",
+            "ProgramFiles(x86)",
+            "ProgramW6432",
+            "LocalAppData",
+            "SCOOP",
+            "SCOOP_GLOBAL",
+            "GIT_INSTALL_ROOT",
+            "USERPROFILE",
+            "ProgramData",
+            "PATH",
+        ] {
+            env = env.unset(variable);
+        }
+        env = env.set(variable, fixture.join(root).to_str().expect("UTF-8 fixture path"));
+        if !unset_path {
+            env = env.set(
+                "PATH",
+                if on_path {
+                    fixture.join("path").to_str().expect("UTF-8 fixture path").to_owned()
+                } else {
+                    String::new()
+                },
+            );
+        }
+        let expected = if on_path {
+            expected.into()
+        } else {
+            fixture.join(expected)
+        };
+        assert_eq!(
+            gix_path::env::exe_invocation(),
+            expected,
+            "Scoop is a fallback when no Git executable is on PATH, including when PATH is unset"
+        );
+        drop(env);
+        Ok(())
+    }
+}
+
 #[test]
 fn shell_absolute() {
     assert!(

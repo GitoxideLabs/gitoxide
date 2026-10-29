@@ -773,12 +773,50 @@ mod locations {
     }
 
     #[test]
+    fn scoop_locations_respect_configured_roots() {
+        let locations = super::super::locations_under_scoop(var_os_stub! {
+            "GIT_INSTALL_ROOT" => r"D:\portable\git",
+            "SCOOP" => r"D:\custom",
+            "SCOOP_GLOBAL" => r"E:\shared",
+            "USERPROFILE" => r"C:\Users\alice",
+            "ProgramData" => r"C:\ProgramData",
+        });
+        assert_eq!(
+            locations,
+            pathbuf_vec![
+                r"D:\portable\git\cmd",
+                r"D:\custom\apps\git\current\cmd",
+                r"E:\shared\apps\git\current\cmd",
+            ],
+            "explicit installation roots take precedence over Scoop's default roots"
+        );
+    }
+
+    #[test]
+    fn scoop_locations_reject_relative_roots() {
+        for invalid in ["", "relative", r"C:relative", r"\rooted"] {
+            let locations = super::super::locations_under_scoop(var_os_stub! {
+                "GIT_INSTALL_ROOT" => invalid,
+                "SCOOP" => invalid,
+                "SCOOP_GLOBAL" => invalid,
+                "USERPROFILE" => invalid,
+                "ProgramData" => invalid,
+            });
+            assert!(
+                locations.is_empty(),
+                "{invalid:?} must not cause discovery relative to the working directory"
+            );
+        }
+    }
+
+    #[test]
     fn alternative_locations() {
         // Obtain program files directory paths by other means and check that they seem correct.
         let pf = ProgramFilesPaths::obtain_envlessly().validated();
 
         // Check that `ALTERNATIVE_LOCATIONS` correspond to them, with the correct subdirectories.
-        let locations = super::super::ALTERNATIVE_LOCATIONS.as_slice();
+        let program_files_count = super::super::locations_under_program_files(|key| std::env::var_os(key)).len();
+        let locations = &super::super::ALTERNATIVE_LOCATIONS[..program_files_count];
         RelativeGitBinPaths::assert_from(&pf, locations).assert_architectures();
     }
 }

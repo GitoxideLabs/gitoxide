@@ -116,13 +116,17 @@ pub fn shell_command() -> std::process::Command {
 ///
 /// Note that on Windows, we will find the executable in the `PATH` if it exists there, or search it
 /// in alternative locations which when found yields the full path to it.
+/// These include standard Git for Windows installations and Scoop's user and global installations
+/// (`SCOOP`/`SCOOP_GLOBAL`, defaulting to `USERPROFILE/scoop` and `ProgramData/scoop`), as well as
+/// `GIT_INSTALL_ROOT`. Installation roots must be absolute paths.
 pub fn exe_invocation() -> &'static Path {
     if cfg!(windows) {
         /// The path to the Git executable as located in the `PATH` or in other locations that it's
-        /// known to be installed to. It's `None` if environment variables couldn't be read or if
-        /// no executable could be found.
+        /// known to be installed to. It's `None` if no executable could be found.
         static EXECUTABLE_PATH: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
-            std::env::split_paths(&std::env::var_os("PATH")?)
+            std::env::var_os("PATH")
+                .iter()
+                .flat_map(std::env::split_paths)
                 .chain(git::ALTERNATIVE_LOCATIONS.iter().map(Into::into))
                 .find_map(|prefix| {
                     let full_path = prefix.join(EXE_NAME);

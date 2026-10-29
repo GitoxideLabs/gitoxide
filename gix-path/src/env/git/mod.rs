@@ -9,8 +9,11 @@ use std::sync::LazyLock;
 
 /// Other places to find Git in.
 #[cfg(windows)]
-pub(super) static ALTERNATIVE_LOCATIONS: LazyLock<Vec<PathBuf>> =
-    LazyLock::new(|| locations_under_program_files(|key| std::env::var_os(key)));
+pub(super) static ALTERNATIVE_LOCATIONS: LazyLock<Vec<PathBuf>> = LazyLock::new(|| {
+    let mut locations = locations_under_program_files(|key| std::env::var_os(key));
+    locations.extend(locations_under_scoop(|key| std::env::var_os(key)));
+    locations
+});
 #[cfg(not(windows))]
 pub(super) static ALTERNATIVE_LOCATIONS: LazyLock<Vec<PathBuf>> = LazyLock::new(Vec::new);
 
@@ -90,6 +93,23 @@ where
         }
     }
 
+    locations
+}
+
+#[cfg(windows)]
+fn locations_under_scoop(var_os: impl Fn(&str) -> Option<std::ffi::OsString>) -> Vec<PathBuf> {
+    let absolute = |name| var_os(name).map(PathBuf::from).filter(|path| path.is_absolute());
+    // Scoop exports GIT_INSTALL_ROOT even when its root was configured outside the environment.
+    // Find the stable `current` installation without relying on Scoop's shims being on PATH.
+    let mut locations: Vec<_> = absolute("GIT_INSTALL_ROOT")
+        .map(|root| root.join("cmd"))
+        .into_iter()
+        .collect();
+    for (variable, default_base) in [("SCOOP", "USERPROFILE"), ("SCOOP_GLOBAL", "ProgramData")] {
+        if let Some(root) = absolute(variable).or_else(|| absolute(default_base).map(|base| base.join("scoop"))) {
+            locations.push(root.join("apps/git/current/cmd"));
+        }
+    }
     locations
 }
 
