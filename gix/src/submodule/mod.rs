@@ -210,27 +210,36 @@ impl Submodule<'_> {
         git_dir_from_name(self.state.repo.git_dir(), self.validated_name()?)
     }
 
-    /// Return the path to the location at which the workdir would be checked out.
+    /// Return the submodule's checkout location, or `None` if the superproject has no working directory.
     ///
-    /// Note that it may be a path relative to the repository if, for some reason, the parent directory
-    /// doesn't have a working dir set.
-    pub fn work_dir(&self) -> Result<PathBuf> {
-        let worktree_git = gix_path::from_bstr(self.path()?)?;
-        Ok(match self.state.repo.workdir() {
-            None => worktree_git.into_owned(),
-            Some(prefix) => prefix.join(worktree_git),
-        })
+    /// The returned directory might not exist yet. Use [`path()`](Self::path()) to obtain the configured
+    /// relative path regardless of whether the superproject has a working directory.
+    pub fn work_dir(&self) -> Result<Option<PathBuf>> {
+        let Some(work_dir) = self.state.repo.workdir() else {
+            return Ok(None);
+        };
+        Ok(Some(work_dir.join(gix_path::from_bstr(self.path()?)?)))
     }
 
-    /// Return the path at which the repository of the submodule should be located, or the path inside of
-    /// the superproject's worktree where it actually *is* located if the submodule in the 'old-form', thus is a directory
-    /// inside of the superproject's work-tree.
+    /// Return the submodule's repository location, honoring old-form `.git` directories and gitdir
+    /// file targets in the superproject's worktree.
+    ///
+    /// Fall back to the name-derived [`git_dir()`](Self::git_dir()) when no checkout `.git` entry exists.
+    /// This fallback directory might not exist yet for uninitialized submodules.
     ///
     /// Note that paths returned aren't fully verified, i.e. the `.git` repository might be corrupt or otherwise
     /// invalid - it's left to the caller to try to open it. `.git` files are parsed when present and their target
     /// is required to be a directory though, as a malformed gitdir file means a broken submodule checkout.
     ///
-    /// Also note that the fallback path returned for uninitialized submodules may not actually exist.
+    /// Symbolic links in the configured submodule path are rejected. Symlinks in the superproject's
+    /// own path are allowed.
+    ///
+    /// Without a superproject worktree, there is no checkout `.git` entry to inspect. Repository lookup
+    /// therefore uses the name-derived location returned by [`git_dir()`](Self::git_dir()).
+    /// For example, a bare superproject at `/repos/project.git` with submodule name `library` and configured
+    /// path `vendor/lib` returns `/repos/project.git/modules/library`, even if that directory does not exist.
+    /// It does not inspect `vendor/lib/.git` relative to the current directory, as there is no superproject
+    /// worktree to anchor that checkout path.
     pub fn git_dir_try_old_form(&self) -> Result<PathBuf> {
         self.git_dir_try_old_form_inner(true)
     }
@@ -244,7 +253,9 @@ impl Submodule<'_> {
         let git_dir = self
             .git_dir()
             .or_raise(|| gix_error::validation("The submodule name is invalid"))?;
-        let worktree_gitdir = self.worktree_gitdir()?;
+        let Some(worktree_gitdir) = self.worktree_gitdir()? else {
+            return Ok(git_dir);
+        };
         let git_dir = if worktree_gitdir.is_dir() {
             worktree_gitdir
         } else if worktree_gitdir.is_file() {
@@ -286,8 +297,8 @@ impl Submodule<'_> {
             .any(|section| section.header().subsection_name() == Some(self.name.as_ref()));
         Ok(State {
             repository_exists: maybe_old_path.is_dir(),
-            is_old_form: worktree_git.is_dir(),
-            worktree_checkout: worktree_git.exists(),
+            is_old_form: worktree_git.as_deref().is_some_and(Path::is_dir),
+            worktree_checkout: worktree_git.as_deref().is_some_and(Path::exists),
             superproject_configuration,
         })
     }
@@ -319,9 +330,10 @@ impl Submodule<'_> {
         options.git_dir_trust = None;
         match crate::open_opts(self.git_dir_try_old_form()?, options) {
             Ok(mut repo) => {
-                if repo.workdir().is_none() {
-                    let wd = self.work_dir()?;
-                    // We should always have a workdir, as bare submodules don't exist.
+                if repo.workdir().is_none()
+                    && let Some(wd) = self.work_dir()?
+                {
+                    // Submodules of a checked-out superproject should always have a workdir.
                     // However, it's possible for no workdir to be accessible if there is a symlink in the way.
                     // Just setting it by hand fixes this issue effectively, even though the question remains
                     // if this should work automatically.
@@ -344,8 +356,17 @@ impl Submodule<'_> {
         }
     }
 
-    fn worktree_gitdir(&self) -> Result<PathBuf> {
-        Ok(self.work_dir()?.join(gix_discover::DOT_GIT_DIR))
+    /// Return the location of the submodule checkout's `.git` entry, or `None` if the superproject has no worktree.
+    ///
+    /// This is usually a file containing a `gitdir:` pointer to the submodule's repository, but is a directory
+    /// in old-form submodules.
+    fn worktree_gitdir(&self) -> Result<Option<PathBuf>> {
+        let relative_path = gix_path::from_bstr(self.path()?)?;
+        let Some(work_dir) = self.state.repo.workdir() else {
+            return Ok(None);
+        };
+        let path = gix_fs::symlink::validate_relative_path(work_dir, &relative_path)?;
+        Ok(Some(path.join(gix_discover::DOT_GIT_DIR)))
     }
 }
 
