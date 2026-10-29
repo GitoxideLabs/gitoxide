@@ -28,8 +28,8 @@ impl Remote<'_> {
     /// disable these policies; recursive settings follow configuration occurrence order.
     /// [`crate::remote::Connection::push()`] leaves sender policy to its caller.
     ///
-    /// Like the connection API, this does not expand push refspecs, run local pre-push hooks, or
-    /// update local tracking refs. Use [`Self::update_tracking_refs()`] for the latter and
+    /// Like the connection API, this does not expand push refspecs or update local tracking refs.
+    /// `options.pre_push_hook` lets the caller run sender hooks against the exact planned updates. Use [`Self::update_tracking_refs()`] for the latter and
     /// [`Self::urls()`] to handle additional configured push URLs.
     /// Local receive operations run configured and traditional receiver hooks serially and quarantine incoming objects.
     /// Event-wide disables suppress both hook forms. Receiver shallow boundaries are preserved, honoring
