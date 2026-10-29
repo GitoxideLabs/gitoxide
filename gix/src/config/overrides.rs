@@ -21,7 +21,7 @@ pub(crate) fn append(
                 "{input:?} is not a valid configuration key. Examples are 'core.abbrev' or 'remote.origin.url'"
             ))
         })?;
-        let mut section = file.section_mut_or_create_new(key.section_name, key.subsection_name)?;
+        let mut section = file.new_section(key.section_name, key.subsection_name.map(ToOwned::to_owned))?;
         let comment = make_comment(key_value);
         let value = value.map(ByteSlice::as_bstr);
         match comment {

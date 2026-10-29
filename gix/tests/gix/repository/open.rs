@@ -1192,3 +1192,47 @@ mod worktree {
         Ok(())
     }
 }
+
+#[test]
+fn configuration_overrides_preserve_cross_section_order() -> TestResult {
+    use std::fmt::Write;
+
+    let fixture = gix_testtools::scripted_fixture_read_only("make_config_repos.sh")?;
+    let repo_path = fixture.join("bare-repo");
+    let overrides = [
+        "audit.first.value=one",
+        "audit.second.value=two",
+        "audit.first.value=three",
+    ];
+    let mut git = gix_testtools::git_command(&repo_path);
+    for value in overrides {
+        git.args(["-c", value]);
+    }
+    let expected = git.args(["config", "--get-regexp", r"^audit\..*\.value$"]).output()?;
+    assert!(expected.status.success(), "Git accepts ordered command-line overrides");
+    let expected = String::from_utf8(expected.stdout)?;
+    for options in [
+        crate::restricted().config_overrides(overrides),
+        crate::restricted().cli_overrides(overrides),
+    ] {
+        let repo = gix::open_opts(&repo_path, options)?;
+        let mut actual = String::new();
+        for section in repo.config_snapshot().plumbing().sections() {
+            if section.header().name() != "audit" {
+                continue;
+            }
+            let name = section
+                .header()
+                .subsection_name()
+                .expect("test overrides have a subsection");
+            for (key, value) in section.body() {
+                writeln!(actual, "audit.{name}.{key} {value}")?;
+            }
+        }
+        assert_eq!(
+            actual, expected,
+            "API and CLI overrides retain the order supplied, including when a subsection reappears"
+        );
+    }
+    Ok(())
+}
