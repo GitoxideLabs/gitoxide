@@ -91,7 +91,11 @@ pub(crate) fn push(
         });
     }
     policy.ensure_supported(destination)?;
+    // Installing a fallback identity refreshes configuration, including its reference namespace.
+    // Preserve the receiver namespace selected for this operation.
+    let namespace = destination.refs.namespace.clone();
     destination.committer_or_set_generic_fallback()?;
+    destination.refs.namespace = namespace;
     let quarantine = quarantine::Quarantine::new(destination)?;
     let tips = requested.iter().filter_map(|&index| updates[index].update.new_id);
     let mut buffer = Vec::new();
