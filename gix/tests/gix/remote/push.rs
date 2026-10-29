@@ -817,6 +817,93 @@ fi
 }
 
 #[test]
+fn configured_push_protection_is_not_silently_ignored() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    for setting in [
+        "push.gpgSign=true",
+        "push.gpgSign=IF-ASKED",
+        "push.gpgSign",
+        "push.recurseSubmodules=check",
+        "push.recurseSubmodules=on-demand",
+        "push.recurseSubmodules=only",
+        "submodule.recurse=true",
+        "submodule.recurse",
+    ] {
+        let (mut repo, destination) = setup()?;
+        repo.config_snapshot_mut()
+            .append_config([setting], gix::config::Source::Api)?;
+        let request = update("refs/heads/main", Some(repo.head_id()?.detach()))?;
+        let error = repo
+            .remote_at(destination.path())?
+            .push(
+                [request.clone()],
+                Options::default(),
+                gix::progress::Discard,
+                |_, _| Ok(()),
+                &AtomicBool::default(),
+            )
+            .expect_err("unsupported signing or recursive publication must not silently push the superproject");
+        assert!(error.is_unsupported(), "{setting}: {error}");
+        assert_eq!(remote_id(destination.path(), "refs/heads/main")?, None, "{setting}");
+        let raw = push(&repo, destination.path(), vec![request], Options::default())?;
+        assert!(
+            matches!(raw.updates[0].status, Status::Updated { .. }),
+            "the Connection API remains explicitly configured by its caller"
+        );
+    }
+    for settings in [
+        vec![
+            "push.gpgSign=true",
+            "push.gpgSign=false",
+            "submodule.recurse=true",
+            "push.recurseSubmodules=no",
+        ],
+        vec!["push.recurseSubmodules=only", "submodule.recurse=false"],
+        vec!["push.gpgSign=", "push.recurseSubmodules=0"],
+    ] {
+        let (mut repo, destination) = setup()?;
+        repo.config_snapshot_mut()
+            .append_config(settings, gix::config::Source::Api)?;
+        let outcome = repo.remote_at(destination.path())?.push(
+            [update("refs/heads/main", Some(repo.head_id()?.detach()))?],
+            Options::default(),
+            gix::progress::Discard,
+            |_, _| Ok(()),
+            &AtomicBool::default(),
+        )?;
+        assert!(
+            matches!(outcome.updates[0].status, Status::Updated { .. }),
+            "later false settings disable protection in configuration order"
+        );
+    }
+    for setting in [
+        "push.gpgSign=invalid",
+        "push.recurseSubmodules=true",
+        "push.recurseSubmodules",
+        "submodule.recurse=invalid",
+    ] {
+        let (mut repo, destination) = setup()?;
+        repo.config_snapshot_mut()
+            .append_config([setting], gix::config::Source::Api)?;
+        let error = repo
+            .remote_at(destination.path())?
+            .push(
+                [update("refs/heads/main", Some(repo.head_id()?.detach()))?],
+                Options::default(),
+                gix::progress::Discard,
+                |_, _| Ok(()),
+                &AtomicBool::default(),
+            )
+            .expect_err("invalid configuration is rejected before updates");
+        assert!(error.is_validation(), "{setting}: {error}");
+        assert_eq!(remote_id(destination.path(), "refs/heads/main")?, None, "{setting}");
+    }
+    Ok(())
+}
+
+#[test]
 fn pushes_an_in_memory_commit_with_an_implicit_empty_tree() -> TestResult {
     use gix_object::Exists;
 

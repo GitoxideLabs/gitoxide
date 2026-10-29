@@ -2,8 +2,8 @@ use std::{io, sync::atomic::AtomicBool};
 
 use crate::{
     Progress, Remote, Result,
-    bstr::BString,
-    error::{bail, message},
+    bstr::{BString, ByteSlice},
+    error::{ResultExt, bail, message},
     push::{Options, Outcome, Update},
     remote::Direction,
 };
@@ -18,6 +18,13 @@ impl Remote<'_> {
     /// An empty `options.push_options` uses `push.pushOption` defaults, including empty-value resets.
     /// A nonempty slice, even one containing an empty option, overrides those defaults.
     /// Named remotes with `remote.<name>.mirror=true` are rejected, as mirroring conflicts with explicit updates.
+    ///
+    /// Sender push certificates and recursive submodule publication are currently unsupported.
+    /// Enabling `push.gpgSign` (including `if-asked`), `push.recurseSubmodules=check|on-demand|only`,
+    /// or `submodule.recurse=true` is rejected before contacting the receiver. In particular,
+    /// `if-asked` is refused even for servers that would allow an unsigned push. Later false values
+    /// disable these policies; recursive settings follow configuration occurrence order.
+    /// [`crate::remote::Connection::push()`] leaves sender policy to its caller.
     ///
     /// Like the connection API, this does not expand push refspecs, run local pre-push hooks, or
     /// update local tracking refs. Use [`Self::update_tracking_refs()`] for the latter and
@@ -52,23 +59,66 @@ impl Remote<'_> {
             bail!(message("Mirroring cannot be combined with explicit push updates").validation());
         }
         let mut configured_options = Vec::<BString>::new();
-        for section in config.plumbing().sections().filter(|section| {
-            section.header().subsection_name().is_none() && section.header().name().eq_ignore_ascii_case(b"push")
-        }) {
-            for (_, value) in section
-                .body()
-                .into_iter_implicit()
-                .filter(|(name, _)| name.eq_ignore_ascii_case("pushOption"))
-            {
-                let Some(value) = value else {
-                    bail!(message("push.pushOption requires an explicit value").validation());
-                };
-                if value.is_empty() {
-                    configured_options.clear();
-                } else {
-                    configured_options.push(value);
+        let (mut signing, mut recurse) = (false, false);
+        let boolean = |value: Option<&BString>, key: &str| -> Result<bool> {
+            value
+                .map_or(Ok(true), |value| {
+                    gix_config::Boolean::try_from(value.as_bstr()).map(|value| value.0)
+                })
+                .or_raise(|| message("Invalid boolean push configuration").with("key", key))
+        };
+        for section in config
+            .plumbing()
+            .sections()
+            .filter(|section| section.header().subsection_name().is_none())
+        {
+            let is_push = section.header().name().eq_ignore_ascii_case(b"push");
+            let is_submodule = section.header().name().eq_ignore_ascii_case(b"submodule");
+            if !is_push && !is_submodule {
+                continue;
+            }
+            for (name, value) in section.body().into_iter_implicit() {
+                if is_push && name.eq_ignore_ascii_case("pushOption") {
+                    let Some(value) = value else {
+                        bail!(message("push.pushOption requires an explicit value").validation());
+                    };
+                    if value.is_empty() {
+                        configured_options.clear();
+                    } else {
+                        configured_options.push(value);
+                    }
+                } else if is_push && name.eq_ignore_ascii_case("gpgSign") {
+                    signing = value
+                        .as_ref()
+                        .is_some_and(|value| value.eq_ignore_ascii_case(b"if-asked"))
+                        || boolean(value.as_ref(), "push.gpgSign")?;
+                } else if is_push && name.eq_ignore_ascii_case("recurseSubmodules") {
+                    recurse = match value.as_ref().map(|value| value.as_slice()) {
+                        Some(b"check" | b"on-demand" | b"only") => true,
+                        _ => {
+                            if boolean(value.as_ref(), "push.recurseSubmodules")? {
+                                bail!(
+                                    message("push.recurseSubmodules requires no, check, on-demand, or only")
+                                        .validation()
+                                );
+                            }
+                            false
+                        }
+                    };
+                } else if is_submodule && name.eq_ignore_ascii_case("recurse") {
+                    recurse = boolean(value.as_ref(), "submodule.recurse")?;
                 }
             }
+        }
+        if signing {
+            bail!(
+                message("Configured push signing is not supported")
+                    .with("key", "push.gpgSign")
+                    .unsupported()
+            );
+        }
+        if recurse {
+            bail!(message("Configured recursive submodule pushes are not supported").unsupported());
         }
         let options = Options {
             push_options: if options.push_options.is_empty() {
