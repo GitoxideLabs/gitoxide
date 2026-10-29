@@ -48,6 +48,33 @@ printf 'early stderr\n' >&2
 exit 23
 HOOK
 chmod +x repo/.git/hooks/pre-applypatch
+# A finished hook must not wait for a descendant which retains only its input.
+cat >repo/.git/hooks/post-rewrite <<'HOOK'
+#!/bin/sh
+sleep 3 <&0 >/dev/null 2>&1 &
+exit 0
+HOOK
+chmod +x repo/.git/hooks/post-rewrite
+# Alternating writes exercise a shared pipe, including the executable-format fallback.
+cat >repo/stream-output <<'HOOK'
+#!/bin/sh
+printf 'stdout-one\n'
+printf 'stderr-one\n' >&2
+printf 'stdout-two\n'
+printf 'stderr-two\n' >&2
+exit 7
+HOOK
+chmod +x repo/stream-output
+sed '1d' repo/stream-output >repo/stream-output-no-shebang
+chmod +x repo/stream-output-no-shebang
+# Cancellation must reap this hook without joining readers inherited by its descendant.
+cat >repo/stream-until-cancelled <<'HOOK'
+#!/bin/sh
+sleep 3 &
+printf '%s\n' "$$"
+while :; do :; done
+HOOK
+chmod +x repo/stream-until-cancelled
 cat >repo/.git/hooks/post-checkout <<'HOOK'
 #!/bin/sh
 printf 'traditional\n'

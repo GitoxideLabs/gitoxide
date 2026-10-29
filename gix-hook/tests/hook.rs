@@ -1,9 +1,10 @@
 use bstr::{BString, ByteSlice};
-use gix_hook::{Context, Options};
+use gix_hook::{Context, Options, OutputMode, Stream};
 use gix_testtools::TestResult;
 use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 fn fixture() -> TestResult<PathBuf> {
@@ -317,6 +318,154 @@ fn config_resolves_last_registration_order_resets_and_disabled_names() -> TestRe
     assert_eq!(
         configured(bytes, "post-checkout")?.expect("event enabled")[0].0,
         b"raw-\xff".as_bstr()
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn exited_hook_does_not_wait_for_descendants_holding_only_stdin() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let fixture = fixture()?;
+    let workdir = fixture.join("repo");
+    let gitdir = workdir.join(".git");
+    let input = vec![b'x'; 1024 * 1024];
+    let start = std::time::Instant::now();
+    let output = gix_hook::run(
+        Path::new(".git/hooks/post-rewrite"),
+        &context(&workdir, &gitdir),
+        Options {
+            stdin: Some(&input),
+            ..Default::default()
+        },
+    )?;
+    assert!(output.status.success(), "the parent hook completed successfully");
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(2),
+        "a descendant keeping stdin open cannot delay a finished hook"
+    );
+    Ok(())
+}
+
+#[test]
+fn prepared_execution_preserves_streams_and_combined_write_order() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let fixture = fixture()?;
+    let workdir = fixture.join("repo");
+    let gitdir = workdir.join(".git");
+    for path in ["stream-output", "stream-output-no-shebang"] {
+        if cfg!(not(unix)) && path.ends_with("no-shebang") {
+            continue;
+        }
+        for mode in [OutputMode::Separate, OutputMode::Combined] {
+            let command = gix_hook::prepare(Path::new(path), &context(&workdir, &gitdir), Options::default())?;
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let status = gix_hook::run_prepared(command, None, mode, &AtomicBool::new(false), |stream, bytes| {
+                match stream {
+                    Stream::Stdout => stdout.extend_from_slice(bytes),
+                    Stream::Stderr => stderr.extend_from_slice(bytes),
+                }
+                Ok(())
+            })?;
+            assert_eq!(status.code(), Some(7), "exit failures retain all trailing output");
+            match mode {
+                OutputMode::Separate => {
+                    assert_eq!(stdout, b"stdout-one\nstdout-two\n", "stdout stays distinct");
+                    assert_eq!(stderr, b"stderr-one\nstderr-two\n", "stderr stays distinct");
+                }
+                OutputMode::Combined => {
+                    assert!(stdout.is_empty(), "combined output is reported as stderr");
+                    assert_eq!(
+                        stderr, b"stdout-one\nstderr-one\nstdout-two\nstderr-two\n",
+                        "a single pipe preserves writes from both streams, including shell fallback"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn cancellation_reaps_the_hook_without_waiting_for_descendants() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let fixture = fixture()?;
+    let workdir = fixture.join("repo");
+    let gitdir = workdir.join(".git");
+    for mode in [OutputMode::Separate, OutputMode::Combined] {
+        for callback_error in [false, true] {
+            let command = gix_hook::prepare(
+                Path::new("stream-until-cancelled"),
+                &context(&workdir, &gitdir),
+                Options::default(),
+            )?;
+            let interrupt = AtomicBool::new(false);
+            let mut output = Vec::new();
+            let mut pid = None;
+            let start = std::time::Instant::now();
+            let result =
+                gix_hook::run_prepared(command, Some(vec![b'x'; 1024 * 1024]), mode, &interrupt, |_, bytes| {
+                    output.extend_from_slice(bytes);
+                    if let Some(end) = output.iter().position(|byte| *byte == b'\n') {
+                        pid = Some(
+                            std::str::from_utf8(&output[..end])
+                                .expect("shell emits a PID")
+                                .parse::<libc::pid_t>()
+                                .expect("PID is numeric"),
+                        );
+                        if callback_error {
+                            return Err(std::io::Error::other("stop streaming"));
+                        }
+                        interrupt.store(true, Ordering::Relaxed);
+                    }
+                    Ok(())
+                });
+            let error = result.expect_err("callback failure and interruption both stop execution");
+            assert!(
+                error.to_string().contains(if callback_error {
+                    "stop streaming"
+                } else {
+                    "interrupted"
+                }),
+                "the cancellation cause remains available: {error}"
+            );
+            assert!(
+                start.elapsed() < std::time::Duration::from_secs(2),
+                "descendants holding pipe handles cannot delay cancellation"
+            );
+            let pid = pid.expect("the hook reported its PID before cancellation");
+            // SAFETY: signal zero only inspects the known child PID and cannot deliver a signal.
+            assert_eq!(
+                unsafe { libc::kill(pid, 0) },
+                -1,
+                "the owned child was killed and reaped"
+            );
+            assert_eq!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::ESRCH),
+                "the child is absent, including from the zombie process table"
+            );
+        }
+    }
+    let error = gix_hook::run_prepared(
+        std::process::Command::new("gitoxide-missing-hook"),
+        None,
+        OutputMode::Combined,
+        &AtomicBool::new(true),
+        |_, _| panic!("an already cancelled invocation has no output"),
+    )
+    .expect_err("preexisting cancellation precedes spawning");
+    assert!(
+        error.to_string().contains("interrupted"),
+        "the missing executable is never started"
     );
     Ok(())
 }

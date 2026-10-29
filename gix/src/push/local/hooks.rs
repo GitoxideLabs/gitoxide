@@ -1,16 +1,14 @@
 use std::{
     ffi::OsString,
-    io::{self, Read, Write},
+    io,
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
-    sync::{atomic::AtomicBool, mpsc},
-    time::Duration,
+    sync::atomic::AtomicBool,
 };
 
 use crate::{
     Repository, Result,
     bstr::BString,
-    error::{OptionExt, ResultExt, message},
+    error::{OptionExt, message},
     push::{self, UpdateOutcome},
 };
 
@@ -30,13 +28,11 @@ impl<'a> Hooks<'a> {
         interrupt: &'a AtomicBool,
         environment: &'a [(OsString, OsString)],
     ) -> Result<Self> {
-        let directory = repo
-            .config_snapshot()
-            .trusted_path("core.hooksPath")?
-            .map_or_else(|| repo.common_dir().join("hooks"), |path| repo.git_dir().join(path));
+        repo.require_hook_trust()?;
+        let directory = repo.hooks_directory_in(&repo.current_dir().join(repo.git_dir()))?;
         Ok(Self {
             repo,
-            directory: repo.current_dir().join(directory),
+            directory,
             push_options,
             interrupt,
             environment,
@@ -89,26 +85,32 @@ impl<'a> Hooks<'a> {
         progress: &mut impl FnMut(bool, &[u8]) -> io::Result<()>,
     ) -> Result<Option<bool>> {
         push::plan::check_interrupt(self.interrupt)?;
-        let path = self.directory.join(name);
-        match std::fs::metadata(&path) {
-            Ok(metadata) if metadata.is_file() && executable(&metadata) => {}
-            Ok(_) => return Ok(None),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(err) => return Err(err).or_error(),
-        }
+        let Some(path) = gix_hook::find(name, &self.directory)? else {
+            return Ok(None);
+        };
         let mut context = self.repo.command_context()?;
         context.stderr = None;
         context.no_replace_objects = Some(true);
-        let (mut output, write_output) = io::pipe().or_error()?;
-        let mut prepare = gix_command::prepare(path)
-            .with_context(context)
-            .args(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::from(write_output.try_clone().or_error()?))
-            .stderr(Stdio::from(write_output));
-        prepare.env.extend_from_slice(self.environment);
-        let mut command: Command = prepare.try_into()?;
-        command.current_dir(self.repo.git_dir());
+        let args: Vec<_> = args.into_iter().collect();
+        let args: Vec<_> = args.iter().map(OsString::as_os_str).collect();
+        let environment: Vec<_> = self
+            .environment
+            .iter()
+            .map(|(key, value)| (key.as_os_str(), value.as_os_str()))
+            .collect();
+        let mut command = gix_hook::prepare(
+            &path,
+            &gix_hook::Context {
+                working_dir: &self.repo.current_dir().join(self.repo.git_dir()),
+                common_dir: &self.repo.current_dir().join(self.repo.common_dir()),
+                command: context,
+            },
+            gix_hook::Options {
+                arguments: &args,
+                environment: &environment,
+                stdin: None,
+            },
+        )?;
         // Repository-local process overrides belong to the sender, never the receiver.
         for key in [
             "GIT_COMMON_DIR",
@@ -161,66 +163,14 @@ impl<'a> Hooks<'a> {
                 );
             }
         }
-        let child = command.spawn().or_raise(|| message!("Could not start {name} hook"))?;
-        drop(command);
-        let mut child = ChildGuard(Some(child));
-        let stdin = child.0.as_mut().expect("child is available until reaped").stdin.take();
-        let (input_sender, input_receiver) = mpsc::sync_channel(1);
-        std::thread::spawn(move || {
-            let result = stdin.map_or(Ok(()), |mut stdin| stdin.write_all(&input));
-            let _ = input_sender.send(result);
-        });
-        // Own only pipe handles on these threads, so cancellation never waits on a hook descendant
-        // that inherited a pipe. The bounded channel prevents unbounded progress buffering.
-        let (sender, receiver) = mpsc::sync_channel(16);
-        std::thread::spawn(move || {
-            let mut buffer = [0; 8192];
-            loop {
-                let result = match output.read(&mut buffer) {
-                    Ok(0) => break,
-                    Ok(len) => Ok(buffer[..len].to_vec()),
-                    Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
-                    Err(err) => Err(err),
-                };
-                let failed = result.is_err();
-                if sender.send(result).is_err() || failed {
-                    break;
-                }
-            }
-        });
-        let mut status = None;
-        let mut output_done = false;
-        while status.is_none() || !output_done {
-            push::plan::check_interrupt(self.interrupt)?;
-            if !output_done {
-                match receiver.recv_timeout(Duration::from_millis(20)) {
-                    Ok(bytes) => progress(false, &bytes.or_error()?).or_error()?,
-                    Err(mpsc::RecvTimeoutError::Disconnected) => output_done = true,
-                    Err(mpsc::RecvTimeoutError::Timeout) => {}
-                }
-            } else {
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            if status.is_none() {
-                status = child
-                    .0
-                    .as_mut()
-                    .expect("child is available until reaped")
-                    .try_wait()
-                    .or_error()?;
-            }
-        }
-        child.0.take();
-        let success = status.expect("loop waits for child exit").success();
-        // The hook's exit status decides whether it accepted its input. A descendant may keep
-        // stdin open after the hook and its output have finished; never wait for that descendant.
-        if success
-            && let Ok(Err(err)) = input_receiver.try_recv()
-            && err.kind() != io::ErrorKind::BrokenPipe
-        {
-            return Err(err).or_raise(|| message!("Could not send input to {name} hook"));
-        }
-        Ok(Some(success))
+        let status = gix_hook::run_prepared(
+            command,
+            Some(input),
+            gix_hook::OutputMode::Combined,
+            self.interrupt,
+            |_, bytes| progress(false, bytes),
+        )?;
+        Ok(Some(status.success()))
     }
 }
 
@@ -243,27 +193,6 @@ pub(super) fn input(
         out.push(b'\n');
     }
     out
-}
-
-fn executable(metadata: &std::fs::Metadata) -> bool {
-    #[cfg(unix)]
-    {
-        gix_fs::is_executable(metadata)
-    }
-    #[cfg(not(unix))]
-    {
-        metadata.is_file()
-    }
-}
-
-struct ChildGuard(Option<Child>);
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        if let Some(child) = &mut self.0 {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    }
 }
 
 pub(super) fn quoted_path(path: &Path) -> Result<OsString> {
