@@ -45,6 +45,8 @@ mod pathspec;
 mod reference;
 mod reflog;
 mod remote;
+#[cfg(feature = "worktree-mutation")]
+mod reset;
 mod shallow;
 mod state;
 #[cfg(feature = "attributes")]

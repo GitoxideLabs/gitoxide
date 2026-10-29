@@ -655,7 +655,7 @@ fn conflict(path: &BStr, reason: &'static str) -> crate::worktree::checkout::Con
     }
 }
 
-fn interrupted(flag: &AtomicBool) -> Result {
+pub(super) fn interrupted(flag: &AtomicBool) -> Result {
     ensure!(
         !flag.load(Ordering::Relaxed),
         crate::error::cancelled("Checkout was interrupted")
@@ -663,7 +663,11 @@ fn interrupted(flag: &AtomicBool) -> Result {
     Ok(())
 }
 
-fn validate_path(path: &BStr, mode: Mode, options: gix_worktree::validate::path::component::Options) -> Result {
+pub(super) fn validate_path(
+    path: &BStr,
+    mode: Mode,
+    options: gix_worktree::validate::path::component::Options,
+) -> Result {
     let mut parts = path.split(|byte| *byte == b'/').peekable();
     while let Some(part) = parts.next() {
         gix_worktree::validate::path::component(
@@ -677,13 +681,13 @@ fn validate_path(path: &BStr, mode: Mode, options: gix_worktree::validate::path:
     Ok(())
 }
 
-enum Disk {
+pub(super) enum Disk {
     Missing,
     Blocked(BString),
     Present(gix_index::fs::Metadata),
 }
 
-fn inspect_path(root: &Path, path: &BStr) -> Result<Disk> {
+pub(super) fn inspect_path(root: &Path, path: &BStr) -> Result<Disk> {
     for end in path
         .iter()
         .enumerate()

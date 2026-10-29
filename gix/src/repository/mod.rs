@@ -146,6 +146,8 @@ mod reference;
 /// Reflog expiration across worktrees.
 pub mod reflog;
 mod remote;
+#[cfg(feature = "worktree-mutation")]
+mod reset;
 mod revision;
 mod shallow;
 mod state;
