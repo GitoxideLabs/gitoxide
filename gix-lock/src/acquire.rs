@@ -55,7 +55,8 @@ impl File {
     /// after the process umask. Pass `0` to keep the umask permissions without reading or rewriting permission metadata.
     /// See [`gix_fs::adjust_shared_repository_permissions()`] for the encoding.
     ///
-    /// On Unix, lock files start with `0o666` before the umask and sharing policy are applied.
+    /// On Unix, lock files start with `0o666`, restricted by negative explicit sharing modes before creation.
+    /// The umask and final sharing policy are then applied.
     ///
     /// ### Warning of potential resource leak
     ///
@@ -77,7 +78,7 @@ impl File {
             shared_repository_permissions,
             resolve_resource,
             &|p, d, c| {
-                if let Some(permissions) = default_permissions() {
+                if let Some(permissions) = default_permissions(shared_repository_permissions) {
                     gix_tempfile::writable_at_with_permissions(p, d, c, permissions)
                 } else {
                     gix_tempfile::writable_at(p, d, c)
@@ -109,7 +110,8 @@ impl Marker {
     /// If `boundary_directory` is given, missing directories will be created and removed up to that boundary on rollback.
     ///
     /// The sharing policy applies to both the marker and newly created directories; `0` keeps the umask permissions.
-    /// On Unix, marker files start with `0o666` before the umask and sharing policy are applied.
+    /// On Unix, marker files start with `0o666`, restricted by negative explicit sharing modes before creation.
+    /// The umask and final sharing policy are then applied.
     ///
     /// ### Warning of potential resource leak
     ///
@@ -129,7 +131,7 @@ impl Marker {
             shared_repository_permissions,
             &keep_resource,
             &|p, d, c| {
-                if let Some(permissions) = default_permissions() {
+                if let Some(permissions) = default_permissions(shared_repository_permissions) {
                     gix_tempfile::mark_at_with_permissions(p, d, c, permissions)
                 } else {
                     gix_tempfile::mark_at(p, d, c)
@@ -244,14 +246,21 @@ fn add_lock_suffix(resource_path: &Path) -> PathBuf {
     lock_path.into()
 }
 
-fn default_permissions() -> Option<std::fs::Permissions> {
+fn default_permissions(shared_repository_permissions: i32) -> Option<std::fs::Permissions> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        Some(std::fs::Permissions::from_mode(0o666))
+        // Restrictive policies must apply at creation: chmod cannot revoke an already-open descriptor.
+        let mode = if shared_repository_permissions < 0 {
+            0o666 & shared_repository_permissions.unsigned_abs()
+        } else {
+            0o666
+        };
+        Some(std::fs::Permissions::from_mode(mode))
     }
     #[cfg(not(unix))]
     {
+        let _ = shared_repository_permissions;
         None
     }
 }
@@ -259,6 +268,27 @@ fn default_permissions() -> Option<std::fs::Permissions> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn restrictive_permissions_apply_before_the_file_is_created() {
+        use std::os::unix::fs::PermissionsExt;
+
+        for (policy, expected) in [
+            (0, 0o666),
+            (0o660, 0o666),
+            (-0o640, 0o640),
+            (-0o600, 0o600),
+            (-0o740, 0o640),
+        ] {
+            let initial = default_permissions(policy).expect("Unix has creation permissions");
+            assert_eq!(
+                initial.mode(),
+                expected,
+                "a restrictive policy cannot briefly expose a readable lock before chmod"
+            );
+        }
+    }
 
     #[test]
     fn add_lock_suffix_to_file_with_extension() {
