@@ -55,6 +55,8 @@ pub use find_traits::{Find, FindExt};
 pub mod index;
 ///
 pub mod multi_index;
+/// Per-object modification times stored alongside cruft packs.
+pub mod mtimes;
 
 ///
 pub mod verify;
