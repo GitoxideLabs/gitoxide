@@ -7,12 +7,16 @@ use std::{
 use bstr::{BStr, BString, ByteSlice};
 use std::sync::LazyLock;
 
+#[cfg(windows)]
+mod registry;
+
 /// Other places to find Git in.
 #[cfg(windows)]
 pub(super) static ALTERNATIVE_LOCATIONS: LazyLock<Vec<PathBuf>> = LazyLock::new(|| {
     let mut locations = locations_under_program_files(|key| std::env::var_os(key));
     locations.extend(locations_under_scoop(|key| std::env::var_os(key)));
     locations.extend(locations_under_package_managers(|key| std::env::var_os(key)));
+    locations.extend(registry::installation_bins());
     locations
 });
 #[cfg(not(windows))]

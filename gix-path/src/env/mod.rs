@@ -122,7 +122,9 @@ pub fn shell_command() -> std::process::Command {
 /// When Scoop's `current` junction is absent, its most recently installed version is used.
 /// Also searched are `ChocolateyToolsLocation/git/cmd`, the active Conda/Mamba environment's
 /// `CONDA_PREFIX/Library/bin`, and WinGet's user and machine `Links` directories. For an MSYS2
-/// installation outside `PATH`, set `GIT_INSTALL_ROOT` to its root (containing `usr/bin`).
+/// installation outside `PATH`, `GIT_INSTALL_ROOT` can name its root (containing `usr/bin`).
+/// Finally, registered Git for Windows and MSYS2 installations are searched, including custom
+/// roots, preferring current-user registrations to machine registrations.
 pub fn exe_invocation() -> &'static Path {
     if cfg!(windows) {
         /// The path to the Git executable as located in the `PATH` or in other locations that it's
