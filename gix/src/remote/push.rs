@@ -15,7 +15,8 @@ impl Remote<'_> {
     /// command is explicitly configured, in which case that command handles the receive operation.
     ///
     /// Like the connection API, this does not expand push refspecs, run local pre-push hooks, or
-    /// update local tracking refs. Use [`Self::urls()`] to handle additional configured push URLs.
+    /// update local tracking refs. Use [`Self::update_tracking_refs()`] for the latter and
+    /// [`Self::urls()`] to handle additional configured push URLs.
     /// Local receive operations run configured and traditional receiver hooks serially and quarantine incoming objects.
     /// Event-wide disables suppress both hook forms. Receiver shallow boundaries are preserved, honoring
     /// `receive.shallowUpdate` when incoming history needs additional boundaries.
@@ -55,5 +56,21 @@ impl Remote<'_> {
             remote_progress,
             should_interrupt,
         )
+    }
+
+    /// Update this remote's tracking references from a confirmed push result.
+    ///
+    /// Apply the first matching fetch refspec to each successful or up-to-date destination,
+    /// honoring negative specs and any actual destination or value reported by proc-receive.
+    /// Dry runs and rejected updates do nothing. Deletions remove the tracking reference and
+    /// its log; other updates record `update by push`. Missing committer identity uses the same
+    /// in-memory generic fallback as cloning.
+    /// Reported objects must exist locally, and mappings into `refs/heads/` require commits.
+    ///
+    /// Reference edits use one transaction. An error affects only this local update step; the
+    /// remote result remains available in `outcome`, so callers can report a local failure
+    /// without losing confirmation that the push already succeeded.
+    pub fn update_tracking_refs(&self, outcome: &Outcome) -> Result<Vec<gix_ref::transaction::RefEdit>> {
+        crate::push::tracking::update_refs(self, outcome)
     }
 }
