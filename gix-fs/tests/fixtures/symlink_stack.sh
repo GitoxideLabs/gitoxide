@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -eu -o pipefail
 
+# Validate parent symlinks separately from leaf links, retaining a symlinked root.
+
 mkdir base;
 (cd base
   touch file

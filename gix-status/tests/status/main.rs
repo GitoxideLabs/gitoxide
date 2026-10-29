@@ -10,8 +10,6 @@ mod index_as_worktree;
 #[cfg(feature = "worktree-rewrites")]
 mod index_as_worktree_with_renames;
 
-mod stack;
-
 pub fn fixture_path(name: &str) -> std::path::PathBuf {
     crate::scripted_fixture_read_only(std::path::Path::new(name).with_extension("sh")).expect("script works")
 }
