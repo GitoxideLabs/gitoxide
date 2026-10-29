@@ -16,6 +16,14 @@ fn named_helpers_run_without_git_and_preserve_operation_environment() -> gix_tes
             ("PATH".into(), "".into()),
             ("GIT_EXEC_PATH".into(), core.into_os_string()),
         ],
+        vec![("PATH".into(), "standalone".into())],
+        vec![
+            ("PATH".into(), "".into()),
+            (
+                "GIT_EXEC_PATH".into(),
+                "installation with spaces/libexec/git-core".into(),
+            ),
+        ],
     ] {
         for definition in [r#"sample --label="a b""#, r#"sample --label="$GIX_HELPER_ARGUMENT""#] {
             let mut environment = environment.clone();
@@ -23,7 +31,9 @@ fn named_helpers_run_without_git_and_preserve_operation_environment() -> gix_tes
                 ("GIX_HELPER_USER".into(), "operation-user".into()),
                 ("GIX_HELPER_ARGUMENT".into(), "a b".into()),
             ]);
-            let output = gix_credentials::Program::from_custom_definition(definition)?
+            let mut helper = gix_credentials::Program::from_custom_definition(definition)?;
+            helper.current_dir = Some(fixture.clone());
+            let output = helper
                 .to_command_with_environment(&gix_credentials::helper::Action::Get(Default::default()), &environment)?
                 .output()?;
             assert!(output.status.success());

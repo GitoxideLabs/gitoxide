@@ -354,6 +354,27 @@ fn default_paths_and_static_helper_options() -> TestResult {
 }
 
 #[test]
+fn operation_directory_selects_the_legacy_socket_without_relaxing_absolute_paths() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let directory = gix_testtools::tempfile::tempdir()?;
+    std::fs::create_dir_all(directory.path().join("home/.git-credential-cache"))?;
+    let _environment = gix_testtools::Env::new()
+        .set("HOME", "home")
+        .set("XDG_CACHE_HOME", directory.path().join("xdg").display().to_string());
+    let mut helper = Program::from_custom_definition("cache")?;
+    helper.current_dir = Some(directory.path().to_owned());
+    let error = helper::invoke(&mut helper, &Action::Get(Context::default()))
+        .expect_err("the existing relative HOME cache wins over absolute XDG and stays invalid");
+    assert!(
+        format!("{error:?}").contains("absolute path"),
+        "native cache sockets must remain absolute: {error:?}"
+    );
+    Ok(())
+}
+
+#[test]
 fn malformed_request_does_not_stop_daemon_or_store_partial_input() -> TestResult {
     use std::net::Shutdown;
     use std::os::unix::net::UnixStream;
@@ -487,6 +508,7 @@ fn operation_environment_reaches_cache_daemon_launcher() -> TestResult {
         child: None,
     };
     let mut helper = program(&socket)?;
+    helper.current_dir = Some(directory.path().to_owned());
     helper.cache_daemon = Some(cache::DaemonCommand {
         executable: gix_path::env::shell().into(),
         args: vec![
@@ -507,13 +529,13 @@ fn operation_environment_reaches_cache_daemon_launcher() -> TestResult {
             ("HOME".into(), home.clone().into_os_string()),
             ("XDG_CACHE_HOME".into(), xdg.clone().into_os_string()),
             ("GIX_CACHE_VALUE".into(), "operation-value".into()),
-            ("GIX_CACHE_MARKER".into(), marker.clone().into_os_string()),
+            ("GIX_CACHE_MARKER".into(), "environment".into()),
         ],
     )?;
     assert_eq!(
         std::fs::read_to_string(marker)?,
         format!("{}\n{}\noperation-value\n", home.display(), xdg.display()),
-        "the daemon inherits operation-specific environment"
+        "the daemon inherits the operation environment and resolves relative paths in its directory"
     );
     assert!(
         !cache::request(&socket, "get", 900, b"", None)?.is_empty(),

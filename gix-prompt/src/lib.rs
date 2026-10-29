@@ -42,6 +42,7 @@ pub fn ask_with_environment(
     if let Some(askpass) = opts.askpass.as_deref() {
         let mut command = gix_command::prepare(askpass).arg(prompt);
         command.env.extend_from_slice(environment);
+        command.current_dir.clone_from(&opts.current_dir);
         match command.spawn() {
             Ok(cmd) => {
                 if let Some(mut stdout) = cmd
@@ -77,6 +78,7 @@ pub fn openly(prompt: impl AsRef<str>) -> Result<String> {
         &Options {
             mode: Mode::Visible,
             askpass: None,
+            current_dir: None,
         },
     )
 }
@@ -90,6 +92,7 @@ pub fn securely(prompt: impl AsRef<str>) -> Result<String> {
         &Options {
             mode: Mode::Hidden,
             askpass: None,
+            current_dir: None,
         },
     )
 }
