@@ -740,3 +740,29 @@ fn split_index_and_regular_index_of_same_content_are_indeed_the_same() {
         assert_eq!(s.path_in(split.path_backing()), r.path_in(regular.path_backing()));
     });
 }
+
+#[test]
+fn resolve_undo_stages_match_git() -> gix_testtools::TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_resolve_undo.sh")?;
+    let index = gix_index::File::at(
+        fixture.join(".git/index"),
+        gix_testtools::object_hash(),
+        false,
+        Default::default(),
+    )?;
+    let mut actual = String::new();
+    for path in index.resolve_undo().expect("the resolution records original stages") {
+        for (stage, entry) in path.stages.iter().enumerate() {
+            if let Some(entry) = entry {
+                use std::fmt::Write;
+                writeln!(actual, "{:06o} {} {}\t{}", entry.mode, entry.id, stage + 1, path.name)?;
+            }
+        }
+    }
+    assert_eq!(
+        actual,
+        std::fs::read_to_string(fixture.join("expected"))?,
+        "resolved conflict stages match git ls-files --resolve-undo"
+    );
+    Ok(())
+}

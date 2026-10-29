@@ -1,35 +1,36 @@
+//! Conflict stages retained after a path is resolved, allowing the conflict to be restored.
+
 use bstr::BString;
 use gix_hash::ObjectId;
 
 use crate::{extension::Signature, util::split_at_byte_exclusive};
 
+/// Paths with recorded pre-resolution conflict stages.
 pub type Paths = Vec<ResolvePath>;
 
-#[expect(
-    dead_code,
-    reason = "REUC is decoded but not yet exposed or written; retain its fields for planned round-trip support"
-)]
-#[derive(Clone)]
+/// A resolved path and its original conflict stages.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvePath {
     /// relative to the root of the repository, or what would be stored in the index
-    name: BString,
+    pub name: BString,
 
     /// 0 = ancestor/common, 1 = ours, 2 = theirs
-    stages: [Option<Stage>; 3],
+    pub stages: [Option<Stage>; 3],
 }
 
-#[expect(
-    dead_code,
-    reason = "REUC is decoded but not yet exposed or written; retain its fields for planned round-trip support"
-)]
-#[derive(Clone, Copy)]
+/// A single original conflict stage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Stage {
-    mode: u32,
-    id: ObjectId,
+    /// The original Git entry mode, or type and permission bits.
+    pub mode: u32,
+    /// The object previously recorded at this stage.
+    pub id: ObjectId,
 }
 
+/// The on-disk extension signature.
 pub const SIGNATURE: Signature = *b"REUC";
 
+/// Decode the complete extension payload, returning `None` for malformed data.
 pub fn decode(mut data: &[u8], object_hash: gix_hash::Kind) -> Option<Paths> {
     let hash_len = object_hash.len_in_bytes();
     let mut out = Vec::new();
