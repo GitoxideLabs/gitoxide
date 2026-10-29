@@ -162,6 +162,20 @@ mod index {
     }
 
     #[test]
+    fn writing_index_trees_uses_repository_objects_without_writing_the_index() -> TestResult {
+        let (repo, _tmp) = crate::basic_rw_repo()?;
+        let before = std::fs::read(repo.index_path())?;
+        let index = repo.open_index()?;
+        assert_eq!(
+            repo.write_index_tree(&index)?,
+            repo.head_tree_id()?,
+            "a clean index produces HEAD's tree"
+        );
+        assert_eq!(std::fs::read(repo.index_path())?, before, "the index is unchanged");
+        Ok(())
+    }
+
+    #[test]
     fn missing_shared_index_is_an_error() -> TestResult {
         let (repo, _tmp) = crate::basic_rw_repo()?;
         let workdir = repo.workdir().expect("the fixture has a worktree");

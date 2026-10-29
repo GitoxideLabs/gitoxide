@@ -25,6 +25,7 @@ pub mod extension;
 pub mod entry;
 
 mod access;
+mod tree;
 
 ///
 pub mod init;

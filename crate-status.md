@@ -883,6 +883,7 @@ The git staging area.
       * [x] 'sdir'
       * [ ] 'link'
           - **note** that we currently **dissolve** any shared index we read so when writing this extension is removed.
+* [x] write stage-zero indexes as trees, including sparse directories and intent-to-add handling
 * `stat` update
     * [ ] optional threaded `stat` based on thread_cost (aka preload)
 * [x] handling of `.gitignore` and system file exclude configuration
