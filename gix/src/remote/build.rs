@@ -18,6 +18,17 @@ impl Remote<'_> {
         self
     }
 
+    /// Set the directory against which relative local URLs and helper paths are resolved.
+    ///
+    /// Transport and authentication commands run in this directory. Receive hooks still run in
+    /// the receiving repository, as required by Git. Relative directories are made absolute now;
+    /// the process working directory is never changed and this setting is not saved to configuration.
+    /// Without this override, the process working directory is used.
+    pub fn with_working_dir(mut self, directory: impl AsRef<std::path::Path>) -> Result<Self> {
+        self.working_dir = Some(std::path::absolute(directory).or_error()?);
+        Ok(self)
+    }
+
     /// Override the `url` to be used when fetching data from a remote.
     ///
     /// Note that this URL is typically set during instantiation with [`crate::Repository::remote_at()`].

@@ -15,14 +15,17 @@ fn local_ref_map_matches_git_without_git_in_path() -> TestResult {
     }
     let fixture = gix_testtools::scripted_fixture_read_only("make_native_local_fetch_repo.sh")?.canonicalize()?;
     let local = repo(fixture.join("empty"))?;
-    let source = fixture.join("source");
+    let source = Path::new("../source");
     let expected = gix_testtools::git_command(&fixture)
-        .args(["ls-remote", "--symref"])
-        .arg(&source)
+        .args(["-C", "empty", "ls-remote", "--symref"])
+        .arg(source)
         .output()?;
     assert!(expected.status.success());
     let expected = String::from_utf8(expected.stdout)?;
-    let mut remote = local.remote_at(gix::path::into_bstr(source)?)?;
+    let mut remote = {
+        let _cwd = gix_testtools::set_current_dir(fixture.join("empty"))?;
+        local.remote_at(gix::path::into_bstr(source)?)?.with_working_dir(".")?
+    };
     remote.replace_refspecs(["+refs/heads/*:refs/remotes/origin/*"], Direction::Fetch)?;
     let guard = gix_testtools::Env::new().set("PATH", fixture.join("empty").to_string_lossy());
     let (map, _) = remote.ref_map(gix::progress::Discard, Default::default())?;
