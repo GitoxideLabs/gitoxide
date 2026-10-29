@@ -43,6 +43,7 @@ wwwauth[]=Bearer
             .invoke(
                 Action::Get(context),
                 gix_prompt::Options {
+                    current_dir: None,
                     mode: gix_prompt::Mode::Hidden,
                     askpass: Some(gix_testtools::fixture_path("username.sh")),
                 },
@@ -118,6 +119,7 @@ credential=access-token
                 .invoke(
                     Action::Get(context.clone()),
                     gix_prompt::Options {
+                        current_dir: None,
                         mode: gix_prompt::Mode::Disable,
                         askpass: None,
                     },
@@ -219,6 +221,7 @@ password_expiry_utc=1
                         ..Default::default()
                     }),
                     gix_prompt::Options {
+                        current_dir: None,
                         mode: gix_prompt::Mode::Disable,
                         askpass: None,
                     },
@@ -649,6 +652,7 @@ password_expiry_utc=1
                         ..Default::default()
                     }),
                     gix_prompt::Options {
+                        current_dir: None,
                         mode: gix_prompt::Mode::Disable,
                         askpass: None,
                     },
@@ -726,11 +730,13 @@ fn operation_environment_reaches_helpers_without_changing_the_process() -> gix_t
             &[("GIX_TEST_CREDENTIAL_VALUE".into(), "operation-value".into())],
         )?
         .expect("helper supplies identity");
-    assert_eq!(outcome.identity.password, "operation-value");
+    assert!(
+        matches!(outcome.credentials, gix_sec::identity::Credentials::UsernamePassword { password, .. } if password == "operation-value")
+    );
     assert_eq!(std::env::var("GIX_TEST_CREDENTIAL_VALUE")?, "process-value");
     let outcome = cascade.invoke(action, prompt)?.expect("helper supplies identity");
-    assert_eq!(
-        outcome.identity.password, "process-value",
+    assert!(
+        matches!(outcome.credentials, gix_sec::identity::Credentials::UsernamePassword { password, .. } if password == "process-value"),
         "per-operation values do not persist in reused cascades"
     );
     Ok(())
@@ -764,7 +770,9 @@ printf '%s\\n' \"$GIX_TEST_ASKPASS_VALUE\"
             &[("GIX_TEST_ASKPASS_VALUE".into(), "per-operation-secret".into())],
         )?
         .expect("askpass supplies password");
-    assert_eq!(outcome.identity.password, "per-operation-secret");
+    assert!(
+        matches!(outcome.credentials, gix_sec::identity::Credentials::UsernamePassword { password, .. } if password == "per-operation-secret")
+    );
     assert!(
         gix_credentials::helper::Cascade::default()
             .invoke_with_environment(
@@ -817,13 +825,9 @@ mod invoke_with_prompt {
             ],
             "prompts use the normalized context, including the username just obtained"
         );
-        assert_eq!(
-            outcome.identity.username, "user",
-            "the username comes from the visible prompt"
-        );
-        assert_eq!(
-            outcome.identity.password, "password",
-            "the password comes from the hidden prompt"
+        assert!(
+            matches!(outcome.credentials, gix_sec::identity::Credentials::UsernamePassword { username, password, .. } if username == "user" && password == "password"),
+            "the username and password come from the visible and hidden prompts"
         );
         let saved = Context::try_from(&outcome.next)?;
         assert_eq!(
@@ -858,7 +862,10 @@ mod invoke_with_prompt {
                 },
             )?
             .expect("the helper and callback jointly supply an identity");
-        assert_eq!(outcome.identity.username, "helper", "the helper's username is retained");
+        assert!(
+            matches!(outcome.credentials, gix_sec::identity::Credentials::UsernamePassword { username, .. } if username == "helper"),
+            "the helper's username is retained"
+        );
         Ok(())
     }
 
@@ -970,8 +977,8 @@ fn operation_environment_combines_with_custom_prompt() -> gix_testtools::TestRes
             },
         )?
         .expect("helper and callback supply the identity");
-    assert_eq!(
-        outcome.identity.username, "operation-user",
+    assert!(
+        matches!(outcome.credentials, gix_sec::identity::Credentials::UsernamePassword { username, .. } if username == "operation-user"),
         "native helper output reaches the result"
     );
     assert_eq!(

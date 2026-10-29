@@ -85,7 +85,7 @@ impl Repository {
                     },
                 )?;
                 cache.set_resource(
-                    self.object_hash().null(),
+                    None,
                     mode,
                     &file_path,
                     gix_diff::blob::ResourceKind::NewOrDestination,

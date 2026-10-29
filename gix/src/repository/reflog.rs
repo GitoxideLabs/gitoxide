@@ -17,7 +17,7 @@ use crate::{
 #[derive(Clone, Debug, Default)]
 pub struct Options {
     /// Reference clock for relative configuration dates, or the current time.
-    pub now: Option<gix_date::Zoned>,
+    pub now: Option<gix_date::ZonedDateTime>,
     /// Override total expiry with unsigned seconds since the Unix epoch.
     ///
     /// Entries strictly older than this cutoff expire. Zero means never and
@@ -78,7 +78,7 @@ impl Repository {
     /// expire objects or perform Git's optional stale-object repair.
     pub fn expire_reflogs(&self, options: Options, interrupt: &AtomicBool) -> Result<Outcome> {
         check_interrupt(interrupt)?;
-        let policy = Policy::from_config(self, options.now.clone().unwrap_or_else(gix_date::Zoned::now))?;
+        let policy = Policy::from_config(self, options.now.clone().unwrap_or_else(gix_date::ZonedDateTime::now))?;
         let mut outcome = Outcome::default();
         for repo in self.worktrees_including_main()? {
             check_interrupt(interrupt)?;
@@ -142,7 +142,7 @@ impl Repository {
 }
 
 impl Policy {
-    fn from_config(repo: &Repository, now: gix_date::Zoned) -> Result<Self> {
+    fn from_config(repo: &Repository, now: gix_date::ZonedDateTime) -> Result<Self> {
         let now_seconds = now.timestamp().as_second() as u64;
         let mut defaults = Cutoffs {
             total: now_seconds.saturating_sub(90 * 24 * 60 * 60),

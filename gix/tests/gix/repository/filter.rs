@@ -1,4 +1,4 @@
-use gix_testtools::{Result, TestResult};
+use gix_testtools::TestResult;
 use std::{path::Path, sync::atomic::AtomicBool};
 
 #[test]

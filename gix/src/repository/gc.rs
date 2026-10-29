@@ -198,7 +198,7 @@ impl Repository {
             && SystemTime::now()
                 .duration_since(metadata.modified().or_error()?)
                 .unwrap_or_default()
-                <= Duration::from_secs(12 * 60 * 60)
+                <= Duration::from_hours(12)
         {
             bail!(message("Another garbage collector may be running (gc.pid exists)").retryable());
         }

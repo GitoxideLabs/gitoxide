@@ -319,7 +319,7 @@ impl Repository {
                             } else {
                                 entry.mode
                             };
-                            desired.mode == mode && desired.id == content_change.unwrap_or(entry.id)
+                            desired.mode == mode && Some(desired.id) == content_change.unwrap_or(Some(entry.id))
                         }),
                         StatusChange::SubmoduleModification(()) => true,
                         StatusChange::Type { .. } => false,

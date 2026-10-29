@@ -461,8 +461,8 @@ fn operation_environment_selects_native_cache_socket() -> TestResult {
                 ],
             )?
             .expect("the operation's socket provides credentials");
-        assert_eq!(
-            result.identity.password, "secret",
+        assert!(
+            matches!(result.credentials, gix_sec::identity::Credentials::UsernamePassword { password, .. } if password == "secret"),
             "HOME, XDG and legacy precedence use the operation environment"
         );
     }

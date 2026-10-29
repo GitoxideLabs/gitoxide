@@ -101,7 +101,7 @@ fn explicit_expiry_overrides_patterns_and_stash_and_errors_are_safe() -> TestRes
 
 #[test]
 fn default_ages_use_the_provided_clock() -> TestResult {
-    let now: gix::date::Zoned = "2002-03-02T00:00:00+00:00[UTC]".parse()?;
+    let now: gix::date::ZonedDateTime = "2002-03-02T00:00:00+00:00[UTC]".parse()?;
     let mut expected = None;
     for use_git in [true, false] {
         let fixture = gix_testtools::scripted_fixture_writable_with_args(

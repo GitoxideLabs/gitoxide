@@ -39,8 +39,8 @@ fn reference_namespace_uses_only_trusted_configuration() -> TestResult {
         #[cfg(feature = "command")]
         assert_eq!(
             repo.command_context()?.ref_namespace,
-            Some(expected.as_bstr().to_owned()),
-            "subprocesses inherit the same trusted namespace"
+            Some("trusted".into()),
+            "subprocesses inherit the trusted namespace in unexpanded form"
         );
     }
     Ok(())

@@ -127,10 +127,10 @@ pub(crate) mod root {
 
 mod sections;
 pub use sections::{
-    Author, Branch, Checkout, Clone, Commit, Committer, Core, Credential, CredentialStore, Extensions, Fetch, FsMonitor, Gitoxide, Gpg, Hook,
-    Http, Index, Init, Mailmap, Merge, Notes, Pack, Protocol, Push, Remote, Safe, Ssh, Url, User, Worktree, branch,
-    checkout, commit, core, credential, extensions, fetch, fsmonitor, gitoxide, gpg, http, index, merge, notes, pack,
-    protocol, push, remote, ssh,
+    Author, Branch, Checkout, Clone, Commit, Committer, Core, Credential, CredentialStore, Extensions, Fetch,
+    FsMonitor, Gitoxide, Gpg, Hook, Http, Index, Init, Mailmap, Merge, Notes, Pack, Protocol, Push, Remote, Safe, Ssh,
+    Url, User, Worktree, branch, checkout, commit, core, credential, extensions, fetch, fsmonitor, gitoxide, gpg, http,
+    index, merge, notes, pack, protocol, push, remote, ssh,
 };
 #[cfg(feature = "blob-diff")]
 pub use sections::{Diff, diff};

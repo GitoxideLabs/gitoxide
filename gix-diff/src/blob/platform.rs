@@ -53,7 +53,8 @@ impl PartialEq for CacheKey {
     fn eq(&self, other: &Self) -> bool {
         self.kind == other.kind
             && if self.kind == CacheKeyKind::Object {
-                self.id == other.id && self.location == other.location
+                self.id == other.id
+                    && self.location == other.location
                     && (self.mode == gix_object::tree::EntryKind::Link)
                         == (other.mode == gix_object::tree::EntryKind::Link)
             } else {
@@ -629,7 +630,10 @@ impl Platform {
                             res.rela_path
                         )
                     })?;
-                    args.extend([res.id.unwrap_or(object_hash.null_ref()).to_string().into(), res.mode.as_octal_str().to_string().into()]);
+                    args.extend([
+                        res.id.unwrap_or(object_hash.null_ref()).to_string().into(),
+                        res.mode.as_octal_str().to_string().into(),
+                    ]);
                     let tmp = tmp.close().or_raise(|| {
                         message!(
                             "Could not close tempfile for \"{}\" while preparing external diff command",

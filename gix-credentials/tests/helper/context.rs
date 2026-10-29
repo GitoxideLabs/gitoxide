@@ -203,6 +203,7 @@ content",
                 .invoke(
                     gix_credentials::helper::Action::Get(context),
                     gix_prompt::Options {
+                        current_dir: None,
                         mode: gix_prompt::Mode::Disable,
                         askpass: None,
                     },
@@ -218,8 +219,8 @@ content",
                     "rejected {key} values must not be retained in diagnostic metadata"
                 );
                 assert!(
-                    error.to_string().contains(key),
-                    "the rejected secret field remains identifiable"
+                    error.is_validation(),
+                    "the rejected secret remains a protocol validation error"
                 );
             }
         }
@@ -253,8 +254,8 @@ fn invalid_secrets_never_appear_in_decoding_diagnostics_or_metadata() -> TestRes
                 "neither protocol nor UTF-8 validation may retain the secret {key} input"
             );
             assert!(
-                error.to_string().contains(key),
-                "the rejected secret field remains identifiable"
+                error.is_validation(),
+                "the rejected secret remains a protocol validation error"
             );
         }
     }

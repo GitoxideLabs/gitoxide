@@ -378,8 +378,8 @@ password=updated
             },
         )?
         .expect("fallback helper completes credentials");
-    assert_eq!(
-        outcome.identity.username, "fallback",
+    assert!(
+        matches!(outcome.credentials, gix_sec::identity::Credentials::UsernamePassword { username, .. } if username == "fallback"),
         "a broken native store permits trying the next helper"
     );
     Ok(())
@@ -492,8 +492,8 @@ fn operation_environment_selects_native_store_files() -> TestResult {
                 &environment,
             )?
             .expect("stored credentials are available");
-        assert_eq!(
-            result.identity.password, "secret",
+        assert!(
+            matches!(result.credentials, gix_sec::identity::Credentials::UsernamePassword { password, .. } if password == "secret"),
             "lookup uses the same operation environment"
         );
         cascade.invoke_with_environment(Action::Erase(context.to_bstring()), prompt.clone(), &environment)?;

@@ -204,7 +204,7 @@ fn rejected_credentials_keep_url_passwords_private() -> gix_testtools::TestResul
     }
 
     impl client::TransportWithoutIO for RejectCredentials {
-        fn set_identity(&mut self, _identity: client::Account) -> std::result::Result<(), client::Error> {
+        fn set_credentials(&mut self, _credentials: client::Credentials) -> std::result::Result<(), client::Error> {
             Ok(())
         }
 
@@ -254,7 +254,7 @@ fn rejected_credentials_keep_url_passwords_private() -> gix_testtools::TestResul
                 Action::Get(context) => {
                     actions.push("get");
                     Ok(Some(Outcome {
-                        identity: client::Account {
+                        credentials: client::Credentials::UsernamePassword {
                             username: "user".into(),
                             password: "password-sentinel".into(),
                             oauth_refresh_token: None,

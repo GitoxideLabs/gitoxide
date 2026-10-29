@@ -86,6 +86,7 @@ pub struct Options<'a> {
     /// Called once after planning, including dry runs and up-to-date pushes. Errors abort
     /// the operation. Applications can run sender hooks through `gix-hook` with source
     /// names retained by their refspec parser. Absent by default for existing callers.
+    #[allow(clippy::type_complexity)]
     pub pre_push_hook: Option<&'a dyn Fn(&[UpdateOutcome]) -> crate::Result<()>>,
     /// Require all requested changes to succeed together. Local rejection prevents
     /// sending any change, and the server must support atomic transactions.

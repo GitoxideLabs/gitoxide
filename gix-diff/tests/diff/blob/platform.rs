@@ -211,7 +211,13 @@ fn cached_blob_conversion_respects_path_attributes() -> TestResult {
     platform.filter.roots = Default::default();
     let db = object_db();
     let blob_id = insert(&db, "same stored bytes")?;
-    platform.set_resource(Some(blob_id), EntryKind::Blob, "a".into(), ResourceKind::OldOrSource, &db)?;
+    platform.set_resource(
+        Some(blob_id),
+        EntryKind::Blob,
+        "a".into(),
+        ResourceKind::OldOrSource,
+        &db,
+    )?;
     platform.set_resource(
         Some(blob_id),
         EntryKind::Blob,
@@ -426,7 +432,7 @@ fn resources_of_worktree_and_odb_and_check_link() -> TestResult {
 fn external_diff_shell_commands_receive_protocol_arguments() -> TestResult {
     let mut platform = new_platform(None, Default::default());
     platform.set_resource(
-        gix_hash::Kind::Sha1.null(),
+        None,
         EntryKind::Blob,
         "a".into(),
         ResourceKind::OldOrSource,
@@ -436,7 +442,7 @@ fn external_diff_shell_commands_receive_protocol_arguments() -> TestResult {
     let new_id = insert(&db, "new content")?;
     let new_path = "renamed ' $* &.txt";
     platform.set_resource(
-        new_id,
+        Some(new_id),
         EntryKind::BlobExecutable,
         new_path.into(),
         ResourceKind::NewOrDestination,
@@ -802,6 +808,7 @@ fn validated_text_changes_cover_resource_states() -> TestResult {
                     algorithm: Some(Algorithm::Myers),
                     is_binary: Some(true),
                     binary_to_text_command: Some("tr -d '\\000' <".into()),
+                    ..Default::default()
                 },
             ],
             pipeline::Mode::ToWorktreeAndBinaryToText,

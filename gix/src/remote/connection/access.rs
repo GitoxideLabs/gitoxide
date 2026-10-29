@@ -343,7 +343,9 @@ mod tests {
                 .expect("proxy authentication is configured");
             let outcome = authenticate.lock().expect("no concurrent authentication")(action.clone())?
                 .expect("the relative helper supplies the proxy password");
-            assert_eq!(outcome.identity.password, "operation-secret");
+            assert!(
+                matches!(outcome.credentials, gix_sec::identity::Credentials::UsernamePassword { password, .. } if password == "operation-secret")
+            );
         }
         Ok(())
     }

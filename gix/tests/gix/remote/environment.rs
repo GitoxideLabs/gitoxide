@@ -29,21 +29,20 @@ printf '%s\\n' \"$GIX_TEST_REMOTE_SECRET\"
         .with_command_environment(env.clone());
     let connection = remote.connect(gix::remote::Direction::Fetch)?;
     let mut credentials = connection.configured_credentials(gix::url::parse("https://user@example.com")?)?;
-    let identity = credentials(gix::credentials::helper::Action::get_for_url(
+    let outcome = credentials(gix::credentials::helper::Action::get_for_url(
         "https://user@example.com",
     ))?
-    .expect("askpass supplies password")
-    .identity;
-    assert_eq!(identity.password, "operation-secret");
+    .expect("askpass supplies password");
+    assert!(
+        matches!(outcome.credentials, gix::sec::identity::Credentials::UsernamePassword { password, .. } if password == "operation-secret")
+    );
     let mut credentials = connection.configured_credentials_for_current_url();
-    assert_eq!(
-        credentials(gix::credentials::helper::Action::get_for_url(
-            "https://user@example.com"
-        ))?
-        .expect("dynamic credentials use same environment")
-        .identity
-        .password,
-        "operation-secret"
+    let outcome = credentials(gix::credentials::helper::Action::get_for_url(
+        "https://user@example.com",
+    ))?
+    .expect("dynamic credentials use same environment");
+    assert!(
+        matches!(outcome.credentials, gix::sec::identity::Credentials::UsernamePassword { password, .. } if password == "operation-secret")
     );
 
     let destination = directory.path().join("receiver");

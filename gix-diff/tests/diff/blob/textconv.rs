@@ -133,7 +133,7 @@ fn textconv_uses_the_filter_repository_context_for_objects_and_worktree_files() 
     );
     for kind in [ResourceKind::OldOrSource, ResourceKind::NewOrDestination] {
         cache.set_resource(
-            new_file_id,
+            Some(new_file_id),
             gix_object::tree::EntryKind::Blob,
             "sample.bin".into(),
             kind,

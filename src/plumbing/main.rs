@@ -1484,6 +1484,7 @@ pub fn main() -> Result<()> {
                     since,
                     rewrites: Some(gix::diff::Rewrites::default()),
                     debug_track_path: false,
+                    ..Default::default()
                 },
                 out,
                 statistics.then_some(err),
