@@ -1618,6 +1618,7 @@ dependencies = [
  "serial_test",
  "signal-hook 0.4.6",
  "smallvec",
+ "tempfile",
  "termtree",
 ]
 

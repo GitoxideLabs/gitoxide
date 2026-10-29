@@ -87,25 +87,6 @@ impl Policy {
         {
             bail!(message("Native local receive cannot yet enforce this advanced receive policy").unsupported());
         }
-        let hook_dir = config
-            .trusted_path("core.hooksPath")?
-            .map_or_else(|| repo.common_dir().join("hooks"), |path| repo.git_dir().join(path));
-        for name in [
-            "pre-receive",
-            "update",
-            "post-receive",
-            "post-update",
-            "reference-transaction",
-        ] {
-            match std::fs::metadata(hook_dir.join(name)) {
-                Ok(metadata) if metadata.is_file() && executable(&metadata) => {
-                    bail!(message!("Native local receive cannot yet run the {name} hook").unsupported())
-                }
-                Ok(_) => {}
-                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-                Err(err) => return Err(err).or_error(),
-            }
-        }
         Ok(())
     }
 
@@ -153,17 +134,6 @@ impl Policy {
             }
         }
         Ok(None)
-    }
-}
-
-fn executable(metadata: &std::fs::Metadata) -> bool {
-    #[cfg(unix)]
-    {
-        gix_fs::is_executable(metadata)
-    }
-    #[cfg(not(unix))]
-    {
-        metadata.is_file()
     }
 }
 

@@ -15,7 +15,7 @@ impl Remote<'_> {
     ///
     /// Like the connection API, this does not expand push refspecs, run local pre-push hooks, or
     /// update local tracking refs. Use [`Self::urls()`] to handle additional configured push URLs.
-    /// Local receive operations currently reject configured hooks, shallow sources, namespaces,
+    /// Local receive operations run receiver hooks and quarantine incoming objects. They currently reject shallow sources, namespaces,
     /// and advanced receive policies they cannot enforce, before modifying references.
     pub fn push(
         &self,
