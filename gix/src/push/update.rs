@@ -90,6 +90,10 @@ pub struct Options<'a> {
     pub push_options: &'a [BString],
     /// Ask the server to suppress non-error progress output.
     pub quiet: bool,
+    /// Add missing annotated tags of commits reachable from proposed or advertised tips.
+    /// `None` inherits `push.followTags` in [`crate::Remote::push()`] and disables tag following
+    /// in [`crate::remote::Connection::push()`]. An explicit boolean overrides configuration.
+    pub follow_tags: Option<bool>,
 }
 
 /// Why one requested update was rejected.
@@ -152,7 +156,7 @@ pub struct Outcome {
     pub dry_run: bool,
     /// The receive-pack advertisement, including the original remote refs.
     pub handshake: gix_protocol::Handshake,
-    /// One result per requested update, in input order.
+    /// One result per requested update, in input order, followed by any derived tag updates.
     pub updates: Vec<UpdateOutcome>,
     /// The complete server report, including unpack failures and proc-receive
     /// metadata. Absent for dry runs or when no commands were sent.

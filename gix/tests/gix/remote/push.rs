@@ -904,6 +904,149 @@ fn configured_push_protection_is_not_silently_ignored() -> TestResult {
 }
 
 #[test]
+fn follow_tags_matches_git_for_proposed_untouched_and_deleted_tips() -> TestResult {
+    use std::fmt::Write as _;
+
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    for hash in [
+        "sha1",
+        #[cfg(feature = "sha256")]
+        "sha256",
+    ] {
+        let fixture = gix_testtools::scripted_fixture_writable_with_args(
+            "make_push_follow_tags.sh",
+            [hash],
+            gix_testtools::Creation::Execute,
+        )?;
+        let mut repo = gix::open_opts(fixture.path().join("source"), gix::open::Options::isolated())?;
+        let updates = vec![
+            update("refs/heads/main", Some(repo.head_id()?.detach()))?,
+            update("refs/heads/remove", None)?,
+        ];
+        let snapshot = |name: &str| -> TestResult<String> {
+            let repo = gix::open_opts(fixture.path().join(name), gix::open::Options::isolated())?;
+            let mut result = String::new();
+            for reference in repo.references()?.all()? {
+                let reference = reference?;
+                writeln!(result, "{} {}", reference.name().as_bstr(), reference.id())?;
+            }
+            Ok(result)
+        };
+        let outcome = repo.remote_at(fixture.path().join("destination"))?.push(
+            updates.clone(),
+            Options::default(),
+            gix::progress::Discard,
+            |_, _| Ok(()),
+            &AtomicBool::default(),
+        )?;
+        assert_eq!(
+            snapshot("destination")?,
+            std::fs::read_to_string(fixture.path().join("expected-refs"))?,
+            "follow-tags agrees with Git for {hash}"
+        );
+        assert_eq!(
+            outcome.updates[0].update, updates[0],
+            "explicit updates retain their order"
+        );
+        assert_eq!(
+            outcome.updates[1].update, updates[1],
+            "derived tag updates follow explicit updates"
+        );
+        assert!(
+            outcome.updates.len() > updates.len(),
+            "missing annotated tags are added"
+        );
+        let initial = snapshot("dry-run")?;
+        let dry_run = repo.remote_at(fixture.path().join("dry-run"))?.push(
+            updates.clone(),
+            Options {
+                dry_run: true,
+                ..Options::default()
+            },
+            gix::progress::Discard,
+            |_, _| Ok(()),
+            &AtomicBool::default(),
+        )?;
+        assert_eq!(
+            dry_run.updates,
+            outcome
+                .updates
+                .iter()
+                .cloned()
+                .map(|mut update| {
+                    if let Status::Updated { forced } = update.status {
+                        update.status = Status::WouldUpdate { forced };
+                    }
+                    update
+                })
+                .collect::<Vec<_>>(),
+            "dry runs plan the same tags"
+        );
+        assert_eq!(snapshot("dry-run")?, initial, "dry runs write no references");
+        let disabled = repo.remote_at(fixture.path().join("no-follow"))?.push(
+            updates.clone(),
+            Options {
+                follow_tags: Some(false),
+                ..Options::default()
+            },
+            gix::progress::Discard,
+            |_, _| Ok(()),
+            &AtomicBool::default(),
+        )?;
+        assert_eq!(
+            disabled.updates.len(),
+            updates.len(),
+            "explicit false overrides configured follow-tags"
+        );
+        let raw = push(
+            &repo,
+            &fixture.path().join("connection"),
+            updates.clone(),
+            Options::default(),
+        )?;
+        assert_eq!(
+            raw.updates.len(),
+            updates.len(),
+            "Connection does not inherit sender configuration"
+        );
+        assert_eq!(snapshot("connection")?, snapshot("no-follow")?);
+        push(
+            &repo,
+            &fixture.path().join("connection-follow"),
+            updates.clone(),
+            Options {
+                follow_tags: Some(true),
+                ..Options::default()
+            },
+        )?;
+        assert_eq!(
+            snapshot("connection-follow")?,
+            snapshot("destination")?,
+            "explicit tag following also works over receive-pack"
+        );
+        repo.config_snapshot_mut().set_raw_value("push.followTags", "false")?;
+        repo.remote_at(fixture.path().join("explicit-follow"))?.push(
+            updates,
+            Options {
+                follow_tags: Some(true),
+                ..Options::default()
+            },
+            gix::progress::Discard,
+            |_, _| Ok(()),
+            &AtomicBool::default(),
+        )?;
+        assert_eq!(
+            snapshot("explicit-follow")?,
+            snapshot("destination")?,
+            "explicit true overrides configured false"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn pushes_an_in_memory_commit_with_an_implicit_empty_tree() -> TestResult {
     use gix_object::Exists;
 

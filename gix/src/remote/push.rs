@@ -17,6 +17,8 @@ impl Remote<'_> {
     /// command is explicitly configured, in which case that command handles the receive operation.
     /// An empty `options.push_options` uses `push.pushOption` defaults, including empty-value resets.
     /// A nonempty slice, even one containing an empty option, overrides those defaults.
+    /// `options.follow_tags` overrides `push.followTags`; when enabled, missing annotated tags
+    /// reachable from proposed or advertised tips are appended to the explicit updates.
     /// Named remotes with `remote.<name>.mirror=true` are rejected, as mirroring conflicts with explicit updates.
     ///
     /// Sender push certificates and recursive submodule publication are currently unsupported.
@@ -59,7 +61,7 @@ impl Remote<'_> {
             bail!(message("Mirroring cannot be combined with explicit push updates").validation());
         }
         let mut configured_options = Vec::<BString>::new();
-        let (mut signing, mut recurse) = (false, false);
+        let (mut signing, mut recurse, mut follow_tags) = (false, false, false);
         let boolean = |value: Option<&BString>, key: &str| -> Result<bool> {
             value
                 .map_or(Ok(true), |value| {
@@ -92,6 +94,8 @@ impl Remote<'_> {
                         .as_ref()
                         .is_some_and(|value| value.eq_ignore_ascii_case(b"if-asked"))
                         || boolean(value.as_ref(), "push.gpgSign")?;
+                } else if is_push && name.eq_ignore_ascii_case("followTags") {
+                    follow_tags = boolean(value.as_ref(), "push.followTags")?;
                 } else if is_push && name.eq_ignore_ascii_case("recurseSubmodules") {
                     recurse = match value.as_ref().map(|value| value.as_slice()) {
                         Some(b"check" | b"on-demand" | b"only") => true,
@@ -121,6 +125,7 @@ impl Remote<'_> {
             bail!(message("Configured recursive submodule pushes are not supported").unsupported());
         }
         let options = Options {
+            follow_tags: Some(options.follow_tags.unwrap_or(follow_tags)),
             push_options: if options.push_options.is_empty() {
                 &configured_options
             } else {
