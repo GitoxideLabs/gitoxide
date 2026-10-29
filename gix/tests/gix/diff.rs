@@ -96,3 +96,81 @@ fn hunk_header_driver_configuration_preserves_order_and_defers_regex_errors() ->
     );
     Ok(())
 }
+
+#[test]
+fn attributes_select_hunk_headers_with_normal_precedence() -> TestResult {
+    use gix::attrs::State;
+    use gix::worktree::stack::state::attributes::Source;
+    let repo = named_repo("make_hunk_header_drivers.sh")?;
+    let index = repo.index()?;
+    let mut attributes = repo.attributes_only(&index, Source::IdMapping)?;
+    for (path, driver_name, line, expected) in [
+        ("main.rs", "rust", "pub fn run() {", "pub fn run() {"),
+        ("nested/main.rs", "special", "prefix nested", "nested"),
+        ("override.rs", "special", "prefix override", "override"),
+        ("file.custom", "special", "prefix custom", "custom"),
+    ] {
+        let selected = attributes.diff_driver(path, None)?;
+        assert_eq!(
+            selected.attribute,
+            State::Value(driver_name.into()),
+            "the effective attribute identifies its named driver for {path}"
+        );
+        assert_eq!(
+            selected.hunk_header()?.ok_or("text matcher")?.find(line.as_bytes())?,
+            Some(expected.as_bytes()),
+            "nested and repository attributes take precedence for {path}"
+        );
+    }
+    for (path, expected) in [
+        ("file.binary", State::Unset),
+        ("file.text", State::Set),
+        ("file.unset", State::Unspecified),
+        ("file.other", State::Unspecified),
+        ("file.unknown", State::Value("unconfigured".into())),
+    ] {
+        let selected = attributes.diff_driver(path, None)?;
+        assert_eq!(selected.attribute, expected, "attribute state survives driver lookup");
+        assert!(selected.driver.is_none());
+        if expected == State::Unset {
+            assert!(selected.hunk_header()?.is_none(), "-diff disables text headers");
+        } else {
+            assert_eq!(
+                selected.hunk_header()?.ok_or("default matcher")?.find(b"identifier")?,
+                Some(b"identifier".as_slice()),
+                "unnamed and unknown drivers use the default identifier matcher"
+            );
+        }
+    }
+    assert!(
+        attributes
+            .diff_driver("file.driverbinary", None)?
+            .hunk_header()?
+            .is_none()
+    );
+    assert!(attributes.diff_driver("file.converted", None)?.hunk_header()?.is_some());
+    assert!(
+        attributes.diff_driver("file.invalid", None)?.hunk_header().is_err(),
+        "attribute lookup defers invalid-pattern errors until matching is requested"
+    );
+    Ok(())
+}
+
+#[test]
+fn attribute_lookup_can_use_an_alternate_worktree_root() -> TestResult {
+    use gix::attrs::State;
+    use gix::worktree::stack::state::attributes::Source;
+    let repo = named_repo("make_hunk_header_drivers.sh")?;
+    let index = repo.index()?;
+    let root = repo.workdir().ok_or("fixture has a worktree")?.join("alternate");
+    let mut attributes = repo.attributes_only_with_root(&index, Source::WorktreeThenIdMapping, &root)?;
+    assert_eq!(attributes.base(), root);
+    for path in ["main.rs", "nested/main.rs", "override.rs"] {
+        assert_eq!(
+            attributes.diff_driver(path, None)?.attribute,
+            State::Value("special".into()),
+            "alternate root, index fallback, and repository attributes remain usable: {path}"
+        );
+    }
+    Ok(())
+}
