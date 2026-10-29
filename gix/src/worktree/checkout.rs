@@ -8,6 +8,10 @@ pub struct Options {
     /// Restore changed or missing baseline-tracked files, including paths unchanged in the target.
     /// Untracked obstructions remain protected, with ignored files controlled by [`Self::overwrite_ignored`].
     pub overwrite_tracked: bool,
+    /// Make the target authoritative at changed paths even when staged content differs from both
+    /// baseline and target. By default such changes are refused, and entries already staged at the
+    /// target retain their unstaged content. Unrelated staging and unmerged entries remain protected.
+    pub overwrite_staged: bool,
     /// Allow ignored files to be removed when they obstruct target entries, as with `git checkout`.
     /// Unrelated ignored files, precious files, and nested repositories remain protected.
     pub overwrite_ignored: bool,
