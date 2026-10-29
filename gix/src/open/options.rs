@@ -186,6 +186,17 @@ impl Options {
         self
     }
 
+    /// Reuse these options to open a subrepository at a known path.
+    ///
+    /// Permissions, explicit configuration overrides, and configuration-source paths are retained.
+    /// Repository-local environment overrides, such as `GIT_WORK_TREE`, `GIT_INDEX_FILE`, and
+    /// `GIT_NAMESPACE`, are ignored, and trust is determined from the new repository's ownership.
+    pub fn for_subrepository(mut self) -> Self {
+        self = self.without_repository_environment_overrides();
+        self.git_dir_trust = None;
+        self
+    }
+
     /// Open a repository at `path` with the options set so far.
     pub fn open(self, path: impl Into<PathBuf>) -> Result<ThreadSafeRepository> {
         ThreadSafeRepository::open_opts(path, self)

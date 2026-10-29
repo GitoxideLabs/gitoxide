@@ -14,6 +14,62 @@ fn open_permissions_is_isolated() {
 
 #[test]
 #[serial_test::serial]
+fn inherited_subrepository_options_keep_permissions_and_recompute_paths_and_trust() -> TestResult {
+    let environment = gix_testtools::isolate_git_environment()?;
+    let parent = named_subrepo_opts(
+        "make_submodules.sh",
+        "with-submodules",
+        crate::restricted_and_git().with(gix_sec::Trust::Reduced),
+    )?;
+    let expected = parent
+        .submodules()?
+        .expect("configured submodules")
+        .next()
+        .expect("one submodule")
+        .open()?
+        .expect("initialized submodule");
+    let _environment = environment
+        .set(
+            "GIT_WORK_TREE",
+            parent.workdir().expect("worktree").display().to_string(),
+        )
+        .set("GIT_INDEX_FILE", parent.index_path().display().to_string())
+        .set("GIT_NAMESPACE", "parent-only");
+    let actual = gix::open_opts(
+        expected.workdir().expect("submodule worktree"),
+        parent.open_options().clone().for_subrepository(),
+    )?;
+    assert_eq!(
+        actual.workdir(),
+        expected.workdir(),
+        "the parent worktree is not inherited"
+    );
+    assert_eq!(
+        actual.index_path().canonicalize()?,
+        expected.index_path().canonicalize()?,
+        "the parent index is not inherited"
+    );
+    assert!(actual.namespace().is_none(), "the parent namespace is not inherited");
+    assert_eq!(
+        actual.git_dir_trust(),
+        gix_sec::Trust::Full,
+        "trust is derived from the subrepository instead of copied from its parent"
+    );
+    assert_eq!(
+        actual.open_options().permissions,
+        parent.open_options().permissions,
+        "the caller's permissions survive"
+    );
+    assert_eq!(
+        actual.config_snapshot().string("user.name"),
+        Some("gitoxide".into()),
+        "explicit configuration overrides survive"
+    );
+    Ok(())
+}
+
+#[test]
+#[serial_test::serial]
 fn discover_with_git_dir_environment_override_uses_it_and_sets_trust() -> TestResult {
     let _environment = gix_testtools::isolate_git_environment()?;
     let fallback = gix_testtools::tempfile::TempDir::new()?;

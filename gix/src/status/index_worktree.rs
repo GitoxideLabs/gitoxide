@@ -286,8 +286,7 @@ mod submodule_status {
                     if !git_dir.exists() {
                         return Ok(None);
                     }
-                    let mut options = repo.options.clone().without_repository_environment_overrides();
-                    options.git_dir_trust = None;
+                    let options = repo.options.clone().for_subrepository();
                     let mut sm_repo = crate::open_opts(&git_dir, options)?;
                     if sm_repo.workdir().is_none() {
                         sm_repo.set_workdir(Some(work_dir))?;
