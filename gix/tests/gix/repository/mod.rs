@@ -11,13 +11,13 @@ mod attributes;
 #[cfg(feature = "blame")]
 mod blame;
 #[cfg(feature = "blame")]
-mod blame_worktree;
-#[cfg(feature = "blame")]
 mod blame_paths;
 #[cfg(feature = "blame")]
 mod blame_sparse;
 #[cfg(feature = "blame")]
 mod blame_textconv;
+#[cfg(feature = "blame")]
+mod blame_worktree;
 mod branch;
 #[cfg(feature = "pack-generate")]
 mod bundle;
