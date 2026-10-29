@@ -19,6 +19,7 @@ impl Remote<'_> {
     /// shallow boundaries and honor `receive.shallowUpdate` when incoming history needs additional boundaries.
     /// `receive.denyCurrentBranch=updateInstead` delegates deployment to a `push-to-checkout` hook;
     /// its built-in worktree update is currently unsupported when no executable hook is present.
+    /// Incoming objects honor `receive.fsckObjects` and `receive.fsck` severity and skip-list policy.
     /// Namespaces and `receive.hideRefs` rules are applied to advertisements, transactions, and hooks.
     /// Advanced receive policies that cannot be enforced are rejected before modifying references.
     pub fn push(
