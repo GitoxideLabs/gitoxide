@@ -62,8 +62,9 @@ pub(crate) fn invoke(
                 bail!(validation("Unsupported credential store option"));
             }
         }
+        let current_dir = helper.current_dir.as_deref().unwrap_or(Path::new(""));
         let files = match file {
-            Some(file) => vec![file],
+            Some(file) => vec![current_dir.join(file)],
             None => {
                 let env_var = |name: &str| {
                     environment
@@ -75,12 +76,12 @@ pub(crate) fn invoke(
                 };
                 let mut files = Vec::new();
                 if let Some(home) = env_var("HOME") {
-                    files.push(PathBuf::from(home).join(".git-credentials"));
+                    files.push(current_dir.join(home).join(".git-credentials"));
                 }
                 if let Some(xdg) = gix_path::env::xdg_config("credentials", &mut |name| {
                     env_var(name).filter(|value| name == "HOME" || !value.is_empty())
                 }) {
-                    files.push(xdg);
+                    files.push(current_dir.join(xdg));
                 }
                 if files.is_empty() {
                     bail!(validation("Credential store needs a home directory or --file"));

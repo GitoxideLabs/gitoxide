@@ -46,7 +46,8 @@ https://:empty@example.org
 no-final-newline";
     std::fs::write(&actual, initial)?;
     std::fs::write(&expected, initial)?;
-    let mut helper = program(&actual)?;
+    let mut helper = program(Path::new(actual.file_name().expect("file has a name")))?;
+    helper.current_dir = Some(dir.path().to_owned());
     let context = Context {
         protocol: Some("https".into()),
         host: Some("example.com".into()),
@@ -453,12 +454,14 @@ fn operation_environment_selects_native_store_files() -> TestResult {
     let process_xdg = std::env::var_os("XDG_CONFIG_HOME");
     let environment = [
         ("HOME".into(), tmp.path().join("unused").into_os_string()),
-        ("HOME".into(), home.clone().into_os_string()),
-        ("XDG_CONFIG_HOME".into(), xdg.into_os_string()),
+        ("HOME".into(), "home".into()),
+        ("XDG_CONFIG_HOME".into(), "xdg".into()),
         ("PATH".into(), tmp.path().join("no-programs").into_os_string()),
     ];
+    let mut program = Program::from_custom_definition("store")?;
+    program.current_dir = Some(tmp.path().to_owned());
     let mut cascade = helper::Cascade {
-        programs: vec![Program::from_custom_definition("store")?],
+        programs: vec![program],
         ..Default::default()
     };
     let prompt = gix_prompt::Options {

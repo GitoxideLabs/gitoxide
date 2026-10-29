@@ -28,6 +28,7 @@ mod invoke {
                         ..Default::default()
                     }),
                     gix_prompt::Options {
+                        current_dir: None,
                         mode: gix_prompt::Mode::Disable,
                         askpass: None,
                     },
@@ -102,6 +103,7 @@ mod invoke {
                     ..Default::default()
                 }),
                 gix_prompt::Options {
+                    current_dir: None,
                     mode: gix_prompt::Mode::Disable,
                     askpass: None,
                 },
@@ -137,6 +139,7 @@ mod invoke {
                     ..Default::default()
                 }),
                 gix_prompt::Options {
+                    current_dir: None,
                     mode: gix_prompt::Mode::Disable,
                     askpass: None,
                 },
@@ -174,6 +177,7 @@ mod invoke {
         .invoke(
             action_get(),
             gix_prompt::Options {
+                current_dir: None,
                 mode: gix_prompt::Mode::Disable,
                 askpass: None,
             },
@@ -331,6 +335,7 @@ mod invoke {
             .invoke(
                 Action::get_for_url("https://example.com"),
                 gix_prompt::Options {
+                    current_dir: None,
                     mode: gix_prompt::Mode::Hidden,
                     askpass: Some(askpass),
                 },
@@ -370,6 +375,7 @@ mod invoke {
             .invoke(
                 Action::get_for_url("ssh://git@host/repo"),
                 gix_prompt::Options {
+                    current_dir: None,
                     mode: gix_prompt::Mode::Disable,
                     askpass: None,
                 },
@@ -398,6 +404,7 @@ mod invoke {
         Cascade::default().use_http_path(true).extend(fixtures(names)).invoke(
             action,
             gix_prompt::Options {
+                current_dir: None,
                 mode: gix_prompt::Mode::Disable,
                 askpass: None,
             },
@@ -421,6 +428,7 @@ fn operation_environment_reaches_helpers_without_changing_the_process() -> gix_t
         )?]);
     let action = gix_credentials::helper::Action::get_for_url("https://example.com");
     let prompt = gix_prompt::Options {
+        current_dir: None,
         mode: gix_prompt::Mode::Disable,
         ..Default::default()
     };
@@ -462,6 +470,7 @@ printf '%s\\n' \"$GIX_TEST_ASKPASS_VALUE\"
         .invoke_with_environment(
             gix_credentials::helper::Action::get_for_url("https://user@example.com"),
             gix_prompt::Options {
+                current_dir: None,
                 askpass: Some(askpass.clone()),
                 mode: gix_prompt::Mode::Disable,
             },
@@ -474,6 +483,7 @@ printf '%s\\n' \"$GIX_TEST_ASKPASS_VALUE\"
             .invoke_with_environment(
                 gix_credentials::helper::Action::get_for_url("https://user@example.com"),
                 gix_prompt::Options {
+                    current_dir: None,
                     askpass: Some(askpass),
                     mode: gix_prompt::Mode::Disable
                 },
@@ -573,6 +583,7 @@ mod invoke_with_prompt {
             .invoke_with_prompt(
                 Action::get_for_url("https://example.com"),
                 Options {
+                    current_dir: None,
                     mode: Mode::Disable,
                     askpass: None,
                 },
@@ -685,6 +696,7 @@ fn operation_environment_combines_with_custom_prompt() -> gix_testtools::TestRes
         .invoke_with_environment_and_prompt(
             Action::get_for_url("https://example.com"),
             gix_prompt::Options {
+                current_dir: None,
                 mode: gix_prompt::Mode::Disable,
                 askpass: Some("unused-askpass".into()),
             },
