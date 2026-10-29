@@ -19,6 +19,24 @@ fn all_orderings() -> [Ordering; 2] {
     ]
 }
 
+#[test]
+fn unallocatable_initial_slot_count_is_an_error() -> gix_error::TestResult {
+    let result = gix_odb::Store::at_opts(
+        fixture_path("objects"),
+        gix_hash::Kind::Sha1,
+        &mut std::iter::empty(),
+        store::init::Options {
+            slots: store::init::Slots::AsNeededByDiskState {
+                multiplier: 1.0,
+                minimum: usize::MAX,
+            },
+            ..Default::default()
+        },
+    );
+    assert!(result.is_err(), "an impossible slot allocation returns an I/O error");
+    Ok(())
+}
+
 #[derive(Debug, Copy, Clone)]
 struct PackMetrics {
     objects: usize,
