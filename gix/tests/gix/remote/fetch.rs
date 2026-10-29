@@ -1068,3 +1068,132 @@ mod blocking_and_async_io {
         Ok(())
     }
 }
+
+#[cfg(feature = "blocking-network-client")]
+mod prune {
+    use gix::remote::{Direction, fetch};
+    use gix_testtools::TestResult;
+
+    fn fixture() -> gix_testtools::Result<(gix_testtools::tempfile::TempDir, gix::Repository)> {
+        let fixture = gix_testtools::scripted_fixture_writable_with_args(
+            "make_fetch_prune_repo.sh",
+            std::iter::empty::<String>(),
+            gix_testtools::Creation::Execute,
+        )?;
+        let repo = gix::open_opts(fixture.path().join("client"), crate::restricted())?;
+        Ok((fixture, repo))
+    }
+
+    fn ref_map(repo: &gix::Repository) -> gix::Result<fetch::RefMap> {
+        let remote = repo.find_remote("origin")?.with_fetch_tags(fetch::Tags::All);
+        let (map, _) = remote
+            .connect(Direction::Fetch)?
+            .ref_map(gix::progress::Discard, Default::default())?;
+        Ok(map)
+    }
+
+    #[test]
+    fn prune_fetch_refs_matches_git_and_honors_dry_run() -> TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        for use_git in [true, false] {
+            let (_fixture, repo) = fixture()?;
+            let ref_map = ref_map(&repo)?;
+            if use_git {
+                gix_testtools::git(
+                    repo.workdir().expect("non-bare fixture"),
+                    "remote prune --dry-run origin",
+                )?;
+            } else {
+                let edits = repo.prune_fetch_refs(&ref_map, fetch::prune::Options { dry_run: true })?;
+                assert_eq!(edits.len(), 1, "only the stale tracking branch is eligible");
+                assert_eq!(edits[0].name.as_bstr(), "refs/remotes/origin/stale");
+            }
+            assert!(
+                repo.try_find_reference("refs/remotes/origin/stale")?.is_some(),
+                "dry-run preserves the stale branch"
+            );
+            if use_git {
+                gix_testtools::git(repo.workdir().expect("non-bare fixture"), "remote prune origin")?;
+            } else {
+                let edits = repo.prune_fetch_refs(&ref_map, Default::default())?;
+                assert_eq!(edits.len(), 1);
+                assert!(
+                    repo.prune_fetch_refs(&ref_map, Default::default())?.is_empty(),
+                    "pruning is repeatable"
+                );
+            }
+            assert!(
+                repo.try_find_reference("refs/remotes/origin/stale")?.is_none(),
+                "stale tracking branches are removed"
+            );
+            for name in [
+                "refs/remotes/origin/keep",
+                "refs/remotes/origin/shared",
+                "refs/remotes/origin/excluded",
+                "refs/remotes/origin/symbolic",
+                "refs/tags/stale-tag",
+            ] {
+                assert!(repo.try_find_reference(name)?.is_some(), "{name} is retained");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn prune_fetch_refs_can_prune_explicitly_mapped_tags() -> TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        for use_git in [true, false] {
+            let (_fixture, repo) = fixture()?;
+            gix_testtools::git(
+                repo.workdir().expect("non-bare fixture"),
+                "config --add remote.origin.fetch +refs/tags/*:refs/tags/*",
+            )?;
+            let repo = gix::open_opts(repo.workdir().expect("non-bare fixture"), crate::restricted())?;
+            if use_git {
+                gix_testtools::git(repo.workdir().expect("non-bare fixture"), "remote prune origin")?;
+            } else {
+                let edits = repo.prune_fetch_refs(&ref_map(&repo)?, Default::default())?;
+                assert_eq!(edits.len(), 2, "explicit tag mappings participate in pruning");
+            }
+            assert!(
+                repo.try_find_reference("refs/tags/stale-tag")?.is_none(),
+                "the explicitly mapped stale tag is removed"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn prune_fetch_refs_preserves_checked_out_branches_and_rolls_back_lock_failures() -> TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let (_fixture, repo) = fixture()?;
+        let ref_map = ref_map(&repo)?;
+        let lock = repo.git_dir().join("refs/remotes/origin/stale.lock");
+        std::fs::write(&lock, b"another writer")?;
+        repo.prune_fetch_refs(&ref_map, Default::default())
+            .expect_err("an existing lock blocks pruning");
+        assert!(
+            repo.try_find_reference("refs/remotes/origin/stale")?.is_some(),
+            "failed pruning preserves the stale reference"
+        );
+        std::fs::remove_file(lock)?;
+        let mut remote = repo.find_remote("origin")?;
+        remote.replace_refspecs(["refs/heads/missing:refs/heads/main"], Direction::Fetch)?;
+        let (map, _) = remote
+            .connect(Direction::Fetch)?
+            .ref_map(gix::progress::Discard, Default::default())?;
+        repo.prune_fetch_refs(&map, Default::default())
+            .expect_err("a checked-out branch cannot be pruned");
+        assert!(
+            repo.find_reference("refs/heads/main").is_ok(),
+            "the checked-out branch is retained"
+        );
+        Ok(())
+    }
+}

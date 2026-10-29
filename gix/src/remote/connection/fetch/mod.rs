@@ -179,6 +179,9 @@ mod receive_pack;
 #[path = "update_refs/mod.rs"]
 pub mod refs;
 
+/// Prune stale references using an advertised fetch mapping.
+pub mod prune;
+
 /// A structure to hold the result of the handshake with the remote and configure the upcoming fetch operation.
 pub struct Prepare<'remote, 'repo, T>
 where
