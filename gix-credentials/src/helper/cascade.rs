@@ -185,6 +185,7 @@ impl Cascade {
 
         if (prompt.mode != gix_prompt::Mode::Disable || prompt.askpass.is_some())
             && let Some(ctx) = action.context_mut()
+            && !ctx.quit.unwrap_or(false)
         {
             ctx.url = url;
             if ctx.username.is_none() {

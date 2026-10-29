@@ -290,6 +290,60 @@ mod invoke {
     }
 
     #[test]
+    fn helpers_can_quit_before_prompting_for_incomplete_credentials() -> TestResult {
+        use std::{io::Write, process::Stdio};
+
+        let definition = "!f() { cat >/dev/null; echo quit=true; }; f";
+        let askpass = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/askpass.sh");
+        let temporary = gix_testtools::tempfile::tempdir()?;
+        let mut git = gix_testtools::git_command(temporary.path())
+            .args([
+                "-c",
+                "credential.helper=",
+                "-c",
+                &format!("credential.helper={definition}"),
+                "credential",
+                "fill",
+            ])
+            .env("GIT_ASKPASS", &askpass)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        git.stdin
+            .take()
+            .expect("piped input")
+            .write_all(b"url=https://example.com\n\n")?;
+        let output = git.wait_with_output()?;
+        assert!(!output.status.success(), "Git honors a helper's request to quit");
+        assert!(
+            output.stdout.is_empty(),
+            "Git returns no prompted identity after quitting"
+        );
+        assert!(
+            output.stderr.contains_str("told us to quit"),
+            "the reference failed due to the helper's quit request"
+        );
+
+        let err = Cascade::default()
+            .extend([Program::from_custom_definition(definition)?])
+            .invoke(
+                Action::get_for_url("https://example.com"),
+                gix_prompt::Options {
+                    mode: gix_prompt::Mode::Hidden,
+                    askpass: Some(askpass),
+                },
+            )
+            .expect_err("a helper can stop authentication before the prompt supplies credentials");
+        assert!(
+            err.is_cancelled(),
+            "a helper's quit request remains a cancellation: {err}"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn expired_credentials_are_not_returned() -> TestResult {
         let actual = invoke_cascade(
             ["expired", "oauth-token", "custom-helper"],
