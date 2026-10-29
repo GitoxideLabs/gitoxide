@@ -231,6 +231,7 @@ impl Cascade {
                             dst_ctx.ephemeral = None;
                         }
                         if dst_ctx.has_complete_credentials() {
+                            dst_ctx.www_authenticate.clear();
                             break;
                         }
                         if quit.unwrap_or_default() {
@@ -274,12 +275,6 @@ impl Cascade {
             }
             ctx.write_to(std::io::sink())
                 .map_err(|_| validation("Prompt response cannot be represented by the credential protocol").raise())?;
-        }
-
-        if let Some(ctx) = action.context_mut()
-            && ctx.has_complete_credentials()
-        {
-            ctx.www_authenticate.clear();
         }
 
         protocol::helper_outcome_to_result(

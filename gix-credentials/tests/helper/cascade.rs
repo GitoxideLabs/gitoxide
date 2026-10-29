@@ -804,7 +804,11 @@ mod invoke_with_prompt {
         let mut prompts = Vec::new();
         let outcome = Cascade::default()
             .invoke_with_prompt(
-                Action::get_for_url("https://example.com/repo"),
+                Action::Get(Context {
+                    url: Some("https://example.com/repo".into()),
+                    www_authenticate: vec!["Basic realm=example".into()],
+                    ..Default::default()
+                }),
                 Options::default(),
                 |message, options| {
                     prompts.push((message.to_owned(), options.mode));
@@ -820,8 +824,8 @@ mod invoke_with_prompt {
         assert_eq!(
             prompts,
             [
-                ("Username for https://example.com: ".into(), Mode::Visible),
-                ("Password for https://user@example.com: ".into(), Mode::Hidden),
+                ("Username for 'https://example.com': ".into(), Mode::Visible),
+                ("Password for 'https://user@example.com': ".into(), Mode::Hidden),
             ],
             "prompts use the normalized context, including the username just obtained"
         );
@@ -840,6 +844,11 @@ mod invoke_with_prompt {
             Some("password".into()),
             "follow-up actions retain the password"
         );
+        assert_eq!(
+            saved.www_authenticate,
+            vec![bstr::BString::from("Basic realm=example")],
+            "prompted credentials retain authentication challenges like Git's credential response"
+        );
         Ok(())
     }
 
@@ -854,7 +863,7 @@ mod invoke_with_prompt {
                 Options::default(),
                 |message, options| {
                     assert_eq!(
-                        message, "Password for https://helper@example.com: ",
+                        message, "Password for 'https://helper@example.com': ",
                         "only the missing password is requested"
                     );
                     assert_eq!(options.mode, Mode::Hidden, "password input is secret");
@@ -965,7 +974,7 @@ fn operation_environment_combines_with_custom_prompt() -> gix_testtools::TestRes
             &[("GIX_TEST_CREDENTIAL_USER".into(), "operation-user".into())],
             |message, options| {
                 assert_eq!(
-                    message, "Password for https://operation-user@example.com: ",
+                    message, "Password for 'https://operation-user@example.com': ",
                     "the helper uses operation environment before prompting"
                 );
                 assert_eq!(
