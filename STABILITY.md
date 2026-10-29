@@ -105,6 +105,9 @@ annotated items available within the crate while exposing them publicly only wit
 Use a bare `#[gix_macros::unstable]` gate for self-explanatory exclusions; add a nonempty `reason = "..."`
 only when the rationale is not obvious. The reason, when supplied, is included in the enabled API's documentation.
 
+Stable release checks cover the supported feature profiles declared in `package.metadata.api-check.profiles`, excluding
+features listed in `package.metadata.smart-release.unstable-features`.
+
 Breaking changes are collected and may be released no more often than every 4 weeks by incrementing the major version number.
 
 For example, `gix-odb` and `gix-ref` both have breaking changes, where `gix-odb`'s change is on August 1st and `gix-ref`'s dependent change

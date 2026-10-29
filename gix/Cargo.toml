@@ -27,6 +27,9 @@ required-features = ["notes"]
 
 [features]
 
+## Expose APIs whose plumbing types or API design are not stable yet. These APIs may change incompatibly.
+unstable = []
+
 default = ["max-performance", "comfort", "basic", "extras", "auto-chain-error", "sha1"]
 
 #! There are various categories of features which help to optimize performance and build times. `gix` comes with 'batteries included' and everything is

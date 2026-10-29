@@ -151,6 +151,22 @@ pub enum Subcommands {
         #[clap(long)]
         asset_dir: Option<BString>,
     },
+    /// Check release API compatibility and public dependency identities.
+    ///
+    /// Without a subcommand, read a JSON release request from stdin containing `package`,
+    /// `manifest_path`, `baseline_revision`, `unstable_features`, and `dependencies`.
+    /// Check the stable profiles in `package.metadata.api-check.profiles` using
+    /// `cargo-semver-checks` and additional dependency identity and type checks.
+    ///
+    /// Exit with 0 for compatibility, 10 for incompatibility, or 2 if the check cannot complete.
+    #[clap(args_conflicts_with_subcommands = true)]
+    CheckApi {
+        /// Use an existing baseline checkout instead of archiving the requested revision.
+        #[clap(long)]
+        baseline_root: Option<PathBuf>,
+        #[clap(subcommand)]
+        command: Option<CheckApiCommand>,
+    },
     /// Check for executable bits that disagree with shebangs.
     ///
     /// This checks committed and staged files, but not anything unstaged, to find shell scripts
@@ -178,6 +194,32 @@ pub enum Subcommands {
     /// representation. Names and values without such content are shown literally and not quoted.
     #[clap(visible_alias = "e")]
     Env {},
+}
+
+#[derive(Debug, clap::Subcommand)]
+pub enum CheckApiCommand {
+    /// Compare a workspace crate with its latest supported release, or audit its first boundary.
+    Compare {
+        /// The workspace crate to check, including uncommitted changes.
+        #[clap(value_name = "CRATE")]
+        krate: String,
+        /// Compare with this Git revision, including an ungated predecessor.
+        #[clap(long)]
+        baseline: Option<String>,
+    },
+    /// Check supported API profiles against the manifest's plumbing type exceptions.
+    Boundary {
+        /// The consuming crate's Cargo manifest.
+        manifest: PathBuf,
+    },
+    /// Print public dependencies of a rustdoc JSON document without running release checks.
+    Audit {
+        /// The rustdoc JSON document to inspect.
+        json: PathBuf,
+        /// Optional comma-separated allowlist of public dependency crate names.
+        #[clap(value_name = "CRATE,...")]
+        allowed: Option<String>,
+    },
 }
 
 #[derive(Clone)]
