@@ -3,9 +3,8 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs, io,
-    io::{BufRead, Seek},
+    io::{Seek, Write},
     path::{Path, PathBuf},
-    process::Stdio,
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, SystemTime},
 };
@@ -409,10 +408,7 @@ fn cleanup(
     let loose = gix_odb::loose::Store::at(objects_directory, repo.object_hash());
     let pruned = loose.prune(
         |object_id| !inventory.loose.contains(object_id),
-        gix_odb::loose::prune::Options {
-            expire,
-            dry_run: false,
-        },
+        gix_odb::loose::prune::Options { expire, dry_run: false },
         should_interrupt,
     )?;
     outcome.removed_loose_objects = pruned.pruned_objects;
@@ -578,40 +574,62 @@ fn recent_hook_objects(repo: &Repository, interrupt: &AtomicBool) -> Result<BTre
         let mut context = repo.command_context()?;
         context.no_replace_objects = Some(true);
         context.ref_namespace = None;
+        let emit_stderr = context.stderr.unwrap_or(true);
         let mut command: std::process::Command = gix_command::prepare(program)
             .with_shell()
             .with_context(context)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
             .try_into()?;
         command.current_dir(repo.workdir().unwrap_or_else(|| repo.git_dir()));
-        let mut child = command
-            .spawn()
-            .or_raise(|| message("Could not start gc.recentObjectsHook"))?;
-        let result: Result<()> = (|| {
-            let stdout = child.stdout.take().expect("stdout was piped");
-            for line in io::BufReader::new(stdout).split(b'\n') {
-                check_interrupt(interrupt)?;
-                let mut line = line.or_raise(|| message("Could not read gc.recentObjectsHook output"))?;
-                if line.last() == Some(&b'\r') {
-                    line.pop();
-                }
-                let object_id =
-                    ObjectId::from_hex(&line).or_raise(|| message("Invalid object ID from gc.recentObjectsHook"))?;
-                if object_id.kind() != repo.object_hash() {
-                    bail!(message("Wrong object format from gc.recentObjectsHook").validation());
-                }
-                out.insert(object_id);
+        let mut line = Vec::new();
+        let mut parse_line = |line: &[u8]| -> io::Result<()> {
+            let line = line.strip_suffix(b"\r").unwrap_or(line);
+            let object_id = ObjectId::from_hex(line)
+                .or_raise(|| message("Invalid object ID from gc.recentObjectsHook"))
+                .map_err(io::Error::other)?;
+            if object_id.kind() != repo.object_hash() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Wrong object format from gc.recentObjectsHook",
+                ));
             }
+            out.insert(object_id);
             Ok(())
-        })();
-        if result.is_err() {
-            let _ = child.kill();
+        };
+        let status = gix_hook::run_prepared(
+            command,
+            None,
+            gix_hook::OutputMode::Separate,
+            interrupt,
+            |stream, bytes| {
+                if stream == gix_hook::Stream::Stderr {
+                    return if emit_stderr {
+                        io::stderr().write_all(bytes)
+                    } else {
+                        Ok(())
+                    };
+                }
+                for chunk in bytes.split_inclusive(|byte| *byte == b'\n') {
+                    let content = chunk.strip_suffix(b"\n").unwrap_or(chunk);
+                    line.extend_from_slice(content);
+                    if line.len() > repo.object_hash().len_in_hex() + 1 {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "Invalid object ID from gc.recentObjectsHook",
+                        ));
+                    }
+                    if content.len() != chunk.len() {
+                        parse_line(&line)?;
+                        line.clear();
+                    }
+                }
+                Ok(())
+            },
+        );
+        check_interrupt(interrupt)?;
+        let status = status?;
+        if !line.is_empty() {
+            parse_line(&line).or_error()?;
         }
-        let status = child
-            .wait()
-            .or_raise(|| message("Could not wait for gc.recentObjectsHook"))?;
-        result?;
         if !status.success() {
             bail!(message!("gc.recentObjectsHook failed with {status}"));
         }
