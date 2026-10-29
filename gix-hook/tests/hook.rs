@@ -1,6 +1,6 @@
+use bstr::{BString, ByteSlice};
 use gix_hook::{Context, Options};
 use gix_testtools::TestResult;
-use gix_testtools::bstr::ByteSlice;
 use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
@@ -20,6 +20,14 @@ fn context<'a>(workdir: &'a Path, common_dir: &'a Path) -> Context<'a> {
             ..Default::default()
         },
     }
+}
+
+fn config(input: &[u8]) -> gix_error::Result<gix_config::File> {
+    gix_config::File::from_bytes_no_includes(input, gix_config::file::Metadata::default(), Default::default())
+}
+
+fn configured(input: &[u8], event: &str) -> gix_error::Result<Option<Vec<(BString, BString)>>> {
+    gix_hook::configured_commands(&config(input)?, |_| true, event)
 }
 
 #[test]
@@ -55,42 +63,23 @@ fn discovery_validates_names_and_execute_permissions() -> TestResult {
         fixture.join("mode-hook-executable").exists(),
         "execute permission agrees with Git"
     );
-    Ok(())
-}
-
-#[test]
-fn preparation_keeps_resolved_context_and_literal_arguments() -> TestResult {
-    let fixture = fixture()?;
-    let workdir = fixture.join("repo");
-    let common_dir = workdir.join(".git");
-    let executable = std::env::current_exe()?;
-    let options = Options {
-        arguments: &[OsStr::new("one $literal argument")],
-        environment: &[(OsStr::new("GIT_COMMON_DIR"), OsStr::new("explicit-common"))],
-        ..Default::default()
-    };
-    let command = gix_hook::prepare(&executable, &context(&workdir, &common_dir), options)?;
-    assert_eq!(
-        command.get_program(),
-        executable.as_os_str(),
-        "native paths stay literal"
-    );
-    assert_eq!(
-        command.get_current_dir(),
-        Some(workdir.as_path()),
-        "the caller supplies the repository directory"
-    );
-    assert_eq!(
-        command.get_args().collect::<Vec<_>>(),
-        options.arguments,
-        "arguments are passed without shell interpretation"
-    );
-    assert!(
-        command
-            .get_envs()
-            .any(|(name, value)| name == "GIT_COMMON_DIR" && value == Some(OsStr::new("explicit-common"))),
-        "explicit environment wins over repository context"
-    );
+    assert!(gix_hook::is_known_event(b"pre-commit".as_bstr()));
+    assert!(!gix_hook::is_known_event(b"custom-\xff".as_bstr()));
+    for event in [
+        "pre-receive",
+        "update",
+        "post-receive",
+        "post-update",
+        "push-to-checkout",
+        "proc-receive",
+    ] {
+        assert!(
+            gix_hook::is_receive_event(event),
+            "receive event {event} runs in the Git directory"
+        );
+    }
+    assert!(!gix_hook::is_receive_event("pre-push"));
+    assert!(!gix_hook::is_receive_event("post-checkout"));
     Ok(())
 }
 
@@ -268,6 +257,207 @@ fn input_and_output_do_not_deadlock_and_broken_pipe_keeps_status() -> TestResult
     Ok(())
 }
 
+#[test]
+fn config_resolves_last_registration_order_resets_and_disabled_names() -> TestResult {
+    let commands = configured(
+        br#"
+        [hook "first"]
+            command = obsolete
+            event = post-checkout
+        [hook "second"]
+            command = second
+            event = post-checkout
+            parallel = true
+        [hook "cleared"]
+            event = another
+            event = post-checkout
+            event =
+        [hook "first"]
+            command = first
+            event = post-checkout
+            enabled = false
+            enabled = true
+        [hook "disabled"]
+            event = post-checkout
+            enabled = false
+    "#,
+        "post-checkout",
+    )?
+    .expect("event enabled");
+    assert_eq!(
+        commands,
+        vec![("second".into(), "second".into()), ("first".into(), "first".into())]
+    );
+    assert!(
+        configured(
+            br#"[hook "post-checkout"]
+        enabled = false
+        event =
+    "#,
+            "post-checkout"
+        )?
+        .is_none()
+    );
+    assert_eq!(
+        configured(
+            br#"[hook "custom"]
+        enabled = false
+        parallel = false
+        [hook "other"]
+        command = true
+        event = custom
+    "#,
+            "custom"
+        )?
+        .expect("custom is a hook name, not an event disable")
+        .len(),
+        1
+    );
+    let bytes = b"[hook \"raw-\xff\"]\ncommand = bytes\nevent = post-checkout\n";
+    assert_eq!(
+        configured(bytes, "post-checkout")?.expect("event enabled")[0].0,
+        b"raw-\xff".as_bstr()
+    );
+    Ok(())
+}
+
+#[test]
+fn config_validation_precedes_execution_and_filters_sections() -> TestResult {
+    for invalid in [
+        "[hook \"missing\"]\nevent=other\n",
+        "[hook \"post-checkout\"]\ncommand=true\n",
+        "[hook \"post-checkout\"]\nparallel=false\n",
+        "[hook \"implicit\"]\nevent\n",
+        "[hook \"implicit\"]\ncommand\n",
+        "[hook \"invalid\"]\nenabled=maybe\n",
+    ] {
+        let config = config(invalid.as_bytes())?;
+        assert!(gix_hook::configured_commands(&config, |_| true, "post-checkout").is_err());
+        assert_eq!(
+            gix_hook::configured_commands(&config, |_| false, "post-checkout")?,
+            Some(Vec::new()),
+            "filtered invalid config is not interpreted"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn serial_events_continue_after_exit_failure_and_replay_input() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let fixture = fixture()?;
+    let workdir = fixture.join("repo");
+    let gitdir = workdir.join(".git");
+    let context = context(&workdir, &gitdir);
+    let hooks_dir = gitdir.join("hooks");
+    let commands = configured(
+        br#"
+        [hook "first"]
+            command = "printf 'first\\n'; exit 7"
+            event = post-checkout
+            parallel = true
+        [hook "second"]
+            command = "printf 'second\\n'"
+            event = post-checkout
+            parallel = true
+        [hook]
+            jobs = 8
+    "#,
+        "post-checkout",
+    )?;
+    let outputs = gix_hook::run_event_serially(
+        "post-checkout",
+        commands.as_deref(),
+        &hooks_dir,
+        &context,
+        Options::default(),
+    )?;
+    assert_eq!(
+        outputs.iter().map(|output| output.status.code()).collect::<Vec<_>>(),
+        [Some(7), Some(0), Some(0)]
+    );
+    let output = outputs
+        .iter()
+        .flat_map(|output| output.stdout.iter())
+        .copied()
+        .collect::<Vec<_>>();
+    assert_eq!(output, b"first\nsecond\ntraditional\n");
+    if *gix_testtools::GIT_VERSION >= (2, 55, 0) {
+        let expected = gix_testtools::git_command(&workdir)
+            .args([
+                "-c",
+                "hook.first.command=printf 'first\\n'; exit 7",
+                "-c",
+                "hook.first.event=post-checkout",
+                "-c",
+                "hook.second.command=printf 'second\\n'",
+                "-c",
+                "hook.second.event=post-checkout",
+                "hook",
+                "run",
+                "-j",
+                "1",
+                "post-checkout",
+            ])
+            .output()?;
+        assert!(!expected.status.success());
+        assert_eq!(expected.stderr, output, "serial ordering agrees with Git");
+    }
+    assert!(
+        gix_hook::run_event_serially("post-checkout", None, &hooks_dir, &context, Options::default())?.is_empty(),
+        "event disable includes traditional hooks"
+    );
+    let commands = vec![
+        ("one".into(), "./.git/hooks/pre-commit".into()),
+        ("two".into(), "./.git/hooks/pre-commit".into()),
+    ];
+    let options = Options {
+        arguments: &[OsStr::new("literal $arg")],
+        environment: &[(OsStr::new("HOOK_VALUE"), OsStr::new("value"))],
+        stdin: Some(b"input\n"),
+    };
+    let outputs = gix_hook::run_event_serially("post-merge", Some(&commands), &hooks_dir, &context, options)?;
+    for output in outputs {
+        assert_eq!(output.stdout, b"value\nliteral $arg\ninput\n");
+    }
+    Ok(())
+}
+
+#[test]
+fn launch_failure_stops_later_hooks_but_shell_exit_does_not() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let fixture = fixture()?;
+    let workdir = fixture.join("repo");
+    let gitdir = workdir.join(".git");
+    let context = context(&workdir, &gitdir);
+    let hooks_dir = gitdir.join("hooks");
+    let observed = gix_testtools::tempfile::tempdir()?;
+    let marker = observed.path().join("later");
+    let mut commands = vec![
+        ("missing".into(), "./missing-hook".into()),
+        ("later".into(), "printf later > \"$HOOK_MARKER\"".into()),
+    ];
+    let options = Options {
+        environment: &[(OsStr::new("HOOK_MARKER"), marker.as_os_str())],
+        ..Default::default()
+    };
+    assert!(gix_hook::run_event_serially("post-merge", Some(&commands), &hooks_dir, &context, options).is_err());
+    assert!(!marker.exists());
+    commands[0].1 = "./missing-hook argument".into();
+    let output = gix_hook::run_event_serially("post-merge", Some(&commands), &hooks_dir, &context, options)?;
+    assert_eq!(
+        output[0].status.code(),
+        Some(127),
+        "shell itself launches, then reports the missing command"
+    );
+    assert_eq!(std::fs::read(marker)?, b"later");
+    Ok(())
+}
+
 #[cfg(windows)]
 #[test]
 fn interpreter_lookup_uses_working_directory_and_explicit_path() -> TestResult {
@@ -293,5 +483,41 @@ fn interpreter_lookup_uses_working_directory_and_explicit_path() -> TestResult {
         output.status.success(),
         "explicit PATH reaches interpreter lookup before spawning"
     );
+    Ok(())
+}
+
+#[test]
+fn configured_commands_reject_invalid_event_names() -> TestResult {
+    let config = config(b"")?;
+    for event in ["", "..", "../post-checkout", "invalid:event", "post\0checkout"] {
+        assert!(
+            gix_hook::configured_commands(&config, |_| true, event)
+                .expect_err("event names cannot escape the hook directory")
+                .is_validation()
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn relative_hook_directories_start_at_the_execution_context() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let fixture = fixture()?;
+    let workdir = fixture.join("repo");
+    let gitdir = workdir.join(".git");
+    let context = context(&workdir, &gitdir);
+    let elsewhere = gix_testtools::tempfile::tempdir()?;
+    let _directory = gix_testtools::set_current_dir(elsewhere.path())?;
+    let outputs = gix_hook::run_event_serially(
+        "post-checkout",
+        Some(&[]),
+        Path::new(".git/hooks"),
+        &context,
+        Options::default(),
+    )?;
+    assert_eq!(outputs.len(), 1, "discovery and execution use the same directory base");
+    assert_eq!(outputs[0].stdout, b"traditional\n");
     Ok(())
 }

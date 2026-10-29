@@ -1,4 +1,5 @@
 use crate::{Context, Options};
+use bstr::BString;
 use gix_error::{ErrorExt, Result, ResultExt, ensure, message, validation};
 use std::{
     io::Write,
@@ -36,6 +37,41 @@ fn command(preparation: gix_command::Prepare, context: &Context<'_>, options: Op
     // PATH participates in Windows lookup before conversion; explicit values win over context afterward.
     command.envs(options.environment.iter().copied());
     Ok(command)
+}
+
+/// Run resolved configured commands followed by the traditional hook for `event`, serially.
+///
+/// `configured` comes from [`crate::configured_commands()`]; `None` disables the entire event.
+/// Each hook receives identical arguments, environment, and a fresh copy of stdin. Exit failures
+/// are retained in order and do not stop later hooks; preparation, launch, and communication errors
+/// stop execution. Neither parallel configuration nor a hook's nonzero exit status changes this order.
+/// Relative `hooks_directory` paths start at `context.working_dir` for both discovery and execution.
+/// The caller selects directories for the event, for example using [`crate::is_receive_event()`].
+pub fn run_event_serially(
+    event: &str,
+    configured: Option<&[(BString, BString)]>,
+    hooks_directory: &Path,
+    context: &Context<'_>,
+    options: Options<'_>,
+) -> Result<Vec<Output>> {
+    crate::validate_name(event)?;
+    let Some(configured) = configured else {
+        return Ok(Vec::new());
+    };
+    let hooks_directory = context.working_dir.join(hooks_directory);
+    let traditional = crate::find(event, &hooks_directory)?;
+    let mut outputs = Vec::with_capacity(configured.len() + usize::from(traditional.is_some()));
+    for (name, script) in configured {
+        let diagnostic = || message!("Could not run configured hook {name:?} for event {event:?}");
+        let preparation = gix_command::prepare(gix_path::from_bstr(script)?.into_owned())
+            .command_may_be_shell_script_disallow_manual_argument_splitting();
+        let command = command(preparation, context, options).or_raise(diagnostic)?;
+        outputs.push(run_prepared(command, options.stdin).or_raise(diagnostic)?);
+    }
+    if let Some(path) = traditional {
+        outputs.push(run(&path, context, options)?);
+    }
+    Ok(outputs)
 }
 
 /// Execute the traditional hook at `path`, capturing stdout, stderr and exit status.

@@ -560,3 +560,345 @@ fn interpreter_lookup_uses_the_hook_directory_and_environment() -> TestResult {
     );
     Ok(())
 }
+
+fn event_fixture() -> gix_testtools::Result<std::path::PathBuf> {
+    Ok(gix_testtools::scripted_fixture_read_only("make_configured_hook_repos.sh")?.canonicalize()?)
+}
+
+#[test]
+fn configured_events_preserve_last_registration_order_and_run_after_failures() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let fixture = event_fixture()?;
+    let overrides = [
+        "hook.first.command=printf obsolete",
+        "hook.first.event=post-checkout",
+        "hook.second.command=printf 'second\\n'; exit 7",
+        "hook.second.event=post-checkout",
+        "hook.cleared.event=post-checkout",
+        "hook.cleared.event=another-event",
+        "hook.cleared.event=",
+        "hook.first.command=printf 'first\\n'",
+        "hook.first.event=post-checkout",
+        "hook.disabled.event=post-checkout",
+        "hook.disabled.enabled=false",
+        "hook.first.enabled=false",
+        "hook.first.enabled=true",
+        "hook.first.parallel=true",
+        "hook.second.parallel=true",
+        "hook.jobs=8",
+    ];
+    let workdir = fixture.join("repo");
+    let repo = gix::open_opts(&workdir, crate::restricted().config_overrides(overrides))?;
+    let outputs = repo.run_hook_event_serially("post-checkout", Default::default())?;
+    assert_eq!(
+        outputs.iter().map(|output| output.status.code()).collect::<Vec<_>>(),
+        [Some(7), Some(0), Some(0)],
+        "a failed configured hook does not stop later configured or traditional hooks"
+    );
+    let stdout = outputs
+        .iter()
+        .flat_map(|output| &output.stdout)
+        .copied()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        stdout, b"second\nfirst\ntraditional\n",
+        "last event registration orders hooks, last commands win, and empty events clear registrations"
+    );
+    if *gix_testtools::GIT_VERSION >= (2, 55, 0) {
+        let mut git = gix_testtools::git_command(&workdir);
+        for config in overrides {
+            git.args(["-c", config]);
+        }
+        let expected = git.args(["hook", "run", "-j", "1", "post-checkout"]).output()?;
+        assert!(!expected.status.success(), "Git also reports the failed hook");
+        // Git warns about a disabled hook without a command; omit that harmless diagnostic.
+        let expected: Vec<_> = expected
+            .stderr
+            .split_inclusive(|byte| *byte == b'\n')
+            .filter(|line| !line.starts_with(b"warning:"))
+            .flatten()
+            .copied()
+            .collect();
+        assert_eq!(stdout, expected, "serial output ordering matches Git");
+    }
+    Ok(())
+}
+
+#[test]
+fn configured_events_replay_native_arguments_environment_and_input() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let fixture = event_fixture()?;
+    let script = "f () { printf '%s\\n' \"$HOOK_VALUE\" \"$@\"; cat; }; f";
+    let overrides = [
+        format!("hook.first.command={script}"),
+        "hook.first.event=post-merge".into(),
+        "hook.second.command=./configured-hook".into(),
+        "hook.second.event=post-merge".into(),
+    ];
+    let repo = gix::open_opts(
+        fixture.join("repo"),
+        crate::restricted().config_overrides(overrides.clone()),
+    )?;
+    let outputs = repo.run_hook_event_serially(
+        "post-merge",
+        gix::hook::Options {
+            arguments: &[OsStr::new("one argument"), OsStr::new("$(touch unexpected)")],
+            environment: &[(OsStr::new("HOOK_VALUE"), OsStr::new("literal $value"))],
+            stdin: Some(b"hook input\n"),
+        },
+    )?;
+    assert_eq!(outputs.len(), 2, "both configured hooks run without a traditional hook");
+    let expected = b"literal $value\none argument\n$(touch unexpected)\nhook input\n";
+    for output in outputs {
+        assert!(output.status.success(), "each hook consumes its own input");
+        assert_eq!(
+            output.stdout, expected,
+            "each hook receives the same literal arguments, environment and full stdin"
+        );
+    }
+    if *gix_testtools::GIT_VERSION >= (2, 55, 0) {
+        let mut git = gix_testtools::git_command(fixture.join("repo"));
+        for config in overrides {
+            git.arg("-c").arg(config);
+        }
+        let reference = git
+            .env("HOOK_VALUE", "literal $value")
+            .args(["hook", "run", "-j", "1", "--to-stdin"])
+            .arg(fixture.join("input"))
+            .args(["post-merge", "--", "one argument", "$(touch unexpected)"])
+            .output()?;
+        assert!(reference.status.success(), "Git also replays stdin for each hook");
+        assert_eq!(
+            reference.stderr,
+            expected.repeat(2),
+            "literal values and input match Git"
+        );
+    }
+    let repo = gix::open_opts(
+        fixture.join("repo"),
+        crate::restricted().config_overrides([
+            "hook.inline.command=HOOK_VALUE=inline ./configured-hook",
+            "hook.inline.event=post-merge",
+        ]),
+    )?;
+    let output = repo.run_hook_event_serially(
+        "post-merge",
+        gix::hook::Options {
+            environment: &[(OsStr::new("HOOK_VALUE"), OsStr::new("outer"))],
+            ..Default::default()
+        },
+    )?;
+    assert_eq!(
+        output[0].stdout, b"inline\n",
+        "inline shell assignments override the supplied environment"
+    );
+    Ok(())
+}
+
+#[test]
+fn event_disables_cover_configured_and_traditional_hooks() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let fixture = event_fixture()?;
+    for enabled in [false, true] {
+        let repo = gix::open_opts(
+            fixture.join("repo"),
+            crate::restricted().config_overrides([
+                "hook.named.command=printf 'configured\\n'".to_owned(),
+                "hook.named.event=post-checkout".into(),
+                "hook.post-checkout.event=".into(),
+                "hook.post-checkout.enabled=false".into(),
+                format!("hook.post-checkout.enabled={enabled}"),
+            ]),
+        )?;
+        assert_eq!(
+            repo.run_hook_event_serially("post-checkout", Default::default())?.len(),
+            if enabled { 2 } else { 0 },
+            "event-wide disables include the traditional hook, and can be overridden"
+        );
+    }
+    let repo = gix::open_opts(
+        fixture.join("repo"),
+        crate::restricted().config_overrides([
+            "hook.custom.enabled=false",
+            "hook.custom.parallel=false",
+            "hook.other.command=printf 'other\\n'",
+            "hook.other.event=custom",
+        ]),
+    )?;
+    assert_eq!(
+        repo.run_hook_event_serially("custom", Default::default())?.len(),
+        1,
+        "a friendly name sharing an unknown event name only disables that individual hook"
+    );
+    assert!(
+        repo.run_hook_event_serially("absent", Default::default())?.is_empty(),
+        "no enabled hooks produces an empty result"
+    );
+    Ok(())
+}
+
+#[test]
+fn event_configuration_is_validated_before_hooks_run_and_respects_trust() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let fixture = event_fixture()?;
+    for overrides in [
+        vec!["hook.missing.event=another-event"],
+        vec![
+            "hook.post-checkout.event=post-commit",
+            "hook.post-checkout.command=true",
+        ],
+        vec!["hook.post-checkout.command=printf unused"],
+        vec!["hook.post-checkout.parallel=false"],
+        vec!["hook.implicit.event"],
+        vec!["hook.implicit.command"],
+        vec!["hook.invalid.enabled=maybe"],
+    ] {
+        let repo = gix::open_opts(fixture.join("repo"), crate::restricted().config_overrides(overrides))?;
+        assert!(
+            repo.run_hook_event_serially("post-checkout", Default::default())
+                .is_err(),
+            "invalid hook configuration is rejected before executing an event"
+        );
+    }
+    let repo = gix::open_opts(
+        fixture.join("repo"),
+        crate::restricted()
+            .config_overrides(["hook.untrusted.event=post-checkout"])
+            .filter_config_section(|_| false),
+    )?;
+    assert_eq!(
+        repo.run_hook_event_serially("post-checkout", Default::default())?.len(),
+        1,
+        "excluded configuration cannot introduce commands or invalid registrations"
+    );
+    let repo = gix::open_opts(fixture.join("repo"), crate::restricted().with(gix::sec::Trust::Reduced))?;
+    assert!(
+        repo.run_hook_event_serially("post-checkout", Default::default())
+            .expect_err("events require full repository trust")
+            .is_permission_denied(),
+        "configured events cannot bypass repository trust"
+    );
+    Ok(())
+}
+
+#[test]
+fn receive_events_use_gitdir_for_execution_and_relative_hook_paths() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let fixture = event_fixture()?;
+    let repo = gix::open_opts(
+        fixture.join("receiver"),
+        crate::restricted().config_overrides([
+            "hook.configured.command=test -f config && printf 'configured-gitdir\\n'",
+            "hook.configured.event=pre-receive",
+        ]),
+    )?;
+    let outputs = repo.run_hook_event_serially("pre-receive", Default::default())?;
+    assert_eq!(outputs.len(), 2, "both kinds of hook use the receive context");
+    assert_eq!(
+        outputs[0].stdout, b"configured-gitdir\n",
+        "configured commands run in gitdir"
+    );
+    assert_eq!(
+        outputs[1].stdout, b"gitdir\n",
+        "relative hooksPath also starts in gitdir"
+    );
+    assert!(
+        std::fs::read(fixture.join("receive-output"))?
+            .windows(b"remote: gitdir".len())
+            .any(|part| part == b"remote: gitdir"),
+        "Git's non-bare receive operation found and ran the same hook"
+    );
+    Ok(())
+}
+
+#[test]
+fn configured_launch_failures_stop_later_hooks_like_git() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let fixture = event_fixture()?;
+    let observed = gix_testtools::tempfile::tempdir()?;
+    let marker = observed.path().join("later-hook-ran");
+    let overrides = [
+        "hook.missing.command=./missing-configured-hook",
+        "hook.missing.event=post-checkout",
+        "hook.later.command=printf later > \"$HOOK_MARKER\"",
+        "hook.later.event=post-checkout",
+    ];
+    let workdir = fixture.join("repo");
+    let repo = gix::open_opts(&workdir, crate::restricted().config_overrides(overrides))?;
+    let error = repo
+        .run_hook_event_serially(
+            "post-checkout",
+            gix::hook::Options {
+                environment: &[(OsStr::new("HOOK_MARKER"), marker.as_os_str())],
+                ..Default::default()
+            },
+        )
+        .expect_err("a configured executable that cannot launch is an error");
+    assert!(
+        error.to_string().contains("missing"),
+        "the error identifies the configured hook"
+    );
+    assert!(!marker.exists(), "launch failures stop later hooks");
+    if *gix_testtools::GIT_VERSION >= (2, 55, 0) {
+        let mut git = gix_testtools::git_command(&workdir);
+        for config in overrides {
+            git.args(["-c", config]);
+        }
+        let reference = git
+            .env("HOOK_MARKER", &marker)
+            .args(["hook", "run", "-j", "1", "post-checkout"])
+            .output()?;
+        assert!(
+            !reference.status.success(),
+            "Git also fails to launch the missing executable"
+        );
+        assert!(
+            !marker.exists(),
+            "Git also stops later configured hooks after launch failure"
+        );
+        assert!(
+            !reference
+                .stderr
+                .windows(b"traditional".len())
+                .any(|part| part == b"traditional"),
+            "Git also skips the traditional hook"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn absent_events_do_not_evaluate_command_only_configuration() -> TestResult {
+    let repo = gix::open_opts(
+        fixture()?.join("repo"),
+        crate::restricted()
+            .strict_config(true)
+            .config_overrides(["gitoxide.core.externalCommandStderr=invalid"]),
+    )?;
+    assert!(
+        repo.command_context().is_err(),
+        "the configured command context is invalid"
+    );
+    assert!(
+        repo.run_hook_event_serially("missing-event", Default::default())?
+            .is_empty(),
+        "an event without hooks does not construct a command context"
+    );
+    assert!(
+        repo.run_hook_event_serially("pre-commit", Default::default()).is_err(),
+        "an existing hook still requires valid command configuration"
+    );
+    Ok(())
+}
