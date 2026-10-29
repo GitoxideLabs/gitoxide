@@ -1154,6 +1154,52 @@ mod object_refresh {
         );
         Ok(())
     }
+
+    #[cfg(feature = "max-performance")]
+    #[test]
+    fn rejected_refresh_configuration_preserves_object_cache_settings() -> gix_testtools::TestResult {
+        let mut repo = repo_opts(
+            "make_basic_repo.sh",
+            gix::open::Options::isolated()
+                .strict_config(true)
+                .config_overrides(["gitoxide.objects.cacheLimit=0", "gitoxide.objects.refreshAfter=1000"]),
+        )?
+        .to_thread_local();
+        assert!(!repo.objects.has_object_cache(), "the initial object cache is disabled");
+        {
+            let mut config = repo.config_snapshot_mut();
+            config.set_raw_value("gitoxide.objects.cacheLimit", "1024")?;
+            config.set_raw_value("gitoxide.objects.refreshAfter", "invalid")?;
+            config
+                .commit()
+                .expect_err("strict configuration rejects a malformed refresh duration");
+        }
+        assert_eq!(
+            repo.config_snapshot().integer("gitoxide.objects.cacheLimit"),
+            Some(0),
+            "a rejected snapshot preserves the original configuration"
+        );
+        assert!(
+            !repo.clone().objects.has_object_cache(),
+            "cloning after a rejected snapshot also preserves the cached settings"
+        );
+        {
+            let mut config = repo.config_snapshot_mut();
+            config.set_raw_value("gitoxide.objects.cacheLimit", "1024")?;
+            config.set_raw_value("gitoxide.objects.refreshAfter", "50")?;
+            config.commit()?;
+        }
+        assert!(
+            repo.objects.has_object_cache(),
+            "retrying the same cache limit with a valid refresh duration enables the live cache"
+        );
+        assert_eq!(
+            repo.objects.refresh_mode(),
+            RefreshMode::AfterDuration(Duration::from_millis(50)),
+            "the accepted snapshot updates the live refresh policy too"
+        );
+        Ok(())
+    }
 }
 
 mod worktree {
