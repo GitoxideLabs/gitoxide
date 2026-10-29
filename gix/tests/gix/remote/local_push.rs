@@ -167,6 +167,75 @@ fn checked_out_branches_and_hidden_refs_are_protected() -> TestResult {
 }
 
 #[test]
+fn hidden_ref_config_requires_explicit_values_like_git() -> TestResult {
+    use std::io::Write as _;
+
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let source = crate::remote::repo("base");
+    let tip_id = source.head_id()?.detach();
+    for section in ["receive", "transfer"] {
+        let destination = gix_testtools::tempfile::tempdir()?;
+        gix_testtools::git(destination.path(), "init --bare")?;
+        let config_path = destination.path().join("config");
+        let original = std::fs::read_to_string(&config_path)?;
+        writeln!(
+            std::fs::OpenOptions::new().append(true).open(&config_path)?,
+            "
+[{section}]
+    hideRefs"
+        )?;
+        let git = gix_testtools::git_command(source.git_dir())
+            .arg("push")
+            .arg(destination.path())
+            .arg(format!("{tip_id}:refs/heads/git"))
+            .output()?;
+        assert!(!git.status.success(), "Git rejects implicit {section}.hideRefs");
+        let error = push(
+            &source,
+            destination.path(),
+            vec![update("refs/heads/native", Some(tip_id))?],
+            Options::default(),
+        )
+        .expect_err("native receive must reject implicit hideRefs before advertising or writing refs");
+        assert!(error.is_validation());
+        assert_eq!(read_id(destination.path(), "refs/heads/git")?, None);
+        assert_eq!(read_id(destination.path(), "refs/heads/native")?, None);
+
+        std::fs::write(
+            &config_path,
+            format!(
+                "{original}
+[{section}]
+    hideRefs =
+"
+            ),
+        )?;
+        let git = gix_testtools::git_command(source.git_dir())
+            .arg("push")
+            .arg(destination.path())
+            .arg(format!("{tip_id}:refs/heads/git"))
+            .output()?;
+        assert!(
+            git.status.success(),
+            "an explicit empty {section}.hideRefs is valid for Git"
+        );
+        let outcome = push(
+            &source,
+            destination.path(),
+            vec![update("refs/heads/native", Some(tip_id))?],
+            Options::default(),
+        )?;
+        assert!(
+            matches!(outcome.updates[0].status, Status::Updated { .. }),
+            "native receive preserves explicit empty values"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn deletion_of_absent_refs_is_checked_by_the_receiver() -> TestResult {
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
