@@ -115,6 +115,9 @@ mod impls;
 mod index;
 pub(crate) mod init;
 mod location;
+/// Repository object retention and maintenance.
+#[cfg(feature = "index")]
+pub mod maintenance;
 #[cfg(feature = "mailmap")]
 mod mailmap;
 ///
