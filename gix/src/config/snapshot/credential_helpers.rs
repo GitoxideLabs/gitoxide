@@ -13,14 +13,22 @@ impl Snapshot<'_> {
         gix_prompt::Options,
     )> {
         let repo = self.repo;
-        function::credential_helpers(
+        #[cfg_attr(not(unix), allow(unused_mut))]
+        let mut outcome = function::credential_helpers(
             url,
             &repo.config.resolved,
             repo.config.lenient_config,
             &mut repo.filter_config_section(),
             repo.config.environment,
             false,
-        )
+        )?;
+        #[cfg(unix)]
+        if let Some(command) = repo.options.credential_cache_daemon.as_deref() {
+            for program in &mut outcome.0.programs {
+                program.cache_daemon = Some(command.clone());
+            }
+        }
+        Ok(outcome)
     }
 }
 

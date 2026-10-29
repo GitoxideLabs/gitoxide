@@ -50,6 +50,8 @@ pub struct Options {
     /// Internal to pass an already obtained CWD on to where it may also be used.
     /// This avoids the CWD being queried more than once per repo.
     pub(crate) current_dir: Option<PathBuf>,
+    #[cfg(all(unix, feature = "credentials"))]
+    pub(crate) credential_cache_daemon: Option<Box<gix_credentials::program::cache::DaemonCommand>>,
 }
 
 mod options;
