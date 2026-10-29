@@ -182,6 +182,10 @@ fn native_and_git_daemons_interoperate_with_both_clients() -> TestResult {
 
 #[test]
 fn socket_permissions_stale_files_and_exit_cleanup() -> TestResult {
+    // Concurrent process creation can temporarily inherit a listener after this process closes it.
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
     use std::os::unix::fs::PermissionsExt;
     let directory = gix_testtools::tempfile::tempdir()?;
     let socket = directory.path().join("private/socket");
