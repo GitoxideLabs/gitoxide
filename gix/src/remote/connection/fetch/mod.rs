@@ -77,6 +77,8 @@ pub struct Outcome {
     pub ref_map: RefMap,
     /// The outcome of the handshake with the server.
     pub handshake: gix_protocol::Handshake,
+    /// Stale references removed before updating fetched references, or proposed deletions in dry-run mode.
+    pub pruned: Vec<gix_ref::transaction::RefEdit>,
     /// The status of the operation to indicate what happened.
     pub status: Status,
 }
@@ -149,6 +151,8 @@ where
             reflog_message: None,
             write_packed_refs: WritePackedRefs::Never,
             shallow: Default::default(),
+            prune: false,
+            missing_refs_allowed: false,
         })
     }
 }
@@ -202,6 +206,8 @@ where
     reflog_message: Option<RefLogMessage>,
     write_packed_refs: WritePackedRefs,
     shallow: remote::fetch::Shallow,
+    prune: bool,
+    missing_refs_allowed: bool,
 }
 
 /// Builder
@@ -214,6 +220,24 @@ where
     /// This works by not actually fetching the pack after negotiating it, nor will refs be updated.
     pub fn with_dry_run(mut self, enabled: bool) -> Self {
         self.inner.dry_run = if enabled { DryRun::Yes } else { DryRun::No };
+        self
+    }
+
+    /// If enabled, prune stale destinations covered by explicit refspecs before updating fetched refs.
+    ///
+    /// Pruning is disabled by default. It obeys dry-run mode and retains implicit tags, symbolic refs,
+    /// and destinations excluded by negative refspecs. See [`Repository::prune_fetch_refs()`][crate::Repository::prune_fetch_refs()].
+    pub fn with_prune(mut self, enabled: bool) -> Self {
+        self.inner.prune = enabled;
+        self
+    }
+
+    /// Permit an empty selection when exact fetch refspecs do not match the remote.
+    ///
+    /// Missing required mappings are errors by default. Enabling this allows synchronizing selected
+    /// refs in one operation, including pruning destinations whose explicitly selected sources vanished.
+    pub fn with_missing_refs_allowed(mut self, enabled: bool) -> Self {
+        self.inner.missing_refs_allowed = enabled;
         self
     }
 
