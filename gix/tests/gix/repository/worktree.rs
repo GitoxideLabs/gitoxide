@@ -1,6 +1,38 @@
 use gix_ref::bstr;
 use gix_testtools::{Result, TestResult};
 
+#[test]
+fn checked_out_branches_includes_main_and_symbolic_referents() -> TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_indirect_head_repos.sh")?;
+    for state in ["committed", "packed", "empty", "staged"] {
+        let occupied_path = fixture.join(state);
+        let mut callers = vec![occupied_path.clone()];
+        if matches!(state, "committed" | "packed") {
+            callers.push(fixture.join(format!("linked-{state}")));
+        }
+        for caller in callers {
+            let repo = gix::open_opts(caller, crate::restricted())?;
+            let branches = repo.checked_out_branches()?;
+            for name in ["main", "alias", "topic"] {
+                let name = gix::refs::FullName::try_from(format!("refs/heads/{name}"))?;
+                let paths = branches.get(&name).expect("every symbolic referent is reserved");
+                assert_eq!(paths.len(), 1, "each occupied worktree is reported once");
+                assert_eq!(
+                    paths[0].canonicalize()?,
+                    occupied_path.canonicalize()?,
+                    "main and linked callers identify the same occupied worktree, even with an unborn HEAD"
+                );
+            }
+        }
+    }
+    let repo = gix::open_opts(fixture.join("malformed"), crate::restricted())?;
+    assert!(
+        repo.checked_out_branches().is_err(),
+        "an unreadable symbolic referent cannot be ignored when protecting branches"
+    );
+    Ok(())
+}
+
 #[cfg(feature = "worktree-mutation")]
 mod lock {
     use gix::bstr::ByteSlice;
