@@ -19,6 +19,7 @@ pub(super) struct Policy {
     pub advertise_atomic: bool,
     pub advertise_push_options: bool,
     pub deny_non_fast_forwards: bool,
+    pub allow_shallow_updates: bool,
     deny_deletes: bool,
     deny_current: Action,
     deny_delete_current: Action,
@@ -50,6 +51,7 @@ impl Policy {
             advertise_atomic: config.try_boolean("receive.advertiseAtomic")?.unwrap_or(true),
             advertise_push_options: config.try_boolean("receive.advertisePushOptions")?.unwrap_or(false),
             deny_non_fast_forwards: config.try_boolean("receive.denyNonFastForwards")?.unwrap_or(false),
+            allow_shallow_updates: config.try_boolean("receive.shallowUpdate")?.unwrap_or(false),
             deny_deletes: config.try_boolean("receive.denyDeletes")?.unwrap_or(false),
             deny_current: action(repo, "receive.denyCurrentBranch")?,
             deny_delete_current: action(repo, "receive.denyDeleteCurrent")?,
@@ -73,10 +75,8 @@ impl Policy {
     }
 
     pub fn ensure_supported(&self, repo: &Repository) -> Result<()> {
-        if repo.refs.namespace.is_some() || repo.is_shallow()? {
-            bail!(
-                message("Native local receive does not yet support namespaces or shallow repositories").unsupported()
-            );
+        if repo.refs.namespace.is_some() {
+            bail!(message("Native local receive does not yet support namespaces").unsupported());
         }
         let config = repo.config_snapshot();
         if config.string("receive.procReceiveRefs").is_some()

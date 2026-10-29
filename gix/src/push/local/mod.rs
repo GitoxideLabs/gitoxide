@@ -12,6 +12,7 @@ use crate::{
 mod hooks;
 mod policy;
 mod quarantine;
+mod shallow;
 mod transaction;
 
 pub(crate) fn push(
@@ -89,21 +90,12 @@ pub(crate) fn push(
             response: None,
         });
     }
-    if !shallow.is_empty() {
-        bail!(message("Native local push does not yet support shallow sources").unsupported());
-    }
     policy.ensure_supported(destination)?;
     destination.committer_or_set_generic_fallback()?;
-    let hooks = hooks::Hooks::new(
-        destination,
-        policy.advertise_push_options.then_some(options.push_options),
-        should_interrupt,
-        &remote.command_environment,
-    )?;
     let quarantine = quarantine::Quarantine::new(destination)?;
     let tips = requested.iter().filter_map(|&index| updates[index].update.new_id);
     let mut buffer = Vec::new();
-    for entry in gix_traverse::object::BreadthFirst::new(tips, &source) {
+    for entry in gix_traverse::object::BreadthFirst::new(tips, &source).with_shallow_commits(shallow.iter().copied()) {
         push::plan::check_interrupt(should_interrupt)?;
         let entry = entry?;
         if !destination.objects.exists(&entry.id) {
@@ -115,6 +107,21 @@ pub(crate) fn push(
         }
         progress.inc();
     }
+    let shallow = shallow::Shallow::prepare(
+        destination,
+        &quarantine.objects,
+        &shallow,
+        &mut updates,
+        policy.allow_shallow_updates,
+        should_interrupt,
+    )?;
+    let hooks = hooks::Hooks::new(
+        destination,
+        policy.advertise_push_options.then_some(options.push_options),
+        should_interrupt,
+        &remote.command_environment,
+    )?
+    .with_shallow_file(shallow.alternate());
     for &index in &requested {
         if policy.hidden(updates[index].update.destination.as_bstr()) {
             let reason = if updates[index].update.new_id.is_some() {
@@ -158,7 +165,13 @@ pub(crate) fn push(
         } else if policy.deny_non_fast_forwards
             && update.update.destination.as_bstr().starts_with_str("refs/heads/")
             && let (Some(old_id), Some(new_id)) = (update.old_id, update.update.new_id)
-            && !push::plan::is_ancestor(destination, old_id, new_id, &[], should_interrupt)?
+            && !push::plan::is_ancestor(
+                destination,
+                old_id,
+                new_id,
+                &shallow.boundaries(index),
+                should_interrupt,
+            )?
         {
             update.status = Status::Rejected(Rejection::Server("non-fast-forward".into()));
         } else if !hooks.run(
@@ -202,19 +215,25 @@ pub(crate) fn push(
             .iter()
             .map(|&index| edit(&updates[index], destination.object_hash()))
             .collect();
-        let result = transaction::commit(destination, edits, &hooks, &mut remote_progress);
+        let result = shallow
+            .commit(destination, &selected, &updates, should_interrupt)
+            .and_then(|()| transaction::commit(destination, edits, &hooks, &mut remote_progress));
         for index in selected {
             finish(&mut updates[index], &result, &mut remote_progress)?;
         }
     } else {
         for index in selected {
             push::plan::check_interrupt(should_interrupt)?;
-            let result = transaction::commit(
-                destination,
-                vec![edit(&updates[index], destination.object_hash())],
-                &hooks,
-                &mut remote_progress,
-            );
+            let result = shallow
+                .commit(destination, &[index], &updates, should_interrupt)
+                .and_then(|()| {
+                    transaction::commit(
+                        destination,
+                        vec![edit(&updates[index], destination.object_hash())],
+                        &hooks,
+                        &mut remote_progress,
+                    )
+                });
             finish(&mut updates[index], &result, &mut remote_progress)?;
         }
     }
@@ -297,7 +316,9 @@ fn advertisement(destination: &Repository, policy: &policy::Policy) -> Result<gi
         server_protocol_version: gix_transport::Protocol::V1,
         refs: Some(refs),
         capabilities: gix_transport::client::Capabilities::from_bytes(caps.as_bytes())?.0,
-        v1_shallow_updates: None,
+        v1_shallow_updates: destination
+            .shallow_commits()?
+            .map(|ids| ids.iter().copied().map(gix_shallow::Update::Shallow).collect()),
     })
 }
 
