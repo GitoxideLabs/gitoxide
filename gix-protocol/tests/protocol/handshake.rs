@@ -186,6 +186,108 @@ shallow dce0ea858eef7ff61ad345cc5cdac62203fb3c10"
     Ok(())
 }
 
+#[cfg(feature = "blocking-client")]
+#[test]
+fn rejected_credentials_keep_url_passwords_private() -> gix_testtools::TestResult {
+    use gix_credentials::{helper::Action, protocol::Outcome};
+    use gix_transport::{
+        Service,
+        client::{
+            self, AuthenticationRequired,
+            blocking_io::{RequestWriter, SetServiceResponse},
+        },
+    };
+
+    #[derive(Default)]
+    struct RejectCredentials {
+        handshakes: usize,
+    }
+
+    impl client::TransportWithoutIO for RejectCredentials {
+        fn set_identity(&mut self, _identity: client::Account) -> std::result::Result<(), client::Error> {
+            Ok(())
+        }
+
+        fn to_url(&self) -> std::borrow::Cow<'_, bstr::BStr> {
+            std::borrow::Cow::Borrowed("https://user:password-sentinel@example.com/repository".into())
+        }
+
+        fn connection_persists_across_multiple_requests(&self) -> bool {
+            false
+        }
+
+        fn configure(&mut self, _config: &dyn std::any::Any) -> Result {
+            Ok(())
+        }
+    }
+
+    impl client::blocking_io::Transport for RejectCredentials {
+        fn handshake<'a>(
+            &mut self,
+            _service: Service,
+            _extra_parameters: &'a [(&'a str, Option<&'a str>)],
+        ) -> std::result::Result<SetServiceResponse<'_>, client::Error> {
+            self.handshakes += 1;
+            Err(client::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                AuthenticationRequired::default(),
+            )))
+        }
+
+        fn request(
+            &mut self,
+            _write_mode: client::WriteMode,
+            _on_into_read: client::MessageKind,
+            _trace: bool,
+        ) -> std::result::Result<RequestWriter<'_>, client::Error> {
+            unreachable!("rejected credentials prevent any protocol request")
+        }
+    }
+
+    for service in [Service::UploadPack, Service::ReceivePack] {
+        let mut transport = RejectCredentials::default();
+        let mut actions = Vec::new();
+        let error = gix_protocol::handshake(
+            &mut transport,
+            service,
+            |action| match action {
+                Action::Get(context) => {
+                    actions.push("get");
+                    Ok(Some(Outcome {
+                        identity: client::Account {
+                            username: "user".into(),
+                            password: "password-sentinel".into(),
+                            oauth_refresh_token: None,
+                        },
+                        next: context.into(),
+                    }))
+                }
+                Action::Erase(_) => {
+                    actions.push("erase");
+                    Ok(None)
+                }
+                Action::Store(_) => unreachable!("rejected credentials must not be stored"),
+            },
+            Vec::new(),
+            &mut gix_utils::progress::Discard,
+        )
+        .expect_err("the remote rejects the retry with credentials");
+        assert_eq!(transport.handshakes, 2, "authentication is retried once");
+        assert_eq!(actions, ["get", "erase"], "rejected credentials are invalidated");
+        for diagnostic in [format!("{error}"), format!("{error:?}")] {
+            assert!(
+                !diagnostic.contains("password-sentinel"),
+                "authentication diagnostics must not expose URL passwords: {diagnostic}"
+            );
+        }
+        assert!(
+            error.is_unauthenticated(),
+            "omitting the URL preserves the authentication classification"
+        );
+    }
+    Ok(())
+}
+
 #[cfg(any(feature = "async-client", feature = "blocking-client"))]
 struct Fixture<'a>(&'a [u8]);
 

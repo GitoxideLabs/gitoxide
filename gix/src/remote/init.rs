@@ -94,7 +94,7 @@ pub(crate) fn rewrite_url(
                     remote::Direction::Fetch => "fetch",
                     remote::Direction::Push => "push",
                 };
-                gix_error::message!("The rewritten {kind} url {url:?} failed to parse")
+                gix_error::message!("The rewritten {kind} URL failed to parse")
             })
         })
         .transpose()

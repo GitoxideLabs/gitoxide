@@ -5,6 +5,26 @@ mod remote_at {
     use crate::remote;
 
     #[test]
+    fn malformed_rewritten_urls_keep_passwords_private() -> TestResult {
+        let mut repo = remote::repo("base");
+        repo.config_snapshot_mut().set_raw_value(
+            "url.https://user:password-sentinel@example.com:invalid/.insteadOf",
+            "alias:",
+        )?;
+        let error = repo
+            .remote_at("alias:repository")
+            .expect_err("the rewritten port is invalid");
+        for diagnostic in [format!("{error}"), format!("{error:?}")] {
+            assert!(
+                !diagnostic.contains("password-sentinel"),
+                "rewritten URL diagnostics must not expose passwords: {diagnostic}"
+            );
+        }
+        assert!(error.is_validation(), "the rewritten URL remains malformed input");
+        Ok(())
+    }
+
+    #[test]
     fn legacy_url_rewrite_bases_are_canonical() -> TestResult {
         let path = gix_testtools::scripted_fixture_read_only("make_legacy_config_consumers.sh")?;
         let repo = gix::open_opts(&path, gix::open::Options::isolated())?;
@@ -487,7 +507,7 @@ mod find_remote {
 
         let mut remote = repo.try_find_remote_without_url_rewrite("origin").expect("exists")?;
         insta::assert_debug_snapshot!(remote.rewrite_urls().expect_err("one malformed rewrite is reported"), "one malformed rewrite is reported", @r#"
-        The rewritten fetch url ":://gitoxide" failed to parse
+        The rewritten fetch URL failed to parse
 
         Caused by:
             0: URL can not be parsed as valid URL, input=":://gitoxide"
@@ -560,7 +580,7 @@ mod find_remote {
 
         let mut remote = repo.try_find_remote_without_url_rewrite("origin").expect("exists")?;
         insta::assert_debug_snapshot!(remote.rewrite_urls().expect_err("explicit rewriting still reports the malformed push fallback rewrite"), "explicit rewriting still reports the malformed push fallback rewrite", @r#"
-        The rewritten push url ":://repo" failed to parse
+        The rewritten push URL failed to parse
 
         Caused by:
             0: URL can not be parsed as valid URL, input=":://repo"
@@ -581,7 +601,7 @@ mod find_remote {
 
         insta::assert_debug_snapshot!(repo.find_remote("origin")
                 .expect_err("rewriting the explicit push URL produces a malformed URL"), "explicit pushUrl values use insteadOf rewriting and report failures as push URL errors", @r#"
-        The rewritten push url ":://repo" failed to parse
+        The rewritten push URL failed to parse
 
         Caused by:
             0: URL can not be parsed as valid URL, input=":://repo"
@@ -590,7 +610,7 @@ mod find_remote {
 
         let mut remote = repo.try_find_remote_without_url_rewrite("origin").expect("exists")?;
         insta::assert_debug_snapshot!(remote.rewrite_urls().expect_err("refreshing rewrites also rejects the malformed result of applying insteadOf to an explicit pushUrl"), "refreshing rewrites also rejects the malformed result of applying insteadOf to an explicit pushUrl", @r#"
-        The rewritten push url ":://repo" failed to parse
+        The rewritten push URL failed to parse
 
         Caused by:
             0: URL can not be parsed as valid URL, input=":://repo"

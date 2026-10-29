@@ -53,7 +53,7 @@ impl<T: Transport> Connection<'_, '_, '_, T> {
                 &self.remote.command_environment,
                 self.remote.working_dir.as_deref(),
             )
-            .or_raise(|| message!("Failed to configure the transport before connecting to {url:?}"))?;
+            .or_raise(|| message("Failed to configure the transport before connecting"))?;
         }
         if let Some(config) = self.transport_options.as_ref() {
             self.transport
