@@ -5,8 +5,9 @@
 //! Byte-oriented POSIX basic and extended regular expressions, derived from Redox posix-regex.
 //!
 //! Expressions operate on arbitrary bytes with ASCII character classes, independently of the
-//! process locale. Basic and extended syntax support captures, backreferences and GNU word
-//! boundaries. Parsing limits pattern size and nesting; matching returns errors on exhausted
+//! process locale. The default GNU dialect supports captures, backreferences and GNU word
+//! boundaries. An explicit Darwin dialect follows Git's libc ERE and enhanced BRE conventions.
+//! Parsing limits pattern size and nesting; matching returns errors on exhausted
 //! work or capture-state memory budgets instead of returning a partial result.
 
 #![forbid(unsafe_code)]
@@ -20,5 +21,5 @@ pub mod immut_vec;
 pub mod matcher;
 pub mod tree;
 
-pub use compile::PosixRegexBuilder;
+pub use compile::{Dialect, PosixRegexBuilder};
 pub use matcher::PosixRegex;
