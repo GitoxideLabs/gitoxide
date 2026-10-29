@@ -27,13 +27,16 @@ pub(crate) fn advertised_objects(
         .filter(|object_id| source.objects.exists(object_id))
         .map(ToOwned::to_owned);
     let mut advertised = gix_hashtable::HashSet::default();
-    for entry in gix_traverse::object::BreadthFirst::new(tips, source)
+    let mut walk = gix_traverse::object::BreadthFirst::new(tips, source)
         .with_object_validation(false)
-        .with_shallow_commits(shallow.iter().copied())
-    {
+        .with_missing_objects_ignored(true)
+        .with_shallow_commits(shallow.iter().copied());
+    for entry in walk.by_ref() {
         check_interrupt(interrupt)?;
         advertised.insert(entry?.id);
     }
+    // A partial clone may omit objects named by the receiver's advertised history.
+    advertised.extend(walk.missing_objects().copied());
     Ok(advertised)
 }
 

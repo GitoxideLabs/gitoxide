@@ -29,6 +29,7 @@ pub struct BreadthFirst<Find> {
     pending: VecDeque<(ObjectId, Option<Kind>)>,
     seen: gix_hashtable::HashMap<ObjectId, Kind>,
     shallow: gix_hashtable::HashSet<ObjectId>,
+    excluded: gix_hashtable::HashSet<ObjectId>,
     buffer: Vec<u8>,
     failed: bool,
     ignore_missing: bool,
@@ -44,6 +45,7 @@ impl<Find> BreadthFirst<Find> {
             pending: tips.into_iter().map(|id| (id, None)).collect(),
             seen: Default::default(),
             shallow: Default::default(),
+            excluded: Default::default(),
             buffer: Vec::new(),
             failed: false,
             ignore_missing: false,
@@ -74,6 +76,23 @@ impl<Find> BreadthFirst<Find> {
         self
     }
 
+    /// Do not read or follow these objects, for example graphs already held by a receiver.
+    ///
+    /// Excluded objects are not yielded or validated, and may be absent from the finder.
+    /// Their descendants are still visited if reached through another, non-excluded path.
+    pub fn with_objects_excluded(mut self, objects: impl IntoIterator<Item = ObjectId>) -> Self {
+        self.excluded = objects.into_iter().collect();
+        self
+    }
+
+    /// Return missing IDs encountered so far when missing objects are ignored.
+    ///
+    /// Each ID was named by a tip or an edge from a readable object. Its descendants
+    /// cannot be determined, so callers must treat it as an opaque graph boundary.
+    pub fn missing_objects(&self) -> impl Iterator<Item = &ObjectId> {
+        self.missing.iter()
+    }
+
     /// Do not follow parent edges of the given shallow commits.
     ///
     /// The commits themselves and their complete trees are still visited. The
@@ -87,6 +106,9 @@ impl<Find> BreadthFirst<Find> {
 impl<F: Find> BreadthFirst<F> {
     fn next_entry(&mut self) -> Result<Option<Entry>> {
         while let Some((object_id, expected_kind)) = self.pending.pop_front() {
+            if self.excluded.contains(&object_id) {
+                continue;
+            }
             if let Some(kind) = self.seen.get(&object_id) {
                 check_kind(object_id, *kind, expected_kind)?;
                 continue;

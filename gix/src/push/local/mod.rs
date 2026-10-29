@@ -123,30 +123,29 @@ pub(crate) fn push(
     let mut existing_buffer = Vec::new();
     for entry in gix_traverse::object::BreadthFirst::new(tips, &source)
         .with_object_validation(false)
+        .with_objects_excluded(advertised)
         .with_shallow_commits(shallow.iter().copied())
     {
         push::plan::check_interrupt(should_interrupt)?;
         let entry = entry?;
-        if !advertised.contains(&entry.id) {
-            let object = source.find(&entry.id, &mut buffer)?;
-            object.verify_checksum(&entry.id)?;
-            let missing = !destination.objects.exists(&entry.id);
-            if !missing {
-                let existing = destination
-                    .find(&entry.id, &mut existing_buffer)
-                    .or_raise(|| message!("Could not read receiver's existing object {}", entry.id))?;
-                if existing.kind != object.kind || existing.data != object.data {
-                    bail!(message!("Source and receiver disagree on object {}", entry.id).corrupted());
-                }
+        let object = source.find(&entry.id, &mut buffer)?;
+        object.verify_checksum(&entry.id)?;
+        let missing = !destination.objects.exists(&entry.id);
+        if !missing {
+            let existing = destination
+                .find(&entry.id, &mut existing_buffer)
+                .or_raise(|| message!("Could not read receiver's existing object {}", entry.id))?;
+            if existing.kind != object.kind || existing.data != object.data {
+                bail!(message!("Source and receiver disagree on object {}", entry.id).corrupted());
             }
-            if let Some(fsck) = fsck.as_mut() {
-                fsck.validate(entry.id, object, &mut remote_progress)?;
-            }
-            if missing {
-                quarantine
-                    .objects
-                    .write_buf_with_known_id(object.kind, object.data, entry.id)?;
-            }
+        }
+        if let Some(fsck) = fsck.as_mut() {
+            fsck.validate(entry.id, object, &mut remote_progress)?;
+        }
+        if missing {
+            quarantine
+                .objects
+                .write_buf_with_known_id(object.kind, object.data, entry.id)?;
         }
         progress.inc();
     }
