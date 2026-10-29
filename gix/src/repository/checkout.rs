@@ -45,9 +45,11 @@ impl Repository {
     /// in the staging index are rejected; unrelated conflicts remain intact.
     ///
     /// Callers must prevent concurrent worktree/index changes. Preflight failures leave the worktree and
-    /// staging index untouched. Later IO or filter failures can leave partial worktree changes, but the staging
-    /// index is updated only after complete success. Cancellation is an error. `target` may retain stat updates
-    /// from completed writes after a failure. Use the returned `index_changed` to decide whether to persist `index`.
+    /// staging index untouched. Content conflicts detected during preflight contain
+    /// [`crate::worktree::checkout::Conflict`] in their error chain. Later IO or filter failures can leave
+    /// partial worktree changes, but the staging index is updated only after complete success. Cancellation
+    /// is an error. `target` may retain stat updates from completed writes after a failure. Use the returned
+    /// `index_changed` to decide whether to persist `index`.
     pub fn checkout_index_with_baseline<P>(
         &self,
         baseline: &State,
@@ -646,8 +648,11 @@ fn clashing_path<'a>(paths: &'a BTreeMap<BString, &BStr>, path: &BStr) -> Option
         .map(|(_, path)| *path)
 }
 
-fn conflict(path: &BStr, message: &str) -> gix_error::Message {
-    validation(format!("{message}: {path:?}")).with_input(path)
+fn conflict(path: &BStr, reason: &'static str) -> crate::worktree::checkout::Conflict {
+    crate::worktree::checkout::Conflict {
+        path: path.into(),
+        reason,
+    }
 }
 
 fn interrupted(flag: &AtomicBool) -> Result {

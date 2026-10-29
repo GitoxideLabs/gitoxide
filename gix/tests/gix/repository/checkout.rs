@@ -306,6 +306,10 @@ fn refuses_dirty_untracked_and_ignored_blockers_before_any_writes() -> TestResul
             )
             .expect_err("unapproved changes prevent the whole checkout");
             assert!(err.is_validation(), "the refusal identifies a worktree conflict: {err}");
+            assert!(
+                err.downcast_any_ref::<gix::worktree::checkout::Conflict>().is_some(),
+                "a typed conflict identifies refusals before any worktree changes: {err}"
+            );
             assert_eq!(
                 fs::read(workdir.join("a-delete"))?,
                 b"old",
@@ -992,15 +996,20 @@ fn checkout_keeps_the_staging_index_on_cancellation_and_write_failure() -> TestR
         let before = current.entries().to_vec();
         let workdir = repo.workdir().expect("non-bare");
         fs::write(workdir.join("a-delete"), b"old")?;
-        repo.checkout_index_with_baseline(
-            &baseline,
-            &mut target,
-            &mut current,
-            progress::Discard,
-            &AtomicBool::new(cancel),
-            Options::default(),
-        )
-        .expect_err("cancelled checkout and missing objects fail");
+        let err = repo
+            .checkout_index_with_baseline(
+                &baseline,
+                &mut target,
+                &mut current,
+                progress::Discard,
+                &AtomicBool::new(cancel),
+                Options::default(),
+            )
+            .expect_err("cancelled checkout and missing objects fail");
+        assert!(
+            err.downcast_any_ref::<gix::worktree::checkout::Conflict>().is_none(),
+            "cancellation and write failures are distinct from preflight conflicts: {err}"
+        );
         assert!(
             current.entries() == before,
             "even partial checkout failure does not replace the staging index"
@@ -1010,6 +1019,11 @@ fn checkout_keeps_the_staging_index_on_cancellation_and_write_failure() -> TestR
                 fs::read(workdir.join("a-delete"))?,
                 b"old",
                 "early cancellation leaves the worktree untouched"
+            );
+        } else {
+            assert!(
+                !workdir.join("a-delete").exists(),
+                "the missing-object failure occurs after worktree changes have begun"
             );
         }
     }
