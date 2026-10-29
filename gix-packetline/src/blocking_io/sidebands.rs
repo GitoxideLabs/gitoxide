@@ -168,6 +168,7 @@ where
                     }
                     None => {
                         break match line.as_slice() {
+                            Some([]) => continue,
                             Some(d) => (U16_HEX_BYTES, d.len()),
                             None => {
                                 return Err(io::Error::new(

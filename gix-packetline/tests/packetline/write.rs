@@ -60,12 +60,14 @@ async fn huge_writes_are_split_into_lines() -> gix_testtools::TestResult {
 #[crate::bisync::bisync]
 #[cfg_attr(feature = "blocking-io", test)]
 #[cfg_attr(all(feature = "async-io", not(feature = "blocking-io")), async_std::test)]
-async fn empty_writes_fail_with_error() {
-    let res = Writer::new(Vec::new()).write(&[]).await;
-    insta::assert_debug_snapshot!(res.expect_err("empty writes fail with error"), "empty writes fail with error", @r#"
-    Custom {
-        kind: Other,
-        error: "empty packet lines are not permitted as '0004' is invalid",
-    }
-    "#);
+async fn empty_writes_emit_empty_packets() -> gix_testtools::TestResult {
+    let mut writer = Writer::new(Vec::new());
+    assert_eq!(writer.write(&[]).await?, 0);
+    writer.write_all(b"next").await?;
+    assert_eq!(
+        writer.into_inner(),
+        b"00040008next",
+        "zero-length data is not a stream terminator"
+    );
+    Ok(())
 }

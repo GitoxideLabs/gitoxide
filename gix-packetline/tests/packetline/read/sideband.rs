@@ -343,3 +343,23 @@ async fn handling_of_err_lines() {
         "An error can also be the reason, which is not distinguishable from an EOF"
     );
 }
+
+#[crate::bisync::bisync]
+#[cfg_attr(feature = "blocking-io", test)]
+#[cfg_attr(all(feature = "async-io", not(feature = "blocking-io")), async_std::test)]
+async fn empty_data_packets_do_not_end_a_byte_stream() -> gix_testtools::TestResult {
+    let mut packets = StreamingPeekableIter::new(&b"00040008data00040000"[..], &[PacketLineRef::Flush], false);
+    assert_eq!(
+        packets.read_line().await.expect("empty data packet")??,
+        PacketLineRef::Data(b"")
+    );
+    let mut reader = packets.as_read();
+    let mut output = Vec::new();
+    reader.read_to_end(&mut output).await?;
+    assert_eq!(
+        output, b"data",
+        "byte streams skip empty data packets instead of returning premature EOF"
+    );
+    assert_eq!(reader.stopped_at(), Some(PacketLineRef::Flush));
+    Ok(())
+}
