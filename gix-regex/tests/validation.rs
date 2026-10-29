@@ -192,3 +192,40 @@ fn case_folding_preserves_punctuation_and_applies_to_classes_and_backreferences(
     }
     Ok(())
 }
+
+#[test]
+fn repetitions_validate_delimiters_bounds_and_leading_operators() -> TestResult {
+    for (pattern, extended) in [
+        (b"*a".as_slice(), true),
+        (b"+a", true),
+        (b"?a", true),
+        (b"{1}a", true),
+        (b"a{32768}", true),
+        (b"a{1,32768}", true),
+        (br"a\{1}", false),
+        (br"a{1\}", true),
+        (b"a{}", true),
+        (b"a{2,1}", true),
+    ] {
+        assert!(
+            PosixRegexBuilder::new(pattern).extended(extended).compile().is_err(),
+            "invalid repetition must be rejected: {pattern:?}"
+        );
+    }
+    for (pattern, extended) in [
+        (b"a{,1}".as_slice(), true),
+        (br"a\{,1\}", false),
+        (b"a{1,}", true),
+        (br"a\{1,\}", false),
+    ] {
+        assert!(
+            PosixRegexBuilder::new(pattern)
+                .extended(extended)
+                .compile()?
+                .matches_exact(b"a")
+                .is_some(),
+            "omitted interval bounds follow GNU syntax: {pattern:?}"
+        );
+    }
+    Ok(())
+}
