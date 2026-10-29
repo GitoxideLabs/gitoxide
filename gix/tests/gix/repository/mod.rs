@@ -15,6 +15,8 @@ mod branch;
 mod bundle;
 #[cfg(feature = "worktree-mutation")]
 mod checkout;
+#[cfg(feature = "worktree-mutation")]
+mod clean;
 pub(crate) mod config;
 #[cfg(feature = "excludes")]
 mod excludes;

@@ -15,6 +15,9 @@ pub mod add;
 /// Materialize worktree contents from Git indexes and trees.
 #[cfg(feature = "worktree-mutation")]
 pub mod checkout;
+/// Remove untracked worktree contents.
+#[cfg(feature = "worktree-mutation")]
+pub mod clean;
 /// Remove linked worktrees.
 #[cfg(feature = "worktree-mutation")]
 pub mod remove;

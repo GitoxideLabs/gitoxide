@@ -95,6 +95,8 @@ pub mod branch;
 mod cache;
 #[cfg(feature = "worktree-mutation")]
 mod checkout;
+#[cfg(feature = "worktree-mutation")]
+mod clean;
 mod config;
 
 #[cfg(feature = "pack-generate")]
