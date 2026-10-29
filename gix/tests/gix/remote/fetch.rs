@@ -333,6 +333,8 @@ mod blocking_and_async_io {
             Default::default(),
             gix::open::Options::isolated(),
         )?
+        // Exercise protocol negotiation, which native local clone does not perform.
+        .configure_connection(|_| Ok(()))
         .configure_remote({
             move |r| {
                 std::fs::write(
