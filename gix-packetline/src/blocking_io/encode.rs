@@ -89,9 +89,6 @@ fn prefixed_and_suffixed_data_to_write(
             gix_error::message!("Cannot encode more than {MAX_DATA_LEN} bytes, got {data_len}").validation(),
         ));
     }
-    if data.is_empty() {
-        return Err(io::Error::other(gix_error::validation("Empty lines are invalid")));
-    }
 
     let data_len = data_len + 4;
     let buf = u16_to_hex(data_len as u16);
