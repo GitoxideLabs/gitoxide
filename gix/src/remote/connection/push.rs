@@ -23,8 +23,8 @@ impl<T: Transport> Connection<'_, '_, '_, T> {
     /// diagnostics while a background thread streams a self-contained pack. This enables the
     /// `parallel` feature, as moving a repository handle to the worker requires it.
     ///
-    /// This explicit API does not expand configured push refspecs, run local pre-push hooks, or
-    /// update local tracking references. The transport's receive-pack server applies its own
+    /// This explicit API does not expand configured push refspecs or update local tracking references.
+    /// `options.pre_push_hook` runs after planning and before transfer. The transport's receive-pack server applies its own
     /// hooks and receive policy. Credentials and transport options use the normal connection
     /// configuration. The connection is consumed even on failure and must not be reused.
     pub fn push(
@@ -90,6 +90,9 @@ impl<T: Transport> Connection<'_, '_, '_, T> {
                     update.status = Status::Rejected(Rejection::Atomic);
                 }
             }
+        }
+        if let Some(hook) = options.pre_push_hook {
+            hook(&updates)?;
         }
         let commands: Vec<_> = updates
             .iter()

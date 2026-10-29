@@ -79,8 +79,14 @@ impl Update {
 }
 
 /// Settings for an explicit push.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct Options<'a> {
+    /// Inspect the exact planned updates before object transfer or reference writes.
+    ///
+    /// Called once after planning, including dry runs and up-to-date pushes. Errors abort
+    /// the operation. Applications can run sender hooks through `gix-hook` with source
+    /// names retained by their refspec parser. Absent by default for existing callers.
+    pub pre_push_hook: Option<&'a dyn Fn(&[UpdateOutcome]) -> crate::Result<()>>,
     /// Require all requested changes to succeed together. Local rejection prevents
     /// sending any change, and the server must support atomic transactions.
     pub atomic: bool,
@@ -94,6 +100,19 @@ pub struct Options<'a> {
     /// `None` inherits `push.followTags` in [`crate::Remote::push()`] and disables tag following
     /// in [`crate::remote::Connection::push()`]. An explicit boolean overrides configuration.
     pub follow_tags: Option<bool>,
+}
+
+impl std::fmt::Debug for Options<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Options")
+            .field("atomic", &self.atomic)
+            .field("dry_run", &self.dry_run)
+            .field("push_options", &self.push_options)
+            .field("quiet", &self.quiet)
+            .field("follow_tags", &self.follow_tags)
+            .field("pre_push_hook", &self.pre_push_hook.is_some())
+            .finish()
+    }
 }
 
 /// Why one requested update was rejected.
