@@ -1,3 +1,5 @@
+mod builtin;
+
 use bstr::BString;
 use gix_error::{Result, ResultExt, bail, message};
 use regex::bytes::{Regex, RegexBuilder};
