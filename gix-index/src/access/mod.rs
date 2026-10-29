@@ -63,6 +63,7 @@ impl State {
         &'state mut self,
         backing: &'backing PathStorageRef,
     ) -> impl Iterator<Item = (&'state mut Entry, &'backing BStr)> {
+        self.tree = None;
         self.entries.iter_mut().map(move |e| {
             let path = backing[e.path.clone()].as_bstr();
             (e, path)
@@ -481,10 +482,15 @@ impl AccelerateLookup<'_> {
 }
 
 /// Mutation
+///
+/// Mutable entry access and changes to entry paths discard the tree cache, as the
+/// object IDs, modes, paths or stages may change. This also applies when callers
+/// only update stat data. Read-only access and sorting preserve the cache.
 impl State {
     /// After usage of the storage obtained by [`take_path_backing()`][Self::take_path_backing()], return it here.
     /// Note that it must not be empty.
     pub fn return_path_backing(&mut self, backing: PathStorage) {
+        self.tree = None;
         debug_assert!(
             self.path_backing.is_empty(),
             "BUG: return path backing only after taking it, once"
@@ -494,16 +500,19 @@ impl State {
 
     /// Return mutable entries in a slice.
     pub fn entries_mut(&mut self) -> &mut [Entry] {
+        self.tree = None;
         &mut self.entries
     }
 
     /// Return a writable slice to entries and read-access to their path storage at the same time.
     pub fn entries_mut_and_pathbacking(&mut self) -> (&mut [Entry], &PathStorageRef) {
+        self.tree = None;
         (&mut self.entries, &self.path_backing)
     }
 
     /// Return mutable entries along with their paths in an iterator.
     pub fn entries_mut_with_paths(&mut self) -> impl Iterator<Item = (&mut Entry, &BStr)> {
+        self.tree = None;
         let paths = &self.path_backing;
         self.entries.iter_mut().map(move |e| {
             let path = paths[e.path.clone()].as_bstr();
@@ -534,8 +543,9 @@ impl State {
     ///
     /// The `path` must use the repository-relative, slash-separated [`State`] path format.
     pub fn entry_mut_by_path_and_stage(&mut self, path: &BStr, stage: entry::Stage) -> Option<&mut Entry> {
-        self.entry_index_by_path_and_stage(path, stage)
-            .map(|idx| &mut self.entries[idx])
+        let idx = self.entry_index_by_path_and_stage(path, stage)?;
+        self.tree = None;
+        Some(&mut self.entries[idx])
     }
 
     /// Push a new entry containing `stat`, `id`, `flags` and `mode` and `path` to the end of our storage, without performing
@@ -558,6 +568,7 @@ impl State {
         mode: entry::Mode,
         path: &BStr,
     ) {
+        self.tree = None;
         let path = {
             let path_start = self.path_backing.len();
             self.path_backing.push_str(path);
@@ -603,6 +614,7 @@ impl State {
     /// To implement this operation typically, one would rather add [entry::Flags::REMOVE] to each entry to remove
     /// them when [writing the index](Self::write_to()).
     pub fn remove_entries(&mut self, mut should_remove: impl FnMut(usize, &BStr, &mut Entry) -> bool) {
+        self.tree = None;
         let mut index = 0;
         let paths = &self.path_backing;
         self.entries.retain_mut(|e| {
@@ -620,6 +632,7 @@ impl State {
     /// Note that the memory used for the removed entries paths is not freed, as it's append-only, and
     /// that some extensions might refer to paths which are now deleted.
     pub fn remove_entry_at_index(&mut self, index: usize) -> Entry {
+        self.tree = None;
         self.entries.remove(index)
     }
 }
