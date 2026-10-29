@@ -32,6 +32,7 @@ pub struct BreadthFirst<Find> {
     buffer: Vec<u8>,
     failed: bool,
     ignore_missing: bool,
+    validate_objects: bool,
     missing: gix_hashtable::HashSet<ObjectId>,
 }
 
@@ -46,8 +47,20 @@ impl<Find> BreadthFirst<Find> {
             buffer: Vec::new(),
             failed: false,
             ignore_missing: false,
+            validate_objects: true,
             missing: Default::default(),
         }
+    }
+
+    /// Control full object decoding, which is enabled by default.
+    ///
+    /// Disable this only when object validation is handled separately, for example
+    /// by a configurable fsck policy. Graph edges are always decoded, and missing
+    /// objects or edges pointing to the wrong kind remain errors. Commit identities,
+    /// tag names, and other metadata unrelated to connectivity are then ignored.
+    pub fn with_object_validation(mut self, validate: bool) -> Self {
+        self.validate_objects = validate;
+        self
     }
 
     /// Skip missing objects, while still failing on malformed objects and invalid edge kinds.
@@ -93,27 +106,36 @@ impl<F: Find> BreadthFirst<F> {
             };
             let kind = object.kind;
             check_kind(object_id, kind, expected_kind)?;
-            match object
-                .decode()
-                .or_raise(|| message!("Could not decode reachable object {object_id}"))?
-            {
-                ObjectRef::Blob(_) => {}
-                ObjectRef::Tag(tag) => self.pending.push_back((tag.target(), Some(tag.target_kind))),
-                ObjectRef::Commit(commit) => {
-                    self.pending.push_back((commit.tree(), Some(Kind::Tree)));
-                    if !self.shallow.contains(&object_id) {
-                        self.pending.extend(commit.parents().map(|id| (id, Some(Kind::Commit))));
+            if self.validate_objects {
+                match object
+                    .decode()
+                    .or_raise(|| message!("Could not decode reachable object {object_id}"))?
+                {
+                    ObjectRef::Blob(_) => {}
+                    ObjectRef::Tag(tag) => self.pending.push_back((tag.target(), Some(tag.target_kind))),
+                    ObjectRef::Commit(commit) => {
+                        self.pending.push_back((commit.tree(), Some(Kind::Tree)));
+                        if !self.shallow.contains(&object_id) {
+                            self.pending.extend(commit.parents().map(|id| (id, Some(Kind::Commit))));
+                        }
+                    }
+                    ObjectRef::Tree(tree) => {
+                        for entry in tree.entries {
+                            if entry.mode.is_commit() {
+                                continue;
+                            }
+                            let kind = if entry.mode.is_tree() { Kind::Tree } else { Kind::Blob };
+                            self.pending.push_back((entry.oid.to_owned(), Some(kind)));
+                        }
                     }
                 }
-                ObjectRef::Tree(tree) => {
-                    for entry in tree.entries {
-                        let kind = match entry.mode.kind() {
-                            gix_object::tree::EntryKind::Commit => continue,
-                            gix_object::tree::EntryKind::Tree => Kind::Tree,
-                            _ => Kind::Blob,
-                        };
-                        self.pending.push_back((entry.oid.to_owned(), Some(kind)));
+            } else {
+                for edge in object.references() {
+                    let edge = edge.or_raise(|| message!("Could not decode edges of reachable object {object_id}"))?;
+                    if kind == Kind::Commit && edge.kind == Kind::Commit && self.shallow.contains(&object_id) {
+                        continue;
                     }
+                    self.pending.push_back((edge.id, Some(edge.kind)));
                 }
             }
             self.seen.insert(object_id, kind);
