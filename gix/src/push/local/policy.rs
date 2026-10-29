@@ -24,6 +24,7 @@ pub(super) struct Policy {
     deny_current: Action,
     deny_delete_current: Action,
     hidden: Vec<BString>,
+    namespace: Option<gix_ref::Namespace>,
 }
 
 impl Policy {
@@ -56,14 +57,29 @@ impl Policy {
             deny_current: action(repo, "receive.denyCurrentBranch")?,
             deny_delete_current: action(repo, "receive.denyDeleteCurrent")?,
             hidden,
+            namespace: repo.namespace().cloned(),
         })
     }
 
+    pub fn full_name(&self, name: &[u8]) -> BString {
+        let mut full_name = self
+            .namespace
+            .as_ref()
+            .map(|namespace| namespace.as_bstr().to_owned())
+            .unwrap_or_default();
+        full_name.extend_from_slice(name);
+        full_name
+    }
+
     pub fn hidden(&self, name: &[u8]) -> bool {
+        let full_name = self.full_name(name);
         for rule in self.hidden.iter().rev() {
             let rule = rule.trim_end_with(|byte| byte == '/');
             let (negated, rule) = rule.strip_prefix(b"!").map_or((false, rule), |rule| (true, rule));
-            let rule = rule.strip_prefix(b"^").unwrap_or(rule);
+            let (rule, name) = match rule.strip_prefix(b"^") {
+                Some(rule) => (rule, full_name.as_slice()),
+                None => (rule, name),
+            };
             if name
                 .strip_prefix(rule)
                 .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with(b"/"))
@@ -75,9 +91,6 @@ impl Policy {
     }
 
     pub fn ensure_supported(&self, repo: &Repository) -> Result<()> {
-        if repo.refs.namespace.is_some() {
-            bail!(message("Native local receive does not yet support namespaces").unsupported());
-        }
         let config = repo.config_snapshot();
         if config.string("receive.procReceiveRefs").is_some()
             || config
@@ -110,7 +123,7 @@ impl Policy {
         if self.deny_deletes && update.update.new_id.is_none() && name.starts_with_str("refs/heads/") {
             return Ok(Some("deletion prohibited".into()));
         }
-        for worktree in checked_out_worktrees(repo, name)? {
+        for worktree in checked_out_worktrees(repo, self.full_name(name).as_bstr())? {
             if !worktree.is_bare() {
                 match self.deny_current {
                     Action::Refuse => return Ok(Some("branch is currently checked out".into())),
@@ -136,16 +149,19 @@ impl Policy {
         if !matches!(self.deny_current, Action::UpdateInstead) {
             return Ok(None);
         }
-        Ok(checked_out_worktrees(repo, update.update.destination.as_bstr())?
-            .into_iter()
-            .find(|worktree| !worktree.is_bare()))
+        Ok(
+            checked_out_worktrees(repo, self.full_name(update.update.destination.as_bstr()).as_bstr())?
+                .into_iter()
+                .find(|worktree| !worktree.is_bare()),
+        )
     }
 }
 
 fn checked_out_worktrees(repo: &Repository, name: &BStr) -> Result<Vec<Repository>> {
     let mut matching = Vec::new();
     for worktree in repo.worktrees_including_main()? {
-        let worktree = worktree?;
+        let mut worktree = worktree?;
+        worktree.clear_namespace();
         if worktree.head_name()?.is_some_and(|head| head.as_bstr() == name) {
             matching.push(worktree);
         }
