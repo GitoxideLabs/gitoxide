@@ -263,6 +263,65 @@ fn core_dir() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn core_dir_uses_explicit_override_without_git() -> gix_testtools::TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let directory = tempfile::tempdir()?;
+    let core = Path::new("relative core directory");
+    std::fs::create_dir(directory.path().join(core))?;
+    let program = core.join("git-credential-example");
+    std::fs::write(directory.path().join(&program), b"helper")?;
+    let output = gix_testtools::git_command(directory.path())
+        .env("GIT_EXEC_PATH", core)
+        .arg("--exec-path")
+        .output()?;
+    assert!(output.status.success(), "Git accepts a relative override");
+    assert_eq!(
+        output.stdout, b"relative core directory\n",
+        "Git preserves the override without making it absolute"
+    );
+    let _cwd = gix_testtools::set_current_dir(directory.path())?;
+    let _environment = gix_testtools::Env::new()
+        .set("GIT_EXEC_PATH", core.to_str().expect("literal path is UTF-8"))
+        .set("PATH", directory.path().display().to_string());
+    assert_eq!(
+        gix_path::env::core_dir(),
+        Some(std::env::current_dir()?.join(core).as_path()),
+        "an explicit relative override resolves without needing the Git executable"
+    );
+    assert_eq!(
+        gix_path::env::core_dir_program("git-credential-example"),
+        Some(std::env::current_dir()?.join(program)),
+        "bundled helpers can be found directly using the explicit core directory"
+    );
+    Ok(())
+}
+
+#[test]
+fn core_dir_ignores_an_empty_override_like_git() -> gix_testtools::TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let fixture = gix_testtools::scripted_fixture_read_only("make_native_installation.sh")?.canonicalize()?;
+    let (bin, core) = if cfg!(windows) {
+        ("windows-ucrt/prefix/cmd", "windows-ucrt/prefix/ucrt64/libexec/git-core")
+    } else {
+        ("unix-lib/prefix/bin", "unix-lib/prefix/lib/git-core")
+    };
+    let _environment = gix_testtools::Env::new()
+        .set("PATH", fixture.join(bin).to_str().expect("UTF-8 fixture path"))
+        .set("GIT_EXEC_PATH", "");
+    assert_eq!(
+        gix_path::env::core_dir(),
+        Some(fixture.join(core).as_path()),
+        "an empty override retains native installation discovery"
+    );
+    Ok(())
+}
+
 #[test]
 fn core_dir_program() -> gix_testtools::TestResult {
     let core_dir = gix_path::env::core_dir().expect("Git is always in PATH when we run tests");
