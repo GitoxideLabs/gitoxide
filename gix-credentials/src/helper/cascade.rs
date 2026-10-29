@@ -4,8 +4,7 @@ use crate::{
     protocol,
     protocol::{Context, ContextOptions},
 };
-use gix_error::Result;
-use gix_error::ResultExt;
+use gix_error::{ErrorExt, Result, ResultExt, validation};
 
 impl Default for Cascade {
     fn default() -> Self {
@@ -76,7 +75,7 @@ impl Cascade {
 /// Finalize
 impl Cascade {
     /// Invoke the cascade by `invoking` each program with `action`, and configuring potential prompts with `prompt` options.
-    /// The latter can also be used to disable the prompt entirely when setting the `mode` to [`Disable`][gix_prompt::Mode::Disable];=.
+    /// The latter can also be used to disable the prompt entirely when setting the `mode` to [`Disable`][gix_prompt::Mode::Disable].
     ///
     /// When _getting_ credentials, all programs are asked until the credentials are complete, stopping the cascade.
     /// When _storing_ or _erasing_ all programs are instructed in order.
@@ -88,12 +87,58 @@ impl Cascade {
     /// Invoke like [`Self::invoke()`], passing `environment` to helpers and askpass programs.
     ///
     /// Values affect this invocation's native helpers and children, including `PATH` lookup, and are
-    /// not retained for subsequent calls. Prompt selection is controlled by `prompt`, as with [`Self::invoke()`].
+    /// not retained for subsequent calls. A disabled terminal prompt still permits a configured askpass program.
     pub fn invoke_with_environment(
+        &mut self,
+        action: helper::Action,
+        prompt: gix_prompt::Options,
+        environment: &[(std::ffi::OsString, std::ffi::OsString)],
+    ) -> Result<Option<protocol::Outcome>> {
+        let prompt_enabled = prompt.mode != gix_prompt::Mode::Disable || prompt.askpass.is_some();
+        self.invoke_inner(action, prompt, environment, prompt_enabled, |message, options| {
+            gix_prompt::ask_with_environment(message, options, environment)
+        })
+    }
+
+    /// Invoke the cascade like [`invoke()`][Self::invoke], using `ask` for missing credentials.
+    ///
+    /// The callback receives the prompt and options with [`Visible`][gix_prompt::Mode::Visible] for a username
+    /// or [`Hidden`][gix_prompt::Mode::Hidden] for a password. It replaces terminal and askpass invocation,
+    /// allowing applications to supply their own user interface. Helpers still run first.
+    ///
+    /// Disabled prompts, helper cancellation, complete credentials, and store/erase actions do not invoke `ask`.
+    /// Callback errors abort authentication; returned values must be representable by the credential protocol.
+    pub fn invoke_with_prompt(
+        &mut self,
+        action: helper::Action,
+        prompt: gix_prompt::Options,
+        ask: impl FnMut(&str, &gix_prompt::Options) -> Result<String>,
+    ) -> Result<Option<protocol::Outcome>> {
+        self.invoke_with_environment_and_prompt(action, prompt, &[], ask)
+    }
+
+    /// Invoke like [`Self::invoke_with_prompt()`], applying `environment` to this invocation's helpers.
+    ///
+    /// The custom callback replaces askpass and terminal interaction, and is never called when prompting is disabled.
+    /// Environment values are not installed in the current process or retained for subsequent invocations.
+    pub fn invoke_with_environment_and_prompt(
+        &mut self,
+        action: helper::Action,
+        prompt: gix_prompt::Options,
+        environment: &[(std::ffi::OsString, std::ffi::OsString)],
+        ask: impl FnMut(&str, &gix_prompt::Options) -> Result<String>,
+    ) -> Result<Option<protocol::Outcome>> {
+        let prompt_enabled = prompt.mode != gix_prompt::Mode::Disable;
+        self.invoke_inner(action, prompt, environment, prompt_enabled, ask)
+    }
+
+    fn invoke_inner(
         &mut self,
         mut action: helper::Action,
         mut prompt: gix_prompt::Options,
         environment: &[(std::ffi::OsString, std::ffi::OsString)],
+        prompt_enabled: bool,
+        mut ask: impl FnMut(&str, &gix_prompt::Options) -> Result<String>,
     ) -> Result<Option<protocol::Outcome>> {
         if let Some(ctx) = action.context_mut() {
             ctx.options = self.context_options;
@@ -183,7 +228,7 @@ impl Cascade {
             }
         }
 
-        if (prompt.mode != gix_prompt::Mode::Disable || prompt.askpass.is_some())
+        if prompt_enabled
             && let Some(ctx) = action.context_mut()
             && !ctx.quit.unwrap_or(false)
         {
@@ -193,7 +238,7 @@ impl Cascade {
                 if prompt.mode != gix_prompt::Mode::Disable {
                     prompt.mode = gix_prompt::Mode::Visible;
                 }
-                ctx.username = gix_prompt::ask_with_environment(&message, &prompt, environment)
+                ctx.username = ask(&message, &prompt)
                     .or_raise(|| gix_error::message!("Couldn't obtain {message}"))?
                     .into();
             }
@@ -202,10 +247,12 @@ impl Cascade {
                 if prompt.mode != gix_prompt::Mode::Disable {
                     prompt.mode = gix_prompt::Mode::Hidden;
                 }
-                ctx.password = gix_prompt::ask_with_environment(&message, &prompt, environment)
+                ctx.password = ask(&message, &prompt)
                     .or_raise(|| gix_error::message!("Couldn't obtain {message}"))?
                     .into();
             }
+            ctx.write_to(std::io::sink())
+                .map_err(|_| validation("Prompt response cannot be represented by the credential protocol").raise())?;
         }
 
         if let Some(ctx) = action.context_mut()
