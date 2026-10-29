@@ -2012,6 +2012,142 @@ mod add {
 
 #[cfg(feature = "worktree-mutation")]
 mod remove {
+    #[test]
+    fn unlink_preserves_dirty_files_and_other_worktree_registrations() -> gix_testtools::TestResult {
+        let (repo, _fixture) = crate::basic_rw_repo()?;
+        let work_dir = repo.workdir().expect("main checkout");
+        let destination = work_dir.join("unlink-me");
+        let (linked, _) = repo.add_worktree(
+            &destination,
+            gix::worktree::add::Head::Detached(repo.head_id()?.detach()),
+            gix::progress::Discard,
+            &AtomicBool::default(),
+        )?;
+        std::fs::write(destination.join("a"), b"modified tracked content")?;
+        std::fs::create_dir(destination.join("nested"))?;
+        std::fs::write(destination.join("nested/keep"), b"untracked contents")?;
+        let missing = repo.register_worktree(
+            work_dir.join("missing"),
+            gix::worktree::add::Head::Detached(repo.head_id()?.detach()),
+            &AtomicBool::default(),
+        )?;
+        std::fs::remove_dir_all(missing.workdir().expect("linked checkout"))?;
+
+        repo.unlink_worktree(&destination, gix::worktree::remove::Force::Never)?;
+        assert_eq!(
+            std::fs::read(destination.join("a"))?,
+            b"modified tracked content",
+            "unlinking preserves modified tracked files"
+        );
+        assert_eq!(
+            std::fs::read(destination.join("nested/keep"))?,
+            b"untracked contents",
+            "unlinking preserves untracked directories"
+        );
+        assert!(
+            !destination.join(".git").exists(),
+            "only the worktree link is removed from the checkout"
+        );
+        assert!(
+            !linked.git_dir().exists(),
+            "the selected private administration is removed"
+        );
+        assert!(
+            missing.git_dir().is_dir(),
+            "unlinking never prunes unrelated missing worktrees"
+        );
+        let listed = gix_testtools::git(work_dir, "worktree list --porcelain")?;
+        assert!(
+            !listed.contains("unlink-me"),
+            "Git no longer lists the unlinked worktree"
+        );
+        assert!(
+            listed.contains("missing"),
+            "Git still lists unrelated stale registrations"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unlink_rejects_foreign_links_and_respects_locks() -> gix_testtools::TestResult {
+        let (repo, _fixture) = crate::basic_rw_repo()?;
+        let destination = repo.workdir().expect("main checkout").join("linked");
+        let linked = repo.register_worktree(
+            &destination,
+            gix::worktree::add::Head::Unborn("refs/custom/unborn".try_into()?),
+            &AtomicBool::default(),
+        )?;
+        let original_link = std::fs::read(destination.join(".git"))?;
+        let proxy = repo.worktree_proxy_by_id("linked")?.expect("registered worktree");
+        proxy.set_lock(Some("retain registration".into()))?;
+        for force in [
+            gix::worktree::remove::Force::Never,
+            gix::worktree::remove::Force::DiscardChanges,
+        ] {
+            let err = repo
+                .unlink_worktree(&destination, force)
+                .expect_err("unlinking respects worktree locks");
+            assert!(err.is_conflict(), "the retained lock is reported as a conflict");
+        }
+        std::fs::write(
+            destination.join(".git"),
+            format!("gitdir: {}\n", repo.git_dir().display()),
+        )?;
+        repo.unlink_worktree(&destination, gix::worktree::remove::Force::OverrideLock)
+            .expect_err("overriding locks never bypasses link validation");
+        assert!(
+            linked.git_dir().is_dir(),
+            "a foreign link preserves the selected registration"
+        );
+        std::fs::write(destination.join(".git"), original_link)?;
+        proxy.unlink(gix::worktree::remove::Force::OverrideLock)?;
+        assert!(
+            destination.is_dir(),
+            "overriding a lock still retains the checkout directory"
+        );
+        assert!(!linked.git_dir().exists(), "the selected registration is unlinked");
+        Ok(())
+    }
+
+    #[test]
+    fn unlink_cleans_missing_links_and_rejects_the_main_worktree() -> gix_testtools::TestResult {
+        let (repo, _fixture) = crate::basic_rw_repo()?;
+        let destination = repo.workdir().expect("main checkout").join("linked");
+        for missing_directory in [false, true] {
+            let linked = repo.register_worktree(
+                &destination,
+                gix::worktree::add::Head::Unborn("refs/custom/unborn".try_into()?),
+                &AtomicBool::default(),
+            )?;
+            if missing_directory {
+                std::fs::remove_dir_all(&destination)?;
+            } else {
+                std::fs::remove_file(destination.join(".git"))?;
+                std::fs::write(destination.join("keep"), b"caller contents")?;
+            }
+            repo.prepare_remove_worktree(&destination)?
+                .unlink(gix::worktree::remove::Force::Never)?;
+            assert!(
+                !linked.git_dir().exists(),
+                "missing checkout links still allow removing stale registration"
+            );
+            if !missing_directory {
+                assert_eq!(
+                    std::fs::read(destination.join("keep"))?,
+                    b"caller contents",
+                    "unlinking preserves the remaining checkout"
+                );
+            }
+        }
+        repo.unlink_worktree(
+            repo.workdir().expect("main checkout"),
+            gix::worktree::remove::Force::OverrideLock,
+        )
+        .expect_err("the main worktree cannot be unlinked");
+        assert!(repo.git_dir().is_dir(), "main Git metadata is retained");
+        Ok(())
+    }
+
     /// Writes once after each removal root has been scanned, through its existing progress API.
     struct LateWriter {
         name: String,
@@ -2463,6 +2599,18 @@ mod remove {
             err.downcast_any_ref::<gix::worktree::remove::Error>(),
             Some(gix::worktree::remove::Error::ContainsSubmodule { .. })
         ));
+
+        let err = repo
+            .unlink_worktree(&destination, Force::Never)
+            .expect_err("unlinking must not discard private submodule metadata without force");
+        assert!(matches!(
+            err.downcast_any_ref::<gix::worktree::remove::Error>(),
+            Some(gix::worktree::remove::Error::ContainsSubmodule { .. })
+        ));
+        assert!(
+            destination.join(".git").is_file(),
+            "submodule rejection preserves the worktree link"
+        );
 
         repo.remove_worktree(&destination, Force::DiscardChanges, gix::progress::Discard)?;
         Ok(())
