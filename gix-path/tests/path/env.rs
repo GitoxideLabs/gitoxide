@@ -20,6 +20,17 @@ fn shell() {
 #[cfg(windows)]
 mod windows_installations {
     #[test]
+    fn scoop_without_junctions() -> gix_error::TestResult {
+        discover(
+            "SCOOP",
+            "no-junction",
+            "no-junction/apps/git/2.50.0/cmd/git.exe",
+            false,
+            false,
+        )
+    }
+
+    #[test]
     fn chocolatey_tools_location() -> gix_error::TestResult {
         discover(
             "ChocolateyToolsLocation",

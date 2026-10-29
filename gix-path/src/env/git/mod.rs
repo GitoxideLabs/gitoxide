@@ -108,10 +108,40 @@ fn locations_under_scoop(var_os: impl Fn(&str) -> Option<std::ffi::OsString>) ->
         .collect();
     for (variable, default_base) in [("SCOOP", "USERPROFILE"), ("SCOOP_GLOBAL", "ProgramData")] {
         if let Some(root) = absolute(variable).or_else(|| absolute(default_base).map(|base| base.join("scoop"))) {
-            locations.push(root.join("apps/git/current/cmd"));
+            let app = root.join("apps/git");
+            let current = app.join("current/cmd");
+            if !current.join(EXE_NAME).is_file() {
+                locations.extend(scoop_version_without_junction(&app));
+            }
+            locations.push(current);
         }
     }
     locations
+}
+
+#[cfg(windows)]
+fn scoop_version_without_junction(app: &Path) -> Option<PathBuf> {
+    // Scoop's Select-CurrentVersion/Get-InstalledVersion uses install-marker timestamps,
+    // not version ordering. A completed downgrade can be newer than a retained upgrade.
+    std::fs::read_dir(app)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().to_str()?.to_ascii_lowercase();
+            if name == "current" || (name.starts_with('_') && name.contains(".old")) {
+                return None;
+            }
+            let directory = entry.path();
+            let modified = ["scoop-install.json", "install.json"]
+                .iter()
+                .filter_map(|marker| std::fs::metadata(directory.join(marker)).ok())
+                .filter(std::fs::Metadata::is_file)
+                .filter_map(|metadata| metadata.modified().ok())
+                .min()?;
+            Some((modified, directory))
+        })
+        .max()
+        .map(|(_, directory)| directory.join("cmd"))
 }
 
 #[cfg(windows)]

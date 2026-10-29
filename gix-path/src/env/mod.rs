@@ -119,6 +119,7 @@ pub fn shell_command() -> std::process::Command {
 /// These include standard Git for Windows installations and Scoop's user and global installations
 /// (`SCOOP`/`SCOOP_GLOBAL`, defaulting to `USERPROFILE/scoop` and `ProgramData/scoop`), as well as
 /// `GIT_INSTALL_ROOT`. Installation roots must be absolute paths.
+/// When Scoop's `current` junction is absent, its most recently installed version is used.
 /// Also searched are `ChocolateyToolsLocation/git/cmd`, the active Conda/Mamba environment's
 /// `CONDA_PREFIX/Library/bin`, and WinGet's user and machine `Links` directories. For an MSYS2
 /// installation outside `PATH`, set `GIT_INSTALL_ROOT` to its root (containing `usr/bin`).
