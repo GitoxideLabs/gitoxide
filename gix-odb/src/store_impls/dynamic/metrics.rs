@@ -16,7 +16,7 @@ impl super::Store {
         let mut unreachable_packs = 0;
 
         let index = self.index.load();
-        for f in index.slot_indices.iter().map(|idx| &self.files[*idx]) {
+        for f in index.slot_indices.iter().map(|idx| &index.files[*idx]) {
             match &**f.files.load() {
                 Some(IndexAndPacks::Index(bundle)) => {
                     if bundle.index.is_loaded() {
@@ -44,7 +44,7 @@ impl super::Store {
             }
         }
 
-        for slot in &self.files {
+        for slot in index.files.iter() {
             match slot.files.load().as_ref() {
                 None => {
                     unused_slots += 1;

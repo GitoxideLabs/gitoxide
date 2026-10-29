@@ -277,8 +277,7 @@ mod blocking_and_async_io {
                             ),
                             "each fetch adds one pack beyond the configured capacity"
                         );
-                        // But opening a new repo will always be able to read all objects
-                        // as it dynamically sizes the otherwise static slotmap.
+                        // Open with automatic sizing to read the packs beyond the fixed limit.
                         let local_repo = gix::open_opts(
                             local_repo.path(),
                             gix::open::Options::isolated().object_store_slots(slots),

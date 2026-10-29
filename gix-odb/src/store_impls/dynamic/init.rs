@@ -2,10 +2,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use arc_swap::ArcSwap;
 
-use crate::{
-    Store,
-    store::types::{MutableIndexAndPack, SlotMapIndex},
-};
+use crate::{Store, store::types::SlotMapIndex};
 
 /// Options for use in [`Store::at_opts()`].
 #[derive(Clone, Debug)]
@@ -40,7 +37,7 @@ impl Default for Options {
     }
 }
 
-/// Configures the number of slots in the index slotmap, which is fixed throughout the existence of the store.
+/// Configures how many pack indices the store can hold.
 #[derive(Copy, Clone, Debug)]
 pub enum Slots {
     /// The number of slots to use, that is the total number of indices we can hold at a time.
@@ -49,7 +46,7 @@ pub enum Slots {
     ///
     /// Note that this won't affect their packs, as each index can have one or more packs associated with it.
     Given(u16),
-    /// Compute the number of slots needed, as probably best used on the client side where a variety of repositories is encountered.
+    /// Size the slot map from the indices on disk, and grow it when a refresh discovers more indices.
     AsNeededByDiskState {
         /// 1.0 means no safety, 1.1 means 10% more slots than needed
         multiplier: f32,
@@ -138,8 +135,11 @@ impl Store {
             write: Default::default(),
             replacements,
             path: objects_dir,
-            files: Vec::from_iter(std::iter::repeat_with(MutableIndexAndPack::default).take(slot_count)),
-            index: ArcSwap::new(Arc::new(SlotMapIndex::default())),
+            slots,
+            index: ArcSwap::from_pointee(SlotMapIndex {
+                files: Arc::new((0..slot_count).map(|_| Arc::default()).collect()),
+                ..Default::default()
+            }),
             use_multi_pack_index,
             object_hash,
             alloc_limit_bytes,

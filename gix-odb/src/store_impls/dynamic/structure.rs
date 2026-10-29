@@ -68,7 +68,7 @@ impl Store {
             })
             .collect();
 
-        for slot in index.slot_indices.iter().map(|idx| &self.files[*idx]) {
+        for slot in index.slot_indices.iter().map(|idx| &index.files[*idx]) {
             let files = slot.files.load();
             let record = match &**files {
                 Some(index) => {

@@ -128,7 +128,7 @@ impl super::Store {
         };
         gix_trace::detail!("verify indices").into_scope(|| {
             for slot_index in &index.slot_indices {
-                let slot = &self.files[*slot_index];
+                let slot = &index.files[*slot_index];
                 if slot.generation.load(Ordering::SeqCst) != index.generation {
                     return Err(changed());
                 }
