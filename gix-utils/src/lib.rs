@@ -22,6 +22,9 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "column")]
+pub mod column;
+
 /// Cache efficiency diagnostics, enabled with `cache-efficiency-debug`.
 pub mod cache;
 /// Variable-length integer decoding.

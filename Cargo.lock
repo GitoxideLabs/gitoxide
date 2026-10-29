@@ -2791,6 +2791,7 @@ dependencies = [
  "insta",
  "prodash",
  "unicode-normalization",
+ "unicode-width",
 ]
 
 [[package]]
