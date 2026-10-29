@@ -72,7 +72,7 @@ where
 impl<R, W> client::blocking_io::Transport for Connection<R, W>
 where
     R: std::io::Read,
-    W: std::io::Write,
+    W: std::io::Write + Send,
 {
     fn handshake<'a>(
         &mut self,
@@ -110,7 +110,7 @@ where
         on_into_read: client::MessageKind,
         trace: bool,
     ) -> std::result::Result<RequestWriter<'_>, client::Error> {
-        Ok(RequestWriter::new_from_bufread(
+        Ok(RequestWriter::new_from_bufread_with_send(
             &mut self.writer,
             Box::new(self.line_provider.as_read_without_sidebands()),
             write_mode,

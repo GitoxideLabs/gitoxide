@@ -506,7 +506,7 @@ impl<H: Http> blocking_io::Transport for Transport<H> {
             .as_mut()
             .expect("handshake to have been called first");
         line_provider.replace(body);
-        Ok(RequestWriter::new_from_bufread(
+        Ok(RequestWriter::new_from_bufread_with_send(
             post_body,
             Box::new(HeadersThenBody::<H, _> {
                 service,
