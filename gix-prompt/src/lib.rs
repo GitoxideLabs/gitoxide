@@ -47,6 +47,7 @@ pub fn ask_with_environment(
                 if let Some(mut stdout) = cmd
                     .wait_with_output()
                     .ok()
+                    .filter(|out| out.status.success())
                     .and_then(|out| String::from_utf8(out.stdout).ok())
                 {
                     if stdout.ends_with('\n') {
