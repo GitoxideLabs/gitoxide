@@ -262,67 +262,48 @@ impl<'a> PosixRegexBuilder<'a> {
         Ok(())
     }
     fn parse_range(&mut self) -> Result<Range, Error> {
-        let mut range = Range(1, Some(1));
-        if let Some(&c) = self.input.first() {
-            let new = match c {
-                b'*' => Some((1, Range(0, None))),
-                b'\\' => match self.input.get(1) {
-                    Some(b'?') if !self.extended => Some((2, Range(0, Some(1)))),
-                    Some(b'+') if !self.extended => Some((2, Range(1, None))),
-                    Some(b'{') if !self.extended => {
-                        self.consume(2);
-                        let first = self.take_int()?.ok_or(Error::EmptyRepetition)?;
-                        let mut second = Some(first);
-                        if let Some(b',') = self.input.first() {
-                            self.consume(1);
-                            second = self.take_int()?;
-                        }
-                        if self.input.first() == Some(&b'}') {
-                            self.consume(1);
-                        } else if self.input.starts_with(br"\}") {
-                            self.consume(2);
-                        } else {
-                            return Err(Error::UnclosedRepetition);
-                        }
-                        if second.map(|second| first > second).unwrap_or(false) {
-                            return Err(Error::IllegalRange);
-                        }
-                        range = Range(first, second);
-                        None
-                    }
-                    _ => None,
-                },
-                b'?' if self.extended => Some((1, Range(0, Some(1)))),
-                b'+' if self.extended => Some((1, Range(1, None))),
-                b'{' if self.extended => {
-                    self.consume(1);
-                    let first = self.take_int()?.ok_or(Error::EmptyRepetition)?;
-                    let mut second = Some(first);
-                    if let Some(b',') = self.input.first() {
-                        self.consume(1);
-                        second = self.take_int()?;
-                    }
-                    if self.input.first() == Some(&b'}') {
-                        self.consume(1);
-                    } else if self.input.starts_with(br"\}") {
-                        self.consume(2);
-                    } else {
-                        return Err(Error::UnclosedRepetition);
-                    }
-                    if second.map(|second| first > second).unwrap_or(false) {
-                        return Err(Error::IllegalRange);
-                    }
-                    range = Range(first, second);
-                    None
-                }
-                _ => None,
-            };
-            if let Some((consume, new)) = new {
-                range = new;
-                self.consume(consume);
+        let (consumed, range) = match self.input {
+            [b'*', ..] => (1, Range(0, None)),
+            [b'?', ..] if self.extended => (1, Range(0, Some(1))),
+            [b'+', ..] if self.extended => (1, Range(1, None)),
+            [b'\\', b'?', ..] if !self.extended => (2, Range(0, Some(1))),
+            [b'\\', b'+', ..] if !self.extended => (2, Range(1, None)),
+            [b'{', ..] if self.extended => {
+                self.consume(1);
+                return self.parse_interval();
             }
-        }
+            [b'\\', b'{', ..] if !self.extended => {
+                self.consume(2);
+                return self.parse_interval();
+            }
+            _ => return Ok(Range(1, Some(1))),
+        };
+        self.consume(consumed);
         Ok(range)
+    }
+
+    fn parse_interval(&mut self) -> Result<Range, Error> {
+        let first = self.take_int()?;
+        let (min, max) = if self.input.first() == Some(&b',') {
+            self.consume(1);
+            (first.unwrap_or(0), self.take_int()?)
+        } else {
+            let first = first.ok_or(Error::EmptyRepetition)?;
+            (first, Some(first))
+        };
+        let closing = if self.extended { b"}".as_slice() } else { br"\}" };
+        if !self.input.starts_with(closing) {
+            return Err(Error::UnclosedRepetition);
+        }
+        self.consume(closing.len());
+        if max.is_some_and(|max| min > max) {
+            return Err(Error::IllegalRange);
+        }
+        // GNU regex and Git support the same finite interval limit in BRE and ERE.
+        if min > 32767 || max.is_some_and(|max| max > 32767) {
+            return Err(Error::IntegerOverflow);
+        }
+        Ok(Range(min, max))
     }
     fn bracket_item(&mut self) -> Result<Collation, Error> {
         let first = self.next()?;
@@ -391,6 +372,7 @@ impl<'a> PosixRegexBuilder<'a> {
         self.builder.start_internal(Token::Alternative, Range(1, Some(1)));
         while let Ok(c) = self.next() {
             let token = match c {
+                b'*' | b'+' | b'?' | b'{' if self.extended => return Err(Error::LeadingRepetition),
                 b'^' if self.extended || at_start => Token::Start,
                 b'$' if self.extended
                     || self.input.is_empty()
