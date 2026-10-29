@@ -490,13 +490,17 @@ where
                             .map(Some);
                     }
                 }
-                for index in self.retained_indices.lock().iter() {
-                    if let Some(iter) = index.iter(pack_id) {
-                        return iter
-                            .map(|e| e.map(|e| (e.pack_offset, e.oid)))
-                            .collect::<Result<Vec<_>>>()
-                            .map(Some);
-                    }
+                let retained = self
+                    .retained_indices
+                    .lock()
+                    .iter()
+                    .find(|index| index.pack(pack_id).is_some())
+                    .cloned();
+                if let Some(iter) = retained.as_ref().and_then(|index| index.iter(pack_id)) {
+                    return iter
+                        .map(|e| e.map(|e| (e.pack_offset, e.oid)))
+                        .collect::<Result<Vec<_>>>()
+                        .map(Some);
                 }
             }
 
