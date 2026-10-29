@@ -136,7 +136,7 @@ impl Repository {
         })
     }
 
-    fn require_hook_trust(&self) -> Result<()> {
+    pub(crate) fn require_hook_trust(&self) -> Result<()> {
         ensure!(
             self.git_dir_trust() == gix_sec::Trust::Full,
             permission_denied("Repository hooks require full repository trust")
@@ -157,7 +157,7 @@ impl Repository {
         self.hooks_directory_in(&self.hook_working_directory(None))
     }
 
-    fn hooks_directory_in(&self, working_dir: &Path) -> Result<PathBuf> {
+    pub(crate) fn hooks_directory_in(&self, working_dir: &Path) -> Result<PathBuf> {
         let default = self.current_dir().join(self.common_dir()).join("hooks");
         let Some(value) = self
             .config
