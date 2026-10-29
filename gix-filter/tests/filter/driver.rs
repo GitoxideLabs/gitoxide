@@ -318,7 +318,7 @@ mod shutdown {
             "shutdown diagnostics identify the program that was actually invoked"
         );
         #[cfg(not(windows))]
-        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(env!("CARGO_BIN_EXE_gix-filter-test-arrow"), "<filter-driver>")]), "the prepared command, program, and status are retained", @r#"Filter process failed, command="\"/bin/sh\" \"-c\" \"'<filter-driver>' process fail-on-shutdown\" \"sh\"", exit_code=1, exit_status="exit status: 1", program="/bin/sh""#);
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(env!("CARGO_BIN_EXE_gix-filter-test-arrow"), "<filter-driver>")]), "the prepared command, program, and status are retained", @r#"Filter process failed, command="\"/bin/sh\" \"-c\" \"'<filter-driver>' process fail-on-shutdown\" \"'<filter-driver>' process fail-on-shutdown\"", exit_code=1, exit_status="exit status: 1", program="/bin/sh""#);
         #[cfg(windows)]
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(env!("CARGO_BIN_EXE_gix-filter-test-arrow"), "<filter-driver>")]), "the prepared command, program, and status are retained", @r#"Filter process failed, command="\"<filter-driver>\" \"process\" \"fail-on-shutdown\"", exit_code=1, exit_status="exit code: 1", program="<filter-driver>""#);
         Ok(())
@@ -634,7 +634,7 @@ pub(crate) mod apply {
             kind: Other,
             error: Message {
                 message: "Driver process failed",
-                values: {command: String("\"/bin/sh\" \"-c\" \"'<filter-driver>' smudge 'do/fail'\" \"sh\""), exit_code: I64(101), exit_status: String("exit status: 101"), program: Path("/bin/sh")},
+                values: {command: String("\"/bin/sh\" \"-c\" \"'<filter-driver>' smudge 'do/fail'\" \"'<filter-driver>' smudge 'do/fail'\""), exit_code: I64(101), exit_status: String("exit status: 101"), program: Path("/bin/sh")},
             },
         }
         "#);
