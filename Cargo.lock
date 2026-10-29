@@ -2433,6 +2433,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "gix-regex"
+version = "0.1.0"
+
+[[package]]
 name = "gix-revision"
 version = "0.52.0"
 dependencies = [
