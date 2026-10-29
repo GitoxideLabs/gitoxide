@@ -630,6 +630,116 @@ fn dry_run_and_atomic_local_rejections_do_not_change_refs() -> TestResult {
 
 #[test]
 #[cfg(unix)]
+fn configured_push_options_reset_defaults_and_yield_to_explicit_options() -> TestResult {
+    use std::os::unix::fs::PermissionsExt;
+
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let (mut repo, destination) = setup()?;
+    gix_testtools::git(destination.path(), "config receive.advertisePushOptions true")?;
+    let hook = destination.path().join("hooks/pre-receive");
+    std::fs::write(
+        &hook,
+        r#"#!/bin/sh
+printf '%s\n' "$GIT_PUSH_OPTION_COUNT" "${GIT_PUSH_OPTION_0-unset}" "${GIT_PUSH_OPTION_1-unset}" > options
+cat >/dev/null
+"#,
+    )?;
+    std::fs::set_permissions(hook, std::fs::Permissions::from_mode(0o755))?;
+    repo.config_snapshot_mut().append_config(
+        [
+            "push.pushOption=discarded",
+            "push.pushOption=",
+            "push.pushOption=first",
+            "push.pushOption=second",
+        ],
+        gix::config::Source::Api,
+    )?;
+    let tip_id = repo.head_id()?.detach();
+    let remote = repo.remote_at(destination.path())?;
+    for (name, explicit, expected) in [
+        ("configured", Vec::new(), "2\nfirst\nsecond\n"),
+        ("override", vec!["explicit".into()], "1\nexplicit\nunset\n"),
+        ("empty", vec!["".into()], "1\n\nunset\n"),
+    ] {
+        let outcome = remote.push(
+            [update(&format!("refs/heads/{name}"), Some(tip_id))?],
+            Options {
+                push_options: &explicit,
+                ..Options::default()
+            },
+            gix::progress::Discard,
+            |_, _| Ok(()),
+            &AtomicBool::default(),
+        )?;
+        assert!(matches!(outcome.updates[0].status, Status::Updated { .. }));
+        assert_eq!(
+            std::fs::read_to_string(destination.path().join("options"))?,
+            expected,
+            "configured defaults preserve resets and explicit empty options"
+        );
+    }
+    drop(remote);
+    repo.config_snapshot_mut()
+        .append_config(["push.pushOption"], gix::config::Source::Api)?;
+    let error = repo
+        .remote_at(destination.path())?
+        .push(
+            [update("refs/heads/invalid", Some(tip_id))?],
+            Options {
+                push_options: &["override".into()],
+                ..Options::default()
+            },
+            gix::progress::Discard,
+            |_, _| Ok(()),
+            &AtomicBool::default(),
+        )
+        .expect_err("implicit push options remain invalid even when explicit options override defaults");
+    assert!(error.is_validation());
+    assert_eq!(remote_id(destination.path(), "refs/heads/invalid")?, None);
+    Ok(())
+}
+
+#[test]
+fn configured_mirror_rejects_explicit_push_updates_before_writing() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let (mut repo, destination) = setup()?;
+    {
+        let mut config = repo.config_snapshot_mut();
+        config.set_raw_value(
+            "remote.mirror.url",
+            gix::path::into_bstr(destination.path().to_owned())?,
+        )?;
+        config.set_raw_value("remote.mirror.mirror", "true")?;
+    }
+    let tip_id = repo.head_id()?.detach();
+    let request = update("refs/heads/main", Some(tip_id))?;
+    let push = |repo: &Repository| {
+        repo.find_remote("mirror")?.push(
+            [request.clone()],
+            Options::default(),
+            gix::progress::Discard,
+            |_, _| Ok(()),
+            &AtomicBool::default(),
+        )
+    };
+    assert!(
+        push(&repo)
+            .expect_err("mirroring cannot be combined with explicit updates")
+            .is_validation()
+    );
+    assert_eq!(remote_id(destination.path(), "refs/heads/main")?, None);
+    repo.config_snapshot_mut()
+        .set_raw_value("remote.mirror.mirror", "false")?;
+    assert!(matches!(push(&repo)?.updates[0].status, Status::Updated { .. }));
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
 fn receive_hooks_push_options_and_atomic_reports_are_preserved() -> TestResult {
     use std::os::unix::fs::PermissionsExt;
 
