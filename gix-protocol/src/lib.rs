@@ -63,6 +63,9 @@ pub use gix_transport as transport;
 
 ///
 pub mod fetch;
+
+/// Sending reference updates and packs to a receive-pack service.
+pub mod push;
 #[cfg(any(feature = "blocking-client", feature = "async-client"))]
 pub use fetch::function::fetch;
 
