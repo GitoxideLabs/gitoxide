@@ -1,4 +1,5 @@
 use gix_error::{ErrorExt, OptionExt, ResultExt, bail, message, validation};
+use gix_object::bstr::ByteSlice;
 use gix_ref::transaction::{LogChange, PreviousValue, RefEdit};
 
 use crate::{Result, state};
@@ -80,6 +81,111 @@ impl crate::Repository {
         }
         Ok(())
     }
+
+    /// Forget all in-progress operations without changing HEAD, the index, or working-tree files.
+    ///
+    /// Clear merge, rebase, mailbox application, cherry-pick, revert, and bisect metadata. This has
+    /// the preservation semantics of Git's `--quit` commands, including saving autostashes to
+    /// `refs/stash` without applying them. Bisect state is removed without checking out its starting
+    /// revision. `ORIG_HEAD`, unrelated files, and unregistered rebase labels are retained.
+    ///
+    /// Rebase-generated references listed in `rebase-merge/refs-to-delete` must be valid names
+    /// beneath `refs/rewritten/`; malformed state is rejected without deleting other references.
+    /// Autostashes are preserved before removing operation directories. Failures can leave partial
+    /// cleanup, but an autostash is never discarded if it cannot be saved.
+    ///
+    /// Cleanup is repeatable, ignores reference namespaces like Git's local operation commands,
+    /// and affects only this worktree. The caller must prevent concurrent changes to operation state.
+    pub fn clear_operation_state(&self) -> Result<()> {
+        let mut repo = self.clone();
+        repo.make_paths_absolute()?;
+        repo.clear_namespace();
+        for name in ["rebase-apply", "rebase-merge", "sequencer"] {
+            let path = repo.git_dir().join(name);
+            match std::fs::symlink_metadata(&path) {
+                Ok(metadata) if metadata.file_type().is_dir() => {}
+                Ok(_) => bail!(validation(format!(
+                    "Operation state is not a directory: {}",
+                    path.display()
+                ))),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    return Err(err.and_raise(message!("Could not inspect operation state at {}", path.display())));
+                }
+            }
+        }
+        let mut references = Vec::new();
+        if let Some(names) = read_state_file(&repo.git_dir().join("rebase-merge/refs-to-delete"))? {
+            for name in names.lines() {
+                let full_name = <&gix_ref::FullNameRef>::try_from(name.as_bstr())
+                    .or_raise(|| validation("Invalid reference name in rebase cleanup state"))?;
+                if !full_name.as_bstr().starts_with(b"refs/rewritten/") {
+                    bail!(validation(format!(
+                        "Refusing to remove non-rebase reference {}",
+                        full_name.as_bstr()
+                    )));
+                }
+                if let Some(reference) = repo.try_find_reference(full_name.as_bstr())? {
+                    references.push(reference);
+                }
+            }
+        }
+        references.extend(
+            repo.references()?
+                .prefixed("refs/bisect/")?
+                .collect::<Result<Vec<_>>>()?,
+        );
+        for name in [
+            "CHERRY_PICK_HEAD",
+            "REVERT_HEAD",
+            "REBASE_HEAD",
+            "BISECT_HEAD",
+            "BISECT_EXPECTED_REV",
+        ] {
+            if let Some(reference) = repo.try_find_reference(name)? {
+                references.push(reference);
+            }
+        }
+        for name in ["rebase-apply", "rebase-merge"] {
+            let path = repo.git_dir().join(name).join("autostash");
+            if let Some(content) = read_state_file(&path)? {
+                let stash_commit_id = gix_hash::ObjectId::from_hex(content.trim())
+                    .or_raise(|| validation(format!("Invalid autostash object ID at {}", path.display())))?;
+                save_autostash(&repo, stash_commit_id)?;
+                remove_state_file(&path)?;
+            }
+        }
+        repo.clear_merge_state()?;
+        references.sort_unstable_by(|a, b| a.name().cmp(b.name()));
+        references.dedup_by(|a, b| a.name() == b.name());
+        for reference in references {
+            delete_reference(&repo, &reference)?;
+        }
+        for name in ["rebase-apply", "rebase-merge", "sequencer"] {
+            let path = repo.git_dir().join(name);
+            match std::fs::remove_dir_all(&path) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    return Err(err.and_raise(message!("Could not remove operation state at {}", path.display())));
+                }
+            }
+        }
+        for name in [
+            "SQUASH_MSG",
+            "BISECT_ANCESTORS_OK",
+            "BISECT_LOG",
+            "BISECT_NAMES",
+            "BISECT_RUN",
+            "BISECT_TERMS",
+            "BISECT_FIRST_PARENT",
+            "BISECT_RESET_WHEN_FOUND",
+            "BISECT_START",
+        ] {
+            remove_state_file(&repo.git_dir().join(name))?;
+        }
+        Ok(())
+    }
 }
 
 fn save_autostash(repo: &crate::Repository, stash_commit_id: gix_hash::ObjectId) -> Result<()> {
@@ -137,5 +243,13 @@ fn remove_state_file(path: &std::path::Path) -> Result<()> {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(err) => Err(err.and_raise(message!("Could not remove operation state at {}", path.display()))),
+    }
+}
+
+fn read_state_file(path: &std::path::Path) -> Result<Option<Vec<u8>>> {
+    match std::fs::read(path) {
+        Ok(content) => Ok(Some(content)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err.and_raise(message!("Could not read operation state at {}", path.display()))),
     }
 }
