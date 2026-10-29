@@ -303,9 +303,10 @@ impl TryFrom<Prepare> for Command {
 /// Create a Windows command using Git-compatible `PATH` lookup and shebang dispatch.
 ///
 /// The last `PATH` in `inline_env` overrides the last one in `env`, which overrides the inherited value (of this process).
-/// The selected `PATH` is searched in order. A resolved shebang script is launched through its interpreter, ignoring shebang
-/// arguments. If `PATH` does not resolve a bare command, the missing program remains anchored in its first entry
-/// so Rust's broader Windows lookup cannot find it elsewhere.
+/// The selected `PATH` is searched in order for both commands and shebang interpreter basenames. Interpreters must
+/// have an `.exe` suffix; their shebang directory and arguments are ignored, like Git for Windows. If `PATH` does not
+/// resolve a bare command, the missing program remains anchored in its first entry so Rust's broader Windows lookup
+/// cannot find it elsewhere.
 fn windows_command(command: OsString, env: &[(OsString, OsString)], inline_env: &[(String, OsString)]) -> Command {
     let explicit_joined_paths = inline_env
         .iter()
@@ -336,8 +337,30 @@ fn windows_command(command: OsString, env: &[(OsString, OsString)], inline_env: 
         }
         None => Cow::Borrowed(command.as_ref()),
     };
-    if let Some(shebang) = extract_interpreter(program.as_ref()) {
-        let mut cmd = Command::new(shebang.interpreter);
+    if let Some(mut interpreter) = extract_interpreter(program.as_ref()).and_then(|shebang| {
+        let path = gix_path::into_bstr(shebang.interpreter).ok()?;
+        let basename = path.rsplit(|byte| matches!(byte, b'/' | b'\\')).next()?;
+        gix_path::from_byte_slice(basename)
+            .ok()
+            .map(|path| path.as_os_str().to_owned())
+    }) {
+        // Git for Windows searches PATH for the interpreter's basename, accepting only .exe files.
+        if !Path::new(&interpreter)
+            .extension()
+            .is_some_and(|extension| extension.as_encoded_bytes().eq_ignore_ascii_case(b"exe"))
+        {
+            interpreter.push(".exe");
+        }
+        let interpreter = joined_paths
+            .as_deref()
+            .and_then(|paths| win_path_lookup(Path::new(&interpreter), paths))
+            .unwrap_or_else(|| {
+                prevent_further_path_lookup(
+                    Path::new(&interpreter),
+                    joined_paths.as_deref().unwrap_or_else(|| OsStr::new("")),
+                )
+            });
+        let mut cmd = Command::new(interpreter);
         // Git for Windows ignores shebang arguments and passes only the script path.
         cmd.arg(program.as_ref());
         cmd
@@ -409,14 +432,63 @@ mod tests {
         let explicit_script = windows_command("./ssh".into(), &[], &[]);
         assert_eq!(
             explicit_script.get_program(),
-            Path::new("/untrusted/interpreter"),
-            "an explicitly requested script retains shebang support"
+            bin.join("interpreter.exe"),
+            "an explicit script's missing interpreter stays confined to PATH"
         );
         assert_eq!(
             explicit_script.get_args().collect::<Vec<_>>(),
             [OsStr::new("./ssh")],
             "the interpreter receives the explicitly requested script"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn windows_shebang_interpreters_use_the_selected_path() -> gix_testtools::TestResult {
+        let root = gix_testtools::scripted_fixture_read_only("windows_shebang.sh")?;
+        let paths = std::env::join_paths([root.join("first"), root.join("second")])?;
+        let environment = [(OsString::from("PATH"), paths.clone())];
+        for (script, interpreter) in [
+            ("hook", "sh.exe"),
+            ("backslash-hook", "sh.exe"),
+            ("exe-hook", "sh.exe"),
+            ("dotted-hook", "python3.11.exe"),
+        ] {
+            let script = root.join(script);
+            let command = windows_command(script.clone().into(), &environment, &[]);
+            assert_eq!(
+                command.get_program(),
+                root.join("second").join(interpreter),
+                "the interpreter basename resolves to an .exe in PATH, skipping extensionless files"
+            );
+            assert_eq!(
+                command.get_args().collect::<Vec<_>>(),
+                [script.as_os_str()],
+                "only the literal script path is passed; shebang options are ignored like Git for Windows"
+            );
+        }
+        let command = windows_command(
+            root.join("hook").into(),
+            &environment,
+            &[("PATH".to_owned(), root.join("third").into())],
+        );
+        assert_eq!(
+            command.get_program(),
+            root.join("third").join("sh.exe"),
+            "inline PATH assignments also govern interpreter lookup"
+        );
+        for paths in [paths, OsString::new()] {
+            let command = windows_command(
+                root.join("missing-hook").into(),
+                &[(OsString::from("PATH"), paths.clone())],
+                &[],
+            );
+            assert_eq!(
+                command.get_program(),
+                prevent_further_path_lookup(Path::new("absent.exe"), &paths),
+                "a missing interpreter stays confined to the selected PATH"
+            );
+        }
         Ok(())
     }
 
