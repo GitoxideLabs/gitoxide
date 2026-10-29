@@ -184,9 +184,10 @@ fn start_and_end() {
     assert!(matches_exact(r".*\(^\|a\)c", "ac").is_some());
     assert!(matches_exact(r".*\(^\|a\)c", "bc").is_none());
 
-    // Tests if ^ can be repeated without issues
+    // In basic syntax, only the first character of a branch can be a start anchor.
     assert!(matches_exact(".*^^a", "helloabc").is_none());
-    assert!(matches_exact(".*^^a", "abc").is_some());
+    assert!(matches_exact(".*^^a", "abc").is_none());
+    assert!(matches_exact(".*^^a", "^^abc").is_some());
 }
 #[test]
 fn word_boundaries() {

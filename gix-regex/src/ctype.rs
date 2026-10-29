@@ -39,6 +39,10 @@ pub const fn is_xdigit(c: u8) -> bool {
     c.is_ascii_hexdigit()
 }
 
+pub const fn is_word(c: u8) -> bool {
+    is_alnum(c) || c == b'_'
+}
+
 pub const fn is_word_boundary(c: u8) -> bool {
-    !is_alnum(c) && c != b'_'
+    !is_word(c)
 }
