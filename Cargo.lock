@@ -1479,6 +1479,7 @@ dependencies = [
  "gix-tix",
  "prodash",
  "serde_derive",
+ "signal-hook 0.4.4",
  "terminal_size",
  "tracing",
 ]

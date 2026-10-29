@@ -191,6 +191,10 @@ terminal_size = "0.4.2"
 serde_derive = ">=1.0.185"
 
 document-features = { version = "0.2.0", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+signal-hook = { version = "0.4.3", default-features = false }
+
 [profile.dev.package]
 insta.opt-level = 3
 similar.opt-level = 3

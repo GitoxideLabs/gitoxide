@@ -8,6 +8,8 @@ pub struct Options {
     pub shallow: gix::remote::fetch::Shallow,
     pub ref_name: Option<gix::refs::PartialName>,
     pub revision: Option<gix::bstr::BString>,
+    #[cfg(unix)]
+    pub cache_daemon: Option<gix::credentials::program::cache::DaemonCommand>,
 }
 
 pub const PROGRESS_RANGE: std::ops::RangeInclusive<u8> = 1..=3;
@@ -40,6 +42,8 @@ pub(crate) mod function {
             ref_name,
             revision,
             shallow,
+            #[cfg(unix)]
+            cache_daemon,
         }: Options,
     ) -> Result<()>
     where
@@ -74,6 +78,10 @@ pub(crate) mod function {
             gix::create::Options::default(),
             {
                 let mut opts = gix::open::Options::default().config_overrides(overrides);
+                #[cfg(unix)]
+                {
+                    opts = opts.credential_cache_daemon(cache_daemon);
+                }
                 opts.permissions.config.git_binary = true;
                 opts
             },
