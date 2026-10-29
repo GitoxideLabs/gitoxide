@@ -35,7 +35,8 @@ impl Repository {
     ///
     /// Before any worktree write, changed tracked files must match either the baseline or target. With
     /// `overwrite_tracked`, dirty or missing baseline-tracked files are restored as well. Existing untracked
-    /// and ignored files, including obstructions inside directories, are always preserved. Submodules are not
+    /// and ignored files, including obstructions inside directories, are preserved unless `overwrite_ignored`
+    /// permits replacing ignored obstructions. Nested repositories remain protected. Submodules are not
     /// checked out recursively. Files already excluded by `SKIP_WORKTREE` remain excluded while their index
     /// content is updated; sparse patterns are not reevaluated. Compressed sparse indexes are not yet supported.
     /// Baseline and target must be full, stage-zero indexes without intent-to-add entries. Touched conflicts
@@ -312,7 +313,7 @@ impl Repository {
             })
         };
         let mut changes = Vec::new();
-        let mut directories = Vec::new();
+        let mut obstructions = Vec::new();
         for (path, item) in &pending {
             let path = path.as_bstr();
             if item.skipped {
@@ -342,32 +343,42 @@ impl Repository {
                     match disk {
                         Disk::Missing => {}
                         Disk::Blocked(parent) => {
-                            ensure!(
-                                owned_entry(parent.as_bstr()).is_some_and(|entry| pending
+                            if !owned_entry(parent.as_bstr()).is_some_and(|entry| {
+                                pending
                                     .get(entry.path(baseline))
-                                    .is_some_and(|item| item.to.is_none() && !item.skipped)),
-                                conflict(parent.as_bstr(), "Untracked parent would be overwritten")
-                            );
+                                    .is_some_and(|item| item.to.is_none() && !item.skipped)
+                            }) {
+                                ensure!(
+                                    options.overwrite_ignored,
+                                    conflict(parent.as_bstr(), "Untracked parent would be overwritten")
+                                );
+                                obstructions.push(parent);
+                            }
                         }
                         Disk::Present(metadata) => {
                             if metadata.is_dir() && !metadata.is_symlink() {
                                 if desired.mode != Mode::COMMIT {
-                                    directories.push(path.to_owned());
+                                    obstructions.push(path.to_owned());
                                 }
                             } else {
-                                let old = owned_entry(path).ok_or_else(|| {
-                                    conflict(path, "Untracked worktree content would be overwritten").raise()
-                                })?;
                                 ensure!(
                                     metadata.is_file() || metadata.is_symlink(),
                                     conflict(path, "Unsupported worktree file type")
                                 );
-                                if (metadata.is_symlink() || matches!(desired.mode, Mode::SYMLINK | Mode::COMMIT))
-                                    && !pending
-                                        .get(old.path(baseline))
-                                        .is_some_and(|item| item.to.is_none() && !item.skipped)
-                                {
-                                    changes.push(Change::Remove { path: path.to_owned() });
+                                if let Some(old) = owned_entry(path) {
+                                    if (metadata.is_symlink() || matches!(desired.mode, Mode::SYMLINK | Mode::COMMIT))
+                                        && !pending
+                                            .get(old.path(baseline))
+                                            .is_some_and(|item| item.to.is_none() && !item.skipped)
+                                    {
+                                        changes.push(Change::Remove { path: path.to_owned() });
+                                    }
+                                } else {
+                                    ensure!(
+                                        options.overwrite_ignored,
+                                        conflict(path, "Untracked worktree content would be overwritten")
+                                    );
+                                    obstructions.push(path.to_owned());
                                 }
                             }
                         }
@@ -376,7 +387,7 @@ impl Repository {
                 }
             }
         }
-        if !directories.is_empty() {
+        if !obstructions.is_empty() {
             check.clone_from(baseline);
             // Removed gitlinks must be classified from disk instead of acting as repository boundaries.
             check.remove_entries(|_, path, entry| {
@@ -389,9 +400,15 @@ impl Repository {
             let mut collect = gix_dir::walk::delegate::Collect::default();
             repo.dirwalk(
                 &check,
-                directories.iter().map(|path| literal(path.as_bstr())),
+                obstructions.iter().map(|path| literal(path.as_bstr())),
                 should_interrupt,
                 repo.dirwalk_options()?
+                    .for_deletion(
+                        options
+                            .overwrite_ignored
+                            .then_some(gix_dir::walk::ForDeletionMode::FindRepositoriesInIgnoredDirectories),
+                    )
+                    .classify_untracked_bare_repositories(options.overwrite_ignored)
                     .emit_tracked(true)
                     .emit_ignored(Some(gix_dir::walk::EmissionMode::Matching))
                     .emit_empty_directories(true),
@@ -408,10 +425,20 @@ impl Repository {
                     entry.disk_kind != Some(gix_dir::entry::Kind::Repository),
                     conflict(entry.rela_path.as_bstr(), "A nested repository would be overwritten")
                 );
-                ensure!(
-                    owned_entry(entry.rela_path.as_bstr()).is_some_and(|old| pending
+                let owned = owned_entry(entry.rela_path.as_bstr()).is_some_and(|old| {
+                    pending
                         .get(old.path(baseline))
-                        .is_some_and(|item| item.to.is_none() && !item.skipped)),
+                        .is_some_and(|item| item.to.is_none() && !item.skipped)
+                });
+                if !owned
+                    && options.overwrite_ignored
+                    && entry.status == gix_dir::entry::Status::Ignored(gix_ignore::Kind::Expendable)
+                {
+                    changes.push(Change::Remove { path: entry.rela_path });
+                    continue;
+                }
+                ensure!(
+                    owned,
                     conflict(
                         entry.rela_path.as_bstr(),
                         "Untracked directory content would be overwritten"
