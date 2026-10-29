@@ -46,6 +46,13 @@ pub struct Options {
     pub dry_run: bool,
     /// Delete stale destinations covered by explicit refspecs before updating fetched refs.
     pub prune: bool,
+    /// Replace the worktree's `FETCH_HEAD` with the refs received by this fetch.
+    ///
+    /// Explicit refspecs are merge candidates, as with `git fetch <remote> <refspec>…`;
+    /// implicit tags and non-commit targets are not for merging. The file is locked before
+    /// fetching and atomically replaced afterwards. Unlike Git, errors leave the old file intact.
+    /// Disabled by default and always ignored during a dry run.
+    pub write_fetch_head: bool,
     /// Allow a selection whose exact source refs no longer exist.
     pub missing_refs_allowed: bool,
     /// Write reference updates directly to packed-refs.
