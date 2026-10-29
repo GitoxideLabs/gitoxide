@@ -37,21 +37,20 @@ mod connect {
     #[cfg_attr(all(feature = "async-client", not(feature = "blocking-client")), async_std::test)]
     async fn unused_url_components_are_validation_failures() -> TestResult {
         let urls = [
-            gix_url::parse("git://user@host/repo")?,
+            gix_url::parse("git://user:password-sentinel@host/repo")?,
             #[cfg(feature = "blocking-client")]
             {
                 let mut url = gix_url::parse("file:///repo")?;
                 url.host = Some("host".into());
                 url.user = Some("user".into());
-                url.password = Some("secret".into());
+                url.password = Some("password-sentinel".into());
                 url.port = Some(123);
                 url
             },
         ];
         for url in urls {
             let expected = format!(
-                "The url {:?} contains information that would not be used by the {} protocol",
-                url.to_bstring(),
+                "The URL contains authority information that would not be used by the {} protocol",
                 url.scheme
             );
             let err = connect(url, Default::default())
@@ -59,9 +58,41 @@ mod connect {
                 .err()
                 .expect("unused URL fields must be rejected before connecting");
             assert!(err.is_validation(), "the caller supplied unusable URL fields");
+            for diagnostic in [format!("{err}"), format!("{err:?}")] {
+                assert!(
+                    !diagnostic.contains("password-sentinel"),
+                    "unused URL fields must not expose passwords: {diagnostic}"
+                );
+            }
 
-            assert_eq!(err.to_string(), expected, "the URL diagnostic remains unchanged");
+            assert_eq!(
+                err.to_string(),
+                expected,
+                "the diagnostic identifies the unusable authority information"
+            );
         }
+        Ok(())
+    }
+
+    #[cfg(feature = "blocking-client")]
+    #[test]
+    fn unsupported_ssh_schemes_keep_url_passwords_private() -> TestResult {
+        let url = gix_url::parse("https://user:password-sentinel@example.com/repository")?;
+        let err = gix_transport::client::blocking_io::ssh::connect(
+            url,
+            gix_transport::Protocol::V1,
+            Default::default(),
+            false,
+        )
+        .err()
+        .expect("SSH rejects an HTTPS URL before starting a process");
+        for diagnostic in [format!("{err}"), format!("{err:?}")] {
+            assert!(
+                !diagnostic.contains("password-sentinel"),
+                "SSH errors must not expose URL passwords: {diagnostic}"
+            );
+        }
+        assert!(gix_error::Error::from_error(err).is_unsupported());
         Ok(())
     }
 

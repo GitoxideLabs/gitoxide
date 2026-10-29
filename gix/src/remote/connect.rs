@@ -78,8 +78,9 @@ impl<'repo> Remote<'repo> {
     /// Produce the sanitized URL and protocol version to use as obtained by querying the repository configuration.
     ///
     /// This can be useful when using custom transports to allow additional configuration.
-    /// Repository path resolution failures and denied protocols include the path or URL bytes as `input`
-    /// [metadata](gix_error::Error::metadata()). A local URL with a configured service command
+    /// Repository path resolution failures include the path bytes as `input`
+    /// [metadata](gix_error::Error::metadata()). Protocol denials omit URLs, which can contain credentials.
+    /// A local URL with a configured service command
     /// is passed to that command without requiring it to name an existing repository.
     pub fn sanitized_url_and_version(
         &self,
@@ -103,10 +104,7 @@ impl<'repo> Remote<'repo> {
                         gix_discover::is_git(dir.as_ref())
                     })
                     .or_raise(|| {
-                        message!(
-                            "Could not verify that {:?} is a valid git directory before attempting to use it",
-                            url.to_bstring()
-                        )
+                        message!("Could not verify local remote directory {dir:?} before attempting to use it")
                     })?;
                 let Some(repository_path) = gix_discover::repository::Path::from_dot_git_dir(
                     dir.clone().into_owned(),
@@ -139,9 +137,7 @@ impl<'repo> Remote<'repo> {
             .to_owned();
         if !self.repo.config.url_scheme()?.allow(&url.scheme) {
             bail!(
-                "Protocol {:?} is denied per configuration"
-                    .permission_denied()
-                    .with_input(url.to_bstring()),
+                "Protocol {:?} is denied per configuration".permission_denied(),
                 url.scheme
             );
         }
