@@ -20,6 +20,8 @@ mod filter;
 mod fsmonitor;
 #[cfg(feature = "object-maintenance")]
 mod gc;
+#[cfg(feature = "command")]
+mod hooks;
 mod location;
 #[cfg(feature = "mailmap")]
 mod mailmap;
