@@ -6,26 +6,35 @@ use std::{
     process::{Command, Output, Stdio},
 };
 
-/// Prepare a traditional hook with resolved paths, literal arguments and environment overrides.
+/// Prepare the traditional hook at `path` using the resolved execution `context`.
 ///
-/// Relative hook paths start at the absolute working directory. Interpreter lookup follows
-/// `gix-command`; arguments and environment are applied to the prepared command afterward.
+/// Relative paths start at `context.working_dir`. Paths and arguments are literal. Environment
+/// overrides reach Windows interpreter lookup and take precedence over repository context afterward.
+/// Standard input is closed by default and stdout is captured; stderr follows command context.
+/// Use [`run()`] for captured stderr, piped input, and Unix execution-time shell fallback.
 pub fn prepare(path: &Path, context: &Context<'_>, options: Options<'_>) -> Result<Command> {
+    command(gix_command::prepare(context.working_dir.join(path)), context, options)
+}
+
+fn command(preparation: gix_command::Prepare, context: &Context<'_>, options: Options<'_>) -> Result<Command> {
     ensure!(
         context.working_dir.is_absolute() && context.common_dir.is_absolute(),
         validation("Hook working and common directories must be absolute")
     );
-    let mut command =
-        Command::try_from(gix_command::prepare(context.working_dir.join(path)).with_context(context.command.clone()))?;
-    command
+    let mut preparation = preparation
         .current_dir(context.working_dir)
-        .env("GIT_COMMON_DIR", context.common_dir);
+        .with_context(context.command.clone())
+        .env("GIT_COMMON_DIR", context.common_dir)
+        .args(options.arguments.iter().copied());
+    for (name, value) in options.environment {
+        preparation = preparation.env(*name, *value);
+    }
+    let mut command = Command::try_from(preparation)?;
     if context.command.worktree_dir.is_none() {
         command.env_remove("GIT_WORK_TREE");
     }
-    command
-        .args(options.arguments)
-        .envs(options.environment.iter().copied());
+    // PATH participates in Windows lookup before conversion; explicit values win over context afterward.
+    command.envs(options.environment.iter().copied());
     Ok(command)
 }
 

@@ -83,3 +83,8 @@ cat >repo/.git/hooks/pre-receive <<'HOOK'
 printf 'must not run\n'
 HOOK
 chmod +x repo/.git/hooks/pre-receive
+
+# Windows preparation can inspect an interpreter selected by a relative PATH
+# without executing this placeholder. Execution tests supply the real shell.
+mkdir -p repo/hook-interpreter
+printf 'interpreter placeholder\n' >repo/hook-interpreter/sh.exe
