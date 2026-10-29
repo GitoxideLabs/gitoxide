@@ -1549,6 +1549,7 @@ dependencies = [
  "gix-glob",
  "gix-hash",
  "gix-hashtable",
+ "gix-hook",
  "gix-ignore",
  "gix-index",
  "gix-lock",

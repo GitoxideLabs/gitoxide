@@ -112,6 +112,8 @@ pub mod freelist;
 #[cfg(feature = "object-maintenance")]
 pub mod gc;
 mod graph;
+#[cfg(feature = "command")]
+mod hooks;
 pub(crate) mod identity;
 mod impls;
 #[cfg(feature = "index")]
