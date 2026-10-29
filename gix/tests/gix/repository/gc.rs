@@ -331,3 +331,47 @@ fn hooks_can_introduce_new_objects_that_protect_older_dependencies() -> TestResu
     );
     Ok(())
 }
+
+#[test]
+fn full_gc_expires_logs_before_objects_and_honors_reference_packing_configuration() -> TestResult {
+    for kind in ["bare", "worktree"] {
+        for pack_refs in ["true", "false", "notbare"] {
+            for use_git in [true, false] {
+                let fixture = gix_testtools::scripted_fixture_writable("make_full_gc.sh")?;
+                let path = fixture.path().join(kind);
+                gix_testtools::git(&path, &format!("config gc.packRefs {pack_refs}"))?;
+                let repo = gix::open_opts(&path, crate::restricted())?;
+                let old_id = ids(&path, "old-id")?[0];
+                if use_git {
+                    gix_testtools::git(&path, "gc --prune=now")?;
+                } else {
+                    let options = Options {
+                        expire: SystemTime::now() + Duration::from_secs(1),
+                        dry_run: true,
+                    };
+                    let outcome = repo.gc(options, &AtomicBool::default())?;
+                    assert!(outcome.reflogs.removed > 0);
+                    assert!(repo.try_find_object(old_id)?.is_some(), "dry run preserves objects");
+                    assert!(repo.common_dir().join("refs/heads/main").is_file());
+                    repo.gc(
+                        Options {
+                            dry_run: false,
+                            ..options
+                        },
+                        &AtomicBool::default(),
+                    )?;
+                }
+                let repo = gix::open_opts(&path, crate::restricted())?;
+                assert!(
+                    repo.try_find_object(old_id)?.is_none(),
+                    "expired logs no longer protect old commits"
+                );
+                assert!(repo.head_commit().is_ok(), "the live branch remains valid");
+                let packed = pack_refs == "true" || (pack_refs == "notbare" && kind != "bare");
+                assert_eq!(repo.common_dir().join("refs/heads/main").is_file(), !packed);
+                gix_testtools::git(&path, "fsck --strict")?;
+            }
+        }
+    }
+    Ok(())
+}
