@@ -55,7 +55,7 @@ impl<'repo> Remote<'repo> {
         };
         let options = connect::Options {
             version,
-            working_dir: None,
+            working_dir: self.working_dir.clone(),
             #[cfg(feature = "blocking-network-client")]
             ssh: scheme_is_ssh
                 .then(|| self.ssh_connect_options())
@@ -85,9 +85,18 @@ impl<'repo> Remote<'repo> {
         &self,
         direction: crate::remote::Direction,
     ) -> Result<(gix_url::Url, gix_protocol::transport::Protocol)> {
-        fn sanitize(mut url: gix_url::Url) -> Result<gix_url::Url> {
+        fn sanitize(mut url: gix_url::Url, working_dir: Option<&std::path::Path>) -> Result<gix_url::Url> {
             if url.scheme == gix_url::Scheme::File {
                 let mut dir = gix_path::to_native_path_on_windows(Cow::Borrowed(url.path.as_ref()))?;
+                let current_dir = match working_dir {
+                    Some(directory) => Cow::Borrowed(directory),
+                    None => Cow::Owned(
+                        gix_fs::current_dir(false).or_raise(|| message("Could not obtain the current directory"))?,
+                    ),
+                };
+                if working_dir.is_some() {
+                    dir = Cow::Owned(current_dir.join(dir.as_ref()));
+                }
                 let kind = gix_discover::is_git(dir.as_ref())
                     .or_else(|_| {
                         dir.to_mut().push(gix_discover::DOT_GIT_DIR);
@@ -104,7 +113,7 @@ impl<'repo> Remote<'repo> {
                     kind,
                     // precomposed unicode doesn't matter here as long as the produced path is accessible,
                     // which is a given either way.
-                    &gix_fs::current_dir(false).or_raise(|| message("Could not obtain the current directory"))?,
+                    &current_dir,
                 ) else {
                     return Err(message("Could not access remote repository")
                         .with_input(gix_path::into_bstr(dir.into_owned())?.into_owned())
@@ -139,7 +148,7 @@ impl<'repo> Remote<'repo> {
         let url = if url.scheme == gix_url::Scheme::File && self.service_command(direction)?.is_some() {
             url
         } else {
-            sanitize(url)?
+            sanitize(url, self.working_dir.as_deref())?
         };
         Ok((url, version))
     }

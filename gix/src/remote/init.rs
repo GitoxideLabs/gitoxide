@@ -42,6 +42,7 @@ impl<'repo> Remote<'repo> {
             push_specs,
             fetch_tags,
             command_environment: Vec::new(),
+            working_dir: None,
             repo,
         })
     }
@@ -72,6 +73,7 @@ impl<'repo> Remote<'repo> {
             push_specs: Vec::new(),
             fetch_tags: Default::default(),
             command_environment: Vec::new(),
+            working_dir: None,
             repo,
         })
     }
