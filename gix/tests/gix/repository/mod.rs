@@ -24,6 +24,8 @@ mod merge;
 #[cfg(feature = "notes")]
 mod note;
 mod object;
+#[cfg(feature = "pack-generate")]
+mod pack;
 mod open;
 #[cfg(feature = "attributes")]
 mod pathspec;
