@@ -1792,6 +1792,8 @@ dependencies = [
  "gix-config-value",
  "gix-date",
  "gix-error",
+ "gix-fs",
+ "gix-lock",
  "gix-path",
  "gix-prompt",
  "gix-quote",

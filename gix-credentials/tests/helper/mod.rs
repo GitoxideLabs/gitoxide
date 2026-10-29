@@ -1,6 +1,7 @@
 mod cascade;
 mod context;
 mod invoke;
+mod store;
 
 #[test]
 fn consume_credentials_prefers_encoded_credentials_and_preserves_username_password() {

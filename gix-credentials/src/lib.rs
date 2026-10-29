@@ -10,13 +10,16 @@
 #![forbid(unsafe_code)]
 
 use gix_error::Result;
-/// A program/executable implementing the credential helper protocol.
+/// A native or external implementation of the credential helper protocol.
 #[derive(Debug)]
 pub struct Program {
     /// The kind of program, ready for launch.
     pub kind: program::Kind,
     /// If true, stderr is enabled, which is the default.
     pub stderr: bool,
+    /// How long the native `store` helper waits for its file lock. Defaults to one second.
+    /// Corresponds to Git's `credentialStore.lockTimeoutMS`.
+    pub store_lock_timeout: gix_lock::acquire::Fail,
     /// `Some(…)` if the process is running.
     child: Option<std::process::Child>,
 }

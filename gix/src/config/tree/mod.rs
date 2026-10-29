@@ -32,6 +32,8 @@ pub(crate) mod root {
         pub const CORE: sections::Core = sections::Core;
         /// The `credential` section.
         pub const CREDENTIAL: sections::Credential = sections::Credential;
+        /// The `credentialStore` section.
+        pub const CREDENTIAL_STORE: sections::CredentialStore = sections::CredentialStore;
         /// The `diff` section.
         #[cfg(feature = "blob-diff")]
         pub const DIFF: sections::Diff = sections::Diff;
@@ -92,6 +94,7 @@ pub(crate) mod root {
                 &Self::COMMIT,
                 &Self::CORE,
                 &Self::CREDENTIAL,
+                &Self::CREDENTIAL_STORE,
                 #[cfg(feature = "blob-diff")]
                 &Self::DIFF,
                 &Self::EXTENSIONS,
@@ -124,7 +127,7 @@ pub(crate) mod root {
 
 mod sections;
 pub use sections::{
-    Author, Branch, Checkout, Clone, Commit, Committer, Core, Credential, Extensions, Fetch, FsMonitor, Gitoxide, Gpg, Hook,
+    Author, Branch, Checkout, Clone, Commit, Committer, Core, Credential, CredentialStore, Extensions, Fetch, FsMonitor, Gitoxide, Gpg, Hook,
     Http, Index, Init, Mailmap, Merge, Notes, Pack, Protocol, Push, Remote, Safe, Ssh, Url, User, Worktree, branch,
     checkout, commit, core, credential, extensions, fetch, fsmonitor, gitoxide, gpg, http, index, merge, notes, pack,
     protocol, push, remote, ssh,

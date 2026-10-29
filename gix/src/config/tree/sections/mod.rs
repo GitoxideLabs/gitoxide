@@ -41,6 +41,11 @@ pub mod core;
 pub struct Credential;
 pub mod credential;
 
+/// The `credentialStore` top-level section.
+#[derive(Copy, Clone, Default)]
+pub struct CredentialStore;
+mod credential_store;
+
 /// The `diff` top-level section.
 #[derive(Copy, Clone, Default)]
 #[cfg(feature = "blob-diff")]
