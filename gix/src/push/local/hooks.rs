@@ -19,10 +19,16 @@ pub(super) struct Hooks<'a> {
     directory: PathBuf,
     push_options: Option<&'a [BString]>,
     interrupt: &'a AtomicBool,
+    environment: &'a [(OsString, OsString)],
 }
 
 impl<'a> Hooks<'a> {
-    pub fn new(repo: &'a Repository, push_options: Option<&'a [BString]>, interrupt: &'a AtomicBool) -> Result<Self> {
+    pub fn new(
+        repo: &'a Repository,
+        push_options: Option<&'a [BString]>,
+        interrupt: &'a AtomicBool,
+        environment: &'a [(OsString, OsString)],
+    ) -> Result<Self> {
         let directory = repo
             .config_snapshot()
             .trusted_path("core.hooksPath")?
@@ -32,6 +38,7 @@ impl<'a> Hooks<'a> {
             directory: repo.current_dir().join(directory),
             push_options,
             interrupt,
+            environment,
         })
     }
 
@@ -55,13 +62,14 @@ impl<'a> Hooks<'a> {
         context.stderr = None;
         context.no_replace_objects = Some(true);
         let (mut output, write_output) = io::pipe().or_error()?;
-        let mut command: Command = gix_command::prepare(path)
+        let mut prepare = gix_command::prepare(path)
             .with_context(context)
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::from(write_output.try_clone().or_error()?))
-            .stderr(Stdio::from(write_output))
-            .try_into()?;
+            .stderr(Stdio::from(write_output));
+        prepare.env.extend_from_slice(self.environment);
+        let mut command: Command = prepare.try_into()?;
         command.current_dir(self.repo.git_dir());
         // Repository-local process overrides belong to the sender, never the receiver.
         for key in [
