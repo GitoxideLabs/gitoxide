@@ -17,6 +17,8 @@ impl Remote<'_> {
     /// update local tracking refs. Use [`Self::urls()`] to handle additional configured push URLs.
     /// Local receive operations run receiver hooks and quarantine incoming objects. They preserve receiver
     /// shallow boundaries and honor `receive.shallowUpdate` when incoming history needs additional boundaries.
+    /// `receive.denyCurrentBranch=updateInstead` delegates deployment to a `push-to-checkout` hook;
+    /// its built-in worktree update is currently unsupported when no executable hook is present.
     /// They reject namespaces and advanced receive policies they cannot enforce before modifying references.
     pub fn push(
         &self,

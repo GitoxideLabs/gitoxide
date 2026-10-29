@@ -10,7 +10,7 @@ use std::{
 use crate::{
     Repository, Result,
     bstr::BString,
-    error::{ResultExt, message},
+    error::{OptionExt, ResultExt, message},
     push::{self, UpdateOutcome},
 };
 
@@ -57,12 +57,43 @@ impl<'a> Hooks<'a> {
         quarantine: Option<&Path>,
         progress: &mut impl FnMut(bool, &[u8]) -> io::Result<()>,
     ) -> Result<bool> {
+        Ok(self
+            .run_with_worktree(name, args, input, quarantine, None, progress)?
+            .unwrap_or(true))
+    }
+
+    /// Return `None` when no executable deployment hook is configured.
+    pub fn push_to_checkout(
+        &self,
+        worktree: &Repository,
+        new_id: gix_hash::ObjectId,
+        progress: &mut impl FnMut(bool, &[u8]) -> io::Result<()>,
+    ) -> Result<Option<bool>> {
+        self.run_with_worktree(
+            "push-to-checkout",
+            [new_id.to_string().into()],
+            Vec::new(),
+            None,
+            Some(worktree),
+            progress,
+        )
+    }
+
+    fn run_with_worktree(
+        &self,
+        name: &str,
+        args: impl IntoIterator<Item = OsString>,
+        input: Vec<u8>,
+        quarantine: Option<&Path>,
+        worktree: Option<&Repository>,
+        progress: &mut impl FnMut(bool, &[u8]) -> io::Result<()>,
+    ) -> Result<Option<bool>> {
         push::plan::check_interrupt(self.interrupt)?;
         let path = self.directory.join(name);
         match std::fs::metadata(&path) {
             Ok(metadata) if metadata.is_file() && executable(&metadata) => {}
-            Ok(_) => return Ok(true),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(true),
+            Ok(_) => return Ok(None),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(err) => return Err(err).or_error(),
         }
         let mut context = self.repo.command_context()?;
@@ -108,6 +139,14 @@ impl<'a> Hooks<'a> {
         }
         if let Some(path) = self.shallow_file {
             command.env("GIT_SHALLOW_FILE", self.repo.current_dir().join(path));
+        }
+        if let Some(worktree) = worktree {
+            let root = worktree
+                .workdir()
+                .ok_or_raise(|| message("A deployment hook requires a worktree").validation())?;
+            command
+                .env("GIT_DIR", worktree.current_dir().join(worktree.git_dir()))
+                .env("GIT_WORK_TREE", worktree.current_dir().join(root));
         }
         // Push options are passed only to the two receive hooks, as in receive-pack.
         command.env_remove("GIT_PUSH_OPTION_COUNT");
@@ -181,7 +220,7 @@ impl<'a> Hooks<'a> {
         {
             return Err(err).or_raise(|| message!("Could not send input to {name} hook"));
         }
-        Ok(success)
+        Ok(Some(success))
     }
 }
 

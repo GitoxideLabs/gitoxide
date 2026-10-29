@@ -197,6 +197,19 @@ pub(crate) fn push(
             &mut remote_progress,
         )? {
             update.status = Status::Rejected(Rejection::Server("hook declined".into()));
+        } else if let Some(worktree) = policy.worktree_to_update(destination, update)? {
+            let new_id = update.update.new_id.unwrap_or_else(|| source.object_hash().null());
+            match hooks.push_to_checkout(&worktree, new_id, &mut remote_progress)? {
+                Some(true) => {}
+                Some(false) => {
+                    update.status = Status::Rejected(Rejection::Server("push-to-checkout hook declined".into()));
+                }
+                None => {
+                    update.status = Status::Rejected(Rejection::Server(
+                        "updating checked-out worktrees without a push-to-checkout hook is not supported".into(),
+                    ));
+                }
+            }
         }
         if options.atomic && matches!(update.status, Status::Rejected(_)) {
             break;
