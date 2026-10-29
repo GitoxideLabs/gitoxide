@@ -1281,3 +1281,113 @@ mod prune {
         Ok(())
     }
 }
+
+#[cfg(feature = "blocking-network-client")]
+#[test]
+fn forced_updates_respect_the_shallow_boundary() -> gix_testtools::TestResult {
+    let fixture = gix_testtools::scripted_fixture_writable("make_shallow_forced_fetch_repo.sh")?;
+    let expected = gix_testtools::scripted_fixture_writable("make_shallow_forced_fetch_repo.sh")?;
+    gix_testtools::git(
+        expected.path().join("client"),
+        "fetch --depth=1 --no-tags ../source +refs/heads/other:refs/remotes/origin/main",
+    )?;
+    let local = gix::open_opts(fixture.path().join("client"), gix::open::Options::isolated())?;
+    let mut remote = local
+        .remote_at(gix::path::into_bstr(fixture.path().join("source"))?)?
+        .with_fetch_tags(gix::remote::fetch::Tags::None);
+    remote.replace_refspecs(
+        ["+refs/heads/other:refs/remotes/origin/main"],
+        gix::remote::Direction::Fetch,
+    )?;
+    let outcome = remote
+        .connect(gix::remote::Direction::Fetch)?
+        .prepare_fetch(gix::progress::Discard, Default::default())?
+        .with_shallow(gix::remote::fetch::Shallow::DepthAtRemote(1.try_into()?))
+        .receive(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
+    let updates = match outcome.status {
+        gix::remote::fetch::Status::Change { update_refs, .. }
+        | gix::remote::fetch::Status::NoPackReceived { update_refs, .. } => update_refs,
+    };
+    assert_eq!(updates.updates[0].mode, gix::remote::fetch::refs::update::Mode::Forced);
+    assert_eq!(
+        gix_testtools::git(local.git_dir(), "rev-parse refs/remotes/origin/main")?,
+        gix_testtools::git(expected.path().join("client"), "rev-parse refs/remotes/origin/main")?
+    );
+    Ok(())
+}
+
+#[cfg(feature = "blocking-network-client")]
+#[test]
+fn fetch_does_not_walk_through_present_parents_of_a_shallow_commit() -> gix_testtools::TestResult {
+    let fixture = gix_testtools::scripted_fixture_writable("make_shallow_forced_fetch_repo.sh")?;
+    let expected = gix_testtools::scripted_fixture_writable("make_shallow_forced_fetch_repo.sh")?;
+    let output = gix_testtools::git_command(expected.path().join("client"))
+        .args([
+            "fetch",
+            "--depth=1",
+            "--no-tags",
+            "../source",
+            "refs/heads/main:refs/heads/selected",
+        ])
+        .output()?;
+    assert!(
+        !output.status.success(),
+        "Git rejects the update because the advertised tip is shallow"
+    );
+    let local = gix::open_opts(fixture.path().join("client"), gix::open::Options::isolated())?;
+    let mut remote = local
+        .remote_at(gix::path::into_bstr(fixture.path().join("source"))?)?
+        .with_fetch_tags(gix::remote::fetch::Tags::None);
+    remote.replace_refspecs(["refs/heads/main:refs/heads/selected"], gix::remote::Direction::Fetch)?;
+    let outcome = remote
+        .connect(gix::remote::Direction::Fetch)?
+        .prepare_fetch(gix::progress::Discard, Default::default())?
+        .with_shallow(gix::remote::fetch::Shallow::DepthAtRemote(1.try_into()?))
+        .receive(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
+    let updates = match outcome.status {
+        gix::remote::fetch::Status::Change { update_refs, .. }
+        | gix::remote::fetch::Status::NoPackReceived { update_refs, .. } => update_refs,
+    };
+    assert_eq!(
+        updates.updates[0].mode,
+        gix::remote::fetch::refs::update::Mode::RejectedNonFastForward
+    );
+    assert_eq!(
+        gix_testtools::git(local.git_dir(), "rev-parse refs/heads/selected")?,
+        gix_testtools::git(expected.path().join("client"), "rev-parse refs/heads/selected")?
+    );
+    Ok(())
+}
+
+#[cfg(feature = "blocking-network-client")]
+#[test]
+fn fetch_fast_forward_checks_do_not_assume_monotonic_commit_times() -> gix_testtools::TestResult {
+    let fixture = gix_testtools::scripted_fixture_writable("make_shallow_forced_fetch_repo.sh")?;
+    let expected = gix_testtools::scripted_fixture_writable("make_shallow_forced_fetch_repo.sh")?;
+    gix_testtools::git(
+        expected.path().join("client-skew"),
+        "fetch --no-tags ../source refs/heads/skew:refs/heads/selected",
+    )?;
+    let local = gix::open_opts(fixture.path().join("client-skew"), gix::open::Options::isolated())?;
+    let mut remote = local
+        .remote_at(gix::path::into_bstr(fixture.path().join("source"))?)?
+        .with_fetch_tags(gix::remote::fetch::Tags::None);
+    remote.replace_refspecs(["refs/heads/skew:refs/heads/selected"], gix::remote::Direction::Fetch)?;
+    let outcome = remote
+        .connect(gix::remote::Direction::Fetch)?
+        .prepare_fetch(gix::progress::Discard, Default::default())?
+        .receive(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
+    let updates = match outcome.status {
+        gix::remote::fetch::Status::Change { update_refs, .. }
+        | gix::remote::fetch::Status::NoPackReceived { update_refs, .. } => update_refs,
+    };
+    assert_eq!(
+        updates.updates[0].mode,
+        gix::remote::fetch::refs::update::Mode::FastForward
+    );
+    assert_eq!(
+        gix_testtools::git(local.git_dir(), "rev-parse refs/heads/selected")?,
+        gix_testtools::git(expected.path().join("client-skew"), "rev-parse refs/heads/selected")?
+    );
+    Ok(())
+}

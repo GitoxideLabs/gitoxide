@@ -7,7 +7,6 @@ use gix_ref::{
 
 use crate::{
     Repository, Result,
-    ext::ObjectIdExt,
     remote::{
         fetch,
         fetch::{
@@ -157,14 +156,9 @@ pub(crate) fn update(
                                             if local.kind == gix_object::Kind::Commit
                                                 && repo.find_header(remote_id)?.kind() == gix_object::Kind::Commit
                                             {
-                                                let local_commit_time = local.into_commit().committer()?.seconds();
-                                                let mut ancestors =
-                                                    remote_id.to_owned().ancestors(&repo.objects).sorting(
-                                                        gix_traverse::commit::simple::Sorting::ByCommitTimeCutoff {
-                                                            order: Default::default(),
-                                                            seconds: local_commit_time,
-                                                        },
-                                                    )?;
+                                                // Parent timestamps need not be monotonic. Use repository traversal
+                                                // so shallow commits remain roots even when their parents exist.
+                                                let mut ancestors = repo.rev_walk([remote_id.to_owned()]).all()?;
                                                 // Stop at either a matching ancestor or the first traversal error.
                                                 ancestors
                                                     .find(|entry| {
