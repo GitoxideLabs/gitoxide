@@ -282,7 +282,10 @@ fn lines(path: &Path, ignore_unreadable: bool) -> Result<Option<std::io::Split<B
         Ok(file) => Ok(Some(BufReader::new(file).split(b'\n'))),
         Err(err)
             if err.kind() == std::io::ErrorKind::NotFound
-                || ignore_unreadable && err.kind() == std::io::ErrorKind::PermissionDenied =>
+                || err.kind() == std::io::ErrorKind::PermissionDenied
+                    && (ignore_unreadable
+                        // A locked rewrite can replace an empty file without losing unreadable credentials.
+                        || std::fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() == 0)) =>
         {
             Ok(None)
         }

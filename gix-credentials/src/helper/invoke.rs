@@ -23,7 +23,7 @@ impl Action {
 /// Static `store` helpers are executed natively, using Git's plaintext credential-file format and
 /// `--file` option. Without `--file`, the home credential file precedes the XDG credential file.
 /// On Unix, new credential files and their locks are private from creation (`0o600`).
-/// Lookup skips unreadable files, but updates abort if existing credentials cannot be read.
+/// Lookup skips unreadable files, but updates abort if nonempty existing credentials cannot be read.
 /// Static `cache` helpers use Git's native Unix socket protocol on Unix; starting a missing daemon
 /// requires an explicitly configured launcher. Existing daemons can always be queried or erased.
 ///
