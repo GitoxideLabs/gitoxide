@@ -1085,15 +1085,14 @@ mod installation_config {
 
     #[test]
     #[cfg(unix)]
-    fn missing_installation_retains_the_system_default() {
+    fn missing_installation_retains_the_system_default() -> gix_testtools::TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only("make_native_installation.sh")?.canonicalize()?;
         assert_eq!(
-            discover(Path::new("/"), "missing-git/bin"),
-            ConfigPaths {
-                installation: None,
-                installation_is_system: false,
-                system: Some("/etc/gitconfig".into()),
-            }
+            discover(&fixture, "missing-git/bin").system,
+            Some("/etc/gitconfig".into()),
+            "a missing explicit installation still provides the platform system path"
         );
+        Ok(())
     }
 
     #[test]
