@@ -1,23 +1,19 @@
-use std::{path::Path, process::Stdio};
+use std::{ffi::OsString, process::Stdio};
 
 use bstr::{BString, ByteSlice, ByteVec};
-use gix_error::Result;
+use gix_error::{Result, ResultExt};
 
 use crate::{Program, helper};
 
-/// Correctly quotes `git_progarm`, while assuming `name_and_args` are good to be put into a script.
-fn external_name_command(
-    git_program: &Path,
-    name_and_args: &bstr::BStr,
-    action: &helper::Action,
-) -> Result<gix_command::Prepare> {
-    let git_program = gix_path::to_unix_separators_on_windows(gix_path::into_bstr(git_program)?);
-    let mut args = gix_quote::single(git_program.as_ref());
-    args.push_str(" credential-");
-    args.push_str(name_and_args);
-    Ok(gix_command::prepare(gix_path::from_bstr(args.as_bstr())?.into_owned())
-        .arg(action.as_arg(true))
-        .command_may_be_shell_script_allow_manual_argument_splitting())
+/// Prefix a helper name while preserving the shell syntax of its optional arguments.
+fn external_name_command(name_and_args: &bstr::BStr, action: &helper::Action) -> Result<gix_command::Prepare> {
+    let mut command = BString::from("git-credential-");
+    command.push_str(name_and_args);
+    Ok(
+        gix_command::prepare(gix_path::from_bstr(command.as_bstr())?.into_owned())
+            .arg(action.as_arg(true))
+            .command_may_be_shell_script_allow_manual_argument_splitting(),
+    )
 }
 
 /// The kind of helper program to use.
@@ -99,14 +95,11 @@ impl Program {
         action: &helper::Action,
         environment: &[(std::ffi::OsString, std::ffi::OsString)],
     ) -> Result<std::process::Command> {
-        let git_program = gix_path::env::exe_invocation();
         let mut prepare = match &self.kind {
-            Kind::Builtin => gix_command::prepare(git_program)
+            Kind::Builtin => gix_command::prepare(gix_path::env::exe_invocation())
                 .arg("credential")
                 .arg(action.as_arg(false)),
-            Kind::ExternalName { name_and_args } => {
-                external_name_command(git_program, name_and_args.as_bstr(), action)?
-            }
+            Kind::ExternalName { name_and_args } => external_name_command(name_and_args.as_bstr(), action)?,
             Kind::ExternalShellScript(for_shell)
             | Kind::ExternalPath {
                 path_and_args: for_shell,
@@ -115,6 +108,24 @@ impl Program {
                 .arg(action.as_arg(true)),
         };
         prepare.env.extend_from_slice(environment);
+        if matches!(self.kind, Kind::ExternalName { .. }) {
+            let effective_env = |name: &str| {
+                environment
+                    .iter()
+                    .rev()
+                    .find(|(key, _)| key == name)
+                    .map(|(_, value)| value.clone())
+                    .or_else(|| std::env::var_os(name))
+            };
+            if let Ok(cwd) = std::env::current_dir()
+                && let Some(core) = gix_path::env::core_dir_from_environment(effective_env, &cwd)
+            {
+                let path = effective_env("PATH").unwrap_or_default();
+                let path =
+                    std::env::join_paths(std::iter::once(core).chain(std::env::split_paths(&path))).or_error()?;
+                prepare.env.push((OsString::from("PATH"), path));
+            }
+        }
         let mut cmd: std::process::Command = prepare.try_into()?;
         cmd.stdin(Stdio::piped())
             .stdout(if action.expects_output() {
@@ -173,33 +184,19 @@ pub use main::function::main;
 
 #[cfg(test)]
 mod tests {
-    use std::{ffi::OsStr, path::Path};
-
-    use crate::helper;
-
     #[test]
-    fn git_program_with_spaces_is_quoted_in_external_name_shell_scripts() -> gix_testtools::TestResult {
+    fn named_helpers_preserve_shell_expansion() -> gix_testtools::TestResult {
         let cmd: std::process::Command = super::external_name_command(
-            Path::new(r"C:\Program Files\Git\mingw64\bin\git.exe"),
             "manager --config=~/credentials".into(),
-            &helper::Action::Get(Default::default()),
+            &crate::helper::Action::Get(Default::default()),
         )?
         .try_into()?;
         let script = cmd
             .get_args()
-            .skip_while(|arg| *arg != OsStr::new("-c"))
+            .skip_while(|arg| *arg != std::ffi::OsStr::new("-c"))
             .nth(1)
             .expect("a shell invocation has its script after the '-c' argument");
-
-        assert_eq!(
-            script,
-            OsStr::new(if cfg!(windows) {
-                r#"'C:/Program Files/Git/mingw64/bin/git.exe' credential-manager --config=~/credentials "$@""#
-            } else {
-                r#"'C:\Program Files\Git\mingw64\bin\git.exe' credential-manager --config=~/credentials "$@""#
-            }),
-            "the Git executable is a single shell token even when its path contains spaces"
-        );
+        assert_eq!(script, r#"git-credential-manager --config=~/credentials "$@""#);
         Ok(())
     }
 }
