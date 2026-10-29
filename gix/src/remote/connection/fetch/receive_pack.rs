@@ -152,6 +152,7 @@ where
             shallow_file: repo.shallow_file()?,
             shallow: &self.shallow,
             tags: con.remote.fetch_tags,
+            filter: self.filter,
             reject_shallow_remote: Clone::REJECT_SHALLOW
                 .enrich_error(
                     repo.config
@@ -241,6 +242,12 @@ where
             remote_progress,
         )
         .await?;
+        if self.filter.is_some()
+            && let Some(path) = write_pack_bundle.as_ref().and_then(|bundle| bundle.data_path.as_ref())
+        {
+            std::fs::write(path.with_extension("promisor"), [])
+                .or_raise(|| message("Could not mark the received pack as promisor"))?;
+        }
         let negotiate = res.map(|v| outcome::Negotiate {
             graph: graph.detach(),
             rounds: v.negotiate.rounds,
