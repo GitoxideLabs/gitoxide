@@ -1,7 +1,4 @@
-use std::{
-    path::Path,
-    process::{Command, Stdio},
-};
+use std::{path::Path, process::Stdio};
 
 use bstr::{BString, ByteSlice, ByteVec};
 use gix_error::Result;
@@ -13,15 +10,14 @@ fn external_name_command(
     git_program: &Path,
     name_and_args: &bstr::BStr,
     action: &helper::Action,
-) -> Result<std::process::Command> {
+) -> Result<gix_command::Prepare> {
     let git_program = gix_path::to_unix_separators_on_windows(gix_path::into_bstr(git_program)?);
     let mut args = gix_quote::single(git_program.as_ref());
     args.push_str(" credential-");
     args.push_str(name_and_args);
-    gix_command::prepare(gix_path::from_bstr(args.as_bstr())?.into_owned())
+    Ok(gix_command::prepare(gix_path::from_bstr(args.as_bstr())?.into_owned())
         .arg(action.as_arg(true))
-        .command_may_be_shell_script_allow_manual_argument_splitting()
-        .try_into()
+        .command_may_be_shell_script_allow_manual_argument_splitting())
 }
 
 /// The kind of helper program to use.
@@ -92,13 +88,22 @@ impl Program {
     ///
     /// Returns an error if helper or executable paths cannot be represented in the required encoding.
     pub fn to_command(&self, action: &helper::Action) -> Result<std::process::Command> {
+        self.to_command_with_environment(action, &[])
+    }
+
+    /// Prepare a command like [`Self::to_command()`], applying `environment` only to the child.
+    ///
+    /// Repeated keys use their last value. The current process environment is never modified.
+    pub fn to_command_with_environment(
+        &self,
+        action: &helper::Action,
+        environment: &[(std::ffi::OsString, std::ffi::OsString)],
+    ) -> Result<std::process::Command> {
         let git_program = gix_path::env::exe_invocation();
-        let mut cmd = match &self.kind {
-            Kind::Builtin => {
-                let mut cmd = Command::try_from(gix_command::prepare(git_program))?;
-                cmd.arg("credential").arg(action.as_arg(false));
-                cmd
-            }
+        let mut prepare = match &self.kind {
+            Kind::Builtin => gix_command::prepare(git_program)
+                .arg("credential")
+                .arg(action.as_arg(false)),
             Kind::ExternalName { name_and_args } => {
                 external_name_command(git_program, name_and_args.as_bstr(), action)?
             }
@@ -107,9 +112,10 @@ impl Program {
                 path_and_args: for_shell,
             } => gix_command::prepare(gix_path::from_bstr(for_shell.as_bstr())?.as_ref())
                 .command_may_be_shell_script()
-                .arg(action.as_arg(true))
-                .try_into()?,
+                .arg(action.as_arg(true)),
         };
+        prepare.env.extend_from_slice(environment);
+        let mut cmd: std::process::Command = prepare.try_into()?;
         cmd.stdin(Stdio::piped())
             .stdout(if action.expects_output() {
                 Stdio::piped()
@@ -134,10 +140,11 @@ impl Program {
     pub(crate) fn start(
         &mut self,
         action: &helper::Action,
+        environment: &[(std::ffi::OsString, std::ffi::OsString)],
     ) -> std::io::Result<(std::process::ChildStdin, Option<std::process::ChildStdout>)> {
         assert!(self.child.is_none(), "BUG: must not call `start()` twice");
         let mut cmd = self
-            .to_command(action)
+            .to_command_with_environment(action, environment)
             .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?;
         gix_trace::debug!(cmd = ?cmd, "launching credential helper");
         let mut child = cmd.spawn()?;
@@ -172,11 +179,12 @@ mod tests {
 
     #[test]
     fn git_program_with_spaces_is_quoted_in_external_name_shell_scripts() -> gix_testtools::TestResult {
-        let cmd = super::external_name_command(
+        let cmd: std::process::Command = super::external_name_command(
             Path::new(r"C:\Program Files\Git\mingw64\bin\git.exe"),
             "manager --config=~/credentials".into(),
             &helper::Action::Get(Default::default()),
-        )?;
+        )?
+        .try_into()?;
         let script = cmd
             .get_args()
             .skip_while(|arg| *arg != OsStr::new("-c"))
