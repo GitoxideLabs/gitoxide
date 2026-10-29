@@ -39,8 +39,8 @@ mod blocking_io {
             ("shallow", false, Some(2), "source"),
             ("empty", false, None, "empty"),
         ] {
-            let expected_path = root.path().join(format!("git-{name}"));
-            let native_path = root.path().join(format!("native-{name}"));
+            let expected_path = root.path().join(format!("git-{name}")).join("nested");
+            let native_path = root.path().join(name).join("native");
             let mut command = gix_testtools::git_command(root.path());
             command.args(["clone", "--no-local", "--origin=upstream"]);
             if bare {

@@ -162,7 +162,7 @@ pub(crate) fn into_with_capabilities(
         let num_entries_in_dot_git = fs::read_dir(&dot_git)
             .or_else(|err| {
                 if err.kind() == std::io::ErrorKind::NotFound {
-                    fs::create_dir(&dot_git).and_then(|_| fs::read_dir(&dot_git))
+                    fs::create_dir_all(&dot_git).and_then(|_| fs::read_dir(&dot_git))
                 } else {
                     Err(err)
                 }
