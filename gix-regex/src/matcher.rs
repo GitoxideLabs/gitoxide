@@ -4,6 +4,13 @@
 
 //! The matcher: Can find substrings in a string that match any compiled regex
 
+// Keep unchanged upstream formatting and option handling while compatibility fixes are developed.
+#![allow(
+    clippy::uninlined_format_args,
+    clippy::cloned_instead_of_copied,
+    clippy::map_unwrap_or
+)]
+
 #[cfg(feature = "no_std")]
 use alloc::collections::BTreeSet as HashSet;
 
@@ -182,7 +189,7 @@ impl<'a> PosixRegex<'a> {
                     {
                         matcher.offset += 1;
                     }
-                    matches.push(groups)
+                    matches.push(groups);
                 }
                 None => break,
             }
@@ -315,7 +322,7 @@ impl<'a> Node<'a> {
                     open: false,
                     id,
                     offset,
-                })
+                });
             }
         }
 
