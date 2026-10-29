@@ -302,7 +302,28 @@ fn recent_objects_hooks_protect_graphs_and_propagate_failures() -> TestResult {
         }
         assert_retention(&path, true, false)?;
     }
-    for command in ["exit 1", "printf invalid"] {
+    for suffix in ["\\r\\n", ""] {
+        let fixture = fixture()?;
+        let path = fixture.path().join("loose");
+        let commit_id = ids(&path, "recent-ids")?[2];
+        let output = gix_testtools::git_command(&path)
+            .args([
+                "config",
+                "gc.recentObjectsHook",
+                &format!("printf '{commit_id}{suffix}'"),
+            ])
+            .output()?;
+        assert!(output.status.success());
+        gix::open_opts(&path, crate::restricted())?.collect_garbage(
+            Options {
+                expire: SystemTime::now(),
+                dry_run: false,
+            },
+            &AtomicBool::default(),
+        )?;
+        assert_retention(&path, true, false)?;
+    }
+    for command in ["exit 1", "printf invalid", "printf '%02000d' 0"] {
         let fixture = fixture()?;
         let path = fixture.path().join("loose");
         let output = gix_testtools::git_command(&path)
@@ -320,6 +341,41 @@ fn recent_objects_hooks_protect_graphs_and_propagate_failures() -> TestResult {
             .expect_err("hook errors stop collection");
         assert_retention(&path, true, true)?;
     }
+    Ok(())
+}
+
+#[test]
+fn recent_objects_hook_without_output_can_be_cancelled() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let fixture = fixture()?;
+    let path = fixture.path().join("loose");
+    let output = gix_testtools::git_command(&path)
+        .args(["config", "gc.recentObjectsHook", "while :; do :; done"])
+        .output()?;
+    assert!(output.status.success());
+    let repo = gix::open_opts(&path, crate::restricted())?;
+    let interrupt = AtomicBool::default();
+    let result = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            std::thread::sleep(Duration::from_millis(100));
+            interrupt.store(true, std::sync::atomic::Ordering::Relaxed);
+        });
+        repo.collect_garbage(
+            Options {
+                expire: SystemTime::now(),
+                dry_run: false,
+            },
+            &interrupt,
+        )
+    });
+    assert!(
+        result
+            .expect_err("a silent hook must not block cancellation")
+            .is_cancelled()
+    );
+    assert_retention(&path, true, true)?;
     Ok(())
 }
 
