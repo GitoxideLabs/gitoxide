@@ -14,6 +14,7 @@ pub struct Options<'a> {
     /// Describe how to handle tags when fetching.
     pub tags: Tags,
     /// Omit blobs from the received graph, except explicitly requested blob tips.
+    /// Servers without filter support send the complete selection instead.
     pub filter: Option<Filter>,
     /// If `true`, if we fetch from a remote that only offers shallow clones, the operation will fail with an error
     /// instead of writing the shallow boundary to the shallow file.
