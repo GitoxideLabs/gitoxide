@@ -220,12 +220,28 @@ pub enum Start<'a> {
         /// The contents to start the blame from, typically read from the worktree.
         contents: std::borrow::Cow<'a, [u8]>,
     },
+    /// Start from prepared contents with multiple parent origins, such as an uncommitted merge.
+    ///
+    /// Parent order determines attribution when more than one parent contains matching lines.
+    /// Each origin supplies the path in its parent, allowing renames. At least one parent is required.
+    /// As with [`Start::Contents`], the bytes must already be converted for diffing.
+    ContentsWithParents {
+        /// Commits and paths against which to compare the supplied contents, in parent order.
+        parents: Vec<PreviousOrigin>,
+        /// Contents whose new lines are attributed to the null id.
+        contents: std::borrow::Cow<'a, [u8]>,
+    },
 }
 
 impl std::fmt::Debug for Start<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Start::Commit(id) => f.debug_tuple("Commit").field(id).finish(),
+            Start::ContentsWithParents { parents, contents } => f
+                .debug_struct("ContentsWithParents")
+                .field("parents", parents)
+                .field("contents_len", &contents.len())
+                .finish(),
             Start::Contents {
                 first_suspect,
                 contents,

@@ -4,20 +4,25 @@ use gix_testtools::TestResult;
 #[test]
 fn staged_renames_use_working_contents_without_writing_objects_or_index() -> TestResult {
     let fixture = crate::named_repo("make_blame_worktree.sh")?;
-    for directory in ["staged", "rewritten"] {
+    for (directory, file_path) in [
+        ("staged", "new.txt"),
+        ("rewritten", "new.txt"),
+        ("merging", "old.txt"),
+        ("renamed-merge", "renamed.txt"),
+    ] {
         let path = fixture.workdir().expect("fixture has a worktree").join(directory);
         let repo = gix::open_opts(&path, gix::open::Options::isolated())?;
         let index_before = std::fs::read(repo.index_path())?;
         let objects_before = gix_testtools::git(&path, "count-objects -v")?;
         let outcome = repo.blame_worktree_file(
-            "new.txt".into(),
+            file_path.into(),
             gix::repository::blame_file::Options {
                 rewrites: Some(Default::default()),
                 ..Default::default()
             },
         )?;
         let output = gix_testtools::git_command(&path)
-            .args(["blame", "--line-porcelain", "--", "new.txt"])
+            .args(["blame", "--line-porcelain", "--", file_path])
             .output()?;
         assert!(output.status.success(), "Git oracle succeeds");
         let mut oracle = output.stdout.lines();
@@ -58,7 +63,7 @@ fn staged_renames_use_working_contents_without_writing_objects_or_index() -> Tes
                     entry
                         .source_file_name
                         .as_ref()
-                        .map_or("new.txt".into(), |path| path.as_bstr())
+                        .map_or(file_path.into(), |path| path.as_bstr())
                         .to_str()?,
                     source_path.expect("Git emits filename"),
                     "source path"
@@ -82,6 +87,16 @@ fn staged_renames_use_working_contents_without_writing_objects_or_index() -> Tes
             "synthetic objects stay in memory"
         );
     }
+    let invalid = gix::open_opts(
+        fixture.workdir().expect("fixture worktree").join("invalid-merge"),
+        gix::open::Options::isolated(),
+    )?;
+    assert!(
+        invalid
+            .blame_worktree_file("old.txt".into(), Default::default())
+            .is_err(),
+        "invalid merge heads must fail"
+    );
     Ok(())
 }
 
@@ -90,6 +105,18 @@ fn worktree_blame_rejects_untracked_and_unsupported_paths() -> TestResult {
     let fixture = crate::named_repo("make_blame_worktree.sh")?;
     let path = fixture.workdir().expect("fixture has a worktree").join("staged");
     let repo = gix::open_opts(&path, gix::open::Options::isolated())?;
+    assert!(
+        repo.blame_file_from(
+            "new.txt".into(),
+            gix::blame::Start::ContentsWithParents {
+                parents: Vec::new(),
+                contents: b"new\n".as_slice().into(),
+            },
+            Default::default()
+        )
+        .is_err(),
+        "contents need at least one parent origin"
+    );
     for file in ["untracked.txt", "missing.txt", "../outside.txt", ".git"] {
         assert!(
             repo.blame_worktree_file(file.into(), Default::default()).is_err(),

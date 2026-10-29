@@ -92,7 +92,7 @@ pub fn file(
         blamed_file_blob,
         mut hunks_to_blame,
         mut out,
-        first_suspect,
+        initial_suspects,
         previous,
     } = initial_state(
         &odb,
@@ -125,9 +125,9 @@ pub fn file(
     let mut queue: gix_revwalk::PriorityQueue<gix_date::SecondsSinceUnixEpoch, ObjectId> =
         gix_revwalk::PriorityQueue::new();
 
-    if let Some(first_suspect) = first_suspect {
-        let commit = find_commit(cache.as_ref(), &odb, &first_suspect, &mut buf)?;
-        queue.insert(commit.commit_time()?, first_suspect);
+    for suspect in initial_suspects {
+        let commit = find_commit(cache.as_ref(), &odb, &suspect, &mut buf)?;
+        queue.insert(commit.commit_time()?, suspect);
     }
 
     let mut diff_state = gix_diff::tree::State::default();
@@ -997,8 +997,8 @@ struct InitialState {
     hunks_to_blame: Vec<UnblamedHunk>,
     /// Entries already resolved while comparing worktree contents to the first suspect.
     out: Vec<BlameEntry>,
-    /// The first commit to traverse, or `None` if no history traversal is needed.
-    first_suspect: Option<ObjectId>,
+    /// Commits which received blame from the initial contents.
+    initial_suspects: Vec<ObjectId>,
     previous: Option<PreviousOrigin>,
 }
 
@@ -1014,7 +1014,7 @@ fn initial_state(
     buf2: &mut Vec<u8>,
     stats: &mut Statistics,
 ) -> Result<InitialState> {
-    match start {
+    let (parents, contents) = match start {
         Start::Commit(suspect) => {
             let (blamed_file_entry_id, mode) =
                 find_path_entry_in_commit(&odb, &suspect, file_path, cache, buf, buf2, stats)?.ok_or_raise(|| {
@@ -1030,7 +1030,7 @@ fn initial_state(
                     blamed_file_blob,
                     hunks_to_blame: Vec::new(),
                     out: Vec::new(),
-                    first_suspect: None,
+                    initial_suspects: Vec::new(),
                     previous: None,
                 });
             }
@@ -1041,94 +1041,119 @@ fn initial_state(
                 .map(|range| UnblamedHunk::new(range, suspect))
                 .collect::<Vec<_>>();
 
-            Ok(InitialState {
+            return Ok(InitialState {
                 blamed_file_blob,
                 hunks_to_blame,
                 out: Vec::new(),
-                first_suspect: Some(suspect),
+                initial_suspects: vec![suspect],
                 previous: None,
-            })
+            });
         }
         Start::Contents {
             first_suspect,
             contents,
-        } => {
-            let null_id = first_suspect.kind().null();
-            let blamed_file_blob = contents.into_owned();
-            let num_lines_in_blamed = tokens_for_diffing(&blamed_file_blob).tokenize().count() as u32;
-
-            if num_lines_in_blamed == 0 {
-                return Ok(InitialState {
-                    blamed_file_blob,
-                    hunks_to_blame: Vec::new(),
-                    out: Vec::new(),
-                    first_suspect: None,
-                    previous: None,
-                });
-            }
-
-            let ranges_to_blame = options.ranges.to_zero_based_exclusive_ranges(num_lines_in_blamed);
-            let mut hunks_to_blame = ranges_to_blame
-                .into_iter()
-                .map(|range| UnblamedHunk::new(range, null_id))
-                .collect::<Vec<_>>();
-
-            let mut out = Vec::new();
-
-            let Some((first_suspect_entry_id, mode)) =
-                find_path_entry_in_commit(odb, &first_suspect, file_path, cache, buf, buf2, stats)?.filter(
-                    |(_, mode)| {
-                        same_blob_type(
-                            *mode,
-                            options
-                                .contents_mode
-                                .unwrap_or(gix_object::tree::EntryKind::Blob)
-                                .into(),
-                        )
-                    },
-                )
-            else {
-                // File does not exist in the starting commit. Treat the requested
-                // ranges as entirely "not committed yet".
-                out.extend(
-                    hunks_to_blame
-                        .iter()
-                        .filter_map(|hunk| BlameEntry::from_unblamed_hunk(hunk, null_id)),
-                );
-
-                return Ok(InitialState {
-                    blamed_file_blob,
-                    hunks_to_blame: Vec::new(),
-                    out,
-                    first_suspect: None,
-                    previous: None,
-                });
-            };
-
-            let first_suspect_blob =
-                diffable_blob(odb, resource_cache, first_suspect_entry_id, mode.kind(), file_path)?;
-
-            let changes = blob_changes_from_data(&first_suspect_blob, &blamed_file_blob, options.diff_algorithm, stats);
-            hunks_to_blame = process_changes(hunks_to_blame, changes, null_id, first_suspect);
-
-            unblamed_to_out_is_done(&mut hunks_to_blame, &mut out, null_id);
-
-            let previous = (!out.is_empty()).then(|| PreviousOrigin {
+        } => (
+            vec![PreviousOrigin {
                 commit_id: first_suspect,
                 source_file_name: file_path.to_owned(),
-            });
-            let first_suspect = hunks_to_blame
-                .iter()
-                .any(|hunk| hunk.has_suspect(&first_suspect))
-                .then_some(first_suspect);
-
-            Ok(InitialState {
+            }],
+            contents,
+        ),
+        Start::ContentsWithParents { parents, contents } => (parents, contents),
+    };
+    let null_id = parents
+        .first()
+        .ok_or_raise(|| gix_error::validation("Contents blame requires at least one parent"))?
+        .commit_id
+        .kind()
+        .null();
+    let blamed_file_blob = contents.into_owned();
+    let num_lines = tokens_for_diffing(&blamed_file_blob).tokenize().count() as u32;
+    if num_lines == 0 {
+        return Ok(InitialState {
+            blamed_file_blob,
+            hunks_to_blame: Vec::new(),
+            out: Vec::new(),
+            initial_suspects: Vec::new(),
+            previous: None,
+        });
+    }
+    let mut hunks_to_blame = options
+        .ranges
+        .to_zero_based_exclusive_ranges(num_lines)
+        .into_iter()
+        .map(|range| UnblamedHunk::new(range, null_id))
+        .collect::<Vec<_>>();
+    let mut candidates = Vec::new();
+    for parent in parents {
+        let Some((blob_id, mode)) = find_path_entry_in_commit(
+            odb,
+            &parent.commit_id,
+            parent.source_file_name.as_ref(),
+            cache,
+            buf,
+            buf2,
+            stats,
+        )?
+        .filter(|(_, mode)| {
+            same_blob_type(
+                *mode,
+                options
+                    .contents_mode
+                    .unwrap_or(gix_object::tree::EntryKind::Blob)
+                    .into(),
+            )
+        }) else {
+            continue;
+        };
+        let blob = diffable_blob(
+            odb,
+            resource_cache,
+            blob_id,
+            mode.kind(),
+            parent.source_file_name.as_ref(),
+        )?;
+        if blob == blamed_file_blob {
+            for hunk in &mut hunks_to_blame {
+                hunk.pass_blame(null_id, parent.commit_id);
+                hunk.source_file_name = (parent.source_file_name != file_path).then(|| parent.source_file_name.clone());
+            }
+            return Ok(InitialState {
                 blamed_file_blob,
                 hunks_to_blame,
-                out,
-                first_suspect,
-                previous,
-            })
+                out: Vec::new(),
+                initial_suspects: vec![parent.commit_id],
+                previous: None,
+            });
+        }
+        candidates.push((parent, blob));
+    }
+    let mut previous = candidates.first().map(|(parent, _)| parent.clone());
+    let mut initial_suspects = Vec::new();
+    for (parent, blob) in candidates {
+        let changes = blob_changes_from_data(&blob, &blamed_file_blob, options.diff_algorithm, stats);
+        hunks_to_blame = process_changes(hunks_to_blame, changes, null_id, parent.commit_id);
+        let mut transferred = false;
+        for hunk in &mut hunks_to_blame {
+            if hunk.has_suspect(&parent.commit_id) {
+                hunk.source_file_name = (parent.source_file_name != file_path).then(|| parent.source_file_name.clone());
+                transferred = true;
+            }
+        }
+        if transferred && !initial_suspects.contains(&parent.commit_id) {
+            initial_suspects.push(parent.commit_id);
         }
     }
+    let mut out = Vec::new();
+    unblamed_to_out_is_done(&mut hunks_to_blame, &mut out, null_id);
+    if out.is_empty() {
+        previous = None;
+    }
+    Ok(InitialState {
+        blamed_file_blob,
+        hunks_to_blame,
+        out,
+        initial_suspects,
+        previous,
+    })
 }
