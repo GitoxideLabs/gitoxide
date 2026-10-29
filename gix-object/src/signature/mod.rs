@@ -33,23 +33,45 @@ pub struct SignatureRef<'a> {
 pub struct SignedData<'a> {
     data: &'a [u8],
     excluded: Range<usize>,
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Vec::is_empty"))]
+    additional_excluded: Vec<Range<usize>>,
 }
 
 impl<'a> SignedData<'a> {
     pub(crate) fn new(data: &'a [u8], excluded: Range<usize>) -> Self {
-        SignedData { data, excluded }
+        SignedData {
+            data,
+            excluded,
+            additional_excluded: Vec::new(),
+        }
     }
 
-    pub(crate) fn segments(&self) -> [&[u8]; 2] {
-        [&self.data[..self.excluded.start], &self.data[self.excluded.end..]]
+    /// Exclusion ranges must be sorted, disjoint, and within `data`.
+    pub(crate) fn excluding(data: &'a [u8], ranges: impl IntoIterator<Item = Range<usize>>) -> Option<Self> {
+        let mut ranges = ranges.into_iter();
+        Some(SignedData {
+            data,
+            excluded: ranges.next()?,
+            additional_excluded: ranges.collect(),
+        })
+    }
+
+    pub(crate) fn segments(&self) -> impl Iterator<Item = &[u8]> {
+        let mut start = 0;
+        let end = self.additional_excluded.last().unwrap_or(&self.excluded).end;
+        std::iter::once(&self.excluded)
+            .chain(&self.additional_excluded)
+            .map(move |range| {
+                let segment = &self.data[start..range.start];
+                start = range.end;
+                segment
+            })
+            .chain(std::iter::once(&self.data[end..]))
     }
 
     /// Return an exact copy of the bytes covered by the signature.
     pub fn to_bstring(&self) -> BString {
-        let [before, after] = self.segments();
-        let mut out = BString::from(before);
-        out.extend_from_slice(after);
-        out
+        self.segments().collect()
     }
 }
 
