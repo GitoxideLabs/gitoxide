@@ -16,6 +16,10 @@ impl PrepareFetch {
     ///
     /// Note that all data we created will be removed once this instance drops if the operation wasn't successful.
     ///
+    /// Local repositories are read directly without starting Git when using blocking I/O and
+    /// either the default shallow policy or an absolute depth. A custom connection callback,
+    /// handshake parameters, or another shallow policy selects the protocol transport instead.
+    ///
     /// ### Note for users of `async`
     ///
     /// Even though `async` is technically supported, it will still be blocking in nature as it uses a lot of non-async writes
@@ -30,7 +34,7 @@ impl PrepareFetch {
         P: crate::NestedProgress,
         P::SubProgress: 'static,
     {
-        use crate::{bstr::ByteVec, remote, remote::fetch::RefLogMessage};
+        use crate::{bstr::ByteVec, remote};
 
         let mut repo = self
             .repo
@@ -79,25 +83,20 @@ impl PrepareFetch {
             // Determine target branch from user-specified ref_name or default branch
             if let Some(ref_name) = &self.ref_name {
                 let prev_tags = std::mem::replace(&mut remote.fetch_tags, remote::fetch::Tags::None);
-                let mut connection = remote.connect(remote::Direction::Fetch).await?;
-                if let Some(f) = self.configure_connection.as_mut() {
-                    f(&mut connection).or_raise(|| {
-                        gix_error::message("Custom configuration of connection to use when cloning failed")
-                    })?;
-                }
-                let (refmap, _) = connection
-                    .ref_map(
-                        &mut progress,
-                        remote::ref_map::Options {
-                            extra_refspecs: vec![
-                                gix_refspec::parse(ref_name.as_ref().as_bstr(), gix_refspec::parse::Operation::Fetch)
-                                    .expect("partial names are valid refspecs")
-                                    .to_owned(),
-                            ],
-                            ..Default::default()
-                        },
-                    )
-                    .await?;
+                let refmap = prepare::ref_map(
+                    &remote,
+                    &mut self.configure_connection,
+                    &mut progress,
+                    remote::ref_map::Options {
+                        extra_refspecs: vec![
+                            gix_refspec::parse(ref_name.as_ref().as_bstr(), gix_refspec::parse::Operation::Fetch)
+                                .expect("partial names are valid refspecs")
+                                .to_owned(),
+                        ],
+                        ..Default::default()
+                    },
+                )
+                .await?;
                 let (_target, full_ref_name) = util::find_custom_refname(&refmap, ref_name)?;
                 remote.fetch_tags = prev_tags;
                 Some(gix_ref::FullName::try_from(full_ref_name).or_error()?)
@@ -105,31 +104,26 @@ impl PrepareFetch {
                 // For shallow clones without a specified ref, we need to determine the ref to clone.
                 // Advertise branches too so a detached HEAD can be matched to a branch.
                 let prev_tags = std::mem::replace(&mut remote.fetch_tags, remote::fetch::Tags::None);
-                let mut connection = remote.connect(remote::Direction::Fetch).await?;
-                if let Some(f) = self.configure_connection.as_mut() {
-                    f(&mut connection).or_raise(|| {
-                        gix_error::message("Custom configuration of connection to use when cloning failed")
-                    })?;
-                }
-                let (refmap, _) = connection
-                    .ref_map(
-                        &mut progress,
-                        remote::ref_map::Options {
-                            extra_refspecs: vec![
-                                gix_refspec::parse(
-                                    "refs/heads/*:refs/heads/*".into(),
-                                    gix_refspec::parse::Operation::Fetch,
-                                )
+                let refmap = prepare::ref_map(
+                    &remote,
+                    &mut self.configure_connection,
+                    &mut progress,
+                    remote::ref_map::Options {
+                        extra_refspecs: vec![
+                            gix_refspec::parse(
+                                "refs/heads/*:refs/heads/*".into(),
+                                gix_refspec::parse::Operation::Fetch,
+                            )
+                            .expect("valid")
+                            .to_owned(),
+                            gix_refspec::parse("HEAD".into(), gix_refspec::parse::Operation::Fetch)
                                 .expect("valid")
                                 .to_owned(),
-                                gix_refspec::parse("HEAD".into(), gix_refspec::parse::Operation::Fetch)
-                                    .expect("valid")
-                                    .to_owned(),
-                            ],
-                            ..Default::default()
-                        },
-                    )
-                    .await?;
+                        ],
+                        ..Default::default()
+                    },
+                )
+                .await?;
 
                 let target = util::guess_remote_head(&repo, &refmap)?
                     .and_then(|mapping| mapping.remote.as_name())
@@ -218,37 +212,35 @@ impl PrepareFetch {
         let head_refspec = gix_refspec::parse("HEAD".into(), gix_refspec::parse::Operation::Fetch)
             .expect("valid")
             .to_owned();
-        let pending_pack = {
-            // For shallow clones, we already connected once, so we need to connect again
-            let mut connection = remote.connect(remote::Direction::Fetch).await?;
-            if let Some(f) = self.configure_connection.as_mut() {
-                f(&mut connection)
-                    .or_raise(|| gix_error::message("Custom configuration of connection to use when cloning failed"))?;
-            }
-            let connection = connection.into_detached();
-            let fetch_opts = {
-                let mut opts = self.fetch_options.clone();
-                if let Some(revision) = &self.revision {
-                    opts.extra_refspecs.clear();
-                    opts.extra_refspecs.push(revision.clone());
-                } else {
-                    if !(opts.extra_refspecs.contains(&head_refspec)
-                        || use_single_branch_for_shallow && self.ref_name.is_some())
-                    {
-                        opts.extra_refspecs.push(head_refspec.clone());
-                    }
-                    if let Some(ref_name) = self.ref_name.as_ref().filter(|_| !use_single_branch_for_shallow) {
-                        opts.extra_refspecs.push(
-                            gix_refspec::parse(ref_name.as_ref().as_bstr(), gix_refspec::parse::Operation::Fetch)
-                                .expect("partial names are valid refspecs")
-                                .to_owned(),
-                        );
-                    }
+        let fetch_opts = {
+            let mut opts = self.fetch_options.clone();
+            if let Some(revision) = &self.revision {
+                opts.extra_refspecs.clear();
+                opts.extra_refspecs.push(revision.clone());
+            } else {
+                if !(opts.extra_refspecs.contains(&head_refspec)
+                    || use_single_branch_for_shallow && self.ref_name.is_some())
+                {
+                    opts.extra_refspecs.push(head_refspec.clone());
                 }
-                opts
-            };
-            connection.prepare_fetch(&repo, &mut progress, fetch_opts).await?
+                if let Some(ref_name) = self.ref_name.as_ref().filter(|_| !use_single_branch_for_shallow) {
+                    opts.extra_refspecs.push(
+                        gix_refspec::parse(ref_name.as_ref().as_bstr(), gix_refspec::parse::Operation::Fetch)
+                            .expect("partial names are valid refspecs")
+                            .to_owned(),
+                    );
+                }
+            }
+            opts
         };
+        let pending_pack = prepare::Prepare::new(
+            &remote,
+            &mut self.configure_connection,
+            fetch_opts,
+            &self.shallow,
+            &mut progress,
+        )
+        .await?;
         drop(remote);
 
         // Assure problems with custom branch names fail early, not after getting the pack or during negotiation.
@@ -306,12 +298,13 @@ impl PrepareFetch {
         let mut receiving_repo = repo.clone();
         receiving_repo.refs.write_reflog = gix_ref::store::WriteReflog::Disable;
         let outcome = pending_pack
-            .with_write_packed_refs_only(true)
-            .with_reflog_message(RefLogMessage::Override {
-                message: reflog_message.clone(),
-            })
-            .with_shallow(self.shallow.clone())
-            .receive(&receiving_repo, &mut progress, should_interrupt)
+            .receive(
+                &receiving_repo,
+                &mut progress,
+                reflog_message.clone(),
+                self.shallow.clone(),
+                should_interrupt,
+            )
             .await?;
 
         // Before finalisation, the current repo handle still needs to
@@ -355,4 +348,5 @@ impl PrepareFetch {
     }
 }
 
+mod prepare;
 mod util;
