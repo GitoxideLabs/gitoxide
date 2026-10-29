@@ -8,6 +8,7 @@ pub use imara_diff::*;
 /// Facilities to render a computed [`Diff`] as unified diff output.
 pub mod unified_diff;
 
+mod driver;
 /// Match source lines for the optional section shown after unified diff hunk headers.
 pub mod hunk_header;
 pub use unified_diff::impls::UnifiedDiff;
@@ -97,6 +98,9 @@ pub struct Driver {
     /// If `Some(false)`, it won't be considered binary, and the its data will not be sampled for the null-byte either.
     /// Leaving it to `None` means binary detection is automatic, and is based on the presence of the `0` byte in the first 8kB of the buffer.
     pub is_binary: Option<bool>,
+    /// A custom POSIX definition for the section displayed in a diff hunk header.
+    /// Without one, the driver's name selects a built-in language when available.
+    pub hunk_header: Option<hunk_header::Definition>,
 }
 
 /// A conversion pipeline to take an object or path from what's stored in `git` to what can be diffed, while
