@@ -22,7 +22,8 @@ impl Repository {
     /// Attribute lines in a commit or in supplied contents to their originating commits.
     ///
     /// [`Start::Contents`] can represent uncommitted worktree changes; its contents must already
-    /// have passed through the configured worktree filters. Newly introduced lines carry the null id.
+    /// have passed through the configured worktree filters and, when enabled, textconv drivers.
+    /// Newly introduced lines carry the null id.
     /// No objects or references are written. See [`gix_blame::file()`] for details and errors.
     pub fn blame_file_from(
         &self,
@@ -31,7 +32,22 @@ impl Repository {
         options: blame_file::Options,
     ) -> Result<gix_blame::Outcome> {
         let cache = self.commit_graph_if_enabled()?;
-        let mut resource_cache = self.diff_resource_cache_for_tree_diff()?;
+        let mut resource_cache = if options.textconv {
+            let index = self.index_or_load_from_head_or_empty()?;
+            let source = if self.workdir().is_some() {
+                gix_worktree::stack::state::attributes::Source::WorktreeThenIdMapping
+            } else {
+                gix_worktree::stack::state::attributes::Source::IdMapping
+            };
+            crate::diff::resource_cache(
+                self,
+                gix_diff::blob::pipeline::Mode::ToGitUnlessBinaryToTextIsPresent,
+                self.attributes_only(&index, source)?.inner,
+                Default::default(),
+            )?
+        } else {
+            self.diff_resource_cache_for_tree_diff()?
+        };
 
         let blame_file::Options {
             diff_algorithm,
@@ -39,6 +55,7 @@ impl Repository {
             since,
             rewrites,
             contents_mode,
+            textconv: _,
         } = options;
         let diff_algorithm = match diff_algorithm {
             Some(diff_algorithm) => diff_algorithm,

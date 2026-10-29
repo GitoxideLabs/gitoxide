@@ -10,6 +10,8 @@ fn blob_id(repo: &Repository, data: &[u8]) -> gix_hash::ObjectId {
 mod attributes;
 #[cfg(feature = "blame")]
 mod blame;
+#[cfg(feature = "blame")]
+mod blame_textconv;
 mod branch;
 #[cfg(feature = "pack-generate")]
 mod bundle;
