@@ -37,7 +37,8 @@ impl Repository {
     ///
     /// Full repository trust is required. The path is used literally, without shell interpretation or an executable
     /// check. Windows shebang handling follows [`gix_command::prepare()`]. This only prepares a command and does not
-    /// implement Git's execution-time shell fallback for executable scripts without a shebang.
+    /// implement Git's execution-time shell fallback for executable scripts without a shebang; use
+    /// [`run_hook()`][Self::run_hook()] for that.
     pub fn prepare_hook(&self, path: impl AsRef<Path>) -> Result<Command> {
         self.require_hook_trust()?;
         let working_dir = self.current_dir().join(self.workdir().unwrap_or(self.git_dir()));
@@ -49,6 +50,31 @@ impl Repository {
                 command: self.command_context()?,
             },
             Default::default(),
+        )
+    }
+
+    /// Execute the traditional hook at `path`, capturing its stdout, stderr, and exit status.
+    ///
+    /// This uses [`prepare_hook()`][Self::prepare_hook()] for repository paths, environment, and trust checks.
+    /// Arguments and environment values in `options` are passed literally. On Unix, if the operating system rejects
+    /// the executable format, the command is retried through Git's shell, supporting scripts without a shebang.
+    /// Like Git, Windows supports shebang scripts through [`gix_command::prepare()`] without an execution-time retry.
+    /// Other launch failures, including permission errors and missing interpreters, are returned without retrying.
+    ///
+    /// Input is written concurrently with output collection. A hook may close stdin early; a broken pipe is ignored
+    /// so its exit status and output remain available. Failed hook exit statuses are returned in the output, while
+    /// launch and communication failures are errors. The caller decides how a failed hook affects its operation.
+    pub fn run_hook(&self, path: impl AsRef<Path>, options: crate::hook::Options<'_>) -> Result<std::process::Output> {
+        self.require_hook_trust()?;
+        let working_dir = self.current_dir().join(self.workdir().unwrap_or(self.git_dir()));
+        gix_hook::run(
+            path.as_ref(),
+            &gix_hook::Context {
+                working_dir: &working_dir,
+                common_dir: &self.current_dir().join(self.common_dir()),
+                command: self.command_context()?,
+            },
+            options,
         )
     }
 
