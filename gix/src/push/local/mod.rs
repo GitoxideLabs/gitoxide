@@ -15,7 +15,7 @@ mod quarantine;
 mod transaction;
 
 pub(crate) fn push(
-    source: &Repository,
+    remote: &crate::Remote<'_>,
     destination: &mut Repository,
     updates: impl IntoIterator<Item = Update>,
     options: Options<'_>,
@@ -23,6 +23,7 @@ pub(crate) fn push(
     mut remote_progress: impl FnMut(bool, &[u8]) -> io::Result<()>,
     should_interrupt: &AtomicBool,
 ) -> Result<Outcome> {
+    let source = remote.repo;
     push::plan::check_interrupt(should_interrupt)?;
     if source.object_hash() != destination.object_hash() {
         bail!(message("Source and destination repositories use different object formats").unsupported());
@@ -97,6 +98,7 @@ pub(crate) fn push(
         destination,
         policy.advertise_push_options.then_some(options.push_options),
         should_interrupt,
+        &remote.command_environment,
     )?;
     let quarantine = quarantine::Quarantine::new(destination)?;
     let tips = requested.iter().filter_map(|&index| updates[index].update.new_id);

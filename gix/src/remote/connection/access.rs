@@ -57,7 +57,7 @@ where
     T: Transport,
 {
     pub(crate) fn configured_credentials_for_current_url(&self, repo: &crate::Repository) -> AuthenticateFn<'static> {
-        configured_credentials_for_current_url(repo.clone())
+        configured_credentials_for_current_url(repo.clone(), self.remote.command_environment.clone())
     }
 }
 
@@ -93,9 +93,14 @@ where
     /// It's meant to be used by users of the [`with_credentials()`](Self::with_credentials()) builder to gain access to the
     /// default way of handling credentials, which they can call as fallback.
     pub fn configured_credentials(&self, url: gix_url::Url) -> Result<AuthenticateFn<'static>> {
-        let (mut cascade, _action_with_normalized_url, prompt_opts) =
+        let (mut cascade, _action_with_normalized_url, mut prompt_opts) =
             self.remote.repo.config_snapshot().credential_helpers(url)?;
-        Ok(Box::new(move |action| cascade.invoke(action, prompt_opts.clone())) as AuthenticateFn<'_>)
+        let environment = self.remote.command_environment.clone();
+        apply_prompt_environment(&mut prompt_opts, &environment)?;
+        Ok(
+            Box::new(move |action| cascade.invoke_with_environment(action, prompt_opts.clone(), &environment))
+                as AuthenticateFn<'_>,
+        )
     }
 
     /// A utility to return a function that uses each
@@ -104,7 +109,7 @@ where
     ///
     /// The transport creates these actions from its current URL, which means authentication naturally follows redirects.
     pub fn configured_credentials_for_current_url(&self) -> AuthenticateFn<'static> {
-        configured_credentials_for_current_url(self.remote.repo.clone())
+        configured_credentials_for_current_url(self.remote.repo.clone(), self.remote.command_environment.clone())
     }
 
     /// Return the underlying remote that instantiate this connection.
@@ -132,7 +137,10 @@ where
     }
 }
 
-fn configured_credentials_for_current_url(repo: crate::Repository) -> AuthenticateFn<'static> {
+fn configured_credentials_for_current_url(
+    repo: crate::Repository,
+    environment: Vec<(std::ffi::OsString, std::ffi::OsString)>,
+) -> AuthenticateFn<'static> {
     let mut previous_cascade_and_prompt = None;
     Box::new(move |action| {
         if matches!(&action, gix_credentials::helper::Action::Get(_)) {
@@ -147,16 +155,19 @@ fn configured_credentials_for_current_url(repo: crate::Repository) -> Authentica
                 .ok_or_raise(|| {
                     gix_error::validation("Either 'url' field or both 'protocol' and 'host' fields must be provided")
                 })?;
-            let (mut cascade, _action_with_normalized_url, prompt_opts) = repo
+            let (mut cascade, _action_with_normalized_url, mut prompt_opts) = repo
                 .config_snapshot()
                 .credential_helpers(gix_url::parse(&url)?)
                 .or_raise(|| gix_error::message("Credential helper configuration is invalid"))?;
-            let outcome = cascade.invoke(action, prompt_opts.clone());
+            apply_prompt_environment(&mut prompt_opts, &environment)?;
+            let outcome = cascade.invoke_with_environment(action, prompt_opts.clone(), &environment);
             previous_cascade_and_prompt = Some((cascade, prompt_opts));
             outcome
         } else {
             match previous_cascade_and_prompt.as_mut() {
-                Some((cascade, prompt_opts)) => cascade.invoke(action, prompt_opts.clone()),
+                Some((cascade, prompt_opts)) => {
+                    cascade.invoke_with_environment(action, prompt_opts.clone(), &environment)
+                }
                 None => {
                     gix_trace::warn!(
                         "credential Store/Erase follow-up was invoked without a preceding Get; ignoring advisory action"
@@ -166,4 +177,48 @@ fn configured_credentials_for_current_url(repo: crate::Repository) -> Authentica
             }
         }
     }) as AuthenticateFn<'_>
+}
+
+fn apply_prompt_environment(
+    options: &mut gix_prompt::Options,
+    environment: &[(std::ffi::OsString, std::ffi::OsString)],
+) -> Result<()> {
+    let value = |name: &str| {
+        environment
+            .iter()
+            .rev()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value)
+    };
+    if let Some(askpass) = value("GIT_ASKPASS") {
+        options.askpass = Some(askpass.into());
+    } else if options.askpass.is_none()
+        && let Some(askpass) = value("SSH_ASKPASS")
+    {
+        options.askpass = Some(askpass.into());
+    }
+    if let Some(allow) = value("GIT_TERMINAL_PROMPT") {
+        options.mode = if gix_config::Boolean::try_from(allow.clone()).or_error()?.0 {
+            gix_prompt::Mode::Hidden
+        } else {
+            gix_prompt::Mode::Disable
+        };
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn operation_environment_can_reenable_terminal_prompts() -> gix_testtools::TestResult {
+        let mut options = gix_prompt::Options {
+            mode: gix_prompt::Mode::Disable,
+            ..Default::default()
+        };
+        super::apply_prompt_environment(&mut options, &[("GIT_TERMINAL_PROMPT".into(), "true".into())])?;
+        assert_eq!(options.mode, gix_prompt::Mode::Hidden);
+        super::apply_prompt_environment(&mut options, &[("GIT_TERMINAL_PROMPT".into(), "false".into())])?;
+        assert_eq!(options.mode, gix_prompt::Mode::Disable);
+        Ok(())
+    }
 }
