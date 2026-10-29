@@ -502,7 +502,7 @@ mod locations {
         ///
         /// The idea here is to obtain this information, which the `alternative_locations()` unit
         /// test uses to learn the expected alternative locations, without duplicating *any* of the
-        /// approach used for `ALTERNATIVE_LOCATIONS`, so it can be used to test that. The approach
+        /// approach used for `locations_under_program_files`, so it can be used to test that. The approach
         /// here is also more reliable than using environment variables, but it is a bit more
         /// complex, and it requires either additional dependencies or the use of unsafe code.
         ///
@@ -511,7 +511,7 @@ mod locations {
         /// folder is not available to 32-bit processes. See the [`KNOWNFOLDDERID`][knownfolderid]
         /// documentation.
         ///
-        /// If in the future the implementation of `ALTERNATIVE_LOCATIONS` uses these techniques,
+        /// If in the future the implementation of `locations_under_program_files` uses these techniques,
         /// then this function can be changed to use environment variables and renamed accordingly.
         ///
         /// [known-folders]: https://learn.microsoft.com/en-us/windows/win32/shell/known-folders
@@ -631,7 +631,7 @@ mod locations {
 
     impl<'a> RelativeUserGitBinPaths<'a> {
         /// Assert that `locations` leads with the given user path prefix, and extract the suffixes.
-        fn assert_from(pf_user: &'a Path, locations: &'static [PathBuf]) -> Self {
+        fn assert_from(pf_user: &'a Path, locations: &'a [PathBuf]) -> Self {
             match locations {
                 [path1, path2, path3, path4, ..] => {
                     let suffix_user_arm64 = path1
@@ -685,7 +685,7 @@ mod locations {
 
     impl<'a> RelativeGlobalGitBinPaths<'a> {
         /// Assert that `locations` trails with the given global path prefixes, and extract the suffixes.
-        fn assert_from(pf: &'a ProgramFilesPaths, locations: &'static [PathBuf]) -> Self {
+        fn assert_from(pf: &'a ProgramFilesPaths, locations: &'a [PathBuf]) -> Self {
             match locations {
                 [_, _, _, _, path5, path6, path7, path8] => {
                     let prefix_64bit = pf
@@ -759,7 +759,7 @@ mod locations {
 
     impl<'a> RelativeGitBinPaths<'a> {
         /// Assert that `locations` has the given path prefixes, and extract the suffixes.
-        fn assert_from(pf: &'a ProgramFilesPaths, locations: &'static [PathBuf]) -> Self {
+        fn assert_from(pf: &'a ProgramFilesPaths, locations: &'a [PathBuf]) -> Self {
             let user = RelativeUserGitBinPaths::assert_from(&pf.user, locations);
             let global = RelativeGlobalGitBinPaths::assert_from(pf, locations);
             Self { global, user }
@@ -773,21 +773,264 @@ mod locations {
     }
 
     #[test]
+    fn path_hits_do_not_inspect_fallbacks() -> gix_error::TestResult {
+        let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only(
+            "windows-git-installations.sh",
+        )?)?;
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let _cwd = gix_testtools::set_current_dir(&fixture)?;
+        let bin = fixture.join("path");
+        for path in [bin.as_os_str(), OsStr::new("path")] {
+            let executable = super::super::find_executable(Some(path), || {
+                panic!("a PATH hit must not inspect alternative locations")
+            })
+            .expect("the fixture has Git on PATH");
+            assert_eq!(
+                executable.path,
+                bin.join("git.exe"),
+                "retain an absolute path for companion discovery, including relative PATH entries"
+            );
+            assert_eq!(
+                executable.invocation(),
+                Path::new("git.exe"),
+                "PATH hits use a short invocation"
+            );
+        }
+
+        let missing = fixture.join("missing");
+        for path in [None, Some(missing.as_os_str())] {
+            let fallback = super::super::find_executable(path, || Some(bin.join("git.exe")))
+                .expect("an absent or unsuccessful PATH reaches the fallback");
+            assert_eq!(
+                fallback.invocation(),
+                bin.join("git.exe"),
+                "fallback invocations are absolute"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn alternative_sources_are_lazy() {
+        use std::cell::Cell;
+
+        let lookups = Cell::new(0);
+        let mut locations = super::super::alternative_locations(
+            |key| {
+                lookups.set(lookups.get() + 1);
+                match key {
+                    "ProgramFiles" => Some("C:/early".into()),
+                    "LocalAppData" | "ProgramW6432" | "ProgramFiles(x86)" => None,
+                    _ => panic!("package roots must not be inspected before Program Files is exhausted"),
+                }
+            },
+            || -> Vec<PathBuf> { panic!("registry discovery must wait for earlier sources") },
+        );
+        assert_eq!(
+            lookups.get(),
+            0,
+            "constructing the iterator does not inspect any source"
+        );
+        assert!(
+            locations
+                .next()
+                .expect("Program Files has candidates")
+                .starts_with("C:/early"),
+            "Program Files remains the first fallback"
+        );
+
+        let mut locations = super::super::alternative_locations(
+            |key| match key {
+                "CONDA_PREFIX" => Some("C:/conda".into()),
+                "ChocolateyToolsLocation" => panic!("later package roots must remain untouched"),
+                _ => None,
+            },
+            || -> Vec<PathBuf> { panic!("an earlier package candidate avoids registry discovery") },
+        );
+        assert_eq!(
+            locations.next(),
+            Some("C:/conda/Library/bin".into()),
+            "reach the active environment"
+        );
+
+        let registry_calls = Cell::new(0);
+        let mut locations = super::super::alternative_locations(
+            |_| None,
+            || {
+                registry_calls.set(registry_calls.get() + 1);
+                [PathBuf::from("C:/registered/cmd")]
+            },
+        );
+        assert_eq!(
+            registry_calls.get(),
+            0,
+            "registry discovery is deferred until iteration"
+        );
+        assert_eq!(
+            locations.next(),
+            Some("C:/registered/cmd".into()),
+            "registry remains the last fallback"
+        );
+        assert_eq!(locations.next(), None, "all sources are exhausted");
+        assert_eq!(registry_calls.get(), 1, "the registry provider runs only once");
+    }
+
+    #[test]
+    fn scoop_locations_are_lazy() {
+        let locations = super::super::locations_under_scoop(|key| match key {
+            "GIT_INSTALL_ROOT" => Some(r"D:\portable\git".into()),
+            _ => panic!("Scoop roots must not be inspected before the explicit root is exhausted"),
+        });
+        assert_eq!(
+            locations.into_iter().next(),
+            Some(PathBuf::from(r"D:\portable\git\cmd")),
+            "an explicit root precedes all Scoop directory inspection"
+        );
+    }
+
+    #[test]
+    fn native_paths_do_not_probe_msys() {
+        for path in [
+            r"C:\Git\etc\gitconfig",
+            "C:/Git/ucrt64/libexec/git-core",
+            r"\\server\git\etc",
+            "relative",
+        ] {
+            assert_eq!(
+                super::super::native_path_with(Path::new(path), || {
+                    panic!("native and relative paths must not trigger executable discovery")
+                }),
+                Some(PathBuf::from(path)),
+                "only rooted Unix paths require an MSYS runtime"
+            );
+        }
+    }
+
+    #[test]
+    fn scoop_locations_respect_configured_roots() {
+        let locations: Vec<_> = super::super::locations_under_scoop(var_os_stub! {
+            "GIT_INSTALL_ROOT" => r"D:\portable\git",
+            "SCOOP" => r"D:\custom",
+            "SCOOP_GLOBAL" => r"E:\shared",
+            "USERPROFILE" => r"C:\Users\alice",
+            "ProgramData" => r"C:\ProgramData",
+        })
+        .collect();
+        assert_eq!(
+            locations,
+            pathbuf_vec![
+                r"D:\portable\git\cmd",
+                r"D:\custom\apps\git\current\cmd",
+                r"E:\shared\apps\git\current\cmd",
+            ],
+            "explicit installation roots take precedence over Scoop's default roots"
+        );
+    }
+
+    #[test]
+    fn scoop_locations_reject_relative_roots() {
+        for invalid in ["", "relative", r"C:relative", r"\rooted"] {
+            let mut locations = super::super::locations_under_scoop(var_os_stub! {
+                "GIT_INSTALL_ROOT" => invalid,
+                "SCOOP" => invalid,
+                "SCOOP_GLOBAL" => invalid,
+                "USERPROFILE" => invalid,
+                "ProgramData" => invalid,
+            });
+            assert!(
+                locations.next().is_none(),
+                "{invalid:?} must not cause discovery relative to the working directory"
+            );
+        }
+    }
+
+    #[test]
     fn alternative_locations() {
         // Obtain program files directory paths by other means and check that they seem correct.
         let pf = ProgramFilesPaths::obtain_envlessly().validated();
 
-        // Check that `ALTERNATIVE_LOCATIONS` correspond to them, with the correct subdirectories.
-        let locations = super::super::ALTERNATIVE_LOCATIONS.as_slice();
-        RelativeGitBinPaths::assert_from(&pf, locations).assert_architectures();
+        // Check that the first fallback corresponds to them, with the correct subdirectories.
+        let locations = super::super::locations_under_program_files(|key| std::env::var_os(key));
+        RelativeGitBinPaths::assert_from(&pf, &locations).assert_architectures();
     }
-}
 
-#[cfg(not(windows))]
-mod locations {
     #[test]
-    fn alternative_locations() {
-        assert!(super::super::ALTERNATIVE_LOCATIONS.is_empty());
+    fn package_manager_locations_reject_relative_roots() {
+        for invalid in ["", "relative", r"C:relative", r"\rooted"] {
+            let mut locations = super::super::locations_under_package_managers(|_| Some(invalid.into()));
+            assert!(
+                locations.next().is_none(),
+                "{invalid:?} must not enable discovery relative to the working directory"
+            );
+        }
+    }
+
+    #[test]
+    fn msys_paths_and_companions_use_the_selected_runtime() -> gix_error::TestResult {
+        let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only(
+            "windows-git-installations.sh",
+        )?)?;
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let bin = fixture.join("msys/usr/bin");
+        let executable = bin.join("git.exe");
+        let _env = gix_testtools::Env::new().set("PATH", bin.to_str().expect("UTF-8 fixture path"));
+        assert_eq!(
+            super::super::msys_bin_at(&executable),
+            Some(bin.as_path()),
+            "identify the selected MSYS runtime"
+        );
+        let mixed_case_bin = fixture.join("msys/UsR/BiN");
+        assert_eq!(
+            super::super::msys_bin_at(&mixed_case_bin.join("git.exe")),
+            Some(mixed_case_bin.as_path()),
+            "Windows PATH spelling does not change the selected MSYS runtime"
+        );
+        assert_eq!(
+            super::super::msys_bin_at(Path::new("usr/bin/git.exe")),
+            None,
+            "relative roots are not trusted"
+        );
+        assert_eq!(
+            super::super::msys_bin_at(&fixture.join("path/git.exe")),
+            None,
+            "ordinary Git is not an MSYS runtime"
+        );
+        for path in ["/usr/lib/git-core", "/etc/gitconfig", "/a directory with spaces "] {
+            let actual = super::super::native_path(Path::new(path)).expect("the bundled cygpath runs");
+            assert_eq!(
+                actual,
+                fixture.join("msys").join(&path[1..]),
+                "Unix paths are mapped by the same runtime, preserving spaces"
+            );
+        }
+        for path in ["relative", r"C:\custom\git-core"] {
+            assert_eq!(
+                super::super::native_path(Path::new(path)).as_deref(),
+                Some(Path::new(path)),
+                "non-Unix overrides are preserved"
+            );
+        }
+        for stem in ["bash", "sh"] {
+            assert_eq!(
+                crate::env::installation_program(stem),
+                Some(bin.join(format!("{stem}.exe"))),
+                "companions come from the selected runtime"
+            );
+        }
+        assert!(
+            !crate::env::shell().to_string_lossy().contains('\\'),
+            "the shell path uses forward slashes"
+        );
+        assert_eq!(
+            crate::env::shell_command().get_args().count(),
+            0,
+            "MSYS sh is not a Git for Windows shim"
+        );
+        Ok(())
     }
 }
 

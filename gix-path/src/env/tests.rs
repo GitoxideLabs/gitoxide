@@ -35,6 +35,8 @@ mod system_prefix {
             ("C:/Git/ucrt64/libexec/git-core", "C:/Git/ucrt64"),
             ("C:/Git/mingw32/libexec/git-core", "C:/Git/mingw32"),
             ("C:/Git/clangarm64/libexec/git-core", "C:/Git/clangarm64"),
+            #[cfg(windows)]
+            ("C:/msys64/usr/lib/git-core", "C:/msys64/usr"),
             ("C:/libexec/Git/ucrt64/libexec/git-core", "C:/libexec/Git/ucrt64"),
         ] {
             assert_eq!(
@@ -60,7 +62,7 @@ mod system_prefix {
     #[test]
     #[cfg(windows)]
     fn config_is_next_to_the_runtime_prefix() {
-        for runtime in ["mingw64", "ucrt64", "mingw32", "clangarm64"] {
+        for runtime in ["mingw64", "ucrt64", "mingw32", "clangarm64", "usr"] {
             assert_eq!(
                 super::super::config_path_from_system_prefix(&Path::new("C:/Git").join(runtime)),
                 PathBuf::from("C:/Git/etc/gitconfig"),
