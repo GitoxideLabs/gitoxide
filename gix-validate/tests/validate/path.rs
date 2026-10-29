@@ -22,6 +22,23 @@ mod component {
         protect_ntfs: true,
     };
 
+    #[test]
+    fn nul_bytes_are_invalid_regardless_of_platform_protections() {
+        for flags in 0..8 {
+            let options = component::Options {
+                protect_windows: flags & 1 != 0,
+                protect_hfs: flags & 2 != 0,
+                protect_ntfs: flags & 4 != 0,
+            };
+            for input in [b"\0".as_slice(), b"\0start", b"mid\0dle", b"end\0"] {
+                assert!(
+                    matches!(component(input.into(), None, options), Err(component::Error::Nul)),
+                    "NUL is invalid on every filesystem, even with optional protections disabled: {options:?}"
+                );
+            }
+        }
+    }
+
     mod valid {
         use bstr::ByteSlice;
         use gix_validate::path::{component, component::Mode::Symlink};
