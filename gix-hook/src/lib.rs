@@ -1,4 +1,4 @@
-//! Discover and prepare traditional Git hooks.
+//! Discover and run traditional Git hooks.
 //!
 //! Callers provide resolved repository paths and command context.
 //! This crate does not discover repositories or decide repository trust.
@@ -12,7 +12,7 @@ use std::{
 };
 
 mod run;
-pub use run::prepare;
+pub use run::{prepare, run};
 
 /// Literal arguments, environment overrides, and input for a hook invocation.
 #[derive(Debug, Default, Clone, Copy)]
