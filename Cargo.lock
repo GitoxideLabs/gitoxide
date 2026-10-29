@@ -2002,6 +2002,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gix-hook"
+version = "0.1.0"
+dependencies = [
+ "gix-command",
+ "gix-error",
+ "gix-sec",
+ "gix-testtools",
+]
+
+[[package]]
 name = "gix-ignore"
 version = "0.24.1"
 dependencies = [

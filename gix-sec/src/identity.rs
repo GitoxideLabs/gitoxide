@@ -19,6 +19,49 @@ pub fn is_path_owned_by_current_user(path: &Path) -> std::io::Result<bool> {
     impl_::is_path_owned_by_current_user(path)
 }
 
+/// Return whether `path` resolves to a regular file that the current user can execute.
+///
+/// Unix checks use `access(X_OK)` with the process's real user and group IDs, like Git's hook discovery.
+/// Symlinks are followed. Windows and other platforms without Unix permission bits treat accessible regular files
+/// as executable candidates. This does not inspect the executable format or interpreter.
+/// Missing files, non-directories in the path, and permission denials return `false`; other I/O errors are returned.
+/// The result is advisory: permissions or the file can change before execution, which must still handle errors.
+pub fn is_path_executable_by_current_user(path: &Path) -> std::io::Result<bool> {
+    use std::io::ErrorKind;
+    match path.metadata() {
+        Ok(metadata) if metadata.is_file() => {}
+        Ok(_) => return Ok(false),
+        Err(err)
+            if matches!(
+                err.kind(),
+                ErrorKind::NotFound | ErrorKind::NotADirectory | ErrorKind::PermissionDenied
+            ) =>
+        {
+            return Ok(false);
+        }
+        Err(err) => return Err(err),
+    }
+    #[cfg(unix)]
+    {
+        use std::{ffi::CString, os::unix::ffi::OsStrExt};
+        let path = CString::new(path.as_os_str().as_bytes())
+            .map_err(|err| std::io::Error::new(ErrorKind::InvalidInput, err))?;
+        // SAFETY: path is a valid, terminated C string, and access only inspects the named file.
+        #[expect(unsafe_code)]
+        let result = unsafe { libc::access(path.as_ptr(), libc::X_OK) };
+        if result == 0 {
+            return Ok(true);
+        }
+        let err = std::io::Error::last_os_error();
+        match err.kind() {
+            ErrorKind::NotFound | ErrorKind::NotADirectory | ErrorKind::PermissionDenied => Ok(false),
+            _ => Err(err),
+        }
+    }
+    #[cfg(not(unix))]
+    Ok(true)
+}
+
 // Wasi doesn't have a concept of a user, so this is implicitly true.
 #[cfg(target_os = "wasi")]
 mod impl_ {

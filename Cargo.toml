@@ -227,6 +227,7 @@ strip = "none"
 
 [workspace]
 members = [
+    "gix-hook",
     "gix-actor",
     "gix-url",
     "gix-hash",
