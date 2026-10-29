@@ -18,7 +18,7 @@ pub(super) fn commit(
 ) -> Result<Vec<RefEdit>> {
     let (loose, packed) = repo.config.lock_timeout()?;
     let transaction = repo.refs.transaction().prepare(edits, loose, packed)?;
-    let input = input(transaction.edits(), repo.object_hash());
+    let input = input(transaction.edits(), repo.object_hash(), repo.namespace());
     if !hooks.run(
         "reference-transaction",
         ["prepared".into()],
@@ -41,7 +41,11 @@ pub(super) fn commit(
     result
 }
 
-fn input<'a>(edits: impl Iterator<Item = &'a RefEdit>, hash: gix_hash::Kind) -> Vec<u8> {
+fn input<'a>(
+    edits: impl Iterator<Item = &'a RefEdit>,
+    hash: gix_hash::Kind,
+    namespace: Option<&gix_ref::Namespace>,
+) -> Vec<u8> {
     let mut out = Vec::new();
     for edit in edits {
         if matches!(
@@ -63,6 +67,9 @@ fn input<'a>(edits: impl Iterator<Item = &'a RefEdit>, hash: gix_hash::Kind) -> 
                 None => out.extend_from_slice(hash.null().to_string().as_bytes()),
             }
             out.push(b' ');
+        }
+        if let Some(namespace) = namespace {
+            out.extend_from_slice(namespace.as_bstr());
         }
         out.extend_from_slice(edit.name.as_bstr());
         out.push(b'\n');

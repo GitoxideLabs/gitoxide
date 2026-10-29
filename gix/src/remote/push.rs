@@ -2,6 +2,7 @@ use std::{io, sync::atomic::AtomicBool};
 
 use crate::{
     Progress, Remote, Result,
+    bstr::ByteSlice,
     push::{Options, Outcome, Update},
     remote::Direction,
 };
@@ -19,7 +20,8 @@ impl Remote<'_> {
     /// shallow boundaries and honor `receive.shallowUpdate` when incoming history needs additional boundaries.
     /// `receive.denyCurrentBranch=updateInstead` delegates deployment to a `push-to-checkout` hook;
     /// its built-in worktree update is currently unsupported when no executable hook is present.
-    /// They reject namespaces and advanced receive policies they cannot enforce before modifying references.
+    /// Namespaces and `receive.hideRefs` rules are applied to advertisements, transactions, and hooks.
+    /// Advanced receive policies that cannot be enforced are rejected before modifying references.
     pub fn push(
         &self,
         updates: impl IntoIterator<Item = Update>,
@@ -40,6 +42,28 @@ impl Remote<'_> {
         open.api_config_overrides.clear();
         open.cli_config_overrides.clear();
         let mut destination = crate::open_opts(gix_path::from_bstr(url.path)?.into_owned(), open)?;
+        let namespace = self
+            .command_environment
+            .iter()
+            .rev()
+            .find(|(key, _)| key == "GIT_NAMESPACE")
+            .map(|(_, value)| value.clone())
+            .or_else(|| {
+                self.repo
+                    .options
+                    .permissions
+                    .env
+                    .git_prefix
+                    .check_opt("GIT_NAMESPACE")
+                    .and_then(std::env::var_os)
+            });
+        if let Some(namespace) = namespace {
+            if namespace.is_empty() {
+                destination.clear_namespace();
+            } else {
+                destination.set_namespace(gix_path::os_string_into_bstring(namespace)?.as_bstr())?;
+            }
+        }
         crate::push::local::push(
             self,
             &mut destination,
