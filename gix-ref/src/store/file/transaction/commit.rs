@@ -53,37 +53,41 @@ impl Transaction<'_, '_> {
                         RefLog::AndReference => (true, true),
                     };
                     if update_reflog {
+                        let previous = match expected {
+                            PreviousValue::MustExistAndMatch(Target::Object(oid)) => Some(*oid),
+                            _ => None,
+                        }
+                        .or(change.leaf_referent_previous_oid);
                         let log_update = match new {
-                            Target::Symbolic(_) => {
-                                // Special HACK: no reflog for symref changes as there is no OID involved which the reflog needs.
-                                // Unless, the ref is new and we can obtain a peeled id
-                                // identified by the expectation of what could be there, as is the case when cloning.
-                                match expected {
-                                    PreviousValue::ExistingMustMatch(Target::Object(oid)) => {
-                                        Some((Some(gix_hash::ObjectId::null(oid.kind())), oid))
-                                    }
-                                    _ => None,
-                                }
-                            }
-                            Target::Object(new_oid) => {
-                                let previous = match expected {
-                                    // Here, this means that the ref already existed, and that it will receive (even transitively)
-                                    // the given value
-                                    PreviousValue::MustExistAndMatch(Target::Object(oid)) => Some(oid.to_owned()),
-                                    _ => None,
-                                }
-                                .or(change.leaf_referent_previous_oid);
-                                Some((previous, new_oid))
-                            }
+                            Target::Symbolic(_) => Self::reflog_target_oid(
+                                self.store,
+                                new,
+                                self.packed_transaction
+                                    .as_ref()
+                                    .and_then(crate::packed::Transaction::buffer),
+                            )
+                            .or_raise(|| {
+                                Message::new("Could not resolve symbolic reference for reflog")
+                                    .with("reference", change.update.name.as_bstr())
+                            })?
+                            .or(match expected {
+                                // Cloning may provide the referent ID before creating the referent itself.
+                                PreviousValue::ExistingMustMatch(Target::Object(oid)) => Some(*oid),
+                                _ => None,
+                            })
+                            .map(|new_oid| (previous, new_oid)),
+                            Target::Object(new_oid) => Some((previous, *new_oid)),
                         };
                         if let Some((previous, new_oid)) = log_update {
-                            let do_update = previous.as_ref() != Some(new_oid);
+                            let do_update = matches!(new, Target::Symbolic(_))
+                                || matches!(expected, PreviousValue::MustExistAndMatch(Target::Symbolic(_)))
+                                || previous != Some(new_oid);
                             if do_update {
                                 self.store
                                     .reflog_create_or_append(
                                         change.update.name.as_ref(),
                                         previous,
-                                        new_oid,
+                                        &new_oid,
                                         committer,
                                         log.message.as_ref(),
                                         log.force_create_reflog,
