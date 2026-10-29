@@ -280,7 +280,7 @@ nix-shell-macos:
 # Audit dependency advisories, bans, licenses, and sources
 [group('Dependencies and SBOMs')]
 audit:
-    cargo deny --workspace --all-features check advisories bans licenses sources
+    cargo deny --workspace --all-features --locked check advisories bans licenses sources
 
 # Install the pinned Rust tools for CycloneDX and SPDX SBOMs
 [group('Dependencies and SBOMs')]
