@@ -34,6 +34,7 @@ mod pack;
 #[cfg(feature = "attributes")]
 mod pathspec;
 mod reference;
+mod reflog;
 mod remote;
 mod shallow;
 mod state;
