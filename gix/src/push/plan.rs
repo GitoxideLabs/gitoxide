@@ -111,7 +111,7 @@ fn peel_commit(repo: &Repository, mut object_id: ObjectId) -> Result<Option<Obje
     }
 }
 
-fn is_ancestor(
+pub(crate) fn is_ancestor(
     repo: &Repository,
     old_id: ObjectId,
     new_id: ObjectId,
