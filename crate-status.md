@@ -175,6 +175,7 @@ The top-level crate that acts as hub to all functionality provided by the `gix-*
         * [ ] run transaction hooks and handle special repository states like quarantine
         * [ ] support for different backends like `files` and `reftable`
     * **main or linked worktree**
+        * [x] clean untracked and ignored contents, with dry-run and nested-repository protection
         * [ ] add files with `.gitignore` handling
         * [ ] checkout with conversions like clean + smudge as in `.gitattributes`
         * [ ] _diff_ index with working tree
