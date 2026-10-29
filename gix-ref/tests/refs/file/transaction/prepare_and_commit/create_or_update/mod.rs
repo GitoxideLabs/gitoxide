@@ -58,6 +58,218 @@ fn reflog_messages_preserve_bytes() -> Result {
 }
 
 #[test]
+fn symbolic_reference_reflogs_match_git() -> TestResult {
+    use std::{io::Write as _, process::Stdio};
+
+    let entries = |store: &gix_ref::file::Store| -> Result<Vec<_>> {
+        Ok(reflog_lines(store, "HEAD")?
+            .into_iter()
+            .map(|entry| (entry.previous_oid, entry.new_oid, entry.message))
+            .collect())
+    };
+    for packed in [false, true] {
+        let (ours, store) = store_writable("make_multi_hop_ref.sh")?;
+        let (theirs, git_store) = store_writable("make_multi_hop_ref.sh")?;
+        if packed {
+            gix_testtools::git(ours.path(), "pack-refs --all --prune")?;
+            gix_testtools::git(theirs.path(), "pack-refs --all --prune")?;
+        }
+        for (target, message) in [
+            ("refs/tags/t1", "same object"),
+            ("refs/tags/t1", "same symbolic target"),
+            ("refs/tags/t1", ""),
+            ("refs/multi-hop2", "tag object through symbolic chain"),
+            ("refs/heads/missing", "dangling target"),
+            ("refs/heads/main", "return from unborn"),
+        ] {
+            store
+                .transaction()
+                .prepare(
+                    [RefEdit::update(
+                        "HEAD".try_into()?,
+                        Target::Symbolic(target.try_into()?),
+                        PreviousValue::Any,
+                        message,
+                    )],
+                    Fail::Immediately,
+                    Fail::Immediately,
+                )?
+                .commit(committer().to_ref(&mut TimeBuf::default()))?;
+            let mut command = gix_testtools::git_command(theirs.path());
+            command.arg("symbolic-ref");
+            if !message.is_empty() {
+                command.args(["-m", message]);
+            }
+            let output = command.args(["HEAD", target]).output()?;
+            assert!(output.status.success(), "Git accepts the symbolic update: {output:?}");
+            assert_eq!(
+                entries(&store)?,
+                entries(&git_store)?,
+                "symbolic reflog IDs and messages match Git for {message}, packed={packed}"
+            );
+        }
+        let old_id = store
+            .find("refs/heads/main")?
+            .target
+            .try_id()
+            .expect("main is direct")
+            .to_owned();
+        store
+            .transaction()
+            .prepare(
+                [RefEdit::update(
+                    "HEAD".try_into()?,
+                    old_id,
+                    PreviousValue::Any,
+                    "detach same object",
+                )],
+                Fail::Immediately,
+                Fail::Immediately,
+            )?
+            .commit(committer().to_ref(&mut TimeBuf::default()))?;
+        gix_testtools::git(
+            theirs.path(),
+            &format!("update-ref --no-deref -m 'detach same object' HEAD {old_id}"),
+        )?;
+        assert_eq!(
+            entries(&store)?,
+            entries(&git_store)?,
+            "detaching a symbolic reference logs even when its object stays the same, packed={packed}"
+        );
+
+        let next_commit = "commit-tree refs/heads/main^{tree} -p refs/heads/main -m next";
+        let new_id = gix_testtools::git(ours.path(), next_commit)?;
+        assert_eq!(
+            new_id,
+            gix_testtools::git(theirs.path(), next_commit)?,
+            "both transaction oracles contain the same commit"
+        );
+        let new_id = ObjectId::from_hex(new_id.trim().as_bytes())?;
+        for (case, target_exists, target_first) in [
+            ("existing-target-first", true, true),
+            ("existing-symref-first", true, false),
+            ("missing-target-first", false, true),
+            ("missing-symref-first", false, false),
+        ] {
+            let target = format!("refs/heads/{case}");
+            for directory in [ours.path(), theirs.path()] {
+                gix_testtools::git(directory, "symbolic-ref -m setup HEAD refs/heads/main")?;
+                if target_exists {
+                    gix_testtools::git(directory, &format!("update-ref {target} {old_id}"))?;
+                }
+                if packed {
+                    gix_testtools::git(directory, "pack-refs --all --prune")?;
+                }
+            }
+            let mut edits = vec![
+                RefEdit::update(target.as_str().try_into()?, new_id, PreviousValue::Any, case),
+                RefEdit::update(
+                    "HEAD".try_into()?,
+                    Target::Symbolic(target.as_str().try_into()?),
+                    PreviousValue::Any,
+                    case,
+                ),
+            ];
+            let mut commands = [
+                format!("update {target} {new_id}"),
+                format!("symref-update HEAD {target}"),
+            ];
+            if !target_first {
+                edits.reverse();
+                commands.reverse();
+            }
+            store
+                .transaction()
+                .prepare(edits, Fail::Immediately, Fail::Immediately)?
+                .commit(committer().to_ref(&mut TimeBuf::default()))?;
+            let mut child = gix_testtools::git_command(theirs.path())
+                .args(["update-ref", "--stdin", "--no-deref", "-m", case])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()?;
+            child
+                .stdin
+                .take()
+                .expect("stdin is piped")
+                .write_all(format!("{}\n", commands.join("\n")).as_bytes())?;
+            let output = child.wait_with_output()?;
+            assert!(
+                output.status.success(),
+                "Git accepts the ordered transaction: {output:?}"
+            );
+            assert_eq!(
+                entries(&store)?,
+                entries(&git_store)?,
+                "symbolic logs resolve target values in commit order for {case}, packed={packed}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn symbolic_reflogs_resolve_namespaced_targets() -> TestResult {
+    for packed in [false, true] {
+        let (directory, mut store) = store_writable("make_multi_hop_ref.sh")?;
+        let commit_id = store
+            .find("refs/heads/main")?
+            .target
+            .try_id()
+            .expect("main is direct")
+            .to_owned();
+        let tag_id = store
+            .find("refs/tags/dt2")?
+            .target
+            .try_id()
+            .expect("the annotated tag is direct")
+            .to_owned();
+        for (name, object_id) in [
+            ("refs/heads/namespaced-only", commit_id),
+            ("refs/tags/namespaced-only", tag_id),
+        ] {
+            gix_testtools::git(
+                directory.path(),
+                &format!("update-ref refs/namespaces/foo/{name} {object_id}"),
+            )?;
+        }
+        if packed {
+            gix_testtools::git(directory.path(), "pack-refs --all --prune")?;
+        }
+        store.namespace = Some(gix_ref::namespace::expand("foo")?);
+        store.write_reflog = WriteReflog::Always;
+        for target in ["refs/heads/namespaced-only", "refs/tags/namespaced-only"] {
+            store
+                .transaction()
+                .prepare(
+                    [RefEdit::update(
+                        "HEAD".try_into()?,
+                        Target::Symbolic(target.try_into()?),
+                        PreviousValue::Any,
+                        "namespaced symbolic update",
+                    )],
+                    Fail::Immediately,
+                    Fail::Immediately,
+                )?
+                .commit(committer().to_ref(&mut TimeBuf::default()))?;
+        }
+        let actual: Vec<_> = reflog_lines(&store, "HEAD")?
+            .into_iter()
+            .map(|entry| (entry.previous_oid, entry.new_oid))
+            .collect();
+        assert_eq!(
+            actual,
+            vec![
+                (ObjectId::null(crate::fixture_hash_kind()), commit_id),
+                (commit_id, tag_id)
+            ],
+            "namespace lookup resolves old and new symbolic targets without peeling tags, packed={packed}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn intermediate_directories_are_removed_on_rollback() -> TestResult {
     for explicit_rollback in [false, true] {
         let (dir, store) = empty_store()?;
@@ -585,8 +797,8 @@ fn reference_with_must_not_exist_constraint_may_exist_already_if_the_new_value_m
 
     assert_eq!(
         reflog_lines(&store, "HEAD")?.len(),
-        previous_reflog_count,
-        "no new reflog is actually added"
+        previous_reflog_count + 1,
+        "symbolic updates record the operation even when the target is unchanged"
     );
     Ok(())
 }

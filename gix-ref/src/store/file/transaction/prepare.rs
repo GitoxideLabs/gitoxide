@@ -53,6 +53,34 @@ impl Transaction<'_, '_> {
         }
     }
 
+    /// Resolve IDs for reflogs, treating dangling and cyclic symbolic chains as unresolved.
+    /// IO failures still abort the transaction instead of silently losing its log entry.
+    pub(super) fn reflog_target_oid(
+        store: &file::Store,
+        target: &Target,
+        packed: Option<&packed::Buffer>,
+    ) -> Result<Option<gix_hash::ObjectId>> {
+        let snapshot = if packed.is_none() {
+            store.assure_packed_refs_uptodate()?
+        } else {
+            None
+        };
+        let packed = packed.or_else(|| snapshot.as_ref().map(|buffer| &***buffer));
+        let mut target = target.clone();
+        for _ in 0..5 {
+            match target {
+                Target::Object(id) => return Ok(Some(id)),
+                Target::Symbolic(name) => {
+                    let Some(reference) = store.try_find_packed(name.as_ref(), packed)? else {
+                        return Ok(None);
+                    };
+                    target = reference.target;
+                }
+            }
+        }
+        Ok(target.try_id().map(ToOwned::to_owned))
+    }
+
     fn lock_ref_and_apply_change(
         store: &file::Store,
         lock_fail_mode: gix_lock::acquire::Fail,
@@ -179,6 +207,9 @@ impl Transaction<'_, '_> {
                 }
 
                 let (is_effective, is_symbolic) = if let Some(existing) = existing_ref {
+                    if matches!(existing.target, Target::Symbolic(_)) {
+                        change.leaf_referent_previous_oid = Self::reflog_target_oid(store, &existing.target, packed)?;
+                    }
                     let (effective, is_symbolic) = new_would_change_existing(new, &existing.target);
                     *expected = PreviousValue::MustExistAndMatch(existing.target);
                     (effective, is_symbolic)
