@@ -10,7 +10,9 @@ impl Remote<'_> {
     ///
     /// Network URLs use [`crate::remote::Connection::ref_map()`]. Local repositories obey
     /// `uploadpack.hideRefs` and `transfer.hideRefs`, advertise peeled tags and symbolic refs,
-    /// and report unborn `HEAD`. URL rewrites and protocol permissions match [`Self::connect()`].
+    /// and report unborn `HEAD`. Per-operation `GIT_NAMESPACE` selects the remote namespace;
+    /// `^`-prefixed hideRefs rules match physical names before stripping that namespace.
+    /// URL rewrites and protocol permissions match [`Self::connect()`].
     pub fn ref_map(
         &self,
         progress: impl Progress,
@@ -34,8 +36,36 @@ pub(super) fn open(remote: &Remote<'_>) -> Result<Option<Repository>> {
     options.cli_config_overrides.clear();
     let mut repo = crate::open_opts(gix_path::from_bstr(url.path)?.into_owned(), options)?;
     repo.make_paths_absolute()?;
+    apply_namespace(remote, &mut repo)?;
     repo.objects.ignore_replacements = true;
     Ok(Some(repo))
+}
+
+pub(super) fn apply_namespace(remote: &Remote<'_>, repo: &mut Repository) -> Result<()> {
+    let namespace = remote
+        .command_environment
+        .iter()
+        .rev()
+        .find(|(key, _)| key == "GIT_NAMESPACE")
+        .map(|(_, value)| value.clone())
+        .or_else(|| {
+            remote
+                .repo
+                .options
+                .permissions
+                .env
+                .git_prefix
+                .check_opt("GIT_NAMESPACE")
+                .and_then(std::env::var_os)
+        });
+    if let Some(namespace) = namespace {
+        if namespace.is_empty() {
+            repo.clear_namespace();
+        } else {
+            repo.set_namespace(gix_path::os_string_into_bstring(namespace)?.as_bstr())?;
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn ref_map(
@@ -49,13 +79,13 @@ pub(super) fn ref_map(
     let hidden = hidden_refs(source)?;
     let mut refs = Vec::new();
     if let Some(head) = source.try_find_reference("HEAD")?
-        && !is_hidden(&hidden, b"HEAD")
+        && !is_hidden(&hidden, b"HEAD", source.namespace())
     {
         advertise(head, true, &mut refs)?;
     }
     for reference in source.references()?.all()? {
         let reference = reference?;
-        if !is_hidden(&hidden, reference.name().as_bstr()) {
+        if !is_hidden(&hidden, reference.name().as_bstr(), source.namespace()) {
             advertise(reference, false, &mut refs)?;
         }
     }
@@ -155,11 +185,18 @@ fn hidden_refs(source: &Repository) -> Result<Vec<BString>> {
     Ok(hidden)
 }
 
-fn is_hidden(hidden: &[BString], name: &[u8]) -> bool {
+fn is_hidden(hidden: &[BString], name: &[u8], namespace: Option<&gix_ref::Namespace>) -> bool {
+    let mut full_name = namespace
+        .map(|namespace| namespace.as_bstr().to_owned())
+        .unwrap_or_default();
+    full_name.extend_from_slice(name);
     for rule in hidden.iter().rev() {
         let rule = rule.trim_end_with(|byte| byte == '/');
         let (negated, rule) = rule.strip_prefix(b"!").map_or((false, rule), |rule| (true, rule));
-        let rule = rule.strip_prefix(b"^").unwrap_or(rule);
+        let (rule, name) = match rule.strip_prefix(b"^") {
+            Some(rule) => (rule, full_name.as_slice()),
+            None => (rule, name),
+        };
         if name
             .strip_prefix(rule)
             .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with(b"/"))

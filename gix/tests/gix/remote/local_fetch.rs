@@ -334,3 +334,100 @@ fn remote_head_candidates_match_git_remote_show() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn local_namespace_and_hidden_ref_advertisements_match_git() -> TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_namespaced_local_fetch_repo.sh")?.canonicalize()?;
+    let local = repo(fixture.join("empty"))?;
+    for namespace in ["team/project", ""] {
+        let expected = gix_testtools::git_command(&fixture)
+            .env("GIT_NAMESPACE", namespace)
+            .args(["ls-remote", "--symref"])
+            .arg(fixture.join("source"))
+            .output()?;
+        assert!(
+            expected.status.success(),
+            "{}",
+            String::from_utf8_lossy(&expected.stderr)
+        );
+        let remote = local
+            .remote_at(gix::path::into_bstr(fixture.join("source"))?)?
+            .with_command_environment([
+                ("GIT_NAMESPACE".into(), "missing".into()),
+                ("GIT_NAMESPACE".into(), namespace.into()),
+            ]);
+        let (map, _) = remote.ref_map(gix::progress::Discard, Default::default())?;
+        let mut actual = Vec::new();
+        for reference in &map.remote_refs {
+            let (name, target_id, peeled_id) = reference.unpack();
+            if let gix::protocol::handshake::Ref::Symbolic { target, .. } = reference {
+                actual.push(format!("ref: {target}\t{name}"));
+            }
+            if let Some(target_id) = target_id {
+                actual.push(format!("{target_id}\t{name}"));
+            }
+            if let Some(peeled_id) = peeled_id {
+                actual.push(format!("{peeled_id}\t{name}^{{}}"));
+            }
+        }
+        let expected = String::from_utf8(expected.stdout)?;
+        let mut expected: Vec<_> = expected.lines().map(str::to_owned).collect();
+        actual.sort();
+        expected.sort();
+        // Git can advertise the namespaced HEAD twice; compare the reference set.
+        actual.dedup();
+        expected.dedup();
+        assert_eq!(
+            actual, expected,
+            "namespace {namespace:?} retains logical and physical hideRefs rules"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn native_namespaced_fetch_matches_git_with_relative_url_and_empty_path() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let fixture = gix_testtools::scripted_fixture_read_only("make_namespaced_local_fetch_repo.sh")?.canonicalize()?;
+    let dir = gix_testtools::tempfile::tempdir()?;
+    for name in ["native", "git"] {
+        gix_testtools::git(dir.path(), &format!("init --bare {name}"))?;
+    }
+    let output = gix_testtools::git_command(&fixture)
+        .env("GIT_NAMESPACE", "team/project")
+        .arg("--git-dir")
+        .arg(dir.path().join("git"))
+        .args([
+            "fetch",
+            "--no-tags",
+            "--no-write-fetch-head",
+            "source",
+            "+refs/heads/*:refs/remotes/origin/*",
+        ])
+        .output()?;
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let local = repo(dir.path().join("native"))?;
+    let mut remote = local
+        .remote_at("source")?
+        .with_fetch_tags(gix::remote::fetch::Tags::None)
+        .with_command_environment([("GIT_NAMESPACE".into(), "team/project".into())]);
+    remote.replace_refspecs(["+refs/heads/*:refs/remotes/origin/*"], Direction::Fetch)?;
+    {
+        let _cwd = gix_testtools::set_current_dir(&fixture)?;
+        let _path = gix_testtools::Env::new().set("PATH", dir.path().to_string_lossy());
+        remote.fetch(
+            Default::default(),
+            gix::progress::Discard,
+            &std::sync::atomic::AtomicBool::default(),
+        )?;
+    }
+    assert_eq!(
+        gix_testtools::git(local.git_dir(), "show-ref")?,
+        gix_testtools::git(dir.path().join("git"), "show-ref")?,
+        "only visible namespaced references are fetched into the default local namespace"
+    );
+    gix_testtools::git(local.git_dir(), "fsck --strict --no-reflogs")?;
+    Ok(())
+}
