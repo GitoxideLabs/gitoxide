@@ -171,6 +171,70 @@ mod multiple {
     }
 
     #[test]
+    fn literal_forward_mapping_preserves_names_and_matches_no_object_ids() -> gix_testtools::TestResult {
+        let target = ObjectId::from_hex(b"1111111111111111111111111111111111111111")?;
+        let hex_spec = format!("{target}:hex");
+        let specs = [
+            "main:short",
+            "refs/heads/*:other/*",
+            &hex_spec,
+            "main:short",
+            "^refs/heads/private",
+        ]
+        .into_iter()
+        .map(|spec| gix_refspec::parse(spec.into(), Operation::Fetch))
+        .collect::<gix_error::Result<Vec<_>>>()?;
+        let names = [
+            "refs/heads/main",
+            "main",
+            "refs/heads/private",
+            "refs/heads/topic/slash",
+            "1111111111111111111111111111111111111111",
+        ];
+        let items = names.into_iter().map(|name| Item {
+            full_ref_name: name.into(),
+            target: &target,
+            object: None,
+        });
+        let group = MatchGroup::from_fetch_specs(specs);
+        let outcome = group.clone().match_lhs_literal(items);
+        let mappings: Vec<_> = outcome
+            .mappings
+            .iter()
+            .map(|mapping| {
+                (
+                    mapping.lhs.to_string(),
+                    mapping
+                        .rhs
+                        .as_deref()
+                        .expect("all specs map to destinations")
+                        .to_string(),
+                    mapping.spec_index,
+                )
+            })
+            .collect();
+        assert_eq!(
+            mappings,
+            [
+                ("main".into(), "short".into(), 0),
+                ("refs/heads/main".into(), "other/main".into(), 1),
+                ("refs/heads/topic/slash".into(), "other/topic/slash".into(), 1),
+                (target.to_string(), "hex".into(), 2),
+            ],
+            "name-only mapping preserves refspec order and spelling, substitutes globs, honors exclusions, and deduplicates mappings"
+        );
+        assert!(
+            outcome.mappings.iter().all(|mapping| mapping.item_index.is_some()),
+            "object-shaped names match names rather than producing synthetic object mappings"
+        );
+        assert!(
+            group.match_lhs_literal(std::iter::empty()).mappings.is_empty(),
+            "a name-only mapping needs an input name"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn glob_prefix_and_suffix_cannot_overlap_in_either_direction() -> gix_testtools::TestResult {
         let target = gix_testtools::object_hash().null();
         let item = Item {
