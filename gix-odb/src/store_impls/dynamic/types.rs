@@ -168,6 +168,16 @@ impl<T: Clone> OnDiskFile<T> {
         std::io::Error::new(error.kind(), Arc::clone(error))
     }
 
+    fn error_depends_on_content(error: &std::io::Error) -> bool {
+        matches!(
+            error.kind(),
+            std::io::ErrorKind::InvalidData | std::io::ErrorKind::UnexpectedEof
+        ) || error
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<gix_error::Error>())
+            .is_some_and(|error| error.downcast_any_ref::<std::io::Error>().is_none())
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -196,7 +206,9 @@ impl<T: Clone> OnDiskFile<T> {
         match &self.state {
             Loaded(v) | Garbage(v) => return Ok(Some(v.clone())),
             Missing => return Ok(None),
-            Failed { error, metadata } if metadata.is_some() && *metadata == self.metadata() => {
+            Failed { error, metadata }
+                if metadata.is_some() && Self::error_depends_on_content(error) && *metadata == self.metadata() =>
+            {
                 return Err(Self::clone_error(error));
             }
             Unloaded | Failed { .. } => {}
@@ -522,6 +534,48 @@ mod tests {
             }
             .to_intrinsic_pack_id();
         }
+    }
+
+    #[test]
+    fn transient_io_failures_are_retried_without_content_changes() -> gix_error::TestResult {
+        use gix_error::ErrorExt;
+
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("pack");
+        std::fs::write(&path, b"unchanged pack")?;
+        for kind in [
+            std::io::ErrorKind::PermissionDenied,
+            std::io::ErrorKind::Interrupted,
+            std::io::ErrorKind::WouldBlock,
+            std::io::ErrorKind::Other,
+        ] {
+            for wrapped in [false, true] {
+                let mut file = OnDiskFile {
+                    path: Arc::new(path.clone()),
+                    mtime: SystemTime::UNIX_EPOCH,
+                    state: OnDiskFileState::Unloaded,
+                };
+                let metadata = file.metadata();
+                let error = file
+                    .load_with_recovery(|_| {
+                        let error = std::io::Error::new(kind, "pack temporarily unavailable");
+                        Err(if wrapped {
+                            super::super::error_to_io(error.raise())
+                        } else {
+                            error
+                        })
+                    })
+                    .expect_err("the first load reports its transient failure");
+                assert_eq!(error.kind(), kind, "the original I/O error kind is preserved");
+                assert_eq!(
+                    file.load_with_recovery(|_| Ok(42))?,
+                    Some(42),
+                    "access can recover without changing the file contents"
+                );
+                assert_eq!(file.metadata(), metadata, "retrying needs no metadata change");
+            }
+        }
+        Ok(())
     }
 
     #[test]
