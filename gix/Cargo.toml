@@ -214,6 +214,7 @@ async-network-client-async-std = [
 ## Make `gix-protocol` available along with a blocking client, providing access to the `file://`, `git://` and `ssh://` transports.
 ## Push streams packs on an upload thread while receiving server progress, requiring `parallel` repository handles.
 blocking-network-client = [
+    "dep:gix-fsck",
     "dep:tempfile",
     "gix-protocol/blocking-client",
     "gix-pack/streaming-input",
@@ -350,6 +351,7 @@ cache-efficiency-debug = ["gix-utils/cache-efficiency-debug"]
 
 [dependencies]
 gix-parallel = { version = "^0.50.1", path = "../gix-parallel", features = ["once_cell"] }
+gix-fsck = { version = "^0.27.1", path = "../gix-fsck", optional = true }
 gix-error = { version = "^0.5.2", path = "../gix-error", features = ["bstr"] }
 gix-utils = { version = "^0.5.2", path = "../gix-utils", features = ["bstr", "interrupt", "progress"] }
 gix-fs = { version = "^0.24.1", path = "../gix-fs" }

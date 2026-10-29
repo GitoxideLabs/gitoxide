@@ -1,6 +1,6 @@
 use std::{path::Path, sync::atomic::AtomicBool};
 
-use gix_object::{Exists, FindExt, Write};
+use gix_object::{Exists, Find, FindExt, Write};
 
 use crate::{Repository, Result, error::ResultExt, push};
 
@@ -47,5 +47,20 @@ impl Quarantine {
                 .write_buf_with_known_id(object.kind, object.data, object_id)?;
         }
         Ok(())
+    }
+}
+
+pub(super) struct Incoming<'a> {
+    pub destination: &'a Repository,
+    pub incoming: &'a gix_odb::loose::Store,
+}
+
+impl Find for Incoming<'_> {
+    fn try_find<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> Result<Option<gix_object::Data<'a>>> {
+        if self.incoming.contains(id) {
+            self.incoming.try_find(id, buffer)
+        } else {
+            self.destination.try_find(id, buffer)
+        }
     }
 }

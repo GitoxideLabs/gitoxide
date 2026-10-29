@@ -72,6 +72,8 @@ mod local_fetch;
 #[cfg(feature = "blocking-network-client")]
 mod local_push;
 #[cfg(feature = "blocking-network-client")]
+mod local_push_fsck;
+#[cfg(feature = "blocking-network-client")]
 mod local_push_hooks;
 #[cfg(feature = "blocking-network-client")]
 mod push;

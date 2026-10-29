@@ -1545,6 +1545,7 @@ dependencies = [
  "gix-error",
  "gix-filter",
  "gix-fs",
+ "gix-fsck",
  "gix-glob",
  "gix-hash",
  "gix-hashtable",

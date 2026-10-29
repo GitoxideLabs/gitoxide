@@ -92,12 +92,7 @@ impl Policy {
 
     pub fn ensure_supported(&self, repo: &Repository) -> Result<()> {
         let config = repo.config_snapshot();
-        if config.string("receive.procReceiveRefs").is_some()
-            || config
-                .try_boolean("receive.fsckObjects")?
-                .or(config.try_boolean("transfer.fsckObjects")?)
-                .unwrap_or(false)
-        {
+        if config.string("receive.procReceiveRefs").is_some() {
             bail!(message("Native local receive cannot yet enforce this advanced receive policy").unsupported());
         }
         Ok(())

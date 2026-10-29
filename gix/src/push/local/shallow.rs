@@ -4,7 +4,7 @@ use gix_object::{Find, Kind};
 
 use crate::{
     ObjectId, Repository, Result,
-    error::{OptionExt, ResultExt, message},
+    error::{ResultExt, bail, message},
     push::{self, Rejection, Status, UpdateOutcome},
 };
 
@@ -29,7 +29,7 @@ impl Shallow {
         let existing: Vec<_> = gix_shallow::read(&destination.shallow_file()?)?
             .map(Vec::from)
             .unwrap_or_default();
-        let objects = Incoming { destination, incoming };
+        let objects = super::quarantine::Incoming { destination, incoming };
         let mut additions = Vec::with_capacity(updates.len());
         let mut needed = gix_hashtable::HashMap::default();
         for update in updates {
@@ -40,6 +40,7 @@ impl Shallow {
                 // Walk with both sets of grafts first, so omitted sender parents
                 // do not cause lookup failures before they can be classified.
                 for entry in gix_traverse::object::BreadthFirst::new([tip_id], &objects)
+                    .with_object_validation(false)
                     .with_shallow_commits(existing.iter().chain(source).copied())
                 {
                     push::plan::check_interrupt(interrupt)?;
@@ -157,13 +158,15 @@ fn ancestry_complete(
         let Some(object) = objects.try_find(&commit_id, &mut buffer)? else {
             return Ok(false);
         };
-        pending.extend(
-            object
-                .decode()?
-                .into_commit()
-                .ok_or_raise(|| message("A commit parent has the wrong object kind").corrupted())?
-                .parents(),
-        );
+        if object.kind != Kind::Commit {
+            bail!(message("A commit parent has the wrong object kind").corrupted());
+        }
+        for edge in object.references() {
+            let edge = edge?;
+            if edge.kind == Kind::Commit {
+                pending.push_back(edge.id);
+            }
+        }
     }
     Ok(true)
 }
@@ -174,24 +177,12 @@ fn check_connected(
     boundaries: impl IntoIterator<Item = ObjectId>,
     interrupt: &AtomicBool,
 ) -> Result<()> {
-    for entry in gix_traverse::object::BreadthFirst::new([tip_id], objects).with_shallow_commits(boundaries) {
+    for entry in gix_traverse::object::BreadthFirst::new([tip_id], objects)
+        .with_object_validation(false)
+        .with_shallow_commits(boundaries)
+    {
         push::plan::check_interrupt(interrupt)?;
         entry?;
     }
     Ok(())
-}
-
-struct Incoming<'a> {
-    destination: &'a Repository,
-    incoming: &'a gix_odb::loose::Store,
-}
-
-impl Find for Incoming<'_> {
-    fn try_find<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> Result<Option<gix_object::Data<'a>>> {
-        if self.incoming.contains(id) {
-            self.incoming.try_find(id, buffer)
-        } else {
-            self.destination.try_find(id, buffer)
-        }
-    }
 }
