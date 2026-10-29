@@ -166,34 +166,44 @@ mod with_fetch {
             })
         }
 
-        /// Return `true` if the explicit fetch refspecs represented by this mapping failed to match the remote in a way
-        /// that should typically be reported as "no mapping".
+        /// Return exact source names that were requested explicitly but are absent from the advertisement.
         ///
-        /// Use this before negotiation or reference updates when callers need to reject a fetch early instead of proceeding
-        /// with an empty or purely implicit mapping set.
-        ///
-        /// This is the case if the server advertised refs but none matched at all, or if only implicit mappings were produced
-        /// while at least one explicit refspec required an actual ref match, as is the case for exact ref names like `HEAD`
-        /// or `refs/heads/main`.
-        pub fn is_missing_required_mapping(&self) -> bool {
-            let has_explicit_mapping = self
-                .mappings
-                .iter()
-                .any(|mapping| matches!(mapping.spec_index, crate::fetch::refmap::SpecIndex::ExplicitInRemote(_)));
-
-            (self.mappings.is_empty() && !self.remote_refs.is_empty())
-                || (!has_explicit_mapping && explicit_fetch_refspecs_require_a_match(&self.refspecs))
+        /// Every exact source must exist, even if other refspecs matched. Wildcards, negative
+        /// refspecs and literal object IDs do not require an advertised reference. Partial names
+        /// use the same expansion as refspec matching; overlapping and excluded mappings do not
+        /// make an advertised source appear missing.
+        pub fn missing_source_refs(&self) -> impl Iterator<Item = &bstr::BStr> {
+            self.refspecs.iter().enumerate().filter_map(|(index, spec)| {
+                let spec = spec.to_ref();
+                let src = match spec.instruction() {
+                    gix_refspec::Instruction::Fetch(
+                        gix_refspec::instruction::Fetch::Only { src }
+                        | gix_refspec::instruction::Fetch::AndUpdate { src, .. },
+                    ) if src.find_byte(b'*').is_none() && gix_hash::ObjectId::from_hex(src).is_err() => src,
+                    _ => return None,
+                };
+                if self.mappings.iter().any(|mapping| {
+                    matches!(mapping.spec_index, refmap::SpecIndex::ExplicitInRemote(spec_index) if spec_index == index)
+                }) {
+                    return None;
+                }
+                let mut candidates = Vec::new();
+                spec.expand_prefixes(&mut candidates);
+                (!self.remote_refs.iter().any(|reference| {
+                    let name = reference.unpack().0;
+                    candidates.iter().any(|candidate| candidate.as_bstr() == name)
+                }))
+                .then_some(src)
+            })
         }
-    }
 
-    fn explicit_fetch_refspecs_require_a_match(refspecs: &[gix_refspec::RefSpec]) -> bool {
-        refspecs.iter().any(|spec| match spec.to_ref().instruction() {
-            gix_refspec::Instruction::Fetch(
-                gix_refspec::instruction::Fetch::Only { src } | gix_refspec::instruction::Fetch::AndUpdate { src, .. },
-            ) => src.find_byteset(b"*?[]\\").is_none() && gix_hash::ObjectId::from_hex(src).is_err(),
-            gix_refspec::Instruction::Fetch(gix_refspec::instruction::Fetch::Exclude { .. })
-            | gix_refspec::Instruction::Push(_) => false,
-        })
+        /// Return whether any explicitly requested exact source is missing.
+        ///
+        /// Use this before negotiation or reference updates to reject an incomplete selection.
+        /// Wildcards may match no references even if unrelated refs were advertised.
+        pub fn is_missing_required_mapping(&self) -> bool {
+            self.missing_source_refs().next().is_some()
+        }
     }
 }
 #[cfg(feature = "fetch")]
