@@ -218,3 +218,71 @@ fn partial_clone_push_does_not_require_advertised_historical_blobs() -> TestResu
     }
     Ok(())
 }
+
+#[test]
+fn unsupported_filter_falls_back_to_full_objects_like_git() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    // Corresponds to t5500-fetch-pack.sh: filtering has no effect if the server
+    // does not advertise support. Test both upload-pack protocol versions.
+    let source = source()?.parent().expect("fixture parent").join("unfiltered");
+    for protocol in ["1", "2"] {
+        let dir = gix_testtools::tempfile::tempdir()?;
+        let oracle_path = dir.path().join("oracle");
+        gix::init_bare(&oracle_path)?;
+        let output = gix_testtools::git_command(&oracle_path)
+            .args([
+                "-c",
+                &format!("protocol.version={protocol}"),
+                "fetch",
+                "--filter=blob:none",
+                "--no-tags",
+            ])
+            .arg(&source)
+            .arg("+refs/heads/main:refs/remotes/origin/main")
+            .output()?;
+        assert!(output.status.success(), "Git ignores an unsupported filter");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("filtering not recognized by server"),
+            "the oracle used a server without filter support"
+        );
+        let local_path = dir.path().join("native");
+        gix::init_bare(&local_path)?;
+        let repo = gix::open_opts(
+            &local_path,
+            gix::open::Options::isolated().config_overrides([format!("protocol.version={protocol}")]),
+        )?;
+        let remote = fetch_remote(&repo, &source)?;
+        remote
+            .connect(Direction::Fetch)?
+            .prepare_fetch(gix::progress::Discard, Default::default())?
+            .with_filter(Some(fetch::Filter::BlobNone))
+            .receive(gix::progress::Discard, &AtomicBool::default())?;
+        let tip = repo
+            .find_reference("refs/remotes/origin/main")?
+            .into_fully_peeled_id()?
+            .object()?
+            .peel_to_commit()?;
+        let blob_id = tip.tree()?.find_entry("value").expect("fixture value").object_id();
+        assert_eq!(
+            repo.find_blob(blob_id)?.data,
+            b"tip value\n",
+            "unsupported filtering transfers blobs in protocol {protocol}"
+        );
+        let oracle = gix::open_opts(&oracle_path, gix::open::Options::isolated())?;
+        assert_eq!(
+            tip.id,
+            oracle
+                .find_reference("refs/remotes/origin/main")?
+                .into_fully_peeled_id()?,
+            "native and Git fetch the same tip"
+        );
+        assert_eq!(
+            repo.find_blob(blob_id)?.data,
+            oracle.find_blob(blob_id)?.data,
+            "both include the formerly filtered blob"
+        );
+    }
+    Ok(())
+}
