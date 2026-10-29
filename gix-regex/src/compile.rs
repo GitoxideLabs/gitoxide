@@ -140,6 +140,14 @@ pub enum Error {
     UnexpectedToken(u8),
     UnknownClass(Vec<u8>),
     UnknownCollation,
+    /// The pattern exceeds the configured byte limit.
+    PatternTooLarge {
+        limit: usize,
+    },
+    /// Group nesting exceeds the configured depth limit.
+    NestingTooDeep {
+        limit: usize,
+    },
 }
 
 impl fmt::Display for Error {
@@ -161,6 +169,8 @@ impl fmt::Display for Error {
             Self::UnexpectedToken(token) => write!(f, "Unexpected regular expression token {:?}", char::from(*token)),
             Self::UnknownClass(name) => write!(f, "Unknown regular expression character class {name:?}"),
             Self::UnknownCollation => f.write_str("Unknown regular expression collation"),
+            Self::PatternTooLarge { limit } => write!(f, "Regular expression exceeds its {limit}-byte pattern limit"),
+            Self::NestingTooDeep { limit } => write!(f, "Regular expression exceeds its {limit}-level nesting limit"),
         }
     }
 }
@@ -174,6 +184,9 @@ pub struct PosixRegexBuilder<'a> {
     closed_groups: Vec<bool>,
     builder: TreeBuilder,
     extended: bool,
+    size_limit: usize,
+    nesting_limit: usize,
+    nesting: usize,
 }
 impl<'a> PosixRegexBuilder<'a> {
     /// Create a new instance that is ready to parse the regex `input`
@@ -185,6 +198,9 @@ impl<'a> PosixRegexBuilder<'a> {
             closed_groups: vec![false],
             builder: TreeBuilder::default(),
             extended: false,
+            size_limit: 64 * 1024,
+            nesting_limit: 64,
+            nesting: 0,
         }
     }
     /// Add a custom collation class, for use within square brackets (such as `[[:digit:]]`)
@@ -217,12 +233,26 @@ impl<'a> PosixRegexBuilder<'a> {
         self.extended = extended;
         self
     }
+    /// Limit pattern length in bytes. The default is 64 KiB.
+    pub fn size_limit(mut self, bytes: usize) -> Self {
+        self.size_limit = bytes;
+        self
+    }
+    /// Limit group nesting depth. The default is 64; values above 128 are capped
+    /// to protect the parser and matcher stacks.
+    pub fn nesting_limit(mut self, depth: usize) -> Self {
+        self.nesting_limit = depth.min(128);
+        self
+    }
     /// "Compile" this regex to a struct ready to match input
     pub fn compile(self) -> Result<PosixRegex<'static>, Error> {
         let tree = self.compile_tokens()?;
         Ok(PosixRegex::new(Cow::Owned(tree)))
     }
     pub fn compile_tokens(mut self) -> Result<Tree, Error> {
+        if self.input.len() > self.size_limit {
+            return Err(Error::PatternTooLarge { limit: self.size_limit });
+        }
         self.builder.start_internal(Token::Root, Range(1, Some(1)));
         self.parse(false)?;
         self.builder.finish_internal();
@@ -367,6 +397,14 @@ impl<'a> PosixRegexBuilder<'a> {
     }
 
     fn parse(&mut self, in_group: bool) -> Result<(), Error> {
+        if in_group {
+            self.nesting += 1;
+            if self.nesting > self.nesting_limit {
+                return Err(Error::NestingTooDeep {
+                    limit: self.nesting_limit,
+                });
+            }
+        }
         let mut closed = !in_group;
         let mut at_start = true;
         self.builder.start_internal(Token::Alternative, Range(1, Some(1)));
@@ -470,6 +508,9 @@ impl<'a> PosixRegexBuilder<'a> {
             return Err(Error::Expected(b')', None));
         }
         self.builder.finish_internal();
+        if in_group {
+            self.nesting -= 1;
+        }
         Ok(())
     }
 }

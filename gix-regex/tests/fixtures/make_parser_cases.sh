@@ -78,3 +78,12 @@ make_case omitted-lower-bound xfuncname 'a{,1}' a
 make_case omitted-basic-lower-bound funcname 'a\{,1\}' a
 make_case omitted-upper-bound xfuncname 'a{1,}' a
 make_case omitted-basic-upper-bound funcname 'a\{1,\}' a
+
+make_case empty-alternative xfuncname '(a|)b' b
+make_case leading-empty-alternative xfuncname '(|a)b' b
+make_case zero-repetitions xfuncname '(a){0}' a
+make_case required-empty-repetitions xfuncname '(a?){2}b' b
+make_case repeated-long-alternative xfuncname '(aa|a)*' aa
+make_case repeated-short-alternative xfuncname '(a|aa)*' aa
+make_case incomplete-interval xfuncname 'a{' a
+make_case textual-interval xfuncname 'a{foo}' a
