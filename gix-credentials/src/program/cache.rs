@@ -252,8 +252,9 @@ fn parse_timeout(input: &[u8]) -> Result<i32> {
 
 /// A bound Unix credential-cache daemon, storing credentials only in memory.
 ///
-/// Binding does not announce readiness or change process-wide state. Executable entrypoints must
-/// announce readiness before calling [`run()`][Self::run()]. Dropping the daemon removes its socket.
+/// Binding does not announce readiness or change process-wide state. Executable entrypoints can use
+/// [`run_with_stdio()`][Self::run_with_stdio()] or announce readiness before calling [`run()`][Self::run()].
+/// Dropping the daemon removes its socket.
 pub struct Daemon {
     listener: UnixListener,
     socket: PathBuf,
@@ -316,6 +317,26 @@ impl Daemon {
             socket: socket.into(),
             identity: (metadata.dev(), metadata.ino()),
         })
+    }
+
+    /// Announce readiness and serve as a dedicated daemon process.
+    ///
+    /// Call this only from an executable's daemon entrypoint, after installing its signal policy.
+    /// This writes and flushes `ok\n`, then redirects stdout to the null device so the launching
+    /// client's readiness pipe reaches EOF. Unless `keep_stderr` is set, stderr is redirected too.
+    /// The daemon then runs until [`run()`][Self::run()] finishes; the caller owns process termination.
+    pub fn run_with_stdio(self, keep_stderr: bool, interrupt: &AtomicBool) -> Result<()> {
+        let null = fs::OpenOptions::new().write(true).open("/dev/null").or_error()?;
+        {
+            let mut stdout = io::stdout().lock();
+            stdout.write_all(b"ok\n").or_error()?;
+            stdout.flush().or_error()?;
+            rustix::stdio::dup2_stdout(&null).or_error()?;
+        }
+        if !keep_stderr {
+            rustix::stdio::dup2_stderr(&null).or_error()?;
+        }
+        self.run(interrupt)
     }
 
     /// Serve until an `exit` request, interruption, or 30 seconds without any cached credential.

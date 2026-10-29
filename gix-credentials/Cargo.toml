@@ -40,7 +40,7 @@ percent-encoding = "2.3.1"
 document-features = { version = "0.2.1", optional = true }
 
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1.1.4", features = ["event"] }
+rustix = { version = "1.1.4", features = ["event", "stdio"] }
 
 [dev-dependencies]
 insta = "1.46.3"
