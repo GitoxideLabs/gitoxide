@@ -189,6 +189,7 @@ pub(super) mod function {
         let allow_git_env = environment.git_prefix.is_allowed();
         let allow_ssh_env = environment.ssh_prefix.is_allowed();
         let prompt_options = gix_prompt::Options {
+            current_dir: None,
             askpass: crate::config::cache::access::trusted_file_path(
                 config,
                 Core::ASKPASS,

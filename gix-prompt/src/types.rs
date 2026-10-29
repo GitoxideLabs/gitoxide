@@ -19,6 +19,8 @@ pub struct Options {
     ///
     /// It's called like this `askpass <prompt>`, but note that it won't know if the input should be hidden or not.
     pub askpass: Option<PathBuf>,
+    /// Working directory for the askpass child; `None` uses the process directory.
+    pub current_dir: Option<PathBuf>,
     /// The way the user is prompted.
     pub mode: Mode,
 }
