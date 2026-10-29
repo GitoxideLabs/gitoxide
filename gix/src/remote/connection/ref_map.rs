@@ -113,9 +113,14 @@ where
         };
 
         if self.transport_options.is_none() {
-            self.transport_options = repo
-                .transport_options(url.as_ref(), self.remote.name().map(crate::remote::Name::as_bstr))
-                .or_raise(|| message!("Failed to configure the transport before connecting to {url:?}"))?;
+            self.transport_options = super::access::transport_options(
+                repo,
+                url.as_ref(),
+                self.remote.name().map(crate::remote::Name::as_bstr),
+                &self.remote.command_environment,
+                self.remote.working_dir.as_deref(),
+            )
+            .or_raise(|| message!("Failed to configure the transport before connecting to {url:?}"))?;
         }
         if let Some(config) = self.transport_options.as_ref() {
             self.transport

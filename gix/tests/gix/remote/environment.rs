@@ -20,11 +20,12 @@ printf '%s\\n' \"$GIX_TEST_REMOTE_SECRET\"
     std::fs::set_permissions(&askpass, std::fs::Permissions::from_mode(0o755))?;
     let env = vec![
         ("GIT_TERMINAL_PROMPT".into(), "0".into()),
-        ("GIT_ASKPASS".into(), askpass.into_os_string()),
+        ("GIT_ASKPASS".into(), "./askpass".into()),
         ("GIX_TEST_REMOTE_SECRET".into(), "operation-secret".into()),
     ];
     let remote = repo
         .remote_at("ssh://example.com/repository")?
+        .with_working_dir(directory.path())?
         .with_command_environment(env.clone());
     let connection = remote.connect(gix::remote::Direction::Fetch)?;
     let mut credentials = connection.configured_credentials(gix::url::parse("https://user@example.com")?)?;
@@ -53,11 +54,13 @@ printf '%s\\n' \"$GIX_TEST_REMOTE_SECRET\"
         &hook,
         "#!/bin/sh
 test \"$GIX_TEST_REMOTE_SECRET\" = operation-secret
+test -f config
 ",
     )?;
     std::fs::set_permissions(hook, std::fs::Permissions::from_mode(0o755))?;
     let outcome = repo
         .remote_at(gix::path::into_bstr(&destination)?)?
+        .with_working_dir(directory.path())?
         .with_command_environment(env)
         .push(
             [gix::push::Update {
@@ -111,17 +114,20 @@ fn configured_service_commands_run_for_file_and_ssh_remotes() -> TestResult {
                 format!("remote.origin.url={}", url(fixture.join("source"))),
                 format!("remote.origin.pushurl={}", url(tmp.path().join("receiver"))),
                 "remote.origin.fetch=refs/heads/main:refs/remotes/origin/main".into(),
-                format!("remote.origin.uploadpack='{}' upload-pack", service.display()),
-                format!("remote.origin.receivepack='{}' receive-pack", service.display()),
-                format!("core.sshCommand={}", ssh.display()),
+                "remote.origin.uploadpack='../service helper' upload-pack".into(),
+                "remote.origin.receivepack='../service helper' receive-pack".into(),
+                "core.sshCommand=../ssh-helper".into(),
                 "ssh.variant=simple".into(),
             ]),
         )?;
-        let marker = tmp.path().join("commands");
-        let remote = repo.find_remote("origin")?.with_command_environment([
-            ("GIX_SERVICE_TEST_MARKER".into(), marker.clone().into_os_string()),
-            ("GIX_SERVICE_TEST_VALUE".into(), "operation-value".into()),
-        ]);
+        let marker = tmp.path().join("client/commands");
+        let remote = repo
+            .find_remote("origin")?
+            .with_working_dir(tmp.path().join("client"))?
+            .with_command_environment([
+                ("GIX_SERVICE_TEST_MARKER".into(), "commands".into()),
+                ("GIX_SERVICE_TEST_VALUE".into(), "operation-value".into()),
+            ]);
         remote.fetch(Default::default(), gix::progress::Discard, &AtomicBool::new(false))?;
         assert_eq!(
             std::fs::read_to_string(&marker)?,

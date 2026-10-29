@@ -186,6 +186,7 @@ impl RemoteDetached {
             fetch_specs: self.fetch_specs,
             fetch_tags: self.fetch_tags,
             command_environment: self.command_environment,
+            working_dir: self.working_dir,
             repo,
         }
     }
@@ -285,6 +286,7 @@ impl From<Remote<'_>> for RemoteDetached {
             fetch_specs,
             fetch_tags,
             command_environment,
+            working_dir,
             push_urls: _,
             push_url_aliases: _,
             push_specs: _,
@@ -298,6 +300,7 @@ impl From<Remote<'_>> for RemoteDetached {
             fetch_specs,
             fetch_tags,
             command_environment,
+            working_dir,
         }
     }
 }
