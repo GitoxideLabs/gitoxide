@@ -109,7 +109,10 @@ fn refuses_dirty_untracked_and_ignored_blockers_before_any_writes() -> TestResul
                 &baseline,
                 &mut target,
                 &mut current,
-                Options { overwrite_tracked },
+                Options {
+                    overwrite_tracked,
+                    ..Default::default()
+                },
             )
             .expect_err("unapproved changes prevent the whole checkout");
             assert!(err.is_validation(), "the refusal identifies a worktree conflict: {err}");
@@ -120,6 +123,138 @@ fn refuses_dirty_untracked_and_ignored_blockers_before_any_writes() -> TestResul
             );
             assert!(current.entries() == before, "refusal leaves the staging index intact");
         }
+    }
+    Ok(())
+}
+
+#[test]
+fn overwriting_ignored_obstructions_matches_git_read_tree() -> TestResult {
+    for obstruction in ["file", "symlink", "directory", "parent"] {
+        let mut snapshots = Vec::new();
+        for use_git in [false, true] {
+            let (repo, _tmp) = crate::util::repo_rw("make_empty_repo.sh")?;
+            let workdir = repo.workdir().expect("non-bare");
+            if obstruction == "symlink" && !gix::fs::Capabilities::probe_dir(workdir).symlink {
+                break;
+            }
+            let baseline = index(&repo, &[("a-delete", "old")])?;
+            let mut target = index(
+                &repo,
+                if obstruction == "parent" {
+                    &[("path/one", "new"), ("path/two", "new")]
+                } else {
+                    &[("path", "new")]
+                },
+            )?;
+            gix::index::File::from_state(target.clone(), repo.index_path()).write(Default::default())?;
+            let target_tree_id = gix_testtools::git(workdir, "write-tree")?;
+            gix::index::File::from_state(baseline.clone(), repo.index_path()).write(Default::default())?;
+            let baseline_tree_id = gix_testtools::git(workdir, "write-tree")?;
+            gix_testtools::git(workdir, &format!("read-tree --reset -u {}", baseline_tree_id.trim()))?;
+            fs::write(workdir.join(".gitignore"), "path\nignored-elsewhere\n")?;
+            fs::write(workdir.join("ignored-elsewhere"), "keep ignored")?;
+            fs::write(workdir.join("untracked"), "keep untracked")?;
+            match obstruction {
+                "file" | "parent" => fs::write(workdir.join("path"), "ignored")?,
+                "symlink" => gix::fs::symlink::create("untracked".as_ref(), &workdir.join("path"))?,
+                "directory" => {
+                    fs::create_dir_all(workdir.join("path/nested"))?;
+                    fs::create_dir_all(workdir.join("path/empty"))?;
+                    fs::write(workdir.join("path/nested/file"), "ignored")?;
+                }
+                _ => unreachable!(),
+            }
+            if use_git {
+                gix_testtools::git(
+                    workdir,
+                    &format!("read-tree -m -u {} {}", baseline_tree_id.trim(), target_tree_id.trim()),
+                )?;
+            } else {
+                let mut current = baseline.clone();
+                checkout(
+                    &repo,
+                    &baseline,
+                    &mut target,
+                    &mut current,
+                    Options {
+                        overwrite_ignored: true,
+                        ..Default::default()
+                    },
+                )?;
+                gix::index::File::from_state(current, repo.index_path()).write(Default::default())?;
+            }
+            snapshots.push(gix_testtools::repository::snapshot(workdir)?);
+        }
+        if let [actual, expected] = snapshots.as_slice() {
+            assert_eq!(
+                actual.index, expected.index,
+                "staged entries match Git for ignored {obstruction}"
+            );
+            assert_eq!(
+                actual.worktree, expected.worktree,
+                "only obstructing ignored content is removed for {obstruction}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn overwriting_ignored_files_preserves_untracked_content_and_repositories() -> TestResult {
+    for obstruction in ["untracked", "precious", "non-bare", "bare"] {
+        let (mut repo, _tmp) = crate::util::repo_rw("make_empty_repo.sh")?;
+        repo.config_snapshot_mut()
+            .set_value(&gix::config::tree::Gitoxide::PARSE_PRECIOUS, "true")?;
+        let workdir = repo.workdir().expect("non-bare");
+        let baseline = index(&repo, &[("a-delete", "old")])?;
+        let mut target = index(&repo, &[("path", "new")])?;
+        let mut current = baseline.clone();
+        fs::write(workdir.join("a-delete"), "old")?;
+        fs::create_dir(workdir.join("path"))?;
+        fs::write(workdir.join("path/ignored"), "ignored")?;
+        fs::write(
+            workdir.join(".gitignore"),
+            match obstruction {
+                "untracked" => "path/ignored\n",
+                "precious" => "$path\n",
+                _ => "path\n",
+            },
+        )?;
+        match obstruction {
+            "untracked" | "precious" => fs::write(workdir.join("path/keep"), "keep")?,
+            "non-bare" | "bare" => {
+                crate::init_repo_isolated(
+                    workdir.join("path/repo"),
+                    if obstruction == "bare" {
+                        gix::create::Kind::Bare
+                    } else {
+                        gix::create::Kind::WithWorktree
+                    },
+                )?;
+            }
+            _ => unreachable!(),
+        }
+        let before = gix_testtools::repository::snapshot(workdir)?;
+        checkout(
+            &repo,
+            &baseline,
+            &mut target,
+            &mut current,
+            Options {
+                overwrite_ignored: true,
+                ..Default::default()
+            },
+        )
+        .expect_err("untracked content and nested repositories prevent removing an obstruction");
+        let after = gix_testtools::repository::snapshot(workdir)?;
+        assert_eq!(
+            after.worktree, before.worktree,
+            "all worktree data survives the failed preflight for {obstruction}"
+        );
+        assert!(
+            current.entries() == baseline.entries(),
+            "staged entries survive the failed preflight"
+        );
     }
     Ok(())
 }
@@ -140,6 +275,7 @@ fn force_restores_dirty_and_missing_tracked_files_even_without_a_tree_delta() ->
         &mut current,
         Options {
             overwrite_tracked: true,
+            ..Default::default()
         },
     )?;
     assert_eq!(
@@ -280,6 +416,7 @@ fn symlinked_parents_are_protected_during_forced_and_deleted_transitions() -> Te
             &mut current,
             Options {
                 overwrite_tracked: true,
+                ..Default::default()
             },
         );
         if delete {

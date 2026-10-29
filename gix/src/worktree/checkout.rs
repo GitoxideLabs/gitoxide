@@ -6,8 +6,11 @@ use crate::{Result, Worktree};
 #[derive(Default, Debug, Clone, Copy)]
 pub struct Options {
     /// Restore changed or missing baseline-tracked files, including paths unchanged in the target.
-    /// Untracked and ignored obstructions remain protected.
+    /// Untracked obstructions remain protected, with ignored files controlled by [`Self::overwrite_ignored`].
     pub overwrite_tracked: bool,
+    /// Allow ignored files to be removed when they obstruct target entries, as with `git checkout`.
+    /// Unrelated ignored files, precious files, and nested repositories remain protected.
+    pub overwrite_ignored: bool,
 }
 
 /// The result of [`crate::Repository::checkout_index_with_baseline()`].
