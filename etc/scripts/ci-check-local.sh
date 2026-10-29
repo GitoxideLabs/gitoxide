@@ -61,7 +61,7 @@ run_fast_checks() {
     run cargo machete
     run just clippy -D warnings -A unknown-lints --no-deps
     # cargo-deny 0.20 accepts workspace/features before the check subcommand.
-    run cargo deny --workspace --all-features check bans licenses sources
+    run cargo deny --workspace --all-features --locked check bans licenses sources
 }
 
 if [[ "$mode" == --fast ]]; then

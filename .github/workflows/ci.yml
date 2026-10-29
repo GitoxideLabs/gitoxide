@@ -533,7 +533,7 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check advisories
-          arguments: --workspace --all-features
+          arguments: --workspace --all-features --locked
 
   cargo-deny:
     runs-on: ubuntu-latest
@@ -545,7 +545,7 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check bans licenses sources
-          arguments: --workspace --all-features
+          arguments: --workspace --all-features --locked
 
   wasm:
     name: WebAssembly
