@@ -77,12 +77,16 @@ impl<'p> LooseThenPacked<'p, '_> {
         let git_dir = self.git_dir;
         let common_dir = self.common_dir;
         let (refpath, name) = res.or_raise(|| message("Could not traverse reference directory"))?;
-        std::fs::File::open(&refpath)
-            .and_then(|mut f| {
-                buf.clear();
-                f.read_to_end(buf)
-            })
-            .or_raise(|| file::find::read_reference_error(refpath.as_path()))?;
+        if let Some(contents) = file::find::symbolic_link_ref_contents(&refpath) {
+            *buf = contents;
+        } else {
+            std::fs::File::open(&refpath)
+                .and_then(|mut f| {
+                    buf.clear();
+                    f.read_to_end(buf)
+                })
+                .or_raise(|| file::find::read_reference_error(refpath.as_path()))?;
+        }
         loose::Reference::try_from_path(name, buf, self.object_hash)
             .or_raise(|| {
                 let relative_path = refpath
