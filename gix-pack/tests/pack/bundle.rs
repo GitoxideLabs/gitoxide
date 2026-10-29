@@ -235,26 +235,25 @@ mod write_to_directory {
     }
 
     #[test]
-    fn an_existing_keep_marker_is_preserved_and_not_owned_by_the_receiver() -> Result {
+    fn existing_keep_files_remain_owned_by_their_creator() -> gix_testtools::TestResult {
         let dir = TempDir::new()?;
-        let original = write_pack(Some(&dir), SMALL_PACK)?;
-        let keep_path = original.keep_path.expect("new packs are protected");
-        fs::remove_file(original.data_path.expect("nonempty pack"))?;
-        fs::remove_file(original.index_path.expect("index was written"))?;
-        fs::write(&keep_path, b"another operation")?;
-        let received = write_pack(Some(&dir), SMALL_PACK)?;
-        assert_eq!(
-            received.keep_path, None,
-            "the caller must not remove another operation's marker"
+        let keep_path = dir
+            .path()
+            .join(format!("pack-{}.keep", expected_outcome()?.index.data_hash));
+        fs::write(&keep_path, b"another writer is installing this pack")?;
+        let outcome = write_pack(Some(&dir), SMALL_PACK)?;
+        assert!(
+            outcome.keep_path.is_none(),
+            "an existing keep file does not belong to this writer"
         );
         assert_eq!(
             fs::read(&keep_path)?,
-            b"another operation",
-            "existing keep markers are not truncated"
+            b"another writer is installing this pack",
+            "existing contents survive installation"
         );
         assert!(
-            received.to_bundle().transpose()?.is_some(),
-            "receiving the pack still succeeds"
+            outcome.to_bundle().transpose()?.is_some(),
+            "the pack is still installed"
         );
         Ok(())
     }
