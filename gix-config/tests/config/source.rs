@@ -3,7 +3,10 @@ use std::path::Path;
 use gix_config::Source;
 
 #[test]
-fn git_config_no_system() {
+fn git_config_no_system() -> gix_testtools::TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
     assert_eq!(
         Source::GitInstallation.storage_location(&mut |name| {
             assert_eq!(
@@ -14,17 +17,16 @@ fn git_config_no_system() {
         }),
         None
     );
-    assert!(
-        Source::GitInstallation
-            .storage_location(&mut |name| {
-                match name {
-                    "GIT_CONFIG_NOSYSTEM" => Some("false".into()),
-                    "GIT_CONFIG_SYSTEM" => None,
-                    _ => unreachable!("known set"),
-                }
-            })
-            .is_some(),
-        "it treats the variable as boolean"
+    assert_eq!(
+        Source::GitInstallation.storage_location(&mut |name| {
+            match name {
+                "GIT_CONFIG_NOSYSTEM" => Some("false".into()),
+                "GIT_CONFIG_SYSTEM" => None,
+                _ => unreachable!("known set"),
+            }
+        }),
+        gix_path::env::installation_config().map(ToOwned::to_owned),
+        "a false value allows discovery even when no bundled configuration is installed"
     );
     assert_eq!(
         Source::System.storage_location(&mut |name| {
@@ -47,10 +49,14 @@ fn git_config_no_system() {
             })
             .is_some()
     );
+    Ok(())
 }
 
 #[test]
-fn git_config_system() {
+fn git_config_system() -> gix_testtools::TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
     assert_eq!(
         Source::System
             .storage_location(&mut |name| {
@@ -80,6 +86,7 @@ fn git_config_system() {
         },
         "the override replaces system-scoped installation configuration but preserves other scopes"
     );
+    Ok(())
 }
 
 #[test]
