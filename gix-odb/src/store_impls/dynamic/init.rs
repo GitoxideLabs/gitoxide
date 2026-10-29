@@ -248,6 +248,9 @@ impl Store {
         };
         let mut replacements: Vec<_> = replacements.collect();
         replacements.sort_by_key(|a| a.0);
+        let mut slots = Vec::new();
+        slots.try_reserve_exact(slot_count).map_err(std::io::Error::other)?;
+        slots.resize_with(slot_count, || Arc::new(MutableIndexAndPack::default()));
 
         Ok(Store {
             current_dir,
@@ -256,11 +259,7 @@ impl Store {
             path: objects_dir,
             catalog: ArcSwap::from_pointee(Catalog {
                 index: Arc::new(SlotMapIndex::default()),
-                slots: Arc::new(
-                    std::iter::repeat_with(|| Arc::new(MutableIndexAndPack::default()))
-                        .take(slot_count)
-                        .collect(),
-                ),
+                slots: Arc::new(slots),
             }),
             slot_limit,
             next_pack_id: Default::default(),
