@@ -185,6 +185,9 @@ worktree-stream = ["gix-worktree-stream", "attributes", "parallel"]
 ## Your application should add it as dependency and re-activate the desired features.
 worktree-archive = ["gix-archive", "worktree-stream", "attributes"]
 
+## Generate self-contained pack files from repository objects.
+pack-generate = ["gix-pack/generate"]
+
 #! #### Mutually Exclusive Network Client
 #!
 #! Either `async-*` or `blocking-*` versions of these toggles may be enabled at a time.

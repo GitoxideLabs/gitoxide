@@ -123,6 +123,9 @@ mod merge;
 #[cfg(feature = "notes")]
 mod note;
 mod object;
+/// Generate packs from repository objects.
+#[cfg(feature = "pack-generate")]
+pub mod pack;
 #[cfg(feature = "attributes")]
 mod pathspec;
 mod reference;
