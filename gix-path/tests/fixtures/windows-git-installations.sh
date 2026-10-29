@@ -8,8 +8,9 @@ for directory in user/scoop/apps/git/current/cmd custom/apps/git/current/cmd glo
     touch "$directory/git.exe"
 done
 
-# A relocated MSYS runtime lets Windows tests exercise real path conversion without requiring
+# A relocated MSYS runtime exercises native helper and companion discovery without
 # pacman or downloading packages. Git for Windows provides these same runtime tools.
+mkdir -p msys/usr/lib/git-core
 if test -f /usr/bin/cygpath.exe; then
     cp /usr/bin/cygpath.exe /usr/bin/msys-2.0.dll msys/usr/bin/
 fi
