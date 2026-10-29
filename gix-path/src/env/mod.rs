@@ -120,6 +120,7 @@ pub fn shell_command() -> std::process::Command {
 /// (`SCOOP`/`SCOOP_GLOBAL`, defaulting to `USERPROFILE/scoop` and `ProgramData/scoop`), as well as
 /// `GIT_INSTALL_ROOT`. Installation roots must be absolute paths.
 /// Also searched is `ChocolateyToolsLocation/git/cmd`.
+/// WinGet's user and machine `Links` directories are also searched.
 pub fn exe_invocation() -> &'static Path {
     if cfg!(windows) {
         /// The path to the Git executable as located in the `PATH` or in other locations that it's

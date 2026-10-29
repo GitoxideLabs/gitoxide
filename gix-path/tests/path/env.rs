@@ -31,6 +31,22 @@ mod windows_installations {
     }
 
     #[test]
+    fn winget_user_links() -> gix_error::TestResult {
+        discover(
+            "LocalAppData",
+            "winget",
+            "winget/Microsoft/WinGet/Links/git.exe",
+            false,
+            false,
+        )
+    }
+
+    #[test]
+    fn winget_machine_links() -> gix_error::TestResult {
+        discover("ProgramW6432", "machine", "machine/WinGet/Links/git.exe", false, false)
+    }
+
+    #[test]
     fn default_user_installation() -> gix_error::TestResult {
         discover(
             "USERPROFILE",
@@ -116,7 +132,7 @@ mod windows_installations {
         }
         env = env.set(variable, fixture.join(root).to_str().expect("UTF-8 fixture path"));
         if on_path {
-            for (variable, root) in [("ChocolateyToolsLocation", "chocolatey")] {
+            for (variable, root) in [("ChocolateyToolsLocation", "chocolatey"), ("LocalAppData", "winget")] {
                 env = env.set(variable, fixture.join(root).to_str().expect("UTF-8 fixture path"));
             }
         }
