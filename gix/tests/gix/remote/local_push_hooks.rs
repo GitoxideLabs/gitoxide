@@ -145,13 +145,18 @@ exit 1
 printf 'post-update %s\\n' \"$@\" >>hook-log
 ",
     )?;
+    let mut output = Vec::new();
     let outcome = push(
         &repo,
         destination.path(),
         &["refs/heads/accepted", "refs/heads/rejected"],
         Options::default(),
-        |_| Ok(()),
+        |bytes| {
+            output.extend_from_slice(bytes);
+            Ok(())
+        },
     )?;
+    assert!(String::from_utf8(output)?.contains("error: hook declined to update refs/heads/rejected\n"));
     assert_eq!(outcome.updates[0].status, Status::Updated { forced: false });
     assert_eq!(
         outcome.updates[1].status,
