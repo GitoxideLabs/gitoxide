@@ -264,6 +264,7 @@ where
     }
 
     /// Select objects for a partial fetch and mark received packs as promisor packs.
+    /// Servers without filter support send the complete selection instead.
     pub fn with_filter(mut self, filter: Option<remote::fetch::Filter>) -> Self {
         self.inner.filter = filter;
         self

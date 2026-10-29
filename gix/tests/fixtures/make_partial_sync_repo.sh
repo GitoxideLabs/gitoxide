@@ -10,3 +10,8 @@ git -C source add value
 git -C source commit -m old
 printf 'tip value\n' >source/value
 git -C source commit -am tip
+
+# Filtering support is optional in upload-pack, so clients must fall back to
+# receiving the full graph if the peer does not advertise it.
+git clone --bare source unfiltered
+git -C unfiltered config uploadpack.allowFilter false
