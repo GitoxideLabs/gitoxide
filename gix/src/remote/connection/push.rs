@@ -129,7 +129,7 @@ impl<T: Transport> Connection<'_, '_, '_, T> {
             move |output| {
                 let mut object_ids = Vec::new();
                 for entry in
-                    gix_traverse::object::BreadthFirst::new(tips, &repo.objects).with_shallow_commits(pack_shallow)
+                    gix_traverse::object::BreadthFirst::new(tips, &repo).with_shallow_commits(pack_shallow)
                 {
                     push::plan::check_interrupt(should_interrupt)?;
                     object_ids.push(entry?.id);
