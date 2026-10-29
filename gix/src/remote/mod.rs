@@ -39,6 +39,8 @@ pub type Names = BTreeSet<BString>;
 pub mod name;
 
 mod build;
+#[cfg(feature = "blocking-network-client")]
+mod push;
 
 ///
 pub mod init;
