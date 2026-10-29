@@ -288,21 +288,27 @@ fn shebang_execution_matches_git_for_windows() -> TestResult {
     let shell_directory = std::path::Path::new(gix_path::env::shell())
         .parent()
         .expect("Git for Windows provides an absolute shell path");
-    let mut command = std::process::Command::try_from(
-        gix_command::prepare(root.join("reference.git/hooks/pre-commit"))
-            .env("PATH", shell_directory)
-            .args(["one argument", "literal $value"]),
-    )?;
-    let output = command.output()?;
-    assert!(
-        output.status.success(),
-        "the interpreter found in PATH executes the hook"
-    );
-    assert_eq!(
-        output.stdout,
-        std::fs::read(root.join("reference-output"))?,
-        "Git and gitoxide ignore the shebang directory and options while retaining arguments"
-    );
+    for hook in [
+        std::path::PathBuf::from("hooks/pre-commit"),
+        root.join("reference.git/hooks/pre-commit"),
+    ] {
+        let mut command = std::process::Command::try_from(
+            gix_command::prepare(hook)
+                .current_dir(root.join("reference.git"))
+                .env("PATH", shell_directory)
+                .args(["one argument", "literal $value"]),
+        )?;
+        let output = command.output()?;
+        assert!(
+            output.status.success(),
+            "the interpreter found in PATH executes the hook"
+        );
+        assert_eq!(
+            output.stdout,
+            std::fs::read(root.join("reference-output"))?,
+            "relative and absolute hook execution matches Git -C"
+        );
+    }
     Ok(())
 }
 
@@ -616,5 +622,23 @@ fn quoted_commands_keep_dollar_at_literal_with_or_without_arguments() -> TestRes
             "quoted program paths remain literal, including without additional arguments"
         );
     }
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn child_directory_applies_to_an_explicit_shell_program() -> TestResult {
+    let root = gix_testtools::scripted_fixture_read_only("windows_shebang.sh")?.canonicalize()?;
+    let command = std::process::Command::try_from(
+        gix_command::prepare("printf matched")
+            .with_shell()
+            .with_shell_program("second/sh.exe")
+            .current_dir(&root),
+    )?;
+    assert_eq!(
+        command.get_program(),
+        root.join("second/sh.exe"),
+        "relative shell paths use the child directory too"
+    );
     Ok(())
 }
