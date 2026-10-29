@@ -24,6 +24,8 @@ impl Action {
 /// `--file` option. Without `--file`, the home credential file precedes the XDG credential file.
 /// On Unix, new credential files and their locks are private from creation (`0o600`).
 /// Lookup skips unreadable files, but updates abort if existing credentials cannot be read.
+/// Static `cache` helpers use Git's native Unix socket protocol on Unix; starting a missing daemon
+/// requires an explicitly configured launcher. Existing daemons can always be queried or erased.
 ///
 /// Usually the first call is performed with [`Action::Get`] to obtain `Some` identity, which subsequently can be used if it is complete.
 /// Note that it may also only contain the username _or_ password, and should start out with everything the helper needs.
@@ -75,6 +77,10 @@ pub(crate) fn raw_with_environment(
     environment: &[(std::ffi::OsString, std::ffi::OsString)],
 ) -> Result<Option<Vec<u8>>> {
     if let Some(result) = crate::program::store::invoke(helper, action, environment) {
+        return result.map_err(|err| HelperFailure(std::io::Error::other(err)).raise());
+    }
+    #[cfg(unix)]
+    if let Some(result) = crate::program::cache::invoke(helper, action, environment) {
         return result.map_err(|err| HelperFailure(std::io::Error::other(err)).raise());
     }
     let communication_error = || message("An IO error occurred while communicating to the credentials helper");

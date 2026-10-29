@@ -1,3 +1,5 @@
+#[cfg(unix)]
+mod cache;
 mod cascade;
 mod context;
 mod invoke;

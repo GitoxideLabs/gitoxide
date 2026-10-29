@@ -5,7 +5,7 @@ use std::{
 
 use bstr::ByteSlice;
 use gix_error::{ErrorExt, Result, ResultExt, bail, message, validation};
-use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode, percent_encode};
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_encode};
 
 use crate::{Program, helper::Action, program::Kind, protocol::Context};
 
@@ -38,7 +38,7 @@ pub(crate) fn invoke(
     let Kind::ExternalName { name_and_args } = &helper.kind else {
         return None;
     };
-    if !is_static(name_and_args) {
+    if !super::builtin::is_static(name_and_args) {
         return None;
     }
     let parsed = gix_command::parse::command_line(name_and_args.as_bstr()).ok()?;
@@ -154,31 +154,6 @@ pub(crate) fn invoke(
     })())
 }
 
-// Only shell-static definitions can be handled without executing their configured shell expressions.
-fn is_static(input: &[u8]) -> bool {
-    let mut quote = None;
-    let mut bytes = input.iter().copied();
-    while let Some(byte) = bytes.next() {
-        match (quote, byte) {
-            (Some(b'\''), b'\'') | (Some(b'"'), b'"') => quote = None,
-            (Some(b'\''), _) => {}
-            (_, b'\\') => {
-                bytes.next();
-            }
-            (Some(b'"'), b'$' | b'`') => return false,
-            (Some(b'"'), _) => {}
-            (None, b'\'' | b'"') => quote = Some(byte),
-            (
-                None,
-                b'|' | b'&' | b';' | b'<' | b'>' | b'(' | b')' | b'$' | b'`' | b'\n' | b'*' | b'?' | b'[' | b'#' | b'~'
-                | b'%',
-            ) => return false,
-            _ => {}
-        }
-    }
-    quote.is_none()
-}
-
 fn input_context(action: &Action) -> Result<(Context, bool)> {
     // Store/erase payloads have already been encoded under the caller's protocol policy.
     let options = action.context().map_or(
@@ -237,66 +212,15 @@ fn input_context(action: &Action) -> Result<(Context, bool)> {
 }
 
 fn parse_url(input: &[u8]) -> Option<Context> {
-    // Credential-store's keys are literal URL components: URL normalization would change their identity.
-    let scheme_end = input.find(b"://")?;
-    if scheme_end == 0 {
-        return None;
-    }
-    let rest = &input[scheme_end + 3..];
-    let host_end = rest.find_byteset(b"/?#").unwrap_or(rest.len());
-    let authority = &rest[..host_end];
-    let mut context = Context {
-        protocol: Some(std::str::from_utf8(&input[..scheme_end]).ok()?.into()),
+    let parsed = super::builtin::parse_url(input)?;
+    Some(Context {
+        protocol: Some(String::from_utf8(parsed.protocol).ok()?),
+        host: Some(String::from_utf8(parsed.host).ok()?),
+        username: parsed.username.map(String::from_utf8).transpose().ok()?,
+        password: parsed.password.map(String::from_utf8).transpose().ok()?,
+        path: parsed.path.map(Into::into),
         ..Default::default()
-    };
-    let host = match authority.find_byte(b'@') {
-        None => authority,
-        Some(at) => {
-            let userinfo = &authority[..at];
-            let (user, password) = match userinfo.find_byte(b':') {
-                Some(colon) => (&userinfo[..colon], Some(&userinfo[colon + 1..])),
-                None => (userinfo, None),
-            };
-            context.username = Some(percent_decode(user).decode_utf8().ok()?.into_owned());
-            context.password = password
-                .map(|password| percent_decode(password).decode_utf8().map(std::borrow::Cow::into_owned))
-                .transpose()
-                .ok()?;
-            &authority[at + 1..]
-        }
-    };
-    context.host = Some(percent_decode(host).decode_utf8().ok()?.into_owned());
-    let path = rest[host_end..].trim_start_with(|byte| byte == '/');
-    if !path.is_empty() {
-        let path: Vec<u8> = percent_decode(path).collect();
-        let path = path.trim_end_with(|byte| byte == '/');
-        context.path = Some(if path.is_empty() {
-            b"/".as_slice().into()
-        } else {
-            path.into()
-        });
-    }
-    for value in [
-        context.protocol.as_deref(),
-        context.host.as_deref(),
-        context.username.as_deref(),
-        context.password.as_deref(),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        if value.as_bytes().find_byteset(b"\0\n").is_some() {
-            return None;
-        }
-    }
-    if context
-        .path
-        .as_ref()
-        .is_some_and(|path| path.find_byteset(b"\0\n").is_some())
-    {
-        return None;
-    }
-    Some(context)
+    })
 }
 
 fn matches(query: &Context, entry: &Context, password: bool) -> bool {
