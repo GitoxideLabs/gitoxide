@@ -87,6 +87,7 @@ pub mod with_revision {
 impl PrepareFetch {
     /// Create a new repository at `path` with `create_opts` which is ready to clone from `url`, possibly after making additional adjustments to
     /// configuration and settings.
+    /// Initialization honors template settings as described in [`ThreadSafeRepository::init_opts()`][crate::ThreadSafeRepository::init_opts()].
     ///
     /// [`Kind::Bare`][crate::create::Kind::Bare] uses Git's bare-clone branch layout and omits the default fetch and upstream
     /// configuration. [`Kind::WithWorktree`][crate::create::Kind::WithWorktree] with [`fetch_only()`][Self::fetch_only()]
