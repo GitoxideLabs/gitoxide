@@ -16,19 +16,21 @@ pub(crate) mod config;
 mod excludes;
 #[cfg(feature = "attributes")]
 mod filter;
+#[cfg(feature = "object-maintenance")]
+mod gc;
 mod location;
-#[cfg(feature = "index")]
-mod maintenance;
 #[cfg(feature = "mailmap")]
 mod mailmap;
+#[cfg(feature = "index")]
+mod maintenance;
 #[cfg(feature = "merge")]
 mod merge;
 #[cfg(feature = "notes")]
 mod note;
 mod object;
+mod open;
 #[cfg(feature = "pack-generate")]
 mod pack;
-mod open;
 #[cfg(feature = "attributes")]
 mod pathspec;
 mod reference;

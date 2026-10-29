@@ -188,6 +188,9 @@ worktree-archive = ["gix-archive", "worktree-stream", "attributes"]
 ## Generate self-contained pack files from repository objects.
 pack-generate = ["gix-pack/generate"]
 
+## Repack local objects and expire unreachable objects while preserving repository recovery roots.
+object-maintenance = ["index", "pack-generate", "gix-pack/streaming-input", "command"]
+
 #! #### Mutually Exclusive Network Client
 #!
 #! Either `async-*` or `blocking-*` versions of these toggles may be enabled at a time.
