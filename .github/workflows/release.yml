@@ -404,9 +404,11 @@ jobs:
       - name: Show all individual asset names
         run: cat assets.txt
 
-      # The `features` array is repeated because GHA doesn't support YAML anchors.
-      # We will check that the macOS `universal` features match the others exactly.
-      # In the future this and the next step may be removed, or expanded to do more validation.
+      # The `features` array is repeated rather than using YAML anchors. We will check that the macOS
+      # `universal` features match the others exactly. In the future this and the next step may be
+      # removed, or expanded to do more validation. (GHA supports YAML anchors, but zizmor's support
+      # is beta, and it warns on any input that contains them. For details, see
+      # https://docs.zizmor.sh/usage/#yaml-anchors.)
       - name: Extract macOS asset names by architecture
         run: |
           for arch in aarch64 x86_64 universal; do
