@@ -60,6 +60,8 @@ pub mod tree;
 mod blob;
 ///
 pub mod data;
+///
+pub mod references;
 
 ///
 pub mod find;
