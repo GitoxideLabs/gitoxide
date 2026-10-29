@@ -139,8 +139,35 @@ impl crate::Repository {
         head: Head,
         should_interrupt: &AtomicBool,
     ) -> Result<PrepareCheckout> {
+        self.prepare_worktree(destination.as_ref(), head, should_interrupt, false)
+    }
+
+    /// Register a linked worktree without checking out files, retaining any existing destination contents.
+    ///
+    /// The destination may be absent, empty, or populated, but must not contain a `.git` entry and must not
+    /// already be registered. HEAD validation and configuration inheritance match [`Self::add_worktree()`].
+    /// Only the `.git` link and private administration are created; no index or working files are written.
+    /// On failure, existing contents are retained and newly created registration files are removed.
+    /// The caller is responsible for preventing concurrent changes to the destination and its `.git` entry.
+    /// To check out an initially empty destination later, use [`crate::Worktree::checkout()`].
+    pub fn register_worktree(
+        &self,
+        destination: impl AsRef<Path>,
+        head: Head,
+        should_interrupt: &AtomicBool,
+    ) -> Result<crate::Repository> {
+        self.prepare_worktree(destination.as_ref(), head, should_interrupt, true)?
+            .persist()
+    }
+
+    fn prepare_worktree(
+        &self,
+        destination: &Path,
+        head: Head,
+        should_interrupt: &AtomicBool,
+        preserve_contents: bool,
+    ) -> Result<PrepareCheckout> {
         let repo = self.with_absolute_paths()?;
-        let destination = destination.as_ref();
         let relative_paths = Worktree::USE_RELATIVE_PATHS
             .enrich_error(repo.config.resolved.boolean(Worktree::USE_RELATIVE_PATHS))
             .with_leniency(repo.config.lenient_config)?
@@ -212,14 +239,16 @@ impl crate::Repository {
                     .or_raise(|| message("Failed to read or iterate worktree directories"))?,
             );
         }
-        let prepared = gix_worktree::add::prepare(
-            destination,
-            gix_worktree::add::Context {
-                common_dir: repo.common_dir(),
-                git_dir: sparse_checkout_git_dir(&repo)?,
-            },
-            gix_worktree::add::Options { relative_paths },
-        )
+        let context = gix_worktree::add::Context {
+            common_dir: repo.common_dir(),
+            git_dir: sparse_checkout_git_dir(&repo)?,
+        };
+        let options = gix_worktree::add::Options { relative_paths };
+        let prepared = if preserve_contents {
+            gix_worktree::add::prepare_in_place(destination, context, options)
+        } else {
+            gix_worktree::add::prepare(destination, context, options)
+        }
         .or_raise(|| message("Could not prepare the linked worktree"))?;
         // `prepare()` already applied `gix_path::realpath()`, but that preserves component spelling.
         // Canonicalize the existing destination to also match Windows casing and short-name aliases.
