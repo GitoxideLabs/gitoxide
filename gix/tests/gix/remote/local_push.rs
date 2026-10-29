@@ -232,3 +232,7 @@ fn reference_lock_failure_is_per_ref_unless_atomic() -> TestResult {
 
 #[path = "local_shallow_push.rs"]
 mod shallow;
+
+#[cfg(unix)]
+#[path = "push_to_checkout.rs"]
+mod checkout_hook;

@@ -2,7 +2,7 @@ use std::io;
 
 use crate::{
     Repository, Result,
-    bstr::{BString, ByteSlice},
+    bstr::{BStr, BString, ByteSlice},
     error::{ResultExt, bail, message},
     push::UpdateOutcome,
 };
@@ -110,15 +110,11 @@ impl Policy {
         if self.deny_deletes && update.update.new_id.is_none() && name.starts_with_str("refs/heads/") {
             return Ok(Some("deletion prohibited".into()));
         }
-        for worktree in repo.worktrees_including_main()? {
-            let worktree = worktree?;
-            if worktree.head_name()?.is_none_or(|head| head.as_bstr() != name) {
-                continue;
-            }
+        for worktree in checked_out_worktrees(repo, name)? {
             if !worktree.is_bare() {
                 match self.deny_current {
                     Action::Refuse => return Ok(Some("branch is currently checked out".into())),
-                    Action::UpdateInstead => return Ok(Some("updating checked-out worktrees is not supported".into())),
+                    Action::UpdateInstead => {}
                     Action::Warn => progress(false, b"warning: updating the current branch\n").or_error()?,
                     Action::Ignore => {}
                 }
@@ -135,6 +131,26 @@ impl Policy {
         }
         Ok(None)
     }
+
+    pub fn worktree_to_update(&self, repo: &Repository, update: &UpdateOutcome) -> Result<Option<Repository>> {
+        if !matches!(self.deny_current, Action::UpdateInstead) {
+            return Ok(None);
+        }
+        Ok(checked_out_worktrees(repo, update.update.destination.as_bstr())?
+            .into_iter()
+            .find(|worktree| !worktree.is_bare()))
+    }
+}
+
+fn checked_out_worktrees(repo: &Repository, name: &BStr) -> Result<Vec<Repository>> {
+    let mut matching = Vec::new();
+    for worktree in repo.worktrees_including_main()? {
+        let worktree = worktree?;
+        if worktree.head_name()?.is_some_and(|head| head.as_bstr() == name) {
+            matching.push(worktree);
+        }
+    }
+    Ok(matching)
 }
 
 fn action(repo: &Repository, key: &str) -> Result<Action> {
