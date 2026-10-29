@@ -917,7 +917,7 @@ fn relative_deepening_preserves_merge_depth_and_unrelated_boundaries() -> TestRe
         let spec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
         let output = gix_testtools::git_command(&expected)
             .args(["fetch", "--no-tags", flag])
-            .arg(&source)
+            .arg(source)
             .arg(&spec)
             .output()?;
         assert!(
