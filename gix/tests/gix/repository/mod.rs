@@ -19,6 +19,8 @@ mod filter;
 #[cfg(feature = "fsmonitor-server")]
 mod fsmonitor;
 mod location;
+#[cfg(feature = "index")]
+mod maintenance;
 #[cfg(feature = "mailmap")]
 mod mailmap;
 #[cfg(feature = "merge")]
