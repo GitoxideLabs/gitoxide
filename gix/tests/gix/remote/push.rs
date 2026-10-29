@@ -403,6 +403,196 @@ fn exact_refspec_updates_resolve_revisions_and_reject_implicit_destinations() ->
 }
 
 #[test]
+fn tracking_updates_follow_confirmed_results_and_preserve_remote_outcomes_on_local_error() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let fixture = gix_testtools::scripted_fixture_writable_with_args(
+        "make_push_tracking.sh",
+        ["sha1"],
+        gix_testtools::Creation::Execute,
+    )?;
+    let repo = gix::open_opts(
+        fixture.path().join("source"),
+        gix::open::Options::isolated().config_overrides(["core.filesRefLockTimeout=0"]),
+    )?;
+    let destination = fixture.path().join("destination");
+    let remote = repo.find_remote("origin")?.with_push_url(destination.as_path())?;
+    let old_id = repo.find_reference("refs/remotes/origin/included")?.id().detach();
+    let new_id = repo.find_reference("refs/heads/source")?.id().detach();
+    let mut request = update("refs/heads/included", Some(new_id))?;
+    request.force = true;
+    let push = |request: Update, dry_run| {
+        remote.push(
+            [request],
+            Options {
+                dry_run,
+                ..Options::default()
+            },
+            gix::progress::Discard,
+            |_, _| Ok(()),
+            &AtomicBool::new(false),
+        )
+    };
+    let dry_run = push(request.clone(), true)?;
+    assert!(
+        remote.update_tracking_refs(&dry_run)?.is_empty(),
+        "dry runs never write tracking refs"
+    );
+    let confirmed = push(request.clone(), false)?;
+    assert_eq!(
+        repo.find_reference("refs/remotes/origin/included")?.id(),
+        old_id,
+        "pushing leaves local changes to the explicit helper"
+    );
+    let lock = repo.git_dir().join("refs/remotes/origin/included.lock");
+    std::fs::write(&lock, "held by another writer\n")?;
+    assert!(
+        remote.update_tracking_refs(&confirmed).is_err(),
+        "local lock errors remain separate from the successful remote result"
+    );
+    std::fs::remove_file(lock)?;
+    assert_eq!(confirmed.updates[0].status, Status::Updated { forced: true });
+    assert_eq!(remote_id(&destination, "refs/heads/included")?, Some(new_id));
+    let up_to_date_dry_run = push(request.clone(), true)?;
+    assert_eq!(up_to_date_dry_run.updates[0].status, Status::UpToDate);
+    assert!(
+        remote.update_tracking_refs(&up_to_date_dry_run)?.is_empty(),
+        "even up-to-date dry runs must leave stale local tracking tips untouched"
+    );
+    assert_eq!(repo.find_reference("refs/remotes/origin/included")?.id(), old_id);
+    let up_to_date = push(request, false)?;
+    let edits = remote.update_tracking_refs(&up_to_date)?;
+    assert_eq!(edits.len(), 1);
+    assert_eq!(
+        repo.find_reference("refs/remotes/origin/included")?.id(),
+        new_id,
+        "up-to-date remote results refresh stale tracking refs"
+    );
+    let mut log = Vec::new();
+    let last = repo
+        .refs
+        .reflog_iter("refs/remotes/origin/included", &mut log)?
+        .expect("tracking reflog")
+        .last()
+        .expect("tracking update log entry")?;
+    assert_eq!(last.message, "update by push");
+
+    let rejected = push(update("refs/heads/not-included", Some(new_id))?, false)?;
+    assert!(matches!(rejected.updates[0].status, Status::Rejected(_)));
+    assert!(remote.update_tracking_refs(&rejected)?.is_empty());
+    assert_eq!(repo.find_reference("refs/remotes/origin/not-included")?.id(), old_id);
+    let deleted = push(update("refs/heads/not-included", None)?, false)?;
+    remote.update_tracking_refs(&deleted)?;
+    assert!(repo.try_find_reference("refs/remotes/origin/not-included")?.is_none());
+    assert!(
+        !repo.refs.reflog_exists("refs/remotes/origin/not-included")?,
+        "deletions remove their tracking reflogs"
+    );
+    Ok(())
+}
+
+#[test]
+fn tracking_updates_honor_each_proc_receive_report() -> TestResult {
+    use gix::protocol::push::{RefStatus, Report, Response};
+
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let fixture = gix_testtools::scripted_fixture_writable_with_args(
+        "make_push_tracking.sh",
+        ["sha1"],
+        gix_testtools::Creation::Execute,
+    )?;
+    let repo = gix::open_opts(fixture.path().join("source"), gix::open::Options::isolated())?;
+    let remote = repo
+        .find_remote("origin")?
+        .with_push_url(fixture.path().join("destination").as_path())?;
+    let new_id = repo.find_reference("refs/heads/source")?.id().detach();
+    let reported_id = repo.find_reference("refs/remotes/origin/included")?.id().detach();
+    let mut outcome = remote.push(
+        [update("refs/for/main", Some(new_id))?],
+        Options::default(),
+        gix::progress::Discard,
+        |_, _| Ok(()),
+        &AtomicBool::new(false),
+    )?;
+    // A proc-receive server can report several actual destinations for one command.
+    outcome.response = Some(Response {
+        unpack_error: None,
+        refs: vec![
+            RefStatus {
+                name: "refs/for/main".try_into()?,
+                error: None,
+                report: Report {
+                    ref_name: Some("refs/heads/reported".try_into()?),
+                    new_id: Some(reported_id),
+                    ..Report::default()
+                },
+            },
+            RefStatus {
+                name: "refs/for/main".try_into()?,
+                error: None,
+                report: Report {
+                    ref_name: Some("refs/heads/descendant".try_into()?),
+                    new_id: Some(repo.object_hash().null()),
+                    ..Report::default()
+                },
+            },
+        ],
+    });
+    let mut missing_object = outcome.clone();
+    missing_object.response.as_mut().expect("reports were just set").refs[1]
+        .report
+        .new_id = Some(ObjectId::from_hex(b"1111111111111111111111111111111111111111")?);
+    assert!(
+        remote
+            .update_tracking_refs(&missing_object)
+            .expect_err("reported objects must exist locally")
+            .is_not_found()
+    );
+    assert!(
+        repo.try_find_reference("refs/remotes/origin/reported")?.is_none(),
+        "an invalid later report prevents earlier tracking edits too"
+    );
+
+    let branch_remote = repo
+        .remote_at("unused")?
+        .with_refspecs(["refs/heads/*:refs/heads/*"], gix::remote::Direction::Fetch)?;
+    let blob_id = repo.write_blob(b"reported non-commit")?.detach();
+    let git_rejected = gix_testtools::git_command(repo.git_dir())
+        .args(["update-ref", "refs/heads/reported", &blob_id.to_string()])
+        .output()?;
+    assert!(!git_rejected.status.success(), "Git rejects non-commit branch tips");
+    let mut non_commit = outcome.clone();
+    non_commit.response.as_mut().expect("reports were just set").refs[0]
+        .report
+        .new_id = Some(blob_id);
+    assert!(
+        branch_remote.update_tracking_refs(&non_commit).is_err(),
+        "tracking mappings to local branches require commits, like Git's reference updates"
+    );
+    assert!(repo.try_find_reference("refs/heads/reported")?.is_none());
+
+    let edits = remote.update_tracking_refs(&outcome)?;
+    assert_eq!(edits.len(), 2);
+    assert_eq!(
+        repo.find_reference("refs/remotes/origin/reported")?.id(),
+        reported_id,
+        "reported refname and ID override the submitted command"
+    );
+    assert!(
+        repo.try_find_reference("refs/remotes/origin/descendant")?.is_none(),
+        "reported null IDs delete tracking refs"
+    );
+    assert!(
+        repo.try_find_reference("refs/remotes/origin/main")?.is_none(),
+        "the submitted destination is not used when reports redirect it"
+    );
+    Ok(())
+}
+
+#[test]
 fn dry_run_and_atomic_local_rejections_do_not_change_refs() -> TestResult {
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
