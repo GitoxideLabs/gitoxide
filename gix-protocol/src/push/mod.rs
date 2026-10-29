@@ -342,3 +342,8 @@ fn report_line(line: &[u8]) -> Result<&[u8]> {
     }
     Ok(line)
 }
+
+#[cfg(feature = "blocking-client")]
+mod send;
+#[cfg(feature = "blocking-client")]
+pub use send::SendOptions;

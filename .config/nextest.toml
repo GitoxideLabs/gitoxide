@@ -15,6 +15,10 @@ test-threads = 6
 fail-fast = false
 
 [[profile.default.overrides]]
+filter = 'package(=gix-protocol) & test(=protocol::push::failed_pack_production_aborts_receive_pack_without_hanging)'
+slow-timeout = { period = "10s", terminate-after = 3 }
+
+[[profile.default.overrides]]
 # Start independent expensive fixtures early on all platforms to overlap their setup.
 # Priority affects start order; the Windows groups below limit concurrency.
 filter = '''
