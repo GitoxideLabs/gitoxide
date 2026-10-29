@@ -447,6 +447,55 @@ fn reference_with_must_not_exist_constraint_cannot_be_created_if_it_exists_alrea
 }
 
 #[test]
+fn namespaced_packed_updates_and_deletions_enforce_previous_values() -> TestResult {
+    for delete in [false, true] {
+        let (_keep, mut store) = store_writable("make_namespaced_packed_ref_repository.sh")?;
+        let default_main = store.find("refs/heads/main")?;
+        store.namespace = gix_ref::namespace::expand("foo")?.into();
+        let name = "refs/remotes/origin/main";
+        let previous = store.find(name)?.target;
+        let new_target = Target::Object(ObjectId::empty_tree(crate::fixture_hash_kind()));
+        let edit = |expected| -> TestResult<RefEdit> {
+            Ok(if delete {
+                RefEdit::delete(name.try_into()?, expected)
+            } else {
+                RefEdit::update(name.try_into()?, new_target.clone(), expected, "namespaced update")
+            })
+        };
+        let stale = store.transaction().prepare(
+            [edit(PreviousValue::MustExistAndMatch(new_target.clone()))?],
+            Fail::Immediately,
+            Fail::Immediately,
+        );
+        assert!(
+            stale.is_err(),
+            "packed namespaced references enforce stale-value checks"
+        );
+        drop(stale);
+
+        let requested = edit(PreviousValue::MustExistAndMatch(previous))?;
+        let actual = store
+            .transaction()
+            .prepare([requested.clone()], Fail::Immediately, Fail::Immediately)?
+            .commit(committer().to_ref(&mut TimeBuf::default()))?;
+        assert_eq!(
+            actual,
+            [requested],
+            "transaction results retain logical reference names"
+        );
+        if delete {
+            assert!(store.try_find(name)?.is_none(), "the packed reference was deleted");
+        } else {
+            assert_eq!(store.find(name)?.target, new_target);
+        }
+        store.namespace = None;
+        assert_eq!(store.find("refs/heads/main")?, default_main);
+        assert!(store.try_find(name)?.is_none(), "the default namespace is untouched");
+    }
+    Ok(())
+}
+
+#[test]
 fn namespaced_updates_or_deletions_are_transparent_and_not_observable() -> TestResult {
     let (_keep, mut store) = empty_store()?;
     store.namespace = gix_ref::namespace::expand("foo")?.into();
