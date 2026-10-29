@@ -20,8 +20,8 @@ impl Prepare {
     /// be represented as UTF-8.
     ///
     /// If a shell is used, then arguments given here with [arg()](Self::arg) or
-    /// [args()](Self::args) will be substituted via `"$@"` if it's not already present in the
-    /// command.
+    /// [args()](Self::args) will be appended to the command via `"$@"`, even if the command already
+    /// contains `"$@"`. The original command is passed as the shell's `$0`, matching Git.
     ///
     ///
     /// The [`command_may_be_shell_script_allow_manual_argument_splitting()`](Self::command_may_be_shell_script_allow_manual_argument_splitting())
@@ -45,7 +45,8 @@ impl Prepare {
     /// [`with_shell_program()`](Self::with_shell_program()).
     ///
     /// Arguments given here with [arg()](Self::arg) or [args()](Self::args) will be
-    /// substituted via `"$@"` if it's not already present in the command.
+    /// appended via `"$@"`, even if the command already contains `"$@"`. The original command is
+    /// passed as the shell's `$0`, matching Git.
     ///
     /// If neither this method nor
     /// [`command_may_be_shell_script()`](Self::command_may_be_shell_script()) is called,
@@ -83,9 +84,9 @@ impl Prepare {
     /// using the default shell which is `sh`.
     ///
     /// Note that shells that are not Bourne-style cannot be expected to work correctly,
-    /// because POSIX shell syntax is assumed when searching for and conditionally adding
-    /// `"$@"` to receive arguments, where applicable (and in the behaviour of
-    /// [`with_quoted_command()`](Self::with_quoted_command()), if called).
+    /// because POSIX shell syntax is assumed when appending `"$@"` to receive arguments
+    /// and in the behaviour of
+    /// [`with_quoted_command()`](Self::with_quoted_command()), if called.
     pub fn with_shell_program(mut self, program: impl Into<OsString>) -> Self {
         self.shell_program = Some(program.into());
         self
@@ -215,31 +216,15 @@ impl TryFrom<Prepare> for Command {
                         Some(shell) => Command::new(shell),
                         None => gix_path::env::shell_command(),
                     };
-                    // Passed as `command_name` after `-c <script>`; the shell uses it
-                    // as `$0`, which prefixes its own diagnostic messages. If the
-                    // shell path has no extractable basename — reachable only via
-                    // degenerate input like `""` or `/` — fall back to `_`, the
-                    // conventional placeholder for an unused `$0`, rather than
-                    // making a false claim about which shell is running.
-                    let arg0 = std::path::Path::new(cmd.get_program())
-                        .file_name()
-                        .unwrap_or(std::ffi::OsStr::new("_"))
-                        .to_os_string();
-                    cmd.arg("-c");
-                    if !prep.args.is_empty() {
-                        if !prep.command.as_encoded_bytes().contains_str("$@") {
-                            if prep.quote_command {
-                                let command = gix_path::os_str_into_bstr(&prep.command)?;
-                                prep.command = gix_path::from_bstring(gix_quote::single(command))?.into();
-                            }
-                            prep.command.push(r#" "$@""#);
-                        } else {
-                            gix_trace::debug!(
-                                r#"Will not add '"$@"' to '{:?}' as it seems to contain '$@' already"#,
-                                prep.command
-                            );
-                        }
+                    let arg0 = prep.command.clone();
+                    if prep.quote_command {
+                        let command = gix_path::os_str_into_bstr(&prep.command)?;
+                        prep.command = gix_path::from_bstring(gix_quote::single(command))?.into();
                     }
+                    if !prep.args.is_empty() {
+                        prep.command.push(r#" "$@""#);
+                    }
+                    cmd.arg("-c");
                     cmd.arg(prep.command);
                     cmd.arg(arg0);
                     cmd

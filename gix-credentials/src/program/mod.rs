@@ -9,9 +9,10 @@ use crate::{Program, helper};
 fn external_name_command(name_and_args: &bstr::BStr, action: &helper::Action) -> Result<gix_command::Prepare> {
     let mut command = BString::from("git-credential-");
     command.push_str(name_and_args);
+    command.push(b' ');
+    command.push_str(action.as_arg(true));
     Ok(
         gix_command::prepare(gix_path::from_bstr(command.as_bstr())?.into_owned())
-            .arg(action.as_arg(true))
             .command_may_be_shell_script_allow_manual_argument_splitting(),
     )
 }
@@ -103,9 +104,13 @@ impl Program {
             Kind::ExternalShellScript(for_shell)
             | Kind::ExternalPath {
                 path_and_args: for_shell,
-            } => gix_command::prepare(gix_path::from_bstr(for_shell.as_bstr())?.as_ref())
-                .command_may_be_shell_script()
-                .arg(action.as_arg(true)),
+            } => {
+                // Git appends the action to the script itself, leaving shell positional parameters empty.
+                let mut for_shell = for_shell.clone();
+                for_shell.push(b' ');
+                for_shell.push_str(action.as_arg(true));
+                gix_command::prepare(gix_path::from_bstring(for_shell)?).command_may_be_shell_script()
+            }
         };
         prepare.env.extend_from_slice(environment);
         if matches!(self.kind, Kind::ExternalName { .. }) {
@@ -196,7 +201,10 @@ mod tests {
             .skip_while(|arg| *arg != std::ffi::OsStr::new("-c"))
             .nth(1)
             .expect("a shell invocation has its script after the '-c' argument");
-        assert_eq!(script, r#"git-credential-manager --config=~/credentials "$@""#);
+        assert_eq!(
+            script, "git-credential-manager --config=~/credentials get",
+            "the fixed action is appended to the script, without shell positional parameters"
+        );
         Ok(())
     }
 }
