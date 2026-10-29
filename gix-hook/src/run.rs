@@ -59,6 +59,26 @@ pub fn run_event_serially(
     context: &Context<'_>,
     options: Options<'_>,
 ) -> Result<Vec<Output>> {
+    run_event_serially_with(event, configured, hooks_directory, context, options, |command| {
+        capture(command, options.stdin)
+    })
+}
+
+/// Prepare resolved hooks for `event` in serial order, passing each command to `execute`.
+///
+/// This uses the same event disable, discovery, command preparation and ordering as [`run_event_serially()`].
+/// The callback owns execution and can adjust per-event environment before calling [`run_prepared()`],
+/// for example to stream combined output with cancellation. It also owns replaying `options.stdin`.
+/// Callback results are collected in order, including nonzero exit statuses; any error stops the event
+/// and is propagated unchanged. An empty vector means that no enabled hooks were present.
+pub fn run_event_serially_with<T>(
+    event: &str,
+    configured: Option<&[(BString, BString)]>,
+    hooks_directory: &Path,
+    context: &Context<'_>,
+    options: Options<'_>,
+    mut execute: impl FnMut(Command) -> Result<T>,
+) -> Result<Vec<T>> {
     crate::validate_name(event)?;
     let Some(configured) = configured else {
         return Ok(Vec::new());
@@ -71,10 +91,10 @@ pub fn run_event_serially(
         let preparation = gix_command::prepare(gix_path::from_bstr(script)?.into_owned())
             .command_may_be_shell_script_disallow_manual_argument_splitting();
         let command = command(preparation, context, options).or_raise(diagnostic)?;
-        outputs.push(capture(command, options.stdin).or_raise(diagnostic)?);
+        outputs.push(execute(command)?);
     }
     if let Some(path) = traditional {
-        outputs.push(run(&path, context, options)?);
+        outputs.push(execute(prepare(&path, context, options)?)?);
     }
     Ok(outputs)
 }
@@ -113,7 +133,8 @@ fn capture(command: Command, input: Option<&[u8]>) -> Result<Output> {
 
 /// Execute a prepared hook, streaming output and returning its exit status.
 ///
-/// Use a command returned by [`prepare()`]. The command's stdin, stdout and stderr settings are replaced.
+/// Use a command from [`prepare()`] or [`run_event_serially_with()`].
+/// The command's stdin, stdout and stderr settings are replaced.
 /// `input` is written on a separate
 /// thread; `None` closes stdin. Output is drained concurrently with bounded buffering according to
 /// `output`. Arguments, per-variable environment overrides and working directory are preserved during

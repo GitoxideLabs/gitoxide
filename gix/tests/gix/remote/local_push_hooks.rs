@@ -16,6 +16,13 @@ fn hook(path: &Path, name: &str, script: &str) -> TestResult {
     Ok(())
 }
 
+fn configured_hook(path: &Path, event: &str, name: &str, script: &str) -> TestResult {
+    hook(path, name, script)?;
+    gix_testtools::git(path, &format!("config hook.{name}.command ./hooks/{name}"))?;
+    gix_testtools::git(path, &format!("config hook.{name}.event {event}"))?;
+    Ok(())
+}
+
 fn push(
     repo: &Repository,
     path: &Path,
@@ -106,6 +113,159 @@ exit 1
                 .any(|entry| entry.is_ok_and(|entry| entry.file_name().to_string_lossy().starts_with("incoming-")))
         );
     }
+    Ok(())
+}
+
+#[test]
+fn configured_receive_events_replay_inputs_and_reject_updates_like_git() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let repo = crate::remote::repo("base");
+    let tip_id = repo.head_id()?.detach();
+    let mut expected_logs = None;
+    for native in [false, true] {
+        if !native && *gix_testtools::GIT_VERSION < (2, 55, 0) {
+            continue;
+        }
+        let destination = gix_testtools::tempfile::tempdir()?;
+        gix_testtools::git(destination.path(), "init --bare")?;
+        gix_testtools::git(destination.path(), "config receive.advertisePushOptions true")?;
+        let events = [
+            "pre-receive",
+            "update",
+            "reference-transaction",
+            "post-receive",
+            "post-update",
+        ];
+        for event in events {
+            for label in ["first", "second", "traditional"] {
+                let script = format!(
+                    "#!/bin/sh
+set -eu
+event={event}
+label={label}
+case $event in
+    pre-receive|post-receive)
+        test \"$GIT_PUSH_OPTION_COUNT\" = 2
+        test \"$GIT_PUSH_OPTION_0\" = 'space and = sign'
+        test \"$GIT_PUSH_OPTION_1\" = ''
+        if test \"$event\" = pre-receive; then
+            test -n \"$GIT_QUARANTINE_PATH\"
+        else
+            test -z \"${{GIT_QUARANTINE_PATH-}}\"
+        fi
+        while read old new name; do
+            git cat-file -e \"$new^{{commit}}\"
+            printf '%s %s\\n' \"$label\" \"$name\" >>\"$event-log\"
+        done
+        test \"$event\" != post-receive
+        ;;
+    reference-transaction)
+        # Compare the phases supported by both implementations.
+        case $1 in prepared|committed|aborted) ;; *) exit 0 ;; esac
+        while read old new name; do
+            printf '%s %s %s\\n' \"$label\" \"$1\" \"$name\" >>\"$event-log\"
+        done
+        ;;
+    *)
+        printf '%s %s\\n' \"$label\" \"$1\" >>\"$event-log\"
+        test \"$label:$1\" != first:refs/heads/rejected
+        ;;
+esac
+"
+                );
+                if label == "traditional" {
+                    hook(destination.path(), event, &script)?;
+                } else {
+                    configured_hook(destination.path(), event, &format!("{label}-{event}"), &script)?;
+                }
+            }
+        }
+        if native {
+            let outcome = push(
+                &repo,
+                destination.path(),
+                &["refs/heads/accepted", "refs/heads/rejected"],
+                Options {
+                    push_options: &["space and = sign".into(), "".into()],
+                    ..Options::default()
+                },
+                |_| Ok(()),
+            )?;
+            assert_eq!(outcome.updates[0].status, Status::Updated { forced: false });
+            assert_eq!(
+                outcome.updates[1].status,
+                Status::Rejected(Rejection::Server("hook declined".into())),
+                "a configured update hook can reject a ref after all hooks for that event run"
+            );
+        } else {
+            let output = gix_testtools::git_command(repo.git_dir())
+                .args(["push", "-o", "space and = sign", "-o", ""])
+                .arg(destination.path())
+                .args([
+                    format!("{tip_id}:refs/heads/accepted"),
+                    format!("{tip_id}:refs/heads/rejected"),
+                ])
+                .output()?;
+            assert!(!output.status.success(), "Git rejects one of the updates");
+        }
+        let logs: Vec<_> = events
+            .iter()
+            .map(|event| std::fs::read_to_string(destination.path().join(format!("{event}-log"))))
+            .collect::<Result<_, _>>()?;
+        for (event, log) in events.iter().zip(&logs) {
+            assert!(log.contains("first "), "configured hook runs for {event}");
+            assert!(log.contains("second "), "later configured hook runs for {event}");
+            assert!(log.contains("traditional "), "traditional hook runs for {event}");
+        }
+        if let Some(expected) = &expected_logs {
+            assert_eq!(
+                &logs, expected,
+                "event order, replayed stdin, arguments and rejection match Git"
+            );
+        } else {
+            expected_logs = Some(logs);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn disabled_receive_event_skips_configured_and_traditional_hooks() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let repo = crate::remote::repo("base");
+    let destination = gix_testtools::tempfile::tempdir()?;
+    gix_testtools::git(destination.path(), "init --bare")?;
+    for event in [
+        "pre-receive",
+        "update",
+        "reference-transaction",
+        "post-receive",
+        "post-update",
+    ] {
+        let script = "#!/bin/sh
+touch unexpected-hook
+exit 1
+";
+        hook(destination.path(), event, script)?;
+        configured_hook(destination.path(), event, &format!("configured-{event}"), script)?;
+        gix_testtools::git(destination.path(), &format!("config hook.{event}.enabled false"))?;
+    }
+    let outcome = push(
+        &repo,
+        destination.path(),
+        &["refs/heads/topic"],
+        Options::default(),
+        |_| Ok(()),
+    )?;
+    assert_eq!(outcome.updates[0].status, Status::Updated { forced: false });
+    assert!(
+        !destination.path().join("unexpected-hook").exists(),
+        "the whole event is disabled"
+    );
     Ok(())
 }
 
@@ -230,11 +390,19 @@ fn progress_callback_failure_cancels_an_active_hook() -> TestResult {
     let repo = crate::remote::repo("base");
     let destination = gix_testtools::tempfile::tempdir()?;
     gix_testtools::git(destination.path(), "init --bare")?;
+    configured_hook(
+        destination.path(),
+        "pre-receive",
+        "cancel",
+        "#!/bin/sh
+while :; do printf 'hook output\\n'; done
+",
+    )?;
     hook(
         destination.path(),
         "pre-receive",
         "#!/bin/sh
-while :; do printf 'hook output\\n'; done
+touch unexpected-hook
 ",
     )?;
     let result = push(
@@ -252,6 +420,10 @@ while :; do printf 'hook output\\n'; done
     );
     let remote = gix::open_opts(destination.path(), gix::open::Options::isolated())?;
     assert!(remote.try_find_reference("refs/heads/topic")?.is_none());
+    assert!(
+        !destination.path().join("unexpected-hook").exists(),
+        "callback cancellation stops later hooks in the event"
+    );
     Ok(())
 }
 

@@ -2,6 +2,7 @@ use std::{
     ffi::OsString,
     io,
     path::{Path, PathBuf},
+    process::ExitStatus,
     sync::atomic::AtomicBool,
 };
 
@@ -58,7 +59,7 @@ impl<'a> Hooks<'a> {
             .unwrap_or(true))
     }
 
-    /// Return `None` when no executable deployment hook is configured.
+    /// Return `None` when no enabled deployment hook is configured.
     pub fn push_to_checkout(
         &self,
         worktree: &Repository,
@@ -85,9 +86,14 @@ impl<'a> Hooks<'a> {
         progress: &mut impl FnMut(bool, &[u8]) -> io::Result<()>,
     ) -> Result<Option<bool>> {
         push::plan::check_interrupt(self.interrupt)?;
-        let Some(path) = gix_hook::find(name, &self.directory)? else {
+        let Some(configured) =
+            gix_hook::configured_commands(&self.repo.config.resolved, self.repo.filter_config_section(), name)?
+        else {
             return Ok(None);
         };
+        if configured.is_empty() && gix_hook::find(name, &self.directory)?.is_none() {
+            return Ok(None);
+        }
         let mut context = self.repo.command_context()?;
         context.stderr = None;
         context.no_replace_objects = Some(true);
@@ -98,8 +104,10 @@ impl<'a> Hooks<'a> {
             .iter()
             .map(|(key, value)| (key.as_os_str(), value.as_os_str()))
             .collect();
-        let mut command = gix_hook::prepare(
-            &path,
+        let statuses = gix_hook::run_event_serially_with(
+            name,
+            Some(&configured),
+            &self.directory,
             &gix_hook::Context {
                 working_dir: &self.repo.current_dir().join(self.repo.git_dir()),
                 common_dir: &self.repo.current_dir().join(self.repo.common_dir()),
@@ -108,69 +116,71 @@ impl<'a> Hooks<'a> {
             gix_hook::Options {
                 arguments: &args,
                 environment: &environment,
-                stdin: None,
+                stdin: Some(&input),
+            },
+            |mut command| {
+                // Repository-local process overrides belong to the sender, never the receiver.
+                for key in [
+                    "GIT_COMMON_DIR",
+                    "GIT_INDEX_FILE",
+                    "GIT_OBJECT_DIRECTORY",
+                    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                    "GIT_SHALLOW_FILE",
+                    "GIT_QUARANTINE_PATH",
+                    "GIT_CONFIG_PARAMETERS",
+                    "GIT_CONFIG_COUNT",
+                ] {
+                    command.env_remove(key);
+                }
+                if self.repo.workdir().is_none() {
+                    command.env_remove("GIT_WORK_TREE");
+                }
+                if self.repo.refs.namespace.is_none() {
+                    command.env_remove("GIT_NAMESPACE");
+                }
+                if let Some(quarantine) = quarantine {
+                    command
+                        .env("GIT_OBJECT_DIRECTORY", quarantine)
+                        .env("GIT_QUARANTINE_PATH", quarantine)
+                        .env(
+                            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                            quoted_path(&self.repo.current_dir().join(self.repo.objects.store_ref().path()))?,
+                        );
+                }
+                if let Some(path) = self.shallow_file {
+                    command.env("GIT_SHALLOW_FILE", self.repo.current_dir().join(path));
+                }
+                if let Some(worktree) = worktree {
+                    let root = worktree
+                        .workdir()
+                        .ok_or_raise(|| message("A deployment hook requires a worktree").validation())?;
+                    command
+                        .env("GIT_DIR", worktree.current_dir().join(worktree.git_dir()))
+                        .env("GIT_WORK_TREE", worktree.current_dir().join(root));
+                }
+                // Push options are passed only to the two receive hooks, as in receive-pack.
+                command.env_remove("GIT_PUSH_OPTION_COUNT");
+                if matches!(name, "pre-receive" | "post-receive")
+                    && let Some(options) = self.push_options
+                {
+                    command.env("GIT_PUSH_OPTION_COUNT", options.len().to_string());
+                    for (index, option) in options.iter().enumerate() {
+                        command.env(
+                            format!("GIT_PUSH_OPTION_{index}"),
+                            gix_path::from_bstr(option)?.as_os_str(),
+                        );
+                    }
+                }
+                gix_hook::run_prepared(
+                    command,
+                    Some(input.clone()),
+                    gix_hook::OutputMode::Combined,
+                    self.interrupt,
+                    |_, bytes| progress(false, bytes),
+                )
             },
         )?;
-        // Repository-local process overrides belong to the sender, never the receiver.
-        for key in [
-            "GIT_COMMON_DIR",
-            "GIT_INDEX_FILE",
-            "GIT_OBJECT_DIRECTORY",
-            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-            "GIT_SHALLOW_FILE",
-            "GIT_QUARANTINE_PATH",
-            "GIT_CONFIG_PARAMETERS",
-            "GIT_CONFIG_COUNT",
-        ] {
-            command.env_remove(key);
-        }
-        if self.repo.workdir().is_none() {
-            command.env_remove("GIT_WORK_TREE");
-        }
-        if self.repo.refs.namespace.is_none() {
-            command.env_remove("GIT_NAMESPACE");
-        }
-        if let Some(quarantine) = quarantine {
-            command
-                .env("GIT_OBJECT_DIRECTORY", quarantine)
-                .env("GIT_QUARANTINE_PATH", quarantine)
-                .env(
-                    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-                    quoted_path(&self.repo.current_dir().join(self.repo.objects.store_ref().path()))?,
-                );
-        }
-        if let Some(path) = self.shallow_file {
-            command.env("GIT_SHALLOW_FILE", self.repo.current_dir().join(path));
-        }
-        if let Some(worktree) = worktree {
-            let root = worktree
-                .workdir()
-                .ok_or_raise(|| message("A deployment hook requires a worktree").validation())?;
-            command
-                .env("GIT_DIR", worktree.current_dir().join(worktree.git_dir()))
-                .env("GIT_WORK_TREE", worktree.current_dir().join(root));
-        }
-        // Push options are passed only to the two receive hooks, as in receive-pack.
-        command.env_remove("GIT_PUSH_OPTION_COUNT");
-        if matches!(name, "pre-receive" | "post-receive")
-            && let Some(options) = self.push_options
-        {
-            command.env("GIT_PUSH_OPTION_COUNT", options.len().to_string());
-            for (index, option) in options.iter().enumerate() {
-                command.env(
-                    format!("GIT_PUSH_OPTION_{index}"),
-                    gix_path::from_bstr(option)?.as_os_str(),
-                );
-            }
-        }
-        let status = gix_hook::run_prepared(
-            command,
-            Some(input),
-            gix_hook::OutputMode::Combined,
-            self.interrupt,
-            |_, bytes| progress(false, bytes),
-        )?;
-        Ok(Some(status.success()))
+        Ok((!statuses.is_empty()).then(|| statuses.iter().all(ExitStatus::success)))
     }
 }
 

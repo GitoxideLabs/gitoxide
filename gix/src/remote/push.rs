@@ -15,10 +15,11 @@ impl Remote<'_> {
     ///
     /// Like the connection API, this does not expand push refspecs, run local pre-push hooks, or
     /// update local tracking refs. Use [`Self::urls()`] to handle additional configured push URLs.
-    /// Local receive operations run receiver hooks and quarantine incoming objects. They preserve receiver
-    /// shallow boundaries and honor `receive.shallowUpdate` when incoming history needs additional boundaries.
+    /// Local receive operations run configured and traditional receiver hooks serially and quarantine incoming objects.
+    /// Event-wide disables suppress both hook forms. Receiver shallow boundaries are preserved, honoring
+    /// `receive.shallowUpdate` when incoming history needs additional boundaries.
     /// `receive.denyCurrentBranch=updateInstead` delegates deployment to a `push-to-checkout` hook;
-    /// its built-in worktree update is currently unsupported when no executable hook is present.
+    /// its built-in worktree update is currently unsupported when no enabled hook is present.
     /// Incoming objects honor `receive.fsckObjects` and `receive.fsck` severity and skip-list policy.
     /// Namespaces and `receive.hideRefs` rules are applied to advertisements, transactions, and hooks.
     /// Advanced receive policies that cannot be enforced are rejected before modifying references.

@@ -11,7 +11,8 @@ git init -q -b main source
     git add file
     git commit -qm old
 )
-for mode in main-accept main-reject linked-accept linked-reject missing; do
+for mode in main-accept main-reject linked-accept linked-reject \
+    main-configured-accept main-configured-reject linked-configured-accept linked-configured-reject missing; do
     for kind in native git; do
         target="$kind-$mode"
         git clone -q source "$target"
@@ -48,6 +49,13 @@ git read-tree --reset -u "$1"
 HOOK
             fi
             chmod +x "$target/.git/custom-hooks/push-to-checkout"
+            if [[ "$mode" = *-configured-* ]]; then
+                # Configured commands use the receive directory too, and must count
+                # as an installed deployment hook when no traditional hook exists.
+                mv "$target/.git/custom-hooks/push-to-checkout" "$target/.git/custom-hooks/deploy"
+                git -C "$target" config hook.deploy.command ./custom-hooks/deploy
+                git -C "$target" config hook.deploy.event push-to-checkout
+            fi
             printf 'dirty\n' >"$worktree/file"
         fi
     done
@@ -57,7 +65,8 @@ done
     printf 'new\n' >file
     git commit -qam new
 )
-for mode in main-accept main-reject linked-accept linked-reject; do
+for mode in main-accept main-reject linked-accept linked-reject \
+    main-configured-accept main-configured-reject linked-configured-accept linked-configured-reject; do
     branch=main
     if [[ "$mode" = linked-* ]]; then
         branch=deploy
