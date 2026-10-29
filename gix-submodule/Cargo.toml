@@ -33,7 +33,7 @@ bstr = { version = "1.12.0", default-features = false }
 [dev-dependencies]
 insta = "1.46.3"
 gix-testtools = { path = "../tests/tools" }
-gix-fs = { path = "../gix-fs", features = ["walkdir"] }
+gix-fs = { path = "../gix-fs", features = ["walkdir", "unstable"] }
 
 [package.metadata.docs.rs]
 features = ["sha1"]

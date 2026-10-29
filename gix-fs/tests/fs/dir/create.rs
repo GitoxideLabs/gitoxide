@@ -37,11 +37,70 @@ mod all {
     }
 
     #[test]
+    fn single_and_existing_directories_succeed() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let target = dir.path().join("new");
+        assert_eq!(
+            create::all(&target, Default::default(), 0)?,
+            target,
+            "creating a single directory returns the input path"
+        );
+        assert!(target.is_dir(), "the destination was created");
+        assert_eq!(
+            create::all(&target, Default::default(), 0)?,
+            target,
+            "an existing directory is also a successful destination"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn missing_parents_exhaust_the_configured_retries() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let target = dir.path().join("one/two");
+        let retries = create::Retries {
+            to_create_entire_directory: 5,
+            on_create_directory_failure: 1,
+            on_interrupt: 10,
+        };
+        let failure = create::all(&target, retries, 0).expect_err("a single attempt cannot create missing parents");
+        assert_eq!(
+            failure.kind(),
+            std::io::ErrorKind::NotFound,
+            "the stable helper returns the underlying permanent failure"
+        );
+        assert!(
+            !dir.path().join("one").exists(),
+            "exhausting retries before visiting a parent leaves it uncreated"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_existing_file_cannot_be_a_destination_or_parent() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("file");
+        std::fs::write(&file, b"keep")?;
+        for target in [file.clone(), file.join("child")] {
+            let failure =
+                create::all(&target, Default::default(), 0).expect_err("a file cannot be used as a directory");
+            assert_eq!(
+                failure.kind(),
+                std::io::ErrorKind::NotADirectory,
+                "the stable helper reports file collisions as directory errors"
+            );
+        }
+        assert_eq!(std::fs::read(&file)?, b"keep", "the existing file remains untouched");
+        Ok(())
+    }
+
+    #[test]
     fn a_deeply_nested_directory() -> TestResult {
         let dir = tempfile::tempdir()?;
         let target = &dir.path().join("1").join("2").join("3").join("4").join("5").join("6");
         let dir = create::all(target, Default::default(), 0)?;
         assert_eq!(dir, target, "all subdirectories can be created");
+        assert!(target.is_dir(), "the deepest destination was created");
         Ok(())
     }
 }

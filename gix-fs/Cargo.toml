@@ -2,36 +2,48 @@ lints.workspace = true
 
 [package]
 name = "gix-fs"
-version = "0.24.1"
+version = "1.0.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate providing file system specific utilities to `gitoxide`"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.99"
 include = ["/src/**/*", "/LICENSE-*"]
 
 [lib]
 doctest = true
 
+[features]
+## Expose filesystem APIs beyond stable lock-file creation, cleanup, and permission handling. Pin an exact version when using them.
+unstable = []
+
+## The experimental `Capabilities` type implements `serde::Serialize` and `serde::Deserialize`.
+serde = ["unstable", "dep:serde"]
+
+## Enable experimental recursive directory traversal with optional Unicode precomposition and Git-style sorting using the `walkdir` crate.
+walkdir = ["unstable", "dep:walkdir"]
+
+[package.metadata.smart-release]
+api-check = ["etc/scripts/check-api.sh"]
+unstable-features = ["unstable"]
+
 [package.metadata.api-check]
+profiles = [{ default-features = false, features = [] }]
 allowed-unstable-crates = ["gix_error"]
 
-[features]
-## [`Capabilities`] implements `serde::Serialize` and `serde::Deserialize`.
-serde = ["dep:serde"]
-
-## Enable recursive directory traversal with optional Unicode precomposition and Git-style sorting using the `walkdir` crate.
-walkdir = ["dep:walkdir"]
-
 [dependencies]
+gix-macros = { version = "^0.2.0", path = "../gix-macros" }
 gix-parallel = { version = "^0.50.1", path = "../gix-parallel" }
 bstr = "1.12.0"
 gix-path = { version = "^0.14.1", path = "../gix-path" }
 gix-utils = { version = "^0.5.2", path = "../gix-utils" }
 gix-error = { version = "^0.5.2", path = "../gix-error" }
 
-serde = { version = "1.0.114", optional = true, default-features = false, features = ["std", "derive"] }
+serde = { version = "1.0.114", optional = true, default-features = false, features = [
+    "std",
+    "derive",
+] }
 walkdir = { version = "2.3.2", optional = true }
 
 document-features = { version = "0.2.0", optional = true }
@@ -40,7 +52,10 @@ document-features = { version = "0.2.0", optional = true }
 libc = { version = "0.2.186" }
 
 [dev-dependencies]
-gix-testtools = { path = "../tests/tools", default-features = false, features = ["sha1"] }
+gix-fs = { path = ".", features = ["unstable"] }
+gix-testtools = { path = "../tests/tools", default-features = false, features = [
+    "sha1",
+] }
 insta = "1.46.3"
 crossbeam-channel = "0.5.15"
 is_ci = "1.1.1"

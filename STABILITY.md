@@ -129,6 +129,11 @@ from Git history, following renames when necessary. The date must be a valid cal
 included in experimental documentation. Usually the date is sufficient; add a nonempty `reason = "..."`
 only when it explains something beyond the signature or the fact that the item is not stabilized.
 
+`gix-fs` limits its stable API to the operations needed by `gix-tempfile` and `gix-lock`: `dir::create::Retries`
+(including its public fields), `dir::create::all()`, `dir::remove::empty_upward_until_boundary()`, and
+`set_shared_repository_permissions()`. Other filesystem APIs remain experimental, including the creation/removal
+iterators, capability probing, file and symlink helpers, directory traversal, stacks, and snapshots.
+Its `serde` and `walkdir` features also enable `unstable` and are excluded from stable release checks.
 Stable release checks cover the supported feature profiles declared in `package.metadata.api-check.profiles`, excluding
 features listed in `package.metadata.smart-release.unstable-features`.
 

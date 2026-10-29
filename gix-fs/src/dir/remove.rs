@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 ///
 /// * `Some(Ok(removed_directory))` is yielded once or more success, followed by `None`
 /// * `Some(Err(std::io::Error))` is yielded exactly once on failure.
+#[gix_macros::unstable(since = "2021-06-19")]
 pub struct Iter<'a> {
     cursor: Option<&'a Path>,
     boundary: &'a Path,
@@ -85,6 +86,7 @@ pub fn empty_upward_until_boundary<'a>(delete_dir: &'a Path, boundary_dir: &'a P
 /// If any encountered directory contains a file the entire operation is aborted.
 /// Please note that this is inherently racy and no attempts are made to counter that, which will allow creators to win
 /// as long as they retry.
+#[gix_macros::unstable(since = "2021-07-10")]
 pub fn empty_depth_first(delete_dir: PathBuf) -> std::io::Result<()> {
     if let Ok(()) = std::fs::remove_dir(&delete_dir) {
         return Ok(());

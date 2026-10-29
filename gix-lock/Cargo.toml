@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-lock"
-version = "26.0.1"
+version = "27.0.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A git-style lock-file implementation"
@@ -15,16 +15,29 @@ rust-version = "1.88"
 doctest = true
 test = true
 
+[features]
+## Expose plumbing APIs whose types may change between compatible releases. Pin an exact version when using them.
+unstable = ["gix-tempfile/unstable"]
+
+[package.metadata.smart-release]
+api-check = ["etc/scripts/check-api.sh"]
+unstable-features = ["unstable"]
+
 [package.metadata.api-check]
+profiles = [{ default-features = false, features = [] }]
 allowed-unstable-crates = ["gix_error"]
 
 [dependencies]
+gix-macros = { version = "^0.2.0", path = "../gix-macros" }
 gix-error = { version = "^0.5.2", path = "../gix-error" }
-gix-fs = { version = "^0.24.1", path = "../gix-fs" }
+gix-fs = { version = "^1.0.0", path = "../gix-fs" }
 gix-utils = { version = "^0.5.2", default-features = false, path = "../gix-utils" }
-gix-tempfile = { version = "^26.0.0", default-features = false, path = "../gix-tempfile" }
+gix-tempfile = { version = "^27.0.0", default-features = false, path = "../gix-tempfile" }
 
 [dev-dependencies]
+gix-lock = { path = ".", features = ["unstable"] }
+gix-fs = { path = "../gix-fs", features = ["unstable"] }
+gix-tempfile = { path = "../gix-tempfile", default-features = false, features = ["unstable"] }
 gix-testtools = { path = "../tests/tools", default-features = false, features = ["sha1"] }
 insta = { version = "1.46.3", features = ["filters"] }
 tempfile = "3.26.0"

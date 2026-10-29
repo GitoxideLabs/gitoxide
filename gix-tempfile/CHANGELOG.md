@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### New Features (BREAKING)
+
+ - Establish the `27.0` compatibility boundary for tempfiles and race-proof parent-directory creation
+   without requiring `unstable`. Make `ContainingDirectory`, `AutoRemove`, `signal::handler::Mode`,
+   and `handle::persist::Error<T>` non-exhaustive so future variants and fields can be added compatibly.
+   Downstream enum matches require a fallback arm; struct destructuring requires `..`,
+   and external struct-literal construction is no longer supported.
+   The public directory retry type now comes from `gix-fs 1.0` rather than its `0.24` compatibility family;
+   all retry fields and defaults are unchanged. Directory-helper convenience re-exports require `unstable`.
+
 ## 26.0.1 (2026-10-22)
 
 ### Commit Statistics

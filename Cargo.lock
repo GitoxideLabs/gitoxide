@@ -1974,12 +1974,14 @@ dependencies = [
 
 [[package]]
 name = "gix-fs"
-version = "0.24.1"
+version = "1.0.0"
 dependencies = [
  "bstr",
  "crossbeam-channel",
  "document-features",
  "gix-error",
+ "gix-fs",
+ "gix-macros",
  "gix-parallel",
  "gix-path",
  "gix-testtools",
@@ -2117,10 +2119,12 @@ version = "0.0.0"
 
 [[package]]
 name = "gix-lock"
-version = "26.0.1"
+version = "27.0.0"
 dependencies = [
  "gix-error",
  "gix-fs",
+ "gix-lock",
+ "gix-macros",
  "gix-tempfile",
  "gix-testtools",
  "gix-utils",
@@ -2461,7 +2465,6 @@ dependencies = [
  "gix-odb",
  "gix-parallel",
  "gix-path",
- "gix-tempfile",
  "gix-testtools",
  "gix-utils",
  "gix-validate",
@@ -2599,11 +2602,13 @@ dependencies = [
 
 [[package]]
 name = "gix-tempfile"
-version = "26.0.1"
+version = "27.0.0"
 dependencies = [
  "dashmap",
  "document-features",
  "gix-fs",
+ "gix-macros",
+ "gix-tempfile",
  "gix-testtools",
  "insta",
  "libc",

@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-tempfile"
-version = "26.0.1"
+version = "27.0.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A tempfile implementation with a global registry to assure cleanup"
@@ -30,11 +30,9 @@ required-features = ["signals"]
 doctest = true
 test = true
 
-[package.metadata.api-check]
-allowed-unstable-crates = ["gix_error"]
-
 [dependencies]
-gix-fs = { version = "^0.24.1", path = "../gix-fs" }
+gix-macros = { version = "^0.2.0", path = "../gix-macros" }
+gix-fs = { version = "^1.0.0", path = "../gix-fs" }
 parking_lot = "0.12.4"
 dashmap = { version = "6.2.1", optional = true }
 tempfile = "3.26.0"
@@ -46,11 +44,27 @@ document-features = { version = "0.2.0", optional = true }
 
 [features]
 default = ["hp-hashmap"]
+## Expose plumbing APIs whose types may change between compatible releases. Pin an exact version when using them.
+unstable = []
 ## Support for signal handlers to cleanup tempfiles when a signal is received.
 signals = ["dep:signal-hook", "dep:signal-hook-registry"]
 ## Use a high-performance concurrent hashmap implementation for optimal performance with less contention if there are many tempfiles opening at the same time.
 ## It also allows to potentially cleanup more tempfiles in a signal handler as the hashmap can be partially locked.
 hp-hashmap = ["dep:dashmap"]
+
+[package.metadata.smart-release]
+api-check = ["etc/scripts/check-api.sh"]
+unstable-features = ["unstable"]
+
+[package.metadata.api-check]
+allowed-unstable-crates = ["gix_error"]
+profiles = [
+    { default-features = false, features = [
+    ] },
+    { default-features = true, features = [
+        "signals",
+    ] },
+]
 
 [target.'cfg(not(windows))'.dependencies]
 libc = { version = "0.2.186", default-features = false }
@@ -63,5 +77,7 @@ all-features = true
 features = ["document-features"]
 
 [dev-dependencies]
+gix-tempfile = { path = ".", default-features = false, features = ["unstable"] }
+gix-fs = { path = "../gix-fs", features = ["unstable"] }
 gix-testtools = { path = "../tests/tools", default-features = false, features = ["sha1"] }
 insta = "1.46.3"
