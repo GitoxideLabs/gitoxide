@@ -2,7 +2,6 @@ use std::{io, sync::atomic::AtomicBool};
 
 use crate::{
     Progress, Remote, Result,
-    bstr::ByteSlice,
     push::{Options, Outcome, Update},
     remote::Direction,
 };
@@ -42,28 +41,7 @@ impl Remote<'_> {
         open.api_config_overrides.clear();
         open.cli_config_overrides.clear();
         let mut destination = crate::open_opts(gix_path::from_bstr(url.path)?.into_owned(), open)?;
-        let namespace = self
-            .command_environment
-            .iter()
-            .rev()
-            .find(|(key, _)| key == "GIT_NAMESPACE")
-            .map(|(_, value)| value.clone())
-            .or_else(|| {
-                self.repo
-                    .options
-                    .permissions
-                    .env
-                    .git_prefix
-                    .check_opt("GIT_NAMESPACE")
-                    .and_then(std::env::var_os)
-            });
-        if let Some(namespace) = namespace {
-            if namespace.is_empty() {
-                destination.clear_namespace();
-            } else {
-                destination.set_namespace(gix_path::os_string_into_bstring(namespace)?.as_bstr())?;
-            }
-        }
+        super::local::apply_namespace(self, &mut destination)?;
         crate::push::local::push(
             self,
             &mut destination,
