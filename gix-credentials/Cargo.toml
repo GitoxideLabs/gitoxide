@@ -39,6 +39,9 @@ percent-encoding = "2.3.1"
 
 document-features = { version = "0.2.1", optional = true }
 
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.4", features = ["event"] }
+
 [dev-dependencies]
 insta = "1.46.3"
 gix-sec = { path = "../gix-sec" }
