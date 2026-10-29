@@ -135,6 +135,8 @@ fn default_object_hash() -> Option<gix_hash::Kind> {
 
 /// Create a new `.git` repository of `kind` within the possibly non-existing `directory`
 /// and return its path.
+/// This uses the built-in templates; [`ThreadSafeRepository::init_opts()`][crate::ThreadSafeRepository::init_opts()]
+/// also supports configured template directories.
 /// Note that this is a simple template-based initialization routine which should be accompanied with additional corrections
 /// to respect git configuration, which is accomplished by [its callers][crate::ThreadSafeRepository::init_opts()]
 /// that return a [Repository][crate::Repository].
@@ -142,7 +144,7 @@ fn default_object_hash() -> Option<gix_hash::Kind> {
 /// in
 /// [metadata](gix_error::Error::metadata()).
 pub fn into(directory: impl Into<PathBuf>, kind: Kind, options: Options) -> Result<gix_discover::repository::Path> {
-    into_with_capabilities(directory, kind, options).map(|(path, _)| path)
+    into_with_capabilities(directory, kind, options, None).map(|(path, _, _)| path)
 }
 
 pub(crate) fn into_with_capabilities(
@@ -153,7 +155,8 @@ pub(crate) fn into_with_capabilities(
         destination_must_be_empty,
         object_hash,
     }: Options,
-) -> Result<(gix_discover::repository::Path, gix_fs::Capabilities)> {
+    template: Option<&Path>,
+) -> Result<(gix_discover::repository::Path, gix_fs::Capabilities, bool)> {
     let mut dot_git = directory.into();
     let bare = matches!(kind, Kind::Bare);
     let object_hash = object_hash.or_else(default_object_hash);
@@ -189,13 +192,85 @@ pub(crate) fn into_with_capabilities(
     }
     create_dir(&dot_git)?;
 
+    // Keep required storage directories from being redirected by template symlinks.
+    for path in ["objects/info", "objects/pack", "refs/heads", "refs/tags"] {
+        create_dir(&dot_git.join(path))?;
+    }
+    let mut config = if let Some(template) = template {
+        copy_template(template, &dot_git, object_hash)?
+    } else {
+        copy_builtin_template(&mut dot_git)?;
+        gix_config::File::default()
+    };
+    let head_path = dot_git.join("HEAD");
+    let created_head = match head_path.symlink_metadata() {
+        Ok(_) => false,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            write_file(TPL_HEAD, &head_path)?;
+            true
+        }
+        Err(err) => return Err(io_error(err, "Could not inspect HEAD", &head_path)),
+    };
+
+    let caps = fs_capabilities.unwrap_or_else(|| gix_fs::Capabilities::probe(&dot_git));
+    config.set_raw_value("core.filemode", bool(caps.executable_bit))?;
+    config.set_raw_value("core.bare", bool(bare))?;
+    if config.string_implicit("core.logallrefupdates").is_none() {
+        config.set_raw_value("core.logallrefupdates", bool(!bare))?;
+    }
+    if !caps.symlink {
+        config.set_raw_value("core.symlinks", bool(false))?;
+    }
+    config.set_raw_value("core.ignorecase", bool(caps.ignore_case))?;
+    config.set_raw_value("core.precomposeunicode", bool(caps.precompose_unicode))?;
+    match object_hash {
+        #[cfg(feature = "sha256")]
+        Some(gix_hash::Kind::Sha256) => {
+            config.set_raw_value("core.repositoryformatversion", "1")?;
+            config.set_raw_value("extensions.objectformat", "sha256")?;
+        }
+        _ => {
+            if let Ok(mut values) = config.raw_values_mut("extensions.objectformat") {
+                values.delete_all();
+            }
+            if config.integer("core.repositoryformatversion")? != Some(1) {
+                config.set_raw_value("core.repositoryformatversion", "0")?;
+            }
+        }
+    }
+    let config_path = dot_git.join("config");
+    let mut config_file =
+        gix_lock::File::acquire_to_update_resource(&config_path, gix_lock::acquire::Fail::Immediately, None, 0)?;
+    config_file
+        .write_all(&config.to_bstring())
+        .map_err(|err| io_error(err, "Could not write data", &config_path))?;
+    config_file.commit().or_error()?;
+
+    Ok((
+        gix_discover::repository::Path::from_dot_git_dir(
+            dot_git,
+            if bare {
+                gix_discover::repository::Kind::PossiblyBare
+            } else {
+                gix_discover::repository::Kind::WorkTree { linked_git_dir: None }
+            },
+            &gix_fs::current_dir(caps.precompose_unicode)
+                .or_raise(|| message("Could not obtain the current directory"))?,
+        )
+        .expect("by now the `dot_git` dir is valid as we have accessed it"),
+        caps,
+        created_head,
+    ))
+}
+
+fn copy_builtin_template(dot_git: &mut PathBuf) -> Result<()> {
     {
-        let mut cursor = NewDir(&mut dot_git).at("info")?;
+        let mut cursor = NewDir(dot_git).at("info")?;
         write_file(TPL_INFO_EXCLUDE, PathCursor(cursor.as_mut()).at("exclude"))?;
     }
 
     {
-        let mut cursor = NewDir(&mut dot_git).at("hooks")?;
+        let mut cursor = NewDir(dot_git).at("hooks")?;
         for (tpl, filename) in &[
             (TPL_HOOKS_DOCS_URL, "docs.url"),
             (TPL_HOOKS_PREPARE_COMMIT_MSG, "prepare-commit-msg.sample"),
@@ -213,80 +288,130 @@ pub(crate) fn into_with_capabilities(
         }
     }
 
-    {
-        let mut cursor = NewDir(&mut dot_git).at("objects")?;
-        create_dir(PathCursor(cursor.as_mut()).at("info"))?;
-        create_dir(PathCursor(cursor.as_mut()).at("pack"))?;
+    write_file(TPL_DESCRIPTION, &dot_git.join("description"))
+}
+
+fn copy_template(template: &Path, destination: &Path, object_hash: Option<gix_hash::Kind>) -> Result<gix_config::File> {
+    if template.as_os_str().is_empty() {
+        return Ok(gix_config::File::default());
     }
-
-    {
-        let mut cursor = NewDir(&mut dot_git).at("refs")?;
-        create_dir(PathCursor(cursor.as_mut()).at("heads"))?;
-        create_dir(PathCursor(cursor.as_mut()).at("tags"))?;
+    let entries = match fs::read_dir(template) {
+        Ok(entries) => entries,
+        Err(_err) => {
+            gix_trace::warn!("Templates not found in '{}': {_err}", template.display());
+            return Ok(gix_config::File::default());
+        }
+    };
+    let config_path = template.join("config");
+    let config = match fs::read(&config_path) {
+        Ok(bytes) => gix_config::File::from_bytes_no_includes(
+            &bytes,
+            gix_config::file::Metadata::from(gix_config::Source::Local).at(destination.join("config")),
+            Default::default(),
+        )?,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => gix_config::File::default(),
+        Err(err) => return Err(io_error(err, "Could not read template configuration", &config_path)),
+    };
+    if let Err(_err) = validate_template_format(&config, object_hash) {
+        gix_trace::warn!("Not copying templates from '{}': {_err:#}", template.display());
+        return Ok(gix_config::File::default());
     }
+    copy_template_entries(entries, destination)?;
+    Ok(config)
+}
 
-    for (tpl, filename) in &[(TPL_HEAD, "HEAD"), (TPL_DESCRIPTION, "description")] {
-        write_file(tpl, PathCursor(&mut dot_git).at(filename))?;
-    }
-
-    let caps = {
-        let (mut config_file, config_path) = {
-            let mut cursor = PathCursor(&mut dot_git);
-            let config_path = cursor.at("config");
-            (
-                fs::File::create(config_path).map_err(|err| io_error(err, "Could not create data", config_path))?,
-                config_path.to_owned(),
-            )
-        };
-        let mut config = gix_config::File::default();
-        let caps = {
-            let caps = fs_capabilities.unwrap_or_else(|| gix_fs::Capabilities::probe(&dot_git));
-            let mut core = config.new_section("core", None).expect("valid section name");
-
-            core.push("filemode", bool(caps.executable_bit))?;
-            core.push("bare", bool(bare))?;
-            core.push("logallrefupdates", bool(!bare))?;
-            if !caps.symlink {
-                core.push("symlinks", bool(false))?;
-            }
-            core.push("ignorecase", bool(caps.ignore_case))?;
-            core.push("precomposeunicode", bool(caps.precompose_unicode))?;
-
-            match object_hash {
-                #[cfg(feature = "sha256")]
-                Some(gix_hash::Kind::Sha256) => {
-                    core.push("repositoryformatversion", "1")?;
-
-                    let mut extensions = config.new_section("extensions", None).expect("valid section name");
-                    extensions.push("objectformat", gix_hash::Kind::Sha256.to_string())?;
-                }
-                _ => {
-                    core.push("repositoryformatversion", "0")?;
-                }
-            }
-
-            caps
-        };
-        config_file
-            .write_all(&config.to_bstring())
-            .map_err(|err| io_error(err, "Could not write data", &config_path))?;
-        caps
+fn validate_template_format(config: &gix_config::File, _object_hash: Option<gix_hash::Kind>) -> Result<()> {
+    use crate::{
+        config::tree::{Core, Extensions},
+        repository::FormatVersion,
     };
 
-    Ok((
-        gix_discover::repository::Path::from_dot_git_dir(
-            dot_git,
-            if bare {
-                gix_discover::repository::Kind::PossiblyBare
+    let version = Core::REPOSITORY_FORMAT_VERSION
+        .try_into_repository_format_version(config.integer(Core::REPOSITORY_FORMAT_VERSION))?;
+    #[cfg(feature = "sha256")]
+    if _object_hash == Some(gix_hash::Kind::Sha256) {
+        version.unwrap_or_default().validate_upgrade_to_v1(config)?;
+    }
+    let Some(version) = version else {
+        return Ok(());
+    };
+    for section in config.sections_by_name("extensions").into_iter().flatten() {
+        for name in section.value_names() {
+            let legacy = ["noop", "preciousobjects", "partialclone", "worktreeconfig"]
+                .iter()
+                .any(|known| name.eq_ignore_ascii_case(known));
+            let v1 = ["noop-v1", "objectformat", "relativeworktrees", "refstorage"]
+                .iter()
+                .any(|known| name.eq_ignore_ascii_case(known));
+            if (version == FormatVersion::V1 && (section.header().subsection_name().is_some() || !(legacy || v1)))
+                || (version == FormatVersion::V0 && v1)
+            {
+                bail!(
+                    message("Unsupported template repository extension")
+                        .with("extension", name)
+                        .unsupported()
+                );
+            }
+        }
+    }
+    if let Some(format) = config.string(Extensions::OBJECT_FORMAT) {
+        Extensions::OBJECT_FORMAT.try_into_object_format(format)?;
+    }
+    if let Some(storage) = config.string("extensions.refStorage")
+        && storage != "files"
+    {
+        bail!(
+            message("Unsupported template reference storage")
+                .with_input(storage)
+                .unsupported()
+        );
+    }
+    Ok(())
+}
+
+fn copy_template_entries(entries: fs::ReadDir, destination: &Path) -> Result<()> {
+    for entry in entries {
+        let entry = entry.map_err(|err| io_error(err, "Could not list template", destination))?;
+        if entry.file_name().as_encoded_bytes().starts_with(b".") {
+            continue;
+        }
+        let source = entry.path();
+        let target = destination.join(entry.file_name());
+        let kind = entry
+            .file_type()
+            .map_err(|err| io_error(err, "Could not inspect template", &source))?;
+        let existing = match target.symlink_metadata() {
+            Ok(metadata) => Some(metadata),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+            Err(err) => return Err(io_error(err, "Could not inspect template destination", &target)),
+        };
+        if kind.is_dir() {
+            if let Some(existing) = existing {
+                if !existing.is_dir() {
+                    bail!(
+                        validation("Template directory conflicts with an existing entry")
+                            .with_input(target.display().to_string())
+                    );
+                }
             } else {
-                gix_discover::repository::Kind::WorkTree { linked_git_dir: None }
-            },
-            &gix_fs::current_dir(caps.precompose_unicode)
-                .or_raise(|| message("Could not obtain the current directory"))?,
-        )
-        .expect("by now the `dot_git` dir is valid as we have accessed it"),
-        caps,
-    ))
+                fs::create_dir(&target).map_err(|err| io_error(err, "Could not create template directory", &target))?;
+            }
+            copy_template_entries(
+                fs::read_dir(&source).map_err(|err| io_error(err, "Could not read template directory", &source))?,
+                &target,
+            )?;
+        } else if existing.is_none() {
+            if kind.is_symlink() {
+                let original =
+                    fs::read_link(&source).map_err(|err| io_error(err, "Could not read template symlink", &source))?;
+                gix_fs::symlink::create(&original, &target)
+                    .map_err(|err| io_error(err, "Could not copy template symlink", &target))?;
+            } else if kind.is_file() {
+                fs::copy(&source, &target).map_err(|err| io_error(err, "Could not copy template file", &target))?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn bool(v: bool) -> &'static str {
