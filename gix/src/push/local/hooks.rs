@@ -20,6 +20,7 @@ pub(super) struct Hooks<'a> {
     push_options: Option<&'a [BString]>,
     interrupt: &'a AtomicBool,
     environment: &'a [(OsString, OsString)],
+    shallow_file: Option<&'a Path>,
 }
 
 impl<'a> Hooks<'a> {
@@ -39,7 +40,13 @@ impl<'a> Hooks<'a> {
             push_options,
             interrupt,
             environment,
+            shallow_file: None,
         })
+    }
+
+    pub fn with_shallow_file(mut self, path: Option<&'a Path>) -> Self {
+        self.shallow_file = path;
+        self
     }
 
     pub fn run(
@@ -98,6 +105,9 @@ impl<'a> Hooks<'a> {
                     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
                     quoted_path(&self.repo.current_dir().join(self.repo.objects.store_ref().path()))?,
                 );
+        }
+        if let Some(path) = self.shallow_file {
+            command.env("GIT_SHALLOW_FILE", self.repo.current_dir().join(path));
         }
         // Push options are passed only to the two receive hooks, as in receive-pack.
         command.env_remove("GIT_PUSH_OPTION_COUNT");
