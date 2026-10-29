@@ -77,6 +77,7 @@ gix-transport = { version = "^0.62.0", path = "../gix-transport" }
 gix-hash = { version = "^0.28.1", path = "../gix-hash" }
 gix-shallow = { version = "^0.15.1", path = "../gix-shallow" }
 gix-date = { version = "^0.18.1", path = "../gix-date" }
+gix-parallel = { version = "^0.50.0", path = "../gix-parallel", default-features = false }
 gix-utils = { version = "^0.5.2", path = "../gix-utils", features = ["progress"] }
 gix-ref = { version = "^0.69.1", path = "../gix-ref" }
 gix-macros = { version = "^0.2.0", path = "../gix-macros" }

@@ -4,6 +4,7 @@ use std::{
 };
 
 use gix_error::{Result, ResultExt, bail, message, validation};
+use gix_parallel::{Mutable, lock};
 use gix_utils::progress::DynNestedProgress;
 
 use crate::fetch::{
@@ -40,6 +41,78 @@ use crate::transport::client::blocking_io::{ExtendedBufRead, HandleProgress, Tra
 pub async fn fetch<P, T>(
     negotiate: &mut impl Negotiate,
     consume_pack: impl FnOnce(&mut dyn std::io::BufRead, &mut dyn DynNestedProgress, &AtomicBool) -> Result<bool>,
+    progress: P,
+    should_interrupt: &AtomicBool,
+    context: Context<'_, T>,
+    options: Options<'_>,
+) -> Result<Option<Outcome>>
+where
+    P: gix_utils::progress::NestedProgress,
+    P::SubProgress: 'static,
+    T: Transport,
+{
+    fetch_with_remote_progress(
+        negotiate,
+        consume_pack,
+        progress,
+        should_interrupt,
+        context,
+        options,
+        |_, _| Ok(()),
+    )
+    .await
+}
+
+/// Like [`fetch()`], additionally passing each raw sideband packet to `remote_progress`.
+///
+/// The callback receives an error flag and the original bytes, before progress parsing.
+/// Packets can contain partial lines, multiple lines, or non-UTF-8 data. A callback error
+/// stops the transfer and is preserved in the returned error, including when reading the
+/// pack fails as a result. Normal structured progress reporting remains active.
+#[crate::bisync::bisync]
+pub async fn fetch_with_remote_progress<P, T>(
+    negotiate: &mut impl Negotiate,
+    consume_pack: impl FnOnce(&mut dyn std::io::BufRead, &mut dyn DynNestedProgress, &AtomicBool) -> Result<bool>,
+    progress: P,
+    should_interrupt: &AtomicBool,
+    context: Context<'_, T>,
+    options: Options<'_>,
+    remote_progress: impl FnMut(bool, &[u8]) -> std::io::Result<()>,
+) -> Result<Option<Outcome>>
+where
+    P: gix_utils::progress::NestedProgress,
+    P::SubProgress: 'static,
+    T: Transport,
+{
+    let state = Mutable::new(RemoteProgress {
+        callback: remote_progress,
+        error: None,
+    });
+    let result = fetch_inner(
+        negotiate,
+        consume_pack,
+        progress,
+        should_interrupt,
+        context,
+        options,
+        &state,
+    )
+    .await;
+    if let Some(error) = lock(&state).error.take() {
+        return Err(error).or_raise(|| message("Remote fetch progress callback failed"));
+    }
+    result
+}
+
+struct RemoteProgress<F> {
+    callback: F,
+    error: Option<std::io::Error>,
+}
+
+#[crate::bisync::bisync]
+async fn fetch_inner<P, T, F>(
+    negotiate: &mut impl Negotiate,
+    consume_pack: impl FnOnce(&mut dyn std::io::BufRead, &mut dyn DynNestedProgress, &AtomicBool) -> Result<bool>,
     mut progress: P,
     should_interrupt: &AtomicBool,
     Context {
@@ -54,11 +127,13 @@ pub async fn fetch<P, T>(
         tags,
         reject_shallow_remote,
     }: Options<'_>,
+    remote_progress: &Mutable<RemoteProgress<F>>,
 ) -> Result<Option<Outcome>>
 where
     P: gix_utils::progress::NestedProgress,
     P::SubProgress: 'static,
     T: Transport,
+    F: FnMut(bool, &[u8]) -> std::io::Result<()>,
 {
     let _span = gix_trace::coarse!("gix_protocol::fetch()");
     let v1_shallow_updates = handshake.v1_shallow_updates.take();
@@ -125,7 +200,7 @@ where
                     .await
                     .or_raise(|| message("Failed to send fetch arguments"))?;
                 if sideband_all {
-                    setup_remote_progress(&mut progress, &mut reader, should_interrupt);
+                    setup_remote_progress(&mut progress, &mut reader, should_interrupt, remote_progress);
                 }
                 let response = crate::fetch::Response::from_line_reader(
                     protocol_version,
@@ -141,7 +216,7 @@ where
                     progress.step();
                     progress.set_name("receiving pack".into());
                     if !sideband_all {
-                        setup_remote_progress(&mut progress, &mut reader, should_interrupt);
+                        setup_remote_progress(&mut progress, &mut reader, should_interrupt, remote_progress);
                     }
                     break 'negotiation reader;
                 }
@@ -283,15 +358,26 @@ fn add_shallow_args(
     Ok((shallow_commits, shallow_lock))
 }
 
-fn setup_remote_progress<'a>(
+fn setup_remote_progress<'a, F: FnMut(bool, &[u8]) -> std::io::Result<()>>(
     progress: &mut dyn gix_utils::progress::DynNestedProgress,
     reader: &mut Box<dyn ExtendedBufRead<'a> + Unpin + 'a>,
     should_interrupt: &'a AtomicBool,
+    callback: &'a Mutable<RemoteProgress<F>>,
 ) {
-    reader.set_progress_handler(Some(Box::new({
+    reader.set_progress_handler_raw(Some(Box::new({
         let mut remote_progress = progress.add_child_with_id("remote".to_string(), ProgressId::RemoteProgress.into());
         move |is_err: bool, data: &[u8]| {
-            crate::RemoteProgress::translate_to_progress(is_err, data, &mut remote_progress);
+            let mut state = lock(callback);
+            if state.error.is_some() {
+                return std::ops::ControlFlow::Break(());
+            }
+            if let Err(error) = (state.callback)(is_err, data) {
+                state.error = Some(error);
+                return std::ops::ControlFlow::Break(());
+            }
+            drop(state);
+            let text = data.strip_suffix(b"\n").unwrap_or(data);
+            crate::RemoteProgress::translate_to_progress(is_err, text, &mut remote_progress);
             if should_interrupt.load(Ordering::Relaxed) {
                 std::ops::ControlFlow::Break(())
             } else {

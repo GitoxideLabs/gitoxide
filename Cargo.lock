@@ -2368,6 +2368,7 @@ dependencies = [
  "gix-negotiate",
  "gix-object",
  "gix-packetline",
+ "gix-parallel",
  "gix-protocol",
  "gix-ref",
  "gix-refspec",

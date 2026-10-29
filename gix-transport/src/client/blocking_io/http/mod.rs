@@ -572,6 +572,10 @@ impl<'a, H: Http, B: ExtendedBufRead<'a> + Unpin> ExtendedBufRead<'a> for Header
         self.body.set_progress_handler(handle_progress);
     }
 
+    fn set_progress_handler_raw(&mut self, handle_progress: Option<HandleProgress<'a>>) {
+        self.body.set_progress_handler_raw(handle_progress);
+    }
+
     fn peek_data_line(&mut self) -> Option<std::io::Result<std::result::Result<&[u8], client::Error>>> {
         if let Err(err) = self.handle_headers() {
             return Some(Err(err));

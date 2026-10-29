@@ -77,8 +77,29 @@ where
         P: gix_utils::progress::NestedProgress,
         P::SubProgress: 'static,
     {
+        self.receive_with_remote_progress(progress, |_, _| Ok(()), should_interrupt)
+            .await
+    }
+
+    /// Like [`Self::receive()`], additionally forwarding unmodified server sideband packets.
+    ///
+    /// `remote_progress(is_error, bytes)` sees bytes before progress parsing, including partial
+    /// lines and non-UTF-8 data. Returning an error stops the transfer and preserves its cause.
+    #[gix_protocol::bisync::bisync]
+    pub async fn receive_with_remote_progress<P>(
+        self,
+        progress: P,
+        remote_progress: impl FnMut(bool, &[u8]) -> std::io::Result<()>,
+        should_interrupt: &AtomicBool,
+    ) -> Result<Outcome>
+    where
+        P: gix_utils::progress::NestedProgress,
+        P::SubProgress: 'static,
+    {
         let Prepare { inner, repo } = self;
-        inner.receive(repo, progress, should_interrupt).await
+        inner
+            .receive_with_remote_progress(repo, progress, remote_progress, should_interrupt)
+            .await
     }
 }
 
@@ -88,9 +109,25 @@ where
 {
     #[gix_protocol::bisync::bisync]
     pub(crate) async fn receive<P>(
+        self,
+        repo: &crate::Repository,
+        progress: P,
+        should_interrupt: &AtomicBool,
+    ) -> Result<Outcome>
+    where
+        P: gix_utils::progress::NestedProgress,
+        P::SubProgress: 'static,
+    {
+        self.receive_with_remote_progress(repo, progress, |_, _| Ok(()), should_interrupt)
+            .await
+    }
+
+    #[gix_protocol::bisync::bisync]
+    pub(crate) async fn receive_with_remote_progress<P>(
         mut self,
         repo: &crate::Repository,
         progress: P,
+        remote_progress: impl FnMut(bool, &[u8]) -> std::io::Result<()>,
         should_interrupt: &AtomicBool,
     ) -> Result<Outcome>
     where
@@ -184,7 +221,7 @@ where
         };
         let mut write_pack_bundle = None;
 
-        let res = gix_protocol::fetch(
+        let res = gix_protocol::fetch_with_remote_progress(
             &mut negotiate,
             |reader, progress, should_interrupt| -> Result<bool> {
                 let mut may_read_to_end = false;
@@ -213,6 +250,7 @@ where
             should_interrupt,
             context,
             fetch_options,
+            remote_progress,
         )
         .await?;
         let negotiate = res.map(|v| outcome::Negotiate {
