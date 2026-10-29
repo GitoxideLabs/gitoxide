@@ -834,3 +834,59 @@ fn native_blobless_fetch_and_explicit_hydration_without_git_in_path() -> TestRes
     );
     Ok(())
 }
+
+#[test]
+fn relative_native_deepening_matches_git_without_git_in_path() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let fixture = gix_testtools::scripted_fixture_read_only("make_native_local_fetch_repo.sh")?.canonicalize()?;
+    let dir = gix_testtools::tempfile::tempdir()?;
+    let local = gix::init_bare(dir.path().join("native"))?;
+    let expected = dir.path().join("git");
+    gix_testtools::git(dir.path(), "init --bare git")?;
+    for (depth, flag) in [
+        (gix::remote::fetch::Shallow::DepthAtRemote(1.try_into()?), "--depth=1"),
+        (gix::remote::fetch::Shallow::Deepen(1), "--deepen=1"),
+        (gix::remote::fetch::Shallow::Deepen(1), "--deepen=1"),
+        (gix::remote::fetch::Shallow::undo(), "--unshallow"),
+    ] {
+        let status = gix_testtools::git_command(&expected)
+            .args(["fetch", "--no-tags", flag])
+            .arg(fixture.join("source"))
+            .arg("+refs/heads/main:refs/remotes/origin/main")
+            .status()?;
+        assert!(status.success(), "Git deepening oracle succeeds");
+        let _guard = gix_testtools::Env::new().set("PATH", dir.path().to_string_lossy());
+        fetch(
+            &local,
+            &fixture.join("source"),
+            gix::remote::fetch::Options {
+                shallow: depth,
+                ..Default::default()
+            },
+        )?;
+        assert_eq!(
+            std::fs::read(local.git_dir().join("shallow")).ok(),
+            std::fs::read(expected.join("shallow")).ok(),
+            "native deepening preserves Git's boundary"
+        );
+        drop(_guard);
+        let tip = local
+            .find_reference("refs/remotes/origin/main")?
+            .into_fully_peeled_id()?;
+        assert_eq!(
+            local.rev_walk([tip]).all()?.count(),
+            String::from_utf8(
+                gix_testtools::git_command(&expected)
+                    .args(["rev-list", "--count", "refs/remotes/origin/main"])
+                    .output()?
+                    .stdout
+            )?
+            .trim()
+            .parse::<usize>()?,
+            "the same commit history becomes reachable"
+        );
+    }
+    Ok(())
+}

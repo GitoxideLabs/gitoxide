@@ -23,7 +23,7 @@ impl Remote<'_> {
     /// neither path runs maintenance. A configured upload-pack command uses the process transport.
     ///
     /// Native local fetch currently supports preserving the shallow boundary and setting an
-    /// absolute depth. Shallow source boundaries are preserved, as with `git fetch --update-shallow`;
+    /// absolute depth or deepening relative to reachable client boundaries. Shallow source boundaries are preserved, as with `git fetch --update-shallow`;
     /// `clone.rejectShallow` can prohibit such sources. Other shallow policies return an error.
     pub fn fetch<P>(
         &self,
@@ -235,9 +235,11 @@ where
     }
     if !matches!(
         options.shallow,
-        fetch::Shallow::NoChange | fetch::Shallow::DepthAtRemote(_)
+        fetch::Shallow::NoChange | fetch::Shallow::DepthAtRemote(_) | fetch::Shallow::Deepen(_)
     ) {
-        bail!(message("Native local fetch supports only unchanged or absolute shallow depths").unsupported());
+        bail!(
+            message("Native local fetch supports only unchanged, absolute, or relative shallow depths").unsupported()
+        );
     }
     let mut destination = remote.repo.clone();
     destination.make_paths_absolute()?;
@@ -436,16 +438,44 @@ fn boundary(
 ) -> Result<(BTreeSet<ObjectId>, BTreeSet<ObjectId>)> {
     let mut boundary = previous.clone();
     let mut traversal = source_shallow.clone();
+    let mut seen = BTreeSet::new();
+    let mut pending: VecDeque<_> = tips.iter().map(|id| (*id, 1u32)).collect();
     let depth = match shallow {
-        fetch::Shallow::NoChange => None,
+        fetch::Shallow::NoChange | fetch::Shallow::Deepen(0) => None,
         fetch::Shallow::DepthAtRemote(depth) => Some(depth.get()),
+        fetch::Shallow::Deepen(_) if previous.is_empty() => None,
+        fetch::Shallow::Deepen(depth) => {
+            let mut frontier = VecDeque::new();
+            let mut buffer = Vec::new();
+            while let Some((object_id, _)) = pending.pop_front() {
+                check_interrupt(interrupt)?;
+                if !seen.insert(object_id) {
+                    continue;
+                }
+                if previous.contains(&object_id) {
+                    frontier.push_back((object_id, 1));
+                    continue;
+                }
+                let data = source.find(&object_id, &mut buffer)?;
+                data.verify_checksum(&object_id)?;
+                if !source_shallow.contains(&object_id) {
+                    for edge in data.references() {
+                        let edge = edge?;
+                        if matches!(edge.kind, Kind::Commit | Kind::Tag) {
+                            pending.push_back((edge.id, 1));
+                        }
+                    }
+                }
+            }
+            seen.clear();
+            pending = frontier;
+            Some(depth.saturating_add(1))
+        }
         _ => unreachable!("validated by caller"),
     };
     if depth.is_none() {
         traversal.extend(previous);
     }
-    let mut seen = BTreeSet::new();
-    let mut pending: VecDeque<_> = tips.iter().map(|id| (*id, 1u32)).collect();
     let mut buffer = Vec::new();
     while let Some((object_id, distance)) = pending.pop_front() {
         check_interrupt(interrupt)?;
