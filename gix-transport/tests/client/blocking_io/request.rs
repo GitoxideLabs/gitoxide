@@ -83,3 +83,52 @@ fn non_send_request_writers_still_support_existing_transports() -> gix_testtools
     );
     Ok(())
 }
+
+#[test]
+fn tcp_request_abort_closes_both_directions() -> gix_testtools::TestResult {
+    use gix_transport::{
+        Protocol, Service,
+        client::blocking_io::{Transport, connect},
+    };
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    let server = std::thread::spawn(move || -> gix_testtools::TestResult {
+        let (mut stream, _) = listener.accept()?;
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(3)))?;
+        let mut packets = StreamingPeekableIter::new(stream.try_clone()?, &[PacketLineRef::Flush], false);
+        let _connect_request = packets.read_line().expect("client connects")??;
+        stream.write_all(b"0000")?;
+        let mut byte = [0u8];
+        assert_eq!(
+            stream.read(&mut byte)?,
+            0,
+            "aborting the request closes the client's write half"
+        );
+        Ok(())
+    });
+    let mut transport = connect::connect(
+        format!("git://{address}/repo"),
+        connect::Options {
+            version: Protocol::V1,
+            ..Default::default()
+        },
+    )?;
+    drop(transport.handshake(Service::ReceivePack, &[])?);
+    let mut request = transport.request(WriteMode::Binary, MessageKind::Flush, false)?;
+    let abort = request
+        .take_abort()
+        .expect("stock TCP transports support aborting incomplete uploads");
+    let (mut writer, mut reader) = request.into_parts_with_send()?;
+    abort()?;
+    assert!(
+        writer.write_all(b"data").is_err(),
+        "the write half stops accepting bytes"
+    );
+    let mut output = Vec::new();
+    assert!(
+        reader.read_to_end(&mut output).is_err(),
+        "the pending packet read is interrupted"
+    );
+    server.join().expect("mock server completes without panicking")?;
+    Ok(())
+}

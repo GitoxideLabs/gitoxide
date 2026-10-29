@@ -11,7 +11,7 @@ mod bufread_ext;
 pub use bufread_ext::{ExtendedBufRead, HandleProgress, ReadlineBufRead};
 
 mod request;
-pub use request::RequestWriter;
+pub use request::{Abort, RequestWriter};
 
 ///
 pub mod ssh;

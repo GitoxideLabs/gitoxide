@@ -336,10 +336,13 @@ impl client::blocking_io::Transport for SpawnProcessOnDemand {
         on_into_read: MessageKind,
         trace: bool,
     ) -> std::result::Result<RequestWriter<'_>, client::Error> {
-        self.connection
+        let child = self.child.as_mut().ok_or(client::Error::MissingHandshake)?;
+        Ok(self
+            .connection
             .as_mut()
             .ok_or(client::Error::MissingHandshake)?
-            .request(write_mode, on_into_read, trace)
+            .request(write_mode, on_into_read, trace)?
+            .with_abort(|| child.kill()))
     }
 }
 

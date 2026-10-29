@@ -25,6 +25,7 @@ pub struct Connection<R, W> {
     pub(in crate::client) writer: W,
     pub(in crate::client) line_provider: StreamingPeekableIter<R>,
     pub(in crate::client) state: ConnectionState,
+    abort: Option<fn(&W) -> std::io::Result<client::blocking_io::Abort<'static>>>,
 }
 
 impl<R, W> Connection<R, W> {
@@ -110,13 +111,18 @@ where
         on_into_read: client::MessageKind,
         trace: bool,
     ) -> std::result::Result<RequestWriter<'_>, client::Error> {
-        Ok(RequestWriter::new_from_bufread_with_send(
+        let abort = self.abort.map(|abort| abort(&self.writer)).transpose()?;
+        let request = RequestWriter::new_from_bufread_with_send(
             &mut self.writer,
             Box::new(self.line_provider.as_read_without_sidebands()),
             write_mode,
             on_into_read,
             trace,
-        ))
+        );
+        Ok(match abort {
+            Some(abort) => request.with_abort(abort),
+            None => request,
+        })
     }
 }
 
@@ -140,6 +146,7 @@ where
         trace: bool,
     ) -> Self {
         Connection {
+            abort: None,
             writer: write,
             line_provider: StreamingPeekableIter::new(read, &[PacketLineRef::Flush], trace),
             state: ConnectionState {
@@ -237,7 +244,7 @@ pub mod connect {
             .map(parse_host)
             .transpose()?
             .unwrap_or_else(|| (virtual_host.to_owned(), port));
-        Ok(Connection::new(
+        let mut connection = Connection::new(
             read,
             write,
             desired_version,
@@ -245,7 +252,12 @@ pub mod connect {
             Some(vhost),
             git::ConnectMode::Daemon,
             trace,
-        ))
+        );
+        connection.abort = Some(|stream| {
+            let stream = stream.try_clone()?;
+            Ok(Box::new(move || stream.shutdown(std::net::Shutdown::Both)))
+        });
+        Ok(connection)
     }
 }
 
