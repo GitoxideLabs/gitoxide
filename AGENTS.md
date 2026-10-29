@@ -204,6 +204,21 @@ Follow "purposeful conventional commits" style:
 
 ## Architecture Decisions
 
+### Temporary stability exemptions
+
+Until `gix` reaches 1.0, stable crates may provisionally support selected types from
+`0.x` plumbing crates. Declare their fully qualified Rust paths in the consuming
+crate's `package.metadata.api-check.allowed-unstable-types` array. A whole-crate
+exception belongs in `allowed-unstable-crates`, using the Rust crate name. Keep these
+exceptions in manifests rather than maintaining a second list in documentation.
+
+Do not gate an API solely because it exposes a declared exception. A type exception
+does not admit other types from the same crate or types exposed by its supported
+fields, methods, bounds, or trait implementations. Gate experimental members with
+`gix_macros::unstable(since = "YYYY-MM-DD")`, using the item's introduction date from Git
+history, even when dependency feature unification makes it public. Keep `reason` optional and
+use it only to explain something beyond the signature or the fact that the API is experimental.
+
 ### Plumbing vs Porcelain
 
 - **Plumbing crates**: Low-level, take references, expose mutable parts as arguments

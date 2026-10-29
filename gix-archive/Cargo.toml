@@ -34,7 +34,7 @@ zip = ["dep:rawzip", "dep:flate2"]
 gix-worktree-stream = { version = "^0.39.0", path = "../gix-worktree-stream" }
 gix-object = { version = "^0.66.1", path = "../gix-object" }
 gix-path = { version = "^0.14.1", path = "../gix-path", optional = true }
-gix-date = { version = "^0.18.1", path = "../gix-date" }
+gix-date = { version = "^0.19.0", path = "../gix-date" }
 
 flate2 = { version = "1.1.9", optional = true, default-features = false, features = ["zlib-rs"] }
 rawzip = { version = "0.4.3", optional = true }

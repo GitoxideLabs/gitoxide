@@ -38,12 +38,14 @@ impl Time {
     /// defined in the [`format`](mod@crate::time::format) submodule.
     ///
     /// Note that this can fail if the timezone isn't valid and the format requires a conversion to [`jiff::Zoned`].
+    #[gix_macros::unstable(since = "2022-08-13")]
     pub fn format(&self, format: impl Into<Format>) -> Result<String, jiff::Error> {
         self.format_inner(format.into())
     }
 
     /// Like [`Self::format()`], but on time conversion error, produce the [UNIX] format instead
     /// to make it infallible.
+    #[gix_macros::unstable(since = "2025-11-03")]
     pub fn format_or_unix(&self, format: impl Into<Format>) -> String {
         self.format_inner(format.into())
             .unwrap_or_else(|_| self.seconds.to_string())
@@ -60,6 +62,7 @@ impl Time {
 
 impl Time {
     /// Produce a `Zoned` time for complex time computations and limitless formatting.
+    #[gix_macros::unstable(since = "2025-11-03")]
     pub fn to_zoned(self) -> Result<jiff::Zoned, jiff::Error> {
         let offset = jiff::tz::Offset::from_seconds(self.offset)?;
         Ok(jiff::Timestamp::from_second(self.seconds)?.to_zoned(offset.to_time_zone()))

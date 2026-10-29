@@ -27,7 +27,14 @@ required-features = ["notes"]
 
 [features]
 
-default = ["max-performance", "comfort", "basic", "extras", "auto-chain-error", "sha1"]
+default = [
+    "max-performance",
+    "comfort",
+    "basic",
+    "extras",
+    "auto-chain-error",
+    "sha1",
+]
 
 #! There are various categories of features which help to optimize performance and build times. `gix` comes with 'batteries included' and everything is
 #! enabled as long as it doesn't sacrifice compatibility. Most users will be fine with that but will pay with higher compile times than necessary as they
@@ -132,7 +139,12 @@ dirwalk = ["dep:gix-dir", "attributes", "excludes"]
 credentials = ["dep:gix-credentials", "dep:gix-prompt", "dep:gix-negotiate"]
 
 ## Add, inspect, update, and remove worktrees.
-worktree-mutation = ["status", "dep:gix-worktree-state", "gix-worktree/add", "gix-worktree/remove"]
+worktree-mutation = [
+    "status",
+    "dep:gix-worktree-state",
+    "gix-worktree/add",
+    "gix-worktree/remove",
+]
 
 ## Retrieve a worktree stack for querying exclude information
 excludes = ["dep:gix-ignore", "dep:gix-worktree", "index"]
@@ -337,9 +349,15 @@ progress-tree = ["prodash/progress-tree"]
 cache-efficiency-debug = ["gix-utils/cache-efficiency-debug"]
 
 [dependencies]
-gix-parallel = { version = "^0.50.1", path = "../gix-parallel", features = ["once_cell"] }
+gix-parallel = { version = "^0.50.1", path = "../gix-parallel", features = [
+    "once_cell",
+] }
 gix-error = { version = "^0.5.2", path = "../gix-error", features = ["bstr"] }
-gix-utils = { version = "^0.5.2", path = "../gix-utils", features = ["bstr", "interrupt", "progress"] }
+gix-utils = { version = "^0.5.2", path = "../gix-utils", features = [
+    "bstr",
+    "interrupt",
+    "progress",
+] }
 gix-fs = { version = "^0.24.1", path = "../gix-fs" }
 gix-ref = { version = "^0.69.1", path = "../gix-ref" }
 gix-discover = { version = "^0.57.1", path = "../gix-discover" }
@@ -347,7 +365,7 @@ gix-tempfile = { version = "^26.0.0", path = "../gix-tempfile", default-features
 gix-lock = { version = "^26.0.0", path = "../gix-lock" }
 gix-validate = { version = "^0.13.1", path = "../gix-validate" }
 gix-sec = { version = "^0.16.1", path = "../gix-sec" }
-gix-date = { version = "^0.18.1", path = "../gix-date" }
+gix-date = { version = "^0.19.0", path = "../gix-date" }
 gix-refspec = { version = "^0.47.1", path = "../gix-refspec" }
 gix-filter = { version = "^0.36.1", path = "../gix-filter", optional = true }
 gix-dir = { version = "^0.32.0", path = "../gix-dir", optional = true }
@@ -358,7 +376,7 @@ gix-zlib = { version = "^0.4.0", path = "../gix-zlib" }
 gix-hash = { version = "^0.28.1", path = "../gix-hash" }
 gix-shallow = { version = "^0.15.1", path = "../gix-shallow" }
 gix-object = { version = "^0.66.1", path = "../gix-object" }
-gix-actor = { version = "^0.44.1", path = "../gix-actor" }
+gix-actor = { version = "^0.45.0", path = "../gix-actor" }
 gix-pack = { version = "^0.77.0", path = "../gix-pack", default-features = false, features = [
     "object-cache-dynamic",
 ] }
@@ -426,7 +444,8 @@ document-features = { version = "0.2.0", optional = true }
 
 [dev-dependencies]
 gix = { path = ".", default-features = false, features = [
-    "merge", "tree-error"
+    "merge",
+    "tree-error",
 ] }
 gix-hash = { version = "^0.28.1", path = "../gix-hash" }
 gix-pack = { version = "^0.77.0", path = "../gix-pack", default-features = false, features = [

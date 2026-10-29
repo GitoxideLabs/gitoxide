@@ -27,7 +27,7 @@ gix-quote = { version = "^0.10.1", path = "../gix-quote" }
 gix-command = { version = "^0.12.1", path = "../gix-command" }
 gix-config-value = { version = "^0.21.1", path = "../gix-config-value" }
 gix-prompt = { version = "^0.19.1", path = "../gix-prompt" }
-gix-date = { version = "^0.18.1", path = "../gix-date" }
+gix-date = { version = "^0.19.0", path = "../gix-date" }
 gix-trace = { version = "^0.3.1", path = "../gix-trace" }
 
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }

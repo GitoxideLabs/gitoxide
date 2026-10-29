@@ -44,8 +44,8 @@ serde = [
 gix-hash = { version = "^0.28.1", path = "../gix-hash" }
 gix-hashtable = { version = "^0.18.1", path = "../gix-hashtable" }
 gix-validate = { version = "^0.13.1", path = "../gix-validate" }
-gix-actor = { version = "^0.44.1", path = "../gix-actor" }
-gix-date = { version = "^0.18.1", path = "../gix-date" }
+gix-actor = { version = "^0.45.0", path = "../gix-actor" }
+gix-date = { version = "^0.19.0", path = "../gix-date" }
 gix-utils = { version = "^0.5.2", path = "../gix-utils", features = ["progress"] }
 gix-command = { version = "^0.12.1", path = "../gix-command", optional = true }
 gix-path = { version = "^0.14.1", path = "../gix-path", optional = true }

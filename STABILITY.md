@@ -99,14 +99,47 @@ Released plumbing crates are marked with major version number 1 or above, for ex
 
 *These crates may not expose parts of unstable crates in their supported public API*.
 
+Until `gix` reaches 1.0, a stable crate may provisionally support selected types from
+`0.x` plumbing crates. Its Cargo manifest is the source of truth for these exceptions:
+
+```toml
+[package.metadata.api-check]
+allowed-unstable-types = ["experimental_plumbing::BasicType"]
+# Reserve whole-crate exceptions for APIs intentionally supported in their entirety.
+allowed-unstable-crates = []
+```
+
+Use fully qualified Rust type paths, without generic arguments, and Rust crate names
+with underscores. An exception applies to the named type, not its entire crate. An API
+does not require the enclosing crate's `unstable` feature solely because it exposes
+a declared exception. Other types exposed by supported fields, variants, methods,
+associated types, bounds, and trait implementations still need their own assessment.
+
+This exception permits exposure; it does not establish compatibility across breaking
+dependency releases. Compatible `0.x` dependency updates remain allowed. Incompatible
+updates that change a supported public API or exposed type identity still require
+a breaking release of the affected crate; release API checks must retain those checks.
+Establish compatibility commitments for the exempt APIs before releasing `gix` 1.0.
+
 A crate may offer additional experimental APIs behind a non-default `unstable` feature. These APIs are excluded
 from its compatibility guarantee; consumers using them must pin an exact version. `gix_macros::unstable` keeps
 annotated items available within the crate while exposing them publicly only with this feature enabled.
-Use a bare `#[gix_macros::unstable]` gate for self-explanatory exclusions; add a nonempty `reason = "..."`
-only when the rationale is not obvious. The reason, when supplied, is included in the enabled API's documentation.
+Every gate requires `#[gix_macros::unstable(since = "YYYY-MM-DD")]`. Use the item's introduction date
+from Git history, following renames when necessary. The date must be a valid calendar date and is
+included in experimental documentation. Usually the date is sufficient; add a nonempty `reason = "..."`
+only when it explains something beyond the signature or the fact that the item is not stabilized.
 
 Stable release checks cover the supported feature profiles declared in `package.metadata.api-check.profiles`, excluding
 features listed in `package.metadata.smart-release.unstable-features`.
+
+`check-api boundary path/to/Cargo.toml` checks these profiles against the manifest's
+exceptions. Direct checks inspect the consuming crate's API and the stability of its
+referenced dependency types. Set `package.metadata.api-check.recursive = true` to
+also follow the supported members of reachable plumbing types; this is enabled for
+the porcelain crate. Experimental members are excluded using the documentation
+markers emitted by `gix_macros::unstable`, regardless of whether feature unification
+made them public. Dependency rustdoc is generated with the features resolved for each
+consumer profile. These boundary checks supplement release compatibility checks.
 
 Breaking changes are collected and may be released no more often than every 4 weeks by incrementing the major version number.
 

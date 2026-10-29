@@ -1623,13 +1623,15 @@ dependencies = [
 
 [[package]]
 name = "gix-actor"
-version = "0.44.1"
+version = "0.45.0"
 dependencies = [
  "bstr",
  "document-features",
+ "gix-actor",
  "gix-date",
  "gix-error",
  "gix-hash",
+ "gix-macros",
  "gix-testtools",
  "insta",
  "pretty_assertions",
@@ -1818,12 +1820,14 @@ dependencies = [
 
 [[package]]
 name = "gix-date"
-version = "0.18.1"
+version = "0.19.0"
 dependencies = [
  "bstr",
  "document-features",
+ "gix-date",
  "gix-error",
  "gix-hash",
+ "gix-macros",
  "gix-testtools",
  "insta",
  "itoa",
@@ -2000,6 +2004,7 @@ dependencies = [
  "faster-hex",
  "gix-error",
  "gix-hash",
+ "gix-macros",
  "gix-testtools",
  "gix-utils",
  "insta",

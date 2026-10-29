@@ -30,6 +30,9 @@ required-features = ["signals"]
 doctest = true
 test = true
 
+[package.metadata.api-check]
+allowed-unstable-crates = ["gix_error"]
+
 [dependencies]
 gix-fs = { version = "^0.24.1", path = "../gix-fs" }
 parking_lot = "0.12.4"

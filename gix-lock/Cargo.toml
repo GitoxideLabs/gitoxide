@@ -15,6 +15,9 @@ rust-version = "1.88"
 doctest = true
 test = true
 
+[package.metadata.api-check]
+allowed-unstable-crates = ["gix_error"]
+
 [dependencies]
 gix-error = { version = "^0.5.2", path = "../gix-error" }
 gix-fs = { version = "^0.24.1", path = "../gix-fs" }
