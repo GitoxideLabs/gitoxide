@@ -8,7 +8,7 @@ use alloc::{borrow::Cow, boxed::Box, rc::Rc, vec, vec::Vec};
 use core::{cell::Cell, fmt, mem};
 
 use crate::{
-    compile::Token,
+    compile::{Dialect, Token},
     ctype,
     tree::{NodeId, Tree},
 };
@@ -62,10 +62,12 @@ impl core::error::Error for Error {}
 ///
 /// Matching selects the earliest starting position and the longest complete match there.
 /// When complete matches have equal lengths, alternatives retain their pattern order and
-/// repetitions are greedy. Matching is fallible and always subject to resource limits.
+/// repetitions are greedy. Darwin instead prefers the longest group alternative at each repetition.
+/// Matching is fallible and always subject to resource limits.
 #[derive(Clone, Debug)]
 pub struct PosixRegex<'a> {
     tree: Cow<'a, Tree>,
+    dialect: Dialect,
     case_insensitive: bool,
     newline: bool,
     no_start: bool,
@@ -76,7 +78,7 @@ pub struct PosixRegex<'a> {
 
 impl<'a> PosixRegex<'a> {
     /// Only the parser can construct a matcher, preserving validated tree and depth invariants.
-    pub(crate) fn new(tree: Cow<'a, Tree>) -> Self {
+    pub(crate) fn new(tree: Cow<'a, Tree>, dialect: Dialect) -> Self {
         let groups = 1 + tree
             .arena
             .iter()
@@ -84,6 +86,7 @@ impl<'a> PosixRegex<'a> {
             .count();
         Self {
             tree,
+            dialect,
             case_insensitive: false,
             newline: false,
             no_start: false,
@@ -340,6 +343,11 @@ impl<'a, 'pattern> Search<'a, 'pattern> {
         if let Token::Group(id) = *token {
             let start = state.offset;
             let mut result = self.alternatives(node, &state)?;
+            if self.regex.dialect == Dialect::Darwin && result.len() > 1 {
+                self.budget
+                    .step(result.len().saturating_mul(result.len().ilog2() as usize + 1))?;
+                result.sort_by_key(|state| core::cmp::Reverse(state.offset));
+            }
             for state in &mut result {
                 state.captures[id] = Some((start, state.offset));
             }

@@ -86,6 +86,11 @@ fn parser_acceptance_and_captures_agree_with_git() -> TestResult {
         let extended = std::fs::read_to_string(case.join("syntax"))? == "xfuncname";
         let valid = std::fs::read_to_string(case.join("status"))? == "valid";
         let result = PosixRegexBuilder::new(&pattern)
+            .dialect(if cfg!(target_os = "macos") {
+                gix_regex::Dialect::Darwin
+            } else {
+                gix_regex::Dialect::Gnu
+            })
             .with_default_classes()
             .extended(extended)
             .compile();
