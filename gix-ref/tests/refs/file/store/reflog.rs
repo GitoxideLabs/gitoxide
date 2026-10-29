@@ -123,3 +123,90 @@ mod iter_rev {
         Ok(())
     }
 }
+
+mod retain {
+    use gix_testtools::TestResult;
+    use std::fs;
+
+    #[test]
+    fn filtering_matches_git_expiry_and_preserves_reference_values() -> TestResult {
+        let mut expected = None;
+        for use_git in [true, false] {
+            let fixture = gix_testtools::scripted_fixture_writable("make_reflog_retention.sh")?;
+            let git_dir = fixture.path().join(".git");
+            let path = git_dir.join("logs/refs/heads/main");
+            let original = fs::read(&path)?;
+            let reference = fs::read(git_dir.join("refs/heads/main"))?;
+            if use_git {
+                gix_testtools::git(
+                    fixture.path(),
+                    "reflog expire --expire=@1009843200 --expire-unreachable=never refs/heads/main",
+                )?;
+                expected = Some(fs::read(&path)?);
+            } else {
+                let store = gix_ref::file::Store::at(git_dir.clone(), gix_testtools::object_hash());
+                let select =
+                    |line: gix_ref::file::log::LineRef<'_>| Ok(line.signature.time()?.seconds >= 1_009_843_200);
+                let outcome = store.reflog_retain(
+                    "refs/heads/main",
+                    gix_ref::file::log::retain::Options { dry_run: true },
+                    select,
+                )?;
+                assert_eq!((outcome.retained, outcome.removed), (1, 2));
+                assert_eq!(fs::read(&path)?, original, "dry run does not rewrite the log");
+                let outcome = store.reflog_retain("refs/heads/main", Default::default(), select)?;
+                assert_eq!((outcome.retained, outcome.removed), (1, 2));
+                assert_eq!(
+                    fs::read(&path)?,
+                    expected.as_deref().expect("Git ran first"),
+                    "retained entries match Git byte for byte"
+                );
+            }
+            assert_eq!(
+                fs::read(git_dir.join("refs/heads/main"))?,
+                reference,
+                "filtering does not update the reference"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn locks_and_callback_errors_preserve_the_original_log() -> TestResult {
+        let fixture = gix_testtools::scripted_fixture_writable("make_reflog_retention.sh")?;
+        let git_dir = fixture.path().join(".git");
+        let store = gix_ref::file::Store::at(git_dir.clone(), gix_testtools::object_hash());
+        let path = git_dir.join("logs/refs/heads/main");
+        let original = fs::read(&path)?;
+        for name in ["refs/heads/main.lock", "logs/refs/heads/main.lock"] {
+            let lock = git_dir.join(name);
+            fs::write(&lock, b"another writer")?;
+            store
+                .reflog_retain("refs/heads/main", Default::default(), |_| Ok(false))
+                .expect_err("reference and log locks exclude rewrites");
+            assert_eq!(fs::read(&path)?, original);
+            fs::remove_file(lock)?;
+        }
+        let mut count = 0;
+        store
+            .reflog_retain("refs/heads/main", Default::default(), |_| {
+                count += 1;
+                if count == 2 {
+                    return Err(gix_error::message("callback failed").validation_error());
+                }
+                Ok(false)
+            })
+            .expect_err("callback failure must not publish partial output");
+        assert_eq!(fs::read(&path)?, original);
+        let mut malformed = original.clone();
+        malformed.extend_from_slice(b"invalid log entry\n");
+        fs::write(&path, &malformed)?;
+        store
+            .reflog_retain("refs/heads/main", Default::default(), |_| Ok(false))
+            .expect_err("malformed logs must not publish partial output");
+        assert_eq!(fs::read(&path)?, malformed);
+        assert!(!git_dir.join("refs/heads/main.lock").exists());
+        assert!(!git_dir.join("logs/refs/heads/main.lock").exists());
+        Ok(())
+    }
+}
