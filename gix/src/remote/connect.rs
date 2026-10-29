@@ -55,6 +55,7 @@ impl<'repo> Remote<'repo> {
         };
         let options = connect::Options {
             version,
+            working_dir: None,
             #[cfg(feature = "blocking-network-client")]
             ssh: scheme_is_ssh
                 .then(|| self.ssh_connect_options())

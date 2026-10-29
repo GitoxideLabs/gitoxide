@@ -38,6 +38,9 @@ pub(crate) mod connect {
     pub struct Options {
         /// Use `version` to set the desired protocol version to use when connecting, but note that the server may downgrade it.
         pub version: crate::Protocol,
+        /// Run transport commands in this directory, resolving relative local URLs and commands there.
+        /// Defaults to the process working directory. Ignored by transports that do not launch commands.
+        pub working_dir: Option<std::path::PathBuf>,
         #[cfg(feature = "blocking-client")]
         /// Options to use if the scheme of the URL is `ssh`.
         pub ssh: crate::client::blocking_io::ssh::connect::Options,
