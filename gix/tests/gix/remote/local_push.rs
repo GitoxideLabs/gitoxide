@@ -5,6 +5,7 @@ use gix::{
     push::{Lease, Options, Outcome, Rejection, Status, Update},
 };
 use gix_testtools::TestResult;
+use gix::error::ErrorExt;
 
 fn update(name: &str, new_id: Option<ObjectId>) -> TestResult<Update> {
     Ok(Update {
@@ -305,3 +306,39 @@ mod shallow;
 #[cfg(unix)]
 #[path = "push_to_checkout.rs"]
 mod checkout_hook;
+
+#[test]
+fn sender_hook_observes_planned_updates_and_can_abort_before_transfer() -> TestResult {
+    let repo = crate::remote::repo("base");
+    let destination = gix_testtools::tempfile::tempdir()?;
+    gix::init_bare(destination.path())?;
+    let tip_id = repo.head_id()?.detach();
+    let hook = |updates: &[gix::push::UpdateOutcome]| -> gix::Result<()> {
+        assert_eq!(updates.len(), 1, "hook sees the requested update");
+        assert_eq!(updates[0].old_id, None, "new destination is absent");
+        assert_eq!(updates[0].update.new_id, Some(tip_id), "hook sees the source");
+        assert!(
+            matches!(updates[0].status, Status::WouldUpdate { .. }),
+            "planning precedes the hook"
+        );
+        Err(gix::error::message("sender hook rejection").raise())
+    };
+    let result = push(
+        &repo,
+        destination.path(),
+        vec![update("refs/heads/topic", Some(tip_id))?],
+        Options {
+            pre_push_hook: Some(&hook),
+            ..Default::default()
+        },
+    );
+    assert!(result.is_err(), "hook rejection aborts publication");
+    assert_eq!(
+        read_id(destination.path(), "refs/heads/topic")?,
+        None,
+        "receiver refs remain unchanged"
+    );
+    let receiver = gix::open_opts(destination.path(), gix::open::Options::isolated())?;
+    assert!(!receiver.has_object(tip_id), "hook rejection precedes object transfer");
+    Ok(())
+}
