@@ -25,7 +25,7 @@ impl State {
                 let client = match self.running.remove(process) {
                     Some(c) => c,
                     None => {
-                        let (child, cmd) = spawn_driver(process.clone(), &self.context)?;
+                        let (child, cmd) = spawn_driver(process.clone(), &self.context, &self.environment)?;
                         use gix_error::{ResultExt, message};
                         process::Client::handshake(child, "git-filter", &[2], &["clean", "smudge", "delay"]).or_raise(
                             || {
@@ -65,24 +65,31 @@ impl State {
                     None => return Ok(None),
                 };
 
-                let (child, command) = spawn_driver(cmd, &self.context)?;
+                let (child, command) = spawn_driver(cmd, &self.context, &self.environment)?;
                 Ok(Some(Process::SingleFile { child, command }))
             }
         }
     }
 }
 
-fn spawn_driver(cmd: BString, context: &gix_command::Context) -> Result<(std::process::Child, std::process::Command)> {
-    let mut cmd: std::process::Command = gix_command::prepare(gix_path::from_bstr(cmd)?.into_owned())
+fn spawn_driver(
+    cmd: BString,
+    context: &gix_command::Context,
+    environment: &[(std::ffi::OsString, std::ffi::OsString)],
+) -> Result<(std::process::Child, std::process::Command)> {
+    let mut prepared = gix_command::prepare(gix_path::from_bstr(cmd)?.into_owned())
         .command_may_be_shell_script()
         .with_context(context.clone())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .try_into()?;
-    if let Some(worktree_dir) = &context.worktree_dir {
-        cmd.current_dir(worktree_dir);
+        .stderr(Stdio::inherit());
+    for (key, value) in environment {
+        prepared = prepared.env(key, value);
     }
+    if let Some(worktree_dir) = &context.worktree_dir {
+        prepared = prepared.current_dir(worktree_dir);
+    }
+    let mut cmd: std::process::Command = prepared.try_into()?;
     gix_trace::debug!(cmd = ?cmd, "launching filter driver");
     use gix_error::ResultExt;
     let child = cmd
