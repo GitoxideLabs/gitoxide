@@ -66,7 +66,7 @@ pub(crate) mod function {
     /// the context encoding `options` and your own helper implementation.
     pub fn main<CredentialsFn>(
         args: impl IntoIterator<Item = OsString>,
-        mut stdin: impl std::io::Read,
+        stdin: impl std::io::Read,
         stdout: impl std::io::Write,
         options: ContextOptions,
         credentials: CredentialsFn,
@@ -79,8 +79,7 @@ pub(crate) mod function {
             .next()
             .ok_or_raise(|| validation("The first argument must be the action to perform"))?;
         let action = Action::try_from(action)?;
-        let mut buf = Vec::<u8>::with_capacity(512);
-        stdin.read_to_end(&mut buf).or_error()?;
+        let buf = crate::protocol::read(std::io::BufReader::new(stdin)).or_error()?;
         let ctx = Context::from_bytes(&buf, options)?;
         if ctx.url.is_none() && (ctx.protocol.is_none() || ctx.host.is_none()) {
             bail!(validation(
