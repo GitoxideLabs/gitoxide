@@ -10,10 +10,17 @@ use gix_error::{OptionExt, ResultExt, bail, validation};
 /// surrounded by double quotes, common control bytes use their named escape, and all remaining
 /// non-printable or non-ASCII bytes use three-digit octal escapes.
 pub fn quote(input: &BStr) -> Cow<'_, BStr> {
-    if input
-        .iter()
-        .all(|byte| matches!(byte, b' '..=b'~') && !matches!(byte, b'"' | b'\\'))
-    {
+    quote_with(input, true)
+}
+
+/// Quote `input` using Git's C-style quotation rules and the given `core.quotePath` setting.
+///
+/// With `quote_high_bytes` disabled, bytes greater than 127 are passed through unchanged.
+/// ASCII control characters, backslashes and double quotes are always escaped.
+pub fn quote_with(input: &BStr, quote_high_bytes: bool) -> Cow<'_, BStr> {
+    if input.iter().all(|byte| {
+        (!quote_high_bytes && *byte >= 128) || (matches!(byte, b' '..=b'~') && !matches!(byte, b'"' | b'\\'))
+    }) {
         return Cow::Borrowed(input);
     }
 
@@ -31,6 +38,7 @@ pub fn quote(input: &BStr) -> Cow<'_, BStr> {
             b'"' => out.extend_from_slice(br#"\""#),
             b'\\' => out.extend_from_slice(br"\\"),
             b' '..=b'~' => out.push(byte),
+            128..=255 if !quote_high_bytes => out.push(byte),
             byte => {
                 out.push(b'\\');
                 out.push(b'0' + ((byte >> 6) & 0b11));
