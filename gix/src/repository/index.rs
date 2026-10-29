@@ -208,6 +208,30 @@ impl crate::Repository {
             self.index_path(),
         ))
     }
+
+    /// Create an in-memory index from `tree`, reusing worktree metadata from `previous`.
+    ///
+    /// Unchanged entries retain non-racy stat and assume-valid flags. Skip-worktree marks are retained by path,
+    /// including descendants of sparse directories, without reevaluating sparse-checkout patterns.
+    /// This does not write the index or modify `previous`; see [`gix_index::State::from_tree_with_index()`]
+    /// for the cache reuse and validation rules.
+    pub fn index_from_tree_with_index(
+        &self,
+        tree: &gix_hash::oid,
+        previous: &gix_index::State,
+    ) -> Result<gix_index::File> {
+        Ok(gix_index::File::from_state(
+            gix_index::State::from_tree_with_index(
+                tree,
+                self,
+                self.config.protect_options()?,
+                previous,
+                self.stat_options()?,
+            )
+            .or_raise(|| gix_error::message!("Could not create index from tree at {tree}"))?,
+            self.index_path(),
+        ))
+    }
 }
 
 impl std::ops::Deref for IndexPersistedOrInMemory {

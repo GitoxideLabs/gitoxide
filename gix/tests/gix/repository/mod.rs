@@ -126,6 +126,36 @@ mod index {
     use gix_testtools::TestResult;
 
     #[test]
+    fn tree_constructor_reuses_index_metadata_without_writing() -> TestResult {
+        let repo = crate::basic_repo()?;
+        let before = std::fs::read(repo.index_path())?;
+        let mut previous = repo.open_index()?;
+        for entry in previous.entries_mut() {
+            entry.stat.mtime.secs = 1;
+            entry.flags |= gix::index::entry::Flags::ASSUME_VALID;
+        }
+        let index = repo.index_from_tree_with_index(&repo.head_tree_id()?, &previous)?;
+        assert_eq!(
+            index.path(),
+            repo.index_path(),
+            "the new index uses the repository's index path"
+        );
+        for (entry, previous) in index.entries().iter().zip(previous.entries()) {
+            assert_eq!(
+                entry.stat, previous.stat,
+                "the constructor reuses unchanged, non-racy stat"
+            );
+            assert_eq!(entry.flags, previous.flags, "unchanged files retain assume-valid");
+        }
+        assert_eq!(
+            std::fs::read(repo.index_path())?,
+            before,
+            "construction only changes memory"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn missing_shared_index_is_an_error() -> TestResult {
         let (repo, _tmp) = crate::basic_rw_repo()?;
         let workdir = repo.workdir().expect("the fixture has a worktree");
