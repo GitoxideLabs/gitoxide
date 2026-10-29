@@ -180,15 +180,38 @@ pub fn connect_with_environment(
     trace: bool,
     environment: &[(std::ffi::OsString, std::ffi::OsString)],
 ) -> Result<SpawnProcessOnDemand, Error> {
+    connect_with_environment_and_working_dir(url, desired_version, options, trace, environment, None)
+}
+
+#[expect(
+    clippy::result_large_err,
+    reason = "will be removed once gix-error is used consistently"
+)]
+pub(crate) fn connect_with_environment_and_working_dir(
+    url: Url,
+    desired_version: Protocol,
+    options: connect::Options,
+    trace: bool,
+    environment: &[(std::ffi::OsString, std::ffi::OsString)],
+    working_dir: Option<&std::path::Path>,
+) -> Result<SpawnProcessOnDemand, Error> {
     if url.scheme != gix_url::Scheme::Ssh || url.host().is_none() {
         return Err(Error::UnsupportedScheme(url));
     }
     let ssh_cmd = options.ssh_command();
-    let kind = determine_client_kind(options.kind, ssh_cmd, &url, options.disallow_shell, environment)?;
+    let kind = determine_client_kind(
+        options.kind,
+        ssh_cmd,
+        &url,
+        options.disallow_shell,
+        environment,
+        working_dir,
+    )?;
     let path = gix_url::expand_path::for_shell(url.path.clone());
     Ok(
         SpawnProcessOnDemand::new_ssh(url, ssh_cmd, path, kind, options.disallow_shell, desired_version, trace)
-            .with_environment(environment),
+            .with_environment(environment)
+            .with_working_dir(working_dir.map(std::path::Path::to_owned)),
     )
 }
 
@@ -202,10 +225,11 @@ fn determine_client_kind(
     url: &Url,
     disallow_shell: bool,
     environment: &[(std::ffi::OsString, std::ffi::OsString)],
+    working_dir: Option<&std::path::Path>,
 ) -> Result<ProgramKind, Error> {
     let mut kind = known_kind.unwrap_or_else(|| ProgramKind::from(ssh_cmd));
     if known_kind.is_none() && kind == ProgramKind::Simple {
-        let mut cmd = build_client_feature_check_command(ssh_cmd, url, disallow_shell, environment)?;
+        let mut cmd = build_client_feature_check_command(ssh_cmd, url, disallow_shell, environment, working_dir)?;
         gix_trace::debug!(cmd = ?cmd, "invoking `ssh` for feature check");
         kind = if cmd.status().ok().is_some_and(|status| status.success()) {
             ProgramKind::Ssh
@@ -225,6 +249,7 @@ fn build_client_feature_check_command(
     url: &Url,
     disallow_shell: bool,
     environment: &[(std::ffi::OsString, std::ffi::OsString)],
+    working_dir: Option<&std::path::Path>,
 ) -> Result<Command, Error> {
     let mut prepare = gix_command::prepare(ssh_cmd)
         .stderr(Stdio::null())
@@ -241,6 +266,7 @@ fn build_client_feature_check_command(
         prepare.use_shell = false;
     }
     prepare.env.extend_from_slice(environment);
+    prepare.current_dir = working_dir.map(std::path::Path::to_owned);
     prepare.try_into().map_err(Error::PrepareCommand)
 }
 

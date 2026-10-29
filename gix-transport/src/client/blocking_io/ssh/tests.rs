@@ -59,7 +59,7 @@ mod build_client_feature_check_command {
             ("[fe80::1%Eth0]:p", "fe80::1%Eth0"),
         ] {
             let url = gix_url::parse(input)?;
-            let cmd = build_client_feature_check_command(OsStr::new("ssh"), &url, true, &[])?;
+            let cmd = build_client_feature_check_command(OsStr::new("ssh"), &url, true, &[], None)?;
             assert_eq!(
                 cmd.get_args().collect::<Vec<_>>(),
                 [OsStr::new("-G"), OsStr::new(host)],
@@ -73,7 +73,7 @@ mod build_client_feature_check_command {
     fn bracketed_option_like_hosts_are_rejected_even_with_user() -> gix_error::TestResult {
         for input in ["ssh://[-arg]/p", "ssh://user@[-arg]/p", "[-arg]:p"] {
             let url = gix_url::parse(input)?;
-            let failure = build_client_feature_check_command(OsStr::new("ssh"), &url, true, &[])
+            let failure = build_client_feature_check_command(OsStr::new("ssh"), &url, true, &[], None)
                 .expect_err("brackets and a user must not hide an option from the bare-host probe");
             assert!(
                 matches!(failure, ssh::Error::AmbiguousHostName { host } if host == "-arg"),
@@ -83,7 +83,7 @@ mod build_client_feature_check_command {
         for input in ["ssh://host/p", "ssh://user@host/p"] {
             let mut url = gix_url::parse(input)?;
             url.host = Some("[-arg]".into());
-            let failure = build_client_feature_check_command(OsStr::new("ssh"), &url, true, &[])
+            let failure = build_client_feature_check_command(OsStr::new("ssh"), &url, true, &[], None)
                 .expect_err("manually assigned brackets must not bypass host validation");
             assert!(
                 matches!(failure, ssh::Error::AmbiguousHostName { host } if host == "-arg"),

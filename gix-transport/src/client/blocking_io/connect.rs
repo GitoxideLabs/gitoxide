@@ -42,6 +42,12 @@ pub(crate) mod function {
         E: std::error::Error + Send + Sync + 'static,
     {
         let mut url = url.try_into().or_raise(|| message("Could not parse URL"))?;
+        let mut options = options;
+        options.working_dir = options
+            .working_dir
+            .map(std::path::absolute)
+            .transpose()
+            .or_raise(|| message("Could not resolve the transport working directory"))?;
         Ok(match url.scheme {
             gix_url::Scheme::Ext | gix_url::Scheme::Helper(_) | gix_url::Scheme::HelperUrl(_) => {
                 bail!("The '{}' protocol is currently unsupported".unsupported(), url.scheme);
@@ -57,16 +63,18 @@ pub(crate) mod function {
                 Box::new(
                     crate::client::blocking_io::file::connect(url.path, options.version, options.trace)
                         .or_raise(|| message("connection failed"))?
-                        .with_environment(environment),
+                        .with_environment(environment)
+                        .with_working_dir(options.working_dir),
                 )
             }
             gix_url::Scheme::Ssh => Box::new({
-                crate::client::blocking_io::ssh::connect_with_environment(
+                crate::client::blocking_io::ssh::connect_with_environment_and_working_dir(
                     url,
                     options.version,
                     options.ssh,
                     options.trace,
                     environment,
+                    options.working_dir.as_deref(),
                 )
                 .or_raise(|| message("connection failed"))?
             }),
