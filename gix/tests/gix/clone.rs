@@ -27,6 +27,99 @@ mod blocking_io {
     const EXISTING_HEAD_CONTENT: &[u8] = b"ref: refs/heads/pre-existing\n";
 
     #[test]
+    fn native_local_clone_matches_git_without_git_executable() -> TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let fixture = gix_testtools::scripted_fixture_read_only("make_native_local_fetch_repo.sh")?.canonicalize()?;
+        let root = gix_testtools::tempfile::tempdir()?;
+        for (name, bare, depth, source) in [
+            ("worktree", false, None, "source"),
+            ("bare", true, None, "source"),
+            ("shallow", false, Some(2), "source"),
+            ("empty", false, None, "empty"),
+        ] {
+            let expected_path = root.path().join(format!("git-{name}"));
+            let native_path = root.path().join(format!("native-{name}"));
+            let mut command = gix_testtools::git_command(root.path());
+            command.args(["clone", "--no-local", "--origin=upstream"]);
+            if bare {
+                command.arg("--bare");
+            }
+            if let Some(depth) = depth {
+                command.arg(format!("--depth={depth}"));
+            }
+            let output = command.arg(fixture.join(source)).arg(&expected_path).output()?;
+            assert!(output.status.success(), "{name}: {}", output.stderr.as_bstr());
+            let native = {
+                let _environment = gix_testtools::Env::new()
+                    .set("PATH", root.path().to_string_lossy())
+                    .set("GIT_EXEC_PATH", root.path().to_string_lossy());
+                let mut prepare = gix::clone::PrepareFetch::new(
+                    fixture.join(source),
+                    &native_path,
+                    if bare {
+                        gix::create::Kind::Bare
+                    } else {
+                        gix::create::Kind::WithWorktree
+                    },
+                    Default::default(),
+                    gix::open::Options::isolated(),
+                )?
+                .with_remote_name("upstream")?;
+                if let Some(depth) = depth {
+                    prepare = prepare.with_shallow(Shallow::DepthAtRemote(depth.try_into()?));
+                }
+                if bare {
+                    prepare.fetch_only(gix::progress::Discard, &AtomicBool::default())?.0
+                } else {
+                    prepare
+                        .fetch_then_checkout(gix::progress::Discard, &AtomicBool::default())?
+                        .0
+                        .main_worktree(gix::progress::Discard, &AtomicBool::default())?
+                        .0
+                }
+            };
+            let expected = gix::open_opts(&expected_path, gix::open::Options::isolated())?;
+            assert_eq!(
+                std::fs::read(native.git_dir().join("HEAD"))?,
+                std::fs::read(expected.git_dir().join("HEAD"))?,
+                "{name}: clone selects the same HEAD"
+            );
+            let references = |repo: &gix::Repository| -> TestResult<Vec<(String, gix_ref::Target)>> {
+                let mut refs = repo
+                    .references()?
+                    .all()?
+                    .map(|reference| {
+                        let reference = reference?;
+                        Ok((reference.name().as_bstr().to_string(), reference.target().into_owned()))
+                    })
+                    .collect::<gix::Result<Vec<_>>>()?;
+                refs.sort_by(|left, right| left.0.cmp(&right.0));
+                Ok(refs)
+            };
+            assert_eq!(
+                references(&native)?,
+                references(&expected)?,
+                "{name}: branch, tag and remote HEAD layout"
+            );
+            assert_eq!(
+                std::fs::read(native.git_dir().join("shallow")).ok(),
+                std::fs::read(expected.git_dir().join("shallow")).ok(),
+                "{name}: shallow boundaries"
+            );
+            if !bare {
+                assert_eq!(
+                    std::fs::read(native_path.join("file")).ok(),
+                    std::fs::read(expected_path.join("file")).ok()
+                );
+            }
+            gix_testtools::git(native.git_dir(), "fsck --strict --no-reflogs")?;
+        }
+        Ok(())
+    }
+
+    #[test]
     #[serial_test::serial]
     fn inherited_core_symlinks_false_is_respected() -> TestResult {
         let _environment = gix_testtools::isolate_git_environment()?;
@@ -331,7 +424,6 @@ mod blocking_io {
             shallow_ids(&repo, "present")?,
             sorted([
                 hex_to_id("2d9d136fb0765f2e24c44a0f91984318d580d03b"),
-                hex_to_id("dfd0954dabef3b64f458321ef15571cc1a46d552"),
                 hex_to_id("dfd0954dabef3b64f458321ef15571cc1a46d552"),
             ])
         );
@@ -1345,7 +1437,9 @@ mod blocking_io {
                 gix::create::Kind::WithWorktree,
                 Default::default(),
                 restricted().config_overrides(Some(format!("protocol.version={}", version as u8))),
-            )?;
+            )?
+            // Exercise the protocol's unborn-ref capability, including V0's absence of it.
+            .configure_connection(|_| Ok(()));
             let (mut checkout, out) = prepare.fetch_then_checkout(gix::progress::Discard, &AtomicBool::default())?;
             let (repo, _) = checkout.main_worktree(gix::progress::Discard, &AtomicBool::default())?;
 
