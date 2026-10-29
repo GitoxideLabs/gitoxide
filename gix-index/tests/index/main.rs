@@ -11,6 +11,7 @@ mod file;
 mod fs;
 mod fuzzed;
 mod init;
+mod tree;
 
 static SHA1_TO_SHA256_HASHES: std::sync::LazyLock<std::collections::HashMap<&str, &str>> =
     std::sync::LazyLock::new(|| {

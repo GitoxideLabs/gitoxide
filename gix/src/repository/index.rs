@@ -198,6 +198,22 @@ impl crate::Repository {
         })
     }
 
+    /// Write `index` as trees and return the root tree ID, without changing the index or worktree.
+    ///
+    /// Like `git write-tree`, unmerged entries and missing non-gitlink objects are rejected, while
+    /// intent-to-add entries are omitted and sparse directories are reused. Repository path protection
+    /// applies. See [`gix_index::State::write_tree()`] for validation and cache behavior.
+    pub fn write_index_tree(&self, index: &gix_index::State) -> Result<crate::Id<'_>> {
+        use crate::error::{ensure, validation};
+        use crate::prelude::ObjectIdExt;
+
+        ensure!(
+            index.object_hash() == self.object_hash(),
+            validation("Index and repository must use the same object hash")
+        );
+        Ok(index.write_tree(self, self.config.protect_options()?)?.attach(self))
+    }
+
     /// Create new index-file, which would live at the correct location, in memory from the given `tree`.
     ///
     /// Note that this is an expensive operation as it requires recursively traversing the entire tree to unpack it into the index.
