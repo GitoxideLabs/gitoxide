@@ -26,6 +26,8 @@ mod update;
 pub use update::{Lease, Options, Outcome, Rejection, Status, Update, UpdateOutcome};
 #[cfg(feature = "blocking-network-client")]
 pub(crate) mod plan;
+#[cfg(feature = "blocking-network-client")]
+pub(crate) mod tracking;
 
 #[cfg(feature = "blocking-network-client")]
 pub(crate) mod local;
