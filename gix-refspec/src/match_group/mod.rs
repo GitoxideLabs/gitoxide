@@ -38,7 +38,29 @@ impl<'spec> MatchGroup<'spec> {
     // TODO: figure out how to deal with push-specs, probably when push is being implemented.
     pub fn match_lhs<'item>(
         self,
+        items: impl Iterator<Item = Item<'item>> + Clone,
+    ) -> match_lhs::Outcome<'spec, 'item> {
+        self.match_lhs_inner(items, false)
+    }
+
+    /// Map source names to destinations literally, apart from glob captures.
+    ///
+    /// Unlike [`Self::match_lhs()`], this does not expand partial names, match object IDs, or emit
+    /// synthetic object mappings. Source and destination spelling is preserved, including names
+    /// resembling object IDs. This is suitable for mapping push destinations through fetch refspecs
+    /// to their tracking references. Negative specs still exclude source names, and mappings retain
+    /// refspec order, with duplicate source/destination pairs omitted.
+    pub fn match_lhs_literal<'item>(
+        self,
+        items: impl Iterator<Item = Item<'item>> + Clone,
+    ) -> match_lhs::Outcome<'spec, 'item> {
+        self.match_lhs_inner(items, true)
+    }
+
+    fn match_lhs_inner<'item>(
+        self,
         mut items: impl Iterator<Item = Item<'item>> + Clone,
+        literal: bool,
     ) -> match_lhs::Outcome<'spec, 'item> {
         let mut out = Vec::new();
         let mut seen = BTreeSet::default();
@@ -51,7 +73,13 @@ impl<'spec> MatchGroup<'spec> {
             .specs
             .iter()
             .copied()
-            .map(Matcher::from)
+            .map(|spec| {
+                if literal {
+                    Matcher::for_literal_mapping(spec)
+                } else {
+                    Matcher::from(spec)
+                }
+            })
             .enumerate()
             .map(|(idx, m)| match m.lhs {
                 Some(Needle::Object(id)) => {
@@ -141,7 +169,7 @@ impl<'spec> MatchGroup<'spec> {
                 out.push(mapping);
             }
         };
-        let mut matchers: Vec<Matcher<'_>> = self.specs.iter().copied().map(Matcher::for_reverse_mapping).collect();
+        let mut matchers: Vec<Matcher<'_>> = self.specs.iter().copied().map(Matcher::for_literal_mapping).collect();
 
         let mut has_negation = false;
         for (spec_index, (spec, matcher)) in self.specs.iter().zip(matchers.iter_mut()).enumerate() {
