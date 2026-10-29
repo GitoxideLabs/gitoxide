@@ -1,5 +1,8 @@
 use gix_error::Result;
-use std::{collections::BTreeMap, num::NonZeroU32};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroU32,
+};
 
 use gix_diff::{blob::TokenSource, tree::Visit};
 use gix_error::{ErrorExt, OptionExt, ResultExt, message};
@@ -107,6 +110,8 @@ pub fn file(
     )?;
 
     let mut previous_origins = BTreeMap::new();
+    let mut ignored_lines = BTreeSet::new();
+    let mut unblamable_lines = BTreeSet::new();
     if let Some(previous) = previous {
         previous_origins.insert((previous.commit_id.kind().null(), None), previous);
     }
@@ -119,6 +124,8 @@ pub fn file(
             statistics: stats,
             blame_path: None,
             previous_origins,
+            ignored_lines,
+            unblamable_lines,
         });
     }
 
@@ -251,6 +258,13 @@ pub fn file(
                 .collect();
 
             for hunk in hunks_to_blame.iter() {
+                if hunk
+                    .range_in_blamed_file
+                    .clone()
+                    .any(|line| ignored_lines.contains(&line))
+                {
+                    continue;
+                }
                 if let Some(range_in_suspect) = hunk.get_range(&suspect) {
                     let range_in_blamed_file = hunk.range_in_blamed_file.clone();
 
@@ -291,6 +305,8 @@ pub fn file(
         }
 
         let mut previous_origin = None;
+        let mut ignored_parents = Vec::new();
+        let ignore_revision = options.ignored_revisions.contains(&suspect);
         let more_than_one_parent = parent_ids.len() > 1;
         for (index, (parent_id, parent_commit_time)) in parent_ids.iter().enumerate() {
             queue.insert(*parent_commit_time, *parent_id);
@@ -362,6 +378,14 @@ pub fn file(
                         options.diff_algorithm,
                         &mut stats,
                     )?;
+                    if ignore_revision {
+                        ignored_parents.push(IgnoredParent {
+                            commit_id: *parent_id,
+                            blob_id: previous_id,
+                            file_path: current_file_path.clone(),
+                            changes: changes.clone(),
+                        });
+                    }
                     hunks_to_blame = process_changes(hunks_to_blame, changes.clone(), suspect, *parent_id);
                     if let Some(ref mut blame_path) = blame_path {
                         let has_blame_been_passed = hunks_to_blame.iter().any(|hunk| hunk.has_suspect(parent_id));
@@ -399,6 +423,14 @@ pub fn file(
                         options.diff_algorithm,
                         &mut stats,
                     )?;
+                    if ignore_revision {
+                        ignored_parents.push(IgnoredParent {
+                            commit_id: *parent_id,
+                            blob_id: source_id,
+                            file_path: source_location.clone(),
+                            changes: changes.clone(),
+                        });
+                    }
                     hunks_to_blame = process_changes(hunks_to_blame, changes, suspect, *parent_id);
 
                     let mut has_blame_been_passed = false;
@@ -423,6 +455,37 @@ pub fn file(
                         blame_path.push(blame_path_entry);
                     }
                 }
+            }
+        }
+
+        if !ignored_parents.is_empty() {
+            let new = diffable_blob(
+                &odb,
+                resource_cache,
+                entry_id,
+                entry_mode.kind(),
+                current_file_path.as_ref(),
+            )?;
+            for parent in ignored_parents {
+                let old = diffable_blob(
+                    &odb,
+                    resource_cache,
+                    parent.blob_id,
+                    entry_mode.kind(),
+                    parent.file_path.as_ref(),
+                )?;
+                let source_file_name = (parent.file_path != file_path).then_some(parent.file_path);
+                hunks_to_blame = super::ignore::pass_blame(
+                    hunks_to_blame,
+                    suspect,
+                    parent.commit_id,
+                    source_file_name,
+                    &old,
+                    &new,
+                    &parent.changes,
+                    &mut ignored_lines,
+                    &mut unblamable_lines,
+                );
             }
         }
 
@@ -463,6 +526,8 @@ pub fn file(
         statistics: stats,
         blame_path,
         previous_origins,
+        ignored_lines,
+        unblamable_lines,
     })
 }
 
@@ -542,6 +607,13 @@ fn coalesce_blame_entries(lines_blamed: Vec<BlameEntry>) -> Vec<BlameEntry> {
                 acc
             }
         })
+}
+
+struct IgnoredParent {
+    commit_id: ObjectId,
+    blob_id: ObjectId,
+    file_path: BString,
+    changes: Vec<Change>,
 }
 
 /// The union of [`gix_diff::tree::recorder::Change`] and [`gix_diff::tree_with_rewrites::Change`],

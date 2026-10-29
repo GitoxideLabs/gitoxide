@@ -91,6 +91,8 @@ pub mod attributes;
 #[cfg(feature = "blame")]
 mod blame;
 #[cfg(feature = "blame")]
+mod blame_ignore;
+#[cfg(feature = "blame")]
 mod blame_worktree;
 /// Local branch operations.
 pub mod branch;
@@ -178,5 +180,9 @@ pub mod blame_file {
         /// Apply configured textconv drivers to committed blobs. Disabled by default.
         /// Supplied contents must already be converted to the same text representation.
         pub textconv: bool,
+        /// Revisions whose changes should be attributed to surrounding commits, when possible.
+        /// `None` loads `blame.ignoreRevsFile`; `Some(Vec::new())` disables configured exclusions.
+        /// Explicit IDs must resolve to commits, possibly through annotated tags.
+        pub ignored_revisions: Option<Vec<gix_hash::ObjectId>>,
     }
 }
