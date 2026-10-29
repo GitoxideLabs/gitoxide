@@ -151,6 +151,7 @@ where
             reflog_message: None,
             write_packed_refs: WritePackedRefs::Never,
             shallow: Default::default(),
+            filter: None,
             prune: false,
             missing_refs_allowed: false,
         })
@@ -210,6 +211,7 @@ where
     reflog_message: Option<RefLogMessage>,
     write_packed_refs: WritePackedRefs,
     shallow: remote::fetch::Shallow,
+    filter: Option<remote::fetch::Filter>,
     prune: bool,
     missing_refs_allowed: bool,
 }
@@ -258,6 +260,12 @@ where
     /// Set the reflog message to use when updating refs after fetching a pack.
     pub fn with_reflog_message(mut self, reflog_message: RefLogMessage) -> Self {
         self.inner.reflog_message = reflog_message.into();
+        self
+    }
+
+    /// Select objects for a partial fetch and mark received packs as promisor packs.
+    pub fn with_filter(mut self, filter: Option<remote::fetch::Filter>) -> Self {
+        self.inner.filter = filter;
         self
     }
 

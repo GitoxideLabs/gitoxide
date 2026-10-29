@@ -127,6 +127,7 @@ async fn fetch_inner<P, T, F>(
         shared_repository_permissions,
         shallow,
         tags,
+        filter,
         reject_shallow_remote,
     }: Options<'_>,
     remote_progress: &Mutable<RemoteProgress<F>>,
@@ -152,6 +153,12 @@ where
     let sideband_all = fetch_features.iter().any(|(n, _)| *n == "sideband-all");
     let no_done = fetch_features.iter().any(|(n, _)| *n == "no-done");
     let mut arguments = Arguments::new(protocol_version, fetch_features, trace_packetlines);
+    if let Some(filter) = filter {
+        if !arguments.can_use_filter() {
+            bail!(gix_error::unsupported("Server does not support object filtering"));
+        }
+        arguments.filter(filter.as_str());
+    }
     if matches!(tags, Tags::Included) {
         if !arguments.can_use_include_tag() {
             bail!(gix_error::unsupported(
