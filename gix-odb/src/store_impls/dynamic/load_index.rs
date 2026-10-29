@@ -773,6 +773,7 @@ impl super::Store {
                             types::IndexAndPacks::Index(bundle) => handle::SingleOrMultiIndex::Single {
                                 index: bundle.index.loaded()?.clone(),
                                 data: bundle.data.loaded().cloned(),
+                                retained: false,
                             },
                             types::IndexAndPacks::MultiIndex(multi) => handle::SingleOrMultiIndex::Multi {
                                 index: multi.multi_index.loaded()?.clone(),
@@ -786,6 +787,7 @@ impl super::Store {
                                             .map(|pack| (pack.id, idx as gix_pack::multi_index::PackIndex))
                                     })
                                     .collect(),
+                                retained: vec![false; multi.data.len()],
                             },
                         };
                         handle::IndexLookup {

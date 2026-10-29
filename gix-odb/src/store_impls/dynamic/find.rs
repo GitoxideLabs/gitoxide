@@ -98,6 +98,7 @@ where
                         index_file,
                         pack: possibly_pack,
                         pack_id_to_index,
+                        retained,
                         slot,
                         slot_id,
                     }) = index.lookup(id)?
@@ -149,7 +150,8 @@ where
                             },
                             pack_cache,
                         );
-                        if matches!(self.token.as_ref(), Some(handle::Mode::KeepDeletedPacksAvailable)) {
+                        if matches!(self.token.as_ref(), Some(handle::Mode::KeepDeletedPacksAvailable)) && !*retained {
+                            *retained = true;
                             let pack = Arc::clone(pack_arc);
                             self.retain_pack(index, pack_index, pack);
                         }
@@ -393,6 +395,7 @@ where
                         index_file,
                         pack: possibly_pack,
                         pack_id_to_index,
+                        retained,
                         slot,
                         slot_id,
                     }) = index.lookup(id)?
@@ -447,8 +450,11 @@ where
                             pack_offset,
                             entry_size: entry.header_size() + entry_size_past_header,
                         };
-                        let pack = Arc::clone(pack);
-                        self.retain_pack(index, pack_index, pack);
+                        if !*retained {
+                            *retained = true;
+                            let pack = Arc::clone(pack);
+                            self.retain_pack(index, pack_index, pack);
+                        }
 
                         if idx != 0 {
                             snapshot.indices.swap(0, idx);
@@ -610,6 +616,65 @@ mod tests {
                     result.expect("a local pack lookup does not wait for shared retention"),
                     Some(expected.clone()),
                     "the local snapshot supplies the correct bytes for parent and cloned handles"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn warm_stable_lookups_do_not_lock_retention() -> gix_error::TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only_needs_archive("make_repo_multi_index.sh")?;
+        let objects_dir = fixture.join(".git/objects");
+        let multi_index = gix_pack::multi_index::File::at(objects_dir.join("pack/multi-pack-index"), None)?;
+        let object_id = multi_index
+            .iter()
+            .next()
+            .expect("the fixture contains packed objects")?
+            .oid;
+
+        for use_multi_pack_index in [false, true] {
+            let store = Arc::new(crate::Store::at_opts(
+                objects_dir.clone(),
+                multi_index.object_hash(),
+                &mut std::iter::empty(),
+                crate::store::init::Options {
+                    use_multi_pack_index,
+                    ..Default::default()
+                },
+            )?);
+            let mut parent = store.to_handle_arc();
+            parent.prevent_pack_unload();
+            for handle in [parent.clone(), parent] {
+                let location = handle
+                    .location_by_oid(&object_id, &mut Vec::new())?
+                    .expect("the stable handle locates the fixture object");
+                let retained = Arc::clone(&handle.retained_indices);
+                let lock = retained.lock();
+                let (sender, receiver) = std::sync::mpsc::channel();
+                let worker = std::thread::spawn(move || {
+                    let mut buffer = Vec::new();
+                    let found = Find::try_find(&handle, &object_id, &mut buffer)
+                        .expect("warm lookup succeeds")
+                        .expect("the packed object is available")
+                        .1
+                        .expect("the object has a pack location");
+                    assert_eq!(found, location, "a warm object lookup preserves the pack location");
+                    assert_eq!(
+                        handle
+                            .location_by_oid(&object_id, &mut buffer)
+                            .expect("warm location lookup succeeds"),
+                        Some(location),
+                        "a warm location lookup preserves the pack location"
+                    );
+                    sender.send(()).expect("the test waits for both warm lookups");
+                });
+                let completed = receiver.recv_timeout(std::time::Duration::from_secs(5));
+                drop(lock);
+                worker.join().expect("the lookup worker does not panic");
+                assert!(
+                    completed.is_ok(),
+                    "warm lookups finish while another worker holds the retention lock"
                 );
             }
         }
