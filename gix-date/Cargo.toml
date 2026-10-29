@@ -15,10 +15,15 @@ rust-version = "1.88"
 doctest = true
 
 [features]
+# Preserve the existing API while the crate itself is still pre-1.0.
+default = ["unstable"]
+## Expose experimental members of provisionally supported time types.
+unstable = []
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = ["dep:serde", "bstr/serde"]
 
 [dependencies]
+gix-macros = { version = "^0.2.0", path = "../gix-macros" }
 gix-error = { version = "^0.5.2", path = "../gix-error" }
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
@@ -28,6 +33,7 @@ jiff = "0.2.25"
 document-features = { version = "0.2.0", optional = true }
 
 [dev-dependencies]
+gix-date = { path = ".", features = ["unstable"] }
 insta = "1.46.3"
 gix-hash = { path = "../gix-hash" }
 gix-testtools = { path = "../tests/tools", default-features = false, features = ["sha1"] }

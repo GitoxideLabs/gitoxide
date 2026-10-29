@@ -16,7 +16,10 @@ doctest = true
 test = false
 
 [features]
-default = []
+# Preserve the existing API while the crate itself is still pre-1.0.
+default = ["unstable"]
+## Expose experimental members of provisionally supported hash types.
+unstable = []
 ## Support for SHA1 hashes and digests.
 sha1 = ["dep:sha1dc"]
 ## Support for SHA256 hashes and digests.
@@ -27,6 +30,7 @@ serde = ["dep:serde", "faster-hex/serde"]
 bstr = ["dep:bstr"]
 
 [dependencies]
+gix-macros = { version = "^0.2.0", path = "../gix-macros" }
 gix-utils = { version = "^0.5.2", path = "../gix-utils", features = ["progress"] }
 gix-error = { version = "^0.5.2", path = "../gix-error" }
 
@@ -40,7 +44,7 @@ document-features = { version = "0.2.0", optional = true }
 
 [dev-dependencies]
 insta = "1.46.3"
-gix-hash = { path = ".", features = ["sha1", "sha256", "bstr"] }
+gix-hash = { path = ".", features = ["unstable", "sha1", "sha256", "bstr"] }
 gix-testtools = { path = "../tests/tools", default-features = false }
 
 [package.metadata.docs.rs]
