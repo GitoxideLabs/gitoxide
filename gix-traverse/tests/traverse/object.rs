@@ -110,10 +110,16 @@ fn missing_objects_can_be_skipped_without_hiding_corruption() -> gix_error::Test
     let finder = Without { db: &db, missing };
     let mut tips = vec![missing, missing];
     tips.extend(ids(&root.join("tips"))?);
-    let actual = BreadthFirst::new(tips, &finder)
-        .with_missing_objects_ignored(true)
+    let mut traversal = BreadthFirst::new(tips, &finder).with_missing_objects_ignored(true);
+    let actual = traversal
+        .by_ref()
         .map(|entry| entry.map(|entry| entry.id))
         .collect::<gix_error::Result<std::collections::BTreeSet<_>>>()?;
+    assert_eq!(
+        traversal.missing_objects().copied().collect::<Vec<_>>(),
+        [missing],
+        "missing IDs are exposed once for use as graph boundaries"
+    );
     let mut expected: std::collections::BTreeSet<_> = ids(&root.join("reachable"))?.into_iter().collect();
     expected.remove(&missing);
     assert_eq!(
@@ -157,5 +163,24 @@ fn metadata_validation_can_be_delegated_without_ignoring_connectivity() -> gix_e
         .with_object_validation(false)
         .collect::<gix_error::Result<Vec<_>>>()
         .expect_err("missing objects are still rejected");
+    Ok(())
+}
+
+#[test]
+fn excluded_objects_are_not_read_or_followed() -> gix_error::TestResult {
+    let root = gix_testtools::scripted_fixture_read_only("make_object_graph.sh")?;
+    let db = gix_odb::at(root.join(".git/objects"), gix_testtools::object_hash())?;
+    let tip = ids(&root.join("tip"))?[0];
+    let blob = ids(&root.join("blob"))?[0];
+    let missing = gix_testtools::object_hash().null();
+    let actual = BreadthFirst::new([tip, missing, blob], &db)
+        .with_objects_excluded([tip, missing])
+        .map(|entry| entry.map(|entry| entry.id))
+        .collect::<gix_error::Result<Vec<_>>>()?;
+    assert_eq!(
+        actual,
+        [blob],
+        "excluded graphs are skipped before reading, but their children remain reachable through other paths"
+    );
     Ok(())
 }

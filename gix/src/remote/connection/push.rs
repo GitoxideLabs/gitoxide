@@ -132,6 +132,12 @@ impl<T: Transport> Connection<'_, '_, '_, T> {
             .filter(|command| !command.new_id.is_null())
             .map(|command| command.new_id)
             .collect();
+        let advertised = push::plan::advertised_objects(
+            &repo,
+            handshake.refs.as_deref().unwrap_or_default(),
+            &shallow,
+            should_interrupt,
+        )?;
         let pack_shallow = shallow.clone();
         // The receive-pack exchange closes this transport; a second automatic flush is invalid.
         self.transport.prevent_flush_on_drop();
@@ -139,7 +145,10 @@ impl<T: Transport> Connection<'_, '_, '_, T> {
             &mut self.transport.inner,
             move |output| {
                 let mut object_ids = Vec::new();
-                for entry in gix_traverse::object::BreadthFirst::new(tips, &repo).with_shallow_commits(pack_shallow) {
+                for entry in gix_traverse::object::BreadthFirst::new(tips, &repo)
+                    .with_objects_excluded(advertised)
+                    .with_shallow_commits(pack_shallow)
+                {
                     push::plan::check_interrupt(should_interrupt)?;
                     object_ids.push(entry?.id);
                 }
