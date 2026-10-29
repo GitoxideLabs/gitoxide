@@ -254,3 +254,41 @@ fn shell_arguments_match_git() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn child_directory_is_anchored_during_preparation() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let root = gix_testtools::scripted_fixture_read_only("shell-arguments.sh")?.canonicalize()?;
+    let _cwd = gix_testtools::set_current_dir(&root)?;
+    let script = "test -f .git/config && printf matched";
+    let mut command = std::process::Command::try_from(
+        gix_command::prepare(script)
+            .command_may_be_shell_script()
+            .current_dir("repo"),
+    )?;
+    let _moved = gix_testtools::set_current_dir(root.join("repo/.git"))?;
+    assert_eq!(
+        command.get_current_dir(),
+        Some(root.join("repo").as_path()),
+        "relative child directories are captured before the parent moves"
+    );
+    let actual = command.output()?;
+    let expected = gix_testtools::git_command(root.join("repo"))
+        .args(["-c", &format!("alias.inspect=!{script}"), "inspect"])
+        .output()?;
+    assert!(
+        actual.status.success() && expected.status.success(),
+        "both commands run from the selected repository"
+    );
+    assert_eq!(
+        actual.stdout, expected.stdout,
+        "child-directory shell execution matches Git -C"
+    );
+    assert_eq!(
+        actual.stdout, b"matched",
+        "the shell can read the repository config from its working directory"
+    );
+    Ok(())
+}
