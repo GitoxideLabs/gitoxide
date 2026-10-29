@@ -66,6 +66,27 @@ impl Cache {
                 }
             };
 
+            // Both keys set the same property, so their relative position matters.
+            if let Some(key) = section
+                .value_names()
+                .filter(|key| key.eq_ignore_ascii_case("funcname") || key.eq_ignore_ascii_case("xfuncname"))
+                .last()
+            {
+                let pattern = section.value(&key).ok_or_else(|| {
+                    gix_error::message!("Missing value for 'diff.{}.{key}'", driver.name).validation_error()
+                })?;
+                driver.hunk_header = Some(gix_diff::blob::hunk_header::Definition {
+                    pattern,
+                    options: gix_diff::blob::hunk_header::Options {
+                        syntax: if key.eq_ignore_ascii_case("xfuncname") {
+                            gix_diff::blob::hunk_header::Syntax::Extended
+                        } else {
+                            gix_diff::blob::hunk_header::Syntax::Basic
+                        },
+                        case_insensitive: false,
+                    },
+                });
+            }
             if let Some(binary) = section.value_implicit("binary") {
                 driver.is_binary = config::tree::Diff::DRIVER_BINARY
                     .try_into_binary(binary)

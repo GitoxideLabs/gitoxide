@@ -42,6 +42,13 @@ impl Diff {
     pub const DRIVER_BINARY: Binary = Binary::new_with_validate("binary", &config::Tree::DIFF, validate::Binary)
         .with_subsection_requirement(Some(SubSectionRequirement::Parameter("driver")));
 
+    /// The `diff.<driver>.funcname` key, using POSIX basic regular expressions.
+    pub const DRIVER_FUNCNAME: keys::String = keys::String::new_string("funcname", &config::Tree::DIFF)
+        .with_subsection_requirement(Some(SubSectionRequirement::Parameter("driver")));
+    /// The `diff.<driver>.xfuncname` key, using POSIX extended regular expressions.
+    pub const DRIVER_XFUNCNAME: keys::String = keys::String::new_string("xfuncname", &config::Tree::DIFF)
+        .with_subsection_requirement(Some(SubSectionRequirement::Parameter("driver")));
+
     /// The `diff.external` key.
     pub const EXTERNAL: keys::Program =
         keys::Program::new_program("external", &config::Tree::DIFF).with_environment_override("GIT_EXTERNAL_DIFF");
@@ -62,6 +69,8 @@ impl Section for Diff {
             &Self::DRIVER_TEXTCONV,
             &Self::DRIVER_ALGORITHM,
             &Self::DRIVER_BINARY,
+            &Self::DRIVER_FUNCNAME,
+            &Self::DRIVER_XFUNCNAME,
             &Self::EXTERNAL,
         ]
     }
