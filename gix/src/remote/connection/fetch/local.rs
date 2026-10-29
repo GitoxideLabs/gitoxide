@@ -294,7 +294,7 @@ fn boundary(
                     if !destination.objects.exists(&object_id) || previous.contains(&object_id) {
                         boundary.insert(object_id);
                     }
-                } else if depth == Some(distance) && !parents.is_empty() {
+                } else if depth == Some(distance) {
                     boundary.insert(object_id);
                     traversal.insert(object_id);
                 } else if depth.is_none() && previous.contains(&object_id) {

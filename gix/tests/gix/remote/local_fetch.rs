@@ -88,7 +88,7 @@ fn native_fetch_depth_and_unshallow_match_git_without_git_in_path() -> TestResul
     }
     let local = repo(dir.path().join("native"))?;
     let expected = dir.path().join("git");
-    for depth in [Some(1), Some(2), None, Some(i32::MAX as u32)] {
+    for depth in [Some(1), Some(2), None, Some(4), Some(i32::MAX as u32)] {
         let mut command = gix_testtools::git_command(&expected);
         command.args(["fetch", "--no-tags", "--no-write-fetch-head"]);
         if let Some(depth) = depth {
