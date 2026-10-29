@@ -14,7 +14,11 @@ include = ["/src/**/*", "/LICENSE-*", "/README.md"]
 [dependencies]
 gix-error = { version = "^0.5.2", path = "../gix-error", features = ["bstr"] }
 gix-command = { version = "^0.12.1", path = "../gix-command" }
+gix-path = { version = "^0.14.1", path = "../gix-path" }
 gix-sec = { version = "^0.16.1", path = "../gix-sec" }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.186"
 
 [dev-dependencies]
 gix-testtools = { path = "../tests/tools", features = ["sha1"] }
