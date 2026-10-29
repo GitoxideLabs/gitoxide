@@ -132,6 +132,8 @@ mod object;
 /// Generate packs from repository objects.
 #[cfg(feature = "pack-generate")]
 pub mod pack;
+/// Reference packing.
+pub mod pack_refs;
 #[cfg(feature = "attributes")]
 mod pathspec;
 mod reference;

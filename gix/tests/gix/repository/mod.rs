@@ -31,6 +31,7 @@ mod object;
 mod open;
 #[cfg(feature = "pack-generate")]
 mod pack;
+mod pack_refs;
 #[cfg(feature = "attributes")]
 mod pathspec;
 mod reference;
