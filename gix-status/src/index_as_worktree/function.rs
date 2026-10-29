@@ -52,6 +52,12 @@ use crate::{
 ///
 /// Thus, some care has to be taken to do the right thing when letting the index match the worktree by evaluating the changes observed
 /// by the `collector`.
+///
+/// ### Deviation from Git
+///
+/// Emulated symlinks are compared as raw link targets, without regular-file filters. Git can apply filters to their
+/// regular-file representations during status even though checkout writes raw targets. Keeping these bytes raw avoids
+/// reporting unchanged links as modified or concealing changes to link targets.
 #[expect(clippy::too_many_arguments)]
 pub fn index_as_worktree<'index, T, U, Find>(
     index: &'index gix_index::State,
@@ -607,6 +613,12 @@ where
                 inner: ToGitOutcome::Buffer(self.buf),
                 bytes: None,
                 len: None,
+            }
+        } else if is_symlink {
+            Stream {
+                inner: ToGitOutcome::Unchanged(std::fs::File::open(self.path).map_err(gix_hash::io::from_std_io)?),
+                bytes: Some(self.worktree_bytes),
+                len: Some(self.file_len),
             }
         } else {
             self.buf.clear();

@@ -1068,6 +1068,47 @@ fn unchanged_despite_filter() {
 }
 
 #[test]
+fn emulated_symlinks_keep_raw_content_despite_text_attributes() -> gix_testtools::TestResult {
+    let worktree = fixture_path("status_emulated_symlink_filter");
+    assert_eq!(
+        std::fs::read(worktree.join("clean.txt"))?,
+        b"destination\r\n",
+        "Git checks out an emulated symlink without applying text conversion"
+    );
+    // Git status currently reports the opposite path after filtering these files. Follow its raw checkout
+    // representation so an unchanged link stays clean and a changed link target is not hidden by conversion.
+    fixture_filtered_detailed(
+        "status_emulated_symlink_filter",
+        "",
+        &[],
+        &[(
+            BStr::new("changed.txt"),
+            1,
+            Change::Modification {
+                executable_bit_changed: false,
+                content_change: Some(()),
+                set_entry_stat_size_zero: false,
+            }
+            .into(),
+        )],
+        |index| {
+            index
+                .entries_mut()
+                .iter_mut()
+                .for_each(|entry| entry.stat = Default::default());
+        },
+        false,
+        Default::default(),
+        true,
+        Some(&|dir| gix_fs::Capabilities {
+            symlink: false,
+            ..gix_fs::Capabilities::probe(dir)
+        }),
+    );
+    Ok(())
+}
+
+#[test]
 fn clean_filter_receives_worktree_relative_path_from_worktree_root() -> gix_testtools::TestResult {
     // Use an absolute worktree path, as `gix` does.
     let worktree = gix_path::realpath(fixture_path("status_filter_path"))?;
