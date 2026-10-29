@@ -87,7 +87,7 @@ gix-object = { version = "^0.66.1", path = "../gix-object", optional = true }
 gix-revwalk = { version = "^0.38.0", path = "../gix-revwalk", optional = true }
 gix-credentials = { version = "^0.42.1", path = "../gix-credentials", optional = true }
 gix-refspec = { version = "^0.47.1", path = "../gix-refspec", optional = true }
-gix-lock = { version = "^26.0.0", path = "../gix-lock", optional = true }
+gix-lock = { version = "^27.0.0", path = "../gix-lock", optional = true }
 
 nonempty = "0.12.0"
 serde = { version = "1.0.114", optional = true, default-features = false, features = [

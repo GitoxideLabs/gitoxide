@@ -248,10 +248,14 @@ The top-level crate that acts as hub to all functionality provided by the `gix-*
       but needs `bumpalo` support to avoid item allocations/boxing, and avoid internal `Mutex`. (key type is pointer based).
 
 ### gix-fs
-* [x] probe capabilities
-* [x] symlink creation and removal
-* [x] file snapshots
-* [x] stack abstraction
+* Stable API limited to race-proof creation, public retry configuration, boundary cleanup, and permission application for tempfiles and locks.
+* Other filesystem APIs, including `serde` and `walkdir` support, require `unstable`.
+* [x] race-proof directory creation with public retry configuration and shared-repository permissions
+* [x] empty-directory cleanup with a boundary
+* [x] probe capabilities (experimental, requires `unstable`)
+* [x] symlink creation and removal (experimental, requires `unstable`)
+* [x] file snapshots (experimental, requires `unstable`)
+* [x] stack abstraction (experimental, requires `unstable`)
 
 ### gix-object
 * *decode (zero-copy)* borrowed objects

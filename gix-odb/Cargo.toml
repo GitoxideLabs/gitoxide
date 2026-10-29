@@ -36,8 +36,10 @@ gix-path = { version = "^0.14.1", path = "../gix-path" }
 gix-quote = { version = "^0.10.1", path = "../gix-quote" }
 gix-object = { version = "^0.66.1", path = "../gix-object" }
 gix-pack = { version = "^0.77.0", path = "../gix-pack", default-features = false }
-gix-fs = { version = "^0.24.1", path = "../gix-fs", features = ["walkdir"] }
-serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
+gix-fs = { version = "^1.0.0", path = "../gix-fs", features = ["walkdir", "unstable"] }
+serde = { version = "1.0.114", optional = true, default-features = false, features = [
+    "derive",
+] }
 
 tempfile = "3.26.0"
 parking_lot = { version = "0.12.4" }

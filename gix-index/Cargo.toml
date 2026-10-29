@@ -38,9 +38,11 @@ gix-bitmap = { version = "^0.6.1", path = "../gix-bitmap" }
 gix-object = { version = "^0.66.1", path = "../gix-object" }
 gix-validate = { version = "^0.13.1", path = "../gix-validate" }
 gix-traverse = { version = "^0.64.0", path = "../gix-traverse" }
-gix-lock = { version = "^26.0.0", path = "../gix-lock" }
-gix-fs = { version = "^0.24.1", path = "../gix-fs" }
-gix-utils = { version = "^0.5.2", path = "../gix-utils", features = ["progress"] }
+gix-lock = { version = "^27.0.0", path = "../gix-lock" }
+gix-fs = { version = "^1.0.0", path = "../gix-fs", features = ["unstable"] }
+gix-utils = { version = "^0.5.2", path = "../gix-utils", features = [
+    "progress",
+] }
 
 hashbrown = "0.17.1"
 fnv = "1.0.7"

@@ -26,7 +26,7 @@ gix-error = { version = "^0.5.2", path = "../gix-error" }
 gix-trace = { version = "^0.3.1", path = "../gix-trace" }
 gix-index = { version = "^0.58.0", path = "../gix-index" }
 gix-discover = { version = "^0.57.1", path = "../gix-discover" }
-gix-fs = { version = "^0.24.1", path = "../gix-fs" }
+gix-fs = { version = "^1.0.0", path = "../gix-fs", features = ["unstable"] }
 gix-path = { version = "^0.14.1", path = "../gix-path" }
 gix-pathspec = { version = "^0.22.1", path = "../gix-pathspec" }
 gix-worktree = { version = "^0.59.0", path = "../gix-worktree", default-features = false }
@@ -40,7 +40,7 @@ bstr = { version = "1.12.0", default-features = false }
 insta = "1.46.3"
 gix-dir = { path = ".", features = ["sha1", "sha256"] }
 gix-testtools = { path = "../tests/tools" }
-gix-fs = { path = "../gix-fs" }
+gix-fs = { path = "../gix-fs", features = ["unstable"] }
 pretty_assertions = "1.4.0"
 
 [package.metadata.docs.rs]

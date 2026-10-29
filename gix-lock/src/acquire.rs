@@ -6,11 +6,13 @@ use std::{
 
 use gix_error::{Class, ClassificationMarker, ErrorExt, Result, message};
 use gix_tempfile::{AutoRemove, ContainingDirectory};
+use gix_utils::backoff;
 
-use crate::{DOT_LOCK_SUFFIX, File, Marker, backoff};
+use crate::{DOT_LOCK_SUFFIX, File, Marker};
 
 /// Describe what to do if a lock cannot be obtained as it's already held elsewhere.
 #[derive(Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[non_exhaustive]
 pub enum Fail {
     /// Fail after the first unsuccessful attempt of obtaining a lock.
     #[default]
@@ -53,7 +55,7 @@ impl File {
     ///
     /// Apply `shared_repository_permissions`, Git's parsed sharing policy, to the lock file and newly created directories
     /// after the process umask. Pass `0` to keep the umask permissions without reading or rewriting permission metadata.
-    /// See [`gix_fs::adjust_shared_repository_permissions()`] for the encoding.
+    /// See [`gix_fs::set_shared_repository_permissions()`] for the encoding.
     ///
     /// On Unix, lock files start with `0o666` before the umask and sharing policy are applied.
     ///

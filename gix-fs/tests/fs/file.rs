@@ -1,3 +1,61 @@
+mod clear_readonly_attribute {
+    use gix_fs::clear_readonly_attribute;
+    use gix_testtools::TestResult;
+
+    #[test]
+    fn clearing_readonly_is_platform_specific_and_idempotent() -> TestResult {
+        let dir = gix_testtools::tempfile::tempdir()?;
+        let path = dir.path().join("file");
+        std::fs::write(&path, b"contents")?;
+        let mut permissions = std::fs::metadata(&path)?.permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&path, permissions)?;
+        #[cfg(unix)]
+        let original_mode = {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::metadata(&path)?.permissions().mode()
+        };
+
+        clear_readonly_attribute(&path)?;
+        clear_readonly_attribute(&path)?;
+        assert_eq!(
+            std::fs::metadata(&path)?.permissions().readonly(),
+            !cfg!(windows),
+            "only Windows read-only attributes are cleared, and repeated calls succeed"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path)?.permissions().mode(),
+                original_mode,
+                "Unix permissions remain unchanged"
+            );
+        }
+        assert_eq!(std::fs::read(&path)?, b"contents", "file contents remain unchanged");
+        Ok(())
+    }
+
+    #[test]
+    fn missing_paths_are_only_accessed_on_windows() -> TestResult {
+        let dir = gix_testtools::tempfile::tempdir()?;
+        let path = dir.path().join("missing");
+        #[cfg(windows)]
+        {
+            let err = clear_readonly_attribute(&path).expect_err("Windows metadata errors are propagated");
+            assert_eq!(
+                err.kind(),
+                std::io::ErrorKind::NotFound,
+                "missing paths retain their native I/O error"
+            );
+        }
+        #[cfg(not(windows))]
+        clear_readonly_attribute(&path)?;
+        assert!(!path.exists(), "clearing an attribute never creates a missing file");
+        Ok(())
+    }
+}
+
 mod open_read_only_no_follow {
 
     use std::io::Read;

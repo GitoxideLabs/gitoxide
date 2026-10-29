@@ -10,6 +10,7 @@ mod error {
 
     /// The error returned by various [`commit(…)`][super::Marker::commit()] methods
     #[derive(Debug)]
+    #[non_exhaustive]
     pub struct Error<T: Debug> {
         /// The io error that prevented the attempt to succeed
         pub error: std::io::Error,
