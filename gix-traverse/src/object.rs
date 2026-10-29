@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use gix_error::{Result, ResultExt, bail, corruption, message};
 use gix_hash::ObjectId;
-use gix_object::{Find, FindExt, Kind, ObjectRef};
+use gix_object::{Find, Kind, ObjectRef};
 
 /// One object in a reachable object graph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,6 +31,8 @@ pub struct BreadthFirst<Find> {
     shallow: gix_hashtable::HashSet<ObjectId>,
     buffer: Vec<u8>,
     failed: bool,
+    ignore_missing: bool,
+    missing: gix_hashtable::HashSet<ObjectId>,
 }
 
 impl<Find> BreadthFirst<Find> {
@@ -43,7 +45,19 @@ impl<Find> BreadthFirst<Find> {
             shallow: Default::default(),
             buffer: Vec::new(),
             failed: false,
+            ignore_missing: false,
+            missing: Default::default(),
         }
+    }
+
+    /// Skip missing objects, while still failing on malformed objects and invalid edge kinds.
+    ///
+    /// This is useful when retaining recent unreachable objects: an older collection may have
+    /// already removed some of their dependencies. It is not suitable for validating connectivity
+    /// or collecting the graph of ordinary repository roots. Missing IDs are visited only once.
+    pub fn with_missing_objects_ignored(mut self, ignore: bool) -> Self {
+        self.ignore_missing = ignore;
+        self
     }
 
     /// Do not follow parent edges of the given shallow commits.
@@ -63,10 +77,20 @@ impl<F: Find> BreadthFirst<F> {
                 check_kind(object_id, *kind, expected_kind)?;
                 continue;
             }
+            if self.missing.contains(&object_id) {
+                continue;
+            }
             let object = self
                 .find
-                .find(&object_id, &mut self.buffer)
+                .try_find(&object_id, &mut self.buffer)
                 .or_raise(|| message!("Could not read reachable object {object_id}"))?;
+            let Some(object) = object else {
+                if self.ignore_missing {
+                    self.missing.insert(object_id);
+                    continue;
+                }
+                bail!(message!("Reachable object {object_id} is missing").not_found());
+            };
             let kind = object.kind;
             check_kind(object_id, kind, expected_kind)?;
             match object
