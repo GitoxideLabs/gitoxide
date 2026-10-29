@@ -8,6 +8,7 @@ pub mod component {
     #[non_exhaustive]
     pub enum Error {
         Empty,
+        Nul,
         PathSeparator,
         WindowsPathPrefix,
         WindowsReservedName,
@@ -21,6 +22,7 @@ pub mod component {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self {
                 Error::Empty => write!(f, "A path component must not be empty"),
+                Error::Nul => write!(f, "NUL bytes are not allowed in path components"),
                 Error::PathSeparator => write!(f, r"Path separators like / or \ are not allowed"),
                 Error::WindowsPathPrefix => write!(f, "Windows path prefixes are not allowed"),
                 Error::WindowsReservedName => {
@@ -98,6 +100,9 @@ pub fn component(
 ) -> Result<&BStr, component::Error> {
     if input.is_empty() {
         return Err(component::Error::Empty);
+    }
+    if input.contains(&0) {
+        return Err(component::Error::Nul);
     }
     if input == ".." || input == "." {
         return Err(component::Error::Relative);
