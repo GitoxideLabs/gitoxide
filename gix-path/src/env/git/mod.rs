@@ -1,14 +1,15 @@
 use std::{
-    env,
+    ffi::OsString,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
 };
 
-use bstr::{BStr, BString, ByteSlice};
+use bstr::{BStr, BString};
+#[cfg(windows)]
+use std::env;
 use std::sync::LazyLock;
 
 #[cfg(windows)]
-mod registry;
+pub(super) mod registry;
 
 /// Other places to find Git in, probing each source only after earlier candidates are exhausted.
 #[cfg(windows)]
@@ -34,9 +35,9 @@ fn alternative_executable() -> Option<&'static Path> {
 }
 
 #[cfg(windows)]
-fn locations_under_program_files<F>(var_os_func: F) -> Vec<PathBuf>
+pub(super) fn locations_under_program_files<F>(mut var_os_func: F) -> Vec<PathBuf>
 where
-    F: Fn(&str) -> Option<std::ffi::OsString>,
+    F: FnMut(&str) -> Option<std::ffi::OsString>,
 {
     // Should give a 64-bit program files path from a 32-bit or 64-bit process on a 64-bit system.
     let varname_64bit = "ProgramW6432";
@@ -113,8 +114,10 @@ where
 }
 
 #[cfg(windows)]
-fn locations_under_scoop(var_os: impl Fn(&str) -> Option<std::ffi::OsString>) -> impl Iterator<Item = PathBuf> {
-    let absolute = move |name| var_os(name).map(PathBuf::from).filter(|path| path.is_absolute());
+pub(super) fn locations_under_scoop(
+    mut var_os: impl FnMut(&str) -> Option<std::ffi::OsString>,
+) -> impl Iterator<Item = PathBuf> {
+    let mut absolute = move |name| var_os(name).map(PathBuf::from).filter(|path| path.is_absolute());
     // Scoop exports GIT_INSTALL_ROOT even when its root was configured outside the environment.
     // Find the stable `current` installation without relying on Scoop's shims being on PATH.
     [
@@ -167,8 +170,8 @@ fn scoop_version_without_junction(app: &Path) -> Option<PathBuf> {
 }
 
 #[cfg(windows)]
-fn locations_under_package_managers(
-    var_os: impl Fn(&str) -> Option<std::ffi::OsString>,
+pub(super) fn locations_under_package_managers(
+    mut var_os: impl FnMut(&str) -> Option<std::ffi::OsString>,
 ) -> impl Iterator<Item = PathBuf> {
     // These are stable entry points, including WinGet's links for custom portable roots.
     // Only the active Conda/Mamba environment participates; do not pick an inactive environment.
@@ -261,36 +264,6 @@ fn msys_bin_at(executable: &Path) -> Option<&Path> {
         .then_some(bin)
 }
 
-/// Convert paths emitted by MSYS Git to paths usable by native Windows callers.
-pub(super) fn native_path(path: &Path) -> Option<PathBuf> {
-    #[cfg(windows)]
-    return native_path_with(path, msys_bin);
-    #[cfg(not(windows))]
-    Some(path.to_owned())
-}
-
-#[cfg(windows)]
-fn native_path_with<'a>(path: &Path, msys_bin: impl FnOnce() -> Option<&'a Path>) -> Option<PathBuf> {
-    if path.is_absolute() || !path.as_os_str().as_encoded_bytes().starts_with(b"/") {
-        return Some(path.to_owned());
-    }
-    if let Some(bin) = msys_bin() {
-        use std::os::windows::process::CommandExt;
-        let output = Command::new(bin.join("cygpath.exe"))
-            .args(["-am", "--"])
-            .arg(path)
-            .creation_flags(0x08000000) // CREATE_NO_WINDOW
-            .output()
-            .ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        let path = output.stdout.strip_suffix(b"\n")?.to_path().ok()?.to_owned();
-        return path.is_absolute().then_some(path);
-    }
-    Some(path.to_owned())
-}
-
 #[cfg(windows)]
 pub(super) const EXE_NAME: &str = "git.exe";
 #[cfg(not(windows))]
@@ -303,160 +276,102 @@ struct ConfigPaths {
     system: Option<BString>,
 }
 
-/// Obtain and cache the installation and system configuration paths.
-///
-/// An unambiguous `EXEPATH` identifies Git for Windows' conventional configuration location.
-/// Otherwise, query the Git executable found in `PATH` or an alternative location.
+/// Cache conventional configuration locations without executing Git. Environment overrides of
+/// configuration files and helper paths are intentionally applied by callers, not discovery.
 static GIT_CONFIG_PATHS: LazyLock<ConfigPaths> = LazyLock::new(|| {
-    #[cfg(windows)]
-    if let Some(system_prefix) = super::system_prefix_from_exepath_var(|key| std::env::var_os(key)) {
-        let system_config =
-            crate::os_string_into_bstring(super::config_path_from_system_prefix(&system_prefix).into()).ok();
-        return ConfigPaths {
-            installation: system_config.clone(),
-            installation_is_system: true,
-            system: system_config,
-        };
-    }
-    config_paths_from_executable()
+    std::env::current_dir()
+        .ok()
+        .map(|cwd| config_paths_from_environment(|key| std::env::var_os(key), &cwd))
+        .unwrap_or_default()
 });
 
-// There are a number of ways to refer to the null device on Windows, but they are not all equally
-// well supported. Git for Windows rejects `\\.\NUL` and `\\.\nul`. On Windows 11 ARM64 (and maybe
-// some others), it rejects even the legacy name `NUL`, when capitalized. But it always accepts the
-// lower-case `nul`, handling it in various path checks, some of which are done case-sensitively.
-#[cfg(windows)]
-const NULL_DEVICE: &str = "nul";
-#[cfg(not(windows))]
-const NULL_DEVICE: &str = "/dev/null";
-
-fn config_paths_from_executable() -> ConfigPaths {
-    let executable = PathBuf::from(EXE_NAME);
-    match config_paths_from_executable_at(executable) {
-        Ok(paths) => paths,
-        #[cfg(windows)]
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => alternative_executable()
-            .and_then(|executable| config_paths_from_executable_at(executable.to_owned()).ok())
-            .unwrap_or_default(),
-        Err(_) => ConfigPaths::default(),
+fn config_paths_from_environment(
+    mut environment: impl FnMut(&str) -> Option<OsString>,
+    current_dir: &Path,
+) -> ConfigPaths {
+    if !current_dir.is_absolute() {
+        return ConfigPaths::default();
     }
-}
-
-fn config_paths_from_executable_at(executable: PathBuf) -> std::io::Result<ConfigPaths> {
-    let mut cmd = git_cmd(executable.clone(), true);
-    gix_trace::debug!(cmd = ?cmd, "invoking git for configuration paths");
-    let output = cmd.output()?;
-    let native = |path: &BStr| {
-        native_path(crate::from_byte_slice(path).ok()?).and_then(|path| crate::os_string_into_bstring(path.into()).ok())
-    };
-
-    if !output.status.success() {
-        let mut cmd = git_cmd(executable, false);
-        gix_trace::debug!(cmd = ?cmd, "invoking git for configuration paths (pre Git 2.26)");
-        let output = cmd.output()?;
-        return Ok(ConfigPaths {
-            installation: first_file_from_config_with_origin(output.stdout.as_slice().into()).and_then(native),
-            ..Default::default()
-        });
-    }
-
-    let (installation, installation_is_system, system) =
-        config_paths_from_config_with_origin(output.stdout.as_slice().into());
-    Ok(ConfigPaths {
-        installation: installation.and_then(native),
-        installation_is_system,
-        system: system.and_then(native),
-    })
-}
-
-fn git_cmd(executable: PathBuf, show_scope: bool) -> Command {
-    let mut cmd = Command::new(executable);
+    let directories = super::installation::search_directories(&mut environment, current_dir);
+    let mut prefixes = Vec::new();
     #[cfg(windows)]
+    if let Some(prefix) = super::system_prefix_from_exepath_var(&mut environment) {
+        prefixes.push(prefix);
+    }
+    if prefixes.is_empty() {
+        if let Some(directory) = directories.iter().find(|directory| directory.join(EXE_NAME).is_file()) {
+            // Preserve a package manager's stable symlink prefix before trying the versioned
+            // installation itself, where helpers may live but configuration usually does not.
+            if let Some(prefix) = directory.parent() {
+                prefixes.push(prefix.to_path_buf());
+            }
+            if let Ok(executable) = std::fs::canonicalize(directory.join(EXE_NAME))
+                && let Some(prefix) = executable.parent().and_then(Path::parent)
+                && !prefixes.iter().any(|existing| existing == prefix)
+            {
+                prefixes.push(prefix.to_path_buf());
+            }
+            #[cfg(windows)]
+            if let Some(core) = super::installation::core_from_bin(directory)
+                && let Some(prefix) = core.parent().and_then(Path::parent)
+            {
+                prefixes.insert(0, prefix.to_path_buf());
+            }
+        } else if let Some(core) = directories
+            .iter()
+            .find_map(|dir| super::installation::core_from_bin(dir))
+            && let Some(prefix) = core.parent().and_then(Path::parent)
+        {
+            prefixes.push(prefix.to_path_buf());
+        }
+    }
+    #[cfg(target_os = "macos")]
+    if prefixes.iter().any(|prefix| prefix == Path::new("/usr"))
+        && let Some(prefix) = super::installation::developer_prefix(&mut environment)
     {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
+        prefixes.push(prefix);
     }
-    // We will try to run `git` from a location fairly high in the filesystem, in the hope it may
-    // be faster if we are deeply nested, on a slow disk, or in a directory that has been deleted.
-    let cwd = if cfg!(windows) {
-        // We try the Windows directory (usually `C:\Windows`) first. It is given by `SystemRoot`,
-        // except in rare cases where our own parent has not passed down that environment variable.
-        env::var_os("SystemRoot")
-            .or_else(|| env::var_os("windir"))
-            .map(PathBuf::from)
-            .filter(|p| p.is_absolute())
-            .unwrap_or_else(env::temp_dir)
+    let system = if cfg!(windows) {
+        prefixes
+            .first()
+            .map(|prefix| super::config_path_from_system_prefix(prefix))
     } else {
-        "/".into()
+        Some(
+            prefixes
+                .iter()
+                .map(|prefix| {
+                    if prefix == Path::new("/usr") {
+                        PathBuf::from("/etc/gitconfig")
+                    } else {
+                        prefix.join("etc/gitconfig")
+                    }
+                })
+                .find(|path| path.is_file())
+                .unwrap_or_else(|| "/etc/gitconfig".into()),
+        )
     };
-    // We can't use `--system` here, because scopes treated higher than the
-    // system scope are possible. This commonly happens on macOS with Apple Git, where the config
-    // file under `/Library` or `/Applications` is shown as an "unknown" scope but takes precedence
-    // over the system scope. Although `GIT_CONFIG_NOSYSTEM` suppresses this scope along with the
-    // system scope, passing `--system` selects only the system scope and not this "unknown" scope.
-    cmd.args(["config", "-lz", "--show-origin", "--no-includes"]);
-    if show_scope {
-        cmd.arg("--show-scope");
+    let installation = prefixes
+        .iter()
+        .map(|prefix| prefix.join("share/git-core/gitconfig"))
+        .find(|path| path.is_file());
+    let installation_is_system = installation.is_none();
+    #[cfg(windows)]
+    let installation = installation.or_else(|| {
+        environment("PROGRAMDATA")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .map(|path| path.join("Git/config"))
+            .filter(|path| path.is_file())
+    });
+    let installation = installation.or_else(|| system.as_ref().filter(|path| cfg!(windows) || path.is_file()).cloned());
+    ConfigPaths {
+        installation_is_system: installation_is_system && installation.is_some(),
+        installation: installation.and_then(|path| crate::os_string_into_bstring(path.into()).ok()),
+        system: system.and_then(|path| crate::os_string_into_bstring(path.into()).ok()),
     }
-    cmd.arg("--name-only")
-        .current_dir(cwd)
-        .env_remove("GIT_CONFIG")
-        .env_remove("GIT_DISCOVERY_ACROSS_FILESYSTEM")
-        .env_remove("GIT_OBJECT_DIRECTORY")
-        .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
-        .env_remove("GIT_COMMON_DIR")
-        .env_remove("GIT_CONFIG_SYSTEM")
-        .env_remove("GIT_CONFIG_NOSYSTEM")
-        .env_remove("GIT_CONFIG_COUNT")
-        .env_remove("GIT_CONFIG_PARAMETERS")
-        // Discover stable, unoverridden paths; callers apply the configuration environment they permit.
-        .env("GIT_CONFIG_GLOBAL", NULL_DEVICE)
-        .env("GIT_DIR", NULL_DEVICE) // Avoid getting local-scope config.
-        .env("GIT_WORK_TREE", NULL_DEVICE) // Avoid confusion when debugging.
-        .stdin(Stdio::null())
-        .stderr(Stdio::null());
-    cmd
 }
 
-fn first_file_from_config_with_origin(source: &BStr) -> Option<&BStr> {
-    let file = source.strip_prefix(b"file:")?;
-    let end_pos = file.find_byte(b'\0')?;
-    file[..end_pos].as_bstr().into()
-}
-
-/// Parse NUL-separated scope, origin, and key records produced by `git config --show-scope --show-origin`.
-///
-/// The first file-backed origin is the installation path, and the second return value indicates
-/// whether it had system scope. The system path is the first system-scoped origin distinct from
-/// the installation path, or the installation path itself when no distinct system origin follows.
-/// Non-file origins and incomplete records are ignored.
-fn config_paths_from_config_with_origin(source: &BStr) -> (Option<&BStr>, bool, Option<&BStr>) {
-    let mut fields = source.split(|byte| *byte == 0);
-    let mut installation = None;
-    let mut installation_is_system = false;
-    let mut system = None;
-    while let (Some(scope), Some(origin), Some(_key)) = (fields.next(), fields.next(), fields.next()) {
-        let Some(path) = origin.strip_prefix(b"file:").map(ByteSlice::as_bstr) else {
-            continue;
-        };
-        let is_installation = installation.is_none();
-        let installation_path = *installation.get_or_insert(path);
-        if is_installation {
-            installation_is_system = scope == b"system";
-        }
-        if scope == b"system" && system.is_none_or(|current| current == installation_path) {
-            system = Some(path);
-        }
-    }
-    (installation, installation_is_system, system)
-}
-
-/// Try to find the file that contains Git configuration coming with the Git installation.
-///
-/// This returns the configuration associated with the `git` executable found in the current `PATH`
-/// or an alternative location, or `None` if no `git` executable was found or there were other
-/// errors during execution.
+/// Try to find configuration associated with a conventional Git installation.
 pub(super) fn install_config_path() -> Option<&'static BStr> {
     let _span = gix_trace::detail!("gix_path::git::install_config_path()");
     GIT_CONFIG_PATHS.installation.as_ref().map(AsRef::as_ref)
@@ -468,16 +383,7 @@ pub(super) fn install_config_is_system() -> bool {
 
 pub(super) fn system_config_path() -> Option<&'static BStr> {
     let _span = gix_trace::detail!("gix_path::git::system_config_path()");
-    static FALLBACK: LazyLock<Option<BString>> = LazyLock::new(|| {
-        super::system_prefix()
-            .map(super::config_path_from_system_prefix)
-            .and_then(|path| crate::os_string_into_bstring(path.into()).ok())
-    });
-    GIT_CONFIG_PATHS
-        .system
-        .as_ref()
-        .or_else(|| FALLBACK.as_ref())
-        .map(AsRef::as_ref)
+    GIT_CONFIG_PATHS.system.as_ref().map(AsRef::as_ref)
 }
 
 /// Given `config_path` as obtained from `install_config_path()`, return the path of the git installation base.

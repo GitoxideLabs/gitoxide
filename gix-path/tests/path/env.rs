@@ -229,12 +229,28 @@ fn shell_unix_path() {
 }
 
 #[test]
-fn installation_config() {
-    assert_ne!(
-        gix_path::env::installation_config().map(|p| p.components().count()),
-        gix_path::env::installation_config_prefix().map(|p| p.components().count()),
-        "the prefix is a bit shorter than the installation config path itself"
-    );
+fn installation_config() -> gix_testtools::TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let fixture = gix_testtools::scripted_fixture_read_only("make_native_installation.sh")?.canonicalize()?;
+    let (bin, config) = if cfg!(windows) {
+        ("windows-ucrt/prefix/cmd", "windows-ucrt/prefix/etc/gitconfig")
+    } else {
+        ("unix-lib/prefix/bin", "unix-lib/prefix/etc/gitconfig")
+    };
+    let path = fixture.join(bin);
+    let _env = gix_testtools::Env::new()
+        .set("PATH", path.to_str().expect("UTF-8 fixture path"))
+        .set("EXEPATH", "")
+        .set("PROGRAMDATA", "")
+        .set("GIT_EXEC_PATH", "unrelated-helper-directory");
+    let config = fixture.join(config);
+    assert_eq!(gix_path::env::installation_config(), Some(config.as_path()));
+    assert_eq!(gix_path::env::installation_config_prefix(), config.parent());
+    assert_eq!(gix_path::env::system_config(), Some(config.as_path()));
+    assert!(gix_path::env::installation_config_is_system());
+    Ok(())
 }
 
 #[test]
@@ -266,7 +282,7 @@ fn core_dir_program() -> gix_testtools::TestResult {
         assert!(path.is_file(), "the returned path refers to an existing file");
         assert!(
             path.is_absolute(),
-            "the path is absolute as it is based on `git --exec-path`"
+            "native installation discovery produces absolute paths"
         );
     }
     assert_eq!(
@@ -377,14 +393,12 @@ mod windows_prefix {
             std::fs::create_dir(installation.path().join(directory))?;
         }
         let prefix = installation.path().join(runtime);
-        // Let the real Git report the selected runtime without copying an installation.
-        // Both directories exist, so EXEPATH must fall back to this --exec-path result.
+        // Both directories exist, so EXEPATH must fall back to the installation in PATH.
+        std::fs::create_dir_all(prefix.join("bin"))?;
+        std::fs::create_dir_all(prefix.join("libexec/git-core"))?;
         let _env = gix_testtools::Env::new()
             .set("EXEPATH", installation.path().to_str().expect("UTF-8 temporary path"))
-            .set(
-                "GIT_EXEC_PATH",
-                prefix.join("libexec/git-core").to_str().expect("UTF-8 temporary path"),
-            );
+            .set("PATH", prefix.join("bin").to_str().expect("UTF-8 temporary path"));
         assert_eq!(
             gix_path::env::system_prefix(),
             Some(prefix.as_path()),
@@ -427,4 +441,71 @@ mod xdg_config {
         #[cfg(windows)]
         assert_eq!(actual.to_str(), Some(r"marker\.config\git\test"));
     }
+}
+
+#[test]
+fn native_core_discovery_uses_explicit_paths_and_standard_layouts_without_git() -> gix_testtools::TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_native_installation.sh")?.canonicalize()?;
+    for (bin, core) in [
+        ("unix-lib/prefix/bin", "unix-lib/prefix/lib/git-core"),
+        ("unix-libexec/prefix/bin", "unix-libexec/prefix/libexec/git-core"),
+        ("windows-ucrt/prefix/cmd", "windows-ucrt/prefix/ucrt64/libexec/git-core"),
+        (
+            "windows-mingw/prefix/cmd",
+            "windows-mingw/prefix/mingw64/libexec/git-core",
+        ),
+    ] {
+        assert_eq!(
+            gix_path::env::core_dir_from_environment(|name| (name == "PATH").then(|| bin.into()), &fixture),
+            Some(fixture.join(core)),
+            "standard helper directories can exist without the Git executable"
+        );
+    }
+    assert_eq!(
+        gix_path::env::core_dir_from_environment(
+            |name| match name {
+                "GIT_EXEC_PATH" => Some("custom-core".into()),
+                "PATH" => Some("unix-lib/prefix/bin".into()),
+                _ => None,
+            },
+            &fixture
+        ),
+        Some(fixture.join("custom-core")),
+        "an explicit relative exec path takes precedence"
+    );
+    #[cfg(unix)]
+    assert_eq!(
+        gix_path::env::core_dir_from_environment(|name| (name == "PATH").then(|| "symlink/bin".into()), &fixture),
+        Some(fixture.join("real/libexec/git-core")),
+        "resolve installation symlinks without invoking their executable"
+    );
+    #[cfg(windows)]
+    assert_eq!(
+        gix_path::env::core_dir_from_environment(
+            |name| (name == "GIT_INSTALL_ROOT").then(|| fixture.join("windows-ucrt/prefix").into_os_string()),
+            &fixture
+        ),
+        Some(fixture.join("windows-ucrt/prefix/ucrt64/libexec/git-core")),
+        "native helper discovery shares the fallback installation roots with executable discovery"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn apple_helpers_use_the_selected_developer_installation() -> gix_testtools::TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_native_installation.sh")?.canonicalize()?;
+    assert_eq!(
+        gix_path::env::core_dir_from_environment(
+            |name| match name {
+                "PATH" => Some("/usr/bin".into()),
+                "DEVELOPER_DIR" => Some(fixture.join("apple/Developer").into_os_string()),
+                _ => None,
+            },
+            &fixture
+        ),
+        Some(fixture.join("apple/Developer/usr/libexec/git-core")),
+        "the system launcher delegates helpers to the selected developer installation"
+    );
+    Ok(())
 }

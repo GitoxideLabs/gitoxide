@@ -3,37 +3,35 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use bstr::{BString, ByteSlice};
 use std::sync::LazyLock;
 
 mod auxiliary;
 mod git;
+mod installation;
+pub use installation::core_dir_from_environment;
 
-/// Return the unoverridden location at which an installation-specific Git configuration file can be found, or
-/// `None` if the binary could not be executed or its results could not be parsed.
+/// Return the unoverridden configuration path of a conventional Git installation.
 ///
-/// The Git query ignores `GIT_CONFIG_SYSTEM` and `GIT_CONFIG_NOSYSTEM`; callers must apply these
-/// variables according to their own environment-access policy.
+/// Discovery uses `PATH`, filesystem layouts, and on Windows `EXEPATH` and program-files
+/// locations. No executable is invoked. Unknown compile-time layouts require callers to supply
+/// configuration paths explicitly. Results are cached on first use.
 ///
-/// ### Performance
-///
-/// This can invoke the Git binary, which is slow on Windows. An unambiguous Git for Windows
-/// installation identified by `EXEPATH` avoids that invocation.
+/// `GIT_EXEC_PATH`, `GIT_CONFIG_SYSTEM`, and `GIT_CONFIG_NOSYSTEM` do not affect discovery;
+/// callers must apply configuration overrides according to their own environment-access policy.
 pub fn installation_config() -> Option<&'static Path> {
     git::install_config_path().and_then(|p| crate::from_byte_slice(p).ok())
 }
 
-/// Return whether [`installation_config()`] was reported with system scope by Git.
+/// Return whether [`installation_config()`] has system scope.
 ///
 /// `GIT_CONFIG_SYSTEM` replaces system-scoped installation configuration, but not installation
 /// configuration reported with another scope, such as Apple Git's `unknown` scope.
-/// Returns `false` if no installation path was found or Git was too old to report scopes.
+/// Returns `false` if no installation path was found.
 pub fn installation_config_is_system() -> bool {
     git::install_config_is_system()
 }
 
-/// Return the location at which git installation specific configuration files are located, or `None` if the binary
-/// could not be executed or its results could not be parsed.
+/// Return the directory containing [`installation_config()`], or `None` if no installation was found.
 ///
 /// ### Performance
 ///
@@ -44,14 +42,10 @@ pub fn installation_config_prefix() -> Option<&'static Path> {
 
 /// Return the unoverridden location of the system-wide Git configuration file.
 ///
-/// On Windows this shares the single Git invocation used by [`installation_config()`].
+/// This shares native filesystem discovery and caching with [`installation_config()`].
 /// The caller is responsible for applying `GIT_CONFIG_SYSTEM` and `GIT_CONFIG_NOSYSTEM`.
 pub fn system_config() -> Option<&'static Path> {
-    if cfg!(windows) {
-        git::system_config_path().and_then(|p| crate::from_byte_slice(p).ok())
-    } else {
-        Some(Path::new("/etc/gitconfig"))
-    }
+    git::system_config_path().and_then(|p| crate::from_byte_slice(p).ok())
 }
 
 /// Return the shell that Git would use, the shell to execute commands from.
@@ -160,28 +154,13 @@ pub fn xdg_config(file: &str, env_var: &mut dyn FnMut(&str) -> Option<OsString>)
         })
 }
 
-static GIT_CORE_DIR: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
-    let mut cmd = std::process::Command::new(exe_invocation());
+static GIT_CORE_DIR: LazyLock<Option<PathBuf>> =
+    LazyLock::new(|| core_dir_from_environment(|name| std::env::var_os(name), &std::env::current_dir().ok()?));
 
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    let output = cmd.arg("--exec-path").output().ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    git::native_path(BString::new(output.stdout).strip_suffix(b"\n")?.to_path().ok()?)
-});
-
-/// Return the directory obtained by calling `git --exec-path`.
+/// Return Git's helper directory using cached environment and filesystem installation discovery.
 ///
-/// MSYS2 paths are translated for native Windows callers using the same installation's `cygpath`.
-/// Returns `None` if Git could not be found, returned an error, or its path could not be translated.
+/// No command is invoked. See [`core_dir_from_environment()`] for the search order and support for
+/// custom layouts through `GIT_EXEC_PATH`.
 pub fn core_dir() -> Option<&'static Path> {
     GIT_CORE_DIR.as_deref()
 }
@@ -233,9 +212,9 @@ fn is_bare_program_name(name: &str) -> bool {
     matches!(components.next(), Some(std::path::Component::Normal(_))) && components.next().is_none()
 }
 
-fn system_prefix_from_core_dir<F>(core_dir_func: F) -> Option<PathBuf>
+fn system_prefix_from_core_dir<'a, F>(core_dir_func: F) -> Option<PathBuf>
 where
-    F: Fn() -> Option<&'static Path>,
+    F: Fn() -> Option<&'a Path>,
 {
     core_dir_func()?
         .ancestors()
@@ -245,9 +224,9 @@ where
         .map(Path::to_path_buf)
 }
 
-fn system_prefix_from_exepath_var<F>(var_os_func: F) -> Option<PathBuf>
+fn system_prefix_from_exepath_var<F>(mut var_os_func: F) -> Option<PathBuf>
 where
-    F: Fn(&str) -> Option<OsString>,
+    F: FnMut(&str) -> Option<OsString>,
 {
     // Only attempt this optimization if the `EXEPATH` variable is set to an absolute path.
     let root = var_os_func("EXEPATH").map(PathBuf::from).filter(|r| r.is_absolute())?;
@@ -268,7 +247,7 @@ where
 ///
 /// Git for Windows builds this path as `../etc/gitconfig`, beside its runtime directory. On Unix,
 /// [`system_prefix()`] is `/`, yielding `/etc/gitconfig`. This is used by the `EXEPATH` shortcut
-/// and as a fallback when querying Git yields no origin.
+/// and native installation discovery.
 fn config_path_from_system_prefix(prefix: &Path) -> PathBuf {
     let prefix = if cfg!(windows) {
         prefix.parent().unwrap_or(prefix)
@@ -284,20 +263,18 @@ fn config_path_from_system_prefix(prefix: &Path) -> PathBuf {
 /// `C:/Program Files/Git/mingw64`. Git for Windows keeps its system configuration and attributes
 /// in the sibling `etc` directory. On other platforms this returns `/`.
 ///
-/// ### Performance
-///
-/// On Windows, the slowest part is the launch of the Git executable in the PATH. This is often
-/// avoided by inspecting the environment, when launched from inside a Git Bash MSYS2 shell.
-///
-/// ### When `None` is returned
-///
-/// This happens only Windows if the git binary can't be found at all for obtaining its executable
-/// path, or if the git binary wasn't built with a well-known directory structure or environment.
+/// Discovery only reads environment and conventional filesystem layouts; no Git executable is invoked.
+/// Returns `None` on Windows if no conventional runtime directory can be identified.
 pub fn system_prefix() -> Option<&'static Path> {
     if cfg!(windows) {
         static PREFIX: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
-            system_prefix_from_exepath_var(|key| std::env::var_os(key))
-                .or_else(|| system_prefix_from_core_dir(core_dir))
+            system_prefix_from_exepath_var(|key| std::env::var_os(key)).or_else(|| {
+                let core = core_dir_from_environment(
+                    |key| (key != "GIT_EXEC_PATH").then(|| std::env::var_os(key)).flatten(),
+                    &std::env::current_dir().ok()?,
+                );
+                system_prefix_from_core_dir(|| core.as_deref())
+            })
         });
         PREFIX.as_deref()
     } else {
