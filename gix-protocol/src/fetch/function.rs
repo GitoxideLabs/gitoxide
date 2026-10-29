@@ -152,10 +152,11 @@ where
     let no_done = fetch_features.iter().any(|(n, _)| *n == "no-done");
     let mut arguments = Arguments::new(protocol_version, fetch_features, trace_packetlines);
     if let Some(filter) = filter {
-        if !arguments.can_use_filter() {
-            bail!(gix_error::unsupported("Server does not support object filtering"));
+        if arguments.can_use_filter() {
+            arguments.filter(filter.as_str());
+        } else {
+            progress.info("Server does not support object filtering; receiving all objects".into());
         }
-        arguments.filter(filter.as_str());
     }
     if matches!(tags, Tags::Included) {
         if !arguments.can_use_include_tag() {

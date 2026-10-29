@@ -69,6 +69,7 @@ pub struct Options {
     /// How to adjust the shallow boundary.
     pub shallow: Shallow,
     /// Select objects for a partial fetch. Received packs are marked as promisor packs.
+    /// Servers without filter support send the complete selection instead.
     pub filter: Option<Filter>,
 }
 
