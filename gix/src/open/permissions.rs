@@ -8,10 +8,10 @@ use crate::open::Permissions;
 /// Note that configuration from inside of the repository is always loaded as it's definitely required for correctness.
 #[derive(Copy, Clone, Ord, PartialOrd, PartialEq, Eq, Debug, Hash)]
 pub struct Config {
-    /// The git binary may come with configuration as part of its configuration, and if this is true (default false)
-    /// we will load the configuration of the git binary, if present and not a duplicate of the ones below.
+    /// Load configuration bundled with the Git installation, if present and not a duplicate of the sources below.
     ///
-    /// It's disabled by default as it may involve executing the git binary once per execution of the application.
+    /// This is disabled by default. Installation paths are discovered from the filesystem and environment
+    /// without executing Git.
     pub git_binary: bool,
     /// Whether to use the system configuration.
     /// This is defined as `$(prefix)/etc/gitconfig` on unix.
@@ -69,10 +69,10 @@ impl Default for Config {
 /// Note that `.gitattribute` files from within the repository are always loaded.
 #[derive(Copy, Clone, Ord, PartialOrd, PartialEq, Eq, Debug, Hash)]
 pub struct Attributes {
-    /// The git binary may come with attribute configuration in its installation directory, and if this is true (default false)
-    /// we will load the configuration of the git binary.
+    /// Load attribute configuration bundled with the Git installation.
     ///
-    /// It's disabled by default as it involves executing the git binary once per execution of the application.
+    /// This is disabled by default. Installation paths are discovered from the filesystem and environment
+    /// without executing Git.
     pub git_binary: bool,
     /// Whether to use the system configuration.
     /// This is typically defined as `$(prefix)/etc/gitconfig`.
