@@ -195,15 +195,10 @@ impl<T: Clone> OnDiskFile<T> {
     }
 
     pub fn prepare_retry_if_available(&mut self) -> bool {
-        if !matches!(self.state, OnDiskFileState::Missing | OnDiskFileState::Failed { .. }) || !self.path.is_file() {
+        if !self.is_missing() || !self.path.is_file() {
             return false;
         }
-        match std::mem::replace(&mut self.state, OnDiskFileState::Missing) {
-            OnDiskFileState::Missing => self.state = OnDiskFileState::Unloaded,
-            other @ (OnDiskFileState::Loaded(_) | OnDiskFileState::Unloaded | OnDiskFileState::Failed { .. }) => {
-                self.state = other;
-            }
-        }
+        self.state = OnDiskFileState::Unloaded;
         true
     }
 }
@@ -509,6 +504,10 @@ mod tests {
                 err.kind(),
                 std::io::ErrorKind::InvalidData,
                 "the original error kind is preserved"
+            );
+            assert!(
+                !file.prepare_retry_if_available(),
+                "an unchanged failed file must not publish another catalog and repeat missing-object lookups"
             );
         }
         assert_eq!(attempts, 1, "an unchanged file is opened only once");
