@@ -120,6 +120,48 @@ mod blocking_io {
     }
 
     #[test]
+    fn checkout_filters_receive_operation_environment() -> TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let fixture = gix_testtools::scripted_fixture_read_only("make_native_local_fetch_repo.sh")?.canonicalize()?;
+        let root = gix_testtools::tempfile::tempdir()?;
+        let attributes = root.path().join("attributes");
+        std::fs::write(&attributes, "file filter=environment\n")?;
+        let destination = root.path().join("clone");
+        let _environment = gix_testtools::Env::new().set("PATH", root.path().to_string_lossy());
+        let mut prepare = gix::clone::PrepareFetch::new(
+            fixture.join("source"),
+            &destination,
+            gix::create::Kind::WithWorktree,
+            Default::default(),
+            gix::open::Options::isolated().config_overrides([
+                format!("core.attributesFile={}", attributes.display()),
+                "filter.environment.smudge=printf '%s' \"$GIX_CLONE_FILTER_VALUE\"".into(),
+                "filter.environment.required=true".into(),
+            ]),
+        )?;
+        let (checkout, _) = prepare.fetch_then_checkout(gix::progress::Discard, &AtomicBool::default())?;
+        let (_, outcome) = checkout
+            .with_command_environment([("GIX_CLONE_FILTER_VALUE".into(), "from child environment".into())])
+            .main_worktree(gix::progress::Discard, &AtomicBool::default())?;
+        assert!(
+            outcome.errors.is_empty() && outcome.collisions.is_empty(),
+            "checkout succeeded"
+        );
+        assert_eq!(
+            std::fs::read(destination.join("file"))?,
+            b"from child environment",
+            "clone passes its literal operation environment to smudge filters"
+        );
+        assert!(
+            std::env::var_os("GIX_CLONE_FILTER_VALUE").is_none(),
+            "parent environment is unchanged"
+        );
+        Ok(())
+    }
+
+    #[test]
     #[serial_test::serial]
     fn inherited_core_symlinks_false_is_respected() -> TestResult {
         let _environment = gix_testtools::isolate_git_environment()?;
