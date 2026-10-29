@@ -77,7 +77,7 @@ pub struct IndexLookup {
     pub(crate) file: SingleOrMultiIndex,
     /// The resource node from which packs can be loaded without resolving a mutable catalog position.
     pub(crate) slot: Arc<types::MutableIndexAndPack>,
-    /// The slot position, used only for diagnostics and deterministic test synchronization.
+    /// The slot position, used to recognize retired resource nodes and for diagnostics.
     pub(crate) slot_id: usize,
 }
 
