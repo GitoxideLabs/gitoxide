@@ -81,10 +81,19 @@ impl Cascade {
     /// When _getting_ credentials, all programs are asked until the credentials are complete, stopping the cascade.
     /// When _storing_ or _erasing_ all programs are instructed in order.
     /// The input context is validated even if no helpers are available.
-    pub fn invoke(
+    pub fn invoke(&mut self, action: helper::Action, prompt: gix_prompt::Options) -> Result<Option<protocol::Outcome>> {
+        self.invoke_with_environment(action, prompt, &[])
+    }
+
+    /// Invoke like [`Self::invoke()`], passing `environment` to helpers and askpass programs.
+    ///
+    /// Values affect only this invocation's children, including `PATH` lookup, and are not retained
+    /// for subsequent calls. Prompt selection is controlled by `prompt`, as with [`Self::invoke()`].
+    pub fn invoke_with_environment(
         &mut self,
         mut action: helper::Action,
         mut prompt: gix_prompt::Options,
+        environment: &[(std::ffi::OsString, std::ffi::OsString)],
     ) -> Result<Option<protocol::Outcome>> {
         if let Some(ctx) = action.context_mut() {
             ctx.options = self.context_options;
@@ -109,7 +118,7 @@ impl Cascade {
 
         for program in &mut self.programs {
             program.stderr = self.stderr;
-            match helper::invoke::raw(program, &action) {
+            match helper::invoke::raw_with_environment(program, &action, environment) {
                 Ok(None) => {}
                 Ok(Some(stdout)) => {
                     let Context {
@@ -181,14 +190,14 @@ impl Cascade {
             if ctx.username.is_none() {
                 let message = ctx.to_prompt("Username");
                 prompt.mode = gix_prompt::Mode::Visible;
-                ctx.username = gix_prompt::ask(&message, &prompt)
+                ctx.username = gix_prompt::ask_with_environment(&message, &prompt, environment)
                     .or_raise(|| gix_error::message!("Couldn't obtain {message}"))?
                     .into();
             }
             if ctx.password.is_none() {
                 let message = ctx.to_prompt("Password");
                 prompt.mode = gix_prompt::Mode::Hidden;
-                ctx.password = gix_prompt::ask(&message, &prompt)
+                ctx.password = gix_prompt::ask_with_environment(&message, &prompt, environment)
                     .or_raise(|| gix_error::message!("Couldn't obtain {message}"))?
                     .into();
             }

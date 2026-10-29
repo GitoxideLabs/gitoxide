@@ -354,3 +354,65 @@ mod invoke {
         names.into_iter().map(crate::helper::script_helper).collect()
     }
 }
+
+#[test]
+fn operation_environment_reaches_helpers_without_changing_the_process() -> gix_testtools::TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _environment = gix_testtools::Env::new().set("GIX_TEST_CREDENTIAL_VALUE", "process-value");
+    let mut cascade =
+        gix_credentials::helper::Cascade::default().extend([gix_credentials::Program::from_custom_definition(
+            "!f() { printf 'username=user\\npassword=%s\\n' \"$GIX_TEST_CREDENTIAL_VALUE\"; }; f",
+        )?]);
+    let action = gix_credentials::helper::Action::get_for_url("https://example.com");
+    let prompt = gix_prompt::Options {
+        mode: gix_prompt::Mode::Disable,
+        ..Default::default()
+    };
+    let outcome = cascade
+        .invoke_with_environment(
+            action.clone(),
+            prompt.clone(),
+            &[("GIX_TEST_CREDENTIAL_VALUE".into(), "operation-value".into())],
+        )?
+        .expect("helper supplies identity");
+    assert_eq!(outcome.identity.password, "operation-value");
+    assert_eq!(std::env::var("GIX_TEST_CREDENTIAL_VALUE")?, "process-value");
+    let outcome = cascade.invoke(action, prompt)?.expect("helper supplies identity");
+    assert_eq!(
+        outcome.identity.password, "process-value",
+        "per-operation values do not persist in reused cascades"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn operation_environment_reaches_askpass() -> gix_testtools::TestResult {
+    use std::os::unix::fs::PermissionsExt;
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let directory = gix_testtools::tempfile::tempdir()?;
+    let askpass = directory.path().join("askpass");
+    std::fs::write(
+        &askpass,
+        "#!/bin/sh
+printf '%s\\n' \"$GIX_TEST_ASKPASS_VALUE\"
+",
+    )?;
+    std::fs::set_permissions(&askpass, std::fs::Permissions::from_mode(0o755))?;
+    let outcome = gix_credentials::helper::Cascade::default()
+        .invoke_with_environment(
+            gix_credentials::helper::Action::get_for_url("https://user@example.com"),
+            gix_prompt::Options {
+                askpass: Some(askpass),
+                ..Default::default()
+            },
+            &[("GIX_TEST_ASKPASS_VALUE".into(), "per-operation-secret".into())],
+        )?
+        .expect("askpass supplies password");
+    assert_eq!(outcome.identity.password, "per-operation-secret");
+    Ok(())
+}

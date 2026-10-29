@@ -61,8 +61,16 @@ impl std::error::Error for HelperFailure {
 }
 
 pub(crate) fn raw(helper: &mut crate::Program, action: &Action) -> Result<Option<Vec<u8>>> {
+    raw_with_environment(helper, action, &[])
+}
+
+pub(crate) fn raw_with_environment(
+    helper: &mut crate::Program,
+    action: &Action,
+    environment: &[(std::ffi::OsString, std::ffi::OsString)],
+) -> Result<Option<Vec<u8>>> {
     let communication_error = || message("An IO error occurred while communicating to the credentials helper");
-    let (mut stdin, stdout) = helper.start(action).or_raise(communication_error)?;
+    let (mut stdin, stdout) = helper.start(action, environment).or_raise(communication_error)?;
     if let (Action::Get(_), None) = (&action, &stdout) {
         panic!("BUG: `Helper` impls must return an output handle to read output from if Action::Get is provided")
     }
