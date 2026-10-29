@@ -1,5 +1,5 @@
 use gix_error::Result;
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use crate::{Store, types::IndexAndPacks};
 
@@ -50,10 +50,21 @@ pub enum IndexState {
 impl Store {
     /// Mark the known disk state stale after the caller changed the object database.
     ///
-    /// This only makes the next miss eligible for a refresh; it performs no I/O.
-    /// An ongoing refresh is allowed to finish first so it cannot overwrite this invalidation.
+    /// This makes the next miss eligible for a refresh and cached load failures eligible for retry.
+    /// It performs no I/O and preserves successfully loaded mappings.
+    /// Ongoing loads of current resources and refreshes finish first so they cannot overwrite this invalidation.
     pub fn mark_disk_state_stale(&self) {
         let _write = self.write.lock();
+        let catalog = self.catalog.load();
+        for &slot_id in &catalog.index.slot_indices {
+            let slot = &catalog.slots[slot_id];
+            let _slot_write = slot.write.lock();
+            let mut files = slot.files.load_full();
+            if let Some(files) = Arc::make_mut(&mut files).as_mut() {
+                files.invalidate_load_errors();
+            }
+            slot.files.store(files);
+        }
         *self.last_successful_disk_state_consolidation.lock() = None;
         self.num_disk_state_stale_marks
             .fetch_add(1, std::sync::atomic::Ordering::Release);
