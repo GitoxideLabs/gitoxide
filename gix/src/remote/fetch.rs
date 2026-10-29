@@ -30,3 +30,23 @@ pub(crate) enum WritePackedRefs {
 #[cfg(any(feature = "blocking-network-client", feature = "async-network-client"))]
 pub use gix_protocol::fetch::{RefMap, refmap};
 pub use gix_protocol::fetch::{Shallow, Tags};
+
+/// Options for [`crate::Remote::fetch()`].
+#[cfg(feature = "blocking-network-client")]
+#[derive(Default)]
+pub struct Options {
+    /// Additional ref mapping and handshake options.
+    pub ref_map: crate::remote::ref_map::Options,
+    /// Report proposed changes without writing objects, refs, or shallow state.
+    pub dry_run: bool,
+    /// Delete stale destinations covered by explicit refspecs before updating fetched refs.
+    pub prune: bool,
+    /// Allow a selection whose exact source refs no longer exist.
+    pub missing_refs_allowed: bool,
+    /// Write reference updates directly to packed-refs.
+    pub write_packed_refs_only: bool,
+    /// Override the reflog message; by default it describes a fetch.
+    pub reflog_message: Option<RefLogMessage>,
+    /// How to adjust the shallow boundary.
+    pub shallow: Shallow,
+}

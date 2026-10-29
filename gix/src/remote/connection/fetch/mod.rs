@@ -178,6 +178,8 @@ where
 }
 
 mod config;
+#[cfg(feature = "blocking-network-client")]
+mod local;
 mod receive_pack;
 ///
 #[path = "update_refs/mod.rs"]
