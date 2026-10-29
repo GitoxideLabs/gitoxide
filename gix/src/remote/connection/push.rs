@@ -132,7 +132,7 @@ impl<T: Transport> Connection<'_, '_, '_, T> {
                     push::plan::check_interrupt(should_interrupt)?;
                     object_ids.push(entry?.id);
                 }
-                repo.write_pack(object_ids, output, should_interrupt)?;
+                repo.write_pack(object_ids, output, crate::progress::Discard, should_interrupt)?;
                 Ok(())
             },
             remote_progress,

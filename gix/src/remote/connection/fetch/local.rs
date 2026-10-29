@@ -409,7 +409,7 @@ where
         gix_tempfile::AutoRemove::Tempfile,
     )
     .or_raise(|| message("Could not create temporary fetch pack"))?;
-    source.write_pack(objects.iter().copied(), &mut file, interrupt)?;
+    source.write_pack(objects.iter().copied(), &mut file, crate::progress::Discard, interrupt)?;
     file.rewind().or_error()?;
     gix_pack::Bundle::write_to_directory(
         &mut io::BufReader::new(file),

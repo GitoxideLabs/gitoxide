@@ -75,6 +75,7 @@ extras = [
     "blame",
     "merge",
     "notes",
+    "pack-generate",
 ]
 
 ## Various progress-related features that improve the look of progress message units.
