@@ -33,6 +33,53 @@ fn checked_out_branches_includes_main_and_symbolic_referents() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn checked_out_branches_reserves_rebase_update_refs() -> TestResult {
+    for occupied in ["main", "linked"] {
+        let Some(fixture) = gix_testtools::scripted_fixture_read_only_with_args_with_git_version(
+            "make_worktree_reserved_branches.sh",
+            ["rebase-update-refs", occupied],
+            |version| version >= (2, 38, 0),
+        )?
+        else {
+            return Ok(());
+        };
+        for caller in ["main", "linked"] {
+            let repo = gix::open_opts(fixture.join(caller), crate::restricted())?;
+            let branches = repo.checked_out_branches()?;
+            let name = gix::refs::FullName::try_from("refs/heads/intermediate")?;
+            let paths = branches.get(&name).expect("rebase reserves its intermediate branches");
+            assert_eq!(paths.len(), 1, "the rebase worktree is reported once");
+            assert_eq!(
+                paths[0].canonicalize()?,
+                fixture.join(occupied).canonicalize()?,
+                "both callers locate the rebase's worktree"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn checked_out_branches_rejects_invalid_rebase_update_refs() -> TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_invalid_rebase_update_refs.sh")?;
+    for name in [
+        "missing-before",
+        "missing-after",
+        "invalid-before",
+        "invalid-after",
+        "invalid-ref",
+        "wrong-hash",
+    ] {
+        let repo = gix::open_opts(fixture.join(name), crate::restricted())?;
+        assert!(
+            repo.checked_out_branches().is_err(),
+            "{name}: unreadable reservations must not allow a branch to be overwritten"
+        );
+    }
+    Ok(())
+}
+
 #[cfg(feature = "worktree-mutation")]
 mod lock {
     use gix::bstr::ByteSlice;
