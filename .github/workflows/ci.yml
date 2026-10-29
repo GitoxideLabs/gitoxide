@@ -602,6 +602,12 @@ jobs:
           for crate in "${crates[@]}"; do
             cargo build -p "$crate" --target "$TARGET"
           done
+      - name: gix-regex with and without the standard library
+        run: |
+          set -x
+          for feature in '' no_std; do
+            cargo build -p gix-regex --no-default-features --features "$feature" --target "$TARGET"
+          done
       - name: features of gix-parallel and gix-utils
         run: |
           set -x
