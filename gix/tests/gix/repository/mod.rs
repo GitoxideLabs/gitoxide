@@ -13,6 +13,8 @@ mod blame;
 #[cfg(feature = "blame")]
 mod blame_worktree;
 #[cfg(feature = "blame")]
+mod blame_paths;
+#[cfg(feature = "blame")]
 mod blame_textconv;
 mod branch;
 #[cfg(feature = "pack-generate")]
