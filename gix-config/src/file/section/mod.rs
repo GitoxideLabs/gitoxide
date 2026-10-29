@@ -11,7 +11,7 @@ use crate::{
 
 pub(crate) mod body;
 pub(crate) use body::BodyData;
-pub use body::{BodyRef, BodyRefIter};
+pub use body::{BodyRef, BodyRefIter, BodyRefIterImplicit};
 use gix_parallel::OwnShared;
 
 use crate::file::{SectionId, write::platform_newline};
