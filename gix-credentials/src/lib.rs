@@ -18,6 +18,9 @@ pub struct Program {
     /// Working directory for helper processes and relative native helper paths.
     /// `None` uses the current process directory.
     pub current_dir: Option<std::path::PathBuf>,
+    /// An explicit Git-compatible executable for subprocess calls to `credential` and native helpers.
+    /// `None` uses Git discovery. Static native store/cache operations remain in-process.
+    pub builtin_dispatcher: Option<std::path::PathBuf>,
     /// If true, stderr is enabled, which is the default.
     pub stderr: bool,
     /// How long the native `store` helper waits for its file lock. Defaults to one second.
