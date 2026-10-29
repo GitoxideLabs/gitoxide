@@ -11,6 +11,50 @@ fn remote_name(name: &str) -> BString {
 }
 
 #[test]
+fn local_branches_tracking_ref_matches_git_without_requiring_remote_refs() -> gix_testtools::TestResult {
+    let path = gix_testtools::scripted_fixture_read_only("make_local_tracking_branches.sh")?;
+    let mut repo = gix::open_opts(&path, gix::open::Options::isolated())?;
+    let tracking_ref: &gix::refs::FullNameRef = "refs/remotes/cache/topic".try_into()?;
+    assert!(
+        repo.try_find_reference(tracking_ref)?.is_none(),
+        "the tracking ref need not exist"
+    );
+    let expected: Vec<_> = std::fs::read_to_string(path.join("branch-upstreams"))?
+        .lines()
+        .filter_map(|line| line.split_once(' '))
+        .filter(|(_, upstream)| *upstream == tracking_ref.as_bstr())
+        .map(|(branch, _)| BString::from(branch))
+        .collect();
+    let actual: Vec<_> = repo
+        .local_branches_tracking_ref(tracking_ref)?
+        .into_iter()
+        .map(|branch| branch.name().as_bstr().to_owned())
+        .collect();
+    assert_eq!(
+        actual, expected,
+        "all existing configured trackers match Git's upstream query"
+    );
+    assert_eq!(
+        actual,
+        ["refs/heads/renamed", "refs/heads/second"],
+        "branch names and stale branch config do not select trackers"
+    );
+    assert!(
+        repo.local_branches_tracking_ref("refs/remotes/cache/missing".try_into()?)?
+            .is_empty(),
+        "no configured tracker is a valid empty result"
+    );
+
+    repo.config_snapshot_mut()
+        .set_raw_value("branch.second.merge", "refs/heads/invalid name")?;
+    assert!(
+        repo.local_branches_tracking_ref(tracking_ref).is_err(),
+        "invalid upstream configuration is not treated as absence"
+    );
+    Ok(())
+}
+
+#[test]
 fn legacy_names_can_be_used_for_lookup() -> gix_testtools::TestResult {
     let path = gix_testtools::scripted_fixture_read_only("make_legacy_subsection_repo.sh")?;
     let repo = gix::open_opts(&path, gix::open::Options::isolated())?;
