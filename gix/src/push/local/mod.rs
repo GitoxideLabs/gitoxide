@@ -45,6 +45,7 @@ pub(crate) fn push(
         updates,
         handshake.refs.as_deref().unwrap_or_default(),
         &shallow,
+        options.follow_tags.unwrap_or(false),
         should_interrupt,
     )?;
     if options.atomic

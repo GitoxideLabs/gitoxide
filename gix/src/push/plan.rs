@@ -43,6 +43,7 @@ pub(crate) fn updates(
     updates: impl IntoIterator<Item = Update>,
     remote_refs: &[gix_protocol::handshake::Ref],
     shallow: &[ObjectId],
+    follow_tags: bool,
     should_interrupt: &AtomicBool,
 ) -> Result<Vec<UpdateOutcome>> {
     let mut names = std::collections::HashSet::new();
@@ -77,7 +78,87 @@ pub(crate) fn updates(
         let status = status(repo, remote, &update, old_id, shallow, should_interrupt)?;
         out.push(UpdateOutcome { update, old_id, status });
     }
+    if follow_tags {
+        add_follow_tags(repo, &mut out, remote_refs, shallow, should_interrupt)?;
+    }
     Ok(out)
+}
+
+fn add_follow_tags(
+    repo: &Repository,
+    updates: &mut Vec<UpdateOutcome>,
+    remote_refs: &[gix_protocol::handshake::Ref],
+    shallow: &[ObjectId],
+    should_interrupt: &AtomicBool,
+) -> Result<()> {
+    let present: std::collections::HashSet<_> = remote_refs
+        .iter()
+        .map(|reference| reference.unpack().0.to_owned())
+        .chain(
+            updates
+                .iter()
+                .map(|update| update.update.destination.as_bstr().to_owned()),
+        )
+        .collect();
+    let mut candidates = Vec::new();
+    for reference in repo.references()?.tags()? {
+        check_interrupt(should_interrupt)?;
+        let mut reference = reference?;
+        if present.contains(reference.name().as_bstr()) {
+            continue;
+        }
+        let tag_id = reference.follow_to_object()?.detach();
+        if repo.find_object(tag_id)?.kind == gix_object::Kind::Tag
+            && let Some(commit_id) = peel_commit(repo, tag_id)?
+        {
+            candidates.push((reference.name().to_owned(), tag_id, commit_id));
+        }
+    }
+    if candidates.is_empty() {
+        return Ok(());
+    }
+    let mut tips: Vec<_> = updates.iter().filter_map(|update| update.update.new_id).collect();
+    for reference in remote_refs {
+        let (name, object_id, _) = reference.unpack();
+        // Git retains the advertised tip for deletions as well as untouched references.
+        if !updates
+            .iter()
+            .any(|update| update.update.destination.as_bstr() == name && update.update.new_id.is_some())
+        {
+            tips.extend(object_id.map(ToOwned::to_owned));
+        }
+    }
+    let mut commit_tips = Vec::new();
+    for object_id in tips {
+        if repo.try_find_object(object_id)?.is_some()
+            && let Some(commit_id) = peel_commit(repo, object_id)?
+        {
+            commit_tips.push(commit_id);
+        }
+    }
+    let reachable = reachable_ancestors(
+        repo,
+        candidates.iter().map(|(_, _, commit_id)| *commit_id),
+        commit_tips,
+        shallow,
+        should_interrupt,
+    )?;
+    updates.extend(
+        candidates
+            .into_iter()
+            .filter(|(_, _, commit_id)| reachable.contains(commit_id))
+            .map(|(destination, tag_id, _)| UpdateOutcome {
+                update: Update {
+                    destination,
+                    new_id: Some(tag_id),
+                    lease: Lease::Any,
+                    force: false,
+                },
+                old_id: None,
+                status: Status::WouldUpdate { forced: false },
+            }),
+    );
+    Ok(())
 }
 
 fn status(
@@ -178,12 +259,27 @@ pub(super) fn is_ancestor_of_any(
     shallow: &[ObjectId],
     should_interrupt: &AtomicBool,
 ) -> Result<bool> {
+    Ok(!reachable_ancestors(repo, [old_id], new_ids, shallow, should_interrupt)?.is_empty())
+}
+
+fn reachable_ancestors(
+    repo: &Repository,
+    old_ids: impl IntoIterator<Item = ObjectId>,
+    new_ids: impl IntoIterator<Item = ObjectId>,
+    shallow: &[ObjectId],
+    should_interrupt: &AtomicBool,
+) -> Result<gix_hashtable::HashSet<ObjectId>> {
+    let mut wanted: gix_hashtable::HashSet<_> = old_ids.into_iter().collect();
+    let mut found = gix_hashtable::HashSet::default();
     let mut pending = VecDeque::from_iter(new_ids);
     let mut seen = gix_hashtable::HashSet::default();
     while let Some(commit_id) = pending.pop_front() {
         check_interrupt(should_interrupt)?;
-        if commit_id == old_id {
-            return Ok(true);
+        if wanted.remove(&commit_id) {
+            found.insert(commit_id);
+            if wanted.is_empty() {
+                break;
+            }
         }
         if !seen.insert(commit_id) || shallow.contains(&commit_id) {
             continue;
@@ -199,7 +295,7 @@ pub(super) fn is_ancestor_of_any(
             }
         }
     }
-    Ok(false)
+    Ok(found)
 }
 
 pub(crate) fn check_interrupt(should_interrupt: &AtomicBool) -> Result<()> {
