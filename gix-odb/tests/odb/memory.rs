@@ -174,6 +174,56 @@ fn without_memory_forwards_known_id_writes() -> gix_testtools::TestResult {
     Ok(())
 }
 
+#[test]
+fn pack_lookup_retains_memory_and_delegates_disk_locations() -> gix_testtools::TestResult {
+    use gix_pack::Find as _;
+    let mut objects = crate::db();
+    objects.prevent_pack_unload();
+    let odb = gix_odb::memory::Proxy::new(objects, gix_hash::Kind::Sha1);
+    let mut buf = Vec::new();
+    let blob_id = odb.write_buf(gix_object::Kind::Blob, b"pack from memory")?;
+    assert!(odb.contains(&blob_id), "pack lookup sees in-memory writes");
+    let (data, location) = gix_pack::Find::try_find(&odb, &blob_id, &mut buf)?.expect("memory object is available");
+    assert_eq!(data.data, b"pack from memory", "pack lookup retains object bytes");
+    assert!(location.is_none(), "memory objects have no pack location");
+    assert!(
+        odb.location_by_oid(&blob_id, &mut buf)?.is_none(),
+        "memory never borrows an unrelated pack location"
+    );
+    let mut saw_pack = false;
+    for id in (*odb).iter()? {
+        let id = id?;
+        let (_, actual) = gix_pack::Find::try_find(&odb, &id, &mut buf)?.expect("fixture object exists");
+        let expected = (*odb).location_by_oid(&id, &mut buf)?;
+        assert_eq!(actual, expected, "disk object locations survive the memory proxy");
+        if let Some(location) = actual {
+            saw_pack = true;
+            assert!(
+                odb.entry_by_location(&location).is_some(),
+                "packed bytes remain accessible"
+            );
+            assert!(
+                odb.pack_offsets_and_oid(location.pack_id)?.is_some(),
+                "pack indexes remain accessible"
+            );
+            odb.write_buf_with_known_id(gix_object::Kind::Blob, b"memory override", id)?;
+            assert!(
+                odb.location_by_oid(&id, &mut buf)?.is_none(),
+                "an in-memory override cannot copy old packed bytes"
+            );
+            let (data, location) = gix_pack::Find::try_find(&odb, &id, &mut buf)?.expect("override is available");
+            assert_eq!(
+                data.data, b"memory override",
+                "memory takes precedence over a packed object"
+            );
+            assert!(location.is_none(), "the override is not stored in the old pack");
+            break;
+        }
+    }
+    assert!(saw_pack, "the fixture exercises packed-object delegation");
+    Ok(())
+}
+
 fn db() -> Result<gix_odb::memory::Proxy<gix_odb::Handle>> {
     let odb = crate::odb_at(crate::scripted_fixture_read_only("repo_with_loose_objects.sh")?.join(".git/objects"))?;
     Ok(gix_odb::memory::Proxy::new(odb, gix_testtools::object_hash()))
