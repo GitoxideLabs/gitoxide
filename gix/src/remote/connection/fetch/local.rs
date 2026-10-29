@@ -51,8 +51,8 @@ impl Remote<'_> {
         P: gix_utils::progress::NestedProgress,
         P::SubProgress: 'static,
     {
-        if let Some(source) = local::open(self)? {
-            return receive(self, &source, options, progress, should_interrupt);
+        if let Some(prepare) = PrepareLocal::new(self, options.ref_map.clone())? {
+            return prepare.receive(self.repo, options, progress, should_interrupt);
         }
         let mut prepare = self
             .connect(Direction::Fetch)?
@@ -69,10 +69,57 @@ impl Remote<'_> {
     }
 }
 
+/// Native local fetch preparation with a fixed advertisement and no destination borrow.
+pub(crate) struct PrepareLocal {
+    remote: crate::remote::connection::RemoteDetached,
+    source: Repository,
+    pub(crate) ref_map: fetch::RefMap,
+    handshake: gix_protocol::Handshake,
+}
+
+impl PrepareLocal {
+    pub(crate) fn new(remote: &Remote<'_>, options: crate::remote::ref_map::Options) -> Result<Option<Self>> {
+        let Some(source) = local::open(remote)? else {
+            return Ok(None);
+        };
+        let (ref_map, handshake) = local::ref_map(remote, &source, options)?;
+        Ok(Some(Self {
+            remote: remote.detached(),
+            source,
+            ref_map,
+            handshake,
+        }))
+    }
+
+    pub(crate) fn receive<P>(
+        self,
+        repo: &Repository,
+        options: fetch::Options,
+        progress: P,
+        interrupt: &AtomicBool,
+    ) -> Result<fetch::Outcome>
+    where
+        P: gix_utils::progress::NestedProgress,
+        P::SubProgress: 'static,
+    {
+        receive(
+            &self.remote.attach_for_fetch(repo),
+            &self.source,
+            self.ref_map,
+            self.handshake,
+            options,
+            progress,
+            interrupt,
+        )
+    }
+}
+
 fn receive<P>(
     remote: &Remote<'_>,
     source: &Repository,
-    mut options: fetch::Options,
+    ref_map: fetch::RefMap,
+    handshake: gix_protocol::Handshake,
+    options: fetch::Options,
     mut progress: P,
     interrupt: &AtomicBool,
 ) -> Result<fetch::Outcome>
@@ -93,7 +140,6 @@ where
     let mut destination = remote.repo.clone();
     destination.make_paths_absolute()?;
     destination.objects.ignore_replacements = true;
-    let (ref_map, handshake) = local::ref_map(remote, source, std::mem::take(&mut options.ref_map))?;
     if ref_map.refspecs.is_empty() && ref_map.extra_refspecs.is_empty() {
         bail!(message("Cannot fetch without any refspecs").validation());
     }
@@ -110,7 +156,10 @@ where
             .try_boolean("clone.rejectShallow")?
             .unwrap_or(false)
     {
-        bail!(message("Receiving objects from shallow remotes is prohibited by clone.rejectShallow").validation());
+        bail!(
+            message("Receiving objects from shallow remotes is prohibited due to the value of `clone.rejectShallow`")
+                .validation()
+        );
     }
     let shallow_path = destination.shallow_file()?;
     let shallow_lock = if !options.dry_run
