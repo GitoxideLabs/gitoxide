@@ -5,7 +5,7 @@ use gix_error::{Result, ResultExt};
 
 use crate::{Program, helper};
 
-mod builtin;
+pub(crate) mod builtin;
 pub(crate) mod store;
 
 /// Git-compatible in-memory credential caching over Unix sockets.

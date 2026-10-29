@@ -389,3 +389,72 @@ mod to_url {
         );
     }
 }
+
+mod from_credential_input {
+    use std::{io::Write, process::Stdio};
+
+    use crate::TestResult;
+    use gix_credentials::protocol::Context;
+
+    #[test]
+    fn urls_replace_prior_fields_and_later_fields_override_them_like_git() -> TestResult {
+        let dir = gix_testtools::tempfile::tempdir()?;
+        for input in [
+            "protocol=discarded
+host=discarded
+wwwauth[]=discarded
+url=https://url-user:url-password@First.EXAMPLE:443/one%2Ftwo/
+host=second.example
+username=tail-user
+password=tail-password
+path=literal%2Fpath
+",
+            "url=https://first:first-secret@first.example/old
+url=https://second:second-secret@Second.EXAMPLE:443/last%2Fpath/
+",
+            "url=https://:@example.com/
+",
+            "url=file:///path/to/item
+username=user
+password=secret
+",
+            "protocol=https
+host=example.com
+username=user
+password=secret
+
+host=ignored.example
+",
+        ] {
+            let mut child = gix_testtools::git_command(dir.path())
+                .args(["credential", "fill"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()?;
+            child.stdin.take().expect("piped input").write_all(input.as_bytes())?;
+            let reference = child.wait_with_output()?;
+            assert!(reference.status.success(), "complete credentials need no prompting");
+            let expected = Context::from_bytes(&reference.stdout, Default::default())?;
+            let actual = Context::from_credential_input(input.as_bytes(), Default::default())?;
+            assert_eq!(actual, expected, "credential input follows the ordered Git protocol");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn superseded_fields_and_urls_still_require_valid_protocol_bytes() {
+        for input in [
+            b"password=invalid\0value\nurl=https://user:password@example.com\n".as_slice(),
+            b"password=invalid\rvalue\nurl=https://user:password@example.com\n",
+            b"malformed\nurl=https://user:password@example.com\n",
+            b"url=https://user:bad%0avalue@example.com\nurl=https://user:password@example.com\n",
+            b"url=https://user:bad%00value@example.com\nurl=https://user:password@example.com\n",
+        ] {
+            assert!(
+                Context::from_credential_input(input, Default::default()).is_err(),
+                "replacing fields must not hide an earlier invalid input"
+            );
+        }
+    }
+}
