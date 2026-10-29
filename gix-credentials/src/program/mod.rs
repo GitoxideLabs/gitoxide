@@ -1,4 +1,4 @@
-use std::{ffi::OsString, process::Stdio};
+use std::{ffi::OsString, path::Path, process::Stdio};
 
 use bstr::{BString, ByteSlice, ByteVec};
 use gix_error::{Result, ResultExt};
@@ -13,7 +13,11 @@ pub(crate) mod store;
 pub mod cache;
 
 /// Prefix a helper name while preserving the shell syntax of its optional arguments.
-fn external_name_command(name_and_args: &bstr::BStr, action: &helper::Action) -> Result<gix_command::Prepare> {
+fn external_name_command(
+    name_and_args: &bstr::BStr,
+    action: &helper::Action,
+    builtin_dispatcher: Option<&Path>,
+) -> Result<gix_command::Prepare> {
     let name = name_and_args
         .split(|byte| matches!(*byte, b' ' | b'\t' | b'\n'))
         .next()
@@ -24,9 +28,11 @@ fn external_name_command(name_and_args: &bstr::BStr, action: &helper::Action) ->
         name
     };
     let builtin = matches!(name, b"store" | b"cache" | b"cache--daemon");
-    // Keep builtin precedence until these helper implementations move into this crate.
+    // Shell-expanded native helpers still need a dispatcher after their arguments are expanded.
     let mut command = if builtin {
-        let program = gix_path::to_unix_separators_on_windows(gix_path::into_bstr(gix_path::env::exe_invocation())?);
+        let program = gix_path::to_unix_separators_on_windows(gix_path::into_bstr(
+            builtin_dispatcher.unwrap_or_else(|| gix_path::env::exe_invocation()),
+        )?);
         let mut command = gix_quote::single(program.as_ref());
         command.push_str(" credential-");
         command
@@ -82,6 +88,7 @@ impl Program {
             kind,
             child: None,
             current_dir: None,
+            builtin_dispatcher: None,
             stderr: true,
             store_lock_timeout: std::time::Duration::from_secs(1).into(),
             #[cfg(unix)]
@@ -115,6 +122,7 @@ impl Program {
                 kind,
                 child: None,
                 current_dir: None,
+                builtin_dispatcher: None,
                 stderr: true,
                 store_lock_timeout: std::time::Duration::from_secs(1).into(),
                 #[cfg(unix)]
@@ -140,10 +148,16 @@ impl Program {
         environment: &[(std::ffi::OsString, std::ffi::OsString)],
     ) -> Result<std::process::Command> {
         let mut prepare = match &self.kind {
-            Kind::Builtin => gix_command::prepare(gix_path::env::exe_invocation())
-                .arg("credential")
-                .arg(action.as_arg(false)),
-            Kind::ExternalName { name_and_args } => external_name_command(name_and_args.as_bstr(), action)?,
+            Kind::Builtin => gix_command::prepare(
+                self.builtin_dispatcher
+                    .as_deref()
+                    .unwrap_or_else(|| gix_path::env::exe_invocation()),
+            )
+            .arg("credential")
+            .arg(action.as_arg(false)),
+            Kind::ExternalName { name_and_args } => {
+                external_name_command(name_and_args.as_bstr(), action, self.builtin_dispatcher.as_deref())?
+            }
             Kind::ExternalShellScript(for_shell)
             | Kind::ExternalPath {
                 path_and_args: for_shell,
@@ -241,6 +255,7 @@ mod tests {
         let cmd: std::process::Command = super::external_name_command(
             "manager --config=~/credentials".into(),
             &crate::helper::Action::Get(Default::default()),
+            None,
         )?
         .try_into()?;
         let script = cmd
