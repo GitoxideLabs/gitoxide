@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use gix::remote::Direction;
+use gix::{bstr::ByteSlice, remote::Direction};
 use gix_object::Exists;
 use gix_testtools::TestResult;
 
@@ -588,6 +588,142 @@ fn native_fetch_rejects_a_partial_missing_selection_before_updates() -> TestResu
     assert!(
         local.try_find_reference("refs/remotes/origin/main")?.is_none(),
         "no partial update is made"
+    );
+    Ok(())
+}
+
+#[test]
+fn explicit_fetch_head_matches_git_with_branch_merge_and_tag_policies() -> TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_native_local_fetch_repo.sh")?.canonicalize()?;
+    for (tags, tag_option) in [
+        (gix::remote::fetch::Tags::Included, None),
+        (gix::remote::fetch::Tags::None, Some("--no-tags")),
+        (gix::remote::fetch::Tags::All, Some("--tags")),
+    ] {
+        let tmp = gix_testtools::tempfile::tempdir()?;
+        for name in ["native", "git"] {
+            gix_testtools::git(tmp.path(), &format!("init -b main {name}"))?;
+            let output = gix_testtools::git_command(tmp.path().join(name))
+                .args(["remote", "add", "origin"])
+                .arg(fixture.join("source"))
+                .output()?;
+            assert!(output.status.success(), "the fixture remote is configured");
+            gix_testtools::git(tmp.path().join(name), "config user.name fixture")?;
+            gix_testtools::git(tmp.path().join(name), "config user.email fixture@example.com")?;
+            gix_testtools::git(tmp.path().join(name), "config branch.main.remote origin")?;
+            gix_testtools::git(tmp.path().join(name), "config branch.main.merge refs/heads/main")?;
+        }
+        let mut command = gix_testtools::git_command(tmp.path().join("git"));
+        command.args(["fetch", "--quiet"]);
+        if let Some(option) = tag_option {
+            command.arg(option);
+        }
+        command.args(["origin", "+refs/heads/*:refs/remotes/origin/*"]);
+        for _ in 0..2 {
+            let output = command.output()?;
+            assert!(output.status.success(), "Git fetch succeeds: {output:?}");
+            let local = repo(tmp.path().join("native"))?;
+            let remote = local.find_remote("origin")?.with_fetch_tags(tags);
+            remote.fetch(
+                gix::remote::fetch::Options {
+                    write_fetch_head: true,
+                    ..Default::default()
+                },
+                gix::progress::Discard,
+                &std::sync::atomic::AtomicBool::new(false),
+            )?;
+            let actual = std::fs::read(local.git_dir().join("FETCH_HEAD"))?;
+            let expected = std::fs::read(tmp.path().join("git/.git/FETCH_HEAD"))?;
+            assert_eq!(
+                actual.lines().next(),
+                expected.lines().next(),
+                "FETCH_HEAD resolves to Git's first merge candidate"
+            );
+            let mut actual: Vec<_> = actual.lines().map(ByteSlice::as_bstr).collect();
+            let mut expected: Vec<_> = expected.lines().map(ByteSlice::as_bstr).collect();
+            actual.sort();
+            expected.sort();
+            assert_eq!(
+                actual, expected,
+                "explicit wildcard merge marking and {tags:?} tag records match Git"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn fetch_head_lock_failure_dry_run_and_missing_sources_preserve_state() -> TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_native_local_fetch_repo.sh")?.canonicalize()?;
+    let tmp = gix_testtools::tempfile::tempdir()?;
+    gix_testtools::git(tmp.path(), "init --bare")?;
+    let local = repo(tmp.path())?;
+    let mut remote = local
+        .remote_at(gix::path::into_bstr(fixture.join("source"))?)?
+        .with_refspecs(["refs/heads/main:refs/remotes/origin/main"], Direction::Fetch)?;
+    let head = local.git_dir().join("FETCH_HEAD");
+    let old_contents = b"previous fetch\n";
+    std::fs::write(&head, old_contents)?;
+    let lock = local.git_dir().join("FETCH_HEAD.lock");
+    std::fs::write(&lock, b"another fetch")?;
+    let interrupt = std::sync::atomic::AtomicBool::new(false);
+    assert!(
+        remote
+            .fetch(
+                gix::remote::fetch::Options {
+                    write_fetch_head: true,
+                    ..Default::default()
+                },
+                gix::progress::Discard,
+                &interrupt
+            )
+            .is_err(),
+        "lock contention is reported before transfer or ref updates"
+    );
+    assert!(
+        local.try_find_reference("refs/remotes/origin/main")?.is_none(),
+        "locking failure makes no ref changes"
+    );
+    remote.fetch(
+        gix::remote::fetch::Options {
+            write_fetch_head: true,
+            dry_run: true,
+            ..Default::default()
+        },
+        gix::progress::Discard,
+        &interrupt,
+    )?;
+    assert_eq!(
+        std::fs::read(&head)?,
+        old_contents,
+        "a dry run never writes or locks FETCH_HEAD"
+    );
+    std::fs::remove_file(lock)?;
+    remote.replace_refspecs(
+        ["refs/heads/main:refs/remotes/origin/main", "refs/heads/absent"],
+        Direction::Fetch,
+    )?;
+    assert!(
+        remote
+            .fetch(
+                gix::remote::fetch::Options {
+                    write_fetch_head: true,
+                    ..Default::default()
+                },
+                gix::progress::Discard,
+                &interrupt
+            )
+            .is_err(),
+        "missing required sources reject the fetch"
+    );
+    assert_eq!(
+        std::fs::read(&head)?,
+        old_contents,
+        "a failed fetch retains its previous FETCH_HEAD"
+    );
+    assert!(
+        !local.git_dir().join("FETCH_HEAD.lock").exists(),
+        "failure releases the fetch lock"
     );
     Ok(())
 }

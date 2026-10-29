@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeSet, VecDeque},
-    io::{self, Seek},
+    io::{self, Seek, Write},
     sync::atomic::{AtomicBool, Ordering},
 };
 
@@ -8,6 +8,7 @@ use gix_object::{Exists, FindExt, Kind};
 
 use crate::{
     ObjectId, Remote, Repository, Result,
+    bstr::ByteSlice,
     error::{ResultExt, bail, message},
     remote::{Direction, fetch, local},
 };
@@ -18,7 +19,8 @@ impl Remote<'_> {
     /// Network URLs use [`Self::connect()`] and [`fetch::Prepare::receive()`]. Local fetches
     /// transfer verified raw objects in a self-contained pack, obey tag and ref visibility
     /// policies, and protect reference updates with transactions. Replacement refs do not
-    /// affect transferred objects. Neither path writes `FETCH_HEAD` nor runs maintenance.
+    /// affect transferred objects. `FETCH_HEAD` is written only when requested by `options`;
+    /// neither path runs maintenance.
     ///
     /// Native local fetch currently supports preserving the shallow boundary and setting an
     /// absolute depth. Shallow source boundaries are preserved, as with `git fetch --update-shallow`;
@@ -51,22 +53,113 @@ impl Remote<'_> {
         P: gix_utils::progress::NestedProgress,
         P::SubProgress: 'static,
     {
-        if let Some(prepare) = PrepareLocal::new(self, options.ref_map.clone())? {
-            return prepare.receive(self.repo, options, progress, should_interrupt);
+        check_interrupt(should_interrupt)?;
+        let fetch_head = if options.write_fetch_head && !options.dry_run {
+            Some(
+                gix_lock::File::acquire_to_update_resource(
+                    self.repo.current_dir().join(self.repo.git_dir()).join("FETCH_HEAD"),
+                    gix_lock::acquire::Fail::Immediately,
+                    None,
+                    0,
+                )
+                .or_raise(|| message("Could not lock FETCH_HEAD before fetching"))?,
+            )
+        } else {
+            None
+        };
+        let outcome = if let Some(prepare) = PrepareLocal::new(self, options.ref_map.clone())? {
+            prepare.receive(self.repo, options, progress, should_interrupt)?
+        } else {
+            let mut prepare = self
+                .connect(Direction::Fetch)?
+                .prepare_fetch(&mut progress, options.ref_map)?
+                .with_dry_run(options.dry_run)
+                .with_prune(options.prune)
+                .with_missing_refs_allowed(options.missing_refs_allowed)
+                .with_write_packed_refs_only(options.write_packed_refs_only)
+                .with_shallow(options.shallow);
+            if let Some(message) = options.reflog_message {
+                prepare = prepare.with_reflog_message(message);
+            }
+            prepare.receive_with_remote_progress(progress, remote_progress, should_interrupt)?
+        };
+        if let Some(file) = fetch_head {
+            write_fetch_head(self, &outcome, file, should_interrupt)?;
         }
-        let mut prepare = self
-            .connect(Direction::Fetch)?
-            .prepare_fetch(&mut progress, options.ref_map)?
-            .with_dry_run(options.dry_run)
-            .with_prune(options.prune)
-            .with_missing_refs_allowed(options.missing_refs_allowed)
-            .with_write_packed_refs_only(options.write_packed_refs_only)
-            .with_shallow(options.shallow);
-        if let Some(message) = options.reflog_message {
-            prepare = prepare.with_reflog_message(message);
-        }
-        prepare.receive_with_remote_progress(progress, remote_progress, should_interrupt)
+        Ok(outcome)
     }
+}
+
+fn write_fetch_head(
+    remote: &Remote<'_>,
+    outcome: &fetch::Outcome,
+    mut file: gix_lock::File,
+    interrupt: &AtomicBool,
+) -> Result<()> {
+    use fetch::refs::update::Mode;
+
+    let mut url = remote.url(Direction::Fetch).expect("fetch required a URL").clone();
+    url.set_user(None);
+    url.set_password(None);
+    let url = url.to_bstring();
+    let url = url.trim_end_with(|character| character == '/');
+    let url = if url.len() > 5 {
+        url.strip_suffix(b".git").unwrap_or(url)
+    } else {
+        url
+    };
+    let url = url.replace(b"\n", b"\\n");
+    let updates = match &outcome.status {
+        fetch::Status::NoPackReceived { update_refs, .. } | fetch::Status::Change { update_refs, .. } => update_refs,
+    };
+    let mut entries = Vec::new();
+    for (mapping, update) in outcome.ref_map.mappings.iter().zip(&updates.updates) {
+        check_interrupt(interrupt)?;
+        let Some(object_id) = mapping.remote.as_id() else {
+            continue;
+        };
+        let implicit = mapping.spec_index.implicit_index().is_some();
+        if matches!(
+            update.mode,
+            Mode::ImplicitTagNotSentByRemote | Mode::RejectedSourceObjectNotFound { .. }
+        ) || (implicit && remote.fetch_tags == fetch::Tags::Included && update.mode == Mode::NoChangeNeeded)
+        {
+            continue;
+        }
+        let for_merge = !implicit && remote.repo.find_object(object_id)?.peel_tags_to_end()?.kind == Kind::Commit;
+        entries.push((for_merge, mapping, object_id));
+    }
+    // FETCH_HEAD resolves to the first merge candidate, even when it followed implicit mappings.
+    entries.sort_by_key(|(for_merge, ..)| !for_merge);
+    for (for_merge, mapping, object_id) in entries {
+        check_interrupt(interrupt)?;
+        write!(file, "{object_id}\t{}\t", if for_merge { "" } else { "not-for-merge" }).or_error()?;
+        let object_name = object_id.to_string();
+        let name = mapping
+            .remote
+            .as_name()
+            .unwrap_or_else(|| object_name.as_bytes().as_bstr());
+        if name != "HEAD" {
+            let (kind, name) = if let Some(name) = name.strip_prefix(b"refs/heads/") {
+                (b"branch ".as_slice(), name)
+            } else if let Some(name) = name.strip_prefix(b"refs/tags/") {
+                (b"tag ".as_slice(), name)
+            } else if let Some(name) = name.strip_prefix(b"refs/remotes/") {
+                (b"remote-tracking branch ".as_slice(), name)
+            } else {
+                (b"".as_slice(), name.as_bytes())
+            };
+            file.write_all(kind).or_error()?;
+            file.write_all(b"'").or_error()?;
+            file.write_all(name).or_error()?;
+            file.write_all(b"' of ").or_error()?;
+        }
+        file.write_all(&url).or_error()?;
+        file.write_all(b"\n").or_error()?;
+    }
+    check_interrupt(interrupt)?;
+    file.commit().or_error()?;
+    Ok(())
 }
 
 /// Native local fetch preparation with a fixed advertisement and no destination borrow.
