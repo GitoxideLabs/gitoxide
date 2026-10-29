@@ -100,3 +100,15 @@ make_case basic-nested-stars funcname 'a**' aaa
 make_case basic-nested-interval funcname 'a*\{2\}' aaa
 make_case basic-leading-interval funcname '\{1\}' a
 make_case basic-star-after-anchor funcname '^*a' '*a'
+
+# Native regex dialects differ on these spellings; retain the local Git outcome.
+make_case empty-ere xfuncname '' anything
+make_case empty-bre funcname '' anything
+make_case empty-group xfuncname '()' anything
+make_case basic-empty-group funcname '\(\)' anything
+make_case literal-word-escape xfuncname '\b(word)\b' bwordb
+make_case literal-textual-interval xfuncname 'a{foo}' 'a{foo}'
+make_case basic-plus-question-literal funcname '\(a\+\?\)' 'a?'
+make_case basic-interval-plus-literal funcname '\(a\{2\}\+\)' 'aa+'
+make_case longer-group-first xfuncname '(a|ab)(b*)' abb
+make_case basic-leading-empty-alternative funcname '\(\|a\)' '|a'

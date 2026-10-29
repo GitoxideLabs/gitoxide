@@ -23,6 +23,16 @@ use core::fmt;
 
 use crate::{PosixRegex, ctype, tree::*};
 
+/// Platform regex conventions used by Git in the C locale.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Dialect {
+    /// GNU regex syntax and capture ordering.
+    #[default]
+    Gnu,
+    /// Darwin libc ERE, or its enhanced BRE mode used by Git.
+    Darwin,
+}
+
 /// Repetition bounds, for example + is (1, None), and ? is (0, Some(1))
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Range(pub u32, pub Option<u32>);
@@ -187,6 +197,7 @@ pub struct PosixRegexBuilder<'a> {
     closed_groups: Vec<bool>,
     builder: TreeBuilder,
     extended: bool,
+    dialect: Dialect,
     size_limit: usize,
     nesting_limit: usize,
     nesting: usize,
@@ -201,6 +212,7 @@ impl<'a> PosixRegexBuilder<'a> {
             closed_groups: vec![false],
             builder: TreeBuilder::default(),
             extended: false,
+            dialect: Dialect::Gnu,
             size_limit: 64 * 1024,
             nesting_limit: 64,
             nesting: 0,
@@ -236,6 +248,11 @@ impl<'a> PosixRegexBuilder<'a> {
         self.extended = extended;
         self
     }
+    /// Select Git's platform regex conventions, preserving GNU behavior by default.
+    pub fn dialect(mut self, dialect: Dialect) -> Self {
+        self.dialect = dialect;
+        self
+    }
     /// Limit pattern length in bytes. The default is 64 KiB.
     pub fn size_limit(mut self, bytes: usize) -> Self {
         self.size_limit = bytes;
@@ -249,8 +266,9 @@ impl<'a> PosixRegexBuilder<'a> {
     }
     /// "Compile" this regex to a struct ready to match input
     pub fn compile(self) -> Result<PosixRegex<'static>, Error> {
+        let dialect = self.dialect;
         let tree = self.compile_tokens()?;
-        Ok(PosixRegex::new(Cow::Owned(tree)))
+        Ok(PosixRegex::new(Cow::Owned(tree), dialect))
     }
     pub fn compile_tokens(mut self) -> Result<Tree, Error> {
         if self.input.len() > self.size_limit {
@@ -316,7 +334,7 @@ impl<'a> PosixRegexBuilder<'a> {
             [b'+', ..] if self.extended => (1, Range(1, None)),
             [b'\\', b'?', ..] if !self.extended => (2, Range(0, Some(1))),
             [b'\\', b'+', ..] if !self.extended => (2, Range(1, None)),
-            [b'{', ..] if self.extended => {
+            [b'{', ..] if self.extended && self.interval_starts() => {
                 self.consume(1);
                 return self.parse_interval();
             }
@@ -330,18 +348,34 @@ impl<'a> PosixRegexBuilder<'a> {
         Ok(range)
     }
 
+    fn interval_starts(&self) -> bool {
+        self.dialect == Dialect::Gnu || self.input.get(1).is_some_and(u8::is_ascii_digit)
+    }
+
     fn has_repetition(&self) -> bool {
         matches!(self.input.first(), Some(b'*'))
             || if self.extended {
-                matches!(self.input.first(), Some(b'+' | b'?' | b'{'))
+                matches!(self.input.first(), Some(b'+' | b'?'))
+                    || self.input.starts_with(b"{") && self.interval_starts()
             } else {
                 matches!(self.input, [b'\\', b'+' | b'?' | b'{', ..])
             }
     }
 
-    fn wrap_repetitions(&mut self, checkpoint: Checkpoint) -> Result<(), Error> {
+    fn wrap_repetitions(&mut self, checkpoint: Checkpoint, previous: &[u8]) -> Result<(), Error> {
         let mut wrappers = 0;
         while self.has_repetition() {
+            if self.dialect == Dialect::Darwin {
+                if self.extended
+                    || self.input.starts_with(b"*")
+                    || self.input.starts_with(br"\{")
+                    || !previous.starts_with(br"\{") && self.input.starts_with(br"\+")
+                {
+                    return Err(Error::LeadingRepetition);
+                }
+                // Enhanced BRE interprets the remaining escaped + or ? literally.
+                return Ok(());
+            }
             if !self.extended && (self.input.starts_with(b"*") || self.input.starts_with(br"\{")) {
                 return Err(Error::LeadingRepetition);
             }
@@ -360,6 +394,9 @@ impl<'a> PosixRegexBuilder<'a> {
 
     fn parse_interval(&mut self) -> Result<Range, Error> {
         let first = self.take_int()?;
+        if self.dialect == Dialect::Darwin && first.is_none() {
+            return Err(Error::EmptyRepetition);
+        }
         let (min, max) = if self.input.first() == Some(&b',') {
             self.consume(1);
             (first.unwrap_or(0), self.take_int()?)
@@ -453,20 +490,27 @@ impl<'a> PosixRegexBuilder<'a> {
         }
         let mut closed = !in_group;
         let mut at_start = true;
+        let mut saw_alternative = false;
         self.builder.start_internal(Token::Alternative, Range(1, Some(1)));
         while let Ok(c) = self.next() {
             let token = match c {
-                b'*' | b'+' | b'?' | b'{' if self.extended => return Err(Error::LeadingRepetition),
+                b'*' | b'+' | b'?' if self.extended => return Err(Error::LeadingRepetition),
+                b'{' if self.extended
+                    && (self.dialect == Dialect::Gnu || self.input.first().is_some_and(u8::is_ascii_digit)) =>
+                {
+                    return Err(Error::LeadingRepetition);
+                }
                 b'^' if self.extended || at_start => Token::Start,
                 b'$' if self.extended
                     || self.input.is_empty()
-                    || self.input.starts_with(br"\|")
+                    || self.dialect == Dialect::Gnu && self.input.starts_with(br"\|")
                     || (in_group && self.input.starts_with(br"\)")) =>
                 {
                     Token::End
                 }
                 b'.' => Token::Any,
                 b'[' => self.parse_bracket()?,
+                b'\\' if self.dialect == Dialect::Darwin && self.extended => Token::Char(self.next()?),
                 b'\\' if self.input.first().is_some_and(|c| matches!(c, b'1'..=b'9')) => {
                     let id = u32::from(self.next()? - b'0');
                     if !self.closed_groups.get(id as usize).copied().unwrap_or(false) {
@@ -482,10 +526,11 @@ impl<'a> PosixRegexBuilder<'a> {
                         let checkpoint = self.builder.checkpoint();
                         self.parse(true)?;
                         self.closed_groups[id] = true;
+                        let quantifier = self.input;
                         let range = self.parse_range()?;
                         self.builder.start_internal_at(checkpoint, Token::Group(id), range);
                         self.builder.finish_internal();
-                        self.wrap_repetitions(checkpoint)?;
+                        self.wrap_repetitions(checkpoint, quantifier)?;
                         at_start = false;
                         continue;
                     }
@@ -497,18 +542,19 @@ impl<'a> PosixRegexBuilder<'a> {
                         break;
                     }
                     b'{' if !self.extended => return Err(Error::LeadingRepetition),
-                    b'|' if !self.extended => {
+                    b'|' if !(self.extended || self.dialect == Dialect::Darwin && at_start) => {
                         self.builder.finish_internal();
                         self.builder.start_internal(Token::Alternative, Range(1, Some(1)));
                         at_start = true;
+                        saw_alternative = true;
                         continue;
                     }
                     b'<' => Token::WordStart,
                     b'>' => Token::WordEnd,
                     b'b' => Token::WordBoundary,
                     b'B' => Token::NotWordBoundary,
-                    b'`' => Token::AbsoluteStart,
-                    b'\'' => Token::AbsoluteEnd,
+                    b'`' if self.dialect == Dialect::Gnu => Token::AbsoluteStart,
+                    b'\'' if self.dialect == Dialect::Gnu => Token::AbsoluteEnd,
                     c @ (b'w' | b'W') => Token::OneOf {
                         invert: c == b'W',
                         list: vec![Collation::Class(ctype::is_word)],
@@ -530,10 +576,11 @@ impl<'a> PosixRegexBuilder<'a> {
                     let checkpoint = self.builder.checkpoint();
                     self.parse(true)?;
                     self.closed_groups[id] = true;
+                    let quantifier = self.input;
                     let range = self.parse_range()?;
                     self.builder.start_internal_at(checkpoint, Token::Group(id), range);
                     self.builder.finish_internal();
-                    self.wrap_repetitions(checkpoint)?;
+                    self.wrap_repetitions(checkpoint, quantifier)?;
                     at_start = false;
                     continue;
                 }
@@ -542,9 +589,13 @@ impl<'a> PosixRegexBuilder<'a> {
                     break;
                 }
                 b'|' if self.extended => {
+                    if self.dialect == Dialect::Darwin && at_start {
+                        return Err(Error::UnexpectedToken(b'|'));
+                    }
                     self.builder.finish_internal();
                     self.builder.start_internal(Token::Alternative, Range(1, Some(1)));
                     at_start = true;
+                    saw_alternative = true;
                     continue;
                 }
                 c => Token::Char(c),
@@ -561,6 +612,7 @@ impl<'a> PosixRegexBuilder<'a> {
                     | Token::AbsoluteEnd
             );
             let checkpoint = self.builder.checkpoint();
+            let quantifier = self.input;
             let range = if assertion {
                 if self.extended && self.has_repetition() {
                     return Err(Error::LeadingRepetition);
@@ -571,12 +623,15 @@ impl<'a> PosixRegexBuilder<'a> {
             };
             self.builder.leaf(token, range);
             if !assertion {
-                self.wrap_repetitions(checkpoint)?;
+                self.wrap_repetitions(checkpoint, quantifier)?;
             }
             at_start = false;
         }
         if !closed {
             return Err(Error::Expected(b')', None));
+        }
+        if self.dialect == Dialect::Darwin && at_start && (!in_group || saw_alternative) {
+            return Err(Error::EOF);
         }
         self.builder.finish_internal();
         if in_group {
