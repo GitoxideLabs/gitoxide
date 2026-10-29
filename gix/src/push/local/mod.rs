@@ -91,6 +91,7 @@ pub(crate) fn push(
     )?;
     if options.dry_run || requested.is_empty() {
         return Ok(Outcome {
+            dry_run: options.dry_run,
             handshake,
             updates,
             response: None,
@@ -170,6 +171,7 @@ pub(crate) fn push(
                 .collect(),
         };
         return Ok(Outcome {
+            dry_run: options.dry_run,
             handshake,
             updates,
             response: Some(response),
@@ -369,6 +371,7 @@ pub(crate) fn push(
             .collect(),
     };
     Ok(Outcome {
+        dry_run: options.dry_run,
         handshake,
         updates,
         response: Some(response),
