@@ -35,6 +35,49 @@ pub struct Update {
     pub force: bool,
 }
 
+#[cfg(feature = "revision")]
+impl Update {
+    /// Resolve a single push refspec with an explicit, fully qualified destination.
+    ///
+    /// Sources may be reference names, object IDs or revision expressions. Deletions have no
+    /// source, and `+` permits forced updates. A source-only fully qualified ref uses the same
+    /// destination. Matching pushes, patterns, exclusions and abbreviated destinations require
+    /// advertisement-aware selection and are rejected as unsupported. No lease is added.
+    pub fn from_refspec(repo: &crate::Repository, spec: gix_refspec::RefSpecRef<'_>) -> crate::Result<Self> {
+        use crate::error::{ResultExt, bail, message};
+        use gix_refspec::{Instruction, instruction::Push};
+
+        let (source, destination, force) = match spec.instruction() {
+            Instruction::Push(Push::Matching {
+                src,
+                dst,
+                allow_non_fast_forward,
+            }) => (Some(src), dst, allow_non_fast_forward),
+            Instruction::Push(Push::Delete { ref_or_pattern }) => (None, ref_or_pattern, false),
+            _ => bail!(message("An explicit push update requires one destination reference").unsupported()),
+        };
+        if !destination.starts_with(b"refs/") || destination.contains(&b'*') {
+            bail!(
+                message("An explicit push destination must be a fully qualified reference without patterns")
+                    .with_input(destination)
+                    .unsupported()
+            );
+        }
+        Ok(Update {
+            destination: gix_ref::FullName::try_from(destination).or_error()?,
+            new_id: source
+                .map(|source| {
+                    repo.rev_parse_single(source)
+                        .map(crate::Id::detach)
+                        .or_raise(|| message("Could not resolve push source").with("source", source))
+                })
+                .transpose()?,
+            lease: Lease::Any,
+            force,
+        })
+    }
+}
+
 /// Settings for an explicit push.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Options<'a> {
