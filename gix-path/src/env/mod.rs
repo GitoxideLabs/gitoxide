@@ -6,8 +6,6 @@ use std::{
 use bstr::{BString, ByteSlice};
 use std::sync::LazyLock;
 
-use crate::env::git::EXE_NAME;
-
 mod auxiliary;
 mod git;
 
@@ -125,24 +123,15 @@ pub fn shell_command() -> std::process::Command {
 /// installation outside `PATH`, `GIT_INSTALL_ROOT` can name its root (containing `usr/bin`).
 /// Finally, registered Git for Windows and MSYS2 installations are searched, including custom
 /// roots, preferring current-user registrations to machine registrations.
+/// Fallback sources are inspected only when earlier locations do not contain Git, and the
+/// selected executable is cached for the lifetime of the process.
 pub fn exe_invocation() -> &'static Path {
-    if cfg!(windows) {
-        /// The path to the Git executable as located in the `PATH` or in other locations that it's
-        /// known to be installed to. It's `None` if no executable could be found.
-        static EXECUTABLE_PATH: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
-            git::exe_path().map(|exe_path| {
-                let is_in_alternate_location = git::ALTERNATIVE_LOCATIONS
-                    .iter()
-                    .any(|prefix| exe_path.strip_prefix(prefix).is_ok());
-                if is_in_alternate_location {
-                    exe_path.to_owned()
-                } else {
-                    EXE_NAME.into()
-                }
-            })
-        });
-        EXECUTABLE_PATH.as_deref().unwrap_or(Path::new(git::EXE_NAME))
-    } else {
+    #[cfg(windows)]
+    {
+        git::exe_invocation()
+    }
+    #[cfg(not(windows))]
+    {
         Path::new("git")
     }
 }

@@ -120,6 +120,27 @@ mod windows_installations {
         discover("SCOOP", "custom", "git.exe", true, false)
     }
 
+    #[test]
+    fn path_inside_a_package_installation_keeps_the_short_invocation() -> gix_error::TestResult {
+        let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only(
+            "windows-git-installations.sh",
+        )?)?;
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let root = fixture.join("conda");
+        let bin = root.join("Library/bin");
+        let _env = gix_testtools::Env::new()
+            .set("PATH", bin.to_str().expect("UTF-8 fixture path"))
+            .set("CONDA_PREFIX", root.to_str().expect("UTF-8 fixture path"));
+        assert_eq!(
+            gix_path::env::exe_invocation(),
+            std::path::Path::new("git.exe"),
+            "PATH provenance determines the invocation without searching alternative locations"
+        );
+        Ok(())
+    }
+
     /// Assert Git discovery in an isolated child process with host installation variables cleared.
     ///
     /// Set `variable` to the fixture-relative `root` to select the installation to discover.

@@ -10,17 +10,28 @@ use std::sync::LazyLock;
 #[cfg(windows)]
 mod registry;
 
-/// Other places to find Git in.
+/// Other places to find Git in, probing each source only after earlier candidates are exhausted.
 #[cfg(windows)]
-pub(super) static ALTERNATIVE_LOCATIONS: LazyLock<Vec<PathBuf>> = LazyLock::new(|| {
-    let mut locations = locations_under_program_files(|key| std::env::var_os(key));
-    locations.extend(locations_under_scoop(|key| std::env::var_os(key)));
-    locations.extend(locations_under_package_managers(|key| std::env::var_os(key)));
-    locations.extend(registry::installation_bins());
-    locations
-});
-#[cfg(not(windows))]
-pub(super) static ALTERNATIVE_LOCATIONS: LazyLock<Vec<PathBuf>> = LazyLock::new(Vec::new);
+fn alternative_locations<I: IntoIterator<Item = PathBuf>>(
+    var_os: impl Fn(&str) -> Option<std::ffi::OsString> + Copy,
+    registered: impl FnOnce() -> I,
+) -> impl Iterator<Item = PathBuf> {
+    std::iter::once_with(move || locations_under_program_files(var_os))
+        .flatten()
+        .chain(locations_under_scoop(var_os))
+        .chain(locations_under_package_managers(var_os))
+        .chain(std::iter::once_with(registered).flatten())
+}
+
+#[cfg(windows)]
+fn alternative_executable() -> Option<&'static Path> {
+    static EXECUTABLE: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
+        alternative_locations(|key| env::var_os(key), registry::installation_bins)
+            .map(|prefix| prefix.join(EXE_NAME))
+            .find(|path| path.is_file())
+    });
+    EXECUTABLE.as_deref()
+}
 
 #[cfg(windows)]
 fn locations_under_program_files<F>(var_os_func: F) -> Vec<PathBuf>
@@ -102,25 +113,32 @@ where
 }
 
 #[cfg(windows)]
-fn locations_under_scoop(var_os: impl Fn(&str) -> Option<std::ffi::OsString>) -> Vec<PathBuf> {
-    let absolute = |name| var_os(name).map(PathBuf::from).filter(|path| path.is_absolute());
+fn locations_under_scoop(var_os: impl Fn(&str) -> Option<std::ffi::OsString>) -> impl Iterator<Item = PathBuf> {
+    let absolute = move |name| var_os(name).map(PathBuf::from).filter(|path| path.is_absolute());
     // Scoop exports GIT_INSTALL_ROOT even when its root was configured outside the environment.
     // Find the stable `current` installation without relying on Scoop's shims being on PATH.
-    let mut locations: Vec<_> = absolute("GIT_INSTALL_ROOT")
-        .map(|root| root.join("cmd"))
-        .into_iter()
-        .collect();
-    for (variable, default_base) in [("SCOOP", "USERPROFILE"), ("SCOOP_GLOBAL", "ProgramData")] {
-        if let Some(root) = absolute(variable).or_else(|| absolute(default_base).map(|base| base.join("scoop"))) {
+    [
+        ("GIT_INSTALL_ROOT", None),
+        ("SCOOP", Some("USERPROFILE")),
+        ("SCOOP_GLOBAL", Some("ProgramData")),
+    ]
+    .into_iter()
+    .filter_map(move |(variable, default_base)| {
+        let root = absolute(variable).or_else(|| absolute(default_base?).map(|base| base.join("scoop")))?;
+        Some((root, default_base.is_some()))
+    })
+    .flat_map(|(root, is_scoop)| {
+        if is_scoop {
             let app = root.join("apps/git");
             let current = app.join("current/cmd");
-            if !current.join(EXE_NAME).is_file() {
-                locations.extend(scoop_version_without_junction(&app));
-            }
-            locations.push(current);
+            let version = (!current.join(EXE_NAME).is_file())
+                .then(|| scoop_version_without_junction(&app))
+                .flatten();
+            version.into_iter().chain(Some(current))
+        } else {
+            None.into_iter().chain(Some(root.join("cmd")))
         }
-    }
-    locations
+    })
 }
 
 #[cfg(windows)]
@@ -149,7 +167,9 @@ fn scoop_version_without_junction(app: &Path) -> Option<PathBuf> {
 }
 
 #[cfg(windows)]
-fn locations_under_package_managers(var_os: impl Fn(&str) -> Option<std::ffi::OsString>) -> Vec<PathBuf> {
+fn locations_under_package_managers(
+    var_os: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> impl Iterator<Item = PathBuf> {
     // These are stable entry points, including WinGet's links for custom portable roots.
     // Only the active Conda/Mamba environment participates; do not pick an inactive environment.
     [
@@ -161,27 +181,65 @@ fn locations_under_package_managers(var_os: impl Fn(&str) -> Option<std::ffi::Os
         ("GIT_INSTALL_ROOT", "usr/bin"),
     ]
     .into_iter()
-    .filter_map(|(variable, suffix)| {
+    .filter_map(move |(variable, suffix)| {
         var_os(variable)
             .map(PathBuf::from)
             .filter(|root| root.is_absolute())
             .map(|root| root.join(suffix))
     })
-    .collect()
 }
 
-/// Keep the selected path internally even when the public invocation is just `git.exe`.
-pub(super) fn exe_path() -> Option<&'static Path> {
-    static PATH: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
-        env::var_os("PATH")
-            .iter()
-            .flat_map(env::split_paths)
-            .chain(ALTERNATIVE_LOCATIONS.iter().cloned())
-            .map(|prefix| prefix.join(EXE_NAME))
-            .find(|path| path.is_file())
-            .and_then(|path| std::path::absolute(path).ok())
+#[cfg(windows)]
+struct Executable {
+    path: PathBuf,
+    from_path: bool,
+}
+
+#[cfg(windows)]
+impl Executable {
+    fn invocation(&self) -> &Path {
+        if self.from_path {
+            Path::new(EXE_NAME)
+        } else {
+            &self.path
+        }
+    }
+}
+
+#[cfg(windows)]
+fn find_executable(path: Option<&std::ffi::OsStr>, fallback: impl FnOnce() -> Option<PathBuf>) -> Option<Executable> {
+    path.into_iter()
+        .flat_map(env::split_paths)
+        .map(|prefix| prefix.join(EXE_NAME))
+        .find(|path| path.is_file())
+        .map(|path| (path, true))
+        .or_else(|| fallback().map(|path| (path, false)))
+        .and_then(|(path, from_path)| {
+            std::path::absolute(path)
+                .ok()
+                .map(|path| Executable { path, from_path })
+        })
+}
+
+#[cfg(windows)]
+fn executable() -> Option<&'static Executable> {
+    static EXECUTABLE: LazyLock<Option<Executable>> = LazyLock::new(|| {
+        find_executable(env::var_os("PATH").as_deref(), || {
+            alternative_executable().map(ToOwned::to_owned)
+        })
     });
-    PATH.as_deref()
+    EXECUTABLE.as_ref()
+}
+
+/// Keep the selected path and its origin without reverse lookup through unused fallbacks.
+#[cfg(windows)]
+pub(super) fn exe_path() -> Option<&'static Path> {
+    executable().map(|exe| exe.path.as_path())
+}
+
+#[cfg(windows)]
+pub(super) fn exe_invocation() -> &'static Path {
+    executable().map_or(Path::new(EXE_NAME), Executable::invocation)
 }
 
 /// MSYS Git uses Unix paths. Bind conversion and companion lookup to its own runtime.
@@ -206,9 +264,17 @@ fn msys_bin_at(executable: &Path) -> Option<&Path> {
 /// Convert paths emitted by MSYS Git to paths usable by native Windows callers.
 pub(super) fn native_path(path: &Path) -> Option<PathBuf> {
     #[cfg(windows)]
-    if let Some(bin) =
-        msys_bin().filter(|_| !path.is_absolute() && path.as_os_str().as_encoded_bytes().starts_with(b"/"))
-    {
+    return native_path_with(path, msys_bin);
+    #[cfg(not(windows))]
+    Some(path.to_owned())
+}
+
+#[cfg(windows)]
+fn native_path_with<'a>(path: &Path, msys_bin: impl FnOnce() -> Option<&'a Path>) -> Option<PathBuf> {
+    if path.is_absolute() || !path.as_os_str().as_encoded_bytes().starts_with(b"/") {
+        return Some(path.to_owned());
+    }
+    if let Some(bin) = msys_bin() {
         use std::os::windows::process::CommandExt;
         let output = Command::new(bin.join("cygpath.exe"))
             .args(["-am", "--"])
@@ -269,13 +335,8 @@ fn config_paths_from_executable() -> ConfigPaths {
     match config_paths_from_executable_at(executable) {
         Ok(paths) => paths,
         #[cfg(windows)]
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => ALTERNATIVE_LOCATIONS
-            .iter()
-            .find_map(|prefix| {
-                let executable = prefix.join(EXE_NAME);
-                executable.is_file().then_some(executable)
-            })
-            .and_then(|executable| config_paths_from_executable_at(executable).ok())
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => alternative_executable()
+            .and_then(|executable| config_paths_from_executable_at(executable.to_owned()).ok())
             .unwrap_or_default(),
         Err(_) => ConfigPaths::default(),
     }
