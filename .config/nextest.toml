@@ -4,6 +4,10 @@ test-threads = 6
 fail-fast = false
 
 [[profile.default.overrides]]
+filter = 'package(=gix-protocol) & test(=protocol::push::failed_pack_production_aborts_receive_pack_without_hanging)'
+slow-timeout = { period = "10s", terminate-after = 3 }
+
+[[profile.default.overrides]]
 # Start one test per expensive fixture early, so independent fixture generation can overlap.
 platform = 'cfg(windows)'
 filter = '''
