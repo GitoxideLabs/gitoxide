@@ -3,7 +3,7 @@ use gix_error::{bail, validation};
 use gix_hash::ObjectId;
 use gix_object::bstr::BString;
 use smallvec::SmallVec;
-use std::ops::RangeInclusive;
+use std::{collections::BTreeMap, ops::RangeInclusive};
 use std::{
     num::NonZeroU32,
     ops::{AddAssign, Range, SubAssign},
@@ -167,6 +167,12 @@ pub struct Options {
     /// Collect debug information whenever there's a diff or rename that affects the outcome of a
     /// blame.
     pub debug_track_path: bool,
+    /// Treat these commits as roots, even if their parent objects are available.
+    /// Use this for shallow boundaries or an explicitly limited traversal.
+    pub boundary_commits: Vec<ObjectId>,
+    /// The kind of supplied [`Start::Contents`], defaulting to a regular blob.
+    /// This prevents attribution across a worktree file-type change.
+    pub contents_mode: Option<gix_object::tree::EntryKind>,
 }
 
 /// Represents a change during history traversal for blame. It is supposed to capture enough
@@ -233,6 +239,18 @@ impl std::fmt::Debug for Start<'_> {
         }
     }
 }
+/// The parent commit and path from which a blamed source file originated.
+///
+/// This is Git's porcelain `previous` metadata: the first parent with a matching file,
+/// including detected renames, even if all of its lines were changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviousOrigin {
+    /// The parent commit containing the earlier version of the file.
+    pub commit_id: ObjectId,
+    /// The repository-relative path in that parent commit.
+    pub source_file_name: BString,
+}
+
 /// The outcome of [`file()`](crate::file()).
 #[derive(Debug, Default, Clone)]
 pub struct Outcome {
@@ -245,6 +263,9 @@ pub struct Outcome {
     pub statistics: Statistics,
     /// Contains a log of all changes that affected the outcome of this blame.
     pub blame_path: Option<Vec<BlamePathEntry>>,
+    /// Previous origins keyed by [`BlameEntry::commit_id`] and [`BlameEntry::source_file_name`].
+    /// Roots and file additions have no previous origin. Supplied contents use the null commit id.
+    pub previous_origins: BTreeMap<(ObjectId, Option<BString>), PreviousOrigin>,
 }
 
 /// Additional information about the performed operations.
