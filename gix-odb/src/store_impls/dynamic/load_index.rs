@@ -297,13 +297,6 @@ impl super::Store {
         if num_indices_needed > index.files.len()
             && (matches!(self.slots, super::init::Slots::Given(_)) || num_indices_needed > PackId::max_indices())
         {
-            if was_uninitialized {
-                self.index.store(Arc::new(SlotMapIndex {
-                    files: Arc::clone(&index.files),
-                    loose_dbs,
-                    ..Default::default()
-                }));
-            }
             return Err(Message::new("The object database has too few index slots")
                 .with("current", index.files.len())
                 .with("needed", num_indices_needed - index.files.len())
