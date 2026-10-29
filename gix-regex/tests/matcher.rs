@@ -28,10 +28,14 @@ fn compile(regex: &str) -> PosixRegex<'static> {
 type Captures = Box<[Option<(usize, usize)>]>;
 
 fn matches(regex: &str, input: &str) -> Vec<Captures> {
-    compile(regex).matches(input.as_bytes(), None)
+    compile(regex)
+        .matches(input.as_bytes(), None)
+        .expect("matching stays within the default resource limits")
 }
 fn matches_exact(regex: &str, input: &str) -> Option<Captures> {
-    compile(regex).matches_exact(input.as_bytes())
+    compile(regex)
+        .matches_exact(input.as_bytes())
+        .expect("matching stays within the default resource limits")
 }
 
 #[test]
@@ -284,12 +288,14 @@ fn case_insensitive() {
         compile(r"abc[de]")
             .case_insensitive(true)
             .matches_exact(b"ABCD")
+            .expect("matching stays within the default resource limits")
             .is_some()
     );
     assert!(
         compile(r"abc[de]")
             .case_insensitive(true)
             .matches_exact(b"ABCF")
+            .expect("matching stays within the default resource limits")
             .is_none()
     );
 }
@@ -299,6 +305,7 @@ fn newline() {
         compile(r"^hello$")
             .newline(true)
             .matches(b"hi\nhello\ngreetings", None)
+            .expect("matching stays within the default resource limits")
             .len(),
         1
     );
@@ -306,11 +313,24 @@ fn newline() {
         compile(r"^hello$")
             .newline(true)
             .matches(b"hi\ngood day\ngreetings", None)
+            .expect("matching stays within the default resource limits")
             .is_empty()
     );
 }
 #[test]
 fn no_start_end() {
-    assert!(compile(r"^hello").no_start(true).matches_exact(b"hello").is_none());
-    assert!(compile(r"hello$").no_end(true).matches_exact(b"hello").is_none());
+    assert!(
+        compile(r"^hello")
+            .no_start(true)
+            .matches_exact(b"hello")
+            .expect("matching stays within the default resource limits")
+            .is_none()
+    );
+    assert!(
+        compile(r"hello$")
+            .no_end(true)
+            .matches_exact(b"hello")
+            .expect("matching stays within the default resource limits")
+            .is_none()
+    );
 }
