@@ -71,6 +71,11 @@ pub struct State {
 
     /// The context to pass to spawned filter programs, with `worktree_dir` as their working directory if set.
     pub context: gix_command::Context,
+    /// Environment overrides for newly launched filters, without changing the current process.
+    ///
+    /// Repeated keys use their last value. Repository context takes precedence. Set these before
+    /// launching any filters: already running process filters retain their original environment.
+    pub environment: Vec<(std::ffi::OsString, std::ffi::OsString)>,
 }
 
 /// Initialization
@@ -80,6 +85,7 @@ impl State {
         Self {
             running: Default::default(),
             context,
+            environment: Vec::new(),
         }
     }
 }
@@ -89,6 +95,7 @@ impl Clone for State {
         State {
             running: Default::default(),
             context: self.context.clone(),
+            environment: self.environment.clone(),
         }
     }
 }
