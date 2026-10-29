@@ -59,7 +59,7 @@ gix-odb = { path = ".", features = ["sha1", "sha256", "test-support"] }
 gix-hash = { path = "../gix-hash" }
 gix-testtools = { path = "../tests/tools", default-features = false, features = ["sha1", "sha256"] }
 gix-date = { path = "../gix-date" }
-gix-pack = { path = "../gix-pack", features = ["sha1"] }
+gix-pack = { path = "../gix-pack", features = ["sha1", "pack-cache-lru-static"] }
 gix-actor = { path = "../gix-actor" }
 pretty_assertions = "1.0.0"
 filetime = "0.2.29"
