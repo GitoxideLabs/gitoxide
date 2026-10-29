@@ -197,6 +197,8 @@ pub struct PrepareCheckout {
     pub(self) repo: Option<crate::Repository>,
     /// If `true`, drop removes the entire worktree. Otherwise leave it alone.
     pub(self) remove_worktree_on_drop: bool,
+    /// Literal environment overrides for checkout filter children.
+    pub(self) command_environment: Vec<(std::ffi::OsString, std::ffi::OsString)>,
 }
 
 fn cleanup_clone_destination_on_drop(repo: &crate::Repository, remove_worktree_on_drop: bool) {

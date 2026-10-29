@@ -342,6 +342,7 @@ impl PrepareFetch {
             crate::clone::PrepareCheckout {
                 repo: repo.into(),
                 remove_worktree_on_drop: self.remove_worktree_on_drop,
+                command_environment: Vec::new(),
             },
             fetch_outcome,
         ))
