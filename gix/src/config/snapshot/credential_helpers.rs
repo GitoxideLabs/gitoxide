@@ -32,7 +32,7 @@ pub(super) mod function {
         bstr::{ByteSlice, ByteVec},
         config::{
             cache::util::ApplyLeniency,
-            tree::{Core, Credential, credential, gitoxide::Credentials},
+            tree::{Core, Credential, CredentialStore, credential, gitoxide::Credentials},
         },
     };
 
@@ -168,6 +168,14 @@ pub(super) mod function {
                     }
                 }
             }
+        }
+
+        let store_lock_timeout = CredentialStore::LOCK_TIMEOUT_MS
+            .try_into_lock_timeout(config.integer_filter(CredentialStore::LOCK_TIMEOUT_MS, &mut filter))
+            .with_leniency(is_lenient_config)?
+            .unwrap_or_else(|| std::time::Duration::from_secs(1).into());
+        for program in &mut programs {
+            program.store_lock_timeout = store_lock_timeout;
         }
 
         let allow_git_env = environment.git_prefix.is_allowed();

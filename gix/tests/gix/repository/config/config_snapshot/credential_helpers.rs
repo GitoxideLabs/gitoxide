@@ -312,3 +312,36 @@ fn core_askpass_interpolation_errors_are_not_ignored() -> TestResult {
     ");
     Ok(())
 }
+
+#[test]
+fn native_store_uses_the_configured_lock_timeout() -> TestResult {
+    use gix_lock::acquire::Fail;
+    use std::time::Duration;
+
+    for (value, expected) in [
+        (None, Fail::AfterDurationWithBackoff(Duration::from_secs(1))),
+        (Some("0"), Fail::Immediately),
+        (Some("25"), Fail::AfterDurationWithBackoff(Duration::from_millis(25))),
+        (
+            Some("-1"),
+            Fail::AfterDurationWithBackoff(Duration::from_secs(u64::MAX)),
+        ),
+    ] {
+        let mut overrides = vec!["credential.helper=store".to_owned()];
+        if let Some(value) = value {
+            overrides.push(format!("credentialStore.lockTimeoutMS={value}"));
+        }
+        let repo = gix::open_opts(
+            remote::repo_path("empty-core-askpass"),
+            gix::open::Options::isolated().config_overrides(overrides),
+        )?;
+        let (cascade, _, _) = repo
+            .config_snapshot()
+            .credential_helpers("https://example.com".try_into()?)?;
+        assert_eq!(
+            cascade.programs[0].store_lock_timeout, expected,
+            "native storage receives Git's configured locking policy"
+        );
+    }
+    Ok(())
+}

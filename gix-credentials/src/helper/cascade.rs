@@ -87,8 +87,8 @@ impl Cascade {
 
     /// Invoke like [`Self::invoke()`], passing `environment` to helpers and askpass programs.
     ///
-    /// Values affect only this invocation's children, including `PATH` lookup, and are not retained
-    /// for subsequent calls. Prompt selection is controlled by `prompt`, as with [`Self::invoke()`].
+    /// Values affect this invocation's native helpers and children, including `PATH` lookup, and are
+    /// not retained for subsequent calls. Prompt selection is controlled by `prompt`, as with [`Self::invoke()`].
     pub fn invoke_with_environment(
         &mut self,
         mut action: helper::Action,

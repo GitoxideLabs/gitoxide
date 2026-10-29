@@ -5,6 +5,8 @@ use gix_error::{Result, ResultExt};
 
 use crate::{Program, helper};
 
+pub(crate) mod store;
+
 /// Prefix a helper name while preserving the shell syntax of its optional arguments.
 fn external_name_command(name_and_args: &bstr::BStr, action: &helper::Action) -> Result<gix_command::Prepare> {
     let name = name_and_args
@@ -52,7 +54,8 @@ pub enum Kind {
         /// The name like `foo` along with optional args, like `foo --arg --bar="a b"`, with arguments using `sh` shell quoting rules.
         /// The program executed will be `git-credential-foo [args]` if `name_and_args` starts with `foo [args]`.
         /// Named helpers use Git's exec-path followed by `PATH`, without a Git dispatcher.
-        /// Builtin helpers still use Git until their implementations are provided natively.
+        /// [`helper::invoke()`] runs static `store` definitions natively. [`Program::to_command()`]
+        /// always returns a subprocess command, including for `store`. Other builtins still use Git.
         name_and_args: BString,
     },
     /// A custom credentials helper, as identified just by the absolute path to the program and optional arguments. The program is executed through a shell.
@@ -73,6 +76,7 @@ impl Program {
             kind,
             child: None,
             stderr: true,
+            store_lock_timeout: std::time::Duration::from_secs(1).into(),
         }
     }
 
@@ -102,6 +106,7 @@ impl Program {
                 kind,
                 child: None,
                 stderr: true,
+                store_lock_timeout: std::time::Duration::from_secs(1).into(),
             })
         }
         from_custom_definition_inner(input.into())
