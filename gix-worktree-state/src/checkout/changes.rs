@@ -24,8 +24,8 @@ use super::{Change, ErrorRecord, Options, Outcome, function::checkout_inner};
 /// Existing regular files selected for writing are overwritten. Unselected paths are left alone, except
 /// that empty parent directories of removed paths are pruned without removing `dir` itself.
 ///
-/// Action indices, duplicate actions, invalid paths, and conflicting write paths are rejected before any
-/// mutation. On case-insensitive filesystems, ASCII case aliases are also rejected. A removal followed by
+/// Action indices, duplicate actions, unsupported entry modes, invalid paths, and conflicting write paths
+/// are rejected before any mutation. On case-insensitive filesystems, ASCII case aliases are also rejected. A removal followed by
 /// a write at the same path, or a file/directory replacement, is allowed. Directory obstructions are never
 /// removed recursively, even with [`Options::overwrite_existing`]: symlink and type replacements require
 /// explicit removal actions. Selected sparse entries are skipped by the regular checkout machinery.
@@ -147,6 +147,13 @@ fn validate_changes<'a>(
                 ensure!(
                     entry.stage() == Stage::Unconflicted,
                     validation("Checkout requires stage-zero worktree content")
+                );
+                ensure!(
+                    matches!(
+                        entry.mode,
+                        Mode::FILE | Mode::FILE_EXECUTABLE | Mode::SYMLINK | Mode::COMMIT | Mode::DIR
+                    ),
+                    validation("Checkout requires a supported entry mode")
                 );
                 ensure!(
                     entry.mode != Mode::DIR || entry.flags.contains(Flags::SKIP_WORKTREE),
