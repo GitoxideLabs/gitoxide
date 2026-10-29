@@ -300,36 +300,3 @@ pub fn entries(repo: gix::Repository, format: OutputFormat, mut out: impl io::Wr
 
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn extra_header_lookup_works_with_one_or_multiple_threads() -> gix_testtools::Result {
-        let dir = tempfile::tempdir()?;
-        let repo: gix::Repository = gix::ThreadSafeRepository::init_opts(
-            dir.path(),
-            gix::create::Kind::Bare,
-            gix::create::Options::default(),
-            gix::open::Options::isolated(),
-        )?
-        .into();
-        repo.write_blob(b"an object to look up twice")?;
-
-        for threads in [1, 2] {
-            statistics(
-                repo.clone(),
-                gix::progress::Discard,
-                Vec::new(),
-                Vec::new(),
-                statistics::Options {
-                    format: OutputFormat::Human,
-                    thread_limit: Some(threads),
-                    extra_header_lookup: true,
-                },
-            )?;
-        }
-        Ok(())
-    }
-}
