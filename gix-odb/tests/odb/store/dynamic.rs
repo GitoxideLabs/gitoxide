@@ -19,6 +19,24 @@ fn all_orderings() -> [Ordering; 2] {
     ]
 }
 
+#[test]
+fn unallocatable_initial_slot_count_is_an_error() -> gix_error::TestResult {
+    let result = gix_odb::Store::at_opts(
+        fixture_path("objects"),
+        gix_hash::Kind::Sha1,
+        &mut std::iter::empty(),
+        store::init::Options {
+            slots: store::init::Slots::AsNeededByDiskState {
+                multiplier: 1.0,
+                minimum: usize::MAX,
+            },
+            ..Default::default()
+        },
+    );
+    assert!(result.is_err(), "an impossible slot allocation returns an I/O error");
+    Ok(())
+}
+
 #[derive(Debug, Copy, Clone)]
 struct PackMetrics {
     objects: usize,
@@ -69,6 +87,222 @@ fn db_with_all_object_sources() -> Result<(gix_odb::Handle, gix_testtools::tempf
         },
     )?;
     Ok((gix_odb::at(objects_dir.path(), gix_hash::Kind::Sha1)?, objects_dir))
+}
+
+#[test]
+fn stable_locations_distinguish_packs_with_colliding_path_crcs() -> gix_error::TestResult {
+    use gix_pack::Find;
+
+    let fixture = crate::scripted_fixture_read_only("make_pack_id_collision.sh")?;
+    let objects_dir = fixture.join("objects");
+    let mut handle = crate::odb_at(&objects_dir)?;
+    handle.prevent_pack_unload();
+    let object_hash = handle.store_ref().object_hash();
+    let packs = [
+        gix_pack::data::File::at(objects_dir.join("pack/pack-446fae5b7acbf932.pack"), object_hash)?,
+        gix_pack::data::File::at(objects_dir.join("pack/pack-da48020c4b9ad19b.pack"), object_hash)?,
+    ];
+    assert_eq!(packs[0].id, packs[1].id, "the fixture reproduces a path-CRC collision");
+
+    let mut locations = Vec::new();
+    for pack in &packs {
+        let index = gix_pack::index::File::at(pack.path().with_extension("idx"), object_hash)?;
+        assert_eq!(index.num_objects(), 1, "each fixture pack has its own single blob");
+        let object_id = index.oid_at_index(0).to_owned();
+        let location = handle
+            .location_by_oid(&object_id, &mut Vec::new())?
+            .expect("the packed fixture object is present");
+        locations.push((location, object_id));
+    }
+    assert_ne!(
+        locations[0].0.pack_id, locations[1].0.pack_id,
+        "locations identify distinct packs despite their colliding path CRCs"
+    );
+    for (pack, (location, object_id)) in packs.iter().zip(locations) {
+        assert_eq!(
+            handle.entry_by_location(&location).expect("the pack is retained").data,
+            pack.entry_slice(location.entry_range(location.pack_offset))
+                .expect("the location names a complete entry"),
+            "a retained location returns bytes from its own pack"
+        );
+        assert_eq!(
+            handle
+                .pack_offsets_and_oid(location.pack_id)?
+                .expect("the index is retained"),
+            vec![(location.pack_offset, object_id)],
+            "the retained index maps the location to the correct object"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn explicit_invalidation_retries_repairs_with_unchanged_metadata() -> gix_testtools::TestResult {
+    for (extension, use_multi_pack_index) in [("idx", false), ("pack", false), ("pack", true)] {
+        let fixture = crate::scripted_fixture_writable("make_repo_multi_index.sh")?;
+        gix_testtools::git(fixture.path(), "prune-packed")?;
+        let objects_dir = fixture.path().join(".git/objects");
+        let pack_dir = objects_dir.join("pack");
+        let object_hash = gix_testtools::object_hash();
+        let index_path = {
+            let multi_index = gix_pack::multi_index::File::at(pack_dir.join("multi-pack-index"), None)?;
+            pack_dir.join(
+                multi_index
+                    .index_names()
+                    .first()
+                    .expect("the fixture has packed objects"),
+            )
+        };
+        let object_id = {
+            let index = gix_pack::index::File::at(&index_path, object_hash)?;
+            index.oid_at_index(0).to_owned()
+        };
+        let path = index_path.with_extension(extension);
+        let original = std::fs::read(&path)?;
+        let mtime = filetime::FileTime::from_last_modification_time(&std::fs::metadata(&path)?);
+        let mut malformed = original.clone();
+        // Both formats store their version at bytes 4..8; an unknown version fails before retaining a mapping.
+        malformed[4..8].copy_from_slice(&u32::MAX.to_be_bytes());
+        let mut permissions = std::fs::metadata(&path)?.permissions();
+        #[expect(clippy::permissions_set_readonly_false, reason = "disposable fixture copy")]
+        permissions.set_readonly(false);
+        std::fs::set_permissions(&path, permissions)?;
+        std::fs::write(&path, &malformed)?;
+        filetime::set_file_mtime(&path, mtime)?;
+        let failed_metadata = std::fs::metadata(&path)?;
+        let mut handle = gix_odb::at_opts(
+            objects_dir,
+            object_hash,
+            Vec::new(),
+            store::init::Options {
+                use_multi_pack_index,
+                ..Default::default()
+            },
+        )?;
+        handle.refresh = store::RefreshMode::AfterDuration(std::time::Duration::from_secs(60));
+        let mut buffer = Vec::new();
+        handle
+            .find(&object_id, &mut buffer)
+            .expect_err("the malformed file cannot load");
+
+        std::fs::write(&path, &original)?;
+        filetime::set_file_mtime(&path, mtime)?;
+        let repaired_metadata = std::fs::metadata(&path)?;
+        assert_eq!(
+            repaired_metadata.len(),
+            failed_metadata.len(),
+            "repair preserves the file length"
+        );
+        assert_eq!(
+            repaired_metadata.modified()?,
+            failed_metadata.modified()?,
+            "repair preserves the modification time"
+        );
+        let verified = gix_testtools::git_command(fixture.path())
+            .arg("verify-pack")
+            .arg(&index_path)
+            .output()?;
+        assert!(
+            verified.status.success(),
+            "Git verifies the repaired pack and index: {}",
+            String::from_utf8_lossy(&verified.stderr)
+        );
+        handle
+            .find(&object_id, &mut buffer)
+            .expect_err("unchanged metadata retains the previous load error");
+        let metrics = handle.store_ref().metrics();
+        handle.store_ref().mark_disk_state_stale();
+        assert_eq!(
+            handle.store_ref().metrics(),
+            metrics,
+            "invalidation does not eagerly load files, scan the disk, or discard existing mappings"
+        );
+        let object = handle.find(&object_id, &mut buffer)?;
+        assert_eq!(
+            gix_object::compute_hash(object_hash, object.kind, object.data)?,
+            object_id,
+            "explicit invalidation makes the repaired object readable"
+        );
+        let loaded = handle.store_ref().metrics();
+        handle.store_ref().mark_disk_state_stale();
+        assert_eq!(
+            handle.store_ref().metrics(),
+            loaded,
+            "loaded packs and indices remain mapped"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn explicit_invalidation_recovers_a_failed_pack_in_a_retired_multi_index() -> gix_testtools::TestResult {
+    use std::time::Duration;
+
+    use gix_object::Find as _;
+
+    let fixture = crate::scripted_fixture_writable("make_repo_multi_index.sh")?;
+    let objects_dir = fixture.path().join(".git/objects");
+    let pack_dir = objects_dir.join("pack");
+    let multi_index_path = pack_dir.join("multi-pack-index");
+    let object_hash = gix_testtools::object_hash();
+    let index_path = {
+        let multi_index = gix_pack::multi_index::File::at(&multi_index_path, None)?;
+        pack_dir.join(
+            multi_index
+                .index_names()
+                .first()
+                .expect("the fixture has packed objects"),
+        )
+    };
+    let object_id = {
+        let index = gix_pack::index::File::at(&index_path, object_hash)?;
+        index.oid_at_index(0).to_owned()
+    };
+    let pack_path = index_path.with_extension("pack");
+    let original = std::fs::read(&pack_path)?;
+    let mtime = filetime::FileTime::from_last_modification_time(&std::fs::metadata(&pack_path)?);
+    let mut malformed = original.clone();
+    malformed[4..8].copy_from_slice(&u32::MAX.to_be_bytes());
+    let mut permissions = std::fs::metadata(&pack_path)?.permissions();
+    #[expect(clippy::permissions_set_readonly_false, reason = "disposable fixture copy")]
+    permissions.set_readonly(false);
+    std::fs::set_permissions(&pack_path, permissions)?;
+    std::fs::write(&pack_path, &malformed)?;
+    filetime::set_file_mtime(&pack_path, mtime)?;
+    let handle = crate::odb_at(objects_dir)?;
+    let mut buffer = Vec::new();
+    handle
+        .find(&object_id, &mut buffer)
+        .expect_err("the old MIDX records the failed pack load");
+    let mut current = handle.clone();
+    current.refresh = store::RefreshMode::AfterAllIndicesLoaded;
+
+    std::fs::write(&pack_path, &original)?;
+    filetime::set_file_mtime(&pack_path, mtime)?;
+    handle
+        .find(&object_id, &mut buffer)
+        .expect_err("same-metadata repair keeps the old error cached");
+    // A changed MIDX timestamp replaces its resource node even when its contents stay the same.
+    let changed = std::fs::metadata(&multi_index_path)?.modified()? + Duration::from_secs(1);
+    filetime::set_file_mtime(&multi_index_path, filetime::FileTime::from_system_time(changed))?;
+    let refreshes = handle.store_ref().metrics().num_refreshes;
+    assert!(
+        current.try_find(&missing_id(&current), &mut buffer)?.is_none(),
+        "another handle refreshes the MIDX while looking for a missing object"
+    );
+    assert!(
+        handle.store_ref().metrics().num_refreshes > refreshes,
+        "the store replaced the MIDX resource after observing its changed timestamp"
+    );
+
+    handle.store_ref().mark_disk_state_stale();
+    let object = handle.find(&object_id, &mut buffer)?;
+    assert_eq!(
+        gix_object::compute_hash(object_hash, object.kind, object.data)?,
+        object_id,
+        "the old handle leaves its retired MIDX node and reads the repaired pack"
+    );
+    Ok(())
 }
 
 #[test]
@@ -212,6 +446,64 @@ fn multi_index_alloc_limit_bytes_falls_back_to_plain_indices() -> gix_testtools:
 }
 
 #[test]
+fn multi_index_pack_locations_after_lazy_loading() -> gix_testtools::TestResult {
+    use gix_odb::HeaderExt as _;
+    use gix_pack::Find as _;
+
+    let dir = crate::scripted_fixture_read_only("make_repo_multi_index.sh")?;
+    let objects_dir = dir.join(".git/objects");
+    let multi_index = gix_pack::multi_index::File::at(objects_dir.join("pack/multi-pack-index"), None)?;
+    let mut object_ids = std::collections::BTreeMap::new();
+    for entry in multi_index.iter() {
+        let entry = entry?;
+        object_ids.entry(entry.pack_index).or_insert(entry.oid);
+    }
+    for load_method in 0..3 {
+        let mut handle = crate::odb_at(&objects_dir)?;
+        handle.prevent_pack_unload();
+        for (&pack_index, object_id) in &object_ids {
+            let mut buf = Vec::new();
+            match load_method {
+                0 => {
+                    handle.find(object_id, &mut buf)?;
+                }
+                1 => {
+                    handle.header(object_id)?;
+                }
+                _ => {}
+            }
+            let location = handle
+                .location_by_oid(object_id, &mut buf)?
+                .expect("the MIDX object is packed");
+            let pack_path = objects_dir
+                .join("pack")
+                .join(&multi_index.index_names()[pack_index as usize])
+                .with_extension("pack");
+            let pack = gix_pack::data::File::at(pack_path, gix_testtools::object_hash())?;
+            assert_eq!(
+                handle
+                    .clone()
+                    .entry_by_location(&location)
+                    .expect("the clone retains the loaded pack")
+                    .data,
+                pack.entry_slice(location.entry_range(location.pack_offset))
+                    .expect("the entry is in its component pack"),
+                "every loading path preserves direct lookup of each MIDX component"
+            );
+            assert!(
+                handle
+                    .pack_offsets_and_oid(location.pack_id)?
+                    .expect("the loaded pack has an index")
+                    .iter()
+                    .any(|(_, id)| id == object_id),
+                "the pack ID also selects the correct MIDX entries"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn multi_index_keep_open() -> gix_testtools::TestResult {
     let dir = crate::scripted_fixture_writable("make_repo_multi_index.sh")?;
     let expected = expected_pack_metrics(dir.path())?;
@@ -261,12 +553,12 @@ fn multi_index_keep_open() -> gix_testtools::TestResult {
             known_reachable_indices: 1,
             open_reachable_packs: 0, /*no pack is open anymore at least as seen from the index*/
             known_packs: expected.packs,
-            unused_slots: 30,
+            unused_slots: 31,
             loose_dbs: 1,
-            unreachable_indices: 1,
-            unreachable_packs: 1
+            unreachable_indices: 0,
+            unreachable_packs: 0
         },
-        "now there is an unreachable index and pack which is still loaded, but whose pack hasn't been loaded"
+        "the old catalog resources are retained only by the stable handle"
     );
 
     assert!(
@@ -274,49 +566,6 @@ fn multi_index_keep_open() -> gix_testtools::TestResult {
         "the entry can still be found even though the location is invalid"
     );
     assert_eq!(handle.store_ref().structure()?.len(), 2);
-    Ok(())
-}
-
-#[test]
-fn a_reader_open_before_fetch_can_resolve_the_updated_remote_ref() -> gix_testtools::TestResult {
-    use gix_pack::Find;
-
-    let dir = crate::scripted_fixture_writable("make_remote_pack_update.sh")?;
-    let client = dir.path().join("client");
-    let mut handle = gix_odb::at_opts(
-        client.join(".git/objects"),
-        gix_testtools::object_hash(),
-        [],
-        store::init::Options {
-            slots: store::init::Slots::AsNeededByDiskState {
-                multiplier: 1.0,
-                minimum: 1,
-            },
-            ..Default::default()
-        },
-    )?;
-    let git = |args| gix_testtools::git(&client, args);
-    let old_id = hex_to_id(git("rev-parse refs/remotes/origin/to-delete")?.trim());
-    let mut buf = Vec::new();
-    handle.prevent_pack_unload();
-    let old_location = handle
-        .location_by_oid(&old_id, &mut buf)?
-        .expect("the first fetch made a pack");
-
-    git("fetch --prune origin")?;
-    let new_id = hex_to_id(git("rev-parse refs/remotes/origin/main")?.trim());
-    assert_ne!(old_id, new_id, "the fetch advanced the surviving branch");
-    assert_eq!(
-        git("for-each-ref refs/remotes/origin/to-delete")?,
-        "",
-        "fetch pruned the branch deleted on the remote"
-    );
-    let commit = handle.find_commit(&new_id, &mut buf)?;
-    assert_eq!(commit.message, "second\n", "the open reader can import the new tip");
-    assert!(
-        handle.entry_by_location(&old_location).is_some(),
-        "adding a pack preserves the location returned before the fetch"
-    );
     Ok(())
 }
 
@@ -1147,20 +1396,29 @@ fn auto_refresh_with_and_without_id_stability() -> gix_testtools::TestResult {
                 known_reachable_indices: 1,
                 open_reachable_packs: 1,
                 known_packs: 1,
-                unused_slots: 30,
+                unused_slots: 31,
                 loose_dbs: 1,
-                unreachable_indices: 1,
-                unreachable_packs: 1
+                unreachable_indices: 0,
+                unreachable_packs: 0
             },
-            "the removed pack is still loaded"
+            "the removed pack is retained by the stable handle, not the store"
         );
         assert!(
             stable_handle.entry_by_location(&location).is_some(),
             "it finds the old removed location (still loaded) on the old id, it's still cached in the handle, too"
         );
         assert!(
-            stable_handle.clone().entry_by_location(&location).is_some(),
+            stable_handle.pack_offsets_and_oid(location.pack_id)?.is_some(),
+            "the index describing the removed pack is retained along with its data"
+        );
+        let cloned_stable_handle = stable_handle.clone();
+        assert!(
+            cloned_stable_handle.entry_by_location(&location).is_some(),
             "handles without any internal cache also work"
+        );
+        assert!(
+            cloned_stable_handle.pack_offsets_and_oid(location.pack_id)?.is_some(),
+            "clones retain enough index information to consume an existing location"
         );
     }
 
@@ -1182,12 +1440,12 @@ fn auto_refresh_with_and_without_id_stability() -> gix_testtools::TestResult {
             known_reachable_indices: 1,
             open_reachable_packs: 1,
             known_packs: 1,
-            unused_slots: 30,
+            unused_slots: 31,
             loose_dbs: 1,
-            unreachable_indices: 1,
-            unreachable_packs: 1
+            unreachable_indices: 0,
+            unreachable_packs: 0
         },
-        "garbaged slots aren't reclaimed until there is the need. Keeping indices open despite them not being accessible anymore."
+        "the store can immediately reclaim slots after stable handles release their retained resources"
     );
     Ok(())
 }

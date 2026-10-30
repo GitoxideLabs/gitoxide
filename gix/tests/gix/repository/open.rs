@@ -1098,6 +1098,110 @@ mod pack_alloc_limit_bytes {
     }
 }
 
+mod object_refresh {
+    use std::time::Duration;
+
+    use gix_odb::store::RefreshMode;
+
+    use crate::util::repo_opts;
+
+    #[test]
+    fn cloning_preserves_runtime_refresh_overrides() -> gix_testtools::TestResult {
+        let mut repo = repo_opts("make_packed_and_loose.sh", gix::open::Options::isolated())?.to_thread_local();
+        for mode in [
+            RefreshMode::AfterAllIndicesLoaded,
+            RefreshMode::Never,
+            RefreshMode::AfterDuration(Duration::from_secs(60)),
+        ] {
+            repo.objects.refresh = mode;
+            assert_eq!(
+                repo.clone().objects.refresh_mode(),
+                mode,
+                "cloning preserves the handle's runtime override instead of restoring cached configuration"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn defaults_to_a_configurable_freshness_window() -> crate::Result {
+        let mut default = repo_opts("make_packed_and_loose.sh", crate::util::restricted())?.to_thread_local();
+        assert_eq!(
+            default.objects.refresh_mode(),
+            RefreshMode::AfterDuration(Duration::from_secs(1)),
+            "gix avoids repeated miss-triggered filesystem scans by default"
+        );
+        {
+            let mut config = default.config_snapshot_mut();
+            config.set_raw_value("gitoxide.objects.refreshAfter", "50")?;
+            config.commit()?;
+        }
+        assert_eq!(
+            default.objects.refresh_mode(),
+            RefreshMode::AfterDuration(Duration::from_millis(50)),
+            "committing configuration updates the active object handle"
+        );
+
+        let mut configured = repo_opts(
+            "make_packed_and_loose.sh",
+            gix::open::Options::isolated().config_overrides(["gitoxide.objects.refreshAfter=250"]),
+        )?
+        .to_thread_local();
+        assert_eq!(
+            configured.objects.refresh_mode(),
+            RefreshMode::AfterDuration(Duration::from_millis(250)),
+            "gitoxide.objects.refreshAfter configures the freshness window"
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "max-performance")]
+    #[test]
+    fn rejected_refresh_configuration_preserves_object_cache_settings() -> gix_testtools::TestResult {
+        let mut repo = repo_opts(
+            "make_basic_repo.sh",
+            gix::open::Options::isolated()
+                .strict_config(true)
+                .config_overrides(["gitoxide.objects.cacheLimit=0", "gitoxide.objects.refreshAfter=1000"]),
+        )?
+        .to_thread_local();
+        assert!(!repo.objects.has_object_cache(), "the initial object cache is disabled");
+        {
+            let mut config = repo.config_snapshot_mut();
+            config.set_raw_value("gitoxide.objects.cacheLimit", "1024")?;
+            config.set_raw_value("gitoxide.objects.refreshAfter", "invalid")?;
+            config
+                .commit()
+                .expect_err("strict configuration rejects a malformed refresh duration");
+        }
+        assert_eq!(
+            repo.config_snapshot().integer("gitoxide.objects.cacheLimit"),
+            Some(0),
+            "a rejected snapshot preserves the original configuration"
+        );
+        assert!(
+            !repo.clone().objects.has_object_cache(),
+            "cloning after a rejected snapshot also preserves the cached settings"
+        );
+        {
+            let mut config = repo.config_snapshot_mut();
+            config.set_raw_value("gitoxide.objects.cacheLimit", "1024")?;
+            config.set_raw_value("gitoxide.objects.refreshAfter", "50")?;
+            config.commit()?;
+        }
+        assert!(
+            repo.objects.has_object_cache(),
+            "retrying the same cache limit with a valid refresh duration enables the live cache"
+        );
+        assert_eq!(
+            repo.objects.refresh_mode(),
+            RefreshMode::AfterDuration(Duration::from_millis(50)),
+            "the accepted snapshot updates the live refresh policy too"
+        );
+        Ok(())
+    }
+}
+
 mod worktree {
     use gix::open;
 

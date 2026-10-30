@@ -1,5 +1,5 @@
 use gix_error::Result;
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use crate::{Store, types::IndexAndPacks};
 
@@ -40,12 +40,36 @@ pub enum IndexState {
     /// The index is active in memory because a mapping exists.
     Loaded,
     /// The index couldn't be unloaded as it was still in use, but that can happen another time.
+    ///
+    /// Dynamic stores no longer produce this state because stable handles retain resources outside the current catalog.
     Disposable,
     /// The index isn't loaded/memory mapped.
     Unloaded,
 }
 
 impl Store {
+    /// Mark the known disk state stale after the caller changed the object database.
+    ///
+    /// This makes the next miss eligible for a refresh and cached load failures eligible for retry.
+    /// It performs no I/O and preserves successfully loaded mappings.
+    /// Ongoing loads of current resources and refreshes finish first so they cannot overwrite this invalidation.
+    pub fn mark_disk_state_stale(&self) {
+        let _write = self.write.lock();
+        let catalog = self.catalog.load();
+        for &slot_id in &catalog.index.slot_indices {
+            let slot = &catalog.slots[slot_id];
+            let _slot_write = slot.write.lock();
+            let mut files = slot.files.load_full();
+            if let Some(files) = Arc::make_mut(&mut files).as_mut() {
+                files.invalidate_load_errors();
+            }
+            slot.files.store(files);
+        }
+        *self.last_successful_disk_state_consolidation.lock() = None;
+        self.num_disk_state_stale_marks
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
+    }
+
     /// Return information about all files known to us as well as their loading state.
     ///
     /// Note that this call is expensive as it gathers additional information about loose object databases.
@@ -54,11 +78,13 @@ impl Store {
     /// changing on disk and somebody reading at the same time.
     pub fn structure(&self) -> Result<Vec<Record>> {
         let _span = gix_trace::detail!("gix_odb::Store::structure()");
-        let index = self.index.load();
-        if !index.is_initialized() {
+        let catalog = self.catalog.load();
+        if !catalog.index.is_initialized() {
             self.consolidate_with_disk_state(true, false /*load one new index*/, self.loose_compression)?;
         }
-        let index = self.index.load();
+        let catalog = self.catalog.load();
+        let index = &catalog.index;
+        let slots = &catalog.slots;
         let mut res: Vec<_> = index
             .loose_dbs
             .iter()
@@ -68,13 +94,11 @@ impl Store {
             })
             .collect();
 
-        for slot in index.slot_indices.iter().map(|idx| &index.files[*idx]) {
+        for slot in index.slot_indices.iter().map(|idx| &slots[*idx]) {
             let files = slot.files.load();
             let record = match &**files {
                 Some(index) => {
-                    let state = if index.is_disposable() {
-                        IndexState::Disposable
-                    } else if index.index_is_loaded() {
+                    let state = if index.index_is_loaded() {
                         IndexState::Loaded
                     } else {
                         IndexState::Unloaded
@@ -102,12 +126,13 @@ impl Store {
     ///
     /// Read more about alternates in the documentation of the [`resolve`][crate::alternate::resolve()] function.
     pub fn alternate_db_paths(&self) -> Result<Vec<PathBuf>> {
-        let index = self.index.load();
-        if !index.is_initialized() {
+        let catalog = self.catalog.load();
+        if !catalog.index.is_initialized() {
             self.consolidate_with_disk_state(true, false /*load one new index*/, self.loose_compression)?;
         }
-        let index = self.index.load();
-        Ok(index
+        let catalog = self.catalog.load();
+        Ok(catalog
+            .index
             .loose_dbs
             .iter()
             .skip(

@@ -1,8 +1,6 @@
-use gix_error::Result;
-use std::ops::Deref;
+use std::{ops::Deref, sync::Arc};
 
-use gix_error::{Message, OptionExt, ResultExt, bail, message, not_found};
-
+use gix_error::{Message, OptionExt, Result, ResultExt, bail, message, not_found};
 use gix_pack::cache::DecodeEntry;
 
 use crate::store::{handle, load_index};
@@ -26,8 +24,6 @@ impl<'a> DeltaBaseRecursion<'a> {
     }
 }
 
-use crate::store::types::PackId;
-
 /// The raised error's [metadata](gix_error::Error::metadata()) `max_depth` (unsigned) and `object_id` (hex text) identify
 /// the recursion limit and original object.
 pub(super) fn delta_base_recursion_limit_error(max_depth: usize, object_id: &gix_hash::oid) -> Message {
@@ -48,6 +44,20 @@ impl<S> super::Handle<S>
 where
     S: Deref<Target = super::Store> + Clone,
 {
+    fn retain_pack(
+        &self,
+        index: &handle::IndexLookup,
+        pack_index: Option<gix_pack::multi_index::PackIndex>,
+        pack: Arc<gix_pack::data::File>,
+    ) {
+        let mut retained = self.retained_indices.lock();
+        if let Some(known) = retained.iter_mut().find(|known| known.same_index(index)) {
+            known.set_pack(pack_index, pack);
+        } else {
+            retained.push(index.clone());
+        }
+    }
+
     /// Delta resolution failures include [metadata](gix_error::Error::metadata()) `object_id` and `base_id` (hex text).
     /// Recursion limits include `object_id` (hex text) and `max_depth` (unsigned).
     fn try_find_cached_inner<'a, 'b>(
@@ -78,38 +88,51 @@ where
         'outer: loop {
             {
                 let marker = snapshot.marker;
-                for (idx, index) in snapshot.indices.iter_mut().enumerate() {
+                'indices: for (idx, index) in snapshot.indices.iter_mut().enumerate() {
                     if let Some(handle::index_lookup::Outcome {
-                        object_index: handle::IndexForObjectInPack { pack_id, pack_offset },
+                        object_index:
+                            handle::IndexForObjectInPack {
+                                pack_index,
+                                pack_offset,
+                            },
                         index_file,
                         pack: possibly_pack,
+                        pack_id_to_index,
+                        retained,
+                        slot,
+                        slot_id,
                     }) = index.lookup(id)?
                     {
-                        let pack = match possibly_pack {
+                        let pack_arc = match possibly_pack {
                             Some(pack) => pack,
-                            None => match self.store.load_pack(pack_id, marker).or_error()? {
+                            None => match self
+                                .store
+                                .load_pack(slot, slot_id, pack_index, &index_file, marker)
+                                .or_error()?
+                            {
                                 Some(pack) => {
+                                    if let (Some(pack_ids), Some(pack_index)) = (pack_id_to_index, pack_index) {
+                                        pack_ids.insert(pack.id, pack_index);
+                                    }
                                     *possibly_pack = Some(pack);
-                                    possibly_pack.as_deref().expect("just put it in")
+                                    possibly_pack.as_mut().expect("just put it in")
                                 }
                                 None => {
                                     // The pack wasn't available anymore so we are supposed to try another round with a fresh index
-                                    match self.store.load_one_index(self.index_ctx(snapshot.marker))? {
+                                    match self.store.load_one_index(self.index_ctx(marker).force_refresh())? {
                                         Some(new_snapshot) => {
                                             *snapshot = new_snapshot;
                                             self.clear_cache();
                                             continue 'outer;
                                         }
-                                        None => {
-                                            // nothing new in the index, kind of unexpected to not have a pack but to also
-                                            // to have no new index yet. We set the new index before removing any slots, so
-                                            // this should be observable.
-                                            return Ok(None);
-                                        }
+                                        None => continue 'indices,
                                     }
                                 }
                             },
                         };
+                        let pack = pack_arc.as_ref();
+                        let pack_id = pack.id;
+                        let object_hash = pack.object_hash();
                         let entry = pack.entry(pack_offset)?;
                         let header_size = entry.header_size();
                         let res = pack.decode_entry(
@@ -127,16 +150,20 @@ where
                             },
                             pack_cache,
                         );
-
+                        if matches!(self.token.as_ref(), Some(handle::Mode::KeepDeletedPacksAvailable)) && !*retained {
+                            *retained = true;
+                            let pack = Arc::clone(pack_arc);
+                            self.retain_pack(index, pack_index, pack);
+                        }
                         let res = match res {
                             Ok(r) => Ok((
                                 gix_object::Data {
                                     kind: r.kind,
-                                    object_hash: pack.object_hash(),
+                                    object_hash,
                                     data: buffer.as_slice(),
                                 },
                                 Some(gix_pack::data::entry::Location {
-                                    pack_id: pack.id,
+                                    pack_id,
                                     pack_offset,
                                     entry_size: r.compressed_size + header_size,
                                 }),
@@ -183,11 +210,12 @@ where
                                 let handle::index_lookup::Outcome {
                                     object_index:
                                         handle::IndexForObjectInPack {
-                                            pack_id: _,
+                                            pack_index: _,
                                             pack_offset,
                                         },
                                     index_file,
                                     pack: possibly_pack,
+                                    ..
                                 } = match snapshot.indices[idx].lookup(id)? {
                                     Some(res) => res,
                                     None => {
@@ -245,7 +273,6 @@ where
                                 })
                             }
                         }?;
-
                         if idx != 0 {
                             snapshot.indices.swap(0, idx);
                         }
@@ -358,34 +385,44 @@ where
         'outer: loop {
             {
                 let marker = snapshot.marker;
-                for (idx, index) in snapshot.indices.iter_mut().enumerate() {
+                'indices: for (idx, index) in snapshot.indices.iter_mut().enumerate() {
                     if let Some(handle::index_lookup::Outcome {
-                        object_index: handle::IndexForObjectInPack { pack_id, pack_offset },
-                        index_file: _,
+                        object_index:
+                            handle::IndexForObjectInPack {
+                                pack_index,
+                                pack_offset,
+                            },
+                        index_file,
                         pack: possibly_pack,
+                        pack_id_to_index,
+                        retained,
+                        slot,
+                        slot_id,
                     }) = index.lookup(id)?
                     {
                         let pack = match possibly_pack {
                             Some(pack) => pack,
-                            None => match self.store.load_pack(pack_id, marker).or_error()? {
+                            None => match self
+                                .store
+                                .load_pack(slot, slot_id, pack_index, &index_file, marker)
+                                .or_error()?
+                            {
                                 Some(pack) => {
+                                    if let (Some(pack_ids), Some(pack_index)) = (pack_id_to_index, pack_index) {
+                                        pack_ids.insert(pack.id, pack_index);
+                                    }
                                     *possibly_pack = Some(pack);
-                                    possibly_pack.as_deref().expect("just put it in")
+                                    possibly_pack.as_mut().expect("just put it in")
                                 }
                                 None => {
                                     // The pack wasn't available anymore so we are supposed to try another round with a fresh index
-                                    match self.store.load_one_index(self.index_ctx(snapshot.marker))? {
+                                    match self.store.load_one_index(self.index_ctx(marker).force_refresh())? {
                                         Some(new_snapshot) => {
                                             *snapshot = new_snapshot;
                                             self.clear_cache();
                                             continue 'outer;
                                         }
-                                        None => {
-                                            // nothing new in the index, kind of unexpected to not have a pack but to also
-                                            // to have no new index yet. We set the new index before removing any slots, so
-                                            // this should be observable.
-                                            return Ok(None);
-                                        }
+                                        None => continue 'indices,
                                     }
                                 }
                             },
@@ -406,7 +443,6 @@ where
                             message!("Cannot store pack entry of {size} bytes in memory").allocation_failure()
                         })?;
                         buf.resize(size_usize, 0);
-                        assert_eq!(pack.id, pack_id.to_intrinsic_pack_id(), "both ids must always match");
 
                         let entry_size_past_header = pack.decompress_entry(&entry, &mut inflate, buf)?;
                         let location = gix_pack::data::entry::Location {
@@ -414,6 +450,11 @@ where
                             pack_offset,
                             entry_size: entry.header_size() + entry_size_past_header,
                         };
+                        if !*retained {
+                            *retained = true;
+                            let pack = Arc::clone(pack);
+                            self.retain_pack(index, pack_index, pack);
+                        }
 
                         if idx != 0 {
                             snapshot.indices.swap(0, idx);
@@ -438,7 +479,6 @@ where
             matches!(self.token.as_ref(), Some(handle::Mode::KeepDeletedPacksAvailable)),
             "BUG: handle must be configured to `prevent_pack_unload()` before using this method"
         );
-        let pack_id = PackId::from_intrinsic_pack_id(pack_id);
         loop {
             let snapshot = self.snapshot.borrow();
             {
@@ -449,6 +489,18 @@ where
                             .collect::<Result<Vec<_>>>()
                             .map(Some);
                     }
+                }
+                let retained = self
+                    .retained_indices
+                    .lock()
+                    .iter()
+                    .find(|index| index.pack(pack_id).is_some())
+                    .cloned();
+                if let Some(iter) = retained.as_ref().and_then(|index| index.iter(pack_id)) {
+                    return iter
+                        .map(|e| e.map(|e| (e.pack_offset, e.oid)))
+                        .collect::<Result<Vec<_>>>()
+                        .map(Some);
                 }
             }
 
@@ -467,40 +519,23 @@ where
             matches!(self.token.as_ref(), Some(handle::Mode::KeepDeletedPacksAvailable)),
             "BUG: handle must be configured to `prevent_pack_unload()` before using this method"
         );
-        let pack_id = PackId::from_intrinsic_pack_id(location.pack_id);
-        let mut snapshot = self.snapshot.borrow_mut();
-        let marker = snapshot.marker;
-        loop {
-            {
-                for index in &mut snapshot.indices {
-                    if let Some(possibly_pack) = index.pack(pack_id) {
-                        let pack = match possibly_pack {
-                            Some(pack) => pack,
-                            None => {
-                                let pack = self.store.load_pack(pack_id, marker).ok()?.expect(
-                                "BUG: pack must exist from previous call to location_by_oid() and must not be unloaded",
-                            );
-                                *possibly_pack = Some(pack);
-                                possibly_pack.as_deref().expect("just put it in")
-                            }
-                        };
-                        return pack
-                            .entry_slice(location.entry_range(location.pack_offset))
-                            .map(|data| gix_pack::find::Entry {
-                                data: data.to_owned(),
-                                version: pack.version(),
-                            });
-                    }
-                }
-            }
-
-            snapshot.indices.insert(
-                0,
-                self.store
-                    .index_by_id(pack_id, marker)
-                    .expect("BUG: index must always be present, must not be unloaded or overwritten"),
-            );
-        }
+        let pack = self
+            .snapshot
+            .borrow()
+            .indices
+            .iter()
+            .find_map(|index| index.pack(location.pack_id).cloned())
+            .or_else(|| {
+                self.retained_indices
+                    .lock()
+                    .iter()
+                    .find_map(|index| index.pack(location.pack_id).cloned())
+            })?;
+        pack.entry_slice(location.entry_range(location.pack_offset))
+            .map(|data| gix_pack::find::Entry {
+                data: data.to_owned(),
+                version: pack.version(),
+            })
     }
 }
 
@@ -538,5 +573,167 @@ where
 {
     fn exists(&self, id: &gix_hash::oid) -> bool {
         gix_pack::Find::contains(self, id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gix_pack::Find;
+
+    #[test]
+    fn local_pack_entries_do_not_lock_shared_retention() -> gix_error::TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only_needs_archive("make_repo_multi_index.sh")?;
+        let objects_dir = fixture.join(".git/objects");
+        let index = gix_pack::multi_index::File::at(objects_dir.join("pack/multi-pack-index"), None)?;
+        let object_id = index.oid_at_index(0).to_owned();
+        for use_multi_pack_index in [false, true] {
+            let store = Arc::new(crate::Store::at_opts(
+                objects_dir.clone(),
+                index.object_hash(),
+                &mut std::iter::empty(),
+                crate::store::init::Options {
+                    use_multi_pack_index,
+                    ..Default::default()
+                },
+            )?);
+            let mut parent = store.to_handle_arc();
+            parent.prevent_pack_unload();
+            let location = parent
+                .location_by_oid(&object_id, &mut Vec::new())?
+                .expect("the fixture object is packed");
+            let expected = parent.entry_by_location(&location).expect("the pack is retained").data;
+            for handle in [parent.clone(), parent] {
+                let location = location.clone();
+                let retained = Arc::clone(&handle.retained_indices);
+                let lock = retained.lock();
+                let (sender, receiver) = std::sync::mpsc::channel();
+                let worker = std::thread::spawn(move || {
+                    sender
+                        .send(handle.entry_by_location(&location).map(|entry| entry.data))
+                        .expect("the test waits for the local entry lookup");
+                });
+                let result = receiver.recv_timeout(std::time::Duration::from_secs(5));
+                drop(lock);
+                worker.join().expect("the entry lookup worker does not panic");
+                assert_eq!(
+                    result.expect("a local pack lookup does not wait for shared retention"),
+                    Some(expected.clone()),
+                    "the local snapshot supplies the correct bytes for parent and cloned handles"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn warm_stable_lookups_do_not_lock_retention() -> gix_error::TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only_needs_archive("make_repo_multi_index.sh")?;
+        let objects_dir = fixture.join(".git/objects");
+        let multi_index = gix_pack::multi_index::File::at(objects_dir.join("pack/multi-pack-index"), None)?;
+        let object_id = multi_index
+            .iter()
+            .next()
+            .expect("the fixture contains packed objects")?
+            .oid;
+
+        for use_multi_pack_index in [false, true] {
+            let store = Arc::new(crate::Store::at_opts(
+                objects_dir.clone(),
+                multi_index.object_hash(),
+                &mut std::iter::empty(),
+                crate::store::init::Options {
+                    use_multi_pack_index,
+                    ..Default::default()
+                },
+            )?);
+            let mut parent = store.to_handle_arc();
+            parent.prevent_pack_unload();
+            for handle in [parent.clone(), parent] {
+                let location = handle
+                    .location_by_oid(&object_id, &mut Vec::new())?
+                    .expect("the stable handle locates the fixture object");
+                let retained = Arc::clone(&handle.retained_indices);
+                let lock = retained.lock();
+                let (sender, receiver) = std::sync::mpsc::channel();
+                let worker = std::thread::spawn(move || {
+                    let mut buffer = Vec::new();
+                    let found = Find::try_find(&handle, &object_id, &mut buffer)
+                        .expect("warm lookup succeeds")
+                        .expect("the packed object is available")
+                        .1
+                        .expect("the object has a pack location");
+                    assert_eq!(found, location, "a warm object lookup preserves the pack location");
+                    assert_eq!(
+                        handle
+                            .location_by_oid(&object_id, &mut buffer)
+                            .expect("warm location lookup succeeds"),
+                        Some(location),
+                        "a warm location lookup preserves the pack location"
+                    );
+                    sender.send(()).expect("the test waits for both warm lookups");
+                });
+                let completed = receiver.recv_timeout(std::time::Duration::from_secs(5));
+                drop(lock);
+                worker.join().expect("the lookup worker does not panic");
+                assert!(
+                    completed.is_ok(),
+                    "warm lookups finish while another worker holds the retention lock"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn stable_handles_retain_one_lookup_per_multi_index() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_read_only_needs_archive("make_repo_multi_index.sh")?;
+        let objects_dir = fixture.join(".git/objects");
+        let multi_index = gix_pack::multi_index::File::at(objects_dir.join("pack/multi-pack-index"), None)?;
+        let mut object_ids = vec![None; multi_index.num_indices() as usize];
+        for entry in multi_index.iter() {
+            let entry = entry?;
+            object_ids[entry.pack_index as usize].get_or_insert(entry.oid);
+        }
+        assert!(
+            object_ids.len() > 1,
+            "the fixture exercises incremental MIDX pack loading"
+        );
+
+        for use_find in [false, true] {
+            let store = Arc::new(crate::Store::at_opts(
+                objects_dir.clone(),
+                multi_index.object_hash(),
+                &mut std::iter::empty(),
+                Default::default(),
+            )?);
+            let mut handle = store.to_handle_arc();
+            handle.prevent_pack_unload();
+            for (pack_number, object_id) in object_ids.iter().enumerate() {
+                let object_id = object_id.expect("each fixture pack contributes objects to the MIDX");
+                let mut buffer = Vec::new();
+                let location = if use_find {
+                    Find::try_find(&handle, &object_id, &mut buffer)?.and_then(|(_, location)| location)
+                } else {
+                    handle.location_by_oid(&object_id, &mut buffer)?
+                };
+                assert!(location.is_some(), "the next MIDX pack is available");
+                let retained = handle.retained_indices.lock();
+                assert_eq!(
+                    retained.len(),
+                    1,
+                    "loading another pack does not duplicate the MIDX lookup"
+                );
+                let handle::SingleOrMultiIndex::Multi { data, .. } = &retained[0].file else {
+                    panic!("the fixture is accessed through its MIDX");
+                };
+                assert_eq!(
+                    data.iter().flatten().count(),
+                    pack_number + 1,
+                    "the single retained lookup accumulates each loaded pack"
+                );
+            }
+        }
+        Ok(())
     }
 }

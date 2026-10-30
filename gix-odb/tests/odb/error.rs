@@ -827,6 +827,182 @@ fn pack_location_preserves_native_load_errors() -> gix_testtools::TestResult {
     Ok(())
 }
 
+#[test]
+fn healthy_indices_remain_searchable_after_index_load_failures() -> gix_error::TestResult {
+    use gix_odb::Header as _;
+    use gix_pack::Find as _;
+
+    let fixture = crate::scripted_fixture_read_only("make_odb_index_failure.sh")?;
+    let healthy_blob_id = gix_hash::ObjectId::from_hex(std::fs::read(fixture.join("healthy-object-id"))?.trim_ascii())?;
+    let corruption = gix_pack::index::File::at(
+        fixture.join("objects/pack/pack-broken.idx"),
+        gix_testtools::object_hash(),
+    )
+    .err()
+    .expect("the largest fixture index is malformed")
+    .to_string();
+    let missing_id = gix_testtools::object_hash().null();
+    for refresh_mode in [
+        gix_odb::store::RefreshMode::AfterAllIndicesLoaded,
+        gix_odb::store::RefreshMode::Never,
+        gix_odb::store::RefreshMode::AfterDuration(std::time::Duration::from_secs(60)),
+    ] {
+        for lookup in 0..4 {
+            let mut parent = crate::odb_at(fixture.join("objects"))?;
+            parent.prevent_pack_unload();
+            parent.refresh = refresh_mode;
+            for handle in [parent.clone(), parent] {
+                let mut buffer = Vec::new();
+                let found = match lookup {
+                    0 => {
+                        let object = gix_object::Find::try_find(&handle, &healthy_blob_id, &mut buffer)?
+                            .expect("the healthy blob remains available");
+                        assert_eq!(
+                            object.data, b"healthy blob\n",
+                            "lookup returns the same blob bytes as Git"
+                        );
+                        true
+                    }
+                    1 => handle.try_header(&healthy_blob_id)?.is_some(),
+                    2 => handle.location_by_oid(&healthy_blob_id, &mut buffer)?.is_some(),
+                    _ => gix_pack::Find::contains(&handle, &healthy_blob_id),
+                };
+                assert!(
+                    found,
+                    "lookup {lookup} reaches the healthy index after larger malformed indices"
+                );
+                for err in [
+                    gix_object::Find::try_find(&handle, &missing_id, &mut buffer)
+                        .expect_err("an object miss reports the deferred corruption"),
+                    handle
+                        .try_header(&missing_id)
+                        .expect_err("a header miss reports the deferred corruption"),
+                    handle
+                        .location_by_oid(&missing_id, &mut buffer)
+                        .expect_err("a location miss reports the deferred corruption"),
+                    handle
+                        .pack_offsets_and_oid(u32::MAX)
+                        .expect_err("an unavailable pack ID reports the deferred corruption"),
+                    handle
+                        .iter()
+                        .err()
+                        .expect("full enumeration must report incomplete index coverage"),
+                ] {
+                    assert_eq!(
+                        err.to_string(),
+                        corruption,
+                        "misses and full enumeration preserve the deferred corruption diagnostic"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn repaired_indices_are_retried_after_unchanged_index_failures() -> gix_error::TestResult {
+    use gix_odb::Header as _;
+
+    let fixture = crate::scripted_fixture_writable("make_odb_index_failure.sh")?;
+    let objects_dir = fixture.path().join("objects");
+    let recoverable_blob_id =
+        gix_hash::ObjectId::from_hex(std::fs::read(fixture.path().join("recoverable-object-id"))?.trim_ascii())?;
+    let missing_id = gix_testtools::object_hash().null();
+    let mut handle = crate::odb_at(&objects_dir)?;
+    handle.refresh_never();
+    let corruption = handle
+        .try_header(&missing_id)
+        .expect_err("both malformed indices are recorded before repair")
+        .to_string();
+    let clone = handle.clone();
+    let index_name = std::fs::read_to_string(fixture.path().join("recoverable-index-name"))?;
+    std::fs::copy(
+        fixture.path().join("recoverable.idx"),
+        objects_dir.join("pack").join(index_name.trim()),
+    )?;
+    for handle in [handle, clone] {
+        assert!(
+            handle.try_header(&recoverable_blob_id)?.is_some(),
+            "an unchanged failure does not prevent retrying a later repaired index"
+        );
+        assert_eq!(
+            handle
+                .try_header(&missing_id)
+                .expect_err("the unrepaired index is still corrupt")
+                .to_string(),
+            corruption,
+            "a miss still reports the failure that was deferred during successful recovery"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn newly_published_sources_are_discovered_after_index_load_failures() -> gix_error::TestResult {
+    use gix_object::Write as _;
+    use gix_odb::Header as _;
+
+    for (use_alternate, loose) in [(false, false), (true, false), (true, true)] {
+        let fixture = crate::scripted_fixture_writable("make_odb_index_failure.sh")?;
+        let objects_dir = fixture.path().join("objects");
+        let recoverable_blob_id =
+            gix_hash::ObjectId::from_hex(std::fs::read(fixture.path().join("recoverable-object-id"))?.trim_ascii())?;
+        let mut handle = crate::odb_at(&objects_dir)?;
+        handle.refresh = gix_odb::store::RefreshMode::AfterAllIndicesLoaded;
+        let corruption = handle
+            .try_header(&recoverable_blob_id)
+            .expect_err("the object's original index is malformed")
+            .to_string();
+        let clone = handle.clone();
+        let target_objects = if use_alternate {
+            fixture.path().join("alternate-objects")
+        } else {
+            objects_dir.clone()
+        };
+        std::fs::create_dir_all(target_objects.join("pack"))?;
+        if loose {
+            let alternate = gix_odb::loose::Store::at(&target_objects, gix_testtools::object_hash());
+            assert_eq!(
+                alternate.write_buf(gix_object::Kind::Blob, b"recoverable blob\n")?,
+                recoverable_blob_id,
+                "the loose alternate supplies the object whose original index is malformed"
+            );
+        } else {
+            let index_name = std::fs::read_to_string(fixture.path().join("recoverable-index-name"))?;
+            std::fs::copy(
+                objects_dir.join("pack").join(index_name.trim()).with_extension("pack"),
+                target_objects.join("pack/pack-added.pack"),
+            )?;
+            std::fs::copy(
+                fixture.path().join("recoverable.idx"),
+                target_objects.join("pack/pack-added.idx"),
+            )?;
+        }
+        if use_alternate {
+            std::fs::write(objects_dir.join("info/alternates"), b"../alternate-objects\n")?;
+        }
+        for handle in [handle, clone] {
+            let mut buffer = Vec::new();
+            let object = gix_object::Find::try_find(&handle, &recoverable_blob_id, &mut buffer)?
+                .expect("the first lookup searches new sources despite the cached index failures");
+            assert_eq!(
+                object.data, b"recoverable blob\n",
+                "the newly published source supplies the object"
+            );
+            assert_eq!(
+                handle
+                    .try_header(&gix_testtools::object_hash().null())
+                    .expect_err("a miss still reports the deferred index error")
+                    .to_string(),
+                corruption,
+                "searching new sources preserves the original corruption diagnostic"
+            );
+        }
+    }
+    Ok(())
+}
+
 // TODO(odb-parallelism): restore shared/concurrent malformed-index coverage for location,
 // offsets, object/header lookup and enumeration, including refresh_never and later valid/repaired
 // packs. Cover pack/alternate removal clearing failures without refresh loops.
@@ -847,7 +1023,7 @@ fn pack_lookup_preserves_index_load_errors() -> gix_testtools::TestResult {
             gix_testtools::object_hash(),
             [],
             gix_odb::store::init::Options {
-                slots: gix_odb::store::init::Slots::Given(32),
+                slots: gix_odb::store::init::Slots::Limit(32),
                 ..Default::default()
             },
         )?;

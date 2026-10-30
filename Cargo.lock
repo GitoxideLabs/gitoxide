@@ -2197,6 +2197,7 @@ version = "0.87.0"
 dependencies = [
  "arc-swap",
  "crc32fast",
+ "criterion",
  "crossbeam-channel",
  "document-features",
  "filetime",
@@ -2222,6 +2223,7 @@ dependencies = [
  "parking_lot",
  "pretty_assertions",
  "serde",
+ "tar",
  "tempfile",
 ]
 
