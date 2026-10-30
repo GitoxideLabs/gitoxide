@@ -13,13 +13,13 @@ impl Status {
     /// The `status.renameLimit` key.
     pub const RENAME_LIMIT: keys::UnsignedInteger = keys::UnsignedInteger::new_unsigned_integer(
         "renameLimit",
-        &config::Tree::MERGE,
+        &config::Tree::STATUS,
     )
     .with_note(
         "The limit is actually squared, so 1000 stands for up to 1 million diffs if fuzzy rename tracking is enabled",
     );
     /// The `status.renames` key.
-    pub const RENAMES: super::diff::Renames = super::diff::Renames::new_renames("renames", &config::Tree::MERGE);
+    pub const RENAMES: super::diff::Renames = super::diff::Renames::new_renames("renames", &config::Tree::STATUS);
 }
 
 /// The `status.showUntrackedFiles` key.
