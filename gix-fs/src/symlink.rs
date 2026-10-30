@@ -1,5 +1,54 @@
 use std::{io, io::ErrorKind::AlreadyExists, path::Path};
 
+use gix_error::{Result, ResultExt, bail, message};
+
+/// Append `relative_path` to the trusted `root`, rejecting symlinks in every appended component.
+///
+/// Reject rooted paths, platform prefixes, and paths that lexically escape `root` before probing the filesystem.
+/// Check components before normalizing away `..`, and preserve the original path spelling in the returned path.
+/// Missing components and non-directory obstructions are allowed, for example for uninitialized submodules.
+/// Symlinks in `root` or its ancestors are allowed, but even dangling or terminal links below it are rejected.
+///
+/// Use this function for one-shot validation, for example of a submodule path like `modules/lib` or
+/// `modules/../lib`. The latter is accepted only if it stays within `root` and `modules` is not a symlink.
+/// Use [`crate::Stack`] instead when traversing related normalized paths, such as `src/lib.rs` followed by
+/// `src/main.rs`, to reuse shared leading directories and maintain directory state through a delegate.
+/// Unlike this function, `Stack` rejects `..` components and leaves filesystem checks to its delegate.
+///
+/// These metadata checks assume no concurrent replacement of checked components; they are not atomic with later I/O.
+pub fn validate_relative_path(root: &Path, relative_path: &Path) -> Result<std::path::PathBuf> {
+    use std::path::Component;
+
+    if relative_path
+        .components()
+        .any(|component| matches!(component, Component::RootDir | Component::Prefix(_)))
+        || gix_path::normalize(relative_path.into(), Path::new("")).is_none()
+    {
+        bail!(gix_error::validation(format!(
+            "The path \"{}\" must stay relative to its root",
+            relative_path.display()
+        )));
+    }
+    let mut path = root.to_owned();
+    for component in relative_path.components() {
+        path.push(component);
+        match path.symlink_metadata() {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                bail!(gix_error::validation(format!(
+                    "The path at \"{}\" contains a symbolic link",
+                    path.display()
+                )));
+            }
+            Ok(_) => {}
+            Err(err) if matches!(err.kind(), io::ErrorKind::NotFound | io::ErrorKind::NotADirectory) => {}
+            Err(err) => {
+                return Err(err).or_raise(|| message!("Could not inspect path at \"{}\"", path.display()));
+            }
+        }
+    }
+    Ok(root.join(relative_path))
+}
+
 /// Create a new symlink at `link` which points to `original`.
 ///
 /// Note that `original` doesn't have to exist.
