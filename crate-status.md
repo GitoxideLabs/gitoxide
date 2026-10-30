@@ -121,6 +121,8 @@ The top-level crate that acts as hub to all functionality provided by the `gix-*
         * [x] tree or index with working tree
              - [x] rename tracking
              - [x] submodule status (recursive)
+             - [x] optional synchronous owned status collection and monitored incremental snapshots
+             - [x] live recursive monitoring of initialized, configured submodules
         * [x] diffs between modified blobs with various algorithms
         * [ ] tree with index (via index-from-tree and index)
             - [ ] rename tracking
@@ -246,6 +248,20 @@ The top-level crate that acts as hub to all functionality provided by the `gix-*
 * [ ] **BString Interner with Arena-Backing and arbitrary value association**
     - probably based on [`internment`](https://docs.rs/internment/latest/internment/struct.Arena.html#),
       but needs `bumpalo` support to avoid item allocations/boxing, and avoid internal `Mutex`. (key type is pointer based).
+
+### gix-notify
+* [x] Git-independent filesystem notifications with upstream `notify` compatibility backends
+* [x] Bounded event intake, explicit coverage loss, replaceable watches, and event-loop wakeups
+* [x] Owned macOS FSEvents backend with administrative-marker delivery fences
+* [ ] Owned Linux and Windows backends with delivery synchronization
+
+### gix-fsmonitor
+* [x] Standalone daemon serving Git hook v2 and native Simple IPC clients
+* [x] Bounded multi-client token history, recovery, and complete worktree coverage
+* [x] Incremental macOS replies using administrative-marker synchronization
+* [x] Unix socket and Windows named-pipe transports
+* [ ] Incremental Linux and Windows replies (currently conservatively invalidate all paths)
+* [ ] Windows runtime validation (cross-compilation only)
 
 ### gix-fs
 * [x] probe capabilities

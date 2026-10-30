@@ -1,6 +1,7 @@
 use gix::bstr::{BStr, BString, ByteSlice};
 use ratatui::{
     Frame,
+    buffer::CellDiffOption,
     layout::{Alignment, Constraint, Layout, Margin, Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
@@ -10,32 +11,54 @@ use ratatui::{
 use crate::{
     BuiltInDiff,
     app::{
-        Alignment as HistoryAlignment, App, AttributionKind, ChangeGroup, ChangeKind, ChangePane, Changes,
+        Action, Alignment as HistoryAlignment, App, AttributionKind, ChangeGroup, ChangeKind, ChangePane, Changes,
         ChangesLayout, ChangesMode, CommitRow, CopyKind, DateMode, HistoryEntry, IdMode, NameMode, Notice, NoticeKind,
         RefMode, SelectionRelation, SignatureState, State,
     },
     command_menu::{self, Command, CommandGroup, CommandId},
+    graph_tiles::Tile,
     history::{DecorationKind, Decorations},
     menu::{MAX_VISIBLE_ROWS, Menu},
 };
 
+const ATTENTION_COLOR: Color = Color::Yellow;
 const COMPARED_PARENT_COLOR: Color = Color::Cyan;
 const COMMIT_PANE_WIDTH: u16 = 84;
-const FILESYSTEM_NOTIFICATION_COLOR: Color = Color::Rgb(255, 165, 0);
 const NOTE_COLOR: Color = Color::LightMagenta;
-const PANE_STATUS_BACKGROUND: Color = Color::DarkGray;
 const REVIEW_BACKGROUND: Color = Color::Magenta;
+const SHORTCUT_COLOR: Color = Color::Cyan;
 
 #[derive(Clone)]
 struct MarkdownStyle;
 
 impl tui_markdown::StyleSheet for MarkdownStyle {
+    fn heading(&self, level: u8) -> Style {
+        if level == 1 {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+        } else {
+            tui_markdown::StyleSheet::heading(&tui_markdown::DefaultStyleSheet, level)
+        }
+    }
+
+    fn code(&self) -> Style {
+        Style::default().add_modifier(Modifier::BOLD)
+    }
+
     fn heading_marker(&self, _level: u8) -> &'static str {
         ""
     }
 
     fn code_block_fence(&self) -> &'static str {
         ""
+    }
+}
+
+fn secondary_highlight(app: &App) -> Style {
+    match app.commit_pane_background {
+        Some((red, green, blue)) => Style::default().bg(Color::Rgb(red, green, blue)),
+        None => Style::default().add_modifier(Modifier::UNDERLINED),
     }
 }
 
@@ -93,15 +116,62 @@ pub(crate) fn draw_command_menu(
     menu: &mut Menu<CommandId>,
     commands: &[Command],
 ) -> Option<Position> {
-    draw_menu(frame, bounds, menu, " Command ", "no matching commands", |index| {
-        let command = &commands[index];
-        let group = command.group.label();
-        let mut shortcut = command.shortcut.chars();
-        match (shortcut.next(), shortcut.next()) {
-            (Some(prefix), Some(key)) => format!("{group:<11} {}  [{prefix} {key}]", command.label),
-            _ => format!("{group:<11} {}", command.label),
-        }
-    })
+    // Measure the whole catalog so filtering and scrolling do not move the columns.
+    let group_width = commands
+        .iter()
+        .map(|command| Line::raw(command.group.label()).width() + 1)
+        .max()
+        .unwrap_or(0);
+    let label_width = commands
+        .iter()
+        .map(|command| Line::raw(command.label).width())
+        .max()
+        .unwrap_or(0);
+    let group_width = u16::try_from(group_width).unwrap_or(u16::MAX);
+    let label_width = u16::try_from(label_width).unwrap_or(u16::MAX);
+    draw_menu(
+        frame,
+        bounds,
+        menu,
+        " Command ",
+        "no matching commands",
+        |frame, area, index| {
+            let command = &commands[index];
+            let shortcut_width = if area.width >= 8 { 7 } else { 0 };
+            // Hide groups first, keeping at least eight cells for the action label.
+            let group_width = if area.width >= group_width.saturating_add(shortcut_width + 8) {
+                group_width
+            } else {
+                0
+            };
+            let label_width = label_width.min(area.width.saturating_sub(group_width + shortcut_width));
+            let group_area = Rect::new(area.x, area.y, group_width.saturating_sub(1), 1);
+            let label_area = Rect::new(area.x + group_width, area.y, label_width, 1);
+            let shortcut_area = Rect::new(
+                label_area.right() + 2.min(shortcut_width),
+                area.y,
+                shortcut_width.saturating_sub(2),
+                1,
+            );
+            let secondary = Style::default().add_modifier(Modifier::DIM);
+            frame.render_widget(Paragraph::new(command.group.label()).style(secondary), group_area);
+            frame.render_widget(Paragraph::new(command.label), label_area);
+            let mut shortcut = command.shortcut.chars();
+            if let (Some(prefix), Some(key)) = (shortcut.next(), shortcut.next()) {
+                frame.render_widget(
+                    Paragraph::new(Line::from(vec![
+                        Span::styled("[", secondary),
+                        Span::styled(
+                            format!("{prefix} {key}"),
+                            Style::default().fg(SHORTCUT_COLOR).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled("]", secondary),
+                    ])),
+                    shortcut_area,
+                );
+            }
+        },
+    )
 }
 
 pub(crate) fn draw_menu<T: Clone + Eq>(
@@ -110,7 +180,7 @@ pub(crate) fn draw_menu<T: Clone + Eq>(
     menu: &mut Menu<T>,
     title: &str,
     empty: &str,
-    label: impl Fn(usize) -> String,
+    render_label: impl Fn(&mut Frame<'_>, Rect, usize),
 ) -> Option<Position> {
     if !menu.is_open() {
         return None;
@@ -135,14 +205,16 @@ pub(crate) fn draw_menu<T: Clone + Eq>(
         width,
         height,
     );
-    let block = Block::new().borders(Borders::ALL).title(title);
+    let block = Block::new()
+        .borders(Borders::ALL)
+        .title(Span::styled(title, Style::default().add_modifier(Modifier::BOLD)));
     let inner = block.inner(area);
     frame.render_widget(Clear, area);
     frame.render_widget(block, area);
     let [query_area, results_area] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(inner);
     let [prompt_area, input_area] = Layout::horizontal([Constraint::Length(2), Constraint::Min(0)]).areas(query_area);
     frame.render_widget(
-        Paragraph::new("> ").style(Style::default().add_modifier(Modifier::BOLD)),
+        Paragraph::new("> ").style(Style::default().fg(SHORTCUT_COLOR).add_modifier(Modifier::BOLD)),
         prompt_area,
     );
 
@@ -156,19 +228,37 @@ pub(crate) fn draw_menu<T: Clone + Eq>(
     );
 
     let selected = menu.selected_visible_row();
-    let mut lines = Vec::new();
     for (row, index) in menu.visible_indices().iter().copied().enumerate() {
-        let style = if selected == Some(row) {
-            Style::default().add_modifier(Modifier::REVERSED)
-        } else {
-            Style::default()
-        };
-        lines.push(Line::styled(format!("{}  {}", row + 1, label(index)), style));
+        let row_area = Rect::new(results_area.x, results_area.y + row as u16, results_area.width, 1);
+        let number_width = row_area.width.min(3);
+        frame.render_widget(
+            Paragraph::new(format!("{}", row + 1))
+                .style(Style::default().fg(SHORTCUT_COLOR).add_modifier(Modifier::BOLD)),
+            Rect::new(row_area.x, row_area.y, number_width, 1),
+        );
+        render_label(
+            frame,
+            Rect::new(row_area.x + number_width, row_area.y, row_area.width - number_width, 1),
+            index,
+        );
+        if selected == Some(row) {
+            // Keep the entire selection high-contrast when REVERSED swaps foreground and background.
+            frame.buffer_mut().set_style(
+                row_area,
+                Style::default()
+                    .fg(Color::Reset)
+                    .bg(Color::Reset)
+                    .remove_modifier(Modifier::DIM)
+                    .add_modifier(Modifier::REVERSED | Modifier::BOLD),
+            );
+        }
     }
-    if lines.is_empty() {
-        lines.push(Line::styled(empty, Style::default().add_modifier(Modifier::DIM)));
+    if menu.visible_indices().is_empty() {
+        frame.render_widget(
+            Paragraph::new(empty).style(Style::default().add_modifier(Modifier::DIM)),
+            results_area,
+        );
     }
-    frame.render_widget(Paragraph::new(lines), results_area);
 
     (input_area.width > 0).then(|| {
         Position::new(
@@ -239,18 +329,18 @@ struct ChangesPaneArea {
     outer: Rect,
 }
 
-fn index_separator(pane: ChangePane, changes: &Changes) -> Option<usize> {
+fn changes_separators(pane: ChangePane, changes: &Changes) -> [Option<usize>; 2] {
     if pane != ChangePane::Worktree {
-        return None;
+        return [None; 2];
     }
-    let index = changes
+    let conflicts = changes
         .paths
-        .iter()
-        .position(|change| change.group == ChangeGroup::Unstaged)?;
-    changes.paths[..index]
-        .iter()
-        .any(|change| change.group == ChangeGroup::Staged)
-        .then_some(index)
+        .partition_point(|change| change.kind == ChangeKind::Unmerged);
+    let index = conflicts + changes.paths[conflicts..].partition_point(|change| change.group == ChangeGroup::Staged);
+    [
+        (conflicts > 0 && conflicts < changes.paths.len()).then_some(conflicts),
+        (index > conflicts && index < changes.paths.len()).then_some(index),
+    ]
 }
 
 fn changes_pane_areas(
@@ -433,6 +523,42 @@ pub(crate) fn draw_with_worktree(
     tree_changes: Option<&Changes>,
     worktree_changes: Option<&Changes>,
 ) {
+    let draw = |frame: &mut Frame<'_>, app: &mut App| {
+        draw_history(
+            frame,
+            area,
+            app,
+            decorations,
+            mailmap,
+            commit_message,
+            tree_changes,
+            worktree_changes,
+        );
+    };
+    draw(frame, app);
+    // A scroll or overlay can move a route under a stationary pointer before the next mouse event.
+    if app.refresh_graph_hover() {
+        draw(frame, app);
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the bounds extend the existing drawing context"
+)]
+fn draw_history(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &mut App,
+    decorations: &Decorations,
+    mailmap: &gix::mailmap::Snapshot,
+    commit_message: Option<&BStr>,
+    tree_changes: Option<&Changes>,
+    worktree_changes: Option<&Changes>,
+) {
+    let mut mouse_regions = std::mem::take(&mut app.mouse_regions);
+    mouse_regions.clear();
+    app.mouse_graph = None;
     let background_progress = app.background_progress().cloned();
     let background_notice = background_progress.as_ref().map(|progress| Notice {
         kind: NoticeKind::Success,
@@ -441,6 +567,7 @@ pub(crate) fn draw_with_worktree(
     let [mut body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
     let full_body = body;
     let selected_segment = app.selected_is_segment();
+    let commit_fullscreen = app.show_commit && app.commit_fullscreen && !selected_segment;
     let time_travel_animation = app.time_travel_animation_origin().is_some();
     let compared_parent = if app.changes_visible() && !selected_segment {
         tree_changes.and_then(|changes| changes.parent.map(|parent| parent.id))
@@ -455,7 +582,12 @@ pub(crate) fn draw_with_worktree(
     let mut commit_pane = (app.show_commit && !selected_segment).then(|| {
         let width = COMMIT_PANE_WIDTH.min(full_body.width / 2);
         let [commits, message] = Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(full_body);
-        body.width = body.width.min(commits.width);
+        let message = if commit_fullscreen {
+            area
+        } else {
+            body.width = body.width.min(commits.width);
+            message
+        };
         let content = message.inner(Margin {
             horizontal: 2,
             vertical: 1,
@@ -465,7 +597,7 @@ pub(crate) fn draw_with_worktree(
     let pane_height = |pane, changes: &Changes| {
         u16::try_from(changes.paths.len())
             .unwrap_or(u16::MAX)
-            .saturating_add(u16::from(index_separator(pane, changes).is_some()))
+            .saturating_add(changes_separators(pane, changes).iter().flatten().count() as u16)
             .saturating_add(2)
     };
     let (changes_layout, mut changes_panes, _) = changes_pane_areas(
@@ -490,11 +622,8 @@ pub(crate) fn draw_with_worktree(
     if let Some(changes) = worktree_changes {
         app.set_worktree_conflicted(changes.paths.iter().any(|change| change.kind == ChangeKind::Unmerged));
     }
-    app.set_new_commit_availability(
-        (app.changes_mode == Some(ChangesMode::Both))
-            .then_some(worktree_changes)
-            .flatten(),
-    );
+    let current_worktree_changes = worktree_changes.filter(|_| app.changes_mode == Some(ChangesMode::Both));
+    app.set_new_commit_availability(current_worktree_changes);
     let selected_is_head = app.selected.and_then(|index| app.rows.get(index)).is_some_and(|row| {
         decorations
             .get(&row.id)
@@ -503,14 +632,13 @@ pub(crate) fn draw_with_worktree(
     let selected_has_stash = app
         .selected
         .and_then(|index| app.rows.get(index))
-        .and_then(|row| decorations.get(&row.id))
-        .is_some_and(|refs| refs.iter().any(|reference| reference.kind == DecorationKind::Stash));
+        .is_some_and(|row| decorations.has_stash(row.id, app.change_id(row.id)));
     let stashable = selected_is_head
         && !selected_has_stash
-        && worktree_changes.is_some_and(|changes| {
+        && current_worktree_changes.is_none_or(|changes| {
             !changes.paths.is_empty() && !changes.paths.iter().any(|change| change.kind == ChangeKind::Unmerged)
         });
-    let worktree_path_amend = worktree_changes.is_some_and(|changes| {
+    let worktree_path_amend = current_worktree_changes.is_some_and(|changes| {
         !changes.paths.iter().any(|change| change.kind == ChangeKind::Unmerged)
             && changes
                 .paths
@@ -518,14 +646,14 @@ pub(crate) fn draw_with_worktree(
                 .is_some_and(|change| !change.path.ends_with(b"/"))
     });
     app.set_head_edit_availability(
-        selected_is_head && worktree_changes.is_some_and(|changes| !changes.paths.is_empty()),
+        selected_is_head && current_worktree_changes.is_none_or(|changes| !changes.paths.is_empty()),
         stashable,
         selected_is_head && selected_has_stash,
         selected_is_head && worktree_path_amend,
-        worktree_changes.is_some_and(|changes| changes.paths.is_empty()),
-        selected_is_head && tree_changes.is_some_and(|changes| !changes.paths.is_empty()),
+        current_worktree_changes.is_none_or(|changes| changes.paths.is_empty()),
+        selected_is_head && tree_changes.is_none_or(|changes| !changes.paths.is_empty()),
         selected_is_head
-            && worktree_changes.is_some_and(|changes| {
+            && current_worktree_changes.is_none_or(|changes| {
                 changes.paths.iter().any(|change| change.group == ChangeGroup::Staged)
                     && changes.paths.iter().any(|change| change.group == ChangeGroup::Unstaged)
                     && !changes.paths.iter().any(|change| change.kind == ChangeKind::Unmerged)
@@ -544,12 +672,16 @@ pub(crate) fn draw_with_worktree(
                 && worktree_changes.is_some_and(Changes::is_visible),
         );
     }
-    let commands =
-        if app.history_display_expanded || app.actions_expanded || app.enrich_expanded || app.information_expanded {
-            command_menu::commands(app, decorations, app.has_verifiable_signatures())
-        } else {
-            Vec::new()
-        };
+    let commands = if app.history_display_expanded
+        || app.actions_expanded
+        || app.enrich_expanded
+        || app.information_expanded
+        || app.viewport_expanded
+    {
+        command_menu::commands(app, decorations, app.has_verifiable_signatures())
+    } else {
+        Vec::new()
+    };
     let focus_feedback = app.focus_feedback.take();
     let time_travel = time_travel_shortcuts(app, decorations, worktree_changes);
     let mut prefix_popup = active_prefix_popup(
@@ -799,7 +931,7 @@ pub(crate) fn draw_with_worktree(
                             span.style = if current_head {
                                 span.style.add_modifier(Modifier::REVERSED)
                             } else {
-                                span.style.bg(Color::DarkGray)
+                                span.style.patch(secondary_highlight(app))
                             };
                         }
                     }
@@ -962,6 +1094,25 @@ pub(crate) fn draw_with_worktree(
         let lane = displayed_lane(index);
         let y = body.y.saturating_add(index as u16);
         let row_area = Rect::new(content.x, y, content.width, 1);
+        let representative = match visible_entries[index] {
+            HistoryEntry::Commit(index)
+            | HistoryEntry::Segment {
+                representative: index, ..
+            } => index,
+        };
+        let click = Action::SelectHistoryRow {
+            index: start + index,
+            commit_id: app.rows[representative].id,
+        };
+        if let Some(column) = lane
+            .chars()
+            .position(|symbol| matches!(symbol, '●' | '◆' | '○' | '@' | '+' | '0'..='9'))
+        {
+            mouse_regions.push((
+                scrolled_row_area(row_area, column..column + 1, horizontal_offset),
+                Some(click.clone()),
+            ));
+        }
         let row_index = match visible_entries[index] {
             HistoryEntry::Commit(index) => index,
             HistoryEntry::Segment { count, .. } => {
@@ -978,19 +1129,20 @@ pub(crate) fn draw_with_worktree(
                         Rect::new(status_x, y, body.right().saturating_sub(status_x).min(2), 1),
                     );
                 }
+                let label = format!("[{count}]");
+                let separator = if requested_alignment == HistoryAlignment::None || lane.is_empty() {
+                    ""
+                } else {
+                    " "
+                };
+                let label_start = lane.chars().count() + separator.len();
+                mouse_regions.push((
+                    scrolled_row_area(row_area, label_start..label_start + label.len(), horizontal_offset),
+                    Some(click),
+                ));
                 frame.render_widget(
-                    Paragraph::new(Line::styled(
-                        format!(
-                            "{lane}{}[{count}]",
-                            if requested_alignment == HistoryAlignment::None || lane.is_empty() {
-                                ""
-                            } else {
-                                " "
-                            }
-                        ),
-                        style,
-                    ))
-                    .scroll((0, horizontal_offset as u16)),
+                    Paragraph::new(Line::styled(format!("{lane}{separator}{label}"), style))
+                        .scroll((0, horizontal_offset as u16)),
                     row_area,
                 );
                 color_graph(
@@ -1002,11 +1154,22 @@ pub(crate) fn draw_with_worktree(
                     SignatureState::Unsigned,
                     None,
                 );
+                if app.graphics_enabled {
+                    tag_graph(
+                        frame,
+                        row_area,
+                        &lanes.tiles(index)[..lane.chars().count()],
+                        horizontal_offset,
+                    );
+                }
                 if !selectable {
                     frame.buffer_mut().set_style(
                         Rect::new(body.x, y, body.width, 1),
                         Style::default().add_modifier(Modifier::DIM),
                     );
+                }
+                if !app.graphics_enabled {
+                    highlight_graph(frame, row_area, lanes.tiles(index), horizontal_offset);
                 }
                 continue;
             }
@@ -1031,6 +1194,15 @@ pub(crate) fn draw_with_worktree(
             attached: attached_head,
         });
         let metadata_width = metadata.width();
+        let text_start = if row_alignment == HistoryAlignment::None {
+            lane.chars().count()
+        } else {
+            metadata_x
+        };
+        mouse_regions.push((
+            scrolled_row_area(row_area, text_start..text_start + metadata_width, horizontal_offset),
+            Some(click),
+        ));
         let title_offset = match row_alignment {
             HistoryAlignment::None => lane.chars().count().saturating_add(metadata_prefix_width),
             HistoryAlignment::Title | HistoryAlignment::Columns | HistoryAlignment::Compressed => {
@@ -1138,6 +1310,14 @@ pub(crate) fn draw_with_worktree(
             row.signature,
             head_state,
         );
+        if app.graphics_enabled {
+            tag_graph(
+                frame,
+                row_area,
+                &lanes.tiles(index)[..lane.chars().count()],
+                horizontal_offset,
+            );
+        }
         if selected {
             let end = if head {
                 content.x.saturating_add(u16::try_from(line_width).unwrap_or(u16::MAX))
@@ -1234,6 +1414,9 @@ pub(crate) fn draw_with_worktree(
                 );
             }
         }
+        if !app.graphics_enabled {
+            highlight_graph(frame, row_area, lanes.tiles(index), horizontal_offset);
+        }
         if let Some((label, role)) = app.tree_selection_marker(row.id) {
             let color = match role {
                 crate::app::TreeSelectionRole::Source => Color::Cyan,
@@ -1269,6 +1452,13 @@ pub(crate) fn draw_with_worktree(
             }
         }
     }
+    app.mouse_regions = mouse_regions;
+    app.mouse_graph = Some(crate::app::MouseGraph {
+        area: Rect::new(content.x, body.y, content.width, (render_end - start) as u16),
+        horizontal_offset,
+        start,
+        lanes,
+    });
     app.set_horizontal_bounds(content.width as usize, max_offset);
     if app.changes_focus.is_some() {
         frame
@@ -1297,6 +1487,7 @@ pub(crate) fn draw_with_worktree(
             vertical: 1,
         });
         frame.render_widget(Clear, *underlay);
+        app.mouse_regions.push((*underlay, None));
         frame.render_widget(Block::new().borders(Borders::TOP).title(summary), outer);
         render_changes(frame, area, changes, pane, app);
         if app.changes_focus == Some(pane) {
@@ -1341,9 +1532,10 @@ pub(crate) fn draw_with_worktree(
                 spans.extend(shortcut(label, 'e', true));
             }
             frame.render_widget(
-                Paragraph::new(Line::from(spans)).style(Style::default().bg(PANE_STATUS_BACKGROUND)),
+                Paragraph::new(Line::from(spans)).style(secondary_highlight(app).add_modifier(Modifier::BOLD)),
                 status,
             );
+            app.mouse_regions.push((status, None));
         } else {
             frame
                 .buffer_mut()
@@ -1355,6 +1547,7 @@ pub(crate) fn draw_with_worktree(
     }
     if let Some((outer, area)) = commit_pane {
         frame.render_widget(Clear, outer);
+        app.mouse_regions.push((outer, None));
         if let Some((red, green, blue)) = app.commit_pane_background {
             frame
                 .buffer_mut()
@@ -1369,22 +1562,32 @@ pub(crate) fn draw_with_worktree(
             0
         };
         app.set_commit_bounds(area.height as usize, max_offset);
+        let mut status = shortcut(
+            if commit_fullscreen {
+                "` restore"
+            } else {
+                "` full-screen"
+            },
+            '`',
+            true,
+        );
+        status.push(Span::raw(" · "));
+        status.extend(shortcut("m/q close", 'q', true));
         if max_offset > 0 {
-            frame.render_widget(
-                Paragraph::new(Line::from(vec![
-                    Span::raw("PgUp/C-b up page · PgDn/C-f down page · "),
-                    Span::styled("m", Style::default().add_modifier(Modifier::UNDERLINED)),
-                    Span::raw(" close"),
-                ]))
-                .style(Style::default().bg(PANE_STATUS_BACKGROUND)),
-                Rect::new(
-                    outer.x.saturating_add(2),
-                    outer.bottom().saturating_sub(1),
-                    outer.width.saturating_sub(4),
-                    1,
-                ),
-            );
+            status.push(Span::raw(" · PgUp/C-b · PgDn/C-f"));
+            if commit_fullscreen {
+                status.push(Span::raw(" · j/k · C-d/C-u · g/G"));
+            }
         }
+        frame.render_widget(
+            Paragraph::new(Line::from(status)).style(secondary_highlight(app).add_modifier(Modifier::BOLD)),
+            Rect::new(
+                outer.x.saturating_add(2),
+                outer.bottom().saturating_sub(1),
+                outer.width.saturating_sub(4),
+                u16::from(outer.height > 0),
+            ),
+        );
     }
 
     let history_state = app.deferred_history_state.unwrap_or(app.state);
@@ -1399,18 +1602,18 @@ pub(crate) fn draw_with_worktree(
     let mut actions_prefix_spans = Vec::new();
     if app.actions_visible() {
         actions_prefix_spans.push(Span::raw(" · "));
-        actions_prefix_spans.push(Span::styled("a", Style::default().add_modifier(Modifier::UNDERLINED)));
+        actions_prefix_spans.push(Span::styled("a", color(SHORTCUT_COLOR)));
         actions_prefix_spans.push(Span::raw("ctions"));
         if app.actions_expanded {
             emphasize_prefix(&mut actions_prefix_spans[1..]);
         }
     }
     if app.changes_focus.is_some() {
-        footer_spans.push(Span::raw(" · q/Esc history"));
+        footer_spans.push(Span::raw(" · Esc history"));
     }
     let mut view_prefix_spans = Vec::new();
     view_prefix_spans.push(Span::raw(" · "));
-    view_prefix_spans.push(Span::styled("v", Style::default().add_modifier(Modifier::UNDERLINED)));
+    view_prefix_spans.push(Span::styled("v", color(SHORTCUT_COLOR)));
     view_prefix_spans.push(Span::raw("iew"));
     if app.history_display_expanded {
         emphasize_prefix(&mut view_prefix_spans[1..]);
@@ -1420,6 +1623,14 @@ pub(crate) fn draw_with_worktree(
         ordered.push(Span::raw(" · <enter> expand"));
     }
     ordered.append(&mut view_prefix_spans);
+    if app.can_position_selection() {
+        ordered.push(Span::raw(" · "));
+        let start = ordered.len();
+        ordered.extend(shortcut("z position", 'z', true));
+        if app.viewport_expanded {
+            emphasize_prefix(&mut ordered[start..]);
+        }
+    }
     ordered.append(&mut actions_prefix_spans);
     if !selected_segment {
         ordered.push(Span::raw(" · "));
@@ -1442,7 +1653,7 @@ pub(crate) fn draw_with_worktree(
     ordered.extend(shortcut("refs", 'r', app.ref_mode != RefMode::None));
     ordered.push(Span::raw(" · "));
     let information_prefix_start = ordered.len();
-    ordered.push(Span::styled("?", Style::default().add_modifier(Modifier::UNDERLINED)));
+    ordered.push(Span::styled("?", color(SHORTCUT_COLOR)));
     if app.information_expanded {
         emphasize_prefix(&mut ordered[information_prefix_start..]);
     }
@@ -1451,10 +1662,18 @@ pub(crate) fn draw_with_worktree(
     if app.changes_focus.is_none() && history_state == State::Loading {
         footer_spans.push(Span::raw(" · Esc cancel"));
     }
-    if app.changes_focus.is_none() {
-        footer_spans.push(Span::raw(" · "));
-        footer_spans.extend(shortcut("quit", 'q', true));
-    }
+    footer_spans.push(Span::raw(" · "));
+    footer_spans.extend(shortcut(
+        if app.show_commit {
+            "q close message"
+        } else if app.changes_mode.is_some() {
+            "q close changes"
+        } else {
+            "quit"
+        },
+        'q',
+        true,
+    ));
     if app.unseen_filesystem_redraw {
         footer_spans = notification_discs(footer_spans);
         if let Some((_, popup)) = prefix_popup.as_mut() {
@@ -1463,8 +1682,11 @@ pub(crate) fn draw_with_worktree(
             }
         }
     }
-    frame.render_widget(Paragraph::new(Line::from(footer_spans)), footer);
+    if !commit_fullscreen {
+        frame.render_widget(Paragraph::new(Line::from(footer_spans)), footer);
+    }
     if let Some(area) = notice_area {
+        app.mouse_regions.push((area, None));
         if let Some(notice) = &notice {
             render_notice(frame, area, notice);
             if app.held_prefix_group().is_none()
@@ -1476,18 +1698,27 @@ pub(crate) fn draw_with_worktree(
             render_background_progress(frame, area, progress);
         }
     }
-    let _ = prefix_popup
+    if let Some(area) = prefix_popup
         .filter(|_| prefix_popup_allowed)
         .and_then(|(anchor, popup)| {
             render_prefix_popup(frame, area, footer, anchor, popup, app.held_prefix_selection())
-        });
+        })
+    {
+        app.mouse_regions.push((area, None));
+    }
+}
+
+fn scrolled_row_area(area: Rect, columns: std::ops::Range<usize>, offset: usize) -> Rect {
+    let start = columns.start.saturating_sub(offset).min(usize::from(area.width)) as u16;
+    let end = columns.end.saturating_sub(offset).min(usize::from(area.width)) as u16;
+    Rect::new(area.x + start, area.y, end.saturating_sub(start), area.height)
 }
 
 fn render_background_progress(frame: &mut Frame<'_>, area: Rect, progress: &crate::app::BackgroundProgress) {
     frame.render_widget(
         Paragraph::new(progress.text.as_str())
             .wrap(Wrap { trim: false })
-            .style(Style::default().bg(Color::Reset)),
+            .style(Style::default().fg(Color::Reset).bg(Color::Reset)),
         area,
     );
     let completed_width = if progress.total == 0 {
@@ -1497,7 +1728,7 @@ fn render_background_progress(frame: &mut Frame<'_>, area: Rect, progress: &crat
     };
     frame.buffer_mut().set_style(
         Rect::new(area.x, area.y, completed_width, area.height),
-        Style::default().bg(Color::DarkGray),
+        Style::default().add_modifier(Modifier::REVERSED),
     );
 }
 
@@ -1603,6 +1834,14 @@ fn active_prefix_popup_anchor(app: &App, time_travel: &[Span<'_>]) -> Option<usi
     width += "view".len();
     let mut active = app.history_display_expanded.then_some(view);
 
+    if app.can_position_selection() {
+        width += 3;
+        if app.viewport_expanded {
+            active = Some(width);
+        }
+        width += "z position".len();
+    }
+
     let actions_visible = app.actions_visible();
     if actions_visible {
         width += 3;
@@ -1635,7 +1874,7 @@ fn active_prefix_popup_anchor(app: &App, time_travel: &[Span<'_>]) -> Option<usi
     active
 }
 
-fn render_changes_divider(frame: &mut Frame<'_>, panes: &[ChangesPaneArea], app: &App) {
+fn render_changes_divider(frame: &mut Frame<'_>, panes: &[ChangesPaneArea], app: &mut App) {
     let Some(tree) = panes.iter().find(|pane| pane.pane == ChangePane::Tree) else {
         return;
     };
@@ -1645,6 +1884,8 @@ fn render_changes_divider(frame: &mut Frame<'_>, panes: &[ChangesPaneArea], app:
     let x = worktree.outer.x;
     let top = tree.outer.y.min(worktree.outer.y);
     let bottom = tree.outer.bottom().max(worktree.outer.bottom());
+    app.mouse_regions
+        .push((Rect::new(x, top, 1, bottom.saturating_sub(top)), None));
     let style = if app.changes_focus.is_none() {
         Style::default().add_modifier(Modifier::DIM)
     } else {
@@ -1723,26 +1964,25 @@ fn push_selection_span(spans: &mut Vec<Span<'static>>, span: Span<'static>) {
     spans.push(span);
 }
 
-fn index_divider(width: u16) -> Line<'static> {
-    const LABEL: &str = "↑ index ↑ ";
+fn changes_divider(width: u16, label: &str, rail_color: Color) -> Line<'static> {
     let width = usize::from(width);
-    let label: String = LABEL.chars().take(width).collect();
+    let label: String = label.chars().take(width).collect();
     let rail_width = width - label.chars().count();
     Line::from(vec![
         Span::styled(label, Style::default().add_modifier(Modifier::DIM)),
-        Span::styled("─".repeat(rail_width), color(Color::Green)),
+        Span::styled("─".repeat(rail_width), color(rail_color)),
     ])
 }
 
 fn render_changes(frame: &mut Frame<'_>, area: Rect, changes: &Changes, pane: ChangePane, app: &mut App) {
     if area.height == 0 {
-        app.set_changes_bounds(pane, 0, 0, None, area.width as usize, 0);
+        app.set_changes_bounds(pane, 0, 0, [None; 2], area.width as usize, 0);
         return;
     }
     let focused = app.changes_focus == Some(pane);
     let selected_index = app.changes(pane).selected.min(changes.paths.len().saturating_sub(1));
-    let separator = index_separator(pane, changes);
-    let display_len = changes.paths.len() + usize::from(separator.is_some());
+    let separators = changes_separators(pane, changes);
+    let display_len = changes.paths.len() + separators.iter().flatten().count();
     let path_capacity = usize::from(area.height);
     let overflow = display_len > 1 && display_len > path_capacity;
     let visible_rows = if overflow {
@@ -1791,8 +2031,17 @@ fn render_changes(frame: &mut Frame<'_>, area: Rect, changes: &Changes, pane: Ch
             Line::from(spans)
         })
         .collect();
-    if let Some(separator) = separator {
-        lines.insert(separator, index_divider(area.width));
+    let display_separators = [
+        separators[0],
+        separators[1].map(|index| index + usize::from(separators[0].is_some())),
+    ];
+    for (separator, (label, rail_color)) in display_separators
+        .into_iter()
+        .zip([("↑ conflicts ↑ ", Color::LightRed), ("↑ index ↑ ", Color::Green)])
+    {
+        if let Some(separator) = separator {
+            lines.insert(separator, changes_divider(area.width, label, rail_color));
+        }
     }
     let horizontal_max = lines
         .iter()
@@ -1804,7 +2053,7 @@ fn render_changes(frame: &mut Frame<'_>, area: Rect, changes: &Changes, pane: Ch
         pane,
         visible_rows,
         changes.paths.len(),
-        separator,
+        separators,
         area.width as usize,
         horizontal_max,
     );
@@ -1812,24 +2061,32 @@ fn render_changes(frame: &mut Frame<'_>, area: Rect, changes: &Changes, pane: Ch
     let horizontal_offset = app.changes(pane).horizontal_offset;
     for (row, line) in lines.into_iter().skip(offset).take(visible_rows).enumerate() {
         let display_index = offset + row;
-        let horizontal_offset = if separator == Some(display_index) {
+        let row_area = Rect::new(area.x, area.y.saturating_add(row as u16), area.width, 1);
+        if !display_separators.contains(&Some(display_index)) {
+            let index = display_index
+                - display_separators
+                    .iter()
+                    .flatten()
+                    .filter(|&&separator| separator < display_index)
+                    .count();
+            app.mouse_regions.push((
+                scrolled_row_area(row_area, 0..line.width(), horizontal_offset),
+                Some(Action::SelectChange { pane, index }),
+            ));
+        }
+        let horizontal_offset = if display_separators.contains(&Some(display_index)) {
             0
         } else {
             horizontal_offset
         };
         frame.render_widget(
             Paragraph::new(line).scroll((0, u16::try_from(horizontal_offset).unwrap_or(u16::MAX))),
-            Rect::new(
-                area.x,
-                area.y.saturating_add(u16::try_from(row).unwrap_or(u16::MAX)),
-                area.width,
-                1,
-            ),
+            row_area,
         );
     }
     let visible_end = offset.saturating_add(visible_rows);
     let hidden = (0..changes.paths.len())
-        .filter(|index| *index + usize::from(separator.is_some_and(|separator| *index >= separator)) >= visible_end)
+        .filter(|index| app.changes(pane).display_index(*index) >= visible_end)
         .count();
     if overflow && hidden > 0 {
         frame.render_widget(
@@ -2453,7 +2710,7 @@ fn conventional_title(title: &BStr) -> Option<ConventionalTitle<'_>> {
     })
 }
 
-fn shortcut(label: &'static str, key: char, enabled: bool) -> Vec<Span<'static>> {
+pub(crate) fn shortcut(label: &'static str, key: char, enabled: bool) -> Vec<Span<'static>> {
     let key_start = label.find(key).expect("shortcut key is present in its label");
     let key_end = key_start + key.len_utf8();
     let style = if enabled {
@@ -2463,7 +2720,7 @@ fn shortcut(label: &'static str, key: char, enabled: bool) -> Vec<Span<'static>>
     };
     vec![
         Span::styled(&label[..key_start], style),
-        Span::styled(&label[key_start..key_end], style.add_modifier(Modifier::UNDERLINED)),
+        Span::styled(&label[key_start..key_end], style.fg(SHORTCUT_COLOR)),
         Span::styled(&label[key_end..], style),
     ]
 }
@@ -2479,9 +2736,22 @@ impl From<Vec<Span<'static>>> for PrefixItem {
     }
 }
 
-struct PrefixPopupRows {
-    rows: Vec<Vec<Span<'static>>>,
-    items: Vec<crate::app::prefix::Item>,
+pub(crate) struct PrefixPopupRows {
+    pub(crate) rows: Vec<Vec<Span<'static>>>,
+    pub(crate) items: Vec<crate::app::prefix::Item>,
+}
+
+pub(crate) fn command_popup(
+    commands: &[Command],
+    group: CommandGroup,
+    hints: Vec<Vec<Span<'static>>>,
+    content_width: usize,
+) -> PrefixPopupRows {
+    let mut rows = vec![command_items(commands, group, 0)];
+    if !hints.is_empty() {
+        rows.push(hints.into_iter().map(PrefixItem::from).collect());
+    }
+    wrap_prefix_popup_rows(rows, content_width)
 }
 
 fn command_items(commands: &[Command], group: CommandGroup, row: usize) -> Vec<PrefixItem> {
@@ -2525,6 +2795,9 @@ fn active_prefix_popup(
     if !selected_segment && app.enrich_expanded {
         logical_rows = Some(vec![command_items(commands, CommandGroup::Enrich, 0)]);
     }
+    if app.viewport_expanded {
+        logical_rows = Some(vec![command_items(commands, CommandGroup::Viewport, 0)]);
+    }
     if app.information_expanded {
         let mut information: Vec<_> = commands
             .iter()
@@ -2533,13 +2806,15 @@ fn active_prefix_popup(
                 let spans = if command.id == CommandId::VerifySignatures {
                     if app.signature_failures > 0 {
                         vec![
-                            Span::raw(format!("s {} ", app.signature_failures)),
+                            Span::styled("s", color(SHORTCUT_COLOR)),
+                            Span::raw(format!(" {} ", app.signature_failures)),
                             Span::styled("●", color(Color::LightRed)),
                         ]
                     } else {
                         vec![
-                            Span::raw("s "),
-                            Span::styled("●", color(Color::Rgb(255, 165, 0))),
+                            Span::styled("s", color(SHORTCUT_COLOR)),
+                            Span::raw(" "),
+                            Span::styled("●", color(ATTENTION_COLOR)),
                             Span::raw(" -> "),
                             Span::styled("●", color(Color::Green)),
                         ]
@@ -2600,6 +2875,9 @@ fn active_prefix_popup(
             vec![Span::raw("J/K topo")],
             vec![Span::raw("PgUp/PgDn move")],
             vec![Span::raw("Shift+PgUp/PgDn pan")],
+            vec![Span::raw("zz center · zt top · zb bottom")],
+            vec![Span::raw("Alt/Option+hover preview line")],
+            vec![Span::raw("Alt/Option+click jump to commit")],
         ]);
         if app.changes_focus.is_none() {
             navigation.push(vec![Span::raw(if selected_segment {
@@ -2657,8 +2935,12 @@ fn wrap_prefix_popup_rows(logical_rows: Vec<Vec<PrefixItem>>, content_width: usi
     PrefixPopupRows { rows, items: positions }
 }
 
-fn emphasize_prefix(spans: &mut [Span<'_>]) {
+pub(crate) fn emphasize_prefix(spans: &mut [Span<'_>]) {
     for span in spans {
+        if span.style.fg == Some(SHORTCUT_COLOR) {
+            // Keep the shortcut's displayed foreground when REVERSED swaps colors.
+            std::mem::swap(&mut span.style.fg, &mut span.style.bg);
+        }
         span.style = span.style.add_modifier(Modifier::REVERSED);
     }
 }
@@ -2667,7 +2949,7 @@ fn spans_width(spans: &[Span<'_>]) -> usize {
     spans.iter().map(Span::width).sum()
 }
 
-fn render_prefix_popup(
+pub(crate) fn render_prefix_popup(
     frame: &mut Frame<'_>,
     bounds: Rect,
     footer: Rect,
@@ -2713,10 +2995,18 @@ fn render_prefix_popup(
                 .add_modifier(Modifier::BOLD),
         );
     }
+    // Held selection removes REVERSED, so only the other shortcut glyphs need their colors swapped.
+    let buffer = frame.buffer_mut();
+    for position in area.positions() {
+        let cell = &mut buffer[position];
+        if cell.fg == SHORTCUT_COLOR && cell.modifier.contains(Modifier::REVERSED) {
+            std::mem::swap(&mut cell.fg, &mut cell.bg);
+        }
+    }
     Some(area)
 }
 
-fn prefix_popup_can_render(frame: Rect, footer: Rect, anchor: usize, rows: usize) -> bool {
+pub(crate) fn prefix_popup_can_render(frame: Rect, footer: Rect, anchor: usize, rows: usize) -> bool {
     footer.width > 0 && usize::from(footer.y.saturating_sub(frame.y)) >= rows && anchor < usize::from(footer.width)
 }
 
@@ -2726,7 +3016,7 @@ fn notification_discs(spans: Vec<Span<'_>>) -> Vec<Span<'_>> {
         let style = span.style;
         for (index, text) in span.content.split('·').enumerate() {
             if index > 0 {
-                out.push(Span::styled("●", style.fg(FILESYSTEM_NOTIFICATION_COLOR)));
+                out.push(Span::styled("●", style.fg(ATTENTION_COLOR)));
             }
             if !text.is_empty() {
                 out.push(Span::styled(text.to_owned(), style));
@@ -2845,27 +3135,7 @@ fn metadata_columns<'a>(
     }
     let mut refs = Vec::new();
     let row_decorations = decorations.get(&row.id).map(Vec::as_slice).unwrap_or_default();
-    if row_decorations
-        .iter()
-        .any(|decoration| decoration.kind == DecorationKind::Pin)
-    {
-        refs.push(Span::styled(" 📌", decoration_style(DecorationKind::Pin)));
-    }
-    if row_decorations
-        .iter()
-        .any(|decoration| decoration.kind == DecorationKind::Stash)
-    {
-        let marker = if row_decorations
-            .iter()
-            .any(|decoration| decoration.kind == DecorationKind::Pin)
-        {
-            "🎁"
-        } else {
-            " 🎁"
-        };
-        refs.push(Span::styled(marker, decoration_style(DecorationKind::Stash)));
-    }
-    let mut labels = row_decorations
+    let labels: Vec<_> = row_decorations
         .iter()
         .filter(|decoration| !matches!(decoration.kind, DecorationKind::Pin | DecorationKind::Stash))
         .filter(|decoration| decoration.kind != DecorationKind::CurrentWorktreeDetached)
@@ -2884,27 +3154,47 @@ fn metadata_columns<'a>(
                     )
             }
         })
-        .peekable();
-    if labels.peek().is_some() {
+        .collect();
+    let has_pin = row_decorations.iter().any(|decoration| {
+        decoration.kind == DecorationKind::Pin
+            && decorations
+                .pin_target(row.id, decoration.name.as_bstr())
+                .is_none_or(|target| !labels.contains(&target))
+    });
+    if has_pin {
+        refs.push(Span::styled(" 📌", decoration_style(DecorationKind::Pin)));
+    }
+    if decorations.has_stash(row.id, change_id) {
+        let marker = if has_pin { "🎁" } else { " 🎁" };
+        refs.push(Span::styled(marker, decoration_style(DecorationKind::Stash)));
+    }
+    if !labels.is_empty() {
         refs.push(Span::raw(" ("));
-        for (index, decoration) in labels.enumerate() {
+        for (index, decoration) in labels.into_iter().enumerate() {
             if index != 0 {
                 refs.push(Span::raw(", "));
             }
             let name = decoration.name.to_str_lossy();
+            let pin = if decorations.is_pinned(row.id, decoration) {
+                "📌"
+            } else {
+                ""
+            };
             refs.push(Span::styled(
                 if matches!(
                     decoration.kind,
                     DecorationKind::WorktreeBranch | DecorationKind::WorktreeDetached
                 ) {
-                    format!("{name}@").into()
+                    format!("{pin}{name}@").into()
                 } else if decoration.kind == DecorationKind::HeadPinBranch {
-                    format!("★{name}").into()
+                    format!("{pin}★{name}").into()
                 } else if matches!(
                     decoration.kind,
                     DecorationKind::CurrentWorktreeBranch | DecorationKind::CurrentWorktreeDetached
                 ) {
-                    format!("@{name}").into()
+                    format!("{pin}@{name}").into()
+                } else if !pin.is_empty() {
+                    format!("{pin}{name}").into()
                 } else {
                     name
                 },
@@ -3201,7 +3491,7 @@ fn actor_style(
 pub(crate) fn decoration_style(kind: DecorationKind) -> Style {
     match kind {
         DecorationKind::Head => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-        DecorationKind::Pin => Style::default().fg(Color::Blue),
+        DecorationKind::Pin => Style::default(),
         DecorationKind::HeadPinBranch => Style::default().fg(Color::Cyan),
         DecorationKind::Stash => Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD),
         DecorationKind::Review => Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD),
@@ -3214,6 +3504,7 @@ pub(crate) fn decoration_style(kind: DecorationKind) -> Style {
         DecorationKind::Tag => Style::default().fg(Color::Magenta),
         DecorationKind::AnnotatedTag => Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
         DecorationKind::Special => Style::default().fg(Color::Blue),
+        DecorationKind::PullRequest => Style::default().fg(Color::LightGreen),
     }
 }
 
@@ -3267,10 +3558,47 @@ fn color_graph(
 fn signature_color(signature: SignatureState) -> Color {
     match signature {
         SignatureState::Unsigned => Color::Blue,
-        SignatureState::Unverified | SignatureState::Verifying => Color::Rgb(255, 165, 0),
+        SignatureState::Unverified | SignatureState::Verifying => ATTENTION_COLOR,
         SignatureState::Verified => Color::Green,
         SignatureState::Failed => Color::LightRed,
         SignatureState::PendingRebase => Color::Gray,
+    }
+}
+
+pub(crate) fn highlight_graph(frame: &mut Frame<'_>, area: Rect, tiles: &[Tile], offset: usize) {
+    for (x, tile) in tiles.iter().skip(offset).take(usize::from(area.width)).enumerate() {
+        if tile.highlighted_paths == 0 {
+            continue;
+        }
+        let cell = &mut frame.buffer_mut()[(area.x + x as u16, area.y)];
+        cell.set_style(
+            Style::default()
+                .add_modifier(Modifier::BOLD)
+                .remove_modifier(Modifier::DIM),
+        );
+        if tile.marker == ' ' {
+            cell.set_fg(Color::LightCyan);
+        }
+    }
+}
+
+pub(crate) fn tag_graph(frame: &mut Frame<'_>, area: Rect, tiles: &[Tile], offset: usize) {
+    for (x, mut tile) in tiles
+        .iter()
+        .skip(offset)
+        .take(usize::from(area.width))
+        .cloned()
+        .enumerate()
+    {
+        if tile.paths == 0 && tile.marker == ' ' && tile.edges.is_empty() {
+            continue;
+        }
+        let cell = &mut frame.buffer_mut()[(area.x + x as u16, area.y)];
+        if tile.marker != ' ' {
+            tile.marker = cell.symbol().chars().next().unwrap_or(tile.marker);
+        }
+        cell.set_symbol(&tile.encode())
+            .set_diff_option(CellDiffOption::ForcedWidth(std::num::NonZeroU16::MIN));
     }
 }
 
@@ -3295,7 +3623,11 @@ fn graph_style(column: usize) -> Style {
 
 #[cfg(test)]
 mod tests {
-    use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
+    use ratatui::{
+        Terminal,
+        backend::TestBackend,
+        buffer::{Buffer, Cell, CellWidth},
+    };
 
     use super::*;
     use crate::{
@@ -3322,11 +3654,310 @@ mod tests {
         app.finish_lane_computation(rows, lanes, lane_time);
     }
 
+    fn assert_shortcut(cell: &Cell) {
+        assert_eq!(
+            if cell.modifier.contains(Modifier::REVERSED) {
+                cell.bg
+            } else {
+                cell.fg
+            },
+            Color::Cyan,
+            "action shortcut glyphs stay cyan even in reversed groups"
+        );
+        assert!(
+            !cell.modifier.contains(Modifier::UNDERLINED),
+            "action shortcuts use color instead of underlining"
+        );
+    }
+
+    #[test]
+    fn mouse_selection_tracks_rendered_text_and_marker_cells() -> gix_error::TestResult {
+        let ids = [1, 2, 3, 4].map(|byte| gix::ObjectId::Sha1([byte; 20]));
+        let mut app = App::new(4);
+        app.changes_mode = None;
+        app.alignment = HistoryAlignment::None;
+        app.extend_commits(
+            [vec![ids[1], ids[2]], vec![ids[3]], vec![ids[3]], vec![]]
+                .into_iter()
+                .enumerate()
+                .map(|(index, parents)| Commit {
+                    id: ids[index],
+                    parent_ids: parents.into_iter().collect(),
+                    author_time: gix::date::Time::default(),
+                    committer_time: gix::date::Time::default(),
+                    author: author(b"author", b"author@example.com"),
+                    attributions: 0..0,
+                    title: "wide 界 text".into(),
+                    metadata_loaded: true,
+                    has_agent_marker: false,
+                    is_review: index == 1,
+                    has_merge_replay: false,
+                    signature: SignatureState::Unsigned,
+                })
+                .collect::<Vec<_>>(),
+        );
+        complete(&mut app);
+        let mut terminal = Terminal::new(TestBackend::new(120, 6))?;
+        let area = Rect::new(3, 1, 90, 4);
+        for graphics in [false, true] {
+            let mut hovered_lines = 0;
+            app.graphics_enabled = graphics;
+            for offset in [0, 1, 5] {
+                app.horizontal_offset = offset;
+                app.viewport_rows = 3;
+                app.update(Action::First);
+                app.update(Action::PanDownBy(1));
+                terminal.draw(|frame| {
+                    draw_with_worktree(
+                        frame,
+                        area,
+                        &mut app,
+                        &Decorations::new(),
+                        &Default::default(),
+                        None,
+                        None,
+                        None,
+                    );
+                })?;
+                let mut markers = 0;
+                for y in area.y..area.bottom() - 1 {
+                    let index = app.offset + usize::from(y - area.y);
+                    let Some(row) = app.rows.get(index) else { continue };
+                    let expected = Action::SelectHistoryRow {
+                        index,
+                        commit_id: row.id,
+                    };
+                    for x in area.x..area.right() {
+                        let symbol = terminal.backend().buffer()[(x, y)].symbol();
+                        let tile = Tile::decode(symbol);
+                        let marker = tile
+                            .as_ref()
+                            .map_or_else(|| symbol.chars().next().unwrap_or(' '), |tile| tile.marker);
+                        if matches!(marker, '●' | '◆' | '@') {
+                            markers += 1;
+                            assert_eq!(
+                                app.mouse_action(x, y),
+                                Some(expected.clone()),
+                                "the rendered marker cell selects its commit"
+                            );
+                        } else if tile.is_some() || matches!(marker, '│' | '─' | '╮' | '╯' | '├' | '┤') {
+                            assert_eq!(
+                                app.mouse_action(x, y),
+                                None,
+                                "passing graph lines are not commit targets"
+                            );
+                        } else if symbol == "界" {
+                            assert_eq!(
+                                app.mouse_action(x, y),
+                                Some(expected.clone()),
+                                "wide text selects its row"
+                            );
+                            assert_eq!(
+                                app.mouse_action(x + 1, y),
+                                Some(expected.clone()),
+                                "both cells of a wide glyph select its row"
+                            );
+                        }
+                    }
+                }
+                if offset == 0 {
+                    assert!(markers > 0, "the unpanned viewport exercises visible markers");
+                }
+                assert_eq!(
+                    app.mouse_action(area.x, area.y),
+                    None,
+                    "the empty selection gutter is inert"
+                );
+                assert_eq!(
+                    app.mouse_action(area.right() - 1, area.y),
+                    None,
+                    "blank space after the text is inert"
+                );
+                assert_eq!(
+                    app.mouse_action(area.x + 2, area.bottom() - 1),
+                    None,
+                    "the footer is not a history row"
+                );
+                let graph = app.mouse_graph.as_ref().expect("history retains its drawn graph");
+                let hover = (0..graph.area.height)
+                    .flat_map(|row| (0..graph.area.width).map(move |column| (column, row)))
+                    .find_map(|(column, row)| {
+                        let position = Position::new(graph.area.x + column, graph.area.y + row);
+                        (graph
+                            .lanes
+                            .route_at(usize::from(row), usize::from(column) + graph.horizontal_offset)
+                            .is_some()
+                            && app.mouse_action(position.x, position.y).is_none())
+                        .then_some(position)
+                    });
+                if let Some(position) = hover {
+                    hovered_lines += 1;
+                    app.update_graph_hover(Some(position), true);
+                    terminal.draw(|frame| {
+                        draw_with_worktree(
+                            frame,
+                            area,
+                            &mut app,
+                            &Decorations::new(),
+                            &Default::default(),
+                            None,
+                            None,
+                            None,
+                        );
+                    })?;
+                    assert!(
+                        app.mouse_action(position.x, position.y).is_some(),
+                        "Alt makes the visible hovered line clickable without Shift"
+                    );
+                    let cell = &terminal.backend().buffer()[(position.x, position.y)];
+                    if graphics {
+                        let tile = Tile::decode(cell.symbol()).expect("the graph cell is graphical");
+                        assert!(
+                            tile.highlighted_paths != 0 || tile.edges.iter().any(|edge| edge.highlighted),
+                            "the hovered line is visibly highlighted"
+                        );
+                    } else {
+                        assert_eq!(cell.fg, Color::LightCyan, "the hovered fallback line is cyan");
+                    }
+                    app.update(Action::PanUpBy(1));
+                    terminal.draw(|frame| {
+                        draw_with_worktree(
+                            frame,
+                            area,
+                            &mut app,
+                            &Decorations::new(),
+                            &Default::default(),
+                            None,
+                            None,
+                            None,
+                        );
+                    })?;
+                    assert!(
+                        !app.refresh_graph_hover(),
+                        "drawing retains Alt hover under a stationary pointer after panning"
+                    );
+                    app.update_graph_hover(None, false);
+                }
+            }
+            assert!(
+                hovered_lines > 0,
+                "both renderers exercise a hovered connector after clipping"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn mouse_selection_ignores_overlays_and_change_dividers() -> gix_error::TestResult {
+        let mut app = held_prefix_app();
+        app.changes_mode = Some(ChangesMode::Both);
+        let changes = Changes {
+            paths: [ChangeGroup::Unstaged, ChangeGroup::Staged, ChangeGroup::Unstaged]
+                .into_iter()
+                .enumerate()
+                .map(|(index, group)| crate::app::PathChange {
+                    kind: if index == 0 {
+                        ChangeKind::Unmerged
+                    } else {
+                        ChangeKind::Modified
+                    },
+                    group,
+                    source: None,
+                    path: format!("file-{index}").into(),
+                    lines: None,
+                })
+                .collect(),
+            ..Changes::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(100, 15))?;
+        terminal.draw(|frame| {
+            let area = frame.area();
+            draw_with_worktree(
+                frame,
+                area,
+                &mut app,
+                &Decorations::new(),
+                &Default::default(),
+                None,
+                None,
+                Some(&changes),
+            );
+        })?;
+        for index in 0..3 {
+            let (y, line) = (0..15)
+                .map(|y| (y, rendered_line(&terminal, y)))
+                .find(|(_, line)| line.contains(&format!("file-{index}")))
+                .expect("the path is visible");
+            let x = line.find("file-").expect("the path has a prefix") as u16;
+            let action = app.mouse_action(x, y).expect("path text is clickable");
+            assert_eq!(
+                action,
+                Action::SelectChange {
+                    pane: ChangePane::Worktree,
+                    index
+                },
+                "dividers do not change the selected path index"
+            );
+            assert!(app.update(action).is_empty(), "a click selects without opening a diff");
+            assert_eq!(
+                app.changes_focus,
+                Some(ChangePane::Worktree),
+                "clicking a path focuses its pane"
+            );
+            assert_eq!(app.worktree_changes.selected, index);
+        }
+        for y in 0..15 {
+            let line = rendered_line(&terminal, y);
+            if line.contains("↑ index") || line.contains("↑ conflicts") {
+                for x in 0..100 {
+                    assert_eq!(
+                        app.mouse_action(x, y),
+                        None,
+                        "change separators do not select paths or obscured history"
+                    );
+                }
+            }
+        }
+        app.changes_mode = None;
+        app.changes_focus = None;
+        app.show_commit = true;
+        app.commit_fullscreen = true;
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(
+            (0..15).all(|y| (0..100).all(|x| app.mouse_action(x, y).is_none())),
+            "fullscreen messages hide all row targets"
+        );
+        app.show_commit = false;
+        app.update(Action::ToggleInformation);
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        let blocked: Vec<_> = app
+            .mouse_regions
+            .iter()
+            .filter_map(|(area, action)| action.is_none().then_some(*area))
+            .collect();
+        assert!(!blocked.is_empty(), "the popup produces an occluding region");
+        app.close_shortcut_groups();
+        for area in blocked {
+            assert!(
+                area.positions()
+                    .all(|position| app.mouse_action(position.x, position.y).is_none()),
+                "closing a popup before dispatch does not click through its last displayed cells"
+            );
+        }
+        Ok(())
+    }
+
     #[test]
     fn embeds_status_shortcuts_in_their_labels() {
         let spans = shortcut("copy", 'y', false);
         assert_eq!(Line::from(spans.clone()).to_string(), "copy");
-        assert!(spans[1].style.add_modifier.contains(Modifier::UNDERLINED));
+        assert_eq!(spans[1].style.fg, Some(Color::Cyan), "the shortcut letter is cyan");
+        assert!(
+            !spans[1].style.add_modifier.contains(Modifier::UNDERLINED),
+            "the shortcut letter is no longer underlined"
+        );
+        assert_eq!(spans[0].style.fg, None, "the rest of the label keeps its normal color");
+        assert_eq!(spans[2].style.fg, None, "the suffix keeps its normal color");
         assert!(spans[1].style.add_modifier.contains(Modifier::DIM));
     }
 
@@ -3427,10 +4058,10 @@ mod tests {
         assert_eq!(rendered_line(&terminal, 0), " one · two ");
         assert_eq!(rendered_line(&terminal, 1).trim_end(), " three");
         assert_eq!(rendered_line(&terminal, 2).trim_end(), " four");
-        let styled_shortcut = terminal.backend().buffer()[(7, 0)].modifier;
-        assert!(styled_shortcut.contains(Modifier::UNDERLINED));
-        assert!(styled_shortcut.contains(Modifier::DIM));
-        assert!(styled_shortcut.contains(Modifier::REVERSED));
+        let styled_shortcut = &terminal.backend().buffer()[(7, 0)];
+        assert_shortcut(styled_shortcut);
+        assert!(styled_shortcut.modifier.contains(Modifier::DIM));
+        assert!(styled_shortcut.modifier.contains(Modifier::REVERSED));
         Ok(())
     }
 
@@ -3495,6 +4126,7 @@ mod tests {
             CommandGroup::Actions,
             CommandGroup::Enrich,
             CommandGroup::Information,
+            CommandGroup::Viewport,
         ] {
             let mut app = held_prefix_app();
             app.date_mode = DateMode::None;
@@ -3558,6 +4190,11 @@ mod tests {
                 !selected.modifier.intersects(Modifier::DIM | Modifier::REVERSED),
                 "selection stays distinct even for toggles that are off"
             );
+            let key = first.key().expect("the first command in every group has a shortcut");
+            let key_offset = first.label[..first.label.find(key).expect("the label contains its shortcut")]
+                .chars()
+                .count() as u16;
+            assert_shortcut(&buffer[(x + 1 + item.start as u16 + key_offset, y)]);
             assert!(
                 buffer[(x, y)].modifier.contains(Modifier::REVERSED),
                 "the popup retains its existing floating style"
@@ -3627,6 +4264,21 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(180, 14))?;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         let commands = command_menu::commands(&app, &Decorations::new(), false);
+        let screen = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>();
+        assert!(
+            screen.contains("Alt/Option+hover preview line"),
+            "help explains line previews"
+        );
+        assert!(
+            screen.contains("Alt/Option+click jump to commit"),
+            "help explains line selection"
+        );
         let information: Vec<_> = commands
             .iter()
             .filter(|command| command.group == CommandGroup::Information)
@@ -3802,7 +4454,14 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(120, 40))?;
         let mut background = None;
         assert!(
-            !crate::redraw_menu(&mut terminal, background.as_ref(), &mut app, &mut menu, &decorations)?,
+            !crate::redraw_menu(
+                &mut terminal,
+                background.as_ref(),
+                &mut app,
+                &mut menu,
+                &decorations,
+                &crate::ref_tree::Tree::default()
+            )?,
             "opening the menu requires a complete background frame"
         );
         let draw_full =
@@ -3812,7 +4471,9 @@ mod tests {
                     let area = frame.area();
                     draw_with_worktree(frame, area, app, &decorations, &mailmap, None, None, Some(changes));
                     background = Some((area, frame.buffer_mut().clone()));
-                    if let Some(cursor) = crate::draw_active_menu(frame, area, app, menu, &decorations) {
+                    if let Some(cursor) =
+                        crate::draw_active_menu(frame, area, app, menu, &decorations, &crate::ref_tree::Tree::default())
+                    {
                         frame.set_cursor_position(cursor);
                     }
                     crate::prepare_terminal_frame(frame);
@@ -3832,7 +4493,14 @@ mod tests {
                 "typing stays inside the command menu"
             );
             assert!(
-                crate::redraw_menu(&mut terminal, background.as_ref(), &mut app, &mut menu, &decorations)?,
+                crate::redraw_menu(
+                    &mut terminal,
+                    background.as_ref(),
+                    &mut app,
+                    &mut menu,
+                    &decorations,
+                    &crate::ref_tree::Tree::default()
+                )?,
                 "query edits reuse the rendered worktree without traversing its changed paths"
             );
         }
@@ -3858,7 +4526,14 @@ mod tests {
         for _ in "ref-tree".chars() {
             menu.backspace(&items);
             assert!(
-                crate::redraw_menu(&mut terminal, background.as_ref(), &mut app, &mut menu, &decorations)?,
+                crate::redraw_menu(
+                    &mut terminal,
+                    background.as_ref(),
+                    &mut app,
+                    &mut menu,
+                    &decorations,
+                    &crate::ref_tree::Tree::default()
+                )?,
                 "deleting query text also reuses the background"
             );
         }
@@ -3871,14 +4546,28 @@ mod tests {
 
         terminal.backend_mut().resize(100, 30);
         assert!(
-            !crate::redraw_menu(&mut terminal, background.as_ref(), &mut app, &mut menu, &decorations)?,
+            !crate::redraw_menu(
+                &mut terminal,
+                background.as_ref(),
+                &mut app,
+                &mut menu,
+                &decorations,
+                &crate::ref_tree::Tree::default()
+            )?,
             "a resize requires a fresh background and layout"
         );
         changes.paths.truncate(1);
         background = draw_full(&mut terminal, &mut app, &mut menu, &changes)?;
         menu.insert('d', &items);
         assert!(
-            crate::redraw_menu(&mut terminal, background.as_ref(), &mut app, &mut menu, &decorations)?,
+            crate::redraw_menu(
+                &mut terminal,
+                background.as_ref(),
+                &mut app,
+                &mut menu,
+                &decorations,
+                &crate::ref_tree::Tree::default()
+            )?,
             "a complete redraw supplies a fresh background after changes and resizing"
         );
         expected.backend_mut().resize(100, 30);
@@ -3890,7 +4579,14 @@ mod tests {
         );
         menu.close();
         assert!(
-            !crate::redraw_menu(&mut terminal, background.as_ref(), &mut app, &mut menu, &decorations)?,
+            !crate::redraw_menu(
+                &mut terminal,
+                background.as_ref(),
+                &mut app,
+                &mut menu,
+                &decorations,
+                &crate::ref_tree::Tree::default()
+            )?,
             "closing the menu returns to ordinary view drawing"
         );
         Ok(())
@@ -3930,7 +4626,11 @@ mod tests {
         assert!(rendered.contains("Command"), "the popup has a title");
         assert!(rendered.contains("> rft"), "the popup shows the query");
         assert!(
-            rendered.contains("1  Information ref-tree  [? t]"),
+            rendered
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .contains("1 Information ref-tree [? t]"),
             "matching commands are numbered and retain their shortcut"
         );
         let result_y = (0..12)
@@ -3964,6 +4664,132 @@ mod tests {
             None,
             "an invisible selection cannot execute"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn command_menu_columns_keep_shortcuts_aligned_and_distinguish_selected_rows() -> gix_error::TestResult {
+        let mut commands = [
+            command_menu::command(CommandId::Date, 0, "age", false),
+            command_menu::command(CommandId::RefTree, 1, "reference tree", true),
+            command_menu::command(CommandId::Reword, 2, "界e\u{301}界界 rename", false),
+            command_menu::command(CommandId::Note, 3, "memo", false),
+        ];
+        commands[3].shortcut = "";
+        let items = commands
+            .iter()
+            .map(|command| crate::menu::Item::new(command.label, command.id))
+            .collect::<Vec<_>>();
+        let render = |menu: &mut Menu<CommandId>, width| -> gix_error::TestResult<Terminal<TestBackend>> {
+            let mut terminal = Terminal::new(TestBackend::new(width, 12))?;
+            terminal.draw(|frame| {
+                draw_command_menu(frame, frame.area(), menu, &commands);
+            })?;
+            Ok(terminal)
+        };
+        let result_row = |terminal: &Terminal<TestBackend>, digit: &str| {
+            (0..12)
+                .find(|y| terminal.backend().buffer()[(2, *y)].symbol() == digit)
+                .expect("each command has a numbered result row")
+        };
+        let mut menu = Menu::default();
+        menu.open(&items);
+        let terminal = render(&mut menu, 60)?;
+        let first_y = result_row(&terminal, "1");
+        let buffer = terminal.backend().buffer();
+        let shortcut_x = (0..60)
+            .find(|x| buffer[(*x, first_y)].symbol() == "[")
+            .expect("commands with shortcuts show brackets");
+        for (row, label) in [("1", "a"), ("2", "r"), ("3", "界"), ("4", "m")] {
+            let y = result_row(&terminal, row);
+            assert_eq!(buffer[(17, y)].symbol(), label, "groups share a padded label column");
+            for (offset, bracket) in [(0, "["), (4, "]")] {
+                assert_eq!(
+                    buffer[(shortcut_x + offset, y)].symbol(),
+                    if row == "4" { " " } else { bracket },
+                    "shortcuts share a column, left empty when unbound"
+                );
+            }
+        }
+        for (x, color, modifier) in [
+            (2, Color::Cyan, Modifier::BOLD),
+            (5, Color::Reset, Modifier::DIM),
+            (17, Color::Reset, Modifier::empty()),
+            (shortcut_x, Color::Reset, Modifier::DIM),
+            (shortcut_x + 1, Color::Cyan, Modifier::BOLD),
+        ] {
+            let cell = &buffer[(x, first_y)];
+            assert_eq!(
+                (cell.fg, cell.modifier),
+                (color, modifier),
+                "keys stand out from metadata and action labels"
+            );
+        }
+
+        menu.paste("age", &items);
+        let filtered = render(&mut menu, 60)?;
+        let y = result_row(&filtered, "1");
+        assert_eq!(
+            filtered.backend().buffer()[(shortcut_x, y)].symbol(),
+            "[",
+            "filtering keeps the shortcut column stable"
+        );
+        for x in 2..58 {
+            let cell = &filtered.backend().buffer()[(x, y)];
+            assert_eq!(
+                (cell.fg, cell.bg, cell.modifier),
+                (Color::Reset, Color::Reset, Modifier::BOLD | Modifier::REVERSED),
+                "selection uses uniform terminal colors without dimming, including padding"
+            );
+        }
+
+        menu.open(&items);
+        for width in [24, 15, 14] {
+            let narrow = render(&mut menu, width)?;
+            let y = result_row(&narrow, "1");
+            let buffer = narrow.backend().buffer();
+            assert_eq!(
+                buffer[(5, y)].symbol(),
+                "a",
+                "narrow menus drop groups before clipping action labels"
+            );
+            if width >= 15 {
+                let shortcut_x = width - 7;
+                assert_eq!(
+                    buffer[(shortcut_x, y)].symbol(),
+                    "[",
+                    "eight content cells retain the five-cell shortcut"
+                );
+                assert_eq!(
+                    buffer[(shortcut_x + 4, y)].symbol(),
+                    "]",
+                    "the shortcut fits before the border"
+                );
+                assert!(
+                    (shortcut_x - 2..shortcut_x).all(|x| buffer[(x, y)].symbol() == " "),
+                    "two cells separate labels and shortcuts"
+                );
+            } else {
+                assert!(
+                    rendered_line(&narrow, y).contains("age"),
+                    "without a shortcut, action labels gain its space"
+                );
+                assert!(
+                    (2..width - 2).all(|x| buffer[(x, y)].symbol() != "["),
+                    "fewer than eight content cells hide shortcuts"
+                );
+            }
+            if width == 24 {
+                let y = result_row(&narrow, "3");
+                for (x, symbol) in [(5, "界"), (7, "e\u{301}"), (14, "e"), (17, "[")] {
+                    assert_eq!(
+                        buffer[(x, y)].symbol(),
+                        symbol,
+                        "Unicode labels clip by display cells without shifting shortcuts"
+                    );
+                }
+            }
+        }
         Ok(())
     }
 
@@ -4370,6 +5196,17 @@ mod tests {
         assert_eq!(terminal.backend().buffer()[(4, 0)].symbol(), "✔️");
         assert_eq!(terminal.backend().buffer()[(8, 0)].symbol(), ">");
         assert_eq!(terminal.backend().buffer()[(10, 0)].symbol(), "●");
+        std::sync::Arc::make_mut(&mut app.rows[0]).signature = SignatureState::PendingRebase;
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert_eq!(
+            terminal.backend().buffer()[(6, 0)].symbol(),
+            "✨",
+            "pending replay keeps the normal sparkle in its existing gutter slot"
+        );
+        assert!(
+            !rendered_line(&terminal, 0).contains('↻'),
+            "the existing commit disk indicates pending replay without another gutter marker"
+        );
         app.set_patch_enrichment(id, crate::app::PatchEnrichmentState::Stale);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert_eq!(
@@ -4482,7 +5319,8 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         let computing = rendered_line(&terminal, 1);
         assert!(
-            computing.contains("1 commits · view · actions · enrich · copy") && computing.contains("computing"),
+            computing.contains("1 commits · view · z position · actions · enrich · copy")
+                && computing.contains("computing"),
             "expired deferral reveals computation progress"
         );
         assert_ne!(computing, completed, "visible progress changes the footer");
@@ -4557,17 +5395,19 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(rendered_line(&terminal, 3).contains("fetching origin: indexing 40/100"));
         assert!(!rendered_line(&terminal, 4).contains("fetching origin"));
-        assert_eq!(
-            terminal.backend().buffer()[(1, 3)].bg,
-            Color::Reset,
-            "the progress fill respects the message margin"
-        );
-        assert_eq!(terminal.backend().buffer()[(39, 3)].bg, Color::DarkGray);
-        assert_eq!(
-            terminal.backend().buffer()[(40, 3)].bg,
-            Color::Reset,
-            "the unfilled share keeps the status background"
-        );
+        for (x, filled) in [(1, false), (39, true), (40, false)] {
+            let cell = &terminal.backend().buffer()[(x, 3)];
+            assert_eq!(
+                (cell.fg, cell.bg),
+                (Color::Reset, Color::Reset),
+                "progress uses the terminal's foreground and background"
+            );
+            assert_eq!(
+                cell.modifier.contains(Modifier::REVERSED),
+                filled,
+                "reverse video fills only the completed share, respecting message margins"
+            );
+        }
 
         app.update(Action::ToggleActions);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
@@ -4685,13 +5525,26 @@ mod tests {
                 None,
             );
         })?;
-        assert!(rendered_line(&terminal, 0).trim_start().starts_with("REBASE PAUSED"));
         assert!(
-            rendered_line(&terminal, 1).contains("[ title"),
-            "the popup keeps its action row"
+            rendered_line(&terminal, 2).trim_start().starts_with("REBASE PAUSED"),
+            "an undersized popup cannot displace the persistent prompt"
         );
-        assert!(rendered_line(&terminal, 2).contains("p command"));
+        assert!(
+            !(0..4).any(|row| rendered_line(&terminal, row).contains("[ title")),
+            "the complete help popup is omitted when the notice leaves too little room"
+        );
+        terminal.backend_mut().resize(150, 6);
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        let notice_row = (0..6)
+            .find(|&row| rendered_line(&terminal, row).trim_start().starts_with("REBASE PAUSED"))
+            .expect("the persistent prompt remains visible above help");
+        assert!(
+            rendered_line(&terminal, notice_row + 1).contains("[ title"),
+            "a fitting popup keeps its action row directly below the prompt"
+        );
+        assert!(rendered_line(&terminal, notice_row + 2).contains("p command"));
         app.information_expanded = false;
+        terminal.backend_mut().resize(150, 4);
 
         app.update(Action::MoveDown);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
@@ -4888,7 +5741,60 @@ mod tests {
             row.trim_start().starts_with("> 1"),
             "the pending choice replaces the selected commit disk: {row:?}"
         );
+        assert!(
+            (0..6).all(|y| (0..80).all(|x| app.mouse_action(x, y).is_none())),
+            "numbered topological navigation retains control of selection"
+        );
         assert!(!row.contains("1/2"), "the old persistent choice annotation is gone");
+        let buffer = terminal.backend().buffer();
+        let marker = |row| {
+            (0..80)
+                .map(|x| &buffer[(x, row)])
+                .find(|cell| cell.symbol() == "●")
+                .expect("each child has a commit marker")
+        };
+        assert!(
+            marker(0).modifier.contains(Modifier::BOLD),
+            "the chosen child is emphasized"
+        );
+        assert_eq!(marker(0).fg, Color::Blue, "the chosen child keeps its signature color");
+        assert!(
+            !marker(1).modifier.contains(Modifier::BOLD),
+            "the other child is unselected"
+        );
+        assert!(
+            (0..80).any(|x| {
+                let cell = &buffer[(x, 1)];
+                cell.symbol() == "├" && cell.fg == Color::LightCyan && cell.modifier.contains(Modifier::BOLD)
+            }),
+            "the chosen line stays visible while passing the other child"
+        );
+
+        app.update(Action::NextChild);
+        app.graphics_enabled = true;
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .filter_map(|cell| Tile::decode(cell.symbol()))
+                .any(|tile| tile.edges.iter().any(|edge| edge.highlighted)),
+            "the changed choice reaches the Kitty tile encoding"
+        );
+        app.update(Action::CancelTopological);
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .filter_map(|cell| Tile::decode(cell.symbol()))
+                .all(|tile| tile.highlighted_paths == 0 && tile.edges.iter().all(|edge| !edge.highlighted)),
+            "cancellation clears every rendered graphical highlight"
+        );
         Ok(())
     }
 
@@ -5255,9 +6161,28 @@ mod tests {
     }
 
     #[test]
+    fn footer_describes_what_the_next_quit_press_will_close() -> gix_error::TestResult {
+        let mut app = App::new(1);
+        app.state = State::Complete;
+        app.show_commit = true;
+        let mut terminal = Terminal::new(TestBackend::new(160, 8))?;
+
+        for label in ["q close message", "q close changes", "quit"] {
+            terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+            assert!(
+                rendered_line(&terminal, 7).trim_end().ends_with(label),
+                "the footer advertises the next quit action: {label}"
+            );
+            app.update(Action::Quit);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn renders_rows_decorations_selection_and_footer() -> Result<(), Box<dyn std::error::Error>> {
         let id = gix::ObjectId::Sha1([1; 20]);
         let mut app = App::new(2);
+        app.changes_mode = None;
         app.id_mode = IdMode::Commit;
         app.extend_commits(vec![Commit {
             id,
@@ -5299,7 +6224,7 @@ mod tests {
             "todo commit metadata uses the author date and excludes separately represented refs"
         );
 
-        let footer_text = "#0 · view · actions · enrich · copy · refs · ? · quit";
+        let footer_text = "#0 · view · z position · actions · enrich · copy · refs · ? · quit";
         let selected_line = "        > @ 0101010 1970-01-01 mapped author subject";
         let mut expected = Buffer::with_lines([format!("{selected_line:<180}"), format!("{footer_text:<180}")]);
         for x in 0..selected_line.chars().count() as u16 {
@@ -5325,6 +6250,7 @@ mod tests {
             .set_style(Style::default().fg(Color::Blue).add_modifier(Modifier::REVERSED));
         for (label, key) in [
             ("view", 'v'),
+            ("z position", 'z'),
             ("actions", 'a'),
             ("enrich", 'n'),
             ("copy", 'y'),
@@ -5337,14 +6263,12 @@ mod tests {
             let key_offset = label[..label.find(key).expect("shortcut key is in its label")]
                 .chars()
                 .count();
-            expected[((label_start + key_offset) as u16, 1)]
-                .modifier
-                .insert(Modifier::UNDERLINED);
+            expected[((label_start + key_offset) as u16, 1)].set_fg(Color::Cyan);
         }
         let information = footer_text[..footer_text.find('?').expect("the information prefix is present")]
             .chars()
             .count();
-        expected[(information as u16, 1)].modifier.insert(Modifier::UNDERLINED);
+        expected[(information as u16, 1)].set_fg(Color::Cyan);
         terminal.backend().assert_buffer(&expected);
 
         let row = terminal.backend().buffer();
@@ -5396,7 +6320,7 @@ mod tests {
             );
             assert_eq!(
                 terminal.backend().buffer()[(x as u16, 1)].fg,
-                FILESYSTEM_NOTIFICATION_COLOR,
+                ATTENTION_COLOR,
                 "every status separator marks an unseen filesystem redraw"
             );
         }
@@ -5567,6 +6491,97 @@ mod tests {
     }
 
     #[test]
+    fn symbolic_pin_markers_stay_with_visible_reference_labels() -> gix::error::TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only("symbolic-pins.sh")?;
+        let repo = crate::test_repository::open(&fixture)?;
+        let refs = crate::history::snapshot(&repo, &[], &[], false)?;
+        let commit_id = repo.head_id()?.detach();
+        let mut decorations = crate::history::decorations(&repo, &refs.pins, &refs.worktrees)?;
+        let mut app = App::new(1);
+        app.extend_commits(vec![Commit {
+            id: commit_id,
+            parent_ids: Default::default(),
+            author_time: gix::date::Time::default(),
+            committer_time: gix::date::Time::default(),
+            author: author(b"author", b"author@example.com"),
+            attributions: 0..0,
+            title: "subject".into(),
+            metadata_loaded: true,
+            has_agent_marker: false,
+            is_review: false,
+            has_merge_replay: false,
+            signature: SignatureState::Unsigned,
+        }]);
+        complete(&mut app);
+        let mut terminal = Terminal::new(TestBackend::new(160, 4))?;
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        let row = rendered_row(&terminal);
+        for label in ["📌 @main", "📌 origin/HEAD", "📌 tag: annotated"] {
+            assert!(row.contains(label), "the pin belongs to its exact reference: {row}");
+        }
+        assert_eq!(row.matches('📌').count(), 3, "two pins of main share its marker");
+        assert!(!row.contains("📌 origin/main"), "the alias referent stays unmarked");
+        let column = Line::raw(&row[..row.find("📌 @main").expect("the branch label is visible")]).width();
+        assert_eq!(
+            terminal.backend().buffer()[(column as u16, 0)].fg,
+            Color::Yellow,
+            "the pin uses the reference text color"
+        );
+
+        app.ref_mode = RefMode::None;
+        // TestBackend retains covered cells when a wide glyph moves between frames.
+        terminal.clear()?;
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        let hidden = rendered_row(&terminal);
+        assert_eq!(
+            hidden.matches('📌').count(),
+            1,
+            "hidden references keep one resource marker: {hidden}"
+        );
+        assert!(!hidden.contains("origin/HEAD"), "pinning does not reveal hidden labels");
+        let column = Line::raw(&hidden[..hidden.find('📌').expect("the resource is visible")]).width();
+        assert_eq!(
+            terminal.backend().buffer()[(column as u16, 0)].fg,
+            Color::Reset,
+            "the standalone pin needs no special color"
+        );
+
+        app.ref_mode = RefMode::Default;
+        decorations.entry(commit_id).or_default().push(Decoration {
+            name: "pin:direct".into(),
+            kind: DecorationKind::Pin,
+        });
+        terminal.clear()?;
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert_eq!(
+            rendered_row(&terminal).matches('📌').count(),
+            4,
+            "a direct pin keeps a resource marker beside the three symbolic targets"
+        );
+        for decoration in decorations.get_mut(&commit_id).expect("the commit has labels") {
+            if decoration.kind == DecorationKind::CurrentWorktreeBranch {
+                decoration.kind = DecorationKind::HeadPinBranch;
+            }
+        }
+        for (_, target) in decorations
+            .symbolic_pins
+            .get_mut(&commit_id)
+            .expect("the commit has symbolic pins")
+        {
+            if target.kind == DecorationKind::CurrentWorktreeBranch {
+                target.kind = DecorationKind::HeadPinBranch;
+            }
+        }
+        terminal.clear()?;
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(
+            rendered_row(&terminal).contains("📌 ★main"),
+            "an ordinary symbolic pin keeps the hero reference's star"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn advertises_travel_and_return_for_non_head_rows() -> Result<(), Box<dyn std::error::Error>> {
         let selected = gix::ObjectId::Sha1([1; 20]);
         let head = gix::ObjectId::Sha1([2; 20]);
@@ -5682,15 +6697,22 @@ mod tests {
             let column = footer[..footer.find(key).expect("both travel shortcuts are visible")]
                 .chars()
                 .count() as u16;
-            assert!(
-                terminal.backend().buffer()[(column, 3)]
-                    .modifier
-                    .contains(Modifier::UNDERLINED),
-                "both travel choices underline their shortcut key"
-            );
+            assert_shortcut(&terminal.backend().buffer()[(column, 3)]);
         }
 
         decorations.remove(&selected);
+        let stash_change_id = gix::hash::ChangeId::from(gix::ObjectId::Sha1([9; 20]));
+        app.set_change_ids(
+            std::collections::HashMap::from([(selected, stash_change_id)]),
+            std::collections::HashSet::new(),
+        );
+        decorations.stashes.insert(stash_change_id);
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(
+            rendered_row(&terminal).contains("🎁"),
+            "a rewritten commit displays the stash for its change ID"
+        );
+        decorations.stashes.clear();
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         assert!(rendered_line(&terminal, 3).contains(" · 2 stash & travel · @ with worktree · copy"));
         assert!(!rendered_line(&terminal, 1).contains("unpin"));
@@ -5752,12 +6774,7 @@ mod tests {
             let column = footer[..footer.find('@').expect("plain travel is visible")]
                 .chars()
                 .count() as u16;
-            assert!(
-                terminal.backend().buffer()[(column, 3)]
-                    .modifier
-                    .contains(Modifier::UNDERLINED),
-                "plain travel underlines @"
-            );
+            assert_shortcut(&terminal.backend().buffer()[(column, 3)]);
             assert_eq!(
                 active_prefix_popup_anchor(&app, &time_travel_shortcuts(&app, &decorations, Some(&clean))),
                 footer.find('?').map(|offset| footer[..offset].chars().count()),
@@ -5829,7 +6846,7 @@ mod tests {
         app.changes_mode = None;
         app.configure_hidden_filter(true);
         app.history_display_expanded = true;
-        let mut terminal = Terminal::new(TestBackend::new(240, 3))?;
+        let mut terminal = Terminal::new(TestBackend::new(320, 3))?;
 
         terminal.draw(|frame| {
             let area = frame.area();
@@ -5858,12 +6875,7 @@ mod tests {
             .count() as u16
             - 1;
         assert_eq!(popup_x, view_x, "the popout is connected to its footer prefix");
-        assert!(
-            terminal.backend().buffer()[(view_x, 2)]
-                .modifier
-                .contains(Modifier::UNDERLINED),
-            "the prefix key is underlined in its verb"
-        );
+        assert_shortcut(&terminal.backend().buffer()[(view_x, 2)]);
         assert_reversed_group(&terminal, 2, "view");
         assert_reversed_group(&terminal, 1, &format!(" {view} "));
 
@@ -5890,14 +6902,15 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert_eq!(rendered_line(&terminal, 2).trim_end(), compact);
         let information = "[ title · ref-tree · message · changes · show Changes · sHow related history";
-        let navigation =
-            "p command · ↑↓/jk move · h/l pan · J/K topo · PgUp/PgDn move · Shift+PgUp/PgDn pan · <enter> diff";
+        let navigation = "p command · ↑↓/jk move · h/l pan · J/K topo · PgUp/PgDn move · Shift+PgUp/PgDn pan";
         assert!(rendered_line(&terminal, 0).contains(information));
         assert!(rendered_line(&terminal, 1).contains(navigation));
+        assert!(rendered_line(&terminal, 1).contains("<enter> diff"));
         assert_reversed_group(&terminal, 2, "?");
         for (row, text) in [(0, information), (1, navigation)] {
             let line = rendered_line(&terminal, row);
             let x = line.find(text).expect("the popup row is visible") as u16;
+            assert_shortcut(&terminal.backend().buffer()[(x, row)]);
             assert!(
                 terminal.backend().buffer()[(x, row)]
                     .modifier
@@ -5914,18 +6927,137 @@ mod tests {
             let key_column = information[..information.find(label).expect("direct shortcuts are documented in ?")]
                 .chars()
                 .count() as u16;
-            assert!(
-                terminal.backend().buffer()[(key_column, 0)]
-                    .modifier
-                    .contains(Modifier::UNDERLINED),
-                "{label} embeds its capitalized shortcut in the label"
-            );
+            assert_shortcut(&terminal.backend().buffer()[(key_column, 0)]);
         }
         app.update(Action::ToggleChangesVisibility);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(
             rendered_line(&terminal, 0).contains("hide Changes"),
             "the direct shortcut hint follows changes visibility"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn missing_changes_keep_eligible_actions_available_and_reveal_their_panes() -> gix_testtools::Result {
+        let mut app = held_prefix_app();
+        let commit_id = app.rows[0].id;
+        app.set_worktree_head(Some(commit_id), false);
+        let mut decorations = Decorations::from([(
+            commit_id,
+            vec![Decoration {
+                name: "HEAD".into(),
+                kind: DecorationKind::Head,
+            }],
+        )]);
+        let mut terminal = Terminal::new(TestBackend::new(180, 12))?;
+        let clean = Changes::default();
+        for mode in [None, Some(ChangesMode::Tree)] {
+            for (command_id, action) in [
+                (crate::command_menu::CommandId::Amend, Action::Amend),
+                (crate::command_menu::CommandId::Spill, Action::Spill),
+                (crate::command_menu::CommandId::Split, Action::Split),
+                (crate::command_menu::CommandId::Stash, Action::Stash),
+                (crate::command_menu::CommandId::NewCommit, Action::NewCommit),
+                (crate::command_menu::CommandId::NewBelowCommit, Action::NewBelowCommit),
+            ] {
+                app.changes_mode = mode;
+                terminal.draw(|frame| {
+                    let area = frame.area();
+                    super::draw_with_worktree(
+                        frame,
+                        area,
+                        &mut app,
+                        &decorations,
+                        &gix::mailmap::Snapshot::default(),
+                        None,
+                        None,
+                        mode.map(|_| &clean),
+                    );
+                })?;
+                assert!(
+                    crate::command_menu::commands(&app, &decorations, false)
+                        .iter()
+                        .any(|command| command.id == command_id),
+                    "missing diff data keeps {command_id:?} discoverable in {mode:?}"
+                );
+                assert!(
+                    !app.update(action.clone()).is_empty(),
+                    "{action:?} dispatches its operation"
+                );
+                assert_eq!(
+                    app.changes_mode,
+                    Some(ChangesMode::Both),
+                    "{action:?} reveals the changes needed for its result"
+                );
+                assert!(
+                    app.changes_focus.is_none(),
+                    "revealing changes retains whole-commit scope"
+                );
+            }
+        }
+        app.changes_mode = Some(ChangesMode::Both);
+        terminal.draw(|frame| {
+            let area = frame.area();
+            super::draw_with_worktree(
+                frame,
+                area,
+                &mut app,
+                &decorations,
+                &gix::mailmap::Snapshot::default(),
+                None,
+                Some(&clean),
+                Some(&clean),
+            );
+        })?;
+        for unavailable in [app.can_amend(), app.can_spill(), app.can_split(), app.can_stash()] {
+            assert!(!unavailable, "loaded clean changes hide inapplicable actions");
+        }
+        decorations
+            .get_mut(&commit_id)
+            .expect("HEAD is decorated")
+            .push(Decoration {
+                name: "stash".into(),
+                kind: DecorationKind::Stash,
+            });
+        app.changes_mode = None;
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(app.can_unstash(), "a saved stash remains available without diff data");
+        assert!(!app.can_stash(), "a saved stash replaces the stash action");
+        app.update(Action::Stash);
+        assert_eq!(app.changes_mode, Some(ChangesMode::Both), "unstash reveals its changes");
+
+        std::sync::Arc::make_mut(&mut app.rows[0]).is_review = true;
+        app.changes_mode = None;
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(app.can_finish_review(), "missing status does not hide finish-review");
+        app.update(Action::Review);
+        assert_eq!(
+            app.changes_mode,
+            Some(ChangesMode::Both),
+            "finishing review reveals changes"
+        );
+
+        app.changes_mode = None;
+        app.set_worktree_conflicted(true);
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(
+            !app.can_split() && !app.can_finish_review(),
+            "missing status preserves known conflict restrictions"
+        );
+        app.set_worktree_conflicted(false);
+        app.set_worktree_changes_available(false);
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(
+            !app.can_amend() && !app.can_spill() && !app.can_split() && !app.can_finish_review(),
+            "missing changes do not enable worktree operations in a bare repository"
+        );
+        app.set_worktree_changes_available(true);
+        app.set_worktree_head(Some(gix::ObjectId::Sha1([2; 20])), false);
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(
+            !app.can_amend() && !app.can_spill() && !app.can_split() && !app.can_unstash(),
+            "missing changes do not enable HEAD operations on another commit"
         );
         Ok(())
     }
@@ -6111,11 +7243,14 @@ mod tests {
         let push = popup[..popup.find("Push").expect("the push action is visible")]
             .chars()
             .count() as u16;
-        assert!(
-            terminal.backend().buffer()[(push, 3)]
-                .modifier
-                .contains(Modifier::UNDERLINED)
-        );
+        assert_shortcut(&terminal.backend().buffer()[(push, 3)]);
+        #[cfg(feature = "blocking-network-client")]
+        {
+            let fetch = popup[..popup.find("Fetch").expect("the fetch action is visible")]
+                .chars()
+                .count() as u16;
+            assert_shortcut(&terminal.backend().buffer()[(fetch, 3)]);
+        }
         Ok(())
     }
 
@@ -6288,13 +7423,12 @@ mod tests {
             rendered_line(&terminal, 6).contains("sTash"),
             "loaded unconflicted worktree changes offer stashing"
         );
-        decorations
-            .get_mut(&id)
-            .expect("HEAD has decorations")
-            .push(Decoration {
-                name: "stash".into(),
-                kind: DecorationKind::Stash,
-            });
+        let stash_change_id = gix::hash::ChangeId::from(gix::ObjectId::Sha1([9; 20]));
+        app.set_change_ids(
+            std::collections::HashMap::from([(id, stash_change_id)]),
+            std::collections::HashSet::new(),
+        );
+        decorations.stashes.insert(stash_change_id);
         terminal.draw(|frame| {
             let area = frame.area();
             super::draw_with_worktree(
@@ -6312,10 +7446,7 @@ mod tests {
             rendered_line(&terminal, 6).contains("unsTash"),
             "an existing commit stash offers in-place restoration even with worktree changes"
         );
-        decorations
-            .get_mut(&id)
-            .expect("HEAD has decorations")
-            .retain(|decoration| decoration.kind != DecorationKind::Stash);
+        decorations.stashes.clear();
         app.changes_focus = Some(ChangePane::Worktree);
 
         std::sync::Arc::make_mut(&mut app.rows[0]).is_review = true;
@@ -6614,7 +7745,7 @@ mod tests {
     fn colors_commit_markers_by_signature_state() -> Result<(), Box<dyn std::error::Error>> {
         let states = [
             (SignatureState::Unsigned, Color::Blue),
-            (SignatureState::Unverified, Color::Rgb(255, 165, 0)),
+            (SignatureState::Unverified, Color::Yellow),
             (SignatureState::Verified, Color::Green),
             (SignatureState::Failed, Color::LightRed),
             (SignatureState::PendingRebase, Color::Gray),
@@ -6686,6 +7817,126 @@ mod tests {
         assert_eq!(terminal.backend().buffer()[(2, 0)].symbol(), "@");
         assert_eq!(terminal.backend().buffer()[(2, 0)].fg, Color::Blue);
         assert_eq!(terminal.backend().buffer()[(3, 0)].symbol(), "─");
+        Ok(())
+    }
+
+    #[test]
+    fn graphical_tags_encode_fractional_edges_without_text_paths() -> gix_error::TestResult {
+        let mut edges = crate::graph_tiles::route_edges(1, &[(0, 0)]);
+        edges[0].from_offset = 1;
+        edges[0].to_offset = 1;
+        let tile = Tile {
+            edges,
+            ..Tile::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(2, 1))?;
+        terminal.draw(|frame| {
+            tag_graph(frame, Rect::new(0, 0, 2, 1), &[tile.clone(), Tile::default()], 0);
+        })?;
+
+        let cell = &terminal.backend().buffer()[(0, 0)];
+        assert_eq!(
+            Tile::decode(cell.symbol()),
+            Some(tile),
+            "a fractional strand remains renderable even without a text path or marker"
+        );
+        assert_eq!(cell.cell_width(), 1, "the encoded strand occupies one terminal cell");
+        assert_eq!(
+            terminal.backend().buffer()[(1, 0)].symbol(),
+            " ",
+            "an empty neighboring tile remains ordinary text"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn graphical_tags_preserve_markers_styles_clipping_and_overlays() -> gix_error::TestResult {
+        for offset in [0, 1, 3, 6] {
+            let mut text = Terminal::new(TestBackend::new(12, 5))?;
+            let mut graphics = Terminal::new(TestBackend::new(12, 5))?;
+            for (terminal, graphical) in [(&mut text, false), (&mut graphics, true)] {
+                terminal.draw(|frame| {
+                    for (y, marker) in ['●', '◆', '○', '3'].into_iter().enumerate() {
+                        let lane = format!("│ {marker} ");
+                        let area = Rect::new(2, y as u16, 6, 1);
+                        let tiles = [
+                            Tile {
+                                paths: Tile::UP_DOWN,
+                                marker: ' ',
+                                edges: vec![crate::graph_tiles::Edge {
+                                    from: 0,
+                                    to: 0,
+                                    from_offset: 0,
+                                    to_offset: 0,
+                                    from_node: false,
+                                    to_node: false,
+                                    start_vertical: false,
+                                    end_vertical: false,
+                                    highlighted: false,
+                                    color: 1,
+                                    incoming: None,
+                                    outgoing: None,
+                                }],
+                                ..Tile::default()
+                            },
+                            Tile::default(),
+                            Tile {
+                                paths: Tile::NODE_UP | Tile::NODE_DOWN,
+                                marker,
+                                ..Tile::default()
+                            },
+                            Tile::default(),
+                        ];
+                        frame.render_widget(Paragraph::new(format!("{lane}@ title")).scroll((0, offset)), area);
+                        color_graph(
+                            frame,
+                            area,
+                            &lane,
+                            usize::from(offset),
+                            Some(Color::Green),
+                            SignatureState::Verified,
+                            (y == 0).then_some(HeadState {
+                                has_descendants: true,
+                                attached: true,
+                            }),
+                        );
+                        if graphical {
+                            tag_graph(frame, area, &tiles, usize::from(offset));
+                        }
+                    }
+                    frame.render_widget(Clear, Rect::new(2, 3, 1, 1));
+                    frame.render_widget(Paragraph::new("overlay"), Rect::new(2, 3, 1, 1));
+                })?;
+            }
+            let mut encoded = 0;
+            for (plain, graphical) in text
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .zip(&graphics.backend().buffer().content)
+            {
+                let mut restored = graphical.clone();
+                if let Some(tile) = Tile::decode(graphical.symbol()) {
+                    encoded += 1;
+                    assert_eq!(
+                        graphical.cell_width(),
+                        1,
+                        "encoded geometry occupies exactly one terminal cell"
+                    );
+                    restored.set_char(tile.fallback()).set_diff_option(CellDiffOption::None);
+                }
+                assert_eq!(
+                    &restored, plain,
+                    "graphics preserve text, color, and clipping at horizontal offset {offset}"
+                );
+            }
+            assert_eq!(
+                encoded > 0,
+                offset < 3,
+                "panning beyond the graph leaves metadata as text"
+            );
+        }
         Ok(())
     }
 
@@ -6877,6 +8128,7 @@ mod tests {
             signature: SignatureState::Unsigned,
         };
         let mut app = App::new(4);
+        app.commit_pane_background = Some((15, 15, 15));
         app.id_mode = IdMode::Commit;
         app.ref_mode = RefMode::None;
         app.set_worktree_head(Some(current), false);
@@ -6938,7 +8190,11 @@ mod tests {
             let line = rendered_line(&terminal, row);
             let title_x = line.find(title).expect("the foreign worktree title is visible") as u16;
             let title_cell = &terminal.backend().buffer()[(title_x, row)];
-            assert_eq!(title_cell.bg, Color::DarkGray, "the foreign HEAD title is shaded");
+            assert_eq!(
+                title_cell.bg,
+                Color::Rgb(15, 15, 15),
+                "the foreign HEAD title uses the derived shade"
+            );
             assert!(
                 !title_cell.modifier.contains(Modifier::REVERSED),
                 "foreign HEAD titles remain less prominent than current HEAD"
@@ -6980,6 +8236,22 @@ mod tests {
                 .contains(Modifier::REVERSED),
             "a selected foreign worktree title stays outside the row inversion"
         );
+        app.selected = None;
+        for background in [Some((240, 240, 240)), None] {
+            app.commit_pane_background = background;
+            terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+            let cell = &terminal.backend().buffer()[(selected_title, 1)];
+            assert_eq!(
+                cell.bg,
+                background.map_or(Color::Reset, |(red, green, blue)| Color::Rgb(red, green, blue)),
+                "foreign HEAD titles follow light themes and retain the default background when detection fails"
+            );
+            assert_eq!(
+                cell.modifier.contains(Modifier::UNDERLINED),
+                background.is_none(),
+                "underlining preserves foreign HEAD emphasis without detected colors"
+            );
+        }
         Ok(())
     }
 
@@ -7296,7 +8568,7 @@ mod tests {
             signature: SignatureState::Unverified,
         }]);
         complete(&mut app);
-        let mut terminal = Terminal::new(TestBackend::new(160, 3))?;
+        let mut terminal = Terminal::new(TestBackend::new(320, 3))?;
 
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(rendered_line(&terminal, 2).contains("copy · refs · ? ·"));
@@ -7307,10 +8579,25 @@ mod tests {
         assert!(rendered_line(&terminal, 0).contains(" s ● -> ● · [ title"));
         assert!(rendered_line(&terminal, 1).contains("p command"));
         assert!(rendered_line(&terminal, 2).contains("copy · refs · ?"));
+        let signature = rendered_line(&terminal, 0);
+        let key_x = signature[..signature.find("s ●").expect("signature verification is available")]
+            .chars()
+            .count() as u16;
+        assert_shortcut(&terminal.backend().buffer()[(key_x, 0)]);
 
         app.finish_signature_verification(vec![(id, false)]);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(rendered_line(&terminal, 0).contains(" s 1 ● · [ title"));
+        let signature = rendered_line(&terminal, 0);
+        let key_x = signature[..signature.find("s 1").expect("the signature failure is visible")]
+            .chars()
+            .count() as u16;
+        assert_shortcut(&terminal.backend().buffer()[(key_x, 0)]);
+        assert_eq!(
+            terminal.backend().buffer()[(key_x + 2, 0)].bg,
+            Color::Reset,
+            "the failure count keeps the popup's normal text color"
+        );
         Ok(())
     }
 
@@ -7350,7 +8637,7 @@ mod tests {
             has_merge_replay: false,
             signature: SignatureState::Unsigned,
         }]);
-        let mut terminal = Terminal::new(TestBackend::new(120, 8))?;
+        let mut terminal = Terminal::new(TestBackend::new(120, 9))?;
 
         app.information_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
@@ -7400,6 +8687,56 @@ mod tests {
         assert!(
             !popup_is_dim(&terminal, "message"),
             "the open commit pane is not dimmed"
+        );
+        assert!(
+            rendered_line(&terminal, 4).contains("` full-screen · m/q close"),
+            "a fitting message still advertises expanding and closing the pane"
+        );
+
+        app.update(Action::ToggleCommitFullscreen);
+        terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                Some(b"subject\n\nbody".as_bstr()),
+                None,
+            );
+        })?;
+        assert_eq!(
+            terminal.backend().buffer()[(2, 1)].symbol(),
+            "s",
+            "the full-screen message starts at the left content margin"
+        );
+        assert_eq!(
+            terminal.backend().buffer()[(0, 0)].bg,
+            Color::Rgb(15, 16, 17),
+            "the full-screen pane covers the history background"
+        );
+        assert!(
+            rendered_line(&terminal, 8).contains("` restore · m/q close")
+                && !rendered_line(&terminal, 8).contains("PgUp")
+                && !rendered_line(&terminal, 8).contains("view"),
+            "the full-screen status replaces history controls and omits unnecessary paging keys"
+        );
+        assert_shortcut(&terminal.backend().buffer()[(2, 8)]);
+
+        app.update(Action::ToggleCommitFullscreen);
+        terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                Some(b"subject\n\nbody".as_bstr()),
+                None,
+            );
+        })?;
+        assert_eq!(
+            terminal.backend().buffer()[(62, 1)].symbol(),
+            "s",
+            "restoring the pane returns to its original half-width layout"
         );
 
         app.update(Action::ToggleCommit);
@@ -7453,7 +8790,7 @@ mod tests {
     }
 
     #[test]
-    fn pages_overflowing_commit_messages_and_hides_the_status_when_they_fit() -> Result<(), Box<dyn std::error::Error>>
+    fn pages_overflowing_commit_messages_and_hides_paging_keys_when_they_fit() -> Result<(), Box<dyn std::error::Error>>
     {
         let mut app = App::new(4);
         app.commit_pane_background = Some((15, 16, 17));
@@ -7472,7 +8809,7 @@ mod tests {
             signature: SignatureState::Unsigned,
         }]);
         app.update(Action::ToggleCommit);
-        let message = b"subject\n\none\ntwo\nthree\nfour\nfive\nsix\n\nSigned-off-by: Alice".as_bstr();
+        let message = b"subject\n\none\n\ntwo\n\nthree\n\nfour\n\nfive\n\nsix\n\nSigned-off-by: Alice".as_bstr();
         let mut terminal = Terminal::new(TestBackend::new(120, 7))?;
 
         terminal.draw(|frame| {
@@ -7486,13 +8823,18 @@ mod tests {
             );
         })?;
         assert!(
-            rendered_line(&terminal, 5).contains("PgUp/C-b up page · PgDn/C-f down page"),
+            rendered_line(&terminal, 5).contains("` full-screen · m/q close · PgUp/C-b · PgDn/C-f"),
             "overflowing commit messages advertise both full-page key pairs"
         );
+        let status = rendered_line(&terminal, 5);
+        let close_x = status[..status.find("q close").expect("the pane advertises closing")]
+            .chars()
+            .count() as u16;
+        assert_shortcut(&terminal.backend().buffer()[(close_x, 5)]);
         assert_eq!(
             terminal.backend().buffer()[(62, 5)].bg,
-            PANE_STATUS_BACKGROUND,
-            "the commit status has the shared pane-status background"
+            Color::Rgb(15, 16, 17),
+            "the commit status uses the detected background shade"
         );
         assert_eq!(
             terminal.backend().buffer()[(0, 6)].bg,
@@ -7511,16 +8853,23 @@ mod tests {
                 None,
             );
         })?;
+        let popup_top = (0..7)
+            .find(|&row| rendered_line(&terminal, row).contains("[ title"))
+            .expect("the help popup keeps its action row");
         assert!(
-            rendered_line(&terminal, 3).contains("PgUp/C-b up page · PgDn/C-f down page"),
+            rendered_line(
+                &terminal,
+                popup_top.checked_sub(1).expect("the popup leaves room for pane status")
+            )
+            .contains("PgUp/C-b · PgDn/C-f"),
             "the popup moves the commit-message status up"
         );
-        assert!(rendered_line(&terminal, 4).contains("[ title"));
-        assert!(rendered_line(&terminal, 5).contains("p command"));
+        assert!(rendered_line(&terminal, popup_top + 1).contains("p command"));
         app.information_expanded = false;
 
-        app.update(Action::PageDown);
-        app.update(Action::PageDown);
+        for _ in message.lines() {
+            app.update(Action::PageDown);
+        }
         terminal.draw(|frame| {
             super::draw(
                 frame,
@@ -7536,6 +8885,31 @@ mod tests {
             "the last page reaches aligned trailers"
         );
 
+        app.update(Action::ToggleCommitFullscreen);
+        terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                Some(message),
+                None,
+            );
+        })?;
+        assert!(
+            rendered_line(&terminal, 6).contains("` restore · m/q close · PgUp/C-b · PgDn/C-f"),
+            "full-screen retains paging hints when the message still overflows"
+        );
+        assert!(
+            rendered_line(&terminal, 6).contains("j/k · C-d/C-u · g/G"),
+            "overflowing full-screen messages advertise line, half-page, and boundary navigation"
+        );
+        assert!(
+            rendered_line(&terminal, 5).contains("Alice"),
+            "resizing the pane clamps scrolling without losing the trailers"
+        );
+        app.update(Action::ToggleCommitFullscreen);
+
         terminal.draw(|frame| {
             super::draw(
                 frame,
@@ -7547,8 +8921,9 @@ mod tests {
             );
         })?;
         assert!(
-            !rendered_line(&terminal, 5).contains("PgUp"),
-            "the commit status disappears when all content fits"
+            rendered_line(&terminal, 5).contains("` full-screen · m/q close")
+                && !rendered_line(&terminal, 5).contains("PgUp"),
+            "the commit status keeps its view keys but omits paging when all content fits"
         );
         assert_eq!(app.commit_offset, 0, "shorter content clamps the old offset");
         Ok(())
@@ -7590,7 +8965,7 @@ mod tests {
             }],
             ..Changes::default()
         };
-        let mut terminal = Terminal::new(TestBackend::new(120, 6))?;
+        let mut terminal = Terminal::new(TestBackend::new(320, 6))?;
 
         terminal.draw(|frame| {
             let area = frame.area();
@@ -7607,7 +8982,13 @@ mod tests {
         })?;
 
         assert!(rendered_line(&terminal, 2).contains("diff: failed deliberately"));
-        assert_eq!(terminal.backend().buffer()[(2, 2)].bg, PANE_STATUS_BACKGROUND);
+        assert_eq!(terminal.backend().buffer()[(2, 2)].bg, Color::Reset);
+        assert!(
+            terminal.backend().buffer()[(2, 2)]
+                .modifier
+                .contains(Modifier::BOLD | Modifier::UNDERLINED),
+            "pane status remains emphasized when color detection is unavailable"
+        );
         assert!(rendered_line(&terminal, 3).contains("[ title"));
         assert!(rendered_line(&terminal, 4).contains("p command"));
         Ok(())
@@ -7822,7 +9203,7 @@ mod tests {
                 Some(&changes),
             );
         })?;
-        let mut footer_terminal = Terminal::new(TestBackend::new(240, 16))?;
+        let mut footer_terminal = Terminal::new(TestBackend::new(320, 16))?;
         footer_terminal.draw(|frame| {
             super::draw(
                 frame,
@@ -7834,8 +9215,8 @@ mod tests {
             );
         })?;
         assert!(
-            rendered_line(&footer_terminal, 15).contains("? · quit"),
-            "the collapsed information prefix is followed only by quit"
+            rendered_line(&footer_terminal, 15).contains("? · q close changes"),
+            "the collapsed information prefix is followed by the panel-aware quit action"
         );
         assert!(
             !rendered_line(&footer_terminal, 15).contains("<tab> switch")
@@ -7861,11 +9242,12 @@ mod tests {
         );
         assert!(
             rendered_line(&footer_terminal, 14).contains(
-                " p command · <tab> switch · ↑↓/jk move · h/l pan · J/K topo · PgUp/PgDn move · Shift+PgUp/PgDn pan · <enter> diff "
+                " p command · <tab> switch · ↑↓/jk move · h/l pan · J/K topo · PgUp/PgDn move · Shift+PgUp/PgDn pan "
             ),
             "the expanded information prefix keeps keyboard help next to the footer"
         );
-        assert!(rendered_line(&footer_terminal, 15).contains("? · quit"));
+        assert!(rendered_line(&footer_terminal, 14).contains("<enter> diff"));
+        assert!(rendered_line(&footer_terminal, 15).contains("? · q close changes"));
         app.information_expanded = false;
 
         assert_eq!(
@@ -7985,8 +9367,8 @@ mod tests {
         );
         assert_eq!(
             terminal.backend().buffer()[(2, 14)].bg,
-            PANE_STATUS_BACKGROUND,
-            "the focused changes status uses the shared pane-status background"
+            Color::Rgb(15, 16, 17),
+            "the focused changes status uses the detected background shade"
         );
         assert!(
             terminal.backend().buffer()[(5, 0)].modifier.contains(Modifier::DIM)
@@ -7994,7 +9376,8 @@ mod tests {
             "the inactive history is dimmed without dimming the main status"
         );
         assert!(!rendered_line(&terminal, 15).contains("<tab> → tree changes"));
-        assert!(rendered_line(&terminal, 15).contains("q/Esc history"));
+        assert!(rendered_line(&terminal, 15).contains("Esc history"));
+        assert!(rendered_line(&terminal, 15).contains("q close changes"));
         terminal.draw(|frame| {
             super::draw(
                 frame,
@@ -8053,6 +9436,16 @@ mod tests {
             rendered_line(&terminal, 14).contains("<enter> diff · copy · cycle tree"),
             "the changes pane advertises the next cycle mode"
         );
+        let status = rendered_line(&terminal, 14);
+        for (label, key) in [("copy", 'y'), ("cycle tree", 'e')] {
+            let label_start = status[..status.find(label).expect("the pane advertises its actions")]
+                .chars()
+                .count();
+            let key_offset = label[..label.find(key).expect("the shortcut is in the label")]
+                .chars()
+                .count();
+            assert_shortcut(&terminal.backend().buffer()[((label_start + key_offset) as u16, 14)]);
+        }
         assert!(
             rendered_line(&terminal, 14).contains("copy"),
             "the changes pane advertises path copying"
@@ -8232,6 +9625,13 @@ mod tests {
         let changes = Changes {
             paths: vec![
                 crate::app::PathChange {
+                    kind: ChangeKind::Unmerged,
+                    group: ChangeGroup::Unstaged,
+                    source: None,
+                    path: "conflict".into(),
+                    lines: None,
+                },
+                crate::app::PathChange {
                     kind: ChangeKind::Added,
                     group: ChangeGroup::Staged,
                     source: None,
@@ -8250,7 +9650,7 @@ mod tests {
             lines_removed: 1,
             ..Changes::default()
         };
-        let mut terminal = Terminal::new(TestBackend::new(80, 12))?;
+        let mut terminal = Terminal::new(TestBackend::new(80, 16))?;
         terminal.draw(|frame| {
             let area = frame.area();
             super::draw_with_worktree(
@@ -8265,23 +9665,41 @@ mod tests {
             );
         })?;
 
-        let (header_y, header) = (0..12)
+        let (header_y, header) = (0..16)
             .map(|y| (y, rendered_line(&terminal, y)))
             .find(|(_, line)| line.contains("Worktree"))
             .expect("the worktree border is visible");
         assert!(
-            header.contains("Worktree ── S 1 + U 1 = 2 · +3 -1"),
+            header.contains("Worktree ── S 1 + U 2 = 3 · +3 -1"),
             "the border distinguishes staged and unstaged rows: {header:?}"
         );
-        let staged_y = header_y + 1;
-        let divider_y = header_y + 2;
-        let unstaged_y = header_y + 3;
+        assert!(
+            rendered_line(&terminal, header_y + 1).contains("U conflict"),
+            "conflicted paths occupy the first rows"
+        );
+        let conflict_divider_y = header_y + 2;
+        let conflict_divider = rendered_line(&terminal, conflict_divider_y);
+        let conflict_label_x = conflict_divider[..conflict_divider
+            .find("↑ conflicts ↑")
+            .expect("a conflicts divider follows the conflicted paths")]
+            .chars()
+            .count() as u16;
+        let conflict_rail_x = conflict_label_x + "↑ conflicts ↑ ".chars().count() as u16;
+        assert_eq!(
+            terminal.backend().buffer()[(conflict_rail_x, conflict_divider_y)].fg,
+            Color::LightRed,
+            "the conflict divider uses the conflict color"
+        );
+        let staged_y = header_y + 3;
+        let divider_y = header_y + 4;
+        let unstaged_y = header_y + 5;
         let divider = rendered_line(&terminal, divider_y);
         let label_x = divider[..divider.find("↑ index ↑").expect("the index label is visible")]
             .chars()
             .count() as u16;
         let staged_x = rendered_line(&terminal, staged_y).find('A').expect("staged letter") as u16;
         assert_eq!(label_x, staged_x, "the index label aligns with path kinds");
+        assert_eq!(conflict_label_x, label_x, "both divider labels align with path kinds");
         assert_eq!(terminal.backend().buffer()[(label_x, divider_y)].fg, Color::Reset);
         assert!(
             terminal.backend().buffer()[(label_x, divider_y)]
@@ -8305,7 +9723,7 @@ mod tests {
         );
 
         let staged_only = Changes {
-            paths: vec![changes.paths[0].clone()],
+            paths: vec![changes.paths[1].clone()],
             ..Changes::default()
         };
         terminal.draw(|frame| {
@@ -8322,10 +9740,14 @@ mod tests {
             );
         })?;
         assert!(
-            !(0..12).any(|y| rendered_line(&terminal, y).contains("index")),
+            !(0..16).any(|y| rendered_line(&terminal, y).contains("index")),
             "a single change group has no divider"
         );
-        assert_eq!(index_divider(5).to_string(), "↑ ind", "narrow panes clip the label");
+        assert_eq!(
+            changes_divider(5, "↑ index ↑ ", Color::Green).to_string(),
+            "↑ ind",
+            "narrow panes clip the label"
+        );
 
         let modified = Changes {
             paths: (0..12)
@@ -8364,18 +9786,18 @@ mod tests {
                 Some(&Changes::default()),
             );
         })?;
-        let (clean_y, clean_header) = (0..12)
+        let (clean_y, clean_header) = (0..16)
             .map(|y| (y, rendered_line(&terminal, y)))
             .find(|(_, line)| line.contains("Worktree clean"))
             .expect("an enabled clean worktree remains visible as an empty block");
         let clean_x = clean_header.find("clean").expect("clean label") as u16;
         assert_eq!(terminal.backend().buffer()[(clean_x, clean_y)].fg, Color::Green);
         assert!(
-            !(0..12).any(|y| rendered_line(&terminal, y).contains("+0") || rendered_line(&terminal, y).contains("-0")),
+            !(0..16).any(|y| rendered_line(&terminal, y).contains("+0") || rendered_line(&terminal, y).contains("-0")),
             "a clean worktree omits empty diff counts"
         );
         assert!(
-            !(0..12).any(|y| rendered_line(&terminal, y).contains("= 0")),
+            !(0..16).any(|y| rendered_line(&terminal, y).contains("= 0")),
             "a clean worktree has no empty aggregate"
         );
         assert!(!app.worktree_changes_visible, "an empty block is not focusable");
@@ -8393,7 +9815,7 @@ mod tests {
                 Some(&Changes::default()),
             );
         })?;
-        let (empty_y, empty_tree) = (0..12)
+        let (empty_y, empty_tree) = (0..16)
             .map(|y| (y, rendered_line(&terminal, y)))
             .find(|(_, line)| line.contains("Tree ------- empty"))
             .expect("an empty tree remains visible and says it is empty");
@@ -8736,6 +10158,43 @@ mod tests {
     }
 
     #[test]
+    fn markdown_preserves_light_and_dark_pane_colors() -> gix_error::TestResult {
+        for (foreground, background) in [
+            (Color::White, Color::Rgb(15, 15, 15)),
+            (Color::Black, Color::Rgb(240, 240, 240)),
+        ] {
+            let mut terminal = Terminal::new(TestBackend::new(20, 8))?;
+            terminal.draw(|frame| {
+                let area = frame.area();
+                frame
+                    .buffer_mut()
+                    .set_style(area, Style::default().fg(foreground).bg(background));
+                frame.render_widget(
+                    Paragraph::new(markdown_text(b"# Heading\n\n`inline`\n\n```rust\nblock\n```".as_bstr())),
+                    area,
+                );
+            })?;
+            for label in ["Heading", "inline", "block"] {
+                let y = (0..8)
+                    .find(|y| rendered_line(&terminal, *y).contains(label))
+                    .expect("Markdown content is visible");
+                let cell = &terminal.backend().buffer()[(0, y)];
+                assert_eq!(cell.bg, background, "headings and code preserve the pane background");
+                assert_eq!(
+                    cell.fg,
+                    if label == "Heading" { Color::Cyan } else { foreground },
+                    "code uses the surrounding foreground while headings retain their semantic color"
+                );
+                assert!(
+                    cell.modifier.contains(Modifier::BOLD),
+                    "headings and code remain emphasized"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn formats_conventional_and_autosquash_prefixes() {
         for (input, symbolic, abbreviated) in [
             ("feat: subject", "+ subject", "+ subject"),
@@ -8821,6 +10280,7 @@ mod tests {
         let commit_id = gix::ObjectId::Sha1([1; 20]);
         for (marker, symbol) in [("fixup!", "↪"), ("squash!", "⊕"), ("amend!", "✎")] {
             let mut app = App::new(1);
+            app.commit_pane_background = Some((15, 15, 15));
             app.extend_commits(vec![Commit {
                 id: commit_id,
                 parent_ids: Default::default(),
@@ -8840,18 +10300,16 @@ mod tests {
             for kind in [None, Some(DecorationKind::Head), Some(DecorationKind::WorktreeDetached)] {
                 let head = kind == Some(DecorationKind::Head);
                 app.set_worktree_head(head.then_some(commit_id), false);
-                let decorations = kind
-                    .map(|kind| {
-                        (
-                            commit_id,
-                            vec![Decoration {
-                                name: "HEAD".into(),
-                                kind,
-                            }],
-                        )
-                    })
-                    .into_iter()
-                    .collect();
+                let mut decorations = Decorations::new();
+                if let Some(kind) = kind {
+                    decorations.insert(
+                        commit_id,
+                        vec![Decoration {
+                            name: "HEAD".into(),
+                            kind,
+                        }],
+                    );
+                }
                 for selected in [None, Some(0)] {
                     app.selected = selected;
                     terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
@@ -8876,7 +10334,7 @@ mod tests {
                     assert_eq!(
                         badge.bg,
                         if kind == Some(DecorationKind::WorktreeDetached) && selected.is_none() {
-                            Color::DarkGray
+                            Color::Rgb(15, 15, 15)
                         } else {
                             Color::Reset
                         },
@@ -9738,6 +11196,14 @@ mod tests {
             (0..3).all(|y| !rendered_line(&terminal, y).contains("stale commit message")),
             "stale commit-message and tree-change panes stay hidden"
         );
+        for x in [summary_x + 2, summary_x + 4] {
+            let click = app
+                .mouse_action(x, 1)
+                .expect("both the hollow marker and summary text are clickable");
+            app.update(Action::First);
+            assert!(app.update(click).is_empty(), "a summary click only selects");
+            assert!(app.selected_is_segment(), "both targets select the compressed row");
+        }
         Ok(())
     }
 

@@ -17,6 +17,7 @@ pub(crate) struct State {
     gesture: Option<Gesture>,
     // Releases still belong to a gesture after Enter, Escape, or a shortcut ended it.
     pressed: HashSet<CommandGroup>,
+    viewport_suffixes: HashSet<char>,
     ignore_enter: bool,
     ignore_escape: bool,
 }
@@ -58,6 +59,7 @@ impl State {
 
     pub(crate) fn cancel(&mut self, app: &mut App) -> bool {
         self.pressed.clear();
+        self.viewport_suffixes.clear();
         self.end(app)
     }
 
@@ -68,6 +70,31 @@ impl State {
 
     /// `enabled` requires both key-release reporting and ownership of the normal application input.
     pub(crate) fn handle(&mut self, event: &Event, app: &mut App, now: Instant, enabled: bool) -> Outcome {
+        self.handle_with(
+            event,
+            app,
+            now,
+            enabled,
+            &[
+                CommandGroup::Actions,
+                CommandGroup::View,
+                CommandGroup::Enrich,
+                CommandGroup::Information,
+                CommandGroup::Viewport,
+            ],
+            crate::app_action,
+        )
+    }
+
+    pub(crate) fn handle_with(
+        &mut self,
+        event: &Event,
+        app: &mut App,
+        now: Instant,
+        enabled: bool,
+        groups: &[CommandGroup],
+        action: impl FnOnce(KeyEvent, &App) -> Option<Action>,
+    ) -> Outcome {
         if !enabled {
             self.cancel(app);
         }
@@ -112,6 +139,14 @@ impl State {
             }
             _ => return Outcome::Pass,
         };
+        if let KeyCode::Char(letter) = key.code
+            && self.viewport_suffixes.contains(&letter.to_ascii_lowercase())
+        {
+            if key.kind == KeyEventKind::Release {
+                self.viewport_suffixes.remove(&letter.to_ascii_lowercase());
+            }
+            return Outcome::Handled;
+        }
         if key.kind == KeyEventKind::Release {
             let Some(group) = released_group(key.code) else {
                 return Outcome::Pass;
@@ -131,19 +166,32 @@ impl State {
             }
             return if was_pressed { Outcome::Handled } else { Outcome::Pass };
         }
-        let prefix = prefix_group(*key);
+        let prefix = prefix_group(*key).filter(|group| groups.contains(group));
         // Native Windows reports repeated key-down events as Press, rather than Repeat.
         if (key.kind == KeyEventKind::Repeat && prefix.is_some())
             || released_group(key.code).is_some_and(|group| self.pressed.contains(&group))
         {
             return Outcome::Handled;
         }
+        if app.viewport_expanded
+            && key.modifiers == KeyModifiers::NONE
+            && let KeyCode::Char(letter @ ('t' | 'b')) = key.code
+        {
+            if key.kind != KeyEventKind::Press {
+                return Outcome::Handled;
+            }
+            // The popup closes on completion, but repeats must not acquire a direct-key meaning.
+            self.viewport_suffixes.insert(letter);
+        }
         if key.kind == KeyEventKind::Press
             && let Some(group) = prefix
         {
+            let completes_viewport = group == CommandGroup::Viewport && app.viewport_expanded;
             self.end(app);
             self.pressed.insert(group);
-            self.gesture = Some(Gesture::Pending { group, started: now });
+            if !completes_viewport {
+                self.gesture = Some(Gesture::Pending { group, started: now });
+            }
             return Outcome::Pass;
         }
         match self.gesture {
@@ -170,7 +218,7 @@ impl State {
                         Outcome::Handled
                     }
                     _ => {
-                        let action = crate::app_action(*key, app);
+                        let action = action(*key, app);
                         self.end(app);
                         action.map_or(Outcome::Pass, Outcome::Action)
                     }
@@ -189,6 +237,7 @@ fn prefix_group(key: KeyEvent) -> Option<CommandGroup> {
         KeyCode::Char('a') if !key.modifiers.contains(KeyModifiers::SHIFT) => Some(CommandGroup::Actions),
         KeyCode::Char('v') if !key.modifiers.contains(KeyModifiers::SHIFT) => Some(CommandGroup::View),
         KeyCode::Char('n') if !key.modifiers.contains(KeyModifiers::SHIFT) => Some(CommandGroup::Enrich),
+        KeyCode::Char('z') if !key.modifiers.contains(KeyModifiers::SHIFT) => Some(CommandGroup::Viewport),
         KeyCode::Char('?') => Some(CommandGroup::Information),
         KeyCode::Char('/') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(CommandGroup::Information),
         _ => None,
@@ -200,6 +249,7 @@ fn released_group(code: KeyCode) -> Option<CommandGroup> {
         KeyCode::Char('a' | 'A') => Some(CommandGroup::Actions),
         KeyCode::Char('v' | 'V') => Some(CommandGroup::View),
         KeyCode::Char('n' | 'N') => Some(CommandGroup::Enrich),
+        KeyCode::Char('z' | 'Z') => Some(CommandGroup::Viewport),
         KeyCode::Char('?' | '/') => Some(CommandGroup::Information),
         _ => None,
     }
@@ -225,6 +275,13 @@ mod tests {
 
     fn key(code: KeyCode, kind: KeyEventKind) -> Event {
         Event::Key(KeyEvent::new_with_kind(code, KeyModifiers::NONE, kind))
+    }
+
+    fn viewport_app() -> App {
+        let mut app = App::new(5);
+        app.set_changes_bounds(crate::app::ChangePane::Worktree, 10, 5, [None; 2], 20, 0);
+        app.changes_focus = Some(crate::app::ChangePane::Worktree);
+        app
     }
 
     fn press(input: &mut State, app: &mut App, group: CommandGroup, now: Instant) {
@@ -298,10 +355,15 @@ mod tests {
             (CommandGroup::View, CommandId::Date),
             (CommandGroup::Enrich, CommandId::Todo),
             (CommandGroup::Information, CommandId::Alignment),
+            (CommandGroup::Viewport, CommandId::ViewportCenter),
         ] {
             let now = Instant::now();
             let mut input = State::default();
-            let mut app = App::new(5);
+            let mut app = if group == CommandGroup::Viewport {
+                viewport_app()
+            } else {
+                App::new(5)
+            };
             press(&mut input, &mut app, group, now);
             let before = now + HOLD_DELAY.saturating_sub(Duration::from_millis(1));
             assert!(!input.promote(&mut app, before), "a short press remains a toggle");
@@ -329,6 +391,136 @@ mod tests {
                 "submission closes the held group before dispatch"
             );
             assert_eq!(input.handle(&release, &mut app, now + HOLD_DELAY, true), Outcome::Pass);
+        }
+    }
+
+    #[test]
+    fn viewport_completion_never_rearms_holding_or_repeats_as_an_unprefixed_key() {
+        for (suffix, position) in [
+            ('z', crate::app::ViewportPosition::Center),
+            ('t', crate::app::ViewportPosition::Top),
+            ('b', crate::app::ViewportPosition::Bottom),
+        ] {
+            let now = Instant::now();
+            let mut input = State::default();
+            let mut app = viewport_app();
+            press(&mut input, &mut app, CommandGroup::Viewport, now);
+            assert_eq!(
+                input.handle(&key(KeyCode::Char('z'), KeyEventKind::Release), &mut app, now, true),
+                Outcome::Handled,
+                "a tapped z leaves its popup open"
+            );
+            let completion = KeyEvent::new(KeyCode::Char(suffix), KeyModifiers::NONE);
+            assert_eq!(
+                input.handle(&Event::Key(completion), &mut app, now, true),
+                Outcome::Pass,
+                "viewport shortcuts use ordinary action dispatch"
+            );
+            let action = crate::app_action(completion, &app).expect("the viewport shortcut has an action");
+            assert_eq!(action, Action::PositionSelection(position));
+            app.update(action);
+            assert!(!app.viewport_expanded, "positioning closes the popup");
+            assert_eq!(input.timeout(now), None, "the completing key cannot start a new hold");
+            assert!(
+                !input.promote(&mut app, now + HOLD_DELAY),
+                "holding the completing key cannot reopen the popup"
+            );
+            for kind in [KeyEventKind::Repeat, KeyEventKind::Press] {
+                assert_eq!(
+                    input.handle(&key(KeyCode::Char(suffix), kind), &mut app, now, true),
+                    Outcome::Handled,
+                    "completion repeats cannot toggle a popup or the reference tree"
+                );
+            }
+            assert_eq!(
+                input.handle(
+                    &key(KeyCode::Char(suffix.to_ascii_uppercase()), KeyEventKind::Release),
+                    &mut app,
+                    now,
+                    true
+                ),
+                Outcome::Handled,
+                "release remains recognized after Shift changes"
+            );
+            assert_eq!(
+                input.handle(&key(KeyCode::Char(suffix), KeyEventKind::Press), &mut app, now, true),
+                Outcome::Pass,
+                "a later deliberate press uses its ordinary meaning"
+            );
+        }
+    }
+
+    #[test]
+    fn overlapping_viewport_completions_remain_suppressed_until_their_own_release() {
+        let now = Instant::now();
+        let mut input = State::default();
+        let mut app = viewport_app();
+        for suffix in ['t', 'b'] {
+            press(&mut input, &mut app, CommandGroup::Viewport, now);
+            input.handle(&key(KeyCode::Char('z'), KeyEventKind::Release), &mut app, now, true);
+            let completion = KeyEvent::new(KeyCode::Char(suffix), KeyModifiers::NONE);
+            assert_eq!(
+                input.handle(&Event::Key(completion), &mut app, now, true),
+                Outcome::Pass
+            );
+            app.update(crate::app_action(completion, &app).expect("the viewport suffix completes its command"));
+        }
+        for suffix in ['t', 'b'] {
+            for kind in [KeyEventKind::Repeat, KeyEventKind::Press] {
+                assert_eq!(
+                    input.handle(&key(KeyCode::Char(suffix), kind), &mut app, now, true),
+                    Outcome::Handled,
+                    "each held suffix stays suppressed even after another completion or release"
+                );
+            }
+            assert_eq!(
+                input.handle(&key(KeyCode::Char(suffix), KeyEventKind::Release), &mut app, now, true),
+                Outcome::Handled,
+                "each release ends only its own suppression"
+            );
+        }
+        assert_eq!(
+            input.handle(&key(KeyCode::Char('t'), KeyEventKind::Press), &mut app, now, true),
+            Outcome::Pass,
+            "a released suffix can be deliberately pressed again"
+        );
+    }
+
+    #[test]
+    fn viewport_hold_cancels_with_escape_and_suffix_latches_reset_on_handoff() {
+        let now = Instant::now();
+        let mut input = State::default();
+        let mut app = viewport_app();
+        hold(
+            &mut input,
+            &mut app,
+            CommandGroup::Viewport,
+            &[
+                CommandId::ViewportCenter,
+                CommandId::ViewportTop,
+                CommandId::ViewportBottom,
+            ],
+            now,
+        );
+        assert_eq!(
+            input.handle(&key(KeyCode::Esc, KeyEventKind::Press), &mut app, now, true),
+            Outcome::Handled,
+            "Escape cancels a held viewport command"
+        );
+        assert!(!app.viewport_expanded, "cancellation closes the viewport popup");
+        assert_eq!(
+            input.handle(&key(KeyCode::Char('z'), KeyEventKind::Release), &mut app, now, true),
+            Outcome::Handled,
+            "releasing a cancelled hold cannot execute it"
+        );
+        for handoff in [Event::FocusLost, Event::FocusGained] {
+            input.viewport_suffixes.insert('t');
+            input.handle(&handoff, &mut app, now, false);
+            assert_eq!(
+                input.handle(&key(KeyCode::Char('t'), KeyEventKind::Press), &mut app, now, true),
+                Outcome::Pass,
+                "input handoff forgets a suffix whose release may have been missed"
+            );
         }
     }
 

@@ -115,6 +115,7 @@ fn apply_with_worktrees(
     edits: Vec<RefEdit>,
     restore_current_tree: Option<ObjectId>,
 ) -> Result<()> {
+    let _guard = super::mutation_lock(repo)?;
     let transitions = worktree_transitions(repo, changes, restore_current_tree)?;
     for transition in &transitions {
         super::delete::preflight_tree_transition(&transition.repo, &transition.workdir, transition.old, transition.new)
@@ -210,6 +211,14 @@ fn ends_review(changes: &[RefChange]) -> bool {
         crate::history::review_number(change.name.as_bstr()).is_some()
             && change.before != State::Missing
             && change.after == State::Missing
+    })
+}
+
+fn pins_only(changes: &[RefChange]) -> bool {
+    // Pin edits leave the review's HEAD, index, and worktree unchanged.
+    changes.iter().all(|change| {
+        change.name.as_bstr().starts_with(crate::history::PIN_PREFIX)
+            && change.name.as_bstr() != crate::history::HEAD_PIN_NAME
     })
 }
 
@@ -309,7 +318,7 @@ pub(super) fn prepare_record(
     if changes.is_empty() {
         return Ok((None, Vec::new()));
     }
-    if !ends_review(&changes) && has_active_review(repo)? {
+    if !ends_review(&changes) && !pins_only(&changes) && has_active_review(repo)? {
         return Ok((None, clear_edits(repo)?));
     }
 
@@ -356,7 +365,12 @@ pub(crate) fn position(repo: &gix::Repository) -> Result<Position> {
             .and_then(|index| queue.entries.get(index)),
         queue.entries.get(queue.cursor_index),
     ];
-    if !adjacent.into_iter().flatten().any(|entry| ends_review(&entry.changes)) && has_active_review(repo)? {
+    if !adjacent
+        .into_iter()
+        .flatten()
+        .any(|entry| ends_review(&entry.changes) || pins_only(&entry.changes))
+        && has_active_review(repo)?
+    {
         return Ok(empty_position());
     }
     Ok(queue.position(queue.cursor_index))
@@ -368,7 +382,7 @@ pub(crate) fn plan_undo(repo: &gix::Repository) -> Result<Option<Plan>> {
         return Ok(None);
     }
     let entry = &queue.entries[queue.cursor_index - 1];
-    if !ends_review(&entry.changes) && has_active_review(repo)? {
+    if !ends_review(&entry.changes) && !pins_only(&entry.changes) && has_active_review(repo)? {
         return Ok(None);
     }
     let changes: Vec<_> = entry.changes.iter().map(RefChange::reversed).collect();
@@ -391,7 +405,7 @@ pub(crate) fn plan_redo(repo: &gix::Repository) -> Result<Option<Plan>> {
     let Some(entry) = queue.entries.get(queue.cursor_index) else {
         return Ok(None);
     };
-    if !ends_review(&entry.changes) && has_active_review(repo)? {
+    if !ends_review(&entry.changes) && !pins_only(&entry.changes) && has_active_review(repo)? {
         return Ok(None);
     }
     Ok(Some(make_plan(

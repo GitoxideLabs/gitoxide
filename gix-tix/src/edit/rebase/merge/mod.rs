@@ -121,6 +121,10 @@ pub(super) fn checkpoint(commit: &gix::objs::Commit) -> Result<Option<ObjectId>>
     Ok(State::read(commit)?.map(|state| state.checkpoint_commit_id))
 }
 
+pub(super) fn source(commit: &gix::objs::CommitRef<'_>) -> Result<Option<ObjectId>> {
+    Ok(State::read(&commit.clone().into_owned()?)?.map(|state| state.source_commit_id))
+}
+
 pub(super) fn parents(commit: &gix::objs::Commit) -> Result<Option<Vec<ObjectId>>> {
     Ok(State::read(commit)?.map(|state| state.parents))
 }

@@ -374,7 +374,7 @@ mod into_iter {
                         .into_iter(None)?
                         .collect::<gix::Result<Vec<_>>>()?;
                     let mut actual = String::new();
-                    for item in items {
+                    for item in &items {
                         match item {
                             Item::IndexWorktree(gix::status::index_worktree::Item::Modification {
                                 entry,
@@ -391,6 +391,17 @@ mod into_iter {
                     }
                     let expected = std::fs::read_to_string(repo.git_dir().join(format!("status-{name}.git")))?;
                     assert_eq!(actual, expected, "{modules}-{state} with ignore={name} agrees with Git");
+                    #[cfg(feature = "status-monitor")]
+                    assert_eq!(
+                        repo.status(gix::progress::Discard)?
+                            .index_worktree_submodules(Submodule::Given {
+                                ignore,
+                                check_dirty: false,
+                            })
+                            .into_vec(None, &std::sync::atomic::AtomicBool::new(false))?,
+                        items,
+                        "synchronous status preserves Git parity for {modules}-{state} with ignore={name}"
+                    );
                 }
                 let expected = std::fs::read_to_string(repo.git_dir().join("status-none.git"))?;
                 assert_eq!(

@@ -281,22 +281,56 @@ mod tests {
 
     #[test]
     fn discard_conflicts_restores_head_without_disturbing_other_staging() -> gix_testtools::Result {
-        let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
-        let path = fixture.path();
-        git(path, &["checkout", "--detach", "HEAD~2"])?;
-        let pick = gix_testtools::git_command(path)
-            .args(["cherry-pick", "main"])
-            .output()?;
-        assert!(!pick.status.success(), "the tip's edit conflicts with the base");
-        assert!(!git(path, &["ls-files", "--unmerged"])?.is_empty());
-        std::fs::write(path.join("other"), "other\n")?;
-        git(path, &["add", "other"])?;
+        use crate::edit::rebase;
 
-        discard(path, "file", ChangeGroup::Unstaged)?;
+        for materialized_rebase in [false, true] {
+            let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
+            let path = fixture.path();
+            if materialized_rebase {
+                let repo = crate::test_repository::open(path)?;
+                let graph = crate::edit::loaded_graph(&repo)?;
+                let rebase::Perform::Conflict(conflict) = rebase::perform(
+                    &repo,
+                    &graph,
+                    rebase::Edit::Remove {
+                        target: repo.rev_parse_single("HEAD~1")?.detach(),
+                    },
+                    rebase::Signature::RedoIfNeeded,
+                    rebase::Tree::CherryPick,
+                )?
+                else {
+                    return Err("dropping the middle commit must conflict".into());
+                };
+                conflict.persist(rebase::CheckoutOptions::default())?;
+            } else {
+                git(path, &["checkout", "--detach", "HEAD~2"])?;
+                let pick = gix_testtools::git_command(path)
+                    .args(["cherry-pick", "main"])
+                    .output()?;
+                assert!(!pick.status.success(), "the tip's edit conflicts with the base");
+            }
+            assert!(!git(path, &["ls-files", "--unmerged"])?.is_empty());
+            let expected = git(path, &["show", "HEAD:file"])?;
+            let head_commit_id = git(path, &["rev-parse", "HEAD"])?;
+            std::fs::write(path.join("other"), "other\n")?;
+            git(path, &["add", "other"])?;
 
-        assert_eq!(std::fs::read(path.join("file"))?, b"base\n");
-        assert!(git(path, &["ls-files", "--unmerged"])?.is_empty());
-        assert_eq!(git(path, &["show", ":other"])?, b"other\n");
+            discard(path, "file", ChangeGroup::Unstaged)?;
+
+            assert_eq!(
+                std::fs::read(path.join("file"))?,
+                expected,
+                "the worktree uses HEAD's file"
+            );
+            assert_eq!(git(path, &["show", ":file"])?, expected, "the index uses HEAD's file");
+            assert!(
+                git(path, &["ls-files", "--unmerged"])?.is_empty(),
+                "the path is resolved"
+            );
+            assert_eq!(git(path, &["show", ":other"])?, b"other\n", "other staging survives");
+            assert_eq!(git(path, &["rev-parse", "HEAD"])?, head_commit_id, "HEAD is unchanged");
+        }
+
         Ok(())
     }
 

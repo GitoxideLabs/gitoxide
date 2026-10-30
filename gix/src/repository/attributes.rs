@@ -11,8 +11,17 @@ impl Repository {
     /// obtain the latter by joining `info/attributes` to [`common_dir()`][Self::common_dir].
     #[cfg(feature = "attributes")]
     pub fn attribute_global_paths(&self) -> Result<Vec<std::path::PathBuf>> {
-        self.config
-            .attribute_global_paths(self.current_dir(), self.options.permissions.attributes)
+        Ok(self
+            .config
+            .attribute_global_paths(
+                self.options.permissions.attributes,
+                Some(self.current_dir()),
+                &mut |_| {},
+            )?
+            .into_iter()
+            .flatten()
+            .map(|path| self.current_dir().join(path))
+            .collect())
     }
 
     /// Configure a file-system cache for accessing git attributes *and* excludes on a per-path basis.

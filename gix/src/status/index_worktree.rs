@@ -177,8 +177,20 @@ pub struct BuiltinSubmoduleStatus {
     #[cfg(not(feature = "parallel"))]
     git_dir: std::path::PathBuf,
     #[cfg(not(feature = "parallel"))]
+    work_tree: Option<std::path::PathBuf>,
+    #[cfg(not(feature = "parallel"))]
+    index_path: std::path::PathBuf,
+    #[cfg(not(feature = "parallel"))]
     open_options: crate::open::Options,
     submodule_paths: Vec<BString>,
+}
+
+/// A submodule provider which borrows its cancellation flag and finishes nested status in its caller.
+#[cfg(feature = "status-monitor")]
+#[derive(Clone)]
+pub(crate) struct SynchronousSubmoduleStatus<'a> {
+    inner: BuiltinSubmoduleStatus,
+    interrupt: &'a AtomicBool,
 }
 
 ///
@@ -193,6 +205,14 @@ mod submodule_status {
     };
 
     impl BuiltinSubmoduleStatus {
+        #[cfg(feature = "status-monitor")]
+        pub(crate) fn synchronous(
+            self,
+            interrupt: &std::sync::atomic::AtomicBool,
+        ) -> super::SynchronousSubmoduleStatus<'_> {
+            super::SynchronousSubmoduleStatus { inner: self, interrupt }
+        }
+
         /// Create a new instance from a `repo` and a `mode` to control how the submodule status will be obtained.
         pub fn new(repo: crate::ThreadSafeRepository, mode: Submodule) -> Result<Self> {
             let local_repo = repo.to_thread_local();
@@ -212,7 +232,14 @@ mod submodule_status {
                 #[cfg(not(feature = "parallel"))]
                 git_dir: local_repo.git_dir().to_owned(),
                 #[cfg(not(feature = "parallel"))]
-                open_options: local_repo.open_options().clone(),
+                work_tree: local_repo.work_tree.clone(),
+                #[cfg(not(feature = "parallel"))]
+                index_path: local_repo.index_path.clone(),
+                #[cfg(not(feature = "parallel"))]
+                open_options: local_repo
+                    .open_options()
+                    .clone()
+                    .without_repository_environment_overrides(),
                 submodule_paths,
             })
         }
@@ -222,6 +249,31 @@ mod submodule_status {
         type Output = crate::submodule::Status;
 
         fn status(&mut self, entry: &gix_index::Entry, rela_path: &BStr) -> Result<Option<Self::Output>> {
+            self.status_inner(
+                entry,
+                rela_path,
+                #[cfg(feature = "status-monitor")]
+                None,
+            )
+        }
+    }
+
+    #[cfg(feature = "status-monitor")]
+    impl gix_status::index_as_worktree::traits::SubmoduleStatus for super::SynchronousSubmoduleStatus<'_> {
+        type Output = crate::submodule::Status;
+
+        fn status(&mut self, entry: &gix_index::Entry, rela_path: &BStr) -> Result<Option<Self::Output>> {
+            self.inner.status_inner(entry, rela_path, Some(self.interrupt))
+        }
+    }
+
+    impl BuiltinSubmoduleStatus {
+        fn status_inner(
+            &mut self,
+            entry: &gix_index::Entry,
+            rela_path: &BStr,
+            #[cfg(feature = "status-monitor")] interrupt: Option<&std::sync::atomic::AtomicBool>,
+        ) -> Result<Option<crate::submodule::Status>> {
             use bstr::ByteSlice;
             if matches!(
                 self.mode,
@@ -235,8 +287,15 @@ mod submodule_status {
             #[cfg(feature = "parallel")]
             let repo = self.repo.to_thread_local();
             #[cfg(not(feature = "parallel"))]
-            let Ok(repo) = crate::open_opts(&self.git_dir, self.open_options.clone()) else {
-                return Ok(None);
+            let repo = {
+                let Ok(mut repo) = crate::open_opts(&self.git_dir, self.open_options.clone()) else {
+                    return Ok(None);
+                };
+                // Reopening must preserve the caller's selected worktree/index without consulting
+                // repository-local environment variables again or losing isolated open options.
+                repo.work_tree.clone_from(&self.work_tree);
+                repo.index_path.clone_from(&self.index_path);
+                repo
             };
             let sm = if self
                 .submodule_paths
@@ -273,7 +332,13 @@ mod submodule_status {
                 Submodule::Given { ignore, check_dirty } => (ignore, check_dirty),
             };
             let status = match sm {
-                Some(sm) => sm.status(ignore, check_dirty)?,
+                Some(sm) => sm.status_opts_inner(
+                    ignore,
+                    check_dirty,
+                    &mut |status| status,
+                    #[cfg(feature = "status-monitor")]
+                    interrupt,
+                )?,
                 None => {
                     if ignore == crate::submodule::config::Ignore::All {
                         return Ok(None);
@@ -302,7 +367,14 @@ mod submodule_status {
                         index_id: Some(entry.id),
                         ..Default::default()
                     }
-                    .with_worktree_status(&sm_repo, ignore, check_dirty, &mut |s| s)?
+                    .with_worktree_status(
+                        &sm_repo,
+                        ignore,
+                        check_dirty,
+                        &mut |s| s,
+                        #[cfg(feature = "status-monitor")]
+                        interrupt,
+                    )?
                 }
             };
             Ok(status.is_dirty().and_then(|dirty| dirty.then_some(status)))
