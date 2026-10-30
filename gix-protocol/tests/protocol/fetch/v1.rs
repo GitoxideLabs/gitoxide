@@ -84,6 +84,7 @@ async fn fetch_receives_pack_after_ready_with_no_done() -> TestResult {
                 trace_packetlines: false,
             },
             fetch::Options {
+                shared_repository_permissions: 0,
                 shallow_file: temp.path().join("shallow"),
                 shallow: &fetch::Shallow::NoChange,
                 tags: fetch::Tags::None,

@@ -2238,6 +2238,7 @@ dependencies = [
  "gix-chunk",
  "gix-diff",
  "gix-error",
+ "gix-fs",
  "gix-hash",
  "gix-hashtable",
  "gix-object",

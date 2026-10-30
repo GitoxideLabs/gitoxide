@@ -224,6 +224,16 @@ pub fn new(
     Handle::<Writable>::new(containing_directory, directory, cleanup)
 }
 
+/// Like [`new()`], but request `permissions` when creating the file, subject to the process umask.
+pub fn new_with_permissions(
+    containing_directory: impl AsRef<Path>,
+    directory: ContainingDirectory,
+    cleanup: AutoRemove,
+    permissions: std::fs::Permissions,
+) -> io::Result<Handle<Writable>> {
+    Handle::<Writable>::new_with_permissions(containing_directory, directory, cleanup, permissions)
+}
+
 /// A shortcut to [`Handle::<Writable>::at()`] providing a writable temporary file at the given path.
 pub fn writable_at(
     path: impl AsRef<Path>,
