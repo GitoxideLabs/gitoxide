@@ -172,7 +172,7 @@ where
             shallow: &self.shallow,
             tags: con.remote.fetch_tags,
             negotiator,
-            open_options: repo.options.clone(),
+            open_options: repo.options.clone_with_trust(),
         };
 
         let write_pack_options = gix_pack::bundle::write::Options {
@@ -285,14 +285,14 @@ impl gix_protocol::fetch::Negotiate for Negotiate<'_, '_, '_> {
             self.refs,
             {
                 let alternates = std::mem::take(&mut self.alternates);
-                let open_options = self.open_options.clone();
+                let open_options = self.open_options.clone_with_trust();
                 move || {
                     Ok(alternates
                         .into_iter()
                         .filter_map(move |path| {
                             path.ancestors()
                                 .nth(1)
-                                .and_then(|git_dir| crate::open_opts(git_dir, open_options.clone()).ok())
+                                .and_then(|git_dir| crate::open_opts(git_dir, open_options.clone_without_trust()).ok())
                         })
                         .map(|repo| (repo.refs, repo.objects)))
                 }

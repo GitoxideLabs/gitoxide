@@ -42,14 +42,11 @@ pub fn append_remote_to_local_config_file(
 /// Existing local configuration, including the remote section written during clone setup,
 /// is preserved. Only local sections are written back to `.git/config`,
 ///
-/// The returned repository is reopened from disk so the object hash change affects all
+/// The repository is reloaded from disk so the object hash change affects all
 /// hash-dependent state. Callers that need in-memory configuration from `repo` must
-/// transfer it to the returned handle.
+/// preserve it before calling and restore it afterward.
 #[cfg(feature = "sha256")]
-pub(super) fn reinitialize_with_object_hash(
-    repo: &crate::Repository,
-    object_hash: gix_hash::Kind,
-) -> Result<crate::Repository> {
+pub(super) fn reinitialize_with_object_hash(repo: &mut crate::Repository, object_hash: gix_hash::Kind) -> Result<()> {
     let git_dir = repo.git_dir();
     let config_path = git_dir.join("config");
 
@@ -80,9 +77,9 @@ pub(super) fn reinitialize_with_object_hash(
     lock.commit()
         .or_raise(|| message("Failed to commit lock after writing repository configuration to disk"))?;
 
-    Ok(crate::ThreadSafeRepository::open_opts(git_dir, repo.options.clone())
-        .or_raise(|| message("Failed to reopen the local repository after adopting the remote's object format"))?
-        .to_thread_local())
+    repo.reload()
+        .or_raise(|| message("Failed to reopen the local repository after adopting the remote's object format"))?;
+    Ok(())
 }
 
 fn local_config_meta(repo: &Repository) -> gix_config::file::Metadata {

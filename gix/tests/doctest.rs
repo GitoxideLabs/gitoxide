@@ -12,7 +12,7 @@ pub fn discover_repo(path: impl AsRef<std::path::Path>) -> Result<gix::Repositor
         path,
         Default::default(),
         gix::sec::trust::Mapping {
-            full: opts.clone(),
+            full: opts.clone_without_trust(),
             reduced: opts,
         },
     )

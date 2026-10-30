@@ -131,7 +131,7 @@ fn legacy_driver_names_are_canonical() -> TestResult {
 #[test]
 #[cfg(unix)]
 fn pipeline_worktree_file_to_object() -> TestResult {
-    let repo = named_repo("repo_with_untracked_files.sh")?;
+    let repo = named_repo("repo_with_untracked_files.sh")?.with_object_memory();
     let work_dir = repo.workdir().expect("non-bare");
     let (mut pipe, index) = repo.filter_pipeline(None)?;
     fn take_two<A, B, C>(t: Option<(A, B, C)>) -> Option<(A, B)> {
@@ -145,10 +145,13 @@ fn pipeline_worktree_file_to_object() -> TestResult {
         take_two(pipe.worktree_file_to_object("embedded-repository".into(), &index)?),
         Some((submodule_id, gix::object::tree::EntryKind::Commit))
     );
-    assert_eq!(
-        take_two(pipe.worktree_file_to_object("submodule".into(), &index)?),
-        Some((submodule_id, gix::object::tree::EntryKind::Commit))
-    );
+    for path in ["submodule", "submodule/", "submodule/.", "empty-dir/../submodule"] {
+        assert_eq!(
+            take_two(pipe.worktree_file_to_object(path.into(), &index)?),
+            Some((submodule_id, gix::object::tree::EntryKind::Commit)),
+            "directory validation preserves safe path spellings: {path}"
+        );
+    }
     assert_eq!(
         take_two(pipe.worktree_file_to_object("uninitialized-embedded-repository".into(), &index)?),
         None,
@@ -185,6 +188,67 @@ fn pipeline_worktree_file_to_object() -> TestResult {
         take_two(pipe.worktree_file_to_object("fifo".into(), &index)?),
         None,
         "untrackable entries are just ignored as if they didn't exist"
+    );
+    for path in [
+        "directory-link/embedded-repository",
+        "directory-link/submodule",
+        "directory-link/file",
+        "directory-link/link",
+        "directory-link/",
+        "directory-link/.",
+        "empty-dir/../directory-link/",
+        "empty-dir/../directory-link/.",
+        "directory-link/../file",
+        "../file",
+    ] {
+        let err = pipe
+            .worktree_file_to_object(path.into(), &index)
+            .expect_err("object creation must not traverse a symlink");
+        assert!(err.is_validation(), "the unsafe path is rejected: {path}: {err:?}");
+    }
+    for path in ["", ".", "..", "empty-dir/.."] {
+        let err = pipe
+            .worktree_file_to_object(path.into(), &index)
+            .expect_err("a path without a file name must not be added, even if it has a parent");
+        assert!(err.is_validation(), "the path without a file name is rejected: {path}");
+        assert_eq!(
+            err.metadata().next().expect("the validation error retains its input")["input"],
+            gix_error::MetadataValue::from(path.as_bytes()),
+            "the original path bytes remain available in the validation error"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn worktree_file_to_object_recomputes_submodule_trust() -> TestResult {
+    fn check_submodule_trust(meta: &gix_config::file::Metadata) -> bool {
+        if meta
+            .path
+            .as_ref()
+            .is_some_and(|path| path.ends_with(Path::new("modules/submodule/config")))
+        {
+            assert_eq!(
+                meta.trust,
+                gix_sec::Trust::Full,
+                "the fixture submodule is owned by this user, regardless of the parent's forced trust"
+            );
+        }
+        true
+    }
+    let repo = named_subrepo_opts(
+        "repo_with_untracked_files.sh",
+        ".",
+        gix::open::Options::isolated()
+            .with_trust(gix_sec::Trust::Reduced)
+            .filter_config_section(check_submodule_trust),
+    )?;
+    assert_eq!(repo.git_dir_trust(), gix_sec::Trust::Reduced, "parent trust is forced");
+    let (mut pipe, index) = repo.filter_pipeline(None)?;
+    assert!(
+        pipe.worktree_file_to_object("submodule".into(), &index)?.is_some(),
+        "opening the submodule consults its local core.worktree configuration"
     );
     Ok(())
 }

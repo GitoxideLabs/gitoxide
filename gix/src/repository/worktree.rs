@@ -115,7 +115,7 @@ impl crate::Repository {
         if self.kind() == crate::repository::Kind::LinkedWorkTree {
             let options = self
                 .options
-                .clone()
+                .clone_with_trust()
                 .without_repository_environment_overrides()
                 .open_path_as_is(true);
             crate::ThreadSafeRepository::open_opts(self.current_dir().join(self.common_dir()), options).map(Into::into)

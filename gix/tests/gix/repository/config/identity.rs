@@ -89,7 +89,7 @@ fn configured_identity_fallbacks_follow_user_identity() -> TestResult {
 #[serial]
 fn author_included_by_hasconfig() -> TestResult {
     let _environment = gix_testtools::isolate_git_environment()?;
-    let repo = named_subrepo_opts("make_config_repos.sh", "with-hasconfig", gix::open::Options::isolated())?;
+    let mut repo = named_subrepo_opts("make_config_repos.sh", "with-hasconfig", gix::open::Options::isolated())?;
     let _environment = _environment
         .set(
             "GIT_CONFIG_SYSTEM",
@@ -99,7 +99,7 @@ fn author_included_by_hasconfig() -> TestResult {
         .unset("GIT_AUTHOR_NAME")
         .unset("GIT_AUTHOR_EMAIL")
         .unset("GIT_COMMITTER_NAME");
-    let repo = gix::open_opts(repo.git_dir(), allow_system_options(repo.open_options().clone()))?;
+    repo.reload_with(allow_system_options)?;
     let author = repo.author().expect("set in system config via include")?;
     assert_eq!(author.name, "works");
     assert_eq!(author.email, "works@example.com");
@@ -111,7 +111,7 @@ fn author_included_by_hasconfig() -> TestResult {
 fn author_and_committer_and_fallback() -> TestResult {
     let _environment = gix_testtools::isolate_git_environment()?;
     for trust in [gix_sec::Trust::Full, gix_sec::Trust::Reduced] {
-        let repo = named_repo("make_config_repo.sh")?;
+        let mut repo = named_repo("make_config_repo.sh")?;
         let work_dir = repo.workdir().expect("present").canonicalize()?;
         let _env = Env::new()
             .set(
@@ -129,10 +129,7 @@ fn author_and_committer_and_fallback() -> TestResult {
             .set("GIT_CONFIG_COUNT", "1")
             .set("GIT_CONFIG_KEY_0", "include.path")
             .set("GIT_CONFIG_VALUE_0", work_dir.join("c.config").display().to_string());
-        let repo = gix::open_opts(
-            repo.git_dir(),
-            allow_system_options(repo.open_options().clone().with(trust)),
-        )?;
+        repo.reload_with(|options| allow_system_options(options.with_trust(trust)))?;
 
         assert_eq!(
             repo.author().expect("present")?,
@@ -200,7 +197,7 @@ fn author_and_committer_and_fallback() -> TestResult {
 #[serial]
 fn author_from_different_config_sections() -> TestResult {
     let _environment = gix_testtools::isolate_git_environment()?;
-    let repo = named_repo("make_signatures_repo.sh")?;
+    let mut repo = named_repo("make_signatures_repo.sh")?;
     let work_dir = repo.workdir().unwrap().canonicalize()?;
 
     let _environment = _environment
@@ -215,15 +212,9 @@ fn author_from_different_config_sections() -> TestResult {
         .unset("GIT_COMMITTER_EMAIL")
         .set("EMAIL", "general@email-unused");
 
-    let repo = gix::open_opts(
-        repo.git_dir(),
-        allow_system_options(
-            repo.open_options()
-                .clone()
-                .config_overrides(None::<&str>)
-                .with(gix_sec::Trust::Full),
-        ),
-    )?;
+    repo.reload_with(|options| {
+        allow_system_options(options.with_trust(gix_sec::Trust::Full).config_overrides(None::<&str>))
+    })?;
 
     assert_eq!(
         repo.author().transpose()?,

@@ -465,11 +465,8 @@ fn has_populated_submodule(repo: &crate::Repository) -> Result<bool> {
             .iter()
             .filter(|entry| entry.mode == gix_index::entry::Mode::COMMIT)
         {
-            if work_dir
-                .join(gix_path::from_bstr(entry.path(&index))?)
-                .join(".git")
-                .exists()
-            {
+            let path = gix_fs::symlink::validate_relative_path(work_dir, &gix_path::from_bstr(entry.path(&index))?)?;
+            if path.join(".git").exists() {
                 return Ok(true);
             }
         }

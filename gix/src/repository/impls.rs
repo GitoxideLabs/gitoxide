@@ -4,6 +4,25 @@ use std::ops::DerefMut;
 use gix_error::{ResultExt, bail};
 use gix_hash::ObjectId;
 
+impl Clone for crate::ThreadSafeRepository {
+    fn clone(&self) -> Self {
+        Self {
+            refs: self.refs.clone(),
+            objects: self.objects.clone(),
+            work_tree: self.work_tree.clone(),
+            index_path: self.index_path.clone(),
+            common_dir: self.common_dir.clone(),
+            config: self.config.clone(),
+            linked_worktree_options: self.linked_worktree_options.clone_with_trust(),
+            #[cfg(feature = "index")]
+            index: self.index.clone(),
+            #[cfg(feature = "attributes")]
+            modules: self.modules.clone(),
+            shallow_commits: self.shallow_commits.clone(),
+        }
+    }
+}
+
 impl Clone for crate::Repository {
     fn clone(&self) -> Self {
         let mut new = crate::Repository::from_refs_and_objects(
@@ -13,7 +32,7 @@ impl Clone for crate::Repository {
             self.index_path.clone(),
             self.common_dir.clone(),
             self.config.clone(),
-            self.options.clone(),
+            self.options.clone_with_trust(),
             #[cfg(feature = "index")]
             self.index.clone(),
             self.shallow_commits.clone(),
@@ -59,7 +78,7 @@ impl From<&crate::ThreadSafeRepository> for crate::Repository {
             repo.index_path.clone(),
             repo.common_dir.clone(),
             repo.config.clone(),
-            repo.linked_worktree_options.clone(),
+            repo.linked_worktree_options.clone_with_trust(),
             #[cfg(feature = "index")]
             repo.index.clone(),
             repo.shallow_commits.clone(),

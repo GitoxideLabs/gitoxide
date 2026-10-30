@@ -342,22 +342,137 @@ mod into_iter {
     }
 
     #[test]
-    fn gitlinks_without_matching_modules_configuration_match_git() -> TestResult {
+    #[cfg(any(unix, windows))]
+    fn unconfigured_submodule_status_rejects_symlinks() -> TestResult {
+        use gix::status::plumbing::index_as_worktree::traits::SubmoduleStatus;
+
+        let root = gix_testtools::scripted_fixture_read_only("make_unlisted_gitlink_symlinks.sh")?;
+        if !gix_testtools::fixture_has_symlinks(&root)? {
+            return Ok(());
+        }
+        let repo = gix::open_opts(root, gix::open::Options::isolated())?;
+        let index = repo.index()?;
+        let entry = &index.entries()[0];
+        let mut status = gix::status::index_worktree::BuiltinSubmoduleStatus::new(
+            repo.into_sync(),
+            Submodule::Given {
+                ignore: gix::submodule::config::Ignore::None,
+                check_dirty: false,
+            },
+        )?;
+        assert!(
+            status.status(entry, "d".into())?.is_some(),
+            "the unconfigured gitlink's changed commit is reported"
+        );
+        for path in ["module-link", "alias/d", "alias/../d"] {
+            let err = status
+                .status(entry, path.into())
+                .expect_err("the provider must validate paths independently of worktree traversal");
+            assert!(err.is_validation(), "the symlink in {path} is rejected: {err:?}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn submodule_status_preserves_worktree_overrides() -> TestResult {
+        use gix::status::plumbing::index_as_worktree::traits::SubmoduleStatus;
+
+        let root = gix_testtools::scripted_fixture_read_only("make_unlisted_gitlinks.sh")?;
+        for modules in ["absent", "listed"] {
+            let mut repo = gix::open_opts(root.join(format!("{modules}-commit")), gix::open::Options::isolated())?;
+            let index = repo.index()?;
+            let entry = index.entry_by_path("d".into()).expect("the fixture has a gitlink");
+            for (work_dir, expected_dirty) in [
+                (Some(root.join(format!("{modules}-commit"))), true),
+                (Some(root.join(format!("{modules}-clean"))), false),
+                (None, false),
+            ] {
+                repo.set_workdir(work_dir.clone())?;
+                let mut status = gix::status::index_worktree::BuiltinSubmoduleStatus::new(
+                    repo.clone().into_sync(),
+                    Submodule::Given {
+                        ignore: gix::submodule::config::Ignore::None,
+                        check_dirty: false,
+                    },
+                )?;
+                assert_eq!(
+                    status.status(entry, "d".into())?.is_some(),
+                    expected_dirty,
+                    "the provider uses the effective parent worktree, including None: {modules}, {work_dir:?}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn submodule_status_preserves_missing_configured_worktree() -> TestResult {
+        use gix::status::plumbing::index_as_worktree::traits::SubmoduleStatus;
+
+        let root = gix_testtools::scripted_fixture_read_only("make_unlisted_gitlinks.sh")?;
+        let repo = gix::open_opts(root.join("missing-worktree"), gix::open::Options::isolated())?;
+        assert!(
+            !repo.workdir().expect("core.worktree is configured").exists(),
+            "opening a repository permits a missing configured checkout"
+        );
+        let index = repo.index()?;
+        let entry = index.entry_by_path("d".into()).expect("the fixture has a gitlink");
+        let mut status = gix::status::index_worktree::BuiltinSubmoduleStatus::new(
+            repo.into_sync(),
+            Submodule::AsConfigured { check_dirty: false },
+        )?;
+        assert!(
+            status.status(entry, "d".into())?.is_none(),
+            "configured ignore=all does not require the missing worktree to become accessible"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn gitfile_dot_dot_target_configured_worktree_matches_git() -> TestResult {
+        gitlinks_match_git(&["gitfile-worktree-config"])
+    }
+
+    #[test]
+    fn gitfile_dot_dot_target_empty_worktree_config_is_reported() -> TestResult {
+        use gix::status::plumbing::index_as_worktree::traits::SubmoduleStatus;
+
+        let root = gix_testtools::scripted_fixture_read_only("make_unlisted_gitlinks.sh")?;
+        for modules in ["absent", "unrelated", "listed"] {
+            let worktree = root.join(format!("{modules}-gitfile-empty-worktree-config"));
+            assert!(
+                worktree.join("d/.git").is_file(),
+                "{modules}: the checkout gitfile is present"
+            );
+            let repo = gix::open_opts(worktree, gix::open::Options::isolated())?;
+            let index = repo.index()?;
+            let entry = index.entry_by_path("d".into()).expect("the fixture has a gitlink");
+            let mut status = gix::status::index_worktree::BuiltinSubmoduleStatus::new(
+                repo.into_sync(),
+                Submodule::Given {
+                    ignore: gix::submodule::config::Ignore::None,
+                    check_dirty: false,
+                },
+            )?;
+            let err = status
+                .status(entry, "d".into())
+                .expect_err("empty core.worktree must propagate for configured and unconfigured gitlinks");
+            assert!(
+                err.is_validation(),
+                "{modules}: empty core.worktree is invalid configuration: {err:?}"
+            );
+        }
+        Ok(())
+    }
+
+    fn gitlinks_match_git(states: &[&str]) -> TestResult {
         use gix::status::plumbing::index_as_worktree::{Change, EntryStatus};
         use gix::submodule::config::Ignore;
         use std::fmt::Write;
 
         let root = gix_testtools::scripted_fixture_read_only("make_unlisted_gitlinks.sh")?;
         for modules in ["absent", "unrelated", "listed"] {
-            for state in [
-                "clean",
-                "commit",
-                "modified",
-                "staged",
-                "untracked",
-                "gitfile",
-                "uninitialized",
-            ] {
+            for state in states {
                 let repo = gix::open_opts(root.join(format!("{modules}-{state}")), gix::open::Options::isolated())?;
                 for (name, ignore) in [
                     ("none", Ignore::None),
@@ -400,6 +515,22 @@ mod into_iter {
                 );
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn gitlinks_without_matching_modules_configuration_match_git() -> TestResult {
+        gitlinks_match_git(&[
+            "clean",
+            "commit",
+            "modified",
+            "staged",
+            "untracked",
+            "gitfile",
+            "gitfile-worktree-inference",
+            "uninitialized",
+        ])?;
+        let root = gix_testtools::scripted_fixture_read_only("make_unlisted_gitlinks.sh")?;
         let repo = gix::open_opts(root.join("global-ignore"), gix::open::Options::isolated())?;
         assert!(
             std::fs::read(repo.git_dir().join("status-configured.git"))?.is_empty(),

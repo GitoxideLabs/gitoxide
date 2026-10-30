@@ -273,7 +273,7 @@ impl PrepareFetch {
                     })
                     .or_error()?;
                 // Reopen the still-empty repo with the remote's format; on error the original is kept for a retry.
-                repo = util::reinitialize_with_object_hash(&repo, remote_object_hash)?;
+                util::reinitialize_with_object_hash(&mut repo, remote_object_hash)?;
                 let mut resolved_config = repo.config.resolved.as_ref().clone();
                 // The reopened repo has the rewritten local config. Reapply the
                 // old API-only layer and then the remote config written during

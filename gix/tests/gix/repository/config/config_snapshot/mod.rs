@@ -100,12 +100,7 @@ fn committing_loose_compression_requires_reopening_the_object_store() -> TestRes
     let still_compressed = repo.objects.write_buf(gix::objs::Kind::Blob, &data)?;
     let still_compressed_size = loose_object_size(&repo, still_compressed)?;
 
-    let git_dir = repo.git_dir().to_owned();
-    let options = repo
-        .open_options()
-        .clone()
-        .config_overrides(["core.looseCompression=0"]);
-    repo = gix::open_opts(git_dir, options)?;
+    repo.reload_with(|options| options.config_overrides(["core.looseCompression=0"]))?;
 
     data[1] = b'b';
     let uncompressed = repo.write_blob(&data)?;
@@ -311,7 +306,7 @@ fn reload_preserves_the_reduced_trust_allocation_limit() -> TestResult {
     let mut repo = gix::open_opts(
         fixture.path(),
         crate::util::restricted()
-            .with(gix_sec::Trust::Reduced)
+            .with_trust(gix_sec::Trust::Reduced)
             .config_overrides(["gitoxide.objects.allocLimitIfReducedTrust=1"]),
     )?;
     assert!(repo.open_index().is_err(), "the opening fallback limits allocations");
@@ -350,7 +345,7 @@ fn reload_reapplies_per_file_safe_directory_trust() -> TestResult {
         fixture.path(),
         gix::open::Options::isolated()
             .permissions(permissions)
-            .with(gix_sec::Trust::Reduced),
+            .with_trust(gix_sec::Trust::Reduced),
     )?;
     assert_eq!(
         repo.config_snapshot().trusted_program(Core::SSH_COMMAND)?,

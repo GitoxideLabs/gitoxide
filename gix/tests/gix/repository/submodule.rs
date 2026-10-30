@@ -11,14 +11,18 @@ mod modules_file {
         for source in ["worktree", "index", "tree"] {
             let repo_dir = dir.join(source);
             for (options, use_overrides) in [
-                (crate::restricted().with(Trust::Reduced), false),
-                (crate::restricted().with(Trust::Full), true),
+                (crate::restricted().with_trust(Trust::Reduced), false),
+                (crate::restricted().with_trust(Trust::Full), true),
                 (
-                    crate::restricted().with(Trust::Full).filter_config_section(|_| false),
+                    crate::restricted()
+                        .with_trust(Trust::Full)
+                        .filter_config_section(|_| false),
                     false,
                 ),
                 (
-                    crate::restricted().with(Trust::Reduced).filter_config_section(|_| true),
+                    crate::restricted()
+                        .with_trust(Trust::Reduced)
+                        .filter_config_section(|_| true),
                     true,
                 ),
             ] {
@@ -49,7 +53,7 @@ mod modules_file {
             let repo = gix::open_opts(
                 &repo_dir,
                 crate::restricted()
-                    .with(Trust::Reduced)
+                    .with_trust(Trust::Reduced)
                     .config_overrides(["submodule.s.update=!trusted"]),
             )?;
             assert_eq!(

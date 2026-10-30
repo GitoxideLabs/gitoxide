@@ -9,6 +9,7 @@ git init embedded-repository
 git init -q
 echo content >file
 ln -s file link
+ln -s . directory-link
 
 echo binary >exe && chmod +x exe
 mkfifo fifo

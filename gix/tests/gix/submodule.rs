@@ -104,7 +104,7 @@ mod url {
         let repo = gix::open_opts(
             &worktree,
             gix::open::Options::isolated()
-                .with(gix::sec::Trust::Reduced)
+                .with_trust(gix::sec::Trust::Reduced)
                 .config_overrides(["submodule.m1.url=ssh://trusted/override.git"]),
         )?;
         let sm = submodule(&repo)?;
@@ -278,6 +278,135 @@ mod open {
     use crate::{submodule::repo, util::named_subrepo_opts};
 
     #[test]
+    #[cfg(unix)]
+    fn configured_paths_reject_symlinks() -> TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only("make_submodule_symlink_paths.sh")?;
+        let repo = gix::open_opts(fixture.join("superproject"), gix::open::Options::isolated())?;
+        let mut count = 0;
+        for sm in repo.submodules()?.expect("fixture has configured submodules") {
+            let path = sm.path()?;
+            assert!(sm.git_dir()?.starts_with(repo.git_dir()), "the name itself is valid");
+            for err in [
+                sm.git_dir_try_old_form()
+                    .expect_err("repository lookup rejects symlinks"),
+                sm.state().expect_err("state inspection rejects symlinks"),
+                sm.open().expect_err("opening rejects symlinks"),
+            ] {
+                assert!(
+                    err.downcast_any_ref::<gix_error::Message>()
+                        .is_some_and(|error| error.class == Some(gix_error::Class::Validation)),
+                    "path {path:?} fails validation: {err:?}"
+                );
+                assert!(
+                    err.to_string().contains("symbolic link"),
+                    "the error identifies the symlink in {path:?}: {err:?}"
+                );
+            }
+            #[cfg(feature = "status")]
+            for ignore in [
+                gix::submodule::config::Ignore::None,
+                gix::submodule::config::Ignore::All,
+            ] {
+                let err = sm
+                    .status(ignore, false)
+                    .expect_err("even coarse state rejects symlinks");
+                assert!(
+                    err.to_string().contains("symbolic link"),
+                    "status rejects the symlink in {path:?}: {err:?}"
+                );
+            }
+            count += 1;
+        }
+        assert_eq!(count, 13, "all symlink variants were exercised");
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn bare_superproject_does_not_inspect_the_current_directory() -> TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let fixture = gix::path::realpath(gix_testtools::scripted_fixture_read_only(
+            "make_submodule_symlink_paths.sh",
+        )?)?;
+        let repo = gix::open_opts(fixture.join("bare.git"), gix::open::Options::isolated())?;
+        let _cwd = gix_testtools::set_current_dir(fixture.join("superproject"))?;
+        assert!(repo.workdir().is_none(), "the superproject has no worktree");
+        for sm in repo.submodules()?.expect("submodules are read from HEAD") {
+            assert_eq!(
+                sm.work_dir()?,
+                None,
+                "a bare superproject has no submodule checkout location"
+            );
+            let expected_git_dir = sm.git_dir()?;
+            assert_eq!(
+                sm.git_dir_try_old_form()?,
+                expected_git_dir,
+                "bare superprojects return the name-derived location even if it does not exist"
+            );
+            let state = sm.state()?;
+            assert!(!state.worktree_checkout, "the caller's directory is not a checkout");
+            assert!(!state.is_old_form, "no old-form lookup occurs without a worktree");
+            let opened = sm.open()?;
+            assert_eq!(opened.is_some(), sm.name() == "case-1", "only one repository exists");
+            assert_eq!(state.repository_exists, opened.is_some(), "state agrees with opening");
+            if let Some(opened) = opened {
+                assert_eq!(opened.git_dir(), expected_git_dir, "the intended repository opens");
+                assert_eq!(
+                    opened.current_dir(),
+                    repo.current_dir(),
+                    "submodules retain the superproject's captured current directory even after the process CWD changes"
+                );
+                assert!(
+                    opened.workdir().is_none(),
+                    "no worktree is invented from the caller's cwd"
+                );
+            }
+            #[cfg(feature = "status")]
+            assert_eq!(
+                sm.status(gix::submodule::config::Ignore::All, false)?.state,
+                state,
+                "coarse status also ignores the caller's directory"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn non_directory_path_prefix_allows_repository_fallback() -> TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only("make_submodule_symlink_paths.sh")?;
+        let repo = gix::open_opts(fixture.join("obstructed"), gix::open::Options::isolated())?;
+        let sm = repo
+            .submodules()?
+            .expect("configured submodules")
+            .next()
+            .expect("module");
+        let expected_git_dir = repo.git_dir().join("modules/module");
+        assert_eq!(
+            sm.git_dir_try_old_form()?,
+            expected_git_dir,
+            "a non-directory obstruction leaves the fallback available"
+        );
+        let state = sm.state()?;
+        assert!(state.repository_exists, "the submodule repository is still available");
+        assert!(!state.worktree_checkout, "the obstructed checkout is absent");
+        assert_eq!(
+            sm.open()?.expect("the fallback repository opens").git_dir(),
+            expected_git_dir,
+            "opening uses the modules directory despite the obstructed checkout"
+        );
+        #[cfg(feature = "status")]
+        assert_eq!(
+            sm.status(gix::submodule::config::Ignore::All, false)?.state,
+            state,
+            "coarse status reports the same state"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn linked_superproject_submodule_repositories_are_private() -> TestResult {
         let fixture = gix_testtools::scripted_fixture_read_only("make_linked_superproject_submodules.sh")?;
         let main = gix::open_opts(fixture.join("superproject"), crate::restricted())?;
@@ -299,6 +428,7 @@ mod open {
                 expected_git_dir,
                 "linked submodule repositories belong to the private superproject Git directory"
             );
+
             if !repository_exists {
                 assert!(
                     linked_path.join("m1").is_dir(),
@@ -340,6 +470,100 @@ mod open {
         assert!(
             main_sm.state()?.worktree_checkout,
             "the main submodule remains populated"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn gitfile_dot_dot_target_preserves_configured_worktree() -> TestResult {
+        let root = gix_testtools::scripted_fixture_read_only("make_unlisted_gitlinks.sh")?
+            .join("listed-gitfile-worktree-config");
+        let repo = gix::open_opts(&root, gix::open::Options::isolated())?;
+        let sm = repo
+            .submodules()?
+            .expect("fixture has submodules")
+            .next()
+            .expect("fixture has d");
+        assert_eq!(
+            sm.git_dir_try_old_form()?,
+            root.join("d/../.git/embedded"),
+            "the checkout gitfile resolves to a repository path containing .."
+        );
+        let opened = sm.open()?.expect("submodule repository exists");
+        assert_eq!(
+            opened.workdir(),
+            Some(root.join(".git/checkout")).as_deref(),
+            "the repository's core.worktree overrides the clean inferred checkout"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn gitfile_dot_dot_target_rejects_empty_worktree_config() -> TestResult {
+        let root = gix_testtools::scripted_fixture_read_only("make_unlisted_gitlinks.sh")?
+            .join("listed-gitfile-empty-worktree-config");
+        let repo = gix::open_opts(&root, gix::open::Options::isolated())?;
+        let sm = repo
+            .submodules()?
+            .expect("fixture has submodules")
+            .next()
+            .expect("fixture has d");
+        assert!(
+            root.join("d/.git").is_file(),
+            "the initialized checkout has a gitfile, unlike the deinitialized regression fixture"
+        );
+        let err = sm
+            .open()
+            .expect_err("empty core.worktree must propagate even when the gitfile target contains ..");
+        assert!(
+            err.is_validation(),
+            "empty core.worktree is invalid configuration: {err:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn bare_submodule_retains_inferred_checkout_without_changing_config() -> TestResult {
+        let root = gix_testtools::scripted_fixture_read_only("make_unlisted_gitlinks.sh")?.join("listed-gitfile-bare");
+        let repo = gix::open_opts(&root, gix::open::Options::isolated())?;
+        let sm = repo
+            .submodules()?
+            .expect("fixture has submodules")
+            .next()
+            .expect("fixture has d");
+        let git_dir = sm.git_dir_try_old_form()?;
+        let opened = sm.open()?.expect("the bare-configured submodule repository exists");
+        assert_eq!(
+            opened.workdir(),
+            Some(root.join("d")).as_deref(),
+            "submodule opening retains the supplied checkout despite core.bare=true"
+        );
+        assert!(
+            opened.is_bare(),
+            "retaining the checkout does not make the configuration non-bare"
+        );
+        let config = opened.config_snapshot();
+        assert_eq!(
+            config.boolean("core.bare"),
+            Some(true),
+            "the bare configuration is preserved"
+        );
+        assert!(
+            config
+                .string(gix::config::tree::Core::WORKTREE)
+                .is_some_and(|value| value.is_empty()),
+            "the empty core.worktree is preserved and ignored while core.bare=true"
+        );
+
+        let ordinary = gix::open_opts(git_dir, gix::open::Options::isolated())?;
+        assert!(
+            ordinary.is_bare(),
+            "ordinary opening also respects the bare configuration"
+        );
+        assert_eq!(
+            ordinary.workdir(),
+            None,
+            "ordinary opening of the resolved gitdir does not retain a submodule checkout"
         );
         Ok(())
     }
@@ -448,6 +672,15 @@ mod open {
                 repo.submodules()?.expect("modules present").zip(expected)
             {
                 assert_eq!(sm.name(), sm_name);
+                assert_eq!(
+                    sm.work_dir()?,
+                    Some(
+                        repo.workdir()
+                            .expect("the superproject has a worktree")
+                            .join(gix_path::from_bstr(sm.path()?)?)
+                    ),
+                    "a checkout location is available even for uninitialized submodules"
+                );
                 let state = sm.state()?;
                 assert_eq!(&state, expected);
 
@@ -529,7 +762,7 @@ mod open {
         let repo = named_subrepo_opts(
             "make_submodules.sh",
             "with-submodules",
-            crate::restricted().with(Trust::Reduced),
+            crate::restricted().with_trust(Trust::Reduced),
         )?;
         assert_eq!(
             repo.git_dir_trust(),
@@ -628,8 +861,8 @@ mod open {
         let submodule_workdir = gix_path::realpath(root.join("home/.config/awesome/lain"))?;
 
         assert_eq!(
-            sm.work_dir()?,
-            submodule_workdir,
+            sm.work_dir()?.as_deref(),
+            Some(submodule_workdir.as_path()),
             "submodule workdir must stay anchored in the detached worktree"
         );
         assert_eq!(

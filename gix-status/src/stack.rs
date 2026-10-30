@@ -32,10 +32,6 @@ impl SymlinkCheck {
     /// Note that the file pointed to by `relative_path` may still be a symbolic link, or not exist at all,
     /// and that an error may also be produced if directories on the path leading to the leaf
     /// component of `relative_path` are missing.
-    ///
-    /// ### Note
-    ///
-    /// On windows, no verification is performed, instead only the combined path is provided as usual.
     pub fn verified_path(&mut self, relative_path: impl ToNormalPathComponents) -> std::io::Result<&Path> {
         self.inner.make_relative_path_current(relative_path, &mut Delegate)?;
         Ok(self.inner.current())
@@ -66,25 +62,17 @@ impl gix_fs::stack::Delegate for Delegate {
         Ok(())
     }
 
-    #[cfg_attr(windows, allow(unused_variables))]
     fn push(&mut self, is_last_component: bool, stack: &Stack) -> std::io::Result<()> {
-        #[cfg(windows)]
-        {
-            Ok(())
+        if is_last_component {
+            return Ok(());
         }
-        #[cfg(not(windows))]
-        {
-            if is_last_component {
-                return Ok(());
-            }
 
-            if stack.current().symlink_metadata()?.is_symlink() {
-                return Err(std::io::Error::other(
-                    gix_error::message!("{}", CANNOT_STEP_THROUGH_SYMLINK).validation(),
-                ));
-            }
-            Ok(())
+        if stack.current().symlink_metadata()?.is_symlink() {
+            return Err(std::io::Error::other(
+                gix_error::message!("{}", CANNOT_STEP_THROUGH_SYMLINK).validation(),
+            ));
         }
+        Ok(())
     }
 
     fn pop_directory(&mut self) {}

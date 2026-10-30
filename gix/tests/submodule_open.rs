@@ -20,8 +20,8 @@ fn on_nested_symlink() -> gix_testtools::TestResult {
     let repo = gix::discover_opts(".", Default::default(), gix::open::Options::isolated())?;
     let sm = repo.submodules()?.into_iter().flatten().next().expect("one submodule");
     assert_eq!(
-        sm.work_dir()?,
-        p("../../m1"),
+        sm.work_dir()?.as_deref(),
+        Some(p("../../m1")),
         "the workdir remains relative and is available"
     );
     let sm_repo = sm.open()?.expect("repo is present and accessible");

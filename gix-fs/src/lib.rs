@@ -226,6 +226,12 @@ pub fn set_shared_repository_permissions(
 }
 
 /// A stack of path components with the delegation of side-effects as the currently set path changes, component by component.
+///
+/// Use this type for related normalized paths, such as `src/lib.rs` followed by `src/main.rs`, when a
+/// [`stack::Delegate`] should maintain directory state or perform side effects. Shared leading directories
+/// are cached; filesystem checks, including symlink rejection, are the delegate's responsibility.
+/// For one-shot containment and symlink validation, use [`symlink::validate_relative_path()`] instead.
+/// It also accepts nonescaping parent components, such as `modules/../lib`, which this type rejects.
 #[derive(Clone)]
 pub struct Stack {
     /// The prefix/root for all paths we handle.

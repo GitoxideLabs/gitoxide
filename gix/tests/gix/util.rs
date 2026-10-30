@@ -262,7 +262,7 @@ pub fn repo_rw_opts(name: &str, opts: gix::open::Options) -> Result<(Repository,
             repo_path.path(),
             Default::default(),
             gix_sec::trust::Mapping {
-                full: opts.clone(),
+                full: opts.clone_without_trust(),
                 reduced: opts,
             },
         )?

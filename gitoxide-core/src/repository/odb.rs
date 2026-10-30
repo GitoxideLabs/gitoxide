@@ -59,7 +59,7 @@ pub mod statistics {
 
 #[cfg_attr(not(feature = "serde"), allow(unused_variables))]
 pub fn statistics(
-    repo: gix::Repository,
+    mut repo: gix::Repository,
     mut progress: impl gix::Progress,
     out: impl io::Write,
     mut err: impl io::Write,
@@ -222,7 +222,7 @@ pub fn statistics(
     if let Some(mut ids) = stats.ids.take() {
         // Critical to re-open the repo to assure we don't have any ODB state and start fresh.
         let start = std::time::Instant::now();
-        let repo = gix::open_opts(repo.git_dir(), repo.open_options().to_owned())?;
+        repo.reload()?;
         progress.set_name("re-counting".into());
         progress.init(Some(ids.len()), gix::progress::count("objects"));
         let counter = progress.counter();

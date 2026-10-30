@@ -38,7 +38,7 @@ fn global_paths_preserve_strict_and_lenient_configuration_handling() -> TestResu
         repo.attribute_global_paths()?.is_empty(),
         "lenient configuration ignores an empty attribute path"
     );
-    let mut repo = gix::open_opts(repo.git_dir(), repo.open_options().clone().strict_config(true))?;
+    repo.reload_with(|options| options.strict_config(true))?;
     repo.config_snapshot_mut()
         .set_value(&gix::config::tree::Core::ATTRIBUTES_FILE, "")?;
     assert!(

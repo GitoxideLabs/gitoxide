@@ -10,7 +10,7 @@ use crate::OutputFormat;
 
 /// List all files which contributed sections to the resolved configuration, in precedence order.
 pub fn list_files(
-    repo: gix::Repository,
+    mut repo: gix::Repository,
     overrides: Vec<BString>,
     format: OutputFormat,
     mut out: impl std::io::Write,
@@ -18,7 +18,7 @@ pub fn list_files(
     if format != OutputFormat::Human {
         bail!(unsupported("Only human output format is supported at the moment"));
     }
-    let repo = gix::open_opts(repo.git_dir(), repo.open_options().clone().cli_overrides(overrides))?;
+    repo.reload_with(|options| options.cli_overrides(overrides))?;
     let config = repo.config_snapshot();
     let mut seen = std::collections::BTreeSet::new();
     for meta in config.sections().map(|section| section.meta()).chain([config.meta()]) {
@@ -44,7 +44,7 @@ pub fn list_files(
 }
 
 pub fn show(
-    repo: gix::Repository,
+    mut repo: gix::Repository,
     filters: Vec<BString>,
     overrides: Vec<BString>,
     format: OutputFormat,
@@ -53,7 +53,7 @@ pub fn show(
     if format != OutputFormat::Human {
         bail!(unsupported("Only human output format is supported at the moment"));
     }
-    let repo = gix::open_opts(repo.git_dir(), repo.open_options().clone().cli_overrides(overrides))?;
+    repo.reload_with(|options| options.cli_overrides(overrides))?;
     let config = repo.config_snapshot();
     if let Some(frontmatter) = config.frontmatter() {
         for event in frontmatter {
