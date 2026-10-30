@@ -43,7 +43,15 @@ default = ["max"]
 ##
 ## When used in conjunction with `http-client-curl-rustls`, the `openssl` crates will still be compiled, but won't be used. To bypass this, disable
 ## default dependencies and specify the features yourself.
-max = ["hashes", "max-control", "fast", "gitoxide-core-tools-query", "gitoxide-core-tools-corpus", "gitoxide-core-blocking-client", "http-client-curl-openssl"]
+max = [
+    "hashes",
+    "max-control",
+    "fast",
+    "gitoxide-core-tools-query",
+    "gitoxide-core-tools-corpus",
+    "gitoxide-core-blocking-client",
+    "http-client-curl-openssl",
+]
 
 ## Like `max`, but only Rust is allowed.
 ##
@@ -52,16 +60,42 @@ max = ["hashes", "max-control", "fast", "gitoxide-core-tools-query", "gitoxide-c
 ## This uses Rust's HTTP implementation.
 ##
 ## As fast as possible, with progress line rendering and auto-configuration, all transports available but less mature pure Rust HTTP implementation, all `ein` tools, CLI colors and local-time support, JSON output, regex support for rev-specs.
-max-pure = ["hashes", "max-control", "http-client-reqwest", "gitoxide-core-blocking-client"]
+max-pure = [
+    "hashes",
+    "max-control",
+    "http-client-reqwest",
+    "gitoxide-core-blocking-client",
+]
 
 ## Like `max`, but with more control for configuration. See the *Package Maintainers* headline for more information.
 ## Needs to chose its own hash(es).
-max-control = ["tracing-cpu-time", "fast", "pretty-cli", "tix", "gitoxide-core-tools", "prodash-render-line", "prodash/render-line-autoconfigure", "gix/revparse-regex"]
+max-control = [
+    "tracing-cpu-time",
+    "fast",
+    "pretty-cli",
+    "tix",
+    "gitoxide-core-tools",
+    "prodash-render-line",
+    "prodash/render-line-autoconfigure",
+    "gix/revparse-regex",
+]
 
 ## All the good stuff, with less fanciness for smaller binaries.
 ##
 ## As fast as possible, progress line rendering, all transports based on their most mature implementation (HTTP), all `ein` tools, CLI colors and local-time support, JSON output.
-lean = ["hashes", "fast", "tracing", "pretty-cli", "tix", "http-client-curl-openssl", "gitoxide-core-tools-query", "gitoxide-core-tools-corpus", "gitoxide-core-tools", "gitoxide-core-blocking-client", "prodash-render-line"]
+lean = [
+    "hashes",
+    "fast",
+    "tracing",
+    "pretty-cli",
+    "tix",
+    "http-client-curl-openssl",
+    "gitoxide-core-tools-query",
+    "gitoxide-core-tools-corpus",
+    "gitoxide-core-tools",
+    "gitoxide-core-blocking-client",
+    "prodash-render-line",
+]
 
 ## The smallest possible build, best suitable for small single-core machines.
 ##
@@ -79,7 +113,18 @@ small = ["hashes", "pretty-cli", "prodash-render-line"]
 ##
 ## Due to async client-networking not being implemented for most transports, this one supports only the 'git+tcp' and HTTP transport.
 ## It uses, however, a fully asynchronous networking implementation which can serve a real-world example on how to implement custom async transports.
-lean-async = ["hashes", "fast", "tracing", "pretty-cli", "tix", "gitoxide-core-tools", "gitoxide-core-tools-query", "gitoxide-core-tools-corpus", "gitoxide-core-async-client", "prodash-render-line"]
+lean-async = [
+    "hashes",
+    "fast",
+    "tracing",
+    "pretty-cli",
+    "tix",
+    "gitoxide-core-tools",
+    "gitoxide-core-tools-query",
+    "gitoxide-core-tools-corpus",
+    "gitoxide-core-async-client",
+    "prodash-render-line",
+]
 
 #! ### Package Maintainers
 #! `*-control` features leave it to you to configure C libraries, involving choices for HTTP transport implementation.
@@ -103,35 +148,62 @@ tix = ["dep:gix-tix"]
 
 ## Makes the crate execute as fast as possible by supporting parallel computation of otherwise long-running functions.
 ## If disabled, the binary will be visibly smaller.
-## Objects are decompressed with `sirocco`, which requires Rust 1.89 or newer.
+## Objects are decompressed and compressed with `sirocco`, which requires Rust 1.89 or newer.
 fast = ["gix/max-performance", "gix/comfort", "gix/zlib-sirocco"]
 
 ## Deprecated: identical to `fast`, as all zlib backends are now pure Rust.
 fast-safe = ["fast"]
 
 ## Enable tracing in `gitoxide-core`.
-tracing = ["dep:anstream", "dep:tracing", "gitoxide-core/tracing", "gix/tracing-detail"]
+tracing = [
+    "dep:anstream",
+    "dep:tracing",
+    "gitoxide-core/tracing",
+    "gix/tracing-detail",
+]
 
 ## Also measure user and kernel CPU time in trace trees on supported Unix platforms.
 ## Sampling adds overhead on span entry and exit.
 tracing-cpu-time = ["tracing", "gitoxide-core/tracing-cpu-time"]
 
 ## Use `clap` to build the prettiest, best documented and most user-friendly CLI at the expense of binary size.
-pretty-cli = ["gitoxide-core/serde", "prodash/progress-tree", "prodash/progress-tree-log", "prodash/local-time", "env_logger/humantime", "env_logger/color", "env_logger/auto-color"]
+pretty-cli = [
+    "gitoxide-core/serde",
+    "prodash/progress-tree",
+    "prodash/progress-tree-log",
+    "prodash/local-time",
+    "env_logger/humantime",
+    "env_logger/color",
+    "env_logger/auto-color",
+]
 
 ## The `--verbose` flag will be powered by an interactive progress mechanism that doubles as log as well as interactive progress
 ## that appears after a short duration.
-prodash-render-line-crossterm = ["prodash-render-line", "prodash/render-line-crossterm", "prodash/signal-hook", "crosstermion"]
+prodash-render-line-crossterm = [
+    "prodash-render-line",
+    "prodash/render-line-crossterm",
+    "prodash/signal-hook",
+    "crosstermion",
+]
 
 ## Progress reporting by visually drawing lines into the terminal without switching to an alternate window.
-prodash-render-line = ["prodash/render-line", "prodash-render-line-crossterm", "gix/progress-tree"]
+prodash-render-line = [
+    "prodash/render-line",
+    "prodash-render-line-crossterm",
+    "gix/progress-tree",
+]
 
 ## Prints statistical information to inform about cache efficiency when those are dropped.
 ## Use this as a way to understand if bigger caches actually produce greater yields.
 cache-efficiency-debug = ["gix/cache-efficiency-debug"]
 
 ##  A way to enable most `gitoxide-core` tools found in `ein tools`, namely `organize` and `estimate hours`.
-gitoxide-core-tools = ["gitoxide-core/organize", "gitoxide-core/estimate-hours", "gitoxide-core-tools-archive", "gitoxide-core-tools-clean"]
+gitoxide-core-tools = [
+    "gitoxide-core/organize",
+    "gitoxide-core/estimate-hours",
+    "gitoxide-core-tools-archive",
+    "gitoxide-core-tools-clean",
+]
 
 ## A program to perform analytics on a `git` repository, using an auto-maintained sqlite database
 gitoxide-core-tools-query = ["gitoxide-core/query"]
@@ -153,7 +225,10 @@ gitoxide-core-tools-clean = ["gitoxide-core/clean"]
 #! The backends are mutually exclusive, e.g. choose either `curl` or `request`.
 #!
 ## Use blocking client networking.
-gitoxide-core-blocking-client = ["gitoxide-core/blocking-client", "gix-tix?/blocking-network-client"]
+gitoxide-core-blocking-client = [
+    "gitoxide-core/blocking-client",
+    "gix-tix?/blocking-network-client",
+]
 ## Support synchronous 'http' and 'https' transports (e.g. for clone, fetch and push) using **curl**.
 http-client-curl = ["gix/blocking-http-transport-curl"]
 ## Implies `http-client-curl` and configures `curl` to use the `rust-tls` backend.
@@ -170,7 +245,9 @@ gitoxide-core-async-client = ["gitoxide-core/async-client", "futures-lite"]
 
 [dependencies]
 gitoxide-core = { version = "^0.64.0", path = "gitoxide-core" }
-gix = { version = "^0.90.0", path = "gix", default-features = false, features = ["error-print-location"] }
+gix = { version = "^0.90.0", path = "gix", default-features = false, features = [
+    "error-print-location",
+] }
 gix-tix = { version = "^0.6.0", path = "gix-tix", default-features = false, optional = true }
 
 clap = { version = "4.5.42", features = ["derive", "cargo"] }
@@ -191,17 +268,21 @@ terminal_size = "0.4.2"
 serde_derive = ">=1.0.185"
 
 document-features = { version = "0.2.0", optional = true }
+
 [profile.dev.package]
 insta.opt-level = 3
-similar.opt-level = 3
 gix-object = { opt-level = 3 }
 gix-ref = { opt-level = 3 }
-#gix-pack = { opt-level = 3 }
+gix-pack = { opt-level = 3 }
 gix-hash = { opt-level = 3 }
 gix-actor = { opt-level = 3 }
 gix-config = { opt-level = 3 }
+gix-zlib = { opt-level = 3 }
 sha1dc = { opt-level = 3 }
 zlib-rs = { opt-level = 3 }
+sirocco = { opt-level = 3 }
+adler32furious = { opt-level = 3 }
+crc32fast = { opt-level = 3 }
 
 [profile.release]
 overflow-checks = false
@@ -296,7 +377,7 @@ members = [
     "gix-fsck",
     "tests/tools",
     "tests/it",
-    "gix-shallow"
+    "gix-shallow",
 ]
 
 [workspace.dependencies]
@@ -337,74 +418,74 @@ pedantic = { level = "warn", priority = -1 }
 
 #
 # Reviewed and allowed lints
-assert_is_empty = "allow" # Keep emptiness assertions usable without requiring `Debug` and `PartialEq`.
+assert_is_empty = "allow"         # Keep emptiness assertions usable without requiring `Debug` and `PartialEq`.
 needless_continue = "allow"
-enum_glob_use = "allow"  # x97
-missing_errors_doc = "allow"  # x1792
-missing_panics_doc = "allow"  # x447
-module_name_repetitions = "allow"  # x125
-must_use_candidate = "allow"  # x1696
+enum_glob_use = "allow"           # x97
+missing_errors_doc = "allow"      # x1792
+missing_panics_doc = "allow"      # x447
+module_name_repetitions = "allow" # x125
+must_use_candidate = "allow"      # x1696
 #
 # Lints that we may want to forbid in the future
-default_trait_access = "allow"  # x709
-doc_markdown = "allow"  # x552
-cast_possible_truncation = "allow"  # x216
-needless_pass_by_value = "allow"  # x205
-return_self_not_must_use = "allow"  # x204
-unreadable_literal = "allow"  # x169
-items_after_statements = "allow"  # x164
-single_match_else = "allow"  # x162
-too_many_lines = "allow"  # x161
-unnecessary_wraps = "allow"  # x110
-match_same_arms = "allow"  # x99
-cast_lossless = "allow"  # x91
-ignored_unit_patterns = "allow"  # x80
-used_underscore_binding = "allow"  # x75
-needless_raw_string_hashes = "allow"  # x75
-implicit_clone = "allow"  # x70
-manual_let_else = "allow"  # x64
-cast_precision_loss = "allow"  # x56
-trivially_copy_pass_by_ref = "allow"  # x43
-redundant_else = "allow"  # x42
-if_not_else = "allow"  # x37
-match_wildcard_for_single_variants = "allow"  # x35
-cast_sign_loss = "allow"  # x35
-similar_names = "allow"  # x32
-struct_excessive_bools = "allow"  # x29
-cast_possible_wrap = "allow"  # x26
-explicit_iter_loop = "allow"  # x24
-explicit_into_iter_loop = "allow"  # x22
-explicit_deref_methods = "allow"  # x22
-inconsistent_struct_constructor = "allow"  # x18
-range_plus_one = "allow"  # x17
-inefficient_to_string = "allow"  # x14
-unused_self = "allow"  # x10
-many_single_char_names = "allow"  # x10
-manual_string_new = "allow"  # x10
-iter_not_returning_iterator = "allow"  # x10
-option_option = "allow"  # x9
-inline_always = "allow"  # x8
-manual_assert = "allow"  # x7
-iter_without_into_iter = "allow"  # x6
-copy_iterator = "allow"  # x6
-should_panic_without_expect = "allow"  # x5
-transmute_ptr_to_ptr = "allow"  # x4
-match_wild_err_arm = "allow"  # x4
-manual_is_variant_and = "allow"  # x4
-bool_to_int_with_if = "allow"  # x4
-struct_field_names = "allow"  # x3
-wildcard_imports = "allow"  # x2
-needless_for_each = "allow"  # x2
-naive_bytecount = "allow"  # x2
-mut_mut = "allow"  # x2
-match_bool = "allow"  # x2
-fn_params_excessive_bools = "allow"  # x2
-filter_map_next = "allow"  # x2
-checked_conversions = "allow"  # x2
-borrow_as_ptr = "allow"  # x2
-unnecessary_join = "allow"  # x1
-stable_sort_primitive = "allow"  # x1
-no_effect_underscore_binding = "allow"  # x1
+default_trait_access = "allow"               # x709
+doc_markdown = "allow"                       # x552
+cast_possible_truncation = "allow"           # x216
+needless_pass_by_value = "allow"             # x205
+return_self_not_must_use = "allow"           # x204
+unreadable_literal = "allow"                 # x169
+items_after_statements = "allow"             # x164
+single_match_else = "allow"                  # x162
+too_many_lines = "allow"                     # x161
+unnecessary_wraps = "allow"                  # x110
+match_same_arms = "allow"                    # x99
+cast_lossless = "allow"                      # x91
+ignored_unit_patterns = "allow"              # x80
+used_underscore_binding = "allow"            # x75
+needless_raw_string_hashes = "allow"         # x75
+implicit_clone = "allow"                     # x70
+manual_let_else = "allow"                    # x64
+cast_precision_loss = "allow"                # x56
+trivially_copy_pass_by_ref = "allow"         # x43
+redundant_else = "allow"                     # x42
+if_not_else = "allow"                        # x37
+match_wildcard_for_single_variants = "allow" # x35
+cast_sign_loss = "allow"                     # x35
+similar_names = "allow"                      # x32
+struct_excessive_bools = "allow"             # x29
+cast_possible_wrap = "allow"                 # x26
+explicit_iter_loop = "allow"                 # x24
+explicit_into_iter_loop = "allow"            # x22
+explicit_deref_methods = "allow"             # x22
+inconsistent_struct_constructor = "allow"    # x18
+range_plus_one = "allow"                     # x17
+inefficient_to_string = "allow"              # x14
+unused_self = "allow"                        # x10
+many_single_char_names = "allow"             # x10
+manual_string_new = "allow"                  # x10
+iter_not_returning_iterator = "allow"        # x10
+option_option = "allow"                      # x9
+inline_always = "allow"                      # x8
+manual_assert = "allow"                      # x7
+iter_without_into_iter = "allow"             # x6
+copy_iterator = "allow"                      # x6
+should_panic_without_expect = "allow"        # x5
+transmute_ptr_to_ptr = "allow"               # x4
+match_wild_err_arm = "allow"                 # x4
+manual_is_variant_and = "allow"              # x4
+bool_to_int_with_if = "allow"                # x4
+struct_field_names = "allow"                 # x3
+wildcard_imports = "allow"                   # x2
+needless_for_each = "allow"                  # x2
+naive_bytecount = "allow"                    # x2
+mut_mut = "allow"                            # x2
+match_bool = "allow"                         # x2
+fn_params_excessive_bools = "allow"          # x2
+filter_map_next = "allow"                    # x2
+checked_conversions = "allow"                # x2
+borrow_as_ptr = "allow"                      # x2
+unnecessary_join = "allow"                   # x1
+stable_sort_primitive = "allow"              # x1
+no_effect_underscore_binding = "allow"       # x1
 empty_docs = "allow"
 too_long_first_doc_paragraph = "allow"
 large_stack_arrays = "allow"

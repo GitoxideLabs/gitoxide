@@ -5,16 +5,26 @@ use gix_error::{ErrorExt, ResourceExhaustionKind, message};
 use gix_error::{Result, resource_exhaustion};
 use zlib_rs::DeflateError;
 
-const BUF_SIZE: usize = 4096 * 8;
+#[cfg(feature = "sirocco")]
+mod sirocco_backend;
+#[cfg(feature = "sirocco")]
+use sirocco_backend::Backend;
+
+/// The writer's backend without the `sirocco` feature.
+#[cfg(not(feature = "sirocco"))]
+mod zlib_rs_backend;
+#[cfg(not(feature = "sirocco"))]
+use zlib_rs_backend::Backend;
 
 /// A utility to zlib compress anything that is written via its [Write][std::io::Write] implementation.
 ///
 /// Be sure to call `flush()` when done to finalize the deflate stream.
+///
+/// It compresses with `zlib-rs`, or with `sirocco` with the `sirocco` feature.
 pub struct Write<W> {
-    compressor: Compress,
+    backend: Backend,
     compression: Compression,
     inner: W,
-    buf: [u8; BUF_SIZE],
 }
 
 impl<W> Clone for Write<W>
@@ -23,10 +33,9 @@ where
 {
     fn clone(&self) -> Self {
         Write {
-            compressor: impls::new_compress(self.compression),
+            backend: Backend::new(self.compression),
             compression: self.compression,
             inner: self.inner.clone(),
-            buf: self.buf,
         }
     }
 }
@@ -129,12 +138,8 @@ pub enum FlushCompress {
 mod impls {
     use std::io;
 
-    use crate::stream::deflate::{self, Compress, FlushCompress};
-    use crate::{Compression, Status};
-
-    pub(crate) fn new_compress(level: Compression) -> Compress {
-        Compress::new(level)
-    }
+    use crate::Compression;
+    use crate::stream::deflate::{self, Backend};
 
     impl<W> deflate::Write<W>
     where
@@ -143,10 +148,9 @@ mod impls {
         /// Create a new instance writing bytes compressed with `level` to `inner`.
         pub fn new(inner: W, level: Compression) -> deflate::Write<W> {
             deflate::Write {
-                compressor: new_compress(level),
+                backend: Backend::new(level),
                 compression: level,
                 inner,
-                buf: [0; deflate::BUF_SIZE],
             }
         }
 
@@ -154,59 +158,22 @@ mod impls {
         ///
         /// That way multiple streams can be written to the same inner writer.
         pub fn reset(&mut self) {
-            self.compressor.reset();
+            self.backend.reset();
         }
 
         /// Consume `self` and return the inner writer.
         pub fn into_inner(self) -> W {
             self.inner
         }
-
-        fn write_inner(&mut self, mut buf: &[u8], flush: FlushCompress) -> io::Result<usize> {
-            let total_in_when_start = self.compressor.total_in();
-            loop {
-                let last_total_in = self.compressor.total_in();
-                let last_total_out = self.compressor.total_out();
-
-                let status = self
-                    .compressor
-                    .compress(buf, &mut self.buf, flush)
-                    .map_err(io::Error::other)?;
-
-                let written = self.compressor.total_out() - last_total_out;
-                if written > 0 {
-                    self.inner.write_all(&self.buf[..written as usize])?;
-                }
-
-                match status {
-                    Status::StreamEnd => return Ok((self.compressor.total_in() - total_in_when_start) as usize),
-                    Status::Ok | Status::BufError => {
-                        let consumed = self.compressor.total_in() - last_total_in;
-                        buf = &buf[consumed as usize..];
-
-                        // output buffer still makes progress
-                        if self.compressor.total_out() > last_total_out {
-                            continue;
-                        }
-                        // input still makes progress
-                        if self.compressor.total_in() > last_total_in {
-                            continue;
-                        }
-                        // input also makes no progress anymore, need more so leave with what we have
-                        return Ok((self.compressor.total_in() - total_in_when_start) as usize);
-                    }
-                }
-            }
-        }
     }
 
     impl<W: io::Write> io::Write for deflate::Write<W> {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.write_inner(buf, FlushCompress::None)
+            self.backend.write(&mut self.inner, buf)
         }
 
         fn flush(&mut self) -> io::Result<()> {
-            self.write_inner(&[], FlushCompress::Finish).map(|_| ())
+            self.backend.finish(&mut self.inner)
         }
     }
 }
