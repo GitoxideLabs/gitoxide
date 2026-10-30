@@ -466,7 +466,7 @@ fn replace_dir_with_file() {
         Outcome {
             entries_to_process: 5,
             entries_processed: 5,
-            symlink_metadata_calls: if cfg!(windows) { 5 } else { 4 },
+            symlink_metadata_calls: 4,
             ..Default::default()
         }
     );
@@ -1595,12 +1595,12 @@ mod windows {
             "cached and live status agree for hits, different casing and missing entries"
         );
         assert_eq!(
-            results[0].1.symlink_metadata_calls, 6,
-            "uncached status queries every path"
+            results[0].1.symlink_metadata_calls, 5,
+            "missing parents are rejected before querying leaf metadata"
         );
         assert_eq!(
-            results[1].1.symlink_metadata_calls, 3,
-            "different casing, an absent entry and failed parent enumeration use live metadata"
+            results[1].1.symlink_metadata_calls, 2,
+            "different casing and an absent leaf use live metadata; missing parents are rejected earlier"
         );
         Ok(())
     }

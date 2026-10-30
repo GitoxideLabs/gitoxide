@@ -42,7 +42,6 @@ fn leaf_file_does_not_have_to_exist() -> TestResult {
 }
 
 #[test]
-#[cfg(not(windows))]
 fn intermediate_directories_have_to_exist_or_not_found_error() -> TestResult {
     let err = stack()
         .verified_path("nonexisting-dir/file")
@@ -53,17 +52,6 @@ fn intermediate_directories_have_to_exist_or_not_found_error() -> TestResult {
 }
 
 #[test]
-#[cfg(windows)]
-fn intermediate_directories_do_not_have_exist_for_success() -> TestResult {
-    assert!(stack().verified_path("nonexisting-dir/file").is_ok());
-    Ok(())
-}
-
-#[test]
-#[cfg_attr(
-    windows,
-    ignore = "on windows, symlinks appear to be files or dirs, is_symlink() doesn't work"
-)]
 fn paths_leading_through_symlinks_are_rejected() {
     let mut stack = stack();
     let err = stack
