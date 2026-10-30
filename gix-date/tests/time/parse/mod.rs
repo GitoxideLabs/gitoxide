@@ -46,15 +46,125 @@ fn parse_header_is_not_too_lenient() {
 }
 
 #[test]
-fn short() {
+fn parse_errors_retain_original_input() -> TestResult {
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(jiff::tz::TimeZone::UTC);
+    for input in ["  not a date  ", "  garbage CET  ", "\tinvalid 🕰 \n", "  "] {
+        for reference in [None, Some(now.clone())] {
+            let err = gix_date::parse(input, reference).expect_err("these inputs contain no date");
+            assert_eq!(
+                err.metadata().next().and_then(|values| values.get("input")),
+                Some(&gix_error::MetadataValue::Bytes(input.as_bytes().into())),
+                "parsing a trimmed copy must not alter the caller's bytes in errors"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn named_timezones_do_not_change_relative_or_raw_inputs() -> TestResult {
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(jiff::tz::TimeZone::UTC);
+    for reference in [None, Some(now)] {
+        for input in ["garbage", "14"] {
+            assert_eq!(
+                gix_date::parse(&format!("{input} CET"), reference.clone()).ok(),
+                gix_date::parse(input, reference.clone()).ok(),
+                "a zone name must not turn unknown words into a date or a day into epoch seconds"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn short() -> gix_testtools::Result {
+    let now = jiff::Timestamp::from_second(1251660000)?.to_zoned(jiff::tz::TimeZone::UTC);
+    for (input, seconds) in [
+        ("2008-12-01", 1228159200),
+        ("2009-12-01", 1259695200),
+        ("1979-02-26", 288904800),
+    ] {
+        assert_eq!(
+            gix_date::parse(input, Some(now.clone()))?,
+            Time { seconds, offset: 0 },
+            "a short date retains the reference clock like Git"
+        );
+    }
     assert_eq!(
-        gix_date::parse("1979-02-26", Some(gix_date::Zoned::now())).unwrap(),
+        gix_date::parse("1979-02-26", None)?,
         Time {
             seconds: 288835200,
             offset: 0,
         },
-        "could not parse with SHORT format"
+        "without a reference, a short date continues to use UTC midnight"
     );
+    Ok(())
+}
+
+#[test]
+fn short_dates_use_target_rules_and_preserve_the_local_clock() -> TestResult {
+    // Intentional difference: use the target era's actual rules, rather than Git's stale tm_isdst.
+    // New York retains 10:00 across seasons; Lord Howe uses its half-hour transition; London
+    // in 1970 retains 15:00 at +0100. Folds choose the earlier occurrence, and gaps move forward.
+    for (reference, input, expected) in [
+        (
+            "2025-07-15T15:00:00[Europe/London]",
+            "1970-01-15",
+            "1970-01-15 15:00:00 +0100",
+        ),
+        (
+            "2025-01-15T10:00:00[America/New_York]",
+            "2024-07-15",
+            "2024-07-15 10:00:00 -0400",
+        ),
+        (
+            "2025-07-15T10:00:00[America/New_York]",
+            "2024-01-15",
+            "2024-01-15 10:00:00 -0500",
+        ),
+        (
+            "2025-07-15T10:00:00[Australia/Lord_Howe]",
+            "2024-01-15",
+            "2024-01-15 10:00:00 +1100",
+        ),
+        (
+            "2025-01-15T10:00:00[Australia/Lord_Howe]",
+            "2024-07-15",
+            "2024-07-15 10:00:00 +1030",
+        ),
+        (
+            "2025-01-15T01:30:00[America/New_York]",
+            "2024-11-03",
+            "2024-11-03 01:30:00 -0400",
+        ),
+        (
+            "2025-07-15T01:30:00[America/New_York]",
+            "2024-11-03",
+            "2024-11-03 01:30:00 -0400",
+        ),
+        (
+            "2025-01-15T02:30:00[America/New_York]",
+            "2024-03-10",
+            "2024-03-10 03:30:00 -0400",
+        ),
+        (
+            "2025-07-15T02:30:00[America/New_York]",
+            "2024-03-10",
+            "2024-03-10 03:30:00 -0400",
+        ),
+        (
+            "2025-01-15T10:00:00[Pacific/Apia]",
+            "2010-07-15",
+            "2010-07-15 10:00:00 -1100",
+        ),
+    ] {
+        assert_eq!(
+            gix_date::parse(input, Some(reference.parse()?))?,
+            gix_date::parse(expected, None)?,
+            "{input} relative to {reference}: use the target era's rules and the requested clock, with compatible fold/gap resolution"
+        );
+    }
+    Ok(())
 }
 
 #[test]
@@ -66,6 +176,23 @@ fn rfc2822() {
             offset: 28800,
         },
     );
+}
+
+#[test]
+fn named_zones_can_touch_a_clock() -> TestResult {
+    for input in ["2008-02-14 20:30:45CET", "Thu, 14 Feb 2008 20:30:45cet"] {
+        assert_eq!(
+            gix_date::parse(input, None)?,
+            Time::new(1_203_017_445, 3600),
+            "a zone attached to a complete clock has the same meaning as a separated zone"
+        );
+    }
+    assert_eq!(
+        gix_date::parse("Thu, 14 Feb 2008 20:30:45 UT", None)?,
+        Time::new(1_203_021_045, 0),
+        "RFC 2822 still recognizes its standard UT designator"
+    );
+    Ok(())
 }
 
 #[test]
@@ -119,10 +246,22 @@ fn raw() -> TestResult {
         },
     );
 
-    assert!(gix_date::parse("1313584730 +1500", None).is_err());
     assert!(gix_date::parse("1313584730 +000001", None).is_err());
-    assert!(gix_date::parse("1313584730 +0001", None).is_err());
-    assert!(gix_date::parse("1313584730 +000100", None).is_err());
+    for (input, offset) in [
+        ("1313584730 +1500", 15 * 3600),
+        ("1313584730 +0001", 60),
+        ("1313584730 +000100", 60),
+        ("@1313584730 -2359", -(23 * 3600 + 59 * 60)),
+    ] {
+        assert_eq!(
+            gix_date::parse(input, None)?,
+            Time {
+                seconds: 1313584730,
+                offset
+            },
+            "raw timestamps retain all valid hour and minute offsets"
+        );
+    }
 
     let expected = Time {
         seconds: 1660874655,
@@ -144,6 +283,8 @@ fn raw() -> TestResult {
 
 #[test]
 fn bad_raw() {
+    // Stored commit headers deliberately remain tolerant of malformed historical signatures.
+    // The input-date parser is strict; parse_header recovers the timestamp when an offset is unusable.
     for bad_date_str in [
         "123456 !0600",
         "123456 +060",
@@ -204,6 +345,7 @@ fn invalid_dates_can_be_produced_without_current_time() {
 
 /// Tests for compact ISO8601 formats (YYYYMMDDTHHMMSS variants)
 mod compact_iso8601;
+mod correctness;
 mod relative;
 
 /// Tests for ISO8601 with dots format (YYYY.MM.DD HH:MM:SS offset)
@@ -223,12 +365,378 @@ mod iso8601_dots {
     }
 }
 
+mod textual_dates {
+    use gix_date::Time;
+
+    #[test]
+    fn complete_layouts_ordinals_and_offsets() -> gix_testtools::Result {
+        let now = jiff::Timestamp::from_second(1_000_000_000)?.to_zoned(jiff::tz::TimeZone::UTC);
+        for (input, seconds, offset) in [
+            ("February 14, 2008 20:30:45 -0500", 1203039045, -18000),
+            ("February 14th, 2008 20:30:45 -0500", 1203039045, -18000),
+            ("February 14th, 2008 at 20:30:45 -0500", 1203039045, -18000),
+            ("on February 14th, 2008 at exactly 20:30:45 -0500", 1203039045, -18000),
+            ("February 14th, 2008 at 20:30:45 CET", 1203017445, 3600),
+            ("14th February 2008 20:30:45 -0500", 1203039045, -18000),
+            ("Feb 14 20:30:45 2008 -0500", 1203039045, -18000),
+            ("Feb 14 2008 8:30 PM -0500", 1203039000, -18000),
+            ("Feb 14 2008 8:30pm -0500", 1203039000, -18000),
+            ("Feb 14 2008 12:30 AM -0500", 1202967000, -18000),
+            ("Feb 14 2008 12:30 PM -0500", 1203010200, -18000),
+            ("Feb. 14, 2008 20:30:45 -0500", 1203039045, -18000),
+            ("Feb 14 2008 20:30:45.123 -0500", 1203039045, -18000),
+            ("Feb 14 2008 8:30:45.123pm -0500", 1203039045, -18000),
+            ("Monday, fEbRu 14st, 2008 20:30:45 -0500", 1203039045, -18000),
+            ("February 14 2008 20:30 -05", 1203039000, -18000),
+            ("February 14 2008 20:30:45 -05:00", 1203039045, -18000),
+            ("February 14 2008 20:30:45 CET", 1203017445, 3600),
+            ("Feb 14 2008 20:30:45CET", 1203017445, 3600),
+            ("Feb 14 2008 20:30:45cet", 1203017445, 3600),
+            ("Feb 14 20:30:45CET 2008", 1203017445, 3600),
+            ("Feb 14 20:30:45.123CET 2008", 1203017445, 3600),
+            ("February 14 2008 20:30:45 Z", 1203021045, 0),
+            ("February 14 2008 20:30:45 +2359", 1202934705, 86340),
+            ("February 14 2008 20:30:45 -2359", 1203107385, -86340),
+            ("February 14 2008 20:30:45 -0001", 1203021105, -60),
+        ] {
+            for reference in [None, Some(now.clone())] {
+                assert_eq!(
+                    gix_date::parse(input, reference)?,
+                    Time::new(seconds, offset),
+                    "{input}: complete textual dates retain their offset and do not depend on now"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn local_textual_dates_preserve_the_inferred_offset() -> gix_testtools::TestResult {
+        let now: jiff::Zoned = "2024-01-15T10:00:00[America/New_York]".parse()?;
+        assert_eq!(
+            gix_date::parse("February 14 2008 20:30:45 UT", Some(now.clone()))?,
+            Time::new(1_203_039_045, -18000),
+            "UT is filler in Git's flexible grammar, rather than a named timezone"
+        );
+        let time = gix_date::parse("March 10 2024 02:30:00", Some(now))?;
+        assert_eq!(
+            time,
+            Time::new(1_710_055_800, -18000),
+            "a spring-gap clock retains the offset inferred from the supplied civil time"
+        );
+        assert_eq!(
+            time.to_zoned()?.datetime().to_string(),
+            "2024-03-10T02:30:00",
+            "the timestamp and stored offset preserve the original author or committer clock"
+        );
+        assert_eq!(
+            gix_date::parse(&time.format(gix_date::time::Format::Raw)?, None)?,
+            time,
+            "raw author and committer dates retain the inferred offset on round-trip"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn absolute_textual_dates_allow_missing_or_reordered_timezones() -> gix_testtools::Result {
+        // Intentional difference: a missing day defaults to June 1, preserving the named month.
+        // Git instead normalizes its unset day sentinel into May 30, before the requested month.
+        let local_now = jiff::Timestamp::from_second(1_251_660_000)?
+            .to_zoned(jiff::tz::TimeZone::fixed(jiff::tz::Offset::from_hours(8)?));
+        for (input, expected, explicit_zone) in [
+            ("June 7 00 12:34:56", "2000-06-07 12:34:56", None),
+            ("June 7 12:34:56 00", "2000-06-07 12:34:56", None),
+            ("June 7 2009 12:34:56", "2009-06-07 12:34:56", None),
+            ("7th June 12:34:56 2009", "2009-06-07 12:34:56", None),
+            ("June 2008 12:34:56", "2008-06-01 12:34:56", None),
+            ("June 12:34:56 2008", "2008-06-01 12:34:56", None),
+            ("June 12:34:56 2008 -0500", "2008-06-01 12:34:56", Some("-0500")),
+            ("June 7 2009 +0200 12:34:56", "2009-06-07 12:34:56", Some("+0200")),
+            ("June 7 2009 CET 12:34:56", "2009-06-07 12:34:56", Some("+0100")),
+            ("June 2008 +0200 12:34:56", "2008-06-01 12:34:56", Some("+0200")),
+        ] {
+            for reference in [None, Some(local_now.clone())] {
+                let zone = explicit_zone.unwrap_or(if reference.is_some() { "+0800" } else { "+0000" });
+                let expected = gix_date::parse(&format!("{expected} {zone}"), None)?;
+                assert_eq!(
+                    gix_date::parse(input, reference)?,
+                    expected,
+                    "{input}: absolute year rules and explicit zones take precedence over relative inference"
+                );
+            }
+        }
+        let summer =
+            jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(jiff::tz::TimeZone::get("America/New_York")?);
+        assert_eq!(
+            gix_date::parse("January 7 2009 12:34:56", Some(summer))?,
+            gix_date::parse("2009-01-07 12:34:56 -0500", None)?,
+            "an omitted absolute timezone uses the target date's offset, not the reference date's offset"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn month_names_accept_case_insensitive_prefixes() -> gix_testtools::Result {
+        for (index, month) in [
+            "January",
+            "February",
+            "March",
+            "April",
+            "May",
+            "June",
+            "July",
+            "August",
+            "September",
+            "October",
+            "November",
+            "December",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let expected = gix_date::parse(&format!("2008-{:02}-14 20:30:45 +0000", index + 1), None)?;
+            for length in 3..=month.len() {
+                let input = format!("{} 14th, 2008 20:30:45 +0000", month[..length].to_ascii_uppercase());
+                assert_eq!(
+                    gix_date::parse(&input, None)?,
+                    expected,
+                    "{input}: Git accepts every month-name prefix with at least three letters"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn two_digit_textual_years_use_a_complete_pivot() -> gix_testtools::Result {
+        // Intentional difference: extend the existing 70..99 -> 1970..1999 mapping with a
+        // complete 00..69 -> 2000..2069 range, instead of Git's unexplained textual gap at 10..69.
+        for year in 0..=99 {
+            let full_year = if year < 70 { 2000 + year } else { 1900 + year };
+            let expected = gix_date::parse(&format!("{full_year}-02-14 20:30:45 -0500"), None)?;
+            for input in [
+                format!("February 14 {year:02} 20:30:45 -0500"),
+                format!("14th February {year:02} 20:30:45 -0500"),
+                format!("Feb 14 20:30:45 {year:02} -0500"),
+            ] {
+                assert_eq!(
+                    gix_date::parse(&input, None)?,
+                    expected,
+                    "{input}: textual and numeric years share the consistent 70 pivot, avoiding Git's missing ranges"
+                );
+            }
+        }
+        for year in ["0", "8", "000", "008", "070"] {
+            let input = format!("February 14 {year} 20:30:45 +0000");
+            assert!(
+                gix_date::parse(&input, None).is_err(),
+                "{input}: textual short years require exactly two digits; four digits are literal"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn iso_end_of_day_is_normalized() -> gix_testtools::Result {
+        assert_eq!(
+            gix_date::parse("Feb 14 2008 24:00:00 +0000", None)?,
+            Time::new(1203033600, 0),
+            "ISO end-of-day clocks roll into the following day; other overflows are rejected"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn incomplete_or_malformed_dates_are_not_absolute() {
+        for input in [
+            "Fe 14 2008 20:30:45 +0000",
+            "Februbbish 14 2008 20:30:45 +0000",
+            "February14 2008 20:30:45 +0000",
+            "14-Feb-2008 20:30:45 +0000",
+            "Feb-14-2008 20:30:45 +0000",
+            "February 14 20:30:45 +0000",
+            "February 14 2008 +0000",
+            "February 32 2008 20:30:45 +0000",
+            "February 14 2008 25:00:00 +0000",
+            "February 14 2008 12:60:00 +0000",
+            "February 14 2008 12:00:61 +0000",
+            "February 14 2008 12:00:00:00 +0000",
+            "February 14 2008 20:30:45 +05::00",
+            "February 14 2008 20:30:45 +01-1",
+            "February 14\n2008 20:30:45 +0000",
+        ] {
+            assert!(
+                gix_date::parse(input, None).is_err(),
+                "{input}: outside the supported complete textual-date grammar"
+            );
+        }
+    }
+}
+
+mod numeric_dates {
+    use gix_date::Time;
+
+    #[test]
+    fn short_year_mapping_is_value_based() {
+        for (year, seconds) in [
+            ("0", 950560245),
+            ("00", 950560245),
+            ("000", 950560245),
+            ("8", 1203021045),
+            ("08", 1203021045),
+            ("008", 1203021045),
+            ("10", 1266179445),
+            ("37", 2118256245),
+            ("71", 35411445),
+            ("071", 35411445),
+            ("99", 919024245),
+        ] {
+            for date in [format!("2/14/{year}"), format!("14.2.{year}")] {
+                let input = format!("{date} 20:30:45 +0000");
+                assert_eq!(
+                    gix_date::parse(&input, None).expect("complete numeric dates need no reference time"),
+                    Time::new(seconds, 0),
+                    "{input}: decimal years use the documented pivot, independently of padding"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn separator_preference_fallback_and_year_first() {
+        for (date, seconds) in [
+            ("02/03/08", 1202070645),
+            ("02.03.08", 1204489845),
+            ("14/02/08", 1203021045),
+            ("02.14.08", 1203021045),
+            ("99/02/14", 919024245),
+            ("99/14/02", 919024245),
+            ("71.02.14", 35411445),
+            ("71.14.02", 35411445),
+            ("071/2/14", 35411445),
+            ("08/02/14", 1407011445),
+            ("08.02.14", 1391891445),
+        ] {
+            let input = format!("{date} 20:30:45 +0000");
+            assert_eq!(
+                gix_date::parse(&input, None).expect("all three numeric date fields and a clock are present"),
+                Time::new(seconds, 0),
+                "{input}: a first value greater than 31 cannot be a day and is interpreted as a short year"
+            );
+        }
+        for date in ["02/14/08", "14.02.08"] {
+            let input = format!("{date} 20:30:45 -0500");
+            assert_eq!(
+                gix_date::parse(&input, None).expect("short years accept the existing time and offset syntax"),
+                Time::new(1203039045, -18000),
+                "{input}: normalizing the date preserves the instant and explicit offset"
+            );
+        }
+    }
+
+    #[test]
+    fn four_digit_years_keep_existing_interpretation() {
+        for date in [
+            "2008/02/14",
+            "2008.02.14",
+            "2008/14/02",
+            "2008.14.02",
+            "02/14/2008",
+            "14/02/2008",
+            "14.02.2008",
+            "02.14.2008",
+        ] {
+            let input = format!("{date} 20:30:45 -0500");
+            assert_eq!(
+                gix_date::parse(&input, None).expect("four-digit dates retain both field orderings"),
+                Time::new(1203039045, -18000),
+                "{input}: short-year support does not change existing four-digit dates"
+            );
+        }
+        for year in ["0008", "1950", "2100"] {
+            // Intentional extension: literal years remain literal throughout Jiff's range.
+            // Git's textual date parser restricts years to 1970..2099 and may expand 0008 to 2008.
+            let expected = gix_date::parse(&format!("{year}-02-14 20:30:45 +0000"), None)
+                .expect("ISO dates retain Jiff's wider year range");
+            for date in [format!("{year}/02/14"), format!("14.02.{year}")] {
+                let input = format!("{date} 20:30:45 +0000");
+                assert_eq!(
+                    gix_date::parse(&input, None).expect("four-digit years remain literal"),
+                    expected,
+                    "{input}: previously accepted four-digit years are not expanded or restricted to Git's range"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unsupported_years_and_malformed_dates_are_rejected() {
+        for date in [
+            "02/14/100",
+            "02/14/32768",
+            "32768/02/14",
+            "02/14/+08",
+            "02/14/-08",
+            "02/14/08/01",
+            "02.14/08",
+            "02/00/08",
+            "00/14/08",
+            "02/29/01",
+        ] {
+            let input = format!("{date} 20:30:45 +0000");
+            assert!(
+                gix_date::parse(&input, None).is_err(),
+                "{input}: short-year support does not guess individual tokens or normalize invalid calendar dates"
+            );
+        }
+        assert!(
+            gix_date::parse("02/14/08", None).is_err(),
+            "a numeric date without a clock does not acquire one from the current time"
+        );
+    }
+}
+
 /// Tests for flexible timezone offset formats
 mod flexible_offset;
 
 /// Tests for subsecond precision in ISO8601 formats (ignored like Git)
 mod subsecond_precision {
     use gix_date::Time;
+
+    #[test]
+    fn fractions_are_validated_before_discarding() -> gix_testtools::TestResult {
+        for date in ["02/14/2008", "02/14/08", "14.02.2008", "14.02.08", "2008-02-14"] {
+            for (zone, offset) in [
+                (" -0500", -18000),
+                ("-05:00", -18000),
+                ("  CET", 3600),
+                ("Z", 0),
+                ("", 0),
+            ] {
+                for fraction in ["0", "123", "12345678901234567890"] {
+                    let input = format!("{date} 20:30:45.{fraction}{zone}");
+                    assert_eq!(
+                        gix_date::parse(&input, None)?,
+                        Time::new(1203021045 - i64::from(offset), offset),
+                        "{input}: numeric fractions are discarded without changing the instant or offset"
+                    );
+                }
+                for fraction in ["", "garbage", "123garbage", "123.456", "１２３"] {
+                    let input = format!("{date} 20:30:45.{fraction}{zone}");
+                    for now in [
+                        None,
+                        Some(jiff::Timestamp::UNIX_EPOCH.to_zoned(jiff::tz::TimeZone::UTC)),
+                    ] {
+                        assert!(
+                            gix_date::parse(&input, now).is_err(),
+                            "{input}: only a nonempty ASCII digit fraction may be discarded"
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn iso8601_with_subseconds() {

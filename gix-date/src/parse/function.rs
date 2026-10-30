@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use jiff::{Zoned, civil::Date, fmt::rfc2822, tz::TimeZone};
 
-use crate::parse::git::parse_git_date_format;
+use crate::parse::git::{normalize_named_timezone, parse_git_date_format};
 use crate::parse::raw::parse_raw;
 use crate::{
     OffsetInSeconds, SecondsSinceUnixEpoch, Time,
@@ -12,11 +12,7 @@ use crate::{
 };
 use gix_error::{ResultExt, bail};
 
-/// The widest timezone offset git reads, as `match_tz()` in `date.c` takes the four digits as a
-/// clock time: hours below 24 and minutes below 60, so `+2359` is the last offset it accepts.
-const MAX_OFFSET_IN_SECONDS: i32 = 23 * 3600 + 59 * 60;
-
-/// Parse `input` as any time that Git can parse when inputting a date.
+/// Parse `input` as a Git-style date, preferring checked calendar semantics over known Git bugs.
 /// Unknown formats and timezone conversion failures include `input` bytes as [metadata](gix_error::Error::metadata()).
 ///
 /// ## Examples
@@ -28,10 +24,34 @@ const MAX_OFFSET_IN_SECONDS: i32 = 23 * 3600 + 59 * 60;
 /// *   `1950-12-31`
 /// *   `2024-12-31`
 ///
+/// With `now`, a short date keeps its local clock and timezone. Without a reference,
+/// it resolves to midnight UTC.
+/// Intentional difference: use the target date's timezone rules instead of Git's reference
+/// daylight-saving flag, which can shift the requested clock across DST boundaries and historical eras.
+/// Ambiguous clocks use the earlier occurrence; nonexistent clocks move forward across the gap.
+///
 /// ### 2. RFC2822 Format
 ///
 /// *   `Thu, 18 Aug 2022 12:45:06 +0800`
 /// *   `Mon Oct 27 10:30:00 2023 -0800`
+///
+/// Complete textual dates also accept month-first or day-first layouts, such as
+/// `February 14th, 2008 at 20:30:45 -0500` and `14 February 2008 20:30:45 CET`.
+/// They require a year and a colon-separated clock. A timezone can appear before or after
+/// the clock/year; when omitted, the timezone of `now` is used, or UTC without a reference.
+/// Four-digit years are literal (`0000..=9999`). Two-digit years share a consistent pivot:
+/// `00..=69` means `2000..=2069`, and `70..=99` means `1970..=1999`.
+/// This intentionally avoids Git's unexplained gaps in accepted years.
+/// The year can precede or follow the clock. Intentional difference: an absent day defaults
+/// to the month's first day, so `June 2008 12:34:56` and `June 12:34:56 2008` mean June 1.
+/// Git instead normalizes its unset day sentinel to May 30.
+/// Month names accept case-insensitive prefixes
+/// of at least three letters, and an optional weekday does not have to match the date.
+/// A trailing period on month names, AM/PM clocks, and fractional seconds are accepted;
+/// fractions are discarded and explicit offsets are retained.
+/// Invalid calendar dates such as February 31 are rejected. ISO's end-of-day `24:00` rolls over,
+/// but other clock overflows are rejected. `Time` stores whole seconds and does not model leap seconds.
+/// Explicit offsets are retained, including `-0001`, which Git treats as an unspecified timezone.
 ///
 /// ### 3. GIT_RFC2822 Format
 ///
@@ -42,6 +62,15 @@ const MAX_OFFSET_IN_SECONDS: i32 = 23 * 3600 + 59 * 60;
 ///
 /// *   `2022-08-17 22:04:58 +0200`
 /// *   `1970-01-01 00:00:00 -0500`
+///
+/// Numeric dates with slashes (`02/14/2008`, `2008/02/14`) or dots (`14.02.2008`,
+/// `2008.02.14`) are also accepted when followed by a time. Slashes prefer month/day
+/// and dots prefer day/month when the year is last. Short years such as `08` in
+/// `02/14/08` use the same complete 70 pivot as textual dates. Four-digit years retain their literal value.
+/// Slash- and dot-separated dates require nonempty ASCII digits after a clock's decimal point;
+/// these fractional seconds are discarded while preserving the explicit offset.
+/// Without a clock, slash- and dot-separated dates are rejected rather than guessed as relative fields.
+/// Unsupported annotations on numeric dates are also rejected before relative guessing.
 ///
 /// ### 5. ISO8601_STRICT Format
 ///
@@ -87,23 +116,72 @@ const MAX_OFFSET_IN_SECONDS: i32 = 23 * 3600 + 59 * 60;
 ///     *   `2 minutes ago` (October 27, 2023 at 09:58:00 UTC)
 ///     *   `3 hours ago` (October 27, 2023 at 07:00:00 UTC)
 ///
-/// The forms understood are `now`, `today`, `yesterday`, and one or more `<count> <unit>` pairs,
-/// as in `2 days 3 hours ago`. A count may be spelled out from `one` to `ten`, or be `last`, and
+/// Named clock times are `midnight` (00:00), `noon` (12:00), and `tea` (17:00), and combine
+/// with relative dates, as in `noon yesterday` or `last Friday at noon`. With no day specified,
+/// a named clock selects its most recent occurrence; `now noon` fixes the day first and can
+/// therefore select noon later today. Explicit clocks (`HH:MM` or `HH:MM:SS`) also combine
+/// with relative dates and keep the current day even if the clock is later than `now`.
+/// `12:34:56.3.days.ago` means three days ago at 12:34:56, even after another operation
+/// establishes the date. A numeric suffix without a following unit is discarded as fractional seconds.
+/// Git's context-dependent treatment can instead discard a count or mistake a fraction for a calendar day.
+/// ISO's end-of-day `24:00` rolls over; `24:01` and second `60` are rejected instead of
+/// silently normalizing invalid clocks as Git does. Leap seconds cannot be represented by `Time`.
+/// `AM` and `PM` can follow an hour or a clock (`6pm`, `6:30pm`, `6am yesterday`), or adjust
+/// the current clock by themselves. They are case-insensitive; `12am` selects midnight and
+/// `12pm` selects noon. Explicit AM/PM hours must be in `1..=12`; `0pm` and `25pm` are rejected.
+/// `today` defaults to local midnight, following Git 2.55, and combines with clocks as in
+/// `today at noon`. `today` preserves an explicitly assigned clock and the accumulated date,
+/// even when the clock equals `now` or follows a relative subtraction.
+/// Intentional difference: local clocks use the target date's timezone rules. Git carries
+/// the reference DST flag through normalization, which can shift `today` to 23:00 on the previous day.
+/// `never` resets the date to the Unix epoch, expressed in the timezone of `now`, and allows
+/// subsequent adjustments such as `never noon`. Standalone `never` needs no reference time;
+/// without one it returns the epoch in UTC. Expiry-configuration aliases like `false` and `all`
+/// are not date expressions and are not handled here.
+///
+/// Other forms are `now`, `today`, `yesterday`, and one or more `<count> <unit>` pairs,
+/// as in `2 days 3 hours ago`. A count may be spelled out from `zero` to `ten`, or be `last`, and
 /// any byte that is neither a digit nor a letter separates the parts, so `1.hour.ago` is the same
 /// as `1 hour ago`. The trailing `ago` is optional.
+/// Counts survive filler words (`2 long days ago`). A new numeric token, a named clock, or
+/// the end of the input flushes an unused count into the first available day, month, or year
+/// field, following Git's guessing rules (`5 6 2008 noon` is June 5 at noon).
+/// Unknown words, including `ago`, are ignored rather than treated as seconds.
+/// Decimal padding does not change a count's value; zero is an identity operation.
+/// Unused or unrepresentable calendar numbers are rejected rather than silently ignored.
+/// Standalone numeric inputs retain their Unix-timestamp interpretation.
+/// Incomplete textual dates such as `July 5th`, `December`, and `6AM, June 7, 2009`
+/// use the timezone and missing clock/date fields from `now`. An unspecified year is the
+/// current year unless the specified month is later than the reference month, in which case
+/// it is the previous year. A later day in the same month can therefore remain in the future.
+/// Month names can be case-insensitive prefixes of at least three letters, including
+/// attached days such as `June7` that Git can misinterpret as an unrelated date.
+/// Counts and units may also touch, as in `2days`. Unlike Git, `2days3hours` applies both pairs
+/// instead of mistaking the counts for calendar fields.
+/// A unit can also be a weekday, as in `last Tuesday` or `2 Fridays ago`, to select its nth
+/// strictly previous occurrence. Weekday names accept case-insensitive prefixes of at least
+/// three letters. `last Sunday` on a Sunday goes back a full week. Weekday adjustments use
+/// calendar days and preserve the local clock across DST, with forward normalization in gaps.
+/// After a month/year adjustment, the weekday is recomputed from the updated calendar;
+/// Git's cached weekday can instead produce a date that is not on the requested weekday.
 ///
 /// `<count> <unit>` pairs are applied in input order, the way Git applies them: `second` through `week` each
 /// subtract a fixed number of seconds, while `month` and `year` step down the respective calendar fields,
-/// leaving the day of the month alone.
-/// A day beyond the end of the shorter target month rolls over into the following month: one month before
-/// May 31st is May 1st, not April 30th.
+/// constraining the day to the target month's length before the next operation.
+/// One month before May 31st is April 30th, instead of Git's rollover to May 1st.
 ///
-/// Note that there is no way to name a time in the future: Git has none either, so `1 hour from
-/// now` is an hour in the past to it, and to this function.
+/// Count/unit pairs subtract time. Future directions such as `from now` are unsupported and
+/// rejected; Git instead silently interprets `1 hour from now` as an hour in the past.
 ///
-/// In any of these formats, a timezone offset wider than `±23:59` is not a timezone to Git, so it
-/// is not accepted here either.
+/// Formats parsed by Jiff retain its wider timezone range and second-precision offsets,
+/// even where Git ignores the offset or truncates it to minutes.
+/// Git's named timezone abbreviations, such as `CET` and `JST`, are also understood.
 pub fn parse(input: &str, now: Option<Zoned>) -> Result<Time> {
+    let original_input = input;
+    let input = input.trim();
+    let normalized = normalize_named_timezone(input);
+    // Only absolute parsers see rewritten zones; raw and relative inputs retain their meaning.
+    let absolute_input = normalized.as_deref().unwrap_or(input);
     // A leading `@` explicitly names epoch seconds, including small and negative values.
     if let Some(rest) = input.strip_prefix('@') {
         if let Some(val) = parse_raw(rest) {
@@ -113,43 +191,40 @@ pub fn parse(input: &str, now: Option<Zoned>) -> Result<Time> {
             return Ok(Time::new(seconds, 0));
         }
     }
-    let time = if let Ok(val) = Date::strptime(SHORT.0, input) {
-        let val = val
-            .to_zoned(TimeZone::UTC)
-            .or_raise(|| validation("Timezone conversion failed").with_input(input.as_bytes()))?;
+    Ok(if let Ok(date) = Date::strptime(SHORT.0, input) {
+        let val = if let Some(now) = now.as_ref() {
+            let clock = now.time();
+            date.at(clock.hour(), clock.minute(), clock.second(), clock.subsec_nanosecond())
+                .to_zoned(now.time_zone().clone())
+        } else {
+            date.to_zoned(TimeZone::UTC)
+        }
+        .or_raise(|| validation("Timezone conversion failed").with_input(original_input.as_bytes()))?;
         Time::new(val.timestamp().as_second(), val.offset().seconds())
-    } else if let Ok(val) = rfc2822_relaxed(input) {
+    } else if let Ok(val) = rfc2822_relaxed(absolute_input) {
         Time::new(val.timestamp().as_second(), val.offset().seconds())
-    } else if let Ok(val) = strptime_relaxed(ISO8601.0, input) {
+    } else if let Ok(val) = strptime_relaxed(ISO8601.0, absolute_input) {
         Time::new(val.timestamp().as_second(), val.offset().seconds())
-    } else if let Ok(val) = strptime_relaxed(ISO8601_STRICT.0, input) {
+    } else if let Ok(val) = strptime_relaxed(ISO8601_STRICT.0, absolute_input) {
         Time::new(val.timestamp().as_second(), val.offset().seconds())
-    } else if let Ok(val) = strptime_relaxed(GITOXIDE.0, input) {
+    } else if let Ok(val) = strptime_relaxed(GITOXIDE.0, absolute_input) {
         Time::new(val.timestamp().as_second(), val.offset().seconds())
-    } else if let Ok(val) = strptime_relaxed(DEFAULT.0, input) {
+    } else if let Ok(val) = strptime_relaxed(DEFAULT.0, absolute_input) {
         Time::new(val.timestamp().as_second(), val.offset().seconds())
     } else if let Ok(val) = SecondsSinceUnixEpoch::from_str(input)
         && val >= 100_000_000
     {
         Time::new(val, 0)
-    } else if let Some(val) = parse_git_date_format(input) {
+    } else if let Some(val) = parse_git_date_format(absolute_input, now.as_ref()) {
+        val
+    } else if let Some(val) = parse_raw(input) {
+        // Complete raw dates take precedence over relative calendar-field guessing.
         val
     } else if let Some(val) = relative::parse(input, now).transpose()? {
-        // The offset is inherited from `now`, not parsed from the input, so Git's
-        // textual offset limit does not apply.
-        return Ok(Time::new(val.timestamp().as_second(), val.offset().seconds()));
-    } else if let Some(val) = parse_raw(input) {
-        // Format::Raw
-        val
+        Time::new(val.timestamp().as_second(), val.offset().seconds())
     } else {
-        bail!(validation("Unknown date format").with_input(input.as_bytes()));
-    };
-
-    // Jiff parses textual offsets up to 25:59:59, beyond Git's accepted range.
-    if time.offset.abs() > MAX_OFFSET_IN_SECONDS {
-        bail!(validation("Unknown date format").with_input(input.as_bytes()));
-    }
-    Ok(time)
+        bail!(validation("Unknown date format").with_input(original_input.as_bytes()));
+    })
 }
 
 /// Unlike [`parse()`] which handles all kinds of input, this function only parses the commit-header format
