@@ -296,20 +296,33 @@ pub fn normalize_and_clean<'a>(path: Cow<'a, Path>, current_dir: &Path) -> Optio
     }
 }
 
-/// Rebuild the worktree-relative `relative_path` to be relative to `prefix`, which is the
-/// worktree-relative path equivalent to the position of the user, or current working directory.
+/// Rebuild `relative_path` to be relative to `prefix`, such as the user's current working directory.
 ///
-/// This is a no-op if `prefix` is empty.
+/// Both inputs must be [normalized](normalize()). Relative inputs must use the same implicit root;
+/// absolute inputs have their shared filesystem root stripped internally. This only manipulates path
+/// components, without accessing the filesystem or resolving symbolic links. Comparisons are case-sensitive.
 ///
-/// Note that both `relative_path` and `prefix` are assumed to be [normalized](normalize()), and
-/// failure to do so will lead to incorrect results.
+/// Return `relative_path` unchanged if `prefix` is empty, the inputs mix absolute and relative paths,
+/// or their filesystem roots differ (for example, different Windows drives or UNC shares).
+/// Anchor mixed inputs to a common root first if a relative result is needed.
 ///
-/// Note that both input paths are expected to be equal in terms of case too, as comparisons will
-/// be case-sensitive.
+/// For example, target `/repo/m1` and prefix `/repo/a/b` produce `../../m1`.
 pub fn relativize_with_prefix<'a>(relative_path: &'a Path, prefix: &Path) -> Cow<'a, Path> {
-    if prefix.as_os_str().is_empty() {
+    if prefix.as_os_str().is_empty() || relative_path.is_absolute() != prefix.is_absolute() {
         return Cow::Borrowed(relative_path);
     }
+    let (relative_path, prefix) = if prefix.is_absolute() {
+        let root = prefix
+            .ancestors()
+            .last()
+            .expect("absolute paths have a filesystem root");
+        match (relative_path.strip_prefix(root), prefix.strip_prefix(root)) {
+            (Ok(path), Ok(prefix)) => (path, prefix),
+            _ => return Cow::Borrowed(relative_path),
+        }
+    } else {
+        (relative_path, prefix)
+    };
     debug_assert!(
         relative_path.components().all(|c| matches!(c, Component::Normal(_))),
         "BUG: all input is expected to be normalized, but relative_path was not"

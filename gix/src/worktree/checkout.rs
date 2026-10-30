@@ -88,14 +88,7 @@ impl Worktree<'_> {
             // Relative forward links work independently of the registration's original link style.
             let git_dir = gix_path::realpath(&git_dir).or_error()?;
             let work_dir = gix_path::realpath(&work_dir).or_error()?;
-            let relative = match work_dir
-                .ancestors()
-                .last()
-                .and_then(|root| Some((git_dir.strip_prefix(root).ok()?, work_dir.strip_prefix(root).ok()?)))
-            {
-                Some((target, base)) => gix_path::relativize_with_prefix(target, base).into_owned(),
-                None => git_dir,
-            };
+            let relative = gix_path::relativize_with_prefix(&git_dir, &work_dir);
             file.write_all(b"gitdir: ").or_error()?;
             file.write_all(gix_path::os_str_into_bstr(relative.as_os_str()).or_error()?)
                 .or_error()?;

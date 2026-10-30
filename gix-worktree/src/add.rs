@@ -221,11 +221,7 @@ pub fn prepare(
 /// relative to `base`; otherwise return `target` unchanged, including across Windows drives or UNC shares.
 /// This only manipulates path components and does not access the filesystem or resolve symbolic links.
 fn link_path(target: &Path, base: &Path, relative: bool) -> PathBuf {
-    if relative
-        && let Some(root) = base.ancestors().last()
-        && let Ok(target) = target.strip_prefix(root)
-        && let Ok(base) = base.strip_prefix(root)
-    {
+    if relative {
         gix_path::relativize_with_prefix(target, base).into_owned()
     } else {
         target.to_owned()

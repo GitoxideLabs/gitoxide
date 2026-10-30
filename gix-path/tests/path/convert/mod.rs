@@ -365,4 +365,61 @@ mod relativize_with_prefix {
         );
         assert_eq!(r("", ""), "", "empty stays empty");
     }
+
+    #[test]
+    fn absolute_paths_with_a_shared_root() {
+        let root = if cfg!(windows) { "C:/" } else { "/" };
+        for (path, prefix, expected) in [
+            ("repo/m1", "repo/a/b", "../../m1"),
+            ("repo/a", "repo", "a"),
+            ("", "repo/a", "../.."),
+            ("repo/a", "", "repo/a"),
+            ("repo", "repo", "."),
+            ("", "", "."),
+        ] {
+            assert_eq!(
+                r(&format!("{root}{path}"), &format!("{root}{prefix}")),
+                expected,
+                "absolute paths are relativized after removing their shared root"
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_absolute_and_relative_paths_are_unchanged() {
+        let absolute = if cfg!(windows) { "C:/repo/a" } else { "/repo/a" };
+        for (path, prefix) in [(absolute, "repo/b"), ("repo/a", absolute), (absolute, "")] {
+            assert!(
+                matches!(
+                    gix_path::relativize_with_prefix(path.as_ref(), prefix.as_ref()),
+                    std::borrow::Cow::Borrowed(actual) if actual == std::path::Path::new(path)
+                ),
+                "without a common coordinate system or a prefix, the original path is borrowed"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_roots() {
+        assert_eq!(
+            r(r"\\server\share\repo\m1", r"\\server\share\repo\a\b"),
+            "../../m1",
+            "paths on the same UNC share can be relativized"
+        );
+        for (path, prefix) in [
+            ("C:/repo/a", "D:/repo/b"),
+            (r"\\server\share\repo\a", r"\\other\share\repo\b"),
+            (r"\\server\share\repo\a", r"\\server\other\repo\b"),
+            ("C:/repo/a", r"\\?\C:\repo\b"),
+        ] {
+            assert!(
+                matches!(
+                    gix_path::relativize_with_prefix(path.as_ref(), prefix.as_ref()),
+                    std::borrow::Cow::Borrowed(actual) if actual == std::path::Path::new(path)
+                ),
+                "paths on different drives, shares, or namespaces stay absolute"
+            );
+        }
+    }
 }
