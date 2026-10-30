@@ -222,6 +222,39 @@ fn pipeline_worktree_file_to_object() -> TestResult {
 
 #[test]
 #[cfg(unix)]
+fn worktree_file_to_object_recomputes_submodule_trust() -> TestResult {
+    fn check_submodule_trust(meta: &gix_config::file::Metadata) -> bool {
+        if meta
+            .path
+            .as_ref()
+            .is_some_and(|path| path.ends_with(Path::new("modules/submodule/config")))
+        {
+            assert_eq!(
+                meta.trust,
+                gix_sec::Trust::Full,
+                "the fixture submodule is owned by this user, regardless of the parent's forced trust"
+            );
+        }
+        true
+    }
+    let repo = named_subrepo_opts(
+        "repo_with_untracked_files.sh",
+        ".",
+        gix::open::Options::isolated()
+            .with(gix_sec::Trust::Reduced)
+            .filter_config_section(check_submodule_trust),
+    )?;
+    assert_eq!(repo.git_dir_trust(), gix_sec::Trust::Reduced, "parent trust is forced");
+    let (mut pipe, index) = repo.filter_pipeline(None)?;
+    assert!(
+        pipe.worktree_file_to_object("submodule".into(), &index)?.is_some(),
+        "opening the submodule consults its local core.worktree configuration"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
 fn worktree_file_to_object_opens_submodules_after_path_options_were_consumed() -> TestResult {
     let repo = named_repo("repo_with_untracked_files.sh")?;
     let submodule = gix::open_opts(
