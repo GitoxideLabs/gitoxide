@@ -24,7 +24,7 @@ sha256 = ["gix-hash/sha256"]
 ## `git describe` functionality
 describe = ["dep:gix-trace", "dep:gix-hashtable"]
 
-## `git merge-base` functionality
+## `git merge-base` functionality and ahead/behind commit counts
 merge_base = ["dep:gix-trace", "dep:bitflags"]
 
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.

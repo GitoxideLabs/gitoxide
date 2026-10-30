@@ -13,7 +13,12 @@
 pub mod describe;
 #[cfg(feature = "describe")]
 pub use describe::function::describe;
-/// Find common ancestors of commits.
+/// Count commits exclusive to either side of a pair of revisions.
+#[cfg(feature = "merge_base")]
+pub mod ahead_behind;
+#[cfg(feature = "merge_base")]
+pub use ahead_behind::{AheadBehind, ahead_behind};
+/// Find common ancestors of commits, or check if a commit is an ancestor of another one.
 #[cfg(feature = "merge_base")]
 pub mod merge_base;
 #[cfg(feature = "merge_base")]

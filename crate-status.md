@@ -810,6 +810,7 @@ Make it the best-performing implementation and the most convenient one.
 * [x] `describe()` (similar to `git name-rev`)
 * [x] merge-base
 * [x] merge-base octopus
+* [x] ahead/behind commit counts
 * parse specifications
     * [x] parsing and navigation
     * [x] revision ranges
