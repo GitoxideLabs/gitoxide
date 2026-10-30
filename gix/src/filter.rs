@@ -149,6 +149,7 @@ impl Pipeline<'_> {
     /// and it should match the state used when [instantiating this instance](Self::new()).
     ///
     /// Return `Ok(None)` the file didn't exist in the worktree, or if it was of an untrackable type.
+    /// Reject paths outside the worktree or through symlinked ancestors, while allowing leaf symlinks.
     pub fn worktree_file_to_object(
         &mut self,
         rela_path: &BStr,
@@ -159,6 +160,13 @@ impl Pipeline<'_> {
         let worktree_dir = repo
             .workdir()
             .ok_or_else(|| Error::from_error(message("Cannot add worktree files in bare repositories")))?;
+        let Some(file_name) = rela_path_as_path.file_name() else {
+            bail!(gix_error::validation("A worktree file path must have a file name").with_input(rela_path));
+        };
+        let parent_dir = gix_fs::symlink::validate_relative_path(
+            worktree_dir,
+            rela_path_as_path.parent().expect("a file path has a parent"),
+        )?;
         let path = worktree_dir.join(&rela_path_as_path);
         let md = match std::fs::symlink_metadata(&path) {
             Ok(md) => md,
@@ -197,6 +205,7 @@ impl Pipeline<'_> {
             };
             (id, kind)
         } else if md.is_dir() {
+            gix_fs::symlink::validate_relative_path(&parent_dir, std::path::Path::new(file_name))?;
             let Some(submodule_repo) = crate::open_opts(&path, repo.open_options().clone()).ok() else {
                 return Ok(None);
             };
