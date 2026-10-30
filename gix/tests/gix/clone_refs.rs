@@ -88,31 +88,7 @@ fn reference_and_head_state_agrees_with_git_clone() -> TestResult {
                 };
                 let expected_repo = gix::open_opts(case.path.join("git"), crate::util::restricted())?;
                 let actual = state(&repo)?;
-                let mut expected = state(&expected_repo)?;
-                if (name.starts_with("collision-equal-") || name.starts_with("collision-different-")) && !bare {
-                    // shortcut: gix-ref can't log the old OID of a symref replacement; remove this exception with symbolic logging.
-                    let (actual_entries, expected_entries) = actual
-                        .logs
-                        .iter()
-                        .zip(&mut expected.logs)
-                        .find_map(|((actual_name, actual), (expected_name, expected))| {
-                            (actual_name == "refs/remotes/origin/HEAD" && actual_name == expected_name)
-                                .then_some((actual, expected))
-                        })
-                        .expect("the tracking HEAD has a reflog");
-                    assert_eq!(actual_entries.len(), 1, "{name}: one tracking HEAD log entry");
-                    assert_eq!(
-                        expected_entries.len(),
-                        1,
-                        "{name}: Git writes one tracking HEAD log entry"
-                    );
-                    assert!(actual_entries[0].0.is_null(), "{name}: known gix old-OID limitation");
-                    assert_eq!(
-                        expected_entries[0].0, expected_entries[0].1,
-                        "{name}: Git resolves the new symref for the old OID"
-                    );
-                    expected_entries[0].0 = actual_entries[0].0;
-                }
+                let expected = state(&expected_repo)?;
                 if actual != expected {
                     differences.push(format!("{name}:\nactual: {actual:#?}\nGit: {expected:#?}"));
                 }

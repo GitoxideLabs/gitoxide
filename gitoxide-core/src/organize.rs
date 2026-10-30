@@ -258,7 +258,13 @@ fn handle(
         );
     }
 
-    match destination_metadata {
+    match destination_metadata.or_else(|err| {
+        if err.kind() == std::io::ErrorKind::NotFound {
+            std::fs::symlink_metadata(&destination)
+        } else {
+            Err(err)
+        }
+    }) {
         Ok(_) => {
             if git_workdir.canonicalize().or_error()? == destination {
                 return Ok(());

@@ -124,12 +124,22 @@ fn dangling_destination_symlinks_are_skipped() -> TestResult {
 
 #[test]
 fn occupied_destinations_are_skipped_without_changing_either_path() -> TestResult {
+    check_occupied_destinations("https://example.com/owner/repository.git")
+}
+
+#[test]
+fn normalized_occupied_destinations_are_skipped_without_changing_either_path() -> TestResult {
+    check_occupied_destinations("https://example.com/missing/../owner/repository.git")
+}
+
+fn check_occupied_destinations(url: &str) -> TestResult {
     for mode in [Mode::Execute, Mode::Simulate] {
         for occupied_kind in ["directory", "empty directory", "file"] {
             let fixture = gix_testtools::scripted_fixture_writable("organize.sh")?;
             let source = fixture.path().join("source").canonicalize()?;
             let destination = fixture.path().join("destination");
             let occupied = destination.join("example.com/owner/repository");
+            gix_testtools::git(&source, &format!("config remote.origin.url {url}"))?;
             std::fs::create_dir_all(occupied.parent().expect("the destination has a parent"))?;
             match occupied_kind {
                 "directory" => {

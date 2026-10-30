@@ -39,6 +39,10 @@ pub(in crate::store_impl::file) struct Edit {
     /// For symbolic refs, this is the previous OID to put into the reflog instead of our own previous value. It's the
     /// peeled value of the leaf referent.
     leaf_referent_previous_oid: Option<ObjectId>,
+    /// The resolved target of a symbolic update, without replacing its symbolic CAS value.
+    symbolic_new_oid: Option<ObjectId>,
+    /// An automatically maintained HEAD log isn't a reference edit requested by the caller.
+    implicit_head: bool,
 }
 
 impl Edit {
@@ -73,11 +77,19 @@ impl file::Store {
             packed_transaction: None,
             updates: None,
             packed_refs: PackedRefs::default(),
+            reflog_message: BString::default(),
         }
     }
 }
 
 impl<'p> Transaction<'_, 'p> {
+    /// Set the message for HEAD reflog entries caused by deleting its referent.
+    /// Updates use their own [`crate::transaction::LogChange::message`]. The default is an empty message.
+    pub fn reflog_message(mut self, message: impl Into<BString>) -> Self {
+        self.reflog_message = message.into();
+        self
+    }
+
     /// Configure the way packed refs are handled during the transaction
     pub fn packed_refs(mut self, packed_refs: PackedRefs<'p>) -> Self {
         self.packed_refs = packed_refs;

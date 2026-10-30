@@ -103,3 +103,5 @@
 # Generate these small status fixtures with host-local symlink preflight and index timestamps.
 /make_status_attribute_and_ignore_repos.tar
 /make_status_attribute_and_ignore_repos_sha256.tar
+# Keep reference-rename Git baselines fresh and regenerate linked worktree state.
+/make_reference_rename_*.tar

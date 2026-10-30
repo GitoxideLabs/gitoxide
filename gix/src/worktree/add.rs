@@ -7,7 +7,7 @@ use gix_error::{ClassificationMarker, ErrorExt, OptionExt, ResultExt, bail, ensu
 use gix_utils::progress::{NestedProgress, Progress};
 
 use crate::{Result, repository::FormatVersion};
-use gix_ref::transaction::{LogChange, PreviousValue, RefEdit, RefLog};
+use gix_ref::transaction::{PreviousValue, RefEdit};
 
 use crate::config::{
     cache::util::ApplyLeniency,
@@ -133,7 +133,7 @@ impl crate::Repository {
             .enrich_error(repo.config.resolved.boolean(Worktree::USE_RELATIVE_PATHS))
             .with_leniency(repo.config.lenient_config)?
             .unwrap_or_default();
-        let (head_target, commit_id, root_tree_id) = match head {
+        let (head_target, root_tree_id) = match head {
             Head::Attached(name) => {
                 if name.category() != Some(gix_ref::Category::LocalBranch) {
                     bail!(Error::NotLocalBranch { name });
@@ -152,7 +152,7 @@ impl crate::Repository {
                     .or_raise(|| message("The local branch could not be found"))?;
                 let commit = reference.peel_to_commit()?;
                 let root_tree_id = commit.tree_id()?.detach();
-                (gix_ref::Target::Symbolic(name), commit.id, root_tree_id)
+                (gix_ref::Target::Symbolic(name), root_tree_id)
             }
             Head::Detached(commit_id) => {
                 let root_tree_id = repo
@@ -160,7 +160,7 @@ impl crate::Repository {
                     .or_raise(|| message("The detached target is not an existing commit"))?
                     .tree_id()?
                     .detach();
-                (gix_ref::Target::Object(commit_id), commit_id, root_tree_id)
+                (gix_ref::Target::Object(commit_id), root_tree_id)
             }
         };
         ensure!(!should_interrupt.load(Ordering::Relaxed), Error::Interrupted);
@@ -238,23 +238,19 @@ impl crate::Repository {
                     .or_raise(|| message("Could not enable relative worktrees in the shared configuration"))?;
             }
         }
-        // Opening the repository requires HEAD. Preserve symbolic targets so conditional configuration
-        // can see the branch; detached HEADs start at null so their first update records initialization.
+        // Opening the repository requires HEAD, including its symbolic target for conditional configuration.
         let mut head_contents = Vec::new();
-        let reflog_mode = match &head_target {
-            gix_ref::Target::Object(_) => {
-                repo.object_hash()
-                    .null()
+        match &head_target {
+            gix_ref::Target::Object(commit_id) => {
+                commit_id
                     .write_hex_to(&mut head_contents)
                     .or_raise(|| message("Could not write the linked worktree HEAD"))?;
-                RefLog::AndReference
             }
             gix_ref::Target::Symbolic(name) => {
                 head_contents.extend_from_slice(b"ref: ");
                 head_contents.extend_from_slice(name.as_bstr());
-                RefLog::Only
             }
-        };
+        }
         head_contents.push(b'\n');
         std::fs::write(prepared.git_dir().join("HEAD"), head_contents)
             .or_raise(|| message("Could not write the linked worktree HEAD"))?;
@@ -279,15 +275,14 @@ impl crate::Repository {
             .or_raise(|| message("Could not open a worktree repository"))?
             .to_thread_local();
         repo.clear_namespace();
-        // Like clone, initialize a symbolic HEAD's log without dereferencing or updating its branch.
-        repo.edit_reference(RefEdit::update_with_log(
+        // Recreate the provisional HEAD so its first reflog entry has no predecessor.
+        std::fs::remove_file(prepared.git_dir().join("HEAD"))
+            .or_raise(|| message("Could not remove the provisional linked worktree HEAD"))?;
+        repo.edit_reference(RefEdit::update(
             "HEAD".try_into().expect("valid reference name"),
-            commit_id,
-            PreviousValue::Any,
-            LogChange {
-                mode: reflog_mode,
-                ..Default::default()
-            },
+            head_target,
+            PreviousValue::MustNotExist,
+            "",
         ))
         .or_raise(|| message("Could not initialize the linked worktree HEAD and its reflog"))?;
         Ok(PrepareCheckout {

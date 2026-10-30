@@ -55,6 +55,7 @@ impl gix_object::Find for EmptyCommit {
 
 mod log;
 mod reference;
+mod rename;
 mod store;
 pub(crate) mod transaction;
 mod worktree;

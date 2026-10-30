@@ -55,15 +55,17 @@ impl Transaction<'_, '_> {
                     if update_reflog {
                         let log_update = match new {
                             Target::Symbolic(_) => {
-                                // Special HACK: no reflog for symref changes as there is no OID involved which the reflog needs.
-                                // Unless, the ref is new and we can obtain a peeled id
-                                // identified by the expectation of what could be there, as is the case when cloning.
-                                match expected {
-                                    PreviousValue::ExistingMustMatch(Target::Object(oid)) => {
-                                        Some((Some(gix_hash::ObjectId::null(oid.kind())), oid))
-                                    }
-                                    _ => None,
-                                }
+                                change
+                                    .symbolic_new_oid
+                                    .as_ref()
+                                    .map(|new_oid| (change.leaf_referent_previous_oid, new_oid))
+                                    .or_else(|| match expected {
+                                        // Clone may provide an object id before the referent exists.
+                                        PreviousValue::ExistingMustMatch(Target::Object(oid)) => {
+                                            Some((Some(gix_hash::ObjectId::null(oid.kind())), oid))
+                                        }
+                                        _ => None,
+                                    })
                             }
                             Target::Object(new_oid) => {
                                 let previous = match expected {
@@ -77,7 +79,10 @@ impl Transaction<'_, '_> {
                             }
                         };
                         if let Some((previous, new_oid)) = log_update {
-                            let do_update = previous.as_ref() != Some(new_oid);
+                            let do_update = change.implicit_head
+                                || matches!(new, Target::Symbolic(_))
+                                || matches!(expected, PreviousValue::MustExistAndMatch(Target::Symbolic(_)))
+                                || previous.as_ref() != Some(new_oid);
                             if do_update {
                                 self.store
                                     .reflog_create_or_append(
@@ -102,22 +107,9 @@ impl Transaction<'_, '_> {
                         change.lock = lock;
                         continue;
                     }
-                    if update_ref && let Some(Err(err)) = lock.map(gix_lock::Marker::commit) {
-                        // TODO: when Kind::IsADirectory becomes stable, use that.
-                        let err = if err.instance.resource_path().is_dir() {
-                            gix_tempfile::remove_dir::empty_depth_first(err.instance.resource_path())
-                                .map_err(std::io::Error::other)
-                                .and_then(|_| err.instance.commit().map_err(|err| err.error))
-                                .err()
-                        } else {
-                            Some(err.error)
-                        };
-
-                        if let Some(err) = err {
-                            return Err(err.and_raise(
-                                Message::new("Could not commit reference").with("reference", change.name()),
-                            ));
-                        }
+                    if update_ref {
+                        change.lock = lock;
+                        change.commit_ref()?;
                     }
                 }
                 Change::Delete { .. } => {}
@@ -179,7 +171,37 @@ impl Transaction<'_, '_> {
                 drop(lock);
             }
         }
-        Ok(updates.into_iter().map(|edit| edit.update).collect())
+        Ok(updates
+            .into_iter()
+            .filter(|edit| !edit.implicit_head)
+            .map(|edit| edit.update)
+            .collect())
+    }
+}
+
+impl super::Edit {
+    /// Publish a prepared loose update, retaining its lock on failure so rename can recover its log safely.
+    pub(in crate::store_impl::file) fn commit_ref(&mut self) -> Result {
+        let Some(lock) = self.lock.take() else { return Ok(()) };
+        let result = match lock.commit() {
+            Err(err) if err.instance.resource_path().is_dir() => {
+                match gix_tempfile::remove_dir::empty_depth_first(err.instance.resource_path()) {
+                    Ok(()) => err.instance.commit(),
+                    Err(error) => Err(gix_lock::commit::Error {
+                        error: std::io::Error::other(error),
+                        instance: err.instance,
+                    }),
+                }
+            }
+            result => result,
+        };
+        if let Err(err) = result {
+            self.lock = Some(err.instance);
+            return Err(err
+                .error
+                .and_raise(Message::new("Could not commit reference").with("reference", self.name())));
+        }
+        Ok(())
     }
 }
 

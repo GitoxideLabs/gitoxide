@@ -16,3 +16,10 @@ make_worktree_repo_packed_sha256.tar
 make_multi_hop_ref*.tar
 # Generate this small directory-cleanup fixture and its host-Git baselines.
 keep_refs_directory*.tar
+# Gather reference-transaction baselines with the host Git when the fixture cache is created.
+make_ref_transaction_baseline*.tar*
+make_ref_head_transaction_baseline*.tar*
+make_ref_symref_transaction_baseline*.tar*
+make_ref_namespace_transaction_baseline*.tar*
+# Refresh dedicated reference-rename baselines from the host Git when caching.
+make_ref_rename*.tar*

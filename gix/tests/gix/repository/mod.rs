@@ -28,6 +28,7 @@ mod open;
 #[cfg(feature = "attributes")]
 mod pathspec;
 mod reference;
+mod reference_rename;
 mod remote;
 mod shallow;
 mod state;

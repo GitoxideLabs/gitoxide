@@ -224,7 +224,7 @@ fn delete_reflog_only_of_symbolic_with_deref() -> TestResult {
 }
 
 #[test]
-fn rename_a_to_a_slash_b_in_one_transaction() -> TestResult {
+fn replacing_a_ref_with_its_child_in_one_transaction_is_rejected() -> TestResult {
     let (_keep, store) = store_writable("make_repo_for_reflog.sh")?;
     let old = store.find_loose("old")?;
 
@@ -239,22 +239,17 @@ fn rename_a_to_a_slash_b_in_one_transaction() -> TestResult {
             Fail::Immediately,
             Fail::Immediately,
         )
-        .unwrap_err();
-    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "path-prefix collisions are reported early, without losing the I/O kind", @r#"
+        .expect_err("transactions reject directory/file name replacement");
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[]), "transactions reject namespace conflicts before publication", @r#"
     Could not prepare reference edit, reference="refs/heads/old/new"
 
     Caused by:
-        0: Another IO error occurred while obtaining the lock
-        1: I/O error (NotADirectory)
-        2: AlreadyExists
+        0: The reference name conflicts with another reference, reference="refs/heads/old"
     "#);
 
-    assert_eq!(
-        err.downcast_any_ref::<std::io::Error>()
-            .expect("original I/O error")
-            .kind(),
-        std::io::ErrorKind::NotADirectory,
-        "path-prefix collisions are reported early, without losing the I/O kind"
+    assert!(
+        err.is_validation(),
+        "reject conflicting reference names independently of filesystem layout"
     );
 
     let edits = store

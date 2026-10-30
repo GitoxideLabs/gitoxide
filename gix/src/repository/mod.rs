@@ -126,6 +126,7 @@ mod object;
 #[cfg(feature = "attributes")]
 mod pathspec;
 mod reference;
+mod reference_rename;
 mod remote;
 mod revision;
 mod shallow;

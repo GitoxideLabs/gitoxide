@@ -26,6 +26,34 @@ use crate::{
 mod collisions;
 
 #[test]
+fn symbolic_targets_preserve_non_utf8_bytes() -> TestResult {
+    let (_keep, mut store) = empty_store()?;
+    store.write_reflog = WriteReflog::Disable;
+    for target in [b"refs/heads/topic-\xff".as_slice(), b"refs/heads/renamed-\xfe"] {
+        let target = Target::Symbolic(target.as_bstr().try_into()?);
+        store
+            .transaction()
+            .prepare(
+                [RefEdit::update(
+                    "HEAD".try_into()?,
+                    target.clone(),
+                    PreviousValue::Any,
+                    "",
+                )],
+                Fail::Immediately,
+                Fail::Immediately,
+            )?
+            .commit(None)?;
+        assert_eq!(
+            store.find("HEAD")?.target,
+            target,
+            "symbolic targets retain their exact bytes"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn reflog_messages_preserve_bytes() -> Result {
     let (_keep, store) = empty_store()?;
     for (index, message) in [b"".as_slice(), b"plain text", b"raw \xff\xfe bytes"]
@@ -504,7 +532,8 @@ fn reference_with_must_exist_constraint_must_exist_already_with_any_value() -> T
 }
 
 #[test]
-fn reference_with_must_not_exist_constraint_may_exist_already_if_the_new_value_matches_the_existing_one() -> Result {
+fn reference_with_must_not_exist_constraint_may_exist_already_if_the_new_value_matches_the_existing_one() -> TestResult
+{
     let (_keep, store) = store_writable("make_repo_for_reflog.sh")?;
     let head = store.try_find_loose("HEAD")?.expect("head exists already");
     let target = head.target;
@@ -536,8 +565,8 @@ fn reference_with_must_not_exist_constraint_may_exist_already_if_the_new_value_m
 
     assert_eq!(
         reflog_lines(&store, "HEAD")?.len(),
-        previous_reflog_count,
-        "no new reflog is actually added"
+        previous_reflog_count + 1,
+        "same-target symbolic HEAD updates log their resolved target"
     );
     Ok(())
 }
@@ -903,13 +932,11 @@ fn symbolic_head_missing_referent_then_update_referent() -> TestResult {
 }
 
 #[test]
-/// Writing a peeled ref to which head points to doesn't update HEAD on the fly even though that might be what's would
-/// be needed to keep the reflog consistent
-fn write_reference_to_which_head_points_to_does_not_update_heads_reflog_even_though_it_should() -> TestResult {
+fn writing_the_reference_to_which_head_points_updates_heads_reflog() -> TestResult {
     let (_keep, store) = store_writable("make_repo_for_reflog.sh")?;
     let head = store.find_loose("HEAD")?;
     let referent = head.target.to_ref().try_name().expect("symbolic ref").to_owned();
-    let previous_head_reflog = reflog_lines(&store, "HEAD")?;
+    let mut expected_head_reflog = reflog_lines(&store, "HEAD")?;
 
     let new_id = hex_to_id("01dd4e2a978a9f5bd773dae6da7aa4a5ac1cdbbc");
     let edits = store
@@ -926,7 +953,7 @@ fn write_reference_to_which_head_points_to_does_not_update_heads_reflog_even_tho
         )?
         .commit(committer().to_ref(&mut TimeBuf::default()))?;
 
-    assert_eq!(edits.len(), 1, "HEAD wasn't update");
+    assert_eq!(edits.len(), 1, "only the requested branch edit is reported");
     assert_eq!(
         edits,
         vec![RefEdit::update(
@@ -936,13 +963,13 @@ fn write_reference_to_which_head_points_to_does_not_update_heads_reflog_even_tho
             "",
         )]
     );
+    let expected_line = log_line(hex_to_id("02a7a22d90d7c02fb494ed25551850b868e634f0"), new_id, "");
+    expected_head_reflog.push(expected_line.clone());
     assert_eq!(
         reflog_lines(&store, "HEAD")?,
-        previous_head_reflog,
-        "nothing changed in the heads reflog"
+        expected_head_reflog,
+        "HEAD records the same direct target change as its referent"
     );
-
-    let expected_line = log_line(hex_to_id("02a7a22d90d7c02fb494ed25551850b868e634f0"), new_id, "");
     assert_eq!(
         reflog_lines(&store, &referent.to_string())?
             .last()
