@@ -358,7 +358,7 @@ fn drive_relative_common_dir_is_rejected_during_opening() -> TestResult {
     );
     std::fs::write(git_dir.join("commondir"), b"C:other.git\n")?;
 
-    let err = gix::open_opts(git_dir, gix::open::Options::isolated().with(gix_sec::Trust::Full))
+    let err = gix::open_opts(git_dir, gix::open::Options::isolated().with_trust(gix_sec::Trust::Full))
         .expect_err("opening rejects an unresolved drive-relative common directory before loading stores");
     assert!(
         err.is_validation(),
@@ -1073,7 +1073,7 @@ mod pack_alloc_limit_bytes {
         let reduced = repo_opts(
             "make_packed_and_loose.sh",
             crate::util::restricted()
-                .with(Trust::Reduced)
+                .with_trust(Trust::Reduced)
                 .config_overrides(["gitoxide.objects.allocLimitIfReducedTrust=1"]),
         )?
         .to_thread_local();
@@ -1085,7 +1085,7 @@ mod pack_alloc_limit_bytes {
         let reduced_without_fallback = repo_opts(
             "make_packed_and_loose.sh",
             crate::util::restricted()
-                .with(Trust::Reduced)
+                .with_trust(Trust::Reduced)
                 .config_overrides(["gitoxide.objects.allocLimitIfReducedTrust=0"]),
         )?
         .to_thread_local();

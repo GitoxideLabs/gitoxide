@@ -169,7 +169,6 @@ impl Repository {
 
 /// An implementation of a trait to use with [`Repository::index_worktree_status()`] to compute the submodule status
 /// using [Submodule::status()](crate::Submodule::status()).
-#[derive(Clone)]
 pub struct BuiltinSubmoduleStatus {
     mode: crate::status::Submodule,
     #[cfg(feature = "parallel")]
@@ -181,6 +180,23 @@ pub struct BuiltinSubmoduleStatus {
     #[cfg(not(feature = "parallel"))]
     work_dir: Option<std::path::PathBuf>,
     submodule_paths: Vec<BString>,
+}
+
+impl Clone for BuiltinSubmoduleStatus {
+    fn clone(&self) -> Self {
+        Self {
+            mode: self.mode,
+            #[cfg(feature = "parallel")]
+            repo: self.repo.clone(),
+            #[cfg(not(feature = "parallel"))]
+            git_dir: self.git_dir.clone(),
+            #[cfg(not(feature = "parallel"))]
+            open_options: self.open_options.clone_with_trust(),
+            #[cfg(not(feature = "parallel"))]
+            work_dir: self.work_dir.clone(),
+            submodule_paths: self.submodule_paths.clone(),
+        }
+    }
 }
 
 ///
@@ -214,7 +230,7 @@ mod submodule_status {
                 #[cfg(not(feature = "parallel"))]
                 git_dir: local_repo.git_dir().to_owned(),
                 #[cfg(not(feature = "parallel"))]
-                open_options: local_repo.open_options().clone(),
+                open_options: local_repo.open_options().clone_with_trust(),
                 #[cfg(not(feature = "parallel"))]
                 work_dir: local_repo.workdir().map(ToOwned::to_owned),
                 submodule_paths,
@@ -239,7 +255,7 @@ mod submodule_status {
             #[cfg(feature = "parallel")]
             let repo = self.repo.to_thread_local();
             #[cfg(not(feature = "parallel"))]
-            let Ok(mut repo) = crate::open_opts(&self.git_dir, self.open_options.clone()) else {
+            let Ok(mut repo) = crate::open_opts(&self.git_dir, self.open_options.clone_with_trust()) else {
                 return Ok(None);
             };
             #[cfg(not(feature = "parallel"))]

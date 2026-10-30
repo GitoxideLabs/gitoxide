@@ -15,14 +15,17 @@ pub fn named_subrepo_opts(
 }
 
 fn discover_with_environment_overrides_isolated(directory: impl AsRef<Path>) -> Result<Repository, gix_error::Error> {
-    let mut options = gix::open::Options::isolated();
-    options.permissions.env.git_prefix = Permission::Allow;
+    let options = || {
+        let mut options = gix::open::Options::isolated();
+        options.permissions.env.git_prefix = Permission::Allow;
+        options
+    };
     ThreadSafeRepository::discover_with_environment_overrides_opts(
         directory,
         Default::default(),
         gix_sec::trust::Mapping {
-            full: options.clone(),
-            reduced: options,
+            full: options(),
+            reduced: options(),
         },
     )
     .map(|repo| repo.to_thread_local())

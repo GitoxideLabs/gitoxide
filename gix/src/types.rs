@@ -197,7 +197,6 @@ pub struct Repository {
 ///
 /// When built with `default-features = false`, this type is **not** `Send`.
 /// The minimal feature set to activate `Send` is `features = ["parallel"]`.
-#[derive(Clone)]
 pub struct ThreadSafeRepository {
     /// A store for references to point at objects
     pub refs: crate::RefStore,

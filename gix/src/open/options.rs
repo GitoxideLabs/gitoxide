@@ -32,6 +32,42 @@ impl Options {
     pub fn isolated() -> Self {
         Options::default().permissions(Permissions::isolated())
     }
+
+    /// Clone all options, retaining the trust override for reopening the same repository.
+    pub(crate) fn clone_with_trust(&self) -> Self {
+        Options {
+            object_store_slots: self.object_store_slots,
+            permissions: self.permissions,
+            git_dir_trust: self.git_dir_trust,
+            filter_config_section: self.filter_config_section,
+            lossy_config: self.lossy_config,
+            lenient_config: self.lenient_config,
+            bail_if_untrusted: self.bail_if_untrusted,
+            api_config_overrides: self.api_config_overrides.clone(),
+            cli_config_overrides: self.cli_config_overrides.clone(),
+            git_installation_config_path: self.git_installation_config_path.clone(),
+            system_config_path: self.system_config_path.clone(),
+            use_repository_local_environment: self.use_repository_local_environment,
+            open_path_as_is: self.open_path_as_is,
+            retain_inferred_worktree_when_bare: self.retain_inferred_worktree_when_bare,
+            current_dir: self.current_dir.clone(),
+        }
+    }
+
+    /// Copy options for opening another repository, clearing trust, the captured CWD, and one-shot opening policies.
+    /// Use [`Repository::reload()`][crate::Repository::reload()] or
+    /// [`reload_with()`][crate::Repository::reload_with()] to reopen the same repository.
+    /// Permissions are preserved, but repository-local environment overrides are disabled.
+    pub fn clone_without_trust(&self) -> Self {
+        Options {
+            git_dir_trust: None,
+            current_dir: None,
+            open_path_as_is: false,
+            retain_inferred_worktree_when_bare: false,
+            ..self.clone_with_trust()
+        }
+        .without_repository_environment_overrides()
+    }
 }
 
 /// Generic modification
@@ -106,13 +142,13 @@ impl Options {
         self
     }
 
-    /// Set the trust level of the `.git` directory we are about to open.
+    /// Set the trust override of the `.git` directory we are about to open, or clear it with `None`.
     ///
     /// This can be set manually to force trust even though otherwise it might
     /// not be fully trusted, leading to limitations in how configuration files
     /// are interpreted.
     ///
-    /// If not called explicitly, trust is determined via [`gix_sec::Trust::from_path_ownership()`] for the
+    /// If no override is set, trust is determined via [`gix_sec::Trust::from_path_ownership()`] for the
     /// candidate path before resolving a possible gitfile, then lowered as needed by ownership checks of the
     /// resolved git directory, common directory, and existing worktree. Setting trust explicitly bypasses
     /// these initial ownership checks when opening, but not when discovering a repository.
@@ -123,13 +159,13 @@ impl Options {
     /// is always controlled by the desired user. This only bypasses the ownership checks described above
     /// when the [`open()`][Self::open()] method is used, as opposed to discovery. Worktree ownership and
     /// `safe.directory` are still considered later during opening.
-    pub fn with(mut self, trust: gix_sec::Trust) -> Self {
+    pub fn with_trust(mut self, trust: impl Into<Option<gix_sec::Trust>>) -> Self {
         self.git_dir_trust = trust.into();
         self
     }
 
     /// If true, default false, and if the repository's trust level is not `Full`
-    /// (see [`with()`][Self::with()] for more), then the open operation will fail.
+    /// (see [`with_trust()`][Self::with_trust()] for more), then the open operation will fail.
     ///
     /// Use this to mimic `git`s way of handling untrusted repositories. Note that `gitoxide` solves
     /// this by not using configuration from untrusted sources and by generally being secured against

@@ -241,7 +241,7 @@ fn worktree_file_to_object_recomputes_submodule_trust() -> TestResult {
         "repo_with_untracked_files.sh",
         ".",
         gix::open::Options::isolated()
-            .with(gix_sec::Trust::Reduced)
+            .with_trust(gix_sec::Trust::Reduced)
             .filter_config_section(check_submodule_trust),
     )?;
     assert_eq!(repo.git_dir_trust(), gix_sec::Trust::Reduced, "parent trust is forced");

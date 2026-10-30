@@ -22,13 +22,14 @@ pub struct Permissions {
 /// The presence of `GIT_NO_REPLACE_OBJECTS` sets `core.useReplaceRefs=false`. Replacements are enabled by default.
 ///
 /// Use [Permissions] to control which environment variables can be read, and config-overrides to control these values programmatically.
-#[derive(Clone)]
+/// Use [`Repository::reload()`][crate::Repository::reload()] to reopen the same repository with its stored options.
+/// Copy options with [`clone_without_trust()`][Self::clone_without_trust()] when opening another repository.
 pub struct Options {
     pub(crate) object_store_slots: gix_odb::store::init::Slots,
     /// Define what is allowed while opening a repository.
     pub permissions: Permissions,
     /// Trust is specific to this Git directory and must not be reused when opening sub-repositories.
-    /// Clear it in cloned options so each sub-repository's trust is determined independently.
+    /// Use `clone_without_trust()` so each sub-repository's trust is determined independently.
     pub(crate) git_dir_trust: Option<gix_sec::Trust>,
     /// Warning: this one is copied to config::Cache - don't change it after repo open or keep in sync.
     pub(crate) filter_config_section: Option<fn(&gix_config::file::Metadata) -> bool>,
@@ -64,13 +65,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn copying_for_another_repository_clears_repository_specific_state() -> gix_testtools::TestResult {
+        let mut options = Options::isolated()
+            .with_trust(gix_sec::Trust::Reduced)
+            .open_path_as_is(true);
+        options.current_dir = Some("captured-cwd".into());
+        options.retain_inferred_worktree_when_bare = true;
+        let copied = options.clone_without_trust();
+        assert!(
+            copied.git_dir_trust.is_none(),
+            "ownership must determine the new repository's trust"
+        );
+        assert!(
+            copied.current_dir.is_none(),
+            "the opening call must capture its own CWD"
+        );
+        assert!(
+            !copied.open_path_as_is,
+            "path interpretation is specific to the original opening call"
+        );
+        assert!(
+            !copied.retain_inferred_worktree_when_bare,
+            "checkout retention is a one-shot policy"
+        );
+        assert!(
+            !copied.use_repository_local_environment,
+            "another repository must not inherit environment redirection"
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "sha1")]
+    #[test]
     fn retained_bare_submodule_checkout_is_used_for_safe_directory_checks() -> gix_testtools::TestResult {
         let root = gix_testtools::scripted_fixture_read_only("make_unlisted_gitlinks.sh")?.join("listed-gitfile-bare");
         let git_dir = root.join(".git/embedded");
         let worktree = root.join("d");
         let cwd = gix_fs::current_dir(false)?;
         for trust in [gix_sec::Trust::Full, gix_sec::Trust::Reduced] {
-            let mut options = Options::isolated().with(trust).bail_if_untrusted(true);
+            let mut options = Options::isolated().with_trust(trust).bail_if_untrusted(true);
             options.current_dir = Some(cwd.clone());
             options.retain_inferred_worktree_when_bare = true;
             let opened =

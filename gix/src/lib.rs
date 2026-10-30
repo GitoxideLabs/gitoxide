@@ -23,7 +23,7 @@
 //! ### The Trust Model
 //!
 //! It is very simple - based on the ownership of the repository compared to the user of the current process [Trust](sec::Trust)
-//! is assigned. This can be [overridden](open::Options::with()) as well. Further, git configuration files track their trust level
+//! is assigned. This can be [overridden](open::Options::with_trust()) as well. Further, git configuration files track their trust level
 //! per section based on and sensitive values like paths to executables or certain values will be skipped if they are from a source
 //! that isn't [fully](sec::Trust::Full) trusted.
 //!
@@ -284,7 +284,7 @@ pub fn discover_opts(
         directory,
         options,
         sec::trust::Mapping {
-            full: open_options.clone(),
+            full: open_options.clone_with_trust(),
             reduced: open_options,
         },
     )

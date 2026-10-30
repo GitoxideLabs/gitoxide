@@ -104,7 +104,11 @@ impl Proxy<'_> {
     /// The returned repository has absolute paths.
     pub fn into_repo_with_possibly_inaccessible_worktree(self) -> Result<Repository> {
         let base = self.base().ok();
-        let options = self.parent.options.clone().without_repository_environment_overrides();
+        let options = self
+            .parent
+            .options
+            .clone_with_trust()
+            .without_repository_environment_overrides();
         let common_dir = self.parent.current_dir().join(self.parent.common_dir());
         ThreadSafeRepository::open_from_paths(self.git_dir, base, options, Some(common_dir)).map(Into::into)
     }
@@ -118,7 +122,11 @@ impl Proxy<'_> {
         if !base.is_dir() {
             bail!("Worktree at \"{}\" is inaccessible", base.display());
         }
-        let options = self.parent.options.clone().without_repository_environment_overrides();
+        let options = self
+            .parent
+            .options
+            .clone_with_trust()
+            .without_repository_environment_overrides();
         let common_dir = self.parent.current_dir().join(self.parent.common_dir());
         ThreadSafeRepository::open_from_paths(self.git_dir, base.into(), options, Some(common_dir)).map(Into::into)
     }

@@ -6,7 +6,7 @@ use crate::util::named_subrepo_opts;
 #[test]
 fn empty_core_excludes() -> TestResult {
     let mut error_snapshots = Vec::new();
-    let repo = named_subrepo_opts(
+    let mut repo = named_subrepo_opts(
         "make_basic_repo.sh",
         "empty-core-excludes",
         gix::open::Options::isolated().strict_config(true),
@@ -21,7 +21,7 @@ fn empty_core_excludes() -> TestResult {
         }
     }
 
-    let repo = gix::open_opts(repo.git_dir(), repo.open_options().clone().strict_config(false))?;
+    repo.reload_with(|options| options.strict_config(false))?;
     repo.excludes(&index, None, Source::WorktreeThenIdMappingIfNotSkipped)?;
     insta::assert_debug_snapshot!(error_snapshots, "empty core excludes", @"
     [

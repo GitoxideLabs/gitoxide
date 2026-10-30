@@ -151,7 +151,14 @@ fn config_file_paths_use_the_cwd_captured_while_opening() -> gix_testtools::Test
         !elsewhere.path().join(".git/config").exists(),
         "the process's new working directory is not used"
     );
+    let mut configured = repo.clone();
+    configured.reload_with(|options| options.clone_without_trust())?;
     repo.reload()?;
+    assert_eq!(
+        configured.git_dir(),
+        repo.git_dir(),
+        "resetting captured state during reload still opens the original repository"
+    );
     assert_eq!(
         repo.config_snapshot()
             .string("physical.after-cwd-change")

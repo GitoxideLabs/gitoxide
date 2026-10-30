@@ -17,7 +17,7 @@ impl ThreadSafeRepository {
     /// while applying `options`. Then use the `trust_map` to determine which of our own repository options to use
     /// for instantiations.
     ///
-    /// Note that [trust overrides](crate::open::Options::with()) in the `trust_map` are not effective here and we will
+    /// Note that [trust overrides](crate::open::Options::with_trust()) in the `trust_map` are not effective here and we will
     /// always override it with the determined trust value as per [gix_discover::upwards::Options::trust].
     /// This value, however, can be set to [assume a given trust level](gix_discover::upwards::TrustPolicy::Assume) to let
     /// callers control the trust level without re-determining it.

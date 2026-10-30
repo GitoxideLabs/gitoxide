@@ -272,7 +272,7 @@ impl crate::Repository {
 
         let options = repo
             .options
-            .clone()
+            .clone_with_trust()
             .without_repository_environment_overrides()
             .open_path_as_is(true);
         let mut repo = crate::ThreadSafeRepository::open_opts(prepared.git_dir(), options)

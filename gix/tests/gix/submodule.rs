@@ -104,7 +104,7 @@ mod url {
         let repo = gix::open_opts(
             &worktree,
             gix::open::Options::isolated()
-                .with(gix::sec::Trust::Reduced)
+                .with_trust(gix::sec::Trust::Reduced)
                 .config_overrides(["submodule.m1.url=ssh://trusted/override.git"]),
         )?;
         let sm = submodule(&repo)?;
@@ -762,7 +762,7 @@ mod open {
         let repo = named_subrepo_opts(
             "make_submodules.sh",
             "with-submodules",
-            crate::restricted().with(Trust::Reduced),
+            crate::restricted().with_trust(Trust::Reduced),
         )?;
         assert_eq!(
             repo.git_dir_trust(),

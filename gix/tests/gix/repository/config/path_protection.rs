@@ -15,14 +15,18 @@ fn repository_sources_respect_the_section_filter() -> TestResult {
     for source in ["local", "worktree"] {
         for value in ["false", "true", "invalid"] {
             for (options, use_config) in [
-                (crate::restricted().with(Trust::Reduced), false),
-                (crate::restricted().with(Trust::Full), true),
+                (crate::restricted().with_trust(Trust::Reduced), false),
+                (crate::restricted().with_trust(Trust::Full), true),
                 (
-                    crate::restricted().with(Trust::Full).filter_config_section(|_| false),
+                    crate::restricted()
+                        .with_trust(Trust::Full)
+                        .filter_config_section(|_| false),
                     false,
                 ),
                 (
-                    crate::restricted().with(Trust::Reduced).filter_config_section(|_| true),
+                    crate::restricted()
+                        .with_trust(Trust::Reduced)
+                        .filter_config_section(|_| true),
                     true,
                 ),
             ] {
@@ -77,7 +81,7 @@ fn repository_sources_respect_the_section_filter() -> TestResult {
             let repo = gix::open_opts(
                 fixture.join(format!("{source}-invalid")),
                 crate::restricted()
-                    .with(Trust::Reduced)
+                    .with_trust(Trust::Reduced)
                     .strict_config(true)
                     .config_overrides(overrides),
             )?;
@@ -109,7 +113,7 @@ fn safe_directory_promotion_updates_reference_protection() -> TestResult {
             let repo = gix::open_opts(
                 fixture.join(format!("{source}-{value}")),
                 crate::restricted()
-                    .with(gix_sec::Trust::Reduced)
+                    .with_trust(gix_sec::Trust::Reduced)
                     .permissions(permissions)
                     .system_config_path(fixture.join("trust-all-repositories.config")),
             )?;
@@ -134,14 +138,16 @@ fn invalid_values_are_checked_only_in_eligible_sections() -> TestResult {
     for source in ["local", "worktree"] {
         let repo = gix::open_opts(
             fixture.join(format!("{source}-invalid")),
-            crate::restricted().with(gix_sec::Trust::Reduced).strict_config(true),
+            crate::restricted()
+                .with_trust(gix_sec::Trust::Reduced)
+                .strict_config(true),
         )?;
         repo.checkout_options(gix::worktree::stack::state::attributes::Source::IdMapping)?;
         for key in ["core.protectHFS", "core.protectNTFS", "gitoxide.core.protectWindows"] {
             let err = gix::open_opts(
                 fixture.join(format!("{source}-true")),
                 crate::restricted()
-                    .with(gix_sec::Trust::Reduced)
+                    .with_trust(gix_sec::Trust::Reduced)
                     .strict_config(true)
                     .config_overrides([format!("{key}=invalid")]),
             )

@@ -63,7 +63,7 @@ impl ThreadSafeRepository {
     /// `options` for fine-grained control.
     /// Empty `core.worktree` values include their bytes as `input` [metadata](gix_error::Error::metadata()).
     ///
-    /// Unless trust is set explicitly with [`Options::with()`], its initial level comes from ownership of the
+    /// Unless trust is set explicitly with [`Options::with_trust()`], its initial level comes from ownership of the
     /// candidate path (`path` or `path/.git`) before resolving a possible gitfile. Ownership checks of the resolved
     /// git directory, common directory, and existing worktree can then only lower this level.
     /// Use [`crate::discover()`] if options such as permissions should also be selected according to ownership.

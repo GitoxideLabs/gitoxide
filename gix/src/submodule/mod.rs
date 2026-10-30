@@ -383,15 +383,11 @@ pub(crate) fn open(superproject: &Repository, git_dir: &Path, relative_path: &BS
             .expect("the Git directory was validated with is_git()")
             .into_repository_and_work_tree_directories(),
     };
-    let mut options = superproject.options.clone().without_repository_environment_overrides();
     // Only repository ownership establishes initial trust; initialization checks the effective checkout after configuration.
-    options.git_dir_trust = Some(gix_discover::repository::trust(
-        &git_dir,
-        None,
-        cwd,
-        (original_path, None),
-    )?);
+    let trust = gix_discover::repository::trust(&git_dir, None, cwd, (original_path, None))?;
+    let mut options = superproject.options.clone_without_trust().with_trust(trust);
 
+    options.current_dir = Some(cwd.to_owned());
     options.retain_inferred_worktree_when_bare = superproject.workdir().is_some();
     match crate::ThreadSafeRepository::open_from_paths(git_dir, work_dir, options, None) {
         Ok(repo) => Ok(Some(repo.into())),

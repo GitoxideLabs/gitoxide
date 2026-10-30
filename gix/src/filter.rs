@@ -206,8 +206,7 @@ impl Pipeline<'_> {
             (id, kind)
         } else if md.is_dir() {
             gix_fs::symlink::validate_relative_path(&parent_dir, std::path::Path::new(file_name))?;
-            let mut options = repo.open_options().clone().without_repository_environment_overrides();
-            options.git_dir_trust = None;
+            let options = repo.open_options().clone_without_trust();
             let Some(submodule_repo) = crate::open_opts(&path, options).ok() else {
                 return Ok(None);
             };

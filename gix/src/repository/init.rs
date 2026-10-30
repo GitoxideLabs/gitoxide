@@ -52,10 +52,30 @@ impl crate::Repository {
     /// then a reload will be performed on the joined path of both to make it succeed, which makes
     /// the reloaded repository git-dir absolute.
     pub fn reload(&mut self) -> Result<&mut Self> {
+        self.reload_with(|options| options)
+    }
+
+    /// Reopen this repository in place after applying `configure` to a copy of its stored open options.
+    ///
+    /// Trust is retained unless `configure` changes it with [`with_trust()`][crate::open::Options::with_trust()].
+    /// The modified options are stored for subsequent reloads. On failure, this handle remains unchanged.
+    /// Like [`reload()`][Self::reload()], this discards transient state and refreshes configuration and caches.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # let mut repo = gix::open(".")?;
+    /// repo.reload_with(|options| options.cli_overrides(["core.abbrev=8"]))?;
+    /// # Ok::<_, gix::Error>(())
+    /// ```
+    pub fn reload_with(
+        &mut self,
+        configure: impl FnOnce(crate::open::Options) -> crate::open::Options,
+    ) -> Result<&mut Self> {
         let mut git_dir = self.git_dir().to_owned();
-        let options = self.options.clone().open_path_as_is(true);
+        let options = configure(self.options.clone_with_trust()).open_path_as_is(true);
         if git_dir.is_relative()
-            && let Some((prev_cwd, cwd)) = options.current_dir.as_ref().zip(std::env::current_dir().ok())
+            && let Some((prev_cwd, cwd)) = self.options.current_dir.as_ref().zip(std::env::current_dir().ok())
             && *prev_cwd != cwd
         {
             git_dir = prev_cwd.join(git_dir);
