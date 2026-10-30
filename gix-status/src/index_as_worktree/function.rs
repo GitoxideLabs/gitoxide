@@ -659,6 +659,19 @@ impl<'a, T> Iterator for OffsetIter<'a, T> {
 }
 
 impl Conflict {
+    /// Return the two-letter unmerged status code used by `git status --short` and `--porcelain=v1`.
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Conflict::BothDeleted => "DD",
+            Conflict::AddedByUs => "AU",
+            Conflict::DeletedByThem => "UD",
+            Conflict::AddedByThem => "UA",
+            Conflict::DeletedByUs => "DU",
+            Conflict::BothAdded => "AA",
+            Conflict::BothModified => "UU",
+        }
+    }
+
     /// Given `entries` and `path_backing` obtained from an [index](gix_index::State), inspect up to three consecutive
     /// conflict-stage entries starting at `start_index` whose path equals `entry_path`.
     ///

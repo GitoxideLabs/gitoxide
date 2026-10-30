@@ -6,7 +6,7 @@ use gix::{
     error::{ResultExt, bail, unsupported},
     status::{self, index_worktree},
 };
-use gix_status::index_as_worktree::{Change, Conflict, EntryStatus};
+use gix_status::index_as_worktree::{Change, EntryStatus};
 
 use crate::OutputFormat;
 
@@ -228,7 +228,7 @@ fn print_index_entry_status(
 ) -> std::io::Result<()> {
     let char_storage;
     let status = match status {
-        EntryStatus::Conflict { summary, entries: _ } => as_str(summary),
+        EntryStatus::Conflict { summary, entries: _ } => summary.as_str(),
         EntryStatus::Change(change) => {
             char_storage = change_to_char(&change);
             std::str::from_utf8(std::slice::from_ref(&char_storage)).expect("valid ASCII")
@@ -242,18 +242,6 @@ fn print_index_entry_status(
     let rela_path = gix::path::from_bstr(rela_path).map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
     let display_path = gix::path::relativize_with_prefix(&rela_path, prefix);
     writeln!(out, "{status: >3} {}", display_path.display())
-}
-
-fn as_str(c: Conflict) -> &'static str {
-    match c {
-        Conflict::BothDeleted => "DD",
-        Conflict::AddedByUs => "AU",
-        Conflict::DeletedByThem => "UD",
-        Conflict::AddedByThem => "UA",
-        Conflict::DeletedByUs => "DU",
-        Conflict::BothAdded => "AA",
-        Conflict::BothModified => "UU",
-    }
 }
 
 fn change_to_char(change: &Change<(), gix::submodule::Status>) -> u8 {

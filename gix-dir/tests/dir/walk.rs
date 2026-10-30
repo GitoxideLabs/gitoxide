@@ -20,6 +20,132 @@ use crate::walk_utils::{
     try_collect_filtered_opts, try_collect_filtered_opts_collect, try_collect_filtered_opts_collect_with_root,
 };
 
+#[test]
+fn conflict_paths_at_any_stage_stay_tracked_like_git() -> TestResult {
+    let root = gix_testtools::scripted_fixture_read_only("conflicts.sh")?;
+    assert_eq!(
+        std::fs::read_to_string(root.join(".git/baseline-clean"))?,
+        "",
+        "Git preserves an ignored directory with an indexed conflict child"
+    );
+    for ignore_case in [false, true] {
+        let baseline = std::fs::read_to_string(root.join(format!(".git/baseline-untracked-{ignore_case}")))?;
+        assert_eq!(
+            baseline,
+            "nested/untracked
+untracked
+",
+            "Git excludes every conflict-stage combination from untracked files"
+        );
+        for emit_untracked in [Matching, CollapseDirectory] {
+            let ((_, _), entries) = try_collect_filtered_opts_collect(
+                &root,
+                None,
+                |keep, ctx| {
+                    walk(
+                        &root,
+                        ctx,
+                        walk::Options {
+                            ignore_case,
+                            emit_untracked,
+                            emit_ignored: Some(Matching),
+                            for_deletion: Some(ForDeletionMode::IgnoredDirectoriesCanHideNestedRepositories),
+                            ..options()
+                        },
+                        keep,
+                    )
+                },
+                None::<&str>,
+                Options {
+                    fresh_index: false,
+                    ..Default::default()
+                },
+            )?;
+            assert_eq!(
+                entries,
+                &[
+                    entry("nested/untracked", Untracked, File),
+                    entry("untracked", Untracked, File)
+                ],
+                "conflicts are neither untracked nor ignored, including when directories collapse (ignore_case={ignore_case})"
+            );
+        }
+    }
+    assert!(
+        std::fs::read_to_string(root.join(".git/baseline-stages"))?
+            .lines()
+            .any(|line| line.starts_with("120000 ") && line.split_whitespace().nth(2) == Some("2")),
+        "Git's index records a symlink on our side of the mixed-type conflict"
+    );
+    let ((_, _), entries) = try_collect_filtered_opts_collect(
+        &root,
+        None,
+        |keep, ctx| {
+            walk(
+                &root,
+                ctx,
+                walk::Options {
+                    emit_tracked: true,
+                    ..options()
+                },
+                keep,
+            )
+        },
+        Some("nested/UU.txt"),
+        Options {
+            fresh_index: false,
+            ..Default::default()
+        },
+    )?;
+    assert_eq!(entries.len(), 1, "the pathspec selects the mixed-type conflict");
+    assert_eq!(
+        entries[0].0.index_kind,
+        Some(Symlink),
+        "case-sensitive classification still prefers our side's type"
+    );
+    Ok(())
+}
+
+#[test]
+fn conflict_children_with_different_casing_stay_tracked_like_git() -> TestResult {
+    let root = gix_testtools::scripted_fixture_read_only("conflicts-ignore-case.sh")?;
+    assert_eq!(
+        std::fs::read_to_string(root.join(".git/baseline-clean"))?,
+        "",
+        "Git preserves conflict children when core.ignoreCase is enabled"
+    );
+    for emit in [Matching, CollapseDirectory] {
+        let ((_, _), entries) = try_collect_filtered_opts_collect(
+            &root,
+            None,
+            |keep, ctx| {
+                walk(
+                    &root,
+                    ctx,
+                    walk::Options {
+                        ignore_case: true,
+                        emit_untracked: emit,
+                        emit_ignored: Some(emit),
+                        for_deletion: Some(ForDeletionMode::IgnoredDirectoriesCanHideNestedRepositories),
+                        ..options()
+                    },
+                    keep,
+                )
+            },
+            None::<&str>,
+            Options {
+                fresh_index: false,
+                ..Default::default()
+            },
+        )?;
+        assert!(
+            entries.is_empty(),
+            "case-insensitive cleanup cannot emit tracked conflict children or their parents: {entries:?}"
+        );
+    }
+    Ok(())
+}
+
 #[cfg(windows)]
 #[test]
 fn invalid_directory_names_return_errors_for_entries_and_traversal_roots() -> TestResult {
