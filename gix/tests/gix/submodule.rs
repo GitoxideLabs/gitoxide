@@ -353,6 +353,11 @@ mod open {
             assert_eq!(state.repository_exists, opened.is_some(), "state agrees with opening");
             if let Some(opened) = opened {
                 assert_eq!(opened.git_dir(), expected_git_dir, "the intended repository opens");
+                assert_eq!(
+                    opened.current_dir(),
+                    repo.current_dir(),
+                    "submodules retain the superproject's captured current directory even after the process CWD changes"
+                );
                 assert!(
                     opened.workdir().is_none(),
                     "no worktree is invented from the caller's cwd"
@@ -465,6 +470,100 @@ mod open {
         assert!(
             main_sm.state()?.worktree_checkout,
             "the main submodule remains populated"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn gitfile_dot_dot_target_preserves_configured_worktree() -> TestResult {
+        let root = gix_testtools::scripted_fixture_read_only("make_unlisted_gitlinks.sh")?
+            .join("listed-gitfile-worktree-config");
+        let repo = gix::open_opts(&root, gix::open::Options::isolated())?;
+        let sm = repo
+            .submodules()?
+            .expect("fixture has submodules")
+            .next()
+            .expect("fixture has d");
+        assert_eq!(
+            sm.git_dir_try_old_form()?,
+            root.join("d/../.git/embedded"),
+            "the checkout gitfile resolves to a repository path containing .."
+        );
+        let opened = sm.open()?.expect("submodule repository exists");
+        assert_eq!(
+            opened.workdir(),
+            Some(root.join(".git/checkout")).as_deref(),
+            "the repository's core.worktree overrides the clean inferred checkout"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn gitfile_dot_dot_target_rejects_empty_worktree_config() -> TestResult {
+        let root = gix_testtools::scripted_fixture_read_only("make_unlisted_gitlinks.sh")?
+            .join("listed-gitfile-empty-worktree-config");
+        let repo = gix::open_opts(&root, gix::open::Options::isolated())?;
+        let sm = repo
+            .submodules()?
+            .expect("fixture has submodules")
+            .next()
+            .expect("fixture has d");
+        assert!(
+            root.join("d/.git").is_file(),
+            "the initialized checkout has a gitfile, unlike the deinitialized regression fixture"
+        );
+        let err = sm
+            .open()
+            .expect_err("empty core.worktree must propagate even when the gitfile target contains ..");
+        assert!(
+            err.is_validation(),
+            "empty core.worktree is invalid configuration: {err:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn bare_submodule_retains_inferred_checkout_without_changing_config() -> TestResult {
+        let root = gix_testtools::scripted_fixture_read_only("make_unlisted_gitlinks.sh")?.join("listed-gitfile-bare");
+        let repo = gix::open_opts(&root, gix::open::Options::isolated())?;
+        let sm = repo
+            .submodules()?
+            .expect("fixture has submodules")
+            .next()
+            .expect("fixture has d");
+        let git_dir = sm.git_dir_try_old_form()?;
+        let opened = sm.open()?.expect("the bare-configured submodule repository exists");
+        assert_eq!(
+            opened.workdir(),
+            Some(root.join("d")).as_deref(),
+            "submodule opening retains the supplied checkout despite core.bare=true"
+        );
+        assert!(
+            opened.is_bare(),
+            "retaining the checkout does not make the configuration non-bare"
+        );
+        let config = opened.config_snapshot();
+        assert_eq!(
+            config.boolean("core.bare"),
+            Some(true),
+            "the bare configuration is preserved"
+        );
+        assert!(
+            config
+                .string(gix::config::tree::Core::WORKTREE)
+                .is_some_and(|value| value.is_empty()),
+            "the empty core.worktree is preserved and ignored while core.bare=true"
+        );
+
+        let ordinary = gix::open_opts(git_dir, gix::open::Options::isolated())?;
+        assert!(
+            ordinary.is_bare(),
+            "ordinary opening also respects the bare configuration"
+        );
+        assert_eq!(
+            ordinary.workdir(),
+            None,
+            "ordinary opening of the resolved gitdir does not retain a submodule checkout"
         );
         Ok(())
     }

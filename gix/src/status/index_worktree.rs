@@ -178,6 +178,8 @@ pub struct BuiltinSubmoduleStatus {
     git_dir: std::path::PathBuf,
     #[cfg(not(feature = "parallel"))]
     open_options: crate::open::Options,
+    #[cfg(not(feature = "parallel"))]
+    work_dir: Option<std::path::PathBuf>,
     submodule_paths: Vec<BString>,
 }
 
@@ -213,6 +215,8 @@ mod submodule_status {
                 git_dir: local_repo.git_dir().to_owned(),
                 #[cfg(not(feature = "parallel"))]
                 open_options: local_repo.open_options().clone(),
+                #[cfg(not(feature = "parallel"))]
+                work_dir: local_repo.workdir().map(ToOwned::to_owned),
                 submodule_paths,
             })
         }
@@ -235,9 +239,14 @@ mod submodule_status {
             #[cfg(feature = "parallel")]
             let repo = self.repo.to_thread_local();
             #[cfg(not(feature = "parallel"))]
-            let Ok(repo) = crate::open_opts(&self.git_dir, self.open_options.clone()) else {
+            let Ok(mut repo) = crate::open_opts(&self.git_dir, self.open_options.clone()) else {
                 return Ok(None);
             };
+            #[cfg(not(feature = "parallel"))]
+            {
+                // Preserve the captured state without requiring its checkout directory to still exist.
+                repo.work_tree.clone_from(&self.work_dir);
+            }
             let sm = if self
                 .submodule_paths
                 .binary_search_by(|path| path.as_bstr().cmp(rela_path))
@@ -278,24 +287,19 @@ mod submodule_status {
                     if ignore == crate::submodule::config::Ignore::All {
                         return Ok(None);
                     }
-                    let Some(work_dir) = repo.workdir() else {
+                    let Some(worktree_gitdir) = crate::submodule::worktree_gitdir(&repo, rela_path)? else {
                         return Ok(None);
                     };
-                    let work_dir = work_dir.join(gix_path::from_bstr(rela_path)?);
-                    let git_dir = work_dir.join(gix_discover::DOT_GIT_DIR);
-                    if !git_dir.exists() {
+                    let Some(git_dir) = crate::submodule::git_dir_from_worktree_gitdir(&worktree_gitdir, true)? else {
                         return Ok(None);
-                    }
-                    let mut options = repo.options.clone().without_repository_environment_overrides();
-                    options.git_dir_trust = None;
-                    let mut sm_repo = crate::open_opts(&git_dir, options)?;
-                    if sm_repo.workdir().is_none() {
-                        sm_repo.set_workdir(Some(work_dir))?;
-                    }
+                    };
+                    let Some(sm_repo) = crate::submodule::open(&repo, &git_dir, rela_path)? else {
+                        return Ok(None);
+                    };
                     crate::submodule::Status {
                         state: crate::submodule::State {
                             repository_exists: true,
-                            is_old_form: git_dir.is_dir(),
+                            is_old_form: worktree_gitdir.is_dir(),
                             worktree_checkout: true,
                             superproject_configuration: false,
                         },

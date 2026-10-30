@@ -47,6 +47,9 @@ pub struct Options {
     /// Retaining it would make later submodule or worktree opens that clone these options skip their normal
     /// `<path>/.git` lookup as well.
     pub(crate) open_path_as_is: bool,
+    /// Submodule checkouts remain usable even if their repository declares `core.bare=true`.
+    /// Consumed during initialization so this does not affect later ordinary repository opens.
+    pub(crate) retain_inferred_worktree_when_bare: bool,
     /// Internal to pass an already obtained CWD on to where it may also be used.
     /// This avoids the CWD being queried more than once per repo.
     pub(crate) current_dir: Option<PathBuf>,
@@ -59,6 +62,41 @@ mod repository;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retained_bare_submodule_checkout_is_used_for_safe_directory_checks() -> gix_testtools::TestResult {
+        let root = gix_testtools::scripted_fixture_read_only("make_unlisted_gitlinks.sh")?.join("listed-gitfile-bare");
+        let git_dir = root.join(".git/embedded");
+        let worktree = root.join("d");
+        let cwd = gix_fs::current_dir(false)?;
+        for trust in [gix_sec::Trust::Full, gix_sec::Trust::Reduced] {
+            let mut options = Options::isolated().with(trust).bail_if_untrusted(true);
+            options.current_dir = Some(cwd.clone());
+            options.retain_inferred_worktree_when_bare = true;
+            let opened =
+                crate::ThreadSafeRepository::open_from_paths(git_dir.clone(), Some(worktree.clone()), options, None);
+            if trust == gix_sec::Trust::Full {
+                let repo = opened?;
+                assert_eq!(
+                    repo.work_tree.as_deref(),
+                    Some(worktree.as_path()),
+                    "the checkout is retained"
+                );
+                assert!(
+                    !repo.linked_worktree_options.retain_inferred_worktree_when_bare,
+                    "the submodule-only policy must not leak into later opens"
+                );
+            } else {
+                let err = opened.expect_err("reduced trust requires safe.directory approval");
+                assert!(
+                    err.to_string()
+                        .contains(worktree.canonicalize()?.to_string_lossy().as_ref()),
+                    "safe.directory checks must use the retained checkout, not the Git directory: {err}"
+                );
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn size_of_options() {

@@ -19,6 +19,7 @@ impl Default for Options {
             git_installation_config_path: None,
             system_config_path: None,
             use_repository_local_environment: true,
+            retain_inferred_worktree_when_bare: false,
             current_dir: None,
         }
     }
@@ -196,6 +197,7 @@ impl gix_sec::trust::DefaultForLevel for Options {
                 object_store_slots: Default::default(),
                 permissions: Permissions::default_for_level(level),
                 git_dir_trust: gix_sec::Trust::Full.into(),
+                retain_inferred_worktree_when_bare: false,
                 filter_config_section: Some(config::section::is_trusted),
                 lossy_config: false,
                 bail_if_untrusted: false,
@@ -212,6 +214,7 @@ impl gix_sec::trust::DefaultForLevel for Options {
                 object_store_slots: gix_odb::store::init::Slots::Given(32), // limit resource usage
                 permissions: Permissions::default_for_level(level),
                 git_dir_trust: gix_sec::Trust::Reduced.into(),
+                retain_inferred_worktree_when_bare: false,
                 filter_config_section: Some(config::section::is_trusted),
                 bail_if_untrusted: false,
                 lenient_config: true,

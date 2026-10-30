@@ -218,7 +218,7 @@ impl Submodule<'_> {
         let Some(work_dir) = self.state.repo.workdir() else {
             return Ok(None);
         };
-        Ok(Some(work_dir.join(gix_path::from_bstr(self.path()?)?)))
+        work_dir_from_relative_path(work_dir, self.path()?.as_ref()).map(Some)
     }
 
     /// Return the submodule's repository location, honoring old-form `.git` directories and gitdir
@@ -256,31 +256,7 @@ impl Submodule<'_> {
         let Some(worktree_gitdir) = self.worktree_gitdir()? else {
             return Ok(git_dir);
         };
-        let git_dir = if worktree_gitdir.is_dir() {
-            worktree_gitdir
-        } else if worktree_gitdir.is_file() {
-            if validate_gitdir_file_target {
-                let git_dir = gix_discover::path::from_gitdir_file(&worktree_gitdir).or_raise(|| {
-                    gix_error::validation(format!(
-                        "The gitdir file at \"{}\" contains an invalid gitdir target",
-                        worktree_gitdir.display()
-                    ))
-                })?;
-                if !git_dir.is_dir() {
-                    bail!(gix_error::validation(format!(
-                        "The gitdir file at \"{}\" contains an invalid gitdir target: \"{}\"",
-                        worktree_gitdir.display(),
-                        git_dir.display()
-                    )));
-                }
-                git_dir
-            } else {
-                gix_discover::path::from_gitdir_file(&worktree_gitdir).unwrap_or(git_dir)
-            }
-        } else {
-            git_dir
-        };
-        Ok(git_dir)
+        Ok(git_dir_from_worktree_gitdir(&worktree_gitdir, validate_gitdir_file_target)?.unwrap_or(git_dir))
     }
 
     fn state_inner(&self, validate_gitdir_file_target: bool) -> Result<State> {
@@ -321,39 +297,7 @@ impl Submodule<'_> {
     /// The repository can also be used to learn about the submodule `HEAD`, i.e. where its working tree is at,
     /// which may differ compared to the superproject's index or `HEAD` commit.
     pub fn open(&self) -> Result<Option<Repository>> {
-        let mut options = self
-            .state
-            .repo
-            .options
-            .clone()
-            .without_repository_environment_overrides();
-        options.git_dir_trust = None;
-        match crate::open_opts(self.git_dir_try_old_form()?, options) {
-            Ok(mut repo) => {
-                if repo.workdir().is_none()
-                    && let Some(wd) = self.work_dir()?
-                {
-                    // Submodules of a checked-out superproject should always have a workdir.
-                    // However, it's possible for no workdir to be accessible if there is a symlink in the way.
-                    // Just setting it by hand fixes this issue effectively, even though the question remains
-                    // if this should work automatically.
-                    // For now, let's *not* use the `self.worktree_git()` directory which has its own edge-cases,
-                    // while the current solution yields the cleanest paths (i.e. it keeps relative ones).
-                    repo.set_workdir(Some(wd))?;
-                }
-                Ok(Some(repo))
-            }
-            // Nested not-found causes may instead describe invalid repository configuration.
-            Err(err)
-                if err
-                    .error()
-                    .downcast_ref::<gix_error::Message>()
-                    .is_some_and(|error| error.class == Some(gix_error::Class::NotFound)) =>
-            {
-                Ok(None)
-            }
-            Err(err) => Err(err),
-        }
+        open(self.state.repo, &self.git_dir_try_old_form()?, self.path()?.as_ref())
     }
 
     /// Return the location of the submodule checkout's `.git` entry, or `None` if the superproject has no worktree.
@@ -361,16 +305,111 @@ impl Submodule<'_> {
     /// This is usually a file containing a `gitdir:` pointer to the submodule's repository, but is a directory
     /// in old-form submodules.
     fn worktree_gitdir(&self) -> Result<Option<PathBuf>> {
-        let relative_path = gix_path::from_bstr(self.path()?)?;
-        let Some(work_dir) = self.state.repo.workdir() else {
-            return Ok(None);
-        };
-        let path = gix_fs::symlink::validate_relative_path(work_dir, &relative_path)?;
-        Ok(Some(path.join(gix_discover::DOT_GIT_DIR)))
+        worktree_gitdir(self.state.repo, self.path()?.as_ref())
     }
 }
 
-/// Append the name textually, like Git's `repo_git_path_append(..., "modules/%s", name)`.
+/// Join the Git path `relative_path` to the superproject's `work_dir`, preserving path spelling.
+fn work_dir_from_relative_path(work_dir: &Path, relative_path: &BStr) -> Result<PathBuf> {
+    Ok(work_dir.join(gix_path::from_bstr(relative_path)?))
+}
+
+/// Locate the `.git` entry of the checkout at `relative_path` below `repo`'s worktree,
+/// without requiring a configured submodule name. Return `None` if `repo` has no worktree.
+/// Validate `relative_path`, but leave inspecting the `.git` entry to the caller.
+pub(crate) fn worktree_gitdir(repo: &Repository, relative_path: &BStr) -> Result<Option<PathBuf>> {
+    let relative_path = gix_path::from_bstr(relative_path)?;
+    let Some(work_dir) = repo.workdir() else {
+        return Ok(None);
+    };
+    let path = gix_fs::symlink::validate_relative_path(work_dir, &relative_path)?;
+    Ok(Some(path.join(gix_discover::DOT_GIT_DIR)))
+}
+
+/// Resolve the checkout's `.git` directory or gitdir file at `worktree_gitdir`, or return `None` if absent.
+/// If `validate_gitdir_file_target` is `true`, require gitdir files to point to a directory.
+/// Otherwise, malformed gitdir files also return `None` so callers can use their fallback.
+pub(crate) fn git_dir_from_worktree_gitdir(
+    worktree_gitdir: &Path,
+    validate_gitdir_file_target: bool,
+) -> Result<Option<PathBuf>> {
+    if worktree_gitdir.is_dir() {
+        return Ok(Some(worktree_gitdir.to_owned()));
+    }
+    if !worktree_gitdir.is_file() {
+        return Ok(None);
+    }
+    if !validate_gitdir_file_target {
+        return Ok(gix_discover::path::from_gitdir_file(worktree_gitdir).ok());
+    }
+    let git_dir = gix_discover::path::from_gitdir_file(worktree_gitdir).or_raise(|| {
+        gix_error::validation(format!(
+            "The gitdir file at \"{}\" contains an invalid gitdir target",
+            worktree_gitdir.display()
+        ))
+    })?;
+    if !git_dir.is_dir() {
+        bail!(gix_error::validation(format!(
+            "The gitdir file at \"{}\" contains an invalid gitdir target: \"{}\"",
+            worktree_gitdir.display(),
+            git_dir.display()
+        )));
+    }
+    Ok(Some(git_dir))
+}
+
+/// Open the submodule repository at `git_dir` without inheriting repository-local environment overrides
+/// or trust from `superproject`. Infer its checkout from `relative_path` below `superproject`'s worktree,
+/// preserving path spelling and configuration precedence.
+/// Include the checkout's `.git` entry in trust checks while opening the resolved repository path.
+pub(crate) fn open(superproject: &Repository, git_dir: &Path, relative_path: &BStr) -> Result<Option<Repository>> {
+    let work_dir = superproject
+        .workdir()
+        .map(|work_dir| work_dir_from_relative_path(work_dir, relative_path))
+        .transpose()?;
+    let worktree_gitdir = worktree_gitdir(superproject, relative_path)?;
+    let original_path = worktree_gitdir
+        .as_deref()
+        .filter(|path| path.is_dir() || path.is_file())
+        .unwrap_or(git_dir);
+    let kind = match gix_discover::is_git(git_dir) {
+        Ok(kind) => kind,
+        Err(_) => return Ok(None),
+    };
+    let cwd = superproject.current_dir();
+    let (git_dir, work_dir) = match work_dir {
+        Some(work_dir) => (git_dir.to_owned(), Some(work_dir)),
+        None => gix_discover::repository::Path::from_dot_git_dir(git_dir.to_owned(), kind, cwd)
+            .expect("the Git directory was validated with is_git()")
+            .into_repository_and_work_tree_directories(),
+    };
+    let mut options = superproject.options.clone().without_repository_environment_overrides();
+    // Only repository ownership establishes initial trust; initialization checks the effective checkout after configuration.
+    options.git_dir_trust = Some(gix_discover::repository::trust(
+        &git_dir,
+        None,
+        cwd,
+        (original_path, None),
+    )?);
+
+    options.retain_inferred_worktree_when_bare = superproject.workdir().is_some();
+    match crate::ThreadSafeRepository::open_from_paths(git_dir, work_dir, options, None) {
+        Ok(repo) => Ok(Some(repo.into())),
+        Err(err)
+            if err
+                .error()
+                // Nested not-found causes may instead describe invalid repository configuration.
+                .downcast_ref::<gix_error::Message>()
+                .is_some_and(|error| error.class == Some(gix_error::Class::NotFound)) =>
+        {
+            Ok(None)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+/// Append `name` textually below the `modules` directory in `git_dir`,
+/// like Git's `repo_git_path_append(..., "modules/%s", name)`.
 ///
 /// In particular, don't use `Path::join()` for `name`: absolute-looking names are valid in Git,
 /// but joining them as a path would discard the `.git/modules` prefix.
