@@ -30,11 +30,20 @@ mod write {
                 oauth_refresh_token,
                 password_expiry_utc,
                 www_authenticate,
+                capability,
+                authtype,
+                credential,
+                ephemeral,
                 url,
                 // We only decode quit and interpret it, but won't get to pass it on as it means to stop the
                 // credential helper invocation chain.
                 quit: _,
             } = self;
+            for value in capability {
+                let key = "capability[]";
+                validate(key, value.as_ref(), *protect_protocol).map_err(std::io::Error::other)?;
+                write_key(&mut out, key, value.as_ref()).ok();
+            }
             for (key, value) in [("url", url), ("path", path)] {
                 if let Some(value) = value {
                     validate(key, value.as_slice().into(), *protect_protocol).map_err(std::io::Error::other)?;
@@ -47,6 +56,8 @@ mod write {
                 ("username", username),
                 ("password", password),
                 ("oauth_refresh_token", oauth_refresh_token),
+                ("authtype", authtype),
+                ("credential", credential),
             ] {
                 if let Some(value) = value {
                     validate(key, value.as_str().into(), *protect_protocol).map_err(std::io::Error::other)?;
@@ -63,6 +74,9 @@ mod write {
                 let key = "wwwauth[]";
                 validate(key, value.as_ref(), *protect_protocol).map_err(std::io::Error::other)?;
                 write_key(&mut out, key, value.as_ref()).ok();
+            }
+            if let Some(value) = ephemeral {
+                write_key(&mut out, "ephemeral", if *value { "1" } else { "0" }.into()).ok();
             }
             Ok(())
         }
@@ -105,6 +119,10 @@ pub mod decode {
                 oauth_refresh_token,
                 password_expiry_utc,
                 www_authenticate,
+                capability,
+                authtype,
+                credential,
+                ephemeral,
                 url,
                 quit,
             } = &mut ctx;
@@ -124,7 +142,13 @@ pub mod decode {
             }) {
                 let (key, value) = res?;
                 match key {
-                    "protocol" | "host" | "username" | "password" | "oauth_refresh_token" => {
+                    "protocol"
+                    | "host"
+                    | "username"
+                    | "password"
+                    | "oauth_refresh_token"
+                    | "authtype"
+                    | "credential" => {
                         if !value.is_utf8() {
                             bail!(validation(format!("Illformed UTF-8 in value of key {key:?}")).with_input(value));
                         }
@@ -135,6 +159,8 @@ pub mod decode {
                             "username" => username,
                             "password" => password,
                             "oauth_refresh_token" => oauth_refresh_token,
+                            "authtype" => authtype,
+                            "credential" => credential,
                             _ => unreachable!("checked field names in match above"),
                         } = Some(value);
                     }
@@ -144,8 +170,14 @@ pub mod decode {
                     "url" => *url = Some(value),
                     "path" => *path = Some(value),
                     "wwwauth[]" => www_authenticate.push(value),
+                    "capability[]" => capability.push(value),
                     "quit" => {
                         *quit = gix_config_value::Boolean::try_from(value.as_bstr())
+                            .ok()
+                            .map(Into::into);
+                    }
+                    "ephemeral" => {
+                        *ephemeral = gix_config_value::Boolean::try_from(value.as_bstr())
                             .ok()
                             .map(Into::into);
                     }

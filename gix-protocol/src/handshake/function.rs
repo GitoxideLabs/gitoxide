@@ -61,11 +61,12 @@ where
         } = match result {
             Ok(v) => Ok(v),
             Err(client::Error::Io(ref err)) if err.kind() == std::io::ErrorKind::PermissionDenied => {
-                let www_authenticate = err
+                let challenge = err
                     .get_ref()
-                    .and_then(|err| err.downcast_ref::<client::AuthenticationRequired>())
-                    .map(|err| err.www_authenticate.clone())
-                    .unwrap_or_default();
+                    .and_then(|err| err.downcast_ref::<client::AuthenticationRequired>());
+                let www_authenticate = challenge.map(|err| err.www_authenticate.clone()).unwrap_or_default();
+                // Challenges come from HTTP transports, which can send credentials of any `authtype`.
+                let capability = challenge.map(|_| vec!["authtype".into()]).unwrap_or_default();
                 drop(result); // needed to workaround this: https://github.com/rust-lang/rust/issues/76149
                 let url = transport.to_url().into_owned();
                 progress.set_name("authentication".into());
@@ -73,6 +74,7 @@ where
                     credentials::protocol::Context {
                         url: Some(url.clone()),
                         www_authenticate,
+                        capability,
                         ..Default::default()
                     },
                 ))

@@ -156,6 +156,82 @@ mod invoke {
     }
 
     #[test]
+    fn authtype_credentials_are_used_if_the_capability_was_announced() -> TestResult {
+        let outcome = Cascade::default()
+            .extend([
+                Program::from_custom_definition(
+                    r#"!f() {
+                        while IFS= read -r line; do
+                            if test "$line" = 'capability[]=authtype'; then
+                                printf 'capability[]=authtype\nauthtype=Bearer\ncredential=token\nephemeral=1\n'
+                            fi
+                        done
+                    }; f"#,
+                )?,
+                Program::from_custom_definition("!f() { cat >/dev/null; echo username=user; echo password=pass; }; f")?,
+            ])
+            .invoke(
+                Action::Get(Context {
+                    capability: vec!["authtype".into()],
+                    url: Some("https://example.com/repo".into()),
+                    www_authenticate: vec!["Bearer".into()],
+                    ..Default::default()
+                }),
+                gix_prompt::Options {
+                    mode: gix_prompt::Mode::Disable,
+                    askpass: None,
+                },
+            )?
+            .expect("the first helper supplies a complete credential");
+        assert_eq!(
+            outcome.identity,
+            Account {
+                username: "".into(),
+                password: "token".into(),
+                oauth_refresh_token: None,
+                authtype: Some("Bearer".into()),
+            },
+            "a credential with its authtype is complete, so the second helper isn't asked"
+        );
+        let context = Context::try_from(&outcome.next)?;
+        assert_eq!(
+            (context.authtype.as_deref(), context.ephemeral),
+            (Some("Bearer"), Some(true)),
+            "store and erase tell helpers which credential was used and that it should not be stored"
+        );
+        assert!(
+            context.www_authenticate.is_empty(),
+            "completed credentials do not carry authentication challenges into store or erase"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn authtype_credentials_are_ignored_if_the_capability_was_not_announced() -> TestResult {
+        let outcome = Cascade::default()
+            .extend([
+                Program::from_custom_definition(
+                    "!f() { cat >/dev/null; printf 'authtype=Bearer\\ncredential=token\\n'; }; f",
+                )?,
+                Program::from_custom_definition("!f() { cat >/dev/null; echo username=user; echo password=pass; }; f")?,
+            ])
+            .invoke(
+                Action::get_for_url("https://example.com/repo"),
+                gix_prompt::Options {
+                    mode: gix_prompt::Mode::Disable,
+                    askpass: None,
+                },
+            )?
+            .expect("the second helper supplies a complete credential");
+        assert_eq!(
+            outcome.identity,
+            identity("user", "pass"),
+            "callers that can't send an `authtype` don't receive one"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn credentials_are_filled_in_one_by_one_and_stop_when_complete() -> TestResult {
         let actual = invoke_cascade(["username", "password", "custom-helper"], action_get())?.expect("credentials");
         assert_eq!(actual.identity, identity("user", "pass"));
@@ -334,6 +410,7 @@ mod invoke {
             username: user.into(),
             password: pass.into(),
             oauth_refresh_token: None,
+            authtype: None,
         }
     }
 

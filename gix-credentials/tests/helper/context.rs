@@ -21,6 +21,31 @@ wwwauth[]=Bearer realm=\"\xff\"
 }
 
 #[test]
+fn authtype_fields_survive_a_protocol_roundtrip() -> TestResult {
+    let input = b"capability[]=authtype
+protocol=https
+host=example.com
+authtype=Bearer
+credential=token
+ephemeral=1
+";
+    let context = Context::from_bytes(input, ContextOptions::default())?;
+    let mut output = Vec::new();
+    context.write_to(&mut output)?;
+    assert_eq!(
+        output.as_bstr(),
+        input.as_bstr(),
+        "`capability[]` comes first as it must precede the values depending on it"
+    );
+    assert_eq!(
+        context.redacted().credential.as_deref(),
+        Some("<redacted>"),
+        "the credential is as secret as a password"
+    );
+    Ok(())
+}
+
+#[test]
 fn authentication_challenges_cannot_inject_protocol_fields() {
     for value in [
         b"Basic\0realm=example".as_slice(),

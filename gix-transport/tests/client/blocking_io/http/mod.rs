@@ -215,6 +215,7 @@ fn http_identity_is_picked_up_from_url() -> TestResult {
             username: "user".into(),
             password: "pass".into(),
             oauth_refresh_token: None,
+            authtype: None,
         })
     );
     Ok(())
@@ -316,6 +317,7 @@ fn http_will_use_pipelining() {
             username: "foo".into(),
             password: "bar".into(),
             oauth_refresh_token: None,
+            authtype: None,
         })
         .unwrap();
     match client.handshake(gix_transport::Service::UploadPack, &[]) {
@@ -352,6 +354,7 @@ fn http_authentication_error_can_be_differentiated_and_identity_is_transmitted()
         username: "user".into(),
         password: "password".into(),
         oauth_refresh_token: None,
+        authtype: None,
     })?;
     let SetServiceResponse { refs, .. } = client.handshake(Service::UploadPack, &[])?;
     io::copy(&mut refs.expect("refs in protocol V1"), &mut io::sink())?;
@@ -415,6 +418,62 @@ Authorization: Basic dXNlcjpwYXNzd29yZA==
         "the authentication information is used in subsequent calls"
     );
 
+    Ok(())
+}
+
+#[test]
+fn http_identity_with_authtype_is_transmitted_with_its_scheme() -> TestResult {
+    let (server, mut client, _err) = assert_error_status(401, std::io::ErrorKind::PermissionDenied)?;
+    server.next_read_and_respond_with(fixture_bytes("v1/http-handshake.response"));
+    client.set_identity(gix_sec::identity::Account {
+        username: String::new(),
+        password: "pre-encoded-token".into(),
+        oauth_refresh_token: None,
+        authtype: Some("Bearer".into()),
+    })?;
+    let SetServiceResponse { refs, .. } = client.handshake(Service::UploadPack, &[])?;
+    io::copy(&mut refs.expect("refs in protocol V1"), &mut io::sink())?;
+
+    let authorization: Vec<_> = server
+        .received_as_string()
+        .lines()
+        .filter(|line| line.to_lowercase().starts_with("authorization:"))
+        .map(ToOwned::to_owned)
+        .collect();
+    assert_eq!(
+        authorization,
+        ["Authorization: Bearer pre-encoded-token"],
+        "the credential is sent as is with its scheme, like Git does for credentials obtained with the `authtype` capability"
+    );
+    Ok(())
+}
+
+#[test]
+fn http_identity_with_authtype_refuses_values_that_would_break_the_header() -> TestResult {
+    for (authtype, credential) in [
+        ("Bearer", "token\r\nX-Injected: value"),
+        ("Bearer", "token\n"),
+        ("Bearer\r\nX-Injected: value", "token"),
+        ("Bea rer", "token"),
+        ("", "token"),
+        ("Bearer", ""),
+    ] {
+        let (_server, mut client, _err) = assert_error_status(401, std::io::ErrorKind::PermissionDenied)?;
+        client.set_identity(gix_sec::identity::Account {
+            username: String::new(),
+            password: credential.into(),
+            oauth_refresh_token: None,
+            authtype: Some(authtype.into()),
+        })?;
+        let err = client
+            .handshake(Service::UploadPack, &[])
+            .err()
+            .expect("the identity is refused before any header is built");
+        assert!(
+            matches!(err, client::Error::AuthenticationRefused(_)),
+            "{authtype:?} {credential:?} -> {err:?}"
+        );
+    }
     Ok(())
 }
 
@@ -623,6 +682,7 @@ fn redirected_post_does_not_forward_basic_auth_to_the_new_host() -> TestResult {
         username: "user".into(),
         password: "password".into(),
         oauth_refresh_token: None,
+        authtype: None,
     })?;
 
     let SetServiceResponse { refs, .. } = client.handshake(Service::UploadPack, &[])?;

@@ -38,12 +38,17 @@ mod access {
                 oauth_refresh_token,
                 password_expiry_utc: _,
                 www_authenticate: _,
+                capability: _,
+                authtype: _,
+                credential,
+                ephemeral: _,
                 url: _,
                 quit: _,
             } = self;
 
             *password = None;
             *oauth_refresh_token = None;
+            *credential = None;
         }
         /// Replace existing secrets with the word `<redacted>`.
         pub fn redacted(mut self) -> Self {
@@ -57,10 +62,14 @@ mod access {
                 oauth_refresh_token,
                 password_expiry_utc: _,
                 www_authenticate: _,
+                capability: _,
+                authtype: _,
+                credential,
+                ephemeral: _,
                 url: _,
                 quit: _,
             } = &mut self;
-            for secret in [password, oauth_refresh_token].into_iter().flatten() {
+            for secret in [password, oauth_refresh_token, credential].into_iter().flatten() {
                 *secret = "<redacted>".into();
             }
             self

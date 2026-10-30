@@ -18,7 +18,8 @@ fn get() -> gix_testtools::TestResult {
         gix_sec::identity::Account {
             username: "user".into(),
             password: "pass".into(),
-            oauth_refresh_token: None
+            oauth_refresh_token: None,
+            authtype: None,
         }
     );
     assert_eq!(
@@ -114,7 +115,8 @@ mod program {
             gix_sec::identity::Account {
                 username: "user".into(),
                 password: "pass".into(),
-                oauth_refresh_token: None
+                oauth_refresh_token: None,
+                authtype: None,
             }
         );
         Ok(())
@@ -137,7 +139,8 @@ mod program {
             gix_sec::identity::Account {
                 username: "user-script".into(),
                 password: "pass-script".into(),
-                oauth_refresh_token: None
+                oauth_refresh_token: None,
+                authtype: None,
             }
         );
         Ok(())
@@ -156,7 +159,8 @@ mod program {
             gix_sec::identity::Account {
                 username: "user-script".into(),
                 password: "pass-script".into(),
-                oauth_refresh_token: None
+                oauth_refresh_token: None,
+                authtype: None,
             }
         );
         Ok(())
