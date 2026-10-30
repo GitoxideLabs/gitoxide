@@ -225,10 +225,18 @@ fn writes_after_finishing_fail_until_reset() -> gix_error::TestResult {
     let mut inflate = gix_zlib::Inflate::default();
     let mut output = [0; 16];
     let (_, consumed, written) = inflate.once(&streams, &mut output)?;
-    assert_eq!(&output[..written], b"first");
+    assert_eq!(
+        &output[..written],
+        b"first",
+        "repeated flushes and a rejected write should preserve the finished stream"
+    );
     inflate.reset();
     let (_, _, written) = inflate.once(&streams[consumed..], &mut output)?;
-    assert_eq!(&output[..written], b"second");
+    assert_eq!(
+        &output[..written],
+        b"second",
+        "resetting the writer should allow writing a new independently decodable stream"
+    );
     Ok(())
 }
 
@@ -264,7 +272,7 @@ fn inputs_larger_than_any_buffer() -> gix_error::TestResult {
 fn writers_of_different_levels_one_after_another() -> gix_error::TestResult {
     let data = b"some object content, some object content".repeat(10);
     for level in [1, 9, 6, 1, 0, 9, 9, 6] {
-        let level = Compression::new(level).expect("valid");
+        let level = Compression::new(level).expect("all test levels are within the supported range of 0..=9");
         let mut writer = deflate::Write::new(Vec::new(), level);
         writer.write_all(&data)?;
         writer.flush()?;
@@ -276,7 +284,12 @@ fn writers_of_different_levels_one_after_another() -> gix_error::TestResult {
             6 => 2,
             _ => 3,
         };
-        assert_eq!(out[1] >> 6, flevel, "level {}", level.level());
+        assert_eq!(
+            out[1] >> 6,
+            flevel,
+            "the zlib header should record compression level {} even when levels change between writers",
+            level.level()
+        );
         assert_deflate_buffer(out, &data)?;
     }
     Ok(())

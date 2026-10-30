@@ -11,7 +11,7 @@ use crate::Compression;
 /// The most input buffered before compressing. Objects up to this size are compressed in one
 /// call, which lets `sirocco` size its tables to them; larger ones stream through a buffer this
 /// large.
-const MAX_INPUT: usize = 1 << 20;
+const MAX_INPUT: usize = 1024 * 1024;
 const _: () = assert!(MAX_INPUT >= 2 * sirocco::deflate::MIN_BUFFER_LEN);
 /// The most input capacity kept with a pooled encoder, so that idle pools stay small.
 const MAX_POOLED_INPUT: usize = 64 * 1024;
@@ -28,6 +28,11 @@ struct State {
 }
 
 thread_local! {
+    /// Idle states reused across writers to avoid allocating the large encoder tables for every object.
+    /// A writer removes a state with its compression level, or allocates one if none matches, and owns
+    /// it exclusively until drop. Dropping resets the state and returns it to the current thread's pool,
+    /// keeping at most `POOL_LEN` idle states and discarding input capacities above `MAX_POOLED_INPUT`.
+    /// If the pool is full or already destroyed during thread shutdown, the returned state is dropped.
     static POOL: RefCell<Vec<State>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -46,8 +51,8 @@ impl State {
         })
     }
 
-    /// Return the state to this thread's pool, if it has room.
-    fn give_back(mut self) {
+    /// Reset and return the state to this thread's pool, or drop it if the pool is full or unavailable.
+    fn reuse(mut self) {
         self.encoder.reset();
         self.input.clear();
         if self.input.capacity() > MAX_POOLED_INPUT {
@@ -73,7 +78,7 @@ pub(super) struct Backend {
 impl Drop for Backend {
     fn drop(&mut self) {
         if let Some(state) = self.state.take() {
-            state.give_back();
+            state.reuse();
         }
     }
 }
