@@ -67,3 +67,8 @@ ignored = [
     # Public optional `serde` feature is retained for downstream feature compatibility.
     "serde",
 ]
+
+[package.metadata.qa]
+checks = [
+    { args = ["--all-features"] },
+]

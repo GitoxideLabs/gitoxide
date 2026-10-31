@@ -3353,6 +3353,7 @@ dependencies = [
  "cargo-smart-release-core",
  "clap",
  "gix",
+ "gix-error",
  "gix-testtools",
  "regex",
  "serde_json",

@@ -55,3 +55,19 @@ permutohedron = "0.2.4"
 [package.metadata.docs.rs]
 all-features = true
 features = ["sha1", "document-features"]
+
+[package.metadata.qa]
+checks = [
+    { args = ["--features", "sha1,serde"] },
+    { args = ["--no-default-features", "--features", "sha1,describe"] },
+]
+tests = [
+    { args = ["--features", "sha256"], env = { GIX_TEST_FIXTURE_HASH = "sha1" } },
+    { args = ["--features", "sha256"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+]
+
+[package.metadata.qa.wasm]
+targets = ["wasm32-unknown-unknown", "wasm32-wasip1", "wasm32-wasip2"]
+checks = [
+    { args = ["--features", "sha1"] },
+]

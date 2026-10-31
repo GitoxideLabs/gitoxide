@@ -66,3 +66,13 @@ gix-discover = { path = "../gix-discover" }
 
 [package.metadata.docs.rs]
 features = ["sha1", "document-features", "serde"]
+
+[package.metadata.qa]
+checks = [
+    { args = ["--features", "sha1,serde"] },
+    { args = ["--no-default-features", "--features", "sha1"] },
+]
+tests = [
+    { args = ["--features", "gix-parallel/parallel"], packages = ["gix-worktree", "gix-parallel"], env = { GIX_TEST_FIXTURE_HASH = "sha1" } },
+    { args = ["--features", "gix-worktree/sha256,gix-parallel/parallel"], packages = ["gix-worktree", "gix-parallel"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+]

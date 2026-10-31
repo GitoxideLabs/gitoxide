@@ -46,3 +46,11 @@ tempfile = "3.26.0"
 [package.metadata.docs.rs]
 all-features = true
 features = ["document-features"]
+
+[package.metadata.qa]
+checks = [
+    { args = ["--features", "serde"] },
+]
+
+[package.metadata.qa.wasm]
+targets = ["wasm32-wasip1", "wasm32-wasip2"]

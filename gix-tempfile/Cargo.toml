@@ -82,3 +82,12 @@ gix-testtools = { path = "../tests/tools", default-features = false, features = 
     "sha1",
 ] }
 insta = "1.46.3"
+
+[package.metadata.qa]
+checks = [
+    { args = ["--features", "signals"] },
+    { args = ["--features", "hp-hashmap"] },
+]
+tests = [
+    { args = ["--features", "signals"] },
+]

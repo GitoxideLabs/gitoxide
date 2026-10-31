@@ -30,3 +30,6 @@ serial_test = { version = "3.4.0", default-features = false }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))'.dev-dependencies]
 expectrl = "0.7.0"
+
+[package.metadata.qa.wasm]
+targets = ["wasm32-unknown-unknown", "wasm32-wasip1", "wasm32-wasip2"]

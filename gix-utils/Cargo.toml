@@ -78,3 +78,30 @@ required-features = ["io-pipe"]
 [package.metadata.docs.rs]
 all-features = true
 features = ["document-features"]
+
+[package.metadata.qa]
+checks = [
+    { args = ["--all-features"] },
+    { args = ["--features", "progress,progress-unit-bytes"] },
+    { args = ["--features", "progress,progress-unit-human-numbers"] },
+]
+tests = [
+    { args = ["--all-features"] },
+]
+
+[package.metadata.qa.each-feature]
+# There is no default feature; check independent additions without multiplying combinations.
+args = ["--no-default-features"]
+exclude = ["prodash", "document-features", "progress-unit-bytes", "progress-unit-human-numbers"]
+
+[package.metadata.qa.wasm]
+targets = ["wasm32-unknown-unknown", "wasm32-wasip1", "wasm32-wasip2"]
+checks = [
+    { args = ["--no-default-features", "--features", "progress,progress-unit-bytes"] },
+    { args = ["--no-default-features", "--features", "progress,progress-unit-human-numbers"] },
+]
+
+[package.metadata.qa.wasm.each-feature]
+args = ["--no-default-features"]
+# Keep platform coverage for the established independent features and explicit progress-unit pairs.
+exclude = ["bstr", "prodash", "document-features", "progress-unit-bytes", "progress-unit-human-numbers"]
