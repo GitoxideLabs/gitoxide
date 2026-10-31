@@ -11,8 +11,9 @@
 //! ## Script Isolation
 //!
 //! Fixture scripts and [`git()`] use `GIT_CONFIG_PARAMETERS` to disable signing and automatic maintenance
-//! and set `init.defaultBranch=main`. A script's own `GIT_CONFIG_COUNT` entries coexist with this configuration,
-//! with isolation taking precedence for shared keys. Explicit `git -c` options can override isolation.
+//! and set `init.defaultBranch=main` and `core.longpaths=true`. The latter lets Git for Windows use long paths
+//! without depending on external configuration. A script's own `GIT_CONFIG_COUNT` entries coexist with this
+//! configuration, with isolation taking precedence for shared keys. Explicit `git -c` options can override isolation.
 //! Bash fixtures trace commands to a separate descriptor so redirected stderr baselines remain unchanged.
 //! Bash older than 4.1 reports failed commands instead. Captured diagnostics are printed only on failure.
 //!
@@ -419,6 +420,7 @@ const ISOLATED_GIT_CONFIG: &[(&str, &str)] = &[
     ("commit.gpgsign", "false"),
     ("tag.gpgsign", "false"),
     ("init.defaultBranch", "main"),
+    ("core.longpaths", "true"),
     ("protocol.file.allow", "always"),
     ("maintenance.auto", "false"),
     ("gc.auto", "0"),

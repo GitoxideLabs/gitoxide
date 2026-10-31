@@ -37,6 +37,21 @@ mod isolation {
             "false",
             "`git()` runs with the same isolation"
         );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("longpaths"))?.trim(),
+            "true",
+            "fixture Git supports long Windows paths without system or global configuration"
+        );
+        assert_eq!(
+            gix_testtools::git(dir.path().join("repo"), "config --bool --get core.longpaths")?.trim(),
+            "true",
+            "direct Git commands share the fixture's long-path setting"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("override-longpaths"))?.trim(),
+            "false",
+            "tests can explicitly override long-path support with git -c"
+        );
         Ok(())
     }
 
