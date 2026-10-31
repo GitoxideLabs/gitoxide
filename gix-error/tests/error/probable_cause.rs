@@ -1189,7 +1189,7 @@ fn converted_marker_roots_format_their_real_diagnostic() {
     let exn = exn.chain(message("specific diagnostic"));
     let location = exn.frame().children()[0].location();
     let expected = if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
-        format!("specific diagnostic, at {}:{}", location.file(), location.line())
+        format!("specific diagnostic, at {}:{}", location.file(), location.line()).replace('\\', "/")
     } else {
         "specific diagnostic".into()
     };
@@ -1211,7 +1211,7 @@ fn converted_marker_only_errors_retain_their_root_diagnostic() {
     let exn = VALIDATION.raise_typed().chain(NOT_FOUND);
     let location = exn.frame().location();
     let expected = if cfg!(all(feature = "auto-chain-error", not(feature = "tree-error"))) {
-        format!("Validation, at {}:{}", location.file(), location.line())
+        format!("Validation, at {}:{}", location.file(), location.line()).replace('\\', "/")
     } else {
         "Validation".into()
     };

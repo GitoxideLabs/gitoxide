@@ -721,12 +721,13 @@ fn public_error_reports_preserve_context_and_native_causes() {
             );
         }
     }
+    let source = file!().replace('\\', "/");
     assert!(
-        format!("{error:?}").contains(file!()),
+        format!("{error:?}").contains(&source),
         "Debug reports include captured caller locations for main() errors"
     );
     assert!(
-        !format!("{error:#?}").contains(file!()) && !format!("{error:#}").contains(file!()),
+        !format!("{error:#?}").contains(&source) && !format!("{error:#}").contains(&source),
         "alternate reports omit caller locations"
     );
     assert!(

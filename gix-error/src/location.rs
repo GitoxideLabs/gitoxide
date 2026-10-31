@@ -2,8 +2,21 @@ use std::{fmt, panic::Location};
 
 pub(crate) fn write(f: &mut fmt::Formatter<'_>, location: &Location<'_>) -> fmt::Result {
     if cfg!(feature = "error-print-location") {
-        let (package, source) = local_path(location.file());
-        write!(f, ", at {package}{source}:{}", location.line())?;
+        f.write_str(", at ")?;
+        write_path(f, location.file())?;
+        write!(f, ":{}", location.line())?;
+    }
+    Ok(())
+}
+
+fn write_path(f: &mut impl fmt::Write, file: &str) -> fmt::Result {
+    let (package, source) = local_path(file);
+    f.write_str(package)?;
+    for (index, component) in source.split('\\').enumerate() {
+        if index != 0 {
+            f.write_char('/')?;
+        }
+        f.write_str(component)?;
     }
     Ok(())
 }
@@ -78,12 +91,14 @@ mod tests {
             ),
             (
                 r"C:\Users\user\.cargo\registry\src\index.crates.io-hash\gix-url-0.39.0\src\parse.rs",
-                r"gix-url\src\parse.rs",
+                "gix-url/src/parse.rs",
             ),
             (
                 r"C:\checkout\gix-error\tests\error\main.rs",
-                r"gix-error\tests\error\main.rs",
+                "gix-error/tests/error/main.rs",
             ),
+            (r"gix-error\tests/error\main.rs", "gix-error/tests/error/main.rs"),
+            (r"src\nested/main.rs", "src/nested/main.rs"),
             ("/checkout/crate-1.2.3/src/main.rs", "crate-1.2.3/src/main.rs"),
             ("src/main.rs", "src/main.rs"),
             ("../src/main.rs", "main.rs"),
@@ -93,8 +108,9 @@ mod tests {
             ("main.rs", "main.rs"),
             ("", ""),
         ] {
-            let (package, source) = super::local_path(input);
-            assert_eq!(format!("{package}{source}"), expected, "source path: {input}");
+            let mut actual = String::new();
+            super::write_path(&mut actual, input).expect("writing a source path to a String cannot fail");
+            assert_eq!(actual, expected, "source path: {input}");
         }
     }
 }
