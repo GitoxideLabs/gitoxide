@@ -9,9 +9,7 @@ version = "0.90.0"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
-# Rust 1.88 is required so hash-related dependencies can use Rust 2024 crates,
-# notably `sha2` 0.11 and `hashbrown` 0.17.
-rust-version = "1.88"
+rust-version = "1.99"
 
 [lib]
 doctest = true
@@ -20,14 +18,17 @@ test = true
 [[example]]
 name = "clone"
 path = "examples/clone.rs"
-required-features = ["blocking-network-client"]
+required-features = ["unstable", "blocking-network-client"]
 
 [[example]]
 name = "gix-notes-bench"
 path = "examples/gix-notes-bench.rs"
-required-features = ["notes"]
+required-features = ["unstable", "notes"]
 
 [features]
+
+## Expose APIs whose plumbing types or API design are not stable yet. These APIs may change incompatibly.
+unstable = []
 
 default = ["max-performance", "comfort", "basic", "extras", "auto-chain-error", "sha1"]
 
@@ -339,14 +340,19 @@ progress-tree = ["prodash/progress-tree"]
 cache-efficiency-debug = ["gix-utils/cache-efficiency-debug"]
 
 [dependencies]
+gix-macros = { version = "^0.2.0", path = "../gix-macros" }
 gix-parallel = { version = "^0.50.1", path = "../gix-parallel", features = ["once_cell"] }
 gix-error = { version = "^0.5.2", path = "../gix-error", features = ["bstr"] }
-gix-utils = { version = "^0.5.2", path = "../gix-utils", features = ["bstr", "interrupt", "progress"] }
-gix-fs = { version = "^0.24.1", path = "../gix-fs" }
+gix-utils = { version = "^0.5.2", path = "../gix-utils", features = [
+    "bstr",
+    "interrupt",
+    "progress",
+] }
+gix-fs = { version = "^1.0.0", path = "../gix-fs", features = ["unstable"] }
 gix-ref = { version = "^0.69.1", path = "../gix-ref" }
 gix-discover = { version = "^0.57.1", path = "../gix-discover" }
-gix-tempfile = { version = "^26.0.0", path = "../gix-tempfile", default-features = false }
-gix-lock = { version = "^26.0.0", path = "../gix-lock" }
+gix-tempfile = { version = "^27.0.0", path = "../gix-tempfile", default-features = false }
+gix-lock = { version = "^27.0.0", path = "../gix-lock" }
 gix-validate = { version = "^0.13.1", path = "../gix-validate" }
 gix-sec = { version = "^0.16.1", path = "../gix-sec" }
 gix-date = { version = "^0.18.1", path = "../gix-date" }
@@ -427,8 +433,11 @@ parking_lot = { version = "0.12.4", optional = true }
 document-features = { version = "0.2.0", optional = true }
 
 [dev-dependencies]
+gix-fs = { path = "../gix-fs", features = ["unstable"] }
+gix-lock = { path = "../gix-lock", features = ["unstable"] }
+gix-tempfile = { path = "../gix-tempfile", default-features = false, features = ["unstable"] }
 gix = { path = ".", default-features = false, features = [
-    "merge", "tree-error"
+    "unstable", "merge", "tree-error"
 ] }
 gix-hash = { version = "^0.28.1", path = "../gix-hash" }
 gix-pack = { version = "^0.77.0", path = "../gix-pack", default-features = false, features = [
@@ -451,6 +460,34 @@ features = [
     "blocking-network-client",
     "blocking-http-transport-curl",
     "serde",
+]
+
+[package.metadata.smart-release]
+api-check = ["etc/scripts/check-api.sh"]
+unstable-features = ["unstable"]
+
+[package.metadata.api-check]
+profiles = [
+    { default-features = false, features = ["sha1"] },
+    { default-features = true, features = ["blocking-network-client", "sha256", "serde"] },
+]
+recursive = true
+# Temporary support for foundational plumbing until the porcelain API reaches 1.0.
+allowed-unstable-crates = ["gix_error"]
+allowed-unstable-types = [
+    "gix_hash::ObjectId",
+    "gix_hash::oid",
+    "gix_hash::Kind",
+    "gix_hash::Prefix",
+    "gix_hash::ChangeId",
+    "gix_object::Kind",
+    "gix_actor::Signature",
+    "gix_actor::SignatureRef",
+    "gix_actor::Identity",
+    "gix_actor::IdentityRef",
+    "gix_date::Time",
+    "gix_date::SecondsSinceUnixEpoch",
+    "gix_date::OffsetInSeconds",
 ]
 
 [package.metadata.cargo-machete]

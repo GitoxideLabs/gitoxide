@@ -9,6 +9,7 @@ use crate::{Id, Object, Result};
 /// An [object id][ObjectId] infused with a [`Repository`][crate::Repository].
 impl<'repo> Id<'repo> {
     /// Find the [`Object`] associated with this object id, and consider it an error if it doesn't exist.
+    #[gix_macros::unstable(since = "2021-08-19")]
     pub fn object(&self) -> Result<Object<'repo>> {
         self.repo.find_object(self.inner)
     }
@@ -16,11 +17,13 @@ impl<'repo> Id<'repo> {
     /// Find the [`header`][gix_odb::find::Header] associated with this object id, or an error if it doesn't exist.
     ///
     /// Use this method if there is no interest in the contents of the object, which generally is much faster to obtain.
+    #[gix_macros::unstable(since = "2023-07-19")]
     pub fn header(&self) -> Result<gix_odb::find::Header> {
         self.repo.find_header(self.inner)
     }
 
     /// Try to find the [`Object`] associated with this object id, and return `None` if it's not available locally.
+    #[gix_macros::unstable(since = "2021-08-19")]
     pub fn try_object(&self) -> Result<Option<Object<'repo>>> {
         self.repo.try_find_object(self.inner)
     }
@@ -28,6 +31,7 @@ impl<'repo> Id<'repo> {
     /// Find the [`header`][gix_odb::find::Header] associated with this object id, or return `None` if it doesn't exist.
     ///
     /// Use this method if there is no interest in the contents of the object, which generally is much faster to obtain.
+    #[gix_macros::unstable(since = "2023-07-19")]
     pub fn try_header(&self) -> Result<Option<gix_odb::find::Header>> {
         self.repo.try_find_header(self.inner)
     }
@@ -84,6 +88,7 @@ impl<'repo> Id<'repo> {
 
 impl<'repo> Id<'repo> {
     /// Obtain a platform for traversing ancestors of this commit.
+    #[gix_macros::unstable(since = "2021-09-06")]
     pub fn ancestors(&self) -> crate::revision::walk::Platform<'repo> {
         crate::revision::walk::Platform::new(Some(self.inner), self.repo)
     }
@@ -94,7 +99,9 @@ mod impls {
 
     use gix_hash::{ObjectId, oid};
 
-    use crate::{Id, Object, ObjectDetached};
+    use crate::Id;
+    #[cfg(feature = "unstable")]
+    use crate::{Object, ObjectDetached};
 
     macro_rules! impl_partial_eq_text {
         ($text:ty) => {
@@ -154,12 +161,14 @@ mod impls {
         }
     }
 
+    #[gix_macros::unstable(since = "2022-02-26")]
     impl<'repo> PartialEq<Object<'repo>> for Id<'repo> {
         fn eq(&self, other: &Object<'repo>) -> bool {
             self.inner == other.id
         }
     }
 
+    #[gix_macros::unstable(since = "2022-02-26")]
     impl PartialEq<ObjectDetached> for Id<'_> {
         fn eq(&self, other: &ObjectDetached) -> bool {
             self.inner == other.id

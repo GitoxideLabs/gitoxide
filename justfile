@@ -40,6 +40,13 @@ clippy-fix:
 check:
     etc/scripts/cargo-check-all.sh
 
+# Check stable APIs against a revision, or the latest supported release (Rust 1.99)
+[group('Development')]
+check-api baseline='':
+    cargo test -p internal-tools -- --include-ignored
+    etc/scripts/check-gix-api.sh
+    bash etc/scripts/check-api-compare.sh {{ quote(baseline) }}
+
 # Check cargo-auditable compatibility (install with `cargo install cargo-auditable --locked`)
 [group('Development')]
 check-auditable:

@@ -1666,7 +1666,7 @@ mod windows {
             BStr::new("file"),
         );
         index.set_timestamp(FileTime::from_system_time(
-            std::time::SystemTime::now() + std::time::Duration::from_secs(60),
+            std::time::SystemTime::now() + std::time::Duration::from_mins(1),
         ));
         for executable_bit in [false, true] {
             let options = Options {

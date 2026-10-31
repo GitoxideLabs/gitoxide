@@ -12,6 +12,7 @@ impl crate::Repository {
     ///   `HEAD` ref available for lookups.
     #[doc(alias = "revparse", alias = "git2")]
     #[cfg(feature = "revision")]
+    #[gix_macros::unstable(since = "2022-07-31")]
     pub fn rev_parse<'a>(&self, spec: impl Into<&'a BStr>) -> Result<revision::Spec<'_>> {
         revision::Spec::from_bstr(
             spec,
@@ -51,7 +52,7 @@ impl crate::Repository {
     /// Graph setup and traversal failures are returned as errors.
     ///
     /// # Performance
-    /// For repeated calls, prefer [`merge_base_with_graph()`](Self::merge_base_with_graph()).
+    /// With `unstable` enabled, use `merge_base_with_graph()` to reuse a graph across calls.
     /// Also be sure to [set an object cache](crate::Repository::object_cache_size_if_unset) to accelerate repeated commit lookups.
     #[cfg(feature = "revision")]
     pub fn merge_base(
@@ -71,6 +72,7 @@ impl crate::Repository {
     /// # Performance
     /// Be sure to [set an object cache](crate::Repository::object_cache_size_if_unset) to accelerate repeated commit lookups.
     #[cfg(feature = "revision")]
+    #[gix_macros::unstable(since = "2024-08-27")]
     pub fn merge_base_with_graph(
         &self,
         one: impl Into<gix_hash::ObjectId>,
@@ -92,6 +94,7 @@ impl crate::Repository {
     /// Be sure to [set an object cache](crate::Repository::object_cache_size_if_unset) to speed up repeated commit lookups.
     #[doc(alias = "merge_bases_many", alias = "git2")]
     #[cfg(feature = "revision")]
+    #[gix_macros::unstable(since = "2024-08-27")]
     pub fn merge_bases_many_with_graph(
         &self,
         one: impl Into<gix_hash::ObjectId>,
@@ -106,12 +109,12 @@ impl crate::Repository {
         })
     }
 
-    /// Like [`merge_bases_many_with_graph()`](Self::merge_bases_many_with_graph), but without the ability to speed up consecutive calls with a [graph](gix_revwalk::Graph).
+    /// Find merge bases without retaining a graph between calls.
     ///
     /// # Performance
     ///
     /// Be sure to [set an object cache](crate::Repository::object_cache_size_if_unset) to speed up repeated commit lookups, and consider
-    /// using [`merge_bases_many_with_graph()`](Self::merge_bases_many_with_graph) for consecutive calls.
+    /// using `merge_bases_many_with_graph()` with `unstable` enabled for consecutive calls.
     #[doc(alias = "git2")]
     #[cfg(feature = "revision")]
     pub fn merge_bases_many(
@@ -128,6 +131,7 @@ impl crate::Repository {
     ///
     /// Use `graph` to speed up repeated calls. Traversal failures are returned as errors.
     #[cfg(feature = "revision")]
+    #[gix_macros::unstable(since = "2024-11-07")]
     pub fn merge_base_octopus_with_graph(
         &self,
         commits: impl IntoIterator<Item = impl Into<gix_hash::ObjectId>>,
@@ -145,7 +149,7 @@ impl crate::Repository {
     /// Return the best merge-base among all `commits`, or `None` if `commits` yields no commit or no merge-base was found.
     /// Graph setup and traversal failures are returned as errors.
     ///
-    /// For repeated calls, prefer [`Self::merge_base_octopus_with_graph()`] for cache-reuse.
+    /// With `unstable` enabled, use `merge_base_octopus_with_graph()` to reuse a graph across calls.
     #[cfg(feature = "revision")]
     pub fn merge_base_octopus(
         &self,
@@ -165,6 +169,7 @@ impl crate::Repository {
     /// [`DateOrder`](revision::walk::Sorting::DateOrder) to prioritize newer commits while still visiting children before parents.
     /// Without a commit-graph, these topological modes must explore the visible history before yielding the first commit.
     #[doc(alias = "revwalk", alias = "git2")]
+    #[gix_macros::unstable(since = "2022-07-31")]
     pub fn rev_walk(
         &self,
         tips: impl IntoIterator<Item = impl Into<gix_hash::ObjectId>>,

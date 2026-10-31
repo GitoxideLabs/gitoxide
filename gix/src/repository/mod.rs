@@ -3,6 +3,7 @@
 
 /// The kind of Git repository, focussing on the repository data itself, i.e. what's in `.git`.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[non_exhaustive]
 pub enum Kind {
     /// An ordinary Git repository.
     Common,
@@ -18,6 +19,7 @@ pub enum Kind {
 ///
 /// See [Git's repository format specification](https://git-scm.com/docs/repository-version).
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum FormatVersion {
     /// The original SHA-1 repository format, used when no version is configured.
     ///
@@ -58,6 +60,7 @@ impl FormatVersion {
     /// Version 1 needs no upgrade and is accepted without checking its extensions.
     ///
     /// This only checks extension names; it neither validates values nor modifies `config`.
+    #[gix_macros::unstable(since = "2026-09-14")]
     pub fn validate_upgrade_to_v1(self, config: &gix_config::File) -> crate::Result<()> {
         use gix_error::bail;
 
@@ -86,11 +89,13 @@ impl FormatVersion {
 }
 
 #[cfg(any(feature = "attributes", feature = "excludes"))]
+#[gix_macros::unstable(since = "2023-07-04")]
 pub mod attributes;
 ///
 #[cfg(feature = "blame")]
 mod blame;
 /// Local branch operations.
+#[gix_macros::unstable(since = "2026-08-16")]
 pub mod branch;
 mod cache;
 #[cfg(feature = "worktree-mutation")]
@@ -103,10 +108,10 @@ mod diff;
 ///
 #[cfg(feature = "dirwalk")]
 mod dirwalk;
-///
 #[cfg(feature = "attributes")]
+#[gix_macros::unstable(since = "2023-07-03")]
 pub mod filter;
-///
+#[gix_macros::unstable(since = "2024-09-20")]
 pub mod freelist;
 mod graph;
 pub(crate) mod identity;
@@ -137,6 +142,7 @@ pub(crate) mod worktree;
 
 ///
 #[cfg(feature = "blame")]
+#[gix_macros::unstable(since = "2025-09-04")]
 pub mod blame_file {
     /// Options to be passed to [Repository::blame_file()](crate::Repository::blame_file()).
     #[derive(Default, Debug, Clone)]

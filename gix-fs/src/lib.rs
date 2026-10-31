@@ -1,12 +1,18 @@
 //! A crate with file-system specific utilities.
 //!
-//! File-opening helpers such as [`open_read_only_no_follow()`] and Unicode-aware [`read_dir()`]
-//! are available without enabling any features. The read helper returns [`FileOrSymlink`] so callers
-//! can choose whether to skip or reject symlinks without platform-specific handling.
+//! The stable API is limited to the filesystem operations needed by `gix-tempfile` and `gix-lock`:
+//! [`dir::create::Retries`], [`dir::create::all()`], [`dir::remove::empty_upward_until_boundary()`],
+//! and [`set_shared_repository_permissions()`].
+//!
+//! All other public APIs require the `unstable` feature and are outside the compatibility guarantee.
+//! Pin an exact crate version when using them. The `serde` and `walkdir` features also enable `unstable`.
 //!
 //! ## Examples
 //!
+//! With `unstable` enabled, delegate side effects as a stack's current path changes:
+//!
 //! ```
+//! # #[cfg(feature = "unstable")]
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! use std::path::{Path, PathBuf};
 //!
@@ -57,6 +63,8 @@
 //! assert_eq!(recorder.paths, vec![PathBuf::from("src"), PathBuf::from("src/lib.rs")]);
 //! assert_eq!(gix_fs::current_dir(capabilities.precompose_unicode)?, std::env::current_dir()?);
 //! # Ok(()) }
+//! # #[cfg(not(feature = "unstable"))]
+//! # fn main() {}
 //! ```
 //!
 //! ## Feature Flags
@@ -71,6 +79,7 @@
 use std::path::PathBuf;
 
 /// Common knowledge about the worktree that is needed across most interactions with the work tree
+#[gix_macros::unstable(since = "2023-04-16")]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone, Copy)]
 pub struct Capabilities {
@@ -96,28 +105,39 @@ pub struct Capabilities {
     /// out as files which contain the link as text.
     pub symlink: bool,
 }
+#[cfg_attr(not(feature = "unstable"), allow(dead_code))]
 mod capabilities;
 
+#[cfg_attr(not(feature = "unstable"), allow(dead_code))]
 mod file;
+#[gix_macros::unstable(since = "2026-09-30")]
 pub use file::{FileOrSymlink, clear_readonly_attribute, open_options_no_follow, open_read_only_no_follow};
 
+#[cfg_attr(not(feature = "unstable"), allow(dead_code))]
 mod snapshot;
+#[gix_macros::unstable(since = "2023-04-13")]
 pub use snapshot::{FileSnapshot, SharedFileSnapshot, SharedFileSnapshotMut};
 
 ///
+#[gix_macros::unstable(since = "2023-04-13")]
 pub mod symlink;
 
+#[cfg_attr(not(feature = "unstable"), allow(dead_code))]
 mod precompose;
 
 /// Directory entries with optional Unicode precomposition.
+#[gix_macros::unstable(since = "2024-01-17")]
 pub mod read_dir;
+#[gix_macros::unstable(since = "2024-01-17")]
 pub use read_dir::function::read_dir;
 
 /// Recursive directory traversal with optional Unicode precomposition and Git-style sorting.
 #[cfg(feature = "walkdir")]
+#[gix_macros::unstable(since = "2026-09-30")]
 pub mod walkdir;
 #[cfg(feature = "walkdir")]
-pub use walkdir::{WalkDir, walkdir_new, walkdir_sorted_new};
+#[gix_macros::unstable(since = "2026-10-29")]
+pub use crate::walkdir::{WalkDir, walkdir_new, walkdir_sorted_new};
 
 ///
 pub mod dir;
@@ -129,6 +149,7 @@ pub mod dir;
 /// Keeping it `false` will not alter the output.
 ///
 /// Note that `precompose_unicode` most be set using the `core.precomposeUnicode` git configuration.
+#[gix_macros::unstable(since = "2024-01-09")]
 pub fn current_dir(precompose_unicode: bool) -> std::io::Result<PathBuf> {
     let cwd = std::env::current_dir()?;
     Ok(if precompose_unicode {
@@ -140,27 +161,9 @@ pub fn current_dir(precompose_unicode: bool) -> std::io::Result<PathBuf> {
 
 /// Adjust `permissions` according to Git's shared-repository permission policy.
 ///
-/// `permissions` should normally be the permissions of a newly created entry, read back after the operating system has
-/// applied the process umask. Apply this function before the file is made visible at its final path. Existing permission
-/// bits not governed by the policy are preserved.
-/// Read-only files stay read-only, and executable files gain execute bits wherever the policy grants read access.
-/// Directory permissions must retain the file-type bits returned by metadata: directories gain search permissions
-/// alongside read permissions, and setgid where the platform needs it to inherit the parent directory's group.
-///
-/// `shared_repository_permissions` uses Git's compact signed encoding and usually comes from parsing the effective
-/// `core.sharedRepository` configuration value:
-///
-/// - `0` leaves the permissions produced by the umask unchanged. An absent key, `umask`, boolean `false`, and legacy
-///   value `0` produce this.
-/// - A positive mode is ORed into the post-umask mode. A bare key, `group`, boolean `true`, and legacy value `1` usually
-///   produce `0o660`; `all`, `world`, `everybody`, and legacy value `2` usually produce `0o664`.
-/// - A negative mode replaces the low nine Unix permission bits with its absolute value. Git-compatible parsers use this
-///   for explicit octal configuration such as `0640`, represented here as `-0o640`, so it can remove bits allowed by the
-///   umask instead of merely adding bits.
-///
-/// Callers must pass the parsed encoding, not an explicit octal configuration value directly. On non-Unix platforms the
-/// shared-repository mode has no portable representation in [`std::fs::Permissions`], so this function returns
-/// `permissions` unchanged.
+/// See [`set_shared_repository_permissions()`] for the policy encoding and platform-specific behavior.
+/// Keep directory file-type bits in `permissions` so search access and setgid can be applied correctly.
+#[gix_macros::unstable(since = "2026-09-01")]
 pub fn adjust_shared_repository_permissions(
     permissions: std::fs::Permissions,
     shared_repository_permissions: i32,
@@ -206,7 +209,20 @@ pub fn adjust_shared_repository_permissions(
 
 /// Apply the parsed Git sharing policy to an existing entry at `path`, following symbolic links.
 ///
-/// See [`adjust_shared_repository_permissions()`] for the policy encoding and directory handling.
+/// Apply this to a newly created entry after the operating system has applied the process umask, before making
+/// the entry visible at its final path. Permission bits not governed by the policy are preserved.
+/// Read-only files stay read-only, and executable files gain execute bits wherever the policy grants read access.
+/// Directories gain search permissions alongside read permissions and setgid where needed to inherit the parent group.
+///
+/// `shared_repository_permissions` uses Git's compact signed encoding, usually parsed from `core.sharedRepository`:
+///
+/// - `0` leaves the umask permissions unchanged. An absent key, `umask`, boolean `false`, and legacy value `0` produce this.
+/// - A positive mode is ORed into the post-umask mode. A bare key, `group`, boolean `true`, and legacy value `1` usually
+///   produce `0o660`; `all`, `world`, `everybody`, and legacy value `2` usually produce `0o664`.
+/// - A negative mode replaces the low nine Unix permission bits with its absolute value. Explicit octal configuration
+///   such as `0640` is represented as `-0o640`, so it can remove bits allowed by the umask instead of merely adding bits.
+///
+/// Pass the parsed encoding, not an explicit octal configuration value directly.
 /// No metadata is read or written for the default policy (`0`) or on non-Unix platforms.
 pub fn set_shared_repository_permissions(
     path: &std::path::Path,
@@ -232,6 +248,7 @@ pub fn set_shared_repository_permissions(
 /// are cached; filesystem checks, including symlink rejection, are the delegate's responsibility.
 /// For one-shot containment and symlink validation, use [`symlink::validate_relative_path()`] instead.
 /// It also accepts nonescaping parent components, such as `modules/../lib`, which this type rejects.
+#[gix_macros::unstable(since = "2023-04-16")]
 #[derive(Clone)]
 pub struct Stack {
     /// The prefix/root for all paths we handle.
@@ -248,12 +265,14 @@ pub struct Stack {
 
 #[cfg(unix)]
 /// Returns whether a file has the executable permission set.
+#[gix_macros::unstable(since = "2023-07-20")]
 pub fn is_executable(metadata: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
     (metadata.mode() & 0o111) != 0
 }
 
 /// Classifiers for IO-errors.
+#[gix_macros::unstable(since = "2024-12-22")]
 pub mod io_err {
     use std::io::ErrorKind;
 
@@ -265,9 +284,11 @@ pub mod io_err {
 
 #[cfg(not(unix))]
 /// Returns whether a file has the executable permission set.
+#[gix_macros::unstable(since = "2023-07-20")]
 pub fn is_executable(_metadata: &std::fs::Metadata) -> bool {
     false
 }
 
 ///
+#[gix_macros::unstable(since = "2023-04-16")]
 pub mod stack;

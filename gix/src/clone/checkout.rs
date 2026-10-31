@@ -162,6 +162,7 @@ impl Drop for PrepareCheckout {
     }
 }
 
+#[gix_macros::unstable(since = "2022-10-11")]
 impl From<PrepareCheckout> for Repository {
     fn from(prep: PrepareCheckout) -> Self {
         prep.persist()

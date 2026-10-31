@@ -26,7 +26,7 @@ gix-utils = { version = "^0.5.2", path = "../gix-utils", features = ["interrupt"
 gix-parallel = { version = "^0.50.1", path = "../gix-parallel" }
 gix-worktree = { version = "^0.59.0", path = "../gix-worktree", default-features = false, features = ["attributes"] }
 gix-index = { version = "^0.58.0", path = "../gix-index" }
-gix-fs = { version = "^0.24.1", path = "../gix-fs" }
+gix-fs = { version = "^1.0.0", path = "../gix-fs", features = ["unstable"] }
 gix-object = { version = "^0.66.1", path = "../gix-object" }
 gix-error = { version = "^0.5.2", path = "../gix-error", features = ["bstr"] }
 gix-path = { version = "^0.14.1", path = "../gix-path" }
@@ -42,7 +42,7 @@ gix-object = { path = "../gix-object" }
 gix-filter = { path = "../gix-filter" }
 gix-index = { path = "../gix-index", features = ["sha1", "sha256"] }
 gix-hash = { path = "../gix-hash", features = ["sha1", "sha256"] }
-gix-fs = { path = "../gix-fs" }
+gix-fs = { path = "../gix-fs", features = ["unstable"] }
 gix-testtools = { path = "../tests/tools", default-features = false, features = ["sha1", "sha256"] }
 gix-odb = { path = "../gix-odb", features = ["sha1", "sha256"] }
 walkdir = "2.3.2"

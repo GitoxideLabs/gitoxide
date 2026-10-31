@@ -117,6 +117,7 @@ impl Drop for PrepareFetch {
     }
 }
 
+#[gix_macros::unstable(since = "2023-04-21")]
 impl From<PrepareFetch> for Repository {
     fn from(prep: PrepareFetch) -> Self {
         prep.persist()

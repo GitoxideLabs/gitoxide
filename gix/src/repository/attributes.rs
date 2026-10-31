@@ -29,6 +29,7 @@ impl Repository {
     /// * `$XDG_CONFIG_HOME/…/ignore|attributes` if `core.excludesFile|attributesFile` is *not* set, otherwise use the configured file.
     /// * `$GIT_COMMON_DIR/info/exclude|attributes` if present.
     #[cfg(feature = "attributes")]
+    #[gix_macros::unstable(since = "2023-04-25")]
     pub fn attributes(
         &self,
         index: &gix_index::State,
@@ -67,6 +68,7 @@ impl Repository {
 
     /// Like [attributes()][Self::attributes()], but without access to exclude/ignore information.
     #[cfg(feature = "attributes")]
+    #[gix_macros::unstable(since = "2023-07-03")]
     pub fn attributes_only(
         &self,
         index: &gix_index::State,
@@ -113,6 +115,7 @@ impl Repository {
     /// [`Repository::attributes()`] for accessing both attributes and excludes.
     #[doc(alias = "is_path_ignored", alias = "git2")]
     #[cfg(feature = "excludes")]
+    #[gix_macros::unstable(since = "2023-08-15")]
     pub fn excludes(
         &self,
         index: &gix_index::State,

@@ -15,6 +15,14 @@
 //!   which results in them being permanently locked unless there is user-intervention.**
 //! * As the lock file is separate from the actual resource, locking is merely a convention rather than being enforced.
 //!
+//! ## Stability
+//!
+//! The `unstable` feature exposes the `backoff` and `tempfile` plumbing re-exports outside this crate's compatibility
+//! guarantee. Pin an exact crate version when using them. Lock acquisition and resource updates remain available
+//! without it. Directory creation and its retry configuration use stable APIs internally; neither requires `unstable`.
+//! Acquisition errors expose the stable `gix-error::Error` type and its lock recovery predicates.
+//! Experimental error construction helpers are used internally with an exact dependency version.
+//!
 //! ## Examples
 //!
 //! ```
@@ -41,6 +49,8 @@
 
 use std::path::PathBuf;
 
+/// Tempfile plumbing convenience re-export, outside this crate's compatibility guarantee.
+#[gix_macros::unstable(since = "2022-04-15")]
 pub use gix_tempfile as tempfile;
 use gix_tempfile::handle::{Closed, Writable};
 
@@ -49,6 +59,8 @@ const DOT_LOCK_SUFFIX: &str = ".lock";
 ///
 pub mod acquire;
 
+/// Backoff implementation from an unstable plumbing crate.
+#[gix_macros::unstable(since = "2023-04-16")]
 pub use gix_utils::backoff;
 ///
 pub mod commit;

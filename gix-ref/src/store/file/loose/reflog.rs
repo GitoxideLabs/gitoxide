@@ -162,7 +162,7 @@ pub mod create_or_update {
 
                     if force_create_reflog || self.should_autocreate_reflog(&full_name) {
                         let parent_dir = log_path.parent().expect("always with parent directory");
-                        gix_tempfile::create_dir::all(parent_dir, Default::default(), 0)
+                        gix_fs::dir::create::all(parent_dir, Default::default(), 0)
                             .or_raise(|| Message::new("Could not create reflog directory").with("path", parent_dir))?;
                         options.create(true);
                     }
@@ -173,7 +173,7 @@ pub mod create_or_update {
                         Err(err) => {
                             // TODO: when Kind::IsADirectory becomes stable, use that.
                             if log_path.is_dir() {
-                                gix_tempfile::remove_dir::empty_depth_first(log_path.clone())
+                                gix_fs::dir::remove::empty_depth_first(log_path.clone())
                                     .and_then(|_| options.open(&log_path))
                                     .map(Some)
                                     .or_raise(|| open_reflog_for_appending_error(log_path.as_path()))?

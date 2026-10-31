@@ -53,3 +53,6 @@ deny = [
     # end range due to https://github.com/serde-rs/serde/pull/2590
     { name = "serde_derive", version = ">1.0.171, <1.0.185" },
 ]
+
+[sources]
+allow-git = ["https://github.com/GitoxideLabs/cargo-smart-release"]

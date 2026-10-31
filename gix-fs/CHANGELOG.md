@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### New Features (BREAKING)
 
+ - Establish the `1.0` compatibility boundary for the filesystem operations needed by tempfiles and locks:
+   `dir::create::Retries` with all public fields, `dir::create::all()`,
+   `dir::remove::empty_upward_until_boundary()`, and `set_shared_repository_permissions()`.
+   Other APIs require the non-default `unstable` feature, including iterator/error machinery, capability probing,
+   file and symlink helpers, directory traversal, stacks, and snapshots. `serde` and `walkdir` also enable `unstable`.
+   Consumers using experimental APIs must pin an exact version; release checks cover only the stable profile.
+   The MSRV is now Rust 1.99 for attribute gates on file-backed modules.
+
  - <csr-id-fb4aada65bfda590e4f16bfd979f7fdf9f15e83b/> add no-follow reads and recursive directory traversal
    <!-- agent -->
    Bring file-opening and directory-traversal utilities into `gix-fs` so
@@ -31,7 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    Add the optional `walkdir` feature with depth limits, hidden entries,
    configurable link following, and Git's ordering of files and directories.
    Traversal remains serial regardless of the requested `Parallelism`.
-   Basic file access and `read_dir()` remain available without feature flags.
+   File access and `read_dir()` require `unstable`; the `walkdir` feature enables it automatically.
 
 ### Bug Fixes (BREAKING)
 

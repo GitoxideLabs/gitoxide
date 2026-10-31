@@ -5,6 +5,10 @@ impl crate::Repository {
     /// if no operation is currently in progress.
     ///
     /// Note to be confused with the repositories 'status'.
+    #[gix_macros::unstable(
+        since = "2022-04-18",
+        reason = "The exhaustive `state::InProgress` enum needs an extension policy."
+    )]
     pub fn state(&self) -> Option<state::InProgress> {
         let git_dir = self.path();
 

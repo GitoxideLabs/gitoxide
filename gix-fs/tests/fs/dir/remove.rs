@@ -72,6 +72,26 @@ mod empty_upwards_until_boundary {
         Ok(())
     }
     #[test]
+    fn deletion_stops_at_a_non_empty_parent() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let parent = dir.path().join("parent");
+        let target = parent.join("leaf");
+        std::fs::create_dir_all(&target)?;
+        let file = parent.join("keep");
+        std::fs::write(&file, b"keep")?;
+
+        remove::empty_upward_until_boundary(&target, dir.path()).expect_err("a non-empty parent stops upward deletion");
+        assert!(
+            !target.exists(),
+            "the empty leaf was removed before reaching its parent"
+        );
+        assert!(parent.is_dir(), "the non-empty parent remains");
+        assert_eq!(std::fs::read(&file)?, b"keep", "the parent's file remains untouched");
+        assert!(dir.path().is_dir(), "the boundary remains untouched");
+        Ok(())
+    }
+
+    #[test]
     fn nested_directory_deletion_works() -> TestResult {
         let dir = tempfile::tempdir()?;
         let nested = dir.path().join("a").join("b").join("to-delete");

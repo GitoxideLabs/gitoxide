@@ -16,6 +16,10 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.5.60", features = ["derive"] }
-gix = { version = "^0.90.0", path = "../../gix", default-features = false, features = ["attributes", "blame", "blob-diff", "error-print-location", "parallel", "revision", "sha1"] }
+gix = { version = "^0.90.0", path = "../../gix", default-features = false, features = ["unstable", "attributes", "blame", "blob-diff", "error-print-location", "parallel", "revision", "sha1"] }
 gix-testtools = { path = "../tools", default-features = false, features = ["sha1"] }
 regex = { version = "1.12.3", default-features = false, features = ["std"] }
+serde_json = "1.0.150"
+tracing-subscriber = { version = "0.3.22", default-features = false, features = ["fmt"] }
+# shortcut: depend on the development branch, switch to a registry release once available.
+cargo-smart-release-core = { git = "https://github.com/GitoxideLabs/cargo-smart-release", branch = "stability-support" }

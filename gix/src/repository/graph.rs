@@ -13,6 +13,7 @@ impl crate::Repository {
     ///
     /// Note that the [Graph][gix_revwalk::Graph] can be sensitive to various object database settings that may affect the performance
     /// of the commit walk.
+    #[gix_macros::unstable(since = "2023-06-09")]
     pub fn revision_graph<'cache, T>(
         &self,
         cache: Option<&'cache gix_commitgraph::Graph>,
@@ -26,6 +27,7 @@ impl crate::Repository {
     /// Note that [`revision_graph()`][crate::Repository::revision_graph()] should be preferred for general purpose walks that don't
     /// rely on the actual commit cache to be present, while leveraging the commit-graph if possible.
     /// Parent-buffer allocations respect `gitoxide.objects.allocLimit`.
+    #[gix_macros::unstable(since = "2023-06-06")]
     pub fn commit_graph(&self) -> Result<gix_commitgraph::Graph> {
         gix_commitgraph::Graph::at(
             &self.objects.store_ref().path().join("info"),
@@ -35,6 +37,7 @@ impl crate::Repository {
     }
 
     /// Return a newly opened commit-graph if it is available, enabled in Git configuration, and no object replacements are active.
+    #[gix_macros::unstable(since = "2024-08-26")]
     pub fn commit_graph_if_enabled(&self) -> Result<Option<gix_commitgraph::Graph>> {
         (!self.has_object_replacements() && self.config.may_use_commit_graph()?)
             .then(|| self.commit_graph())

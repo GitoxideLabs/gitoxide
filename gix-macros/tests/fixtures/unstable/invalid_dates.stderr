@@ -1,0 +1,95 @@
+error: unexpected end of input, missing required `since = "YYYY-MM-DD"`
+ --> tests/fixtures/unstable/invalid_dates.rs:1:1
+  |
+1 | #[gix_macros::unstable]
+  | ^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `gix_macros::unstable` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: unexpected end of input, missing required `since = "YYYY-MM-DD"`
+ --> tests/fixtures/unstable/invalid_dates.rs:4:1
+  |
+4 | #[gix_macros::unstable()]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `gix_macros::unstable` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: unexpected end of input, missing required `since = "YYYY-MM-DD"`
+ --> tests/fixtures/unstable/invalid_dates.rs:7:1
+  |
+7 | #[gix_macros::unstable(reason = "Only a reason")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `gix_macros::unstable` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: expected a valid date in YYYY-MM-DD format
+  --> tests/fixtures/unstable/invalid_dates.rs:10:32
+   |
+10 | #[gix_macros::unstable(since = "2026-1-01")]
+   |                                ^^^^^^^^^^^
+
+error: expected a valid date in YYYY-MM-DD format
+  --> tests/fixtures/unstable/invalid_dates.rs:13:32
+   |
+13 | #[gix_macros::unstable(since = "2026-02-29")]
+   |                                ^^^^^^^^^^^^
+
+error: expected a valid date in YYYY-MM-DD format
+  --> tests/fixtures/unstable/invalid_dates.rs:16:32
+   |
+16 | #[gix_macros::unstable(since = "1900-02-29")]
+   |                                ^^^^^^^^^^^^
+
+error: expected a valid date in YYYY-MM-DD format
+  --> tests/fixtures/unstable/invalid_dates.rs:19:32
+   |
+19 | #[gix_macros::unstable(since = "2026-04-31")]
+   |                                ^^^^^^^^^^^^
+
+error: expected a valid date in YYYY-MM-DD format
+  --> tests/fixtures/unstable/invalid_dates.rs:22:32
+   |
+22 | #[gix_macros::unstable(since = "0000-01-01")]
+   |                                ^^^^^^^^^^^^
+
+error: expected a valid date in YYYY-MM-DD format
+  --> tests/fixtures/unstable/invalid_dates.rs:25:32
+   |
+25 | #[gix_macros::unstable(since = "2026-13-01")]
+   |                                ^^^^^^^^^^^^
+
+error: expected a valid date in YYYY-MM-DD format
+  --> tests/fixtures/unstable/invalid_dates.rs:28:32
+   |
+28 | #[gix_macros::unstable(since = "2026-10-00")]
+   |                                ^^^^^^^^^^^^
+
+error: duplicate `since`
+  --> tests/fixtures/unstable/invalid_dates.rs:31:46
+   |
+31 | #[gix_macros::unstable(since = "2026-10-13", since = "2026-10-14")]
+   |                                              ^^^^^
+
+error: duplicate `reason`
+  --> tests/fixtures/unstable/invalid_dates.rs:34:62
+   |
+34 | #[gix_macros::unstable(since = "2026-10-13", reason = "One", reason = "Two")]
+   |                                                              ^^^^^^
+
+error: missing required `since = "YYYY-MM-DD"`
+  --> tests/fixtures/unstable/invalid_dates.rs:39:5
+   |
+39 |     #[unstable]
+   |     ^^^^^^^^^^^
+
+error: unexpected end of input, missing required `since = "YYYY-MM-DD"`
+  --> tests/fixtures/unstable/invalid_dates.rs:45:16
+   |
+45 |     #[unstable()]
+   |                ^
+
+error: expected a valid date in YYYY-MM-DD format
+  --> tests/fixtures/unstable/invalid_dates.rs:51:24
+   |
+51 |     #[unstable(since = "2026-02-30")]
+   |                        ^^^^^^^^^^^^

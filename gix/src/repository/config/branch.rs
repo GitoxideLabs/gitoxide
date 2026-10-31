@@ -16,7 +16,7 @@ use crate::{
 /// Query configuration related to branches.
 impl crate::Repository {
     /// Return a set of unique short branch names for which custom configuration exists in the configuration,
-    /// if we deem them [trustworthy][crate::open::Options::filter_config_section()].
+    /// if we deem them trustworthy.
     ///
     /// ### Note
     ///
@@ -40,6 +40,7 @@ impl crate::Repository {
     ///
     /// See also [`Reference::remote_ref_name()`](crate::Reference::remote_ref_name()).
     #[doc(alias = "branch_upstream_name", alias = "git2")]
+    #[gix_macros::unstable(since = "2023-12-17")]
     pub fn branch_remote_ref_name(&self, name: &FullNameRef, direction: remote::Direction) -> Option<Result<FullName>> {
         match direction {
             remote::Direction::Fetch => {
@@ -102,6 +103,7 @@ impl crate::Repository {
     ///
     /// See also [`Reference::remote_tracking_ref_name()`](crate::Reference::remote_tracking_ref_name()).
     #[doc(alias = "branch_upstream_name", alias = "git2")]
+    #[gix_macros::unstable(since = "2023-12-17")]
     pub fn branch_remote_tracking_ref_name(
         &self,
         name: &FullNameRef,
@@ -161,6 +163,7 @@ impl crate::Repository {
     /// A single valid mapping is required: mappings from multiple remotes or multiple mappings within one remote are ambiguous.
     /// Destinations match literally, and the source must be a valid full reference name; abbreviated sources
     /// aren't expanded into branch names.
+    #[gix_macros::unstable(since = "2025-01-12")]
     pub fn upstream_branch_and_remote_for_tracking_branch(
         &self,
         tracking_branch: &FullNameRef,
@@ -219,6 +222,7 @@ impl crate::Repository {
     ///
     /// `short_branch_name` can typically be obtained by [shortening a full branch name](FullNameRef::shorten()).
     #[doc(alias = "branch_upstream_remote", alias = "git2")]
+    #[gix_macros::unstable(since = "2023-12-17")]
     pub fn branch_remote_name<'a>(
         &self,
         short_branch_name: impl Into<&'a BStr>,
@@ -242,6 +246,7 @@ impl crate::Repository {
     /// configuration.
     ///
     /// See also [`Reference::remote()`](crate::Reference::remote()).
+    #[gix_macros::unstable(since = "2023-12-17")]
     pub fn branch_remote<'a>(
         &self,
         short_branch_name: impl Into<&'a BStr>,

@@ -10,6 +10,9 @@ pub use git_to_sh::function::git_to_sh;
 pub mod create_diff_cases;
 pub use create_diff_cases::function::create_diff_cases;
 
+pub mod check_api;
+pub use check_api::check_api;
+
 pub mod check_mode;
 pub use check_mode::function::check_mode;
 

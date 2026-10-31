@@ -1,7 +1,7 @@
 //! git-style registered tempfiles that are removed upon typical termination signals.
 //!
-//! To register signal handlers in a typical application that doesn't have its own, call
-//! [`gix_tempfile::signal::setup(Default::default())`][signal::setup()] before creating the first tempfile.
+//! To register signal handlers in a typical application that doesn't have its own, enable the `signals` feature and call
+//! `gix_tempfile::signal::setup(Default::default())` before creating the first tempfile.
 //!
 //! Signal handlers are powered by [`signal-hook`] to get notified when the application is told to shut down
 //! to assure tempfiles are deleted. The deletion is filtered by process id to allow forks to have their own
@@ -9,12 +9,12 @@
 //!
 //! ### Initial Setup
 //!
-//! As no handlers for `TERMination` are installed, it is required to call [`signal::setup()`] before creating
+//! As no handlers for `TERMination` are installed, the `signals` feature requires calling `signal::setup()` before creating
 //! the first tempfile. This also allows to control how this crate integrates with
 //! other handlers under application control.
 //!
 //! As a general rule of thumb, use `Default::default()` as argument to emulate the default behaviour and
-//! abort the process after cleaning temporary files. Read more about options in [`signal::handler::Mode`].
+//! abort the process after cleaning temporary files. The other options are defined by `signal::handler::Mode`.
 //!
 //! # Limitations
 //!
@@ -25,6 +25,15 @@
 //!   but not others. Any other operation dealing with the tempfile suffers from the same issue.
 //!
 //! [`signal-hook`]: https://docs.rs/signal-hook
+//!
+//! ## Stability
+//!
+//! Only the convenience `create_dir` and `remove_dir` re-exports are excluded from this crate's compatibility
+//! guarantee and require the `unstable` feature. Pin an exact crate version when using these re-exports.
+//! File creation, including parent-directory creation through [`ContainingDirectory::CreateAllRaceProof`] and its
+//! public [`gix_fs::dir::create::Retries`] configuration, cleanup, persistence, and signal support are stable APIs
+//! available without `unstable`. Signal support requires the `signals` feature.
+//! The public types from the `tempfile` dependency remain part of the stable contract.
 //!
 //! ## Examples
 //!
@@ -115,6 +124,8 @@ mod hashmap {
 #[cfg(not(feature = "hp-hashmap"))]
 type HashMap<K, V> = hashmap::Concurrent<K, V>;
 
+/// Directory-helper convenience re-exports, outside this crate's compatibility guarantee.
+#[gix_macros::unstable(since = "2023-04-16")]
 pub use gix_fs::dir::{create as create_dir, remove as remove_dir};
 
 /// signal setup and reusable handlers.
@@ -155,6 +166,7 @@ static REGISTRY: LazyLock<HashMap<usize, Option<ForksafeTempfile>>> = LazyLock::
 
 /// A type expressing the ways we can deal with directories containing a tempfile.
 #[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum ContainingDirectory {
     /// Assume the directory for the tempfile exists and cause failure if it doesn't
     Exists,
@@ -162,9 +174,9 @@ pub enum ContainingDirectory {
     /// depending on the amount of retries.
     CreateAllRaceProof {
         /// How often to retry directory creation when other processes interfere.
-        retries: create_dir::Retries,
+        retries: gix_fs::dir::create::Retries,
         /// Git's parsed sharing policy for newly created directories; `0` keeps the umask permissions.
-        /// See [`gix_fs::adjust_shared_repository_permissions()`] for the encoding.
+        /// See [`gix_fs::set_shared_repository_permissions()`] for the encoding.
         shared_repository_permissions: i32,
     },
 }
@@ -172,6 +184,7 @@ pub enum ContainingDirectory {
 /// A type expressing the ways we cleanup after ourselves to remove resources we created.
 /// Note that cleanup has no effect if the tempfile is persisted.
 #[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum AutoRemove {
     /// Remove the temporary file after usage if it wasn't persisted.
     Tempfile,
@@ -187,7 +200,8 @@ impl AutoRemove {
         match self {
             AutoRemove::Tempfile => None,
             AutoRemove::TempfileAndEmptyParentDirectoriesUntil { boundary_directory } => {
-                remove_dir::empty_upward_until_boundary(directory_to_potentially_delete, &boundary_directory).ok();
+                gix_fs::dir::remove::empty_upward_until_boundary(directory_to_potentially_delete, &boundary_directory)
+                    .ok();
                 Some(boundary_directory)
             }
         }

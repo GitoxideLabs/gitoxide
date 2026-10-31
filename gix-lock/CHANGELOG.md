@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### New Features (BREAKING)
+
+ - Establish the `27.0` compatibility boundary for locks without mandatory experimental tempfile APIs.
+   Make `acquire::Fail` and `commit::Error<T>` non-exhaustive so future variants and fields can be added
+   compatibly. Downstream enum matches require a fallback arm; struct destructuring requires `..`,
+   and external struct-literal construction is no longer supported.
+   Update to `gix-tempfile 27.0` and the stable `gix-fs 1.0` helpers.
+
 ## 26.0.1 (2026-10-22)
 
 ### Commit Statistics

@@ -10,7 +10,7 @@ use crate::{
 ///
 /// There is no notion of a default user like in git, and instead failing to provide a user
 /// is fatal. That way, we enforce correctness and force application developers to take care
-/// of this issue. Use [`Repository::committer_or_set_fallback()`][crate::Repository::committer_or_set_fallback]
+/// of this issue. Use `Repository::committer_or_set_fallback()` with `unstable` enabled
 /// to install an application fallback without overriding an already configured user identity.
 impl crate::Repository {
     /// Return the committer as configured by this repository, which is determined by…
@@ -57,6 +57,7 @@ impl crate::Repository {
     ///
     /// If either part of the committer is missing, both fallback values are installed. Environment, `committer.*`, and
     /// `user.*` values still take precedence individually.
+    #[gix_macros::unstable(since = "2026-08-29")]
     pub fn committer_or_set_fallback(
         &mut self,
         name: impl gix_utils::AsBStr,
@@ -74,7 +75,7 @@ impl crate::Repository {
 
     /// Return the configured committer or install a generic fallback in memory on this instance.
     ///
-    /// This is equivalent to calling [`committer_or_set_fallback()`](Self::committer_or_set_fallback()) with
+    /// This is equivalent to calling `committer_or_set_fallback()` with
     /// `no name configured <noEmailAvailable@example.com>`.
     pub fn committer_or_set_generic_fallback(&mut self) -> Result<gix_actor::SignatureRef<'_>> {
         self.committer_or_set_fallback("no name configured", "noEmailAvailable@example.com")
@@ -135,6 +136,7 @@ pub(crate) struct Personas {
 }
 
 impl Personas {
+    #[gix_macros::unstable(since = "2022-07-21")]
     pub fn from_config_and_env(config: &gix_config::File) -> Self {
         let parse_date = |key: &str, date: &keys::Any| -> Option<String> {
             debug_assert_eq!(

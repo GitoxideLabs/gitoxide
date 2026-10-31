@@ -27,7 +27,7 @@ blob = [
     "dep:gix-command",
     "dep:gix-tempfile",
     "dep:gix-trace",
-    "dep:gix-traverse"
+    "dep:gix-traverse",
 ]
 ## Enable diffing of two indices, which also allows for a generic rewrite tracking implementation.
 index = ["dep:gix-index", "dep:gix-pathspec", "dep:gix-attributes"]
@@ -68,8 +68,8 @@ gix-filter = { version = "^0.36.1", path = "../gix-filter", optional = true }
 gix-worktree = { version = "^0.59.0", path = "../gix-worktree", default-features = false, features = ["attributes"], optional = true }
 gix-command = { version = "^0.12.1", path = "../gix-command", optional = true }
 gix-path = { version = "^0.14.1", path = "../gix-path", optional = true }
-gix-fs = { version = "^0.24.1", path = "../gix-fs", optional = true }
-gix-tempfile = { version = "^26.0.0", path = "../gix-tempfile", optional = true }
+gix-fs = { version = "^1.0.0", path = "../gix-fs", features = ["unstable"], optional = true }
+gix-tempfile = { version = "^27.0.0", path = "../gix-tempfile", optional = true }
 gix-trace = { version = "^0.3.1", path = "../gix-trace", optional = true }
 gix-traverse = { version = "^0.64.0", path = "../gix-traverse", optional = true }
 imara-diff = { package = "gix-imara-diff", version = "^0.3.3", optional = true, path = "../gix-imara-diff" }
@@ -86,7 +86,7 @@ gix-hash = { path = "../gix-hash", features = ["sha1", "sha256"] }
 gix-testtools = { path = "../tests/tools", default-features = false, features = ["sha1", "sha256"] }
 gix-index = { path = "../gix-index" }
 gix-pathspec = { path = "../gix-pathspec" }
-gix-fs = { path = "../gix-fs" }
+gix-fs = { path = "../gix-fs", features = ["unstable"] }
 gix-worktree = { path = "../gix-worktree" }
 gix-object = { path = "../gix-object" }
 gix-odb = { path = "../gix-odb" }

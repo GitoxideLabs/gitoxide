@@ -24,6 +24,36 @@ pub fn discard(_attrs: TokenStream, _input: TokenStream) -> TokenStream {
     TokenStream::new()
 }
 
+/// Expose an item only within its crate unless the consuming crate enables `unstable`.
+///
+/// Supply `#[gix_macros::unstable(since = "YYYY-MM-DD")]` with the date the item was introduced.
+/// The date must be a valid calendar date and is included in the enabled item's documentation.
+/// Usually the date alone is enough; add an optional, nonempty `reason = "..."` only to explain
+/// a non-obvious rationale. The gate also applies directly to file-backed modules
+/// (`pub mod name;`), requiring Rust 1.99 or newer.
+/// Inherent implementations retain their public members as `pub(crate)` when disabled;
+/// trait implementations are omitted instead, since Rust has no private trait implementations.
+#[proc_macro_attribute]
+pub fn unstable(attrs: TokenStream, input: TokenStream) -> TokenStream {
+    unstable::item(attrs.into(), input.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Gate selected public struct fields while retaining their storage and access within the crate.
+///
+/// Mark each field with `#[unstable(since = "YYYY-MM-DD")]`, dating its introduction.
+/// Add an optional, nonempty `reason = "..."` only when the rationale is not obvious.
+/// With the consuming crate's `unstable` feature enabled it remains public and gains an instability
+/// marker, the date and any supplied reason in its documentation; otherwise it
+/// becomes `pub(crate)`. All unmarked fields are unchanged.
+#[proc_macro_attribute]
+pub fn unstable_fields(attrs: TokenStream, input: TokenStream) -> TokenStream {
+    unstable::fields(attrs.into(), input.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
 /// When applied to functions or methods, it will turn it into a wrapper that will immediately call
 /// a de-monomorphized implementation (i.e. one that uses `&dyn Trait`).
 ///
@@ -42,3 +72,4 @@ pub fn momo(_attrs: TokenStream, input: TokenStream) -> TokenStream {
 
 mod bisync;
 mod momo;
+mod unstable;

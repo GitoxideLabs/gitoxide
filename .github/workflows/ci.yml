@@ -19,6 +19,26 @@ env:
   CLICOLOR: "1"
 
 jobs:
+  api-baseline:
+    name: stable API compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      # The API collector understands rustdoc JSON format 61.
+      - run: rustup toolchain install 1.99.0 --profile minimal && rustup default 1.99.0
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+        with:
+          just-version: '1.58.0'
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
+        with:
+          tool: cargo-semver-checks@0.51.0
+      - name: Check the stable API boundary and release compatibility
+        run: just check-api
+
   msrv:
     name: cargo check MSRV
 
@@ -707,6 +727,7 @@ jobs:
     permissions: {}
 
     needs:
+      - api-baseline
       - msrv
       - msrv-badge
       - pure-rust-build

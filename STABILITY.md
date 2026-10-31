@@ -5,6 +5,130 @@ ever-changing codebase.
 
 Please note that this guide isn't stable itself and may be adjusted to fit changes in requirements or new ways are discovered.
 
+## Stable API baselines and `unstable`
+
+`gix`, `gix-lock`, and `gix-tempfile` distinguish their stable API baseline from
+experimental APIs with an opt-in `unstable` feature. The feature adds access; it
+must not change stable signatures, type identities, auto-trait guarantees, or
+behavior. Cargo unifies features across consumers, so stable-only callers must
+continue working when another caller enables experimental APIs.
+
+The initial gates themselves are breaking changes for existing consumers. Add
+`features = ["unstable"]` to continue using gated APIs. Experimental APIs may
+change incompatibly; pin a version when relying on them. Stabilization removes a
+gate in a compatible release and records the first stable version in the docs.
+Do not move an established stable API behind a gate in a compatible release.
+
+Stability covers all reachable public types and implementations, including input
+types, fields, callbacks, associated types, generic bounds and trait conversions.
+An unstable dependency used only internally does not require a breaking release
+of its consumer. Re-exporting a type does not hide its dependency identity.
+Foundational plumbing needs compatibility commitments before `gix` reaches 1.0.
+Until then, stable consumers declare temporary type exceptions in their Cargo
+manifests, as described below. These exceptions permit useful operations while
+their dependencies remain pre-1.0; they do not waive breaking dependency identity
+or signature checks. Concrete plumbing causes remain diagnostic
+details unless a gated API explicitly documents the supported downcast.
+
+For each public type, decide whether construction and exhaustive matching are
+intentional contracts. Private fields already protect struct construction.
+`#[non_exhaustive]` permits additions, not incompatible changes to existing
+members; variants needing extensible fields require their own attribute.
+
+These baselines prepare for stability; they do not promote `gix` or its
+foundational crates to version 1.0.
+
+## Checking a release boundary
+
+`it check-api` uses the shared checker from `cargo-smart-release-core`. Until that crate
+is published, the internal tool depends on cargo-smart-release's
+`stability-support` Git branch, with the exact revision recorded in `Cargo.lock`.
+CI builds the library as part of `it`; it does not need a separate
+`cargo-smart-release` binary or checkout.
+
+Run `just check-api` to check local changes against the same stable API
+checks as CI. It tests the release checker, compiles isolated stable and experimental
+consumers, and recursively audits the supported members of `gix`'s reachable
+workspace plumbing types against its manifest exceptions in each supported profile.
+It checks the current working tree, including uncommitted changes, and respects
+`CARGO_TARGET_DIR`. Use Rust 1.99, which produces the supported rustdoc JSON format
+(for example, `RUSTUP_TOOLCHAIN=1.99.0 just check-api`). It also compares against
+the newest reachable `gix-v*` release tag whose manifest declares an API baseline.
+CI fetches full history and tags for this comparison. Until the first supported
+release exists, the command reports that there is no release baseline and still
+runs the boundary checks. Ungated releases are skipped because introducing the
+initial gates is intentionally breaking.
+
+Run `just check-api HEAD` to compare uncommitted changes against the current commit,
+or replace `HEAD` with any intended baseline revision. Explicit revisions are always
+compared, including ungated predecessors. The command also runs baseline/current
+regression fixtures for the release guard, so it requires `cargo-semver-checks` as
+described below.
+
+The `gix`, `gix-lock` and `gix-tempfile` manifests opt into the API checker through
+`package.metadata.smart-release`. A version of `cargo smart-release` with API
+checker support invokes `etc/scripts/check-api.sh` before release mutations.
+The normal release command remains the entry point. Crates without this metadata
+retain conservative dependency-based version bumps.
+
+This is useful before 1.0: a supported `gix` API break requires the next minor
+release, while a verified private dependency update can remain a patch release.
+Release planning compares against the latest published release, including an
+ungated predecessor; the first release introducing the gates is intentionally
+breaking. Unlike automatic local checks, release planning does not skip that baseline.
+
+The checker compares each manifest's explicit stable feature profile against the
+previous release, excluding `unstable`. It combines `cargo-semver-checks`, type
+signature comparisons, and an audit of reachable dependency identities. A
+planned incompatible update of a public dependency remains breaking even when
+its types have the same spelling. Private dependency updates can stop propagating
+through a verified compatible boundary. Tool failures abort the release plan;
+they never count as compatibility.
+
+With `api-check.recursive = true`, release mode collects the same supported graph
+as the boundary audit in both revisions. It compares the supported signatures and
+dependency identities throughout that graph, and runs `cargo-semver-checks` on
+each workspace dependency's supported subset. This protects exempt plumbing types'
+fields, methods, bounds, associated types, trait implementations and auto traits.
+Experimental members and unrelated dependency APIs are excluded. Removing an
+exception, marking an existing member experimental, disabling recursion or dropping
+a supported feature profile cannot erase a promise made by the baseline. New
+profiles are audited before becoming part of the next baseline.
+
+To run the shared API check, including uncommitted changes, without the regression
+tests and downstream compile probes, use:
+
+```sh
+bash etc/scripts/check-api-compare.sh HEAD
+```
+
+The script delegates to `it check-api compare gix --baseline HEAD`, using the same
+baseline selection and checks as `cargo api-check gix`. Omit `HEAD` to select the
+latest supported release automatically, or audit the current boundary if none exists.
+Use `it check-api compare <crate>` directly to check another workspace crate.
+The local command checks the versions currently in the manifests; the release
+planner also supplies planned breaking dependency updates. The script shares the
+existing Cargo target directory with the archived baseline, honoring
+`CARGO_TARGET_DIR` when set.
+
+Install `cargo-semver-checks` 0.51.0 or newer on `PATH` (for example,
+`cargo install cargo-semver-checks --version 0.51.0 --locked`). The checker relies
+on its distinct exit codes for incompatible APIs and operational failures.
+Rustdoc JSON generation uses the installed Rust toolchain with `RUSTC_BOOTSTRAP=1`
+only for the unstable JSON output option. The collector currently requires format
+61, tested with Rust 1.99; other formats and unknown item shapes fail the check.
+The toolchain's JSON format and the checker version must be compatible.
+Compatibility checks complement behavior tests and the MSRV and platform matrix.
+They are not a proof of every semantic compatibility rule.
+
+Capture the initial baseline after gating. Subsequently compare against the
+latest release so later stabilizations also become protected. The first gated
+release will correctly differ incompatibly from its ungated predecessor.
+`etc/scripts/check-gix-api.sh` separately checks downstream access with the feature
+both disabled and enabled, outside workspace feature unification. Boundary audits
+apply the consuming manifest's exceptions to workspace plumbing; other dependencies
+remain subject to release signature and identity checks.
+
 ## Terminology
 
 - _dependent crate_
@@ -97,7 +221,57 @@ It's acceptable to let each breaking change be immediately followed by a minor v
 
 Released plumbing crates are marked with major version number 1 or above, for example `1.2.4` and live in stability tier 2 _(->ST2)_.
 
-*These crates may not expose parts of unstable crates in their public API*.
+*These crates may not expose parts of unstable crates in their supported public API*.
+
+Until `gix` reaches 1.0, a stable crate may provisionally support selected types from
+`0.x` plumbing crates. Its Cargo manifest is the source of truth for these exceptions:
+
+```toml
+[package.metadata.api-check]
+allowed-unstable-types = ["experimental_plumbing::BasicType"]
+# Reserve whole-crate exceptions for APIs intentionally supported in their entirety.
+allowed-unstable-crates = []
+```
+
+Use fully qualified Rust type paths, without generic arguments, and Rust crate names
+with underscores. An exception applies to the named type, not its entire crate. An API
+does not require the enclosing crate's `unstable` feature solely because it exposes
+a declared exception. Other types exposed by supported fields, variants, methods,
+associated types, bounds, and trait implementations still need their own assessment.
+
+This exception permits exposure; it does not establish compatibility across breaking
+dependency releases. Compatible `0.x` dependency updates remain allowed. Incompatible
+updates that change a supported public API or exposed type identity still require
+a breaking release of the affected crate; release API checks must retain those checks.
+Recursive release checks protect the supported subset even while its defining crate
+remains `0.x`; changes to that subset must respect the consuming crate's release
+contract. Establish these commitments before releasing `gix` 1.0.
+
+A crate may offer additional experimental APIs behind a non-default `unstable` feature. These APIs are excluded
+from its compatibility guarantee; consumers using them must pin an exact version. `gix_macros::unstable` keeps
+annotated items available within the crate while exposing them publicly only with this feature enabled.
+Every gate requires `#[gix_macros::unstable(since = "YYYY-MM-DD")]`. Use the item's introduction date
+from Git history, following renames when necessary. The date must be a valid calendar date and is
+included in experimental documentation. Usually the date is sufficient; add a nonempty `reason = "..."`
+only when it explains something beyond the signature or the fact that the item is not stabilized.
+
+`gix-fs` limits its stable API to the operations needed by `gix-tempfile` and `gix-lock`: `dir::create::Retries`
+(including its public fields), `dir::create::all()`, `dir::remove::empty_upward_until_boundary()`, and
+`set_shared_repository_permissions()`. Other filesystem APIs remain experimental, including the creation/removal
+iterators, capability probing, file and symlink helpers, directory traversal, stacks, and snapshots.
+Its `serde` and `walkdir` features also enable `unstable` and are excluded from stable release checks.
+Stable release checks cover the supported feature profiles declared in `package.metadata.api-check.profiles`, excluding
+features listed in `package.metadata.smart-release.unstable-features`.
+
+`check-api boundary path/to/Cargo.toml` checks these profiles against the manifest's
+exceptions. Direct checks inspect the consuming crate's API and the stability of its
+referenced dependency types. Set `package.metadata.api-check.recursive = true` to
+also follow the supported members of reachable plumbing types; this is enabled for
+the porcelain crate. Experimental members are excluded using the documentation
+markers emitted by `gix_macros::unstable`, regardless of whether feature unification
+made them public. Dependency rustdoc is generated with the features resolved for each
+consumer profile. Release comparisons reuse this same graph for baseline and current
+APIs, rather than maintaining a separate list of protected plumbing types.
 
 Breaking changes are collected and may be released no more often than every 4 weeks by incrementing the major version number.
 
@@ -125,6 +299,8 @@ Once breaking changes are known to be planned, deprecation warnings should be pr
 Minor version updates for new features can be released when needed assuming there are no other breaking changes, updating the build identifiers for year and month accordingly.
 
 ## The _Minimal Supported Rust Version_ (->MSRV)
+
+Each crate declares its own MSRV in its manifest, and increases it if there is relevant code improvements coming iwth it.
 
 The MSRV is automatically assumed to be the latest stable version for all crates with the following exception: `gix` and all it's dependencies must
 adhere to an MSRV, as validated by the `ci.yml` GitHub workflow.

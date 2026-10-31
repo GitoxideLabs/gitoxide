@@ -20,11 +20,13 @@ impl ChangeId {
     }
 
     /// Return a type which displays this ID in reverse-hex notation.
+    #[gix_macros::unstable(since = "2026-08-12")]
     pub fn to_reverse_hex(&self) -> ReverseHexDisplay<'_> {
         ReverseHexDisplay::new(self, self.kind().len_in_hex())
     }
 
     /// Return a type which displays at most `len` characters of this ID in reverse-hex notation.
+    #[gix_macros::unstable(since = "2026-08-12")]
     pub fn to_reverse_hex_with_len(&self, len: usize) -> ReverseHexDisplay<'_> {
         ReverseHexDisplay::new(self, len)
     }
