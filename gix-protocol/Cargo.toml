@@ -114,3 +114,11 @@ gix-protocol = { path = "../gix-protocol", features = ["sha1"] }
 
 [package.metadata.docs.rs]
 features = ["sha1", "blocking-client", "document-features", "serde"]
+
+[package.metadata.ci]
+tests = [
+    { args = ["--features", "blocking-client"] },
+    { args = ["--features", "blocking-client,sha256"] },
+    { args = ["--features", "async-client"] },
+    { args = ["--features", "async-client,sha256"] },
+]

@@ -68,3 +68,9 @@ pretty_assertions = "1.4.0"
 
 [package.metadata.docs.rs]
 features = ["sha1", "document-features", "worktree-rewrites"]
+
+[package.metadata.ci]
+tests = [
+    { args = [], env = { GIX_TEST_FIXTURE_HASH = "sha1" } },
+    { args = [], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+]

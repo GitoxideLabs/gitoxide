@@ -107,3 +107,9 @@ ignored = [
     # Optional API feature wiring (`dep:serde`) referenced only from feature definitions.
     "serde",
 ]
+
+[package.metadata.ci]
+tests = [
+    { args = [], env = { GIX_TEST_FIXTURE_HASH = "sha1" } },
+    { args = [], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+]

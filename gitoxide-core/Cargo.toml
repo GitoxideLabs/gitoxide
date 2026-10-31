@@ -140,3 +140,8 @@ ignored = [
     # Imported as crate `layout`, which does not match the package name `layout-rs`.
     "layout-rs",
 ]
+
+[package.metadata.ci]
+tests = [
+    { args = [] },
+]

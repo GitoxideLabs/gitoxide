@@ -64,3 +64,8 @@ tempfile = "3.26.0"
 [package.metadata.docs.rs]
 all-features = true
 features = ["document-features"]
+
+[package.metadata.ci]
+tests = [
+    { args = ["--all-features"] },
+]

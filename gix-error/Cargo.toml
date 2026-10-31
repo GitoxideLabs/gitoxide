@@ -55,3 +55,9 @@ insta = "1.46.3"
 [package.metadata.docs.rs]
 all-features = true
 features = ["document-features"]
+
+[package.metadata.ci]
+tests = [
+    { args = ["--features", "auto-chain-error"] },
+    { args = [] },
+]

@@ -48,3 +48,8 @@ gix-fs = { path = "../gix-fs", features = ["unstable"] }
 [package.metadata.docs.rs]
 all-features = true
 features = ["document-features"]
+
+[package.metadata.ci]
+tests = [
+    { args = ["--features", "serde"] },
+]

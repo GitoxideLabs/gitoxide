@@ -115,3 +115,11 @@ features = ["document-features", "sha1", "sha256"]
 [package.metadata.cargo-machete]
 # Enables a thread-safe worktree stack for the shared fixture-exclusion cache.
 ignored = ["gix-parallel"]
+
+[package.metadata.ci]
+tests = [
+    # Test repository snapshots with the default pure-gix backend and the Git CLI backend.
+    { args = ["--features", "sbom"] },
+    { args = ["--no-default-features", "--features", "worktree-exclusions,sha1,sha256"] },
+    { args = ["--features", "xz"] },
+]

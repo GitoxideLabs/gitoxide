@@ -78,3 +78,8 @@ required-features = ["io-pipe"]
 [package.metadata.docs.rs]
 all-features = true
 features = ["document-features"]
+
+[package.metadata.ci]
+tests = [
+    { args = ["--all-features"] },
+]

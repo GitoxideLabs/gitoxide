@@ -60,3 +60,16 @@ gix-filter = { path = "../gix-filter" }
 [package.metadata.docs.rs]
 all-features = true
 features = ["sha1", "document-features"]
+
+[package.metadata.ci]
+tests = [
+    { args = ["--no-default-features", "--features", "sha1"], env = { GIX_TEST_FIXTURE_HASH = "sha1" } },
+    { args = ["--no-default-features", "--features", "sha1,tar"], env = { GIX_TEST_FIXTURE_HASH = "sha1" } },
+    { args = ["--no-default-features", "--features", "sha1,tar_gz"], env = { GIX_TEST_FIXTURE_HASH = "sha1" } },
+    { args = ["--no-default-features", "--features", "sha1,zip"], env = { GIX_TEST_FIXTURE_HASH = "sha1" } },
+    { args = ["--features", "sha256"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+    { args = ["--no-default-features", "--features", "sha256"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+    { args = ["--no-default-features", "--features", "sha256,tar"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+    { args = ["--no-default-features", "--features", "sha256,tar_gz"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+    { args = ["--no-default-features", "--features", "sha256,zip"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+]

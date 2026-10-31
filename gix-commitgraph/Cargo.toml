@@ -50,3 +50,9 @@ ignored = [
     # Needed for `bstr/serde` feature forwarding, even though no direct `bstr` paths are referenced.
     "bstr",
 ]
+
+[package.metadata.ci]
+tests = [
+    { args = [], env = { GIX_TEST_FIXTURE_HASH = "sha1" } },
+    { args = [], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+]

@@ -81,3 +81,8 @@ gix-tempfile = { path = ".", default-features = false, features = ["unstable"] }
 gix-fs = { path = "../gix-fs", features = ["unstable"] }
 gix-testtools = { path = "../tests/tools", default-features = false, features = ["sha1"] }
 insta = "1.46.3"
+
+[package.metadata.ci]
+tests = [
+    { args = ["--features", "signals"] },
+]
