@@ -63,3 +63,13 @@ gix-macros = { path = "../gix-macros" }
 
 [package.metadata.docs.rs]
 features = ["document-features", "blocking-io", "serde"]
+
+[package.metadata.ci]
+tests = [
+    { args = ["--features", "blocking-io", "--test", "blocking-packetline"] },
+    { args = ["--features", "async-io", "--test", "async-packetline"] },
+]
+doctests = [
+    # `cargo nextest` doesn't run doctests, so cover feature-gated examples explicitly here.
+    { args = ["--features", "blocking-io"] },
+]

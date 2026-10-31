@@ -50,3 +50,9 @@ gix-testtools = { path = "../tests/tools", default-features = false }
 [package.metadata.docs.rs]
 all-features = true
 features = ["sha1", "document-features"]
+
+[package.metadata.ci]
+tests = [
+    # The dev self-dependency already enables both hashes for every test build.
+    { args = ["--features", "sha1,sha256"] },
+]

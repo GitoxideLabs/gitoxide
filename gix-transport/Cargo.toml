@@ -150,3 +150,18 @@ blocking = "1.6.2"
 
 [package.metadata.docs.rs]
 features = ["http-client-curl", "document-features", "serde"]
+
+[package.metadata.ci]
+tests = [
+    { args = ["--features", "http-client-curl"] },
+    { args = ["--features", "http-client-curl,http-client-insecure-credentials", "--test", "blocking-transport-http-only"] },
+    { args = ["--features", "http-client-reqwest"] },
+    { args = ["--no-default-features", "--features", "blocking-client,http-client-reqwest,http-client-insecure-credentials", "--test", "blocking-transport"] },
+    { args = ["--features", "async-client"] },
+    # As of 2026-10-13, only `handshake_v1_and_request` and
+    # `handshake_v2_and_request` have been made `GIX_TEST_FIXTURE_HASH`-aware.
+    { args = ["--features", "blocking-client,http-client-insecure-credentials", "--test", "blocking-transport", "-E", "test(handshake_v1_and_request) | test(handshake_v2_and_request)"], env = { GIX_TEST_FIXTURE_HASH = "sha1" } },
+    { args = ["--features", "blocking-client,http-client-insecure-credentials", "--test", "blocking-transport", "-E", "test(handshake_v1_and_request) | test(handshake_v2_and_request)"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+    { args = ["--features", "async-client", "--test", "async-transport", "-E", "test(handshake_v1_and_request) | test(handshake_v2_and_request)"], env = { GIX_TEST_FIXTURE_HASH = "sha1" } },
+    { args = ["--features", "async-client", "--test", "async-transport", "-E", "test(handshake_v1_and_request) | test(handshake_v2_and_request)"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+]

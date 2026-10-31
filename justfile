@@ -3,7 +3,6 @@
 #   like a script, with `./justfile test`, for example.
 
 j := quote(just_executable())
-transport-handshake-tests := 'test(handshake_v1_and_request) | test(handshake_v2_and_request)'
 
 # List available recipes
 [private]
@@ -14,9 +13,23 @@ alias t := test
 alias c := check
 alias nt := nextest
 
+# Show affected packages and why; use --base for a stacked PR or --mode exhaustive
+[group('CI')]
+[positional-arguments]
+ci-plan *args:
+    cargo run --quiet --locked -p internal-tools --no-default-features --bin ci -- plan "$@"
+
+# Reproduce CI on this host; --dry-run prints commands, --stage selects checks
+[group('CI')]
+[positional-arguments]
+ci *args:
+    cargo run --quiet --locked -p internal-tools --no-default-features --bin ci -- run "$@"
+
 # Run the full check and test suite, including docs and journey tests
 [group('Development')]
-test: clippy check doc unit-tests doc-tests journey-tests-pure journey-tests-small journey-tests-async journey-tests check-mode
+[positional-arguments]
+test *args:
+    cargo run --locked -p internal-tools --no-default-features --bin ci -- run --mode exhaustive "$@"
 
 # Run `cargo clippy` on all crates
 [group('Development')]
@@ -43,7 +56,7 @@ check:
 # Check stable APIs against a revision, or the latest supported release (Rust 1.99)
 [group('Development')]
 check-api baseline='':
-    cargo test -p internal-tools -- --include-ignored
+    cargo test -p internal-tools --test check_api -- --ignored
     etc/scripts/check-gix-api.sh
     bash etc/scripts/check-api-compare.sh {{ quote(baseline) }}
 
@@ -56,134 +69,18 @@ check-auditable:
 # Run `cargo doc` on all crates
 [group('Development')]
 doc $RUSTDOCFLAGS='-D warnings':
-    cargo doc --workspace --no-deps
-    cargo doc --features=max,lean,small --workspace --no-deps
+    # Default max already enables the lean/small dependency features.
+    cargo doc --locked --workspace --no-deps
 
 # Run all unit tests
 [group('Tests')]
 unit-tests:
-    cargo nextest run --no-fail-fast
-    cargo nextest run -p gix-attributes --features serde --no-fail-fast
-    # Exercise both zlib backends independently of workspace feature unification.
-    cargo nextest run -p gix-zlib --no-fail-fast
-    cargo nextest run -p gix-zlib --features sirocco --no-fail-fast
-    # Keep serial plumbing coverage independent of workspace feature unification.
-    cargo nextest run -p gix-pathspec -p gix-ref -p gix-index -p gix-worktree -p gix-worktree-state --no-fail-fast
-    # Test repository snapshots with the default pure-gix backend and the Git CLI backend.
-    cargo nextest run -p gix-testtools --features sbom --no-fail-fast
-    cargo nextest run -p gix-testtools --no-default-features --features worktree-exclusions,sha1,sha256 --no-fail-fast
-    cargo nextest run -p gix-testtools --features xz --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-archive --no-default-features --features sha1 --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-archive --no-default-features --features sha1,tar --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-archive --no-default-features --features sha1,tar_gz --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-archive --no-default-features --features sha1,zip --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-archive --features sha256 --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-archive --no-default-features --features sha256 --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-archive --no-default-features --features sha256,tar --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-archive --no-default-features --features sha256,tar_gz --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-archive --no-default-features --features sha256,zip --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-diff --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-diff --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-status --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-status --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-dir --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-dir --features sha256 --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-discover --features sha1 --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-discover --features sha256 --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-worktree-state --features gix-parallel/parallel --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-worktree-state --features sha256,gix-parallel/parallel --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-worktree -p gix-parallel --features gix-parallel/parallel --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-worktree -p gix-parallel --features gix-worktree/sha256,gix-parallel/parallel --no-fail-fast
-    cargo nextest run -p gix-error --no-fail-fast --features auto-chain-error
-    cargo nextest run -p gix-error --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-filter --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-filter --no-fail-fast
-    cargo nextest run -p gix-filter -p gix-pathspec --features gix-parallel/parallel --test threaded --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-fsck --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-fsck --features sha256 --no-fail-fast
-    cargo nextest run -p gix-hash --features sha1 --no-fail-fast
-    cargo nextest run -p gix-hash --features sha1,sha256 --no-fail-fast
-    cargo nextest run -p gix-hash --features sha256 --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-commitgraph --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-commitgraph --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-object --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-object --no-fail-fast
-    cargo nextest run -p gix-tempfile --features signals --no-fail-fast
-    cargo nextest run -p gix-parallel --no-default-features --no-fail-fast
-    cargo nextest run -p gix-parallel --all-features --no-fail-fast
-    cargo nextest run -p gix-utils --all-features --no-fail-fast
-    cargo nextest run -p gix-fs --all-features --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-ref --all-features --features gix-parallel/parallel --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-ref --all-features --features gix-parallel/parallel --no-fail-fast
-    cargo nextest run -p gix-odb --all-features --features gix-parallel/parallel --no-fail-fast
-    cargo nextest run -p gix-odb --features gix-parallel/parallel --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-odb --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-odb --no-fail-fast
-    # Cover the threaded regression under SHA-256; SHA-1 is covered above.
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-odb --features gix-parallel/parallel --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-pack --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-pack --no-fail-fast
-    cargo nextest run -p gix-pack --features parallel --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-index --features gix-parallel/parallel --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-index --features gix-parallel/parallel --no-fail-fast
-    cargo nextest run -p gix-packetline --features blocking-io --test blocking-packetline --no-fail-fast
-    cargo nextest run -p gix-packetline --features async-io --test async-packetline --no-fail-fast
-    # Cover tracing modes and both forest renderers independently of workspace feature unification.
-    cargo nextest run -p gix-trace --no-default-features --no-fail-fast
-    cargo nextest run -p gix-trace --no-default-features --features tracing --no-fail-fast
-    cargo nextest run -p gix-trace --no-default-features --features tracing,tracing-detail --no-fail-fast
-    cargo nextest run -p gix-trace --no-default-features --features forest --no-fail-fast
-    cargo nextest run -p gix-trace --all-features --no-fail-fast
-    cargo nextest run -p gix-transport --features http-client-curl --no-fail-fast
-    cargo nextest run -p gix-transport --features http-client-curl,http-client-insecure-credentials --test blocking-transport-http-only --no-fail-fast
-    cargo nextest run -p gix-transport --features http-client-reqwest --no-fail-fast
-    cargo nextest run -p gix-transport --no-default-features --features blocking-client,http-client-reqwest,http-client-insecure-credentials --test blocking-transport --no-fail-fast
-    cargo nextest run -p gix-transport --features async-client --no-fail-fast
-    # As of 2026-10-13, only `handshake_v1_and_request` and
-    # `handshake_v2_and_request` have been made `GIX_TEST_FIXTURE_HASH`-aware.
-    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-transport --features blocking-client,http-client-insecure-credentials --test blocking-transport -E {{ quote(transport-handshake-tests) }} --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-transport --features blocking-client,http-client-insecure-credentials --test blocking-transport -E {{ quote(transport-handshake-tests) }} --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-transport --features async-client --test async-transport -E {{ quote(transport-handshake-tests) }} --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-transport --features async-client --test async-transport -E {{ quote(transport-handshake-tests) }} --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-traverse --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-traverse --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-merge --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-merge --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-negotiate --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-negotiate --features sha256 --no-fail-fast
-    cargo nextest run -p gix-protocol --features blocking-client --no-fail-fast
-    cargo nextest run -p gix-protocol --features blocking-client,sha256 --no-fail-fast
-    cargo nextest run -p gix-protocol --features async-client --no-fail-fast
-    cargo nextest run -p gix-protocol --features async-client,sha256 --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-blame --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-blame --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-refspec --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-refspec --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-revision --features sha256 --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-revision --features sha256 --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-worktree-stream --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-worktree-stream --features sha256 --no-fail-fast
-    cargo nextest run -p gix --no-default-features --features basic,comfort,max-performance,sha1,sha256 --no-fail-fast
-    cargo nextest run -p gix --no-default-features --features basic,extras,comfort,sha1,sha256 --no-fail-fast
-    cargo nextest run -p gix --features async-network-client,sha256 --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix --features async-network-client,sha256 --no-fail-fast
-    cargo nextest run -p gix --features blocking-network-client,sha256 --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix --features blocking-network-client,sha256 --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix --features sha256 --no-fail-fast
-    cargo nextest run -p gix --no-default-features --features sha256 --lib --no-fail-fast
-    cargo nextest run -p gitoxide-core --no-fail-fast
+    cargo run --locked -p internal-tools --no-default-features --bin ci -- run --mode exhaustive --stage tests
 
 # Run all doctests
 [group('Tests')]
 doc-tests:
-    cargo test --workspace --doc --no-fail-fast
-    # `cargo nextest` doesn't run doctests, so cover feature-gated examples explicitly here.
-    cargo test -p gix-packetline --doc --features blocking-io --no-fail-fast
-    cargo test -p gix-trace --doc --no-default-features --features forest --no-fail-fast
-    cargo test -p gix-trace --doc --no-default-features --features forest-ansi,tracing-detail --no-fail-fast
-    cargo test -p gix --doc --no-default-features --features sha1,sha256 --no-fail-fast
-    cargo test -p gix --doc --no-default-features --features revision,sha1,sha256 --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo test -p gix --doc --features sha256 --no-fail-fast
+    cargo run --locked -p internal-tools --no-default-features --bin ci -- run --mode exhaustive --stage doctests
 
 # Run optional flaky async tests
 [group('Tests')]
@@ -332,8 +229,7 @@ find-yanked:
 # Check shell scripts' executable bits and shebangs
 [group('Maintenance')]
 check-mode:
-    cargo build -p internal-tools
-    cargo run -p internal-tools -- check-mode
+    cargo run --locked -p internal-tools --no-default-features --bin ci -- exec mode
 
 # Clean the `target` directory
 [group('Maintenance')]
@@ -368,8 +264,9 @@ roll-release *csr-args:
 
 # Run checks, docs, and unit tests for CI
 [group('CI')]
-ci-test: check doc unit-tests check-mode
+ci-test:
+    cargo run --locked -p internal-tools --no-default-features --bin ci -- run --mode exhaustive --stage check,docs,doctests,tests,housekeeping
 
-# Run all journey tests (use a fresh clone or run `cargo clean` first)
+# Run all journey configurations; each build stays adjacent to its tests
 [group('CI')]
 ci-journey-tests: journey-tests-pure journey-tests-small journey-tests-async journey-tests

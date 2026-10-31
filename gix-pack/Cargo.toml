@@ -94,3 +94,10 @@ insta = "1.46.3"
 [package.metadata.docs.rs]
 all-features = true
 features = ["sha1", "sha256", "document-features", "pack-cache-lru-dynamic", "object-cache-dynamic", "serde"]
+
+[package.metadata.ci]
+tests = [
+    { args = [], env = { GIX_TEST_FIXTURE_HASH = "sha1" } },
+    { args = [], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+    { args = ["--features", "parallel"] },
+]

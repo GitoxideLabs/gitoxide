@@ -45,3 +45,9 @@ pretty_assertions = "1.4.0"
 
 [package.metadata.docs.rs]
 features = ["sha1"]
+
+[package.metadata.ci]
+tests = [
+    { args = [], env = { GIX_TEST_FIXTURE_HASH = "sha1" } },
+    { args = ["--features", "sha256"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+]

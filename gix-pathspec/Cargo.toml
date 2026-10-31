@@ -34,3 +34,9 @@ insta = "1.46.3"
 gix-parallel = { path = "../gix-parallel" }
 gix-testtools = { path = "../tests/tools", default-features = false, features = ["repo-snapshot", "sha1"] }
 serial_test = "3.4.0"
+
+[package.metadata.ci]
+tests = [
+    # Keep serial plumbing coverage independent of workspace feature unification.
+    { args = [], packages = ["gix-pathspec", "gix-ref", "gix-index", "gix-worktree", "gix-worktree-state"] },
+]

@@ -54,3 +54,9 @@ gix-testtools = { path = "../tests/tools", default-features = false, features = 
 gix-trace = { path = "../gix-trace", features = ["tracing"] }
 insta = "1.46.3"
 tracing-subscriber = { version = "0.3.22", default-features = false, features = ["registry"] }
+
+[package.metadata.ci]
+tests = [
+    { args = ["--no-default-features"] },
+    { args = ["--all-features"] },
+]

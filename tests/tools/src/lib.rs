@@ -110,9 +110,11 @@ pub fn rename(from: impl AsRef<Path>, to: impl AsRef<Path>) -> std::io::Result<(
 ///
 /// The returned executable path is stable for the lifetime of the test process and avoids races with other
 /// concurrently running tests that may cause Cargo to update the shared example binary in `target/debug/examples`.
+/// Build in the original workspace so relocated nextest runs reuse that same target directory.
 pub fn build_example_for_test(package: &str, example: &str, target_tmpdir: impl Into<PathBuf>) -> PathBuf {
     let mut cargo = std::process::Command::new(env::var_os("CARGO").unwrap_or_else(|| OsString::from(env!("CARGO"))));
     let res = cargo
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
         .args(["build", "-p", package, "--example", example])
         .status()
         .expect("cargo should run fine");

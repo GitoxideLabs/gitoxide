@@ -49,3 +49,9 @@ features = ["sha1"]
 [package.metadata.cargo-machete]
 # Enables thread-safe attribute and filter types passed to the stream's worker thread.
 ignored = ["gix-parallel"]
+
+[package.metadata.ci]
+tests = [
+    { args = [], env = { GIX_TEST_FIXTURE_HASH = "sha1" } },
+    { args = ["--features", "sha256"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+]

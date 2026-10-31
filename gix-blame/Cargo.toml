@@ -54,3 +54,9 @@ harness = false
 
 [package.metadata.docs.rs]
 features = ["sha1"]
+
+[package.metadata.ci]
+tests = [
+    { args = [], env = { GIX_TEST_FIXTURE_HASH = "sha1" } },
+    { args = [], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+]

@@ -72,3 +72,13 @@ required-features = ["gix-parallel/parallel"]
 
 [package.metadata.docs.rs]
 features = ["sha1", "document-features", "serde"]
+
+[package.metadata.ci]
+tests = [
+    { args = ["--all-features", "--features", "gix-parallel/parallel"] },
+    { args = ["--features", "gix-parallel/parallel"] },
+    { args = [], env = { GIX_TEST_FIXTURE_HASH = "sha1" } },
+    { args = [], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+    # Cover the threaded regression under SHA-256; SHA-1 is covered above.
+    { args = ["--features", "gix-parallel/parallel"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+]

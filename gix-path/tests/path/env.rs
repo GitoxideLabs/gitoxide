@@ -229,12 +229,16 @@ fn shell_unix_path() {
 }
 
 #[test]
-fn installation_config() {
-    assert_ne!(
-        gix_path::env::installation_config().map(|p| p.components().count()),
-        gix_path::env::installation_config_prefix().map(|p| p.components().count()),
-        "the prefix is a bit shorter than the installation config path itself"
+fn installation_config() -> gix_error::TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    assert_eq!(
+        gix_path::env::installation_config().and_then(Path::parent),
+        gix_path::env::installation_config_prefix(),
+        "the prefix is the config's parent, or absent when Git reports no installation config"
     );
+    Ok(())
 }
 
 #[test]

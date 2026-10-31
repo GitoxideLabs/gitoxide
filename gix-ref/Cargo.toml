@@ -67,3 +67,9 @@ libc = "0.2.186"
 
 [package.metadata.docs.rs]
 features = ["sha1", "document-features", "serde"]
+
+[package.metadata.ci]
+tests = [
+    { args = ["--all-features", "--features", "gix-parallel/parallel"], env = { GIX_TEST_FIXTURE_HASH = "sha1" } },
+    { args = ["--all-features", "--features", "gix-parallel/parallel"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+]

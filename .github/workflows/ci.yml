@@ -7,9 +7,12 @@ on:
       - "run-ci/**"
       - "**/run-ci/**"
   pull_request:
-    branches:
-      - main
   workflow_dispatch:
+
+# Keep every landed commit's exhaustive run, while cancelling obsolete PR runs.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -19,422 +22,52 @@ env:
   CLICOLOR: "1"
 
 jobs:
-  api-baseline:
-    name: stable API compatibility
+  plan:
+    name: Select CI work
     runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      plan: ${{ steps.plan.outputs.plan }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
-      # The API collector understands rustdoc JSON format 61.
-      - run: rustup toolchain install 1.99.0 --profile minimal && rustup default 1.99.0
-      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
-        with:
-          just-version: '1.58.0'
+      - name: Install Rust
+        run: rustup update stable && rustup default stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
         with:
-          tool: cargo-semver-checks@0.51.0
-      - name: Check the stable API boundary and release compatibility
-        run: just check-api
+          shared-key: ci-plan
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Test the planner without building Git tooling
+        run: cargo run --locked -p internal-tools --no-default-features --bin ci -- run --mode exhaustive --stage self-test
+      - name: Select checks and distribute them across platforms
+        id: plan
+        env:
+          CI_MODE: ${{ github.event_name == 'pull_request' && 'fast' || 'exhaustive' }}
+          CI_BASE: ${{ github.event.pull_request.base.sha || github.sha }}
+        run: cargo run --locked -p internal-tools --no-default-features --bin ci -- plan --all-platforms --mode "$CI_MODE" --base "$CI_BASE" --github-output "$GITHUB_OUTPUT"
 
-  msrv:
-    name: cargo check MSRV
-
+  run:
+    name: ${{ matrix.id }}
+    needs: plan
+    if: needs.plan.result == 'success'
     strategy:
-      matrix:
-        os:
-          - windows-2025
-          - ubuntu-latest
-
-    runs-on: ${{ matrix.os }}
-
-    defaults:
-      run:
-        shell: bash # Use `bash` even in the Windows job.
-
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    continue-on-error: ${{ !matrix.blocking }}
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
+    env:
+      CI_PLAN: ${{ needs.plan.outputs.plan }}
+      CI_JOB: ${{ matrix.id }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
-      - name: Read the MSRV
-        run: |
-          msrv="$(just msrv)"
-          tee -a "$GITHUB_ENV" <<<"MSRV=$msrv"
-      - name: Set up MSRV and nightly toolchains
-        run: |
-          rustup toolchain install "$MSRV" nightly --profile minimal --no-self-update
-      - name: Downgrade locked dependencies to lowest allowed versions
-        run: |
-          # TODO(msrv): Use `cargo update --minimal-versions` when `--minimal-versions` is
-          # available. See https://github.com/rust-lang/cargo/issues/5657 on that feature,
-          # and https://github.com/GitoxideLabs/gitoxide/issues/1119 on its use here.
-          cargo +nightly update -Zminimal-versions
-      - name: Upgrade `errno` just enough for `winapi` to build on modern Rust
-        if: startsWith(matrix.os, 'windows')
-        run: |
-          # `gix-tempfile` depends directly on a recent version of `signal-hook-registry`. Since
-          # version 1.4.8, `signal-hook-registry` depends on `errno`, and it allows a wide version
-          # range. Downgrading dependencies to minimal versions in the previous step gives `errno`
-          # 0.2.0; on Windows, this depends on `winapi` 0.2. Until version 0.3, `winapi` relied on
-          # implicit wraparound in unsigned overflow at compile time, which modern Rust prohibits
-          # (https://github.com/rust-lang/rust/issues/49765). To work around the problem of having
-          # downgraded `errno` too far to build on Windows, we bump it back up just a bit. (These
-          # steps can't easily be done together in a single `cargo update` command, because there
-          # is no `errno@0.2` to upgrade until after the downgrade done in the previous step.)
-          # `anstream` also reaches `errno` through `rustix`, which requires at least 0.2.8.
-          cargo +nightly update -Zminimal-versions -p errno@0.2 --precise 0.2.8
-      - name: Run some `cargo build` commands on `gix`
-        run: just check-rust-version "$MSRV"
-
-  msrv-badge:
-    name: Check MSRV badge
-
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
-      - name: Ensure we start out clean
-        run: git diff --exit-code
-      - name: Regenerate the MSRV badge
-        run: just msrv-badge
-      - name: Check for changes
-        run: git diff --exit-code
-
-  pure-rust-build:
-    runs-on: ubuntu-latest
-
-    container: debian:stable-slim
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Prerequisites
-        run: |
-          prerequisites=(
-            ca-certificates
-            curl
-            gcc  # rustc calls gcc to invoke the linker.
-            libc-dev  # rustc, in the toolchain we are using, dynamically links to the system libc.
-          )
-          apt-get update
-          apt-get install --no-install-recommends -y -- "${prerequisites[@]}"
-        shell: bash # This step needs `bash`, and the default in container jobs is `sh`.
-      - name: Verify that we are in an environment with limited dev tools
-        run: |
-          set -x
-          for package in cmake g++ libssl-dev make pkgconf pkg-config; do
-            if dpkg-query --status -- "$package"; then
-              exit 1
-            fi
-          done
-          for cmd in cmake g++ make pkgconf pkg-config; do
-            if command -v -- "$cmd"; then
-              exit 1
-            fi
-          done
-      - name: Install Rust via Rustup
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
-            sh -s -- -y --profile minimal
-      - name: Add Rust tools to path
-        run: echo "PATH=$HOME/.cargo/bin:$PATH" >> "$GITHUB_ENV"
-      - name: Generate dependency tree
-        run: cargo tree --locked --no-default-features --features max-pure > tree.txt
-      - name: Scan for dependencies that build C or C++ code
-        run: |
-          pattern='.*\b(-sys|cc|cmake|pkg-config|vcpkg)\b.*'
-          ! GREP_COLORS='ms=30;48;5;214' grep --color=always -Ex -C 1000000 -e "$pattern" tree.txt
-        continue-on-error: true
-      - name: Check for unrecognized *-sys dependencies
-        run: |
-          ! grep -qP '(?<!\b(linux-raw|aws-lc|inotify|dirs))-sys\b' tree.txt
-      - name: Wrap cc1 (and cc1plus if present) to record calls
-        run: |
-          set -o noclobber  # Catch any collisions with existing entries in /usr/local.
-
-          # Define the wrapper script for a compiler driver (for cc1 or cc1plus). This wrapper
-          # records calls, then delegates to the executable it wraps. When recording calls, writes
-          # to the log are synchronized so fragments of separate log entries aren't interleaved,
-          # even in concurrent runs. This wrapper knows what executable it is wrapping because,
-          # when deployed, this wrapper (or a symlink) replaces that executable, which will itself
-          # have been moved aside by being renamed with a `.orig` suffix, so this can call it. (The
-          # lockfile name GUID is just to avoid unintentional collision with unrelated lockfiles.)
-          cat >/usr/local/bin/wrapper1 <<'EOF'
-          #!/bin/sh
-          set -e
-          printf '%s\n' "$0 $*" |
-            flock /run/lock/wrapper1.fbd136bd-9b1b-448d-84a9-e18be53ae63c.lock \
-            tee -a -- /var/log/wrapper1.log ~/display >/dev/null  # We'll link ~/display later.
-          exec "$0.orig" "$@"
-          EOF
-
-          # Define the script that performs the wrapping. This script shall be run once for each
-          # executable to be wrapped, renaming it with a `.orig` suffix and replacing it with a
-          # symlink to the wrapper script, defined above.
-          cat >/usr/local/bin/wrap1 <<'EOF'
-          #!/bin/sh
-          set -e
-          dir="$(dirname -- "$1")"
-          base="$(basename -- "$1")"
-          cd -- "$dir"
-          mv -- "$base" "$base.orig"
-          ln -s -- /usr/local/bin/wrapper1 "$base"
-          EOF
-
-          # Define a helper file that, when sourced, wires up the `~/display` symlink `wrapper1`
-          # uses to report calls as GitHub Actions step output (in addition to writing them to a
-          # log file). This is needed because stdout and stderr are both redirected elsewhere when
-          # the wrapper actually runs, and `/dev/tty` is not usable. This must be sourced in the
-          # same step as the `cargo` command that causes wrapped executables to be run, because
-          # different steps write to different pipe objects. (This also needs the shell that
-          # sourced it to remain running. But that is not the cause of the underlying limitation.)
-          cat >/usr/local/bin/set-display.sh <<'EOF'
-          ln -s -- "/proc/$$/fd/1" ~/display
-          EOF
-
-          chmod +x /usr/local/bin/wrapper1 /usr/local/bin/wrap1
-          mkdir /run/lock/wrapper1.fbd136bd-9b1b-448d-84a9-e18be53ae63c.lock
-
-          find /usr/lib/gcc \( -name cc1 -o -name cc1plus \) \
-            -print -exec /usr/local/bin/wrap1 {} \;
-      - name: Build max-pure with limited dev tools and log cc1
-        run: |
-          . /usr/local/bin/set-display.sh
-          cargo install --debug --locked --no-default-features --features max-pure --path .
-      - name: Show logged C and C++ compilations (should be none)
-        run: |
-          ! cat /var/log/wrapper1.log
-        continue-on-error: true
-
-  test:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install Rust
-        run: |
-          rustup update stable
-          rustup default stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Setup dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends liblzma-dev
-      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
-      - uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
-        with:
-          tool: nextest
-      - name: test
+      # Native 32-bit containers need libraries for the runner's 64-bit Node.js.
+      - name: Install container prerequisites
+        if: matrix.container != ''
+        shell: bash
         env:
-          GIX_TEST_IGNORE_ARCHIVES: "1"
-        # The lint job runs both documentation configurations.
-        run: just check unit-tests check-mode
-
-  auditable:
-    name: cargo-auditable build
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install Rust
-        run: |
-          rustup update stable
-          rustup default stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
-      - uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
-        with:
-          tool: cargo-auditable@0.7.6
-      - name: Check metadata-based auditable builds on stable Rust
-        run: just check-auditable
-
-  test-doc:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install Rust
-        run: |
-          rustup update stable
-          rustup default stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
-      - name: Doctest
-        run: just doc-tests
-
-  test-journey:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install Rust
-        run: |
-          rustup update stable
-          rustup default stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
-      - name: Run journey tests
-        run: just ci-journey-tests
-
-  test-fast:
-    strategy:
-      matrix:
-        os:
-          - windows-latest
-          - windows-11-arm
-          - macos-latest
-          - ubuntu-latest
-          - ubuntu-24.04-arm
-        include:
-          - test-args: ""
-          - os: windows-11-arm
-            test-args: "--skip performance --skip speed"
-
-    runs-on: ${{ matrix.os }}
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install Rust
-        shell: bash # Use `bash` on all OSes, for `set -e` behavior.
-        run: |
-          rustup update stable
-          rustup default stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: cargo check default features
-        if: startsWith(matrix.os, 'windows')
-        run: cargo check --workspace --bins --examples
-      - uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
-        with:
-          tool: nextest
-      - name: Test (nextest)
-        env:
-          GIX_TEST_CREATE_ARCHIVES_EVEN_ON_CI: "1"
-        # We deliberately let this step use different shells on different OSes, each the runner
-        # default: `bash` on Ubuntu and macOS, but `pwsh` on Windows. `bash` on Windows runners
-        # would use a modified ("Git Bash") environment that is in some ways nicer for our tests,
-        # due to being more in line with some Unix-oriented assumptions. So we need to verify that
-        # the test suite is compatible with being run even outside that environment, including that
-        # `gix-testtools` is still able to run fixture scripts with the `bash` shell as intended.
-        # `gix-error` is excluded because it gets compiled with the wrong feature toggles here.
-        # It's tested individually.
-        run: | # zizmor: ignore[template-injection]
-          cargo nextest run --workspace --no-fail-fast --exclude gix-error -- ${{ matrix.test-args }}
-      - name: Check that generated archives are committed or ignored
-        shell: bash # This relies on `-e` and uses shell-specific features on all OSes.
-        run: |
-          # If this fails, the fix is usually to commit a regenerated or new archive.
-          git status --porcelain
-          test -z "$(git status --porcelain)"
-      - name: Remove Git for Windows directories from PATH
-        if: startsWith(matrix.os, 'windows')
-        run: |
-          $prefix = 'C:\Program Files\Git'
-          $filtered = ($Env:PATH -split ';' | Where-Object { $_ -notlike "$prefix\*" }) -join ';'
-          Add-Content -Value "PATH=$filtered" -Path $Env:GITHUB_ENV
-      - name: Check that `git` is no longer found
-        if: startsWith(matrix.os, 'windows')
-        run: |
-          $git = Get-Command git -ErrorAction SilentlyContinue
-          if ($null -eq $git) { exit 0 } else { exit 1 }
-      - name: Check that `EXEPATH` is unset
-        if: startsWith(matrix.os, 'windows')
-        run: if ($null -eq $Env:EXEPATH) { exit 0 } else { exit 1 }
-      - name: Retest gix-path without `git` in `PATH` (nextest)
-        if: startsWith(matrix.os, 'windows')
-        env:
-          TEST_ARGS: ${{ matrix.test-args }}
-        run: |
-          cargo nextest run -p gix-path --no-fail-fast -- (-split $Env:TEST_ARGS)
-
-  test-fixtures-windows:
-    strategy:
-      matrix:
-        os:
-          - windows-latest
-          - windows-11-arm
-        include:
-          - test-args: ""
-          - os: windows-11-arm
-            test-args: "--skip performance --skip speed"
-
-    runs-on: ${{ matrix.os }}
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install Rust
-        shell: bash # Use `bash` (not `pwsh`), for `set -e` behavior.
-        run: |
-          rustup update stable
-          rustup default stable
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          # Reuse test-fast's dependency cache; the fixture mode only changes runtime behavior.
-          shared-key: test-fast
-          save-if: false
-      - uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
-        with:
-          tool: nextest
-      - name: Test (nextest)
-        env:
-          GIX_TEST_IGNORE_ARCHIVES: "1"
-          TEST_ARGS: ${{ matrix.test-args }}
-        run: |
-          cargo nextest run --workspace --no-fail-fast --exclude gix-error -- `
-            (-split $Env:TEST_ARGS)
-
-  test-32bit:
-    strategy:
-      matrix:
-        container-architecture: [i386, arm32v7]
-        include:
-          - container-architecture: i386
-            runner-architecture: amd64
-            # Hold back the move to ubuntu-26.04 (via ubuntu-latest) until a fix for
-            # https://github.com/actions/runner-images/issues/14790 is released.
-            runner-os: ubuntu-24.04
-            host-triple: i686-unknown-linux-gnu
-          - container-architecture: arm32v7
-            runner-architecture: arm64
-            runner-os: ubuntu-24.04-arm
-            host-triple: armv7-unknown-linux-gnueabihf
-
-    runs-on: ${{ matrix.runner-os }}
-
-    container: ${{ matrix.container-architecture }}/debian:stable-slim
-
-    steps:
-      - name: Prerequisites
-        env:
-          RUNNER_ARCHITECTURE: ${{ matrix.runner-architecture }}
+          RUNNER_ARCHITECTURE: ${{ matrix.runner_architecture }}
         run: |
           prerequisites=(
             build-essential
@@ -444,313 +77,106 @@ jobs:
             git
             jq
             libssl-dev
-            "libstdc++6:$RUNNER_ARCHITECTURE"  # To support external 64-bit Node.js for actions.
+            "libstdc++6:$RUNNER_ARCHITECTURE"
             pkgconf
             python3-minimal
           )
           dpkg --add-architecture "$RUNNER_ARCHITECTURE"
           apt-get update
           apt-get install --no-install-recommends -y -- "${prerequisites[@]}"
-        shell: bash # This step needs `bash`, and the default in container jobs is `sh`.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install Rust via Rustup
-        env:
-          HOST_TRIPLE: ${{ matrix.host-triple }}
+          # API comparisons need release tags; other tasks consume the saved plan.
+          fetch-depth: ${{ matrix.semver && '0' || '1' }}
+      - name: Install native Rust
+        if: matrix.container == ''
+        shell: bash
         run: |
-          # Specify toolchain to avoid possible misdetection based on the 64-bit running kernel.
+          rustup update stable
+          rustup default stable
+      - name: Install container Rust
+        if: matrix.container != ''
+        shell: bash
+        env:
+          HOST_TRIPLE: ${{ matrix.host }}
+        run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
-            sh -s -- -y --default-host "$HOST_TRIPLE" --profile minimal
-      - name: Add Rust tools to path
-        run: echo "PATH=$HOME/.cargo/bin:$PATH" >> "$GITHUB_ENV"
+            sh -s -- -y --default-host "$HOST_TRIPLE" --default-toolchain stable --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Install Rust components
+        if: matrix.clippy
+        shell: bash
+        run: rustup component add clippy rustfmt
+      - name: Install the API checker's Rust version
+        if: matrix.semver
+        shell: bash
+        # The API collector understands rustdoc JSON format 61.
+        run: rustup toolchain install 1.99.0 --profile minimal
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+        if: matrix.just
+        with:
+          just-version: '1.58.0'
+      - name: Install MSRV toolchains
+        if: matrix.msrv
+        shell: bash
+        run: |
+          msrv="$(just msrv)"
+          rustup toolchain install "$msrv" nightly --profile minimal --no-self-update
+      - name: Install WebAssembly targets
+        if: matrix.wasm
+        shell: bash
+        run: rustup target add wasm32-unknown-unknown wasm32-wasip1 wasm32-wasip2
+      - name: Install the 32-bit Windows target
+        if: matrix.size32
+        shell: bash
+        run: rustup target add i686-pc-windows-msvc
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          shared-key: ${{ matrix.cache || matrix.id }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
-        with:
-          tool: nextest
-      - name: Make `system` scope nonempty for "GitInstallation" tests
-        run: git config --system gitoxide.imaginary.arbitraryVariable arbitraryValue
-      - name: Test (nextest)
-        env:
-          GIX_TEST_IGNORE_ARCHIVES: "1"
-        run: cargo nextest run --workspace --no-fail-fast --exclude gix-error
-
-  test-32bit-windows-size-doc:
-    runs-on: windows-latest
-
-    env:
-      TARGET: i686-pc-windows-msvc
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install Rust
-        shell: bash # Use `bash` (not `pwsh`), for `$` expansion and `set -e` behavior.
-        run: |
-          rustup update stable
-          rustup default stable
-          rustup target add "$TARGET"
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
-        with:
-          tool: nextest
-      - name: Test data structure sizes (nextest)
-        run: cargo nextest run --target $Env:TARGET --workspace --no-fail-fast size
-      - name: Doctest
-        run: cargo test --workspace --doc --no-fail-fast
-
-  lint:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install Rust
-        run: |
-          rustup update stable
-          rustup default stable
-          rustup component add clippy rustfmt
-      - name: Install cargo machete
+      - name: Install the selected Rust tools
+        if: join(matrix.tools, ',') != ''
         uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
         with:
-          tool: cargo-machete@0.9.1
-      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
-      - name: Run cargo machete
-        run: cargo machete
-      - name: Run cargo clippy
-        run: just clippy -D warnings -A unknown-lints --no-deps
-      - name: Run cargo doc
-        run: just doc
-      - name: Run cargo fmt
-        run: cargo fmt --all -- --check
+          tool: ${{ join(matrix.tools, ',') }}
+      - name: Install the workflow YAML reader
+        if: matrix.yq
+        shell: bash
+        env:
+          YQ_VERSION: v4.49.2
+        run: |
+          curl -LSfs "https://github.com/mikefarah/yq/releases/download/$YQ_VERSION/yq_linux_amd64" -o "$RUNNER_TEMP/yq"
+          mkdir -p "$HOME/.local/bin"
+          install -m 0755 "$RUNNER_TEMP/yq" "$HOME/.local/bin/yq"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install archive test dependencies
+        if: matrix.xz && runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends liblzma-dev
       - name: Install cargo diet
+        if: matrix.diet
+        shell: bash
         env:
           CARGO_DIET_TAG: v1.2.7
         run: |
           curl -LSfs "https://raw.githubusercontent.com/the-lean-crate/cargo-diet/refs/tags/$CARGO_DIET_TAG/ci/install.sh" |
             sh -s -- --git the-lean-crate/cargo-diet --target x86_64-unknown-linux-musl --tag "$CARGO_DIET_TAG"
-      - name: Run cargo diet
-        run: just check-size
-        # Let's not fail CI for this, it will fail locally often enough, and a crate a little bigger
-        # than allows is no problem either if it comes to that.
-        continue-on-error: true
+      - name: Run the selected checks
+        # Keep Windows' native shell; the shared runner configures every task's environment.
+        run: cargo run --locked -p internal-tools --no-default-features --bin ci -- run --from-env
 
-  # This job is not required for PR auto-merge, so that sudden announcement of a
-  # new advisory does not keep otherwise OK pull requests from being integrated.
-  cargo-deny-advisories:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
-        with:
-          command: check advisories
-          arguments: --workspace --all-features --locked
-
-  cargo-deny:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
-        with:
-          command: check bans licenses sources
-          arguments: --workspace --all-features --locked
-
-  wasm:
-    name: WebAssembly
-
-    runs-on: ubuntu-latest
-
-    strategy:
-      matrix:
-        target: [wasm32-unknown-unknown, wasm32-wasip1, wasm32-wasip2]
-
-    env:
-      TARGET: ${{ matrix.target }}
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install Rust
-        run: |
-          rustup update stable
-          rustup default stable
-          rustup target add "$TARGET"
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: "WASI only: crates without feature toggle"
-        if: startsWith(matrix.target, 'wasm32-wasi')
-        run: |
-          set -x
-          for crate in gix-sec; do
-            cargo build -p "$crate" --target "$TARGET"
-          done
-      - name: crates without feature toggles
-        run: |
-          crates=(
-            gix-actor
-            gix-attributes
-            gix-bitmap
-            gix-chunk
-            gix-command
-            gix-config-value
-            gix-date
-            gix-glob
-            gix-mailmap
-            gix-packetline
-            gix-path
-            gix-pathspec
-            gix-prompt
-            gix-quote
-            gix-url
-            gix-validate
-          )
-          set -x
-          for crate in "${crates[@]}"; do
-            cargo build -p "$crate" --target "$TARGET"
-          done
-      - name: features of gix-parallel and gix-utils
-        run: |
-          set -x
-          for feature in '' parallel once_cell parallel,once_cell; do
-            cargo build -p gix-parallel --no-default-features --features "$feature" --target "$TARGET"
-          done
-          for feature in '' progress progress,progress-unit-bytes progress,progress-unit-human-numbers interrupt io-pipe cache-efficiency-debug; do
-            cargo build -p gix-utils --no-default-features --features "$feature" --target "$TARGET"
-          done
-      - name: crates with 'sha1' and 'wasm' feature
-        run: |
-          set -x
-          for crate in gix-pack; do
-            cargo build -p "$crate" --features sha1,wasm --target "$TARGET"
-          done
-      - name: crates with 'sha1' feature
-        run: |
-          crates=(
-            gix-commitgraph
-            gix-hash
-            gix-hashtable
-            gix-index
-            gix-object
-            gix-refspec
-            gix-revision
-            gix-traverse
-          )
-          set -x
-          for crate in "${crates[@]}"; do
-            cargo build -p "$crate" --features sha1 --target "$TARGET"
-          done
-      - name: gix-pack with all features (including wasm)
-        run: cargo build -p gix-pack --all-features --target "$TARGET"
-
-  # Check that all `actions/checkout` in CI jobs have `persist-credentials: false`.
-  check-no-persist-credentials:
-    runs-on: ubuntu-slim
-
-    env:
-      GLOB: .github/workflows/*.@(yaml|yml)
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          sparse-checkout: ".github/workflows"
-      - name: List workflows to be scanned
-        run: |
-          shopt -s extglob
-          printf '%s\n' $GLOB  # Pathname expansion in $GLOB intended.
-      - name: Scan workflows
-        run: |
-          shopt -s extglob
-          yq '.jobs.*.steps[]
-            | select(.uses == "actions/checkout@*" and .with.["persist-credentials"]? != false)
-            | {"file": filename, "line": line, "name": (.name // .uses)}
-            | .file + ":" + (.line | tostring) + ": " + .name
-          ' -- $GLOB >query-output.txt  # Pathname expansion in $GLOB intended.
-          cat query-output.txt
-          test -z "$(<query-output.txt)"  # Report failure if we found anything.
-
-  # Check that only jobs intended not to block PR auto-merge are omitted as
-  # dependencies of the `tests-pass` job below, so that whenever a job is
-  # added, a decision is made about whether it must pass for PRs to merge.
-  check-blocking:
-    runs-on: ubuntu-slim
-
-    env:
-      # List all jobs that are intended NOT to block PR auto-merge here.
-      EXPECTED_NONBLOCKING_JOBS: |-
-        cargo-deny-advisories
-        wasm
-        tests-pass
-
-    defaults:
-      run:
-        shell: bash # Without this, the shell here is `bash` but without `-o pipefail`.
-
-    steps:
-      - name: Find this workflow
-        run: |
-          relative_workflow_with_ref="${GITHUB_WORKFLOW_REF#"$GITHUB_REPOSITORY/"}"
-          echo "WORKFLOW_PATH=${relative_workflow_with_ref%@*}" >> "$GITHUB_ENV"
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          sparse-checkout: ${{ env.WORKFLOW_PATH }}
-      - name: Get all jobs
-        run: yq '.jobs | keys.[]' -- "$WORKFLOW_PATH" | sort | tee all-jobs.txt
-      - name: Get blocking jobs
-        run: yq '.jobs.tests-pass.needs.[]' -- "$WORKFLOW_PATH" | sort | tee blocking-jobs.txt
-      - name: Get jobs we intend do not block
-        run: sort <<<"$EXPECTED_NONBLOCKING_JOBS" | tee expected-nonblocking-jobs.txt
-      - name: Each job must block PRs or be declared not to
-        run: |
-          sort -m blocking-jobs.txt expected-nonblocking-jobs.txt |
-            diff --color=always -U1000 - all-jobs.txt
-
-  # Dummy job to have a stable name for the "all tests pass" requirement.
   tests-pass:
     name: Tests pass
-
     permissions: {}
-
-    needs:
-      - api-baseline
-      - msrv
-      - msrv-badge
-      - pure-rust-build
-      - test
-      - auditable
-      - test-doc
-      - test-journey
-      - test-fast
-      - test-fixtures-windows
-      - test-32bit
-      - test-32bit-windows-size-doc
-      - lint
-      - cargo-deny
-      - check-no-persist-credentials
-      - check-blocking
-
-    if: always() # Always run even if dependencies fail.
-
+    needs: [plan, run]
+    if: always()
     runs-on: ubuntu-slim
-
     steps:
-      - name: Fail if ANY dependency has failed or cancelled
-        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+      - name: Require the planner and all blocking checks to succeed
+        if: needs.plan.result != 'success' || needs.run.result != 'success'
         run: exit 1
       - name: OK
         run: exit 0

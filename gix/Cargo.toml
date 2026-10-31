@@ -495,3 +495,20 @@ ignored = [
     # Feature forwarding uses `prodash/*` in Cargo feature wiring without direct crate references.
     "prodash",
 ]
+
+[package.metadata.ci]
+tests = [
+    { args = ["--no-default-features", "--features", "basic,comfort,max-performance,sha1,sha256"] },
+    { args = ["--no-default-features", "--features", "basic,extras,comfort,sha1,sha256"] },
+    { args = ["--features", "async-network-client,sha256"] },
+    { args = ["--features", "async-network-client,sha256"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+    { args = ["--features", "blocking-network-client,sha256"] },
+    { args = ["--features", "blocking-network-client,sha256"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+    { args = ["--features", "sha256"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+    { args = ["--no-default-features", "--features", "sha256", "--lib"] },
+]
+doctests = [
+    { args = ["--no-default-features", "--features", "sha1,sha256"] },
+    { args = ["--no-default-features", "--features", "revision,sha1,sha256"] },
+    { args = ["--features", "sha256"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+]

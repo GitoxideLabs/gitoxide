@@ -32,3 +32,12 @@ serde = { version = "1.0.114", optional = true, default-features = false, featur
 [dev-dependencies]
 insta = "1.46.3"
 bstr = { version = "1.12.0", default-features = false }
+
+[package.metadata.ci]
+# Stream tests also read packed object fixtures from gix-odb.
+extra-inputs = ["gix-odb/tests/fixtures"]
+tests = [
+    # Exercise both zlib backends independently of workspace feature unification.
+    { args = [] },
+    { args = ["--features", "sirocco"] },
+]

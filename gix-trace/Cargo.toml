@@ -54,3 +54,17 @@ tracing-subscriber = { version = "0.3.22", default-features = false, features = 
 [package.metadata.docs.rs]
 all-features = true
 features = ["document-features"]
+
+[package.metadata.ci]
+tests = [
+    # Cover tracing modes and both forest renderers independently of workspace feature unification.
+    { args = ["--no-default-features"] },
+    { args = ["--no-default-features", "--features", "tracing"] },
+    { args = ["--no-default-features", "--features", "tracing,tracing-detail"] },
+    { args = ["--no-default-features", "--features", "forest"] },
+    { args = ["--all-features"] },
+]
+doctests = [
+    { args = ["--no-default-features", "--features", "forest"] },
+    { args = ["--no-default-features", "--features", "forest-ansi,tracing-detail"] },
+]

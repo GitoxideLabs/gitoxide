@@ -28,6 +28,7 @@ mod ask {
     /// configuration options can change its location (e.g. CARGO_TARGET_DIR).
     fn evaluate_target_dir() -> String {
         let mut manifest_proc = std::process::Command::new(env!("CARGO"))
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
             .args(["metadata", "--format-version", "1"])
             .stdout(std::process::Stdio::piped())
             .spawn()
@@ -73,6 +74,7 @@ mod ask {
     #[test]
     fn askpass_only() -> gix_testtools::TestResult {
         let mut cmd = std::process::Command::new(env!("CARGO"));
+        cmd.current_dir(env!("CARGO_MANIFEST_DIR"));
         cmd.args([
             "build",
             "-p",
@@ -102,6 +104,7 @@ mod ask {
     #[test]
     fn username_password() -> gix_testtools::TestResult {
         let mut cmd = std::process::Command::new(env!("CARGO"));
+        cmd.current_dir(env!("CARGO_MANIFEST_DIR"));
         cmd.args([
             "build",
             "-p",
