@@ -220,7 +220,7 @@ mod update {
     #[test]
     fn checked_out_branches_in_worktrees_are_rejected_with_additional_information() -> TestResult {
         let root = gix_path::realpath(gix_testtools::scripted_fixture_read_only_with_args_single_archive(
-            "make_fetch_repos.sh",
+            "make_fetch_worktrees.sh",
             [base_repo_path()],
         )?)?;
         let repo = root.join("worktree-root");

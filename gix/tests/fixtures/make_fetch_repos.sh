@@ -19,14 +19,3 @@ git clone --shared base two-origins
   git branch "not-currently-checked-out"
   git symbolic-ref refs/heads/symbolic refs/heads/main
 )
-
-git clone --shared base worktree-root
-(cd worktree-root
-
-  git worktree add ../wt-a
-  git worktree add ../prev/wt-a-nested
-  git worktree add ../wt-b
-  git worktree add ../wt-a/nested-wt-b
-  git worktree add --lock ../wt-c-locked
-  git worktree add ../wt-deleted && rm -Rf ../wt-deleted
-)
