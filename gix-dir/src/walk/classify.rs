@@ -192,12 +192,27 @@ pub fn path(
         return Ok(out.with_status(entry::Status::Pruned));
     }
 
-    let (uptodate_index_kind, index_kind, property) = resolve_file_type_with_index(
+    let (uptodate_index_kind, mut index_kind, property) = resolve_file_type_with_index(
         rela_path,
         ctx.index,
         ctx.ignore_case_index_lookup.filter(|_| ignore_case),
     );
     let mut kind = uptodate_index_kind.or(disk_kind).or_else(on_demand_disk_kind);
+    if kind == Some(entry::Kind::Directory) && index_kind.is_some_and(|kind| !kind.is_dir()) {
+        // A conflict can index both a file and its children; keep the directory tracked.
+        let has_indexed_children = if let Some(lookup) = ctx.ignore_case_index_lookup.filter(|_| ignore_case) {
+            ctx.index
+                .path_is_directory_icase(rela_path.as_bstr(), ignore_case, lookup)
+        } else {
+            rela_path.push(b'/');
+            let has_children = ctx.index.prefixed_entries_range(rela_path.as_bstr()).is_some();
+            rela_path.pop();
+            has_children
+        };
+        if has_indexed_children {
+            index_kind = Some(entry::Kind::Directory);
+        }
+    }
 
     // We always check the pathspec to have the value filled in reliably.
     out.pathspec_match = ctx
@@ -423,7 +438,8 @@ fn resolve_file_type_with_index(
             }
         }
     } else {
-        match index.entry_by_path(rela_path.as_bstr()) {
+        // Prefer our side's type, but conflicts without ours are tracked as well.
+        match index.entry_range(rela_path.as_bstr()) {
             None => {
                 rela_path.push(b'/');
                 let res = index.prefixed_entries_range(rela_path.as_bstr());
@@ -459,7 +475,14 @@ fn resolve_file_type_with_index(
                 }
                 (kind, is_tracked.then_some(entry::Kind::Directory))
             }
-            Some(entry) => entry_to_kinds(entry),
+            Some(range) => {
+                let entries = &index.entries()[range];
+                let entry = entries
+                    .iter()
+                    .find(|entry| entry.stage() == gix_index::entry::Stage::Ours)
+                    .unwrap_or_else(|| &entries[entries.len() - 1]);
+                entry_to_kinds(entry)
+            }
         }
     };
     (uptodate_kind, index_kind, special_property)

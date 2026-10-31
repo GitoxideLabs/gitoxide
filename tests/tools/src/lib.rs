@@ -370,7 +370,7 @@ impl IsExcluded for WorktreeExclusions {
                 let git_path = gix_path::to_unix_separators_on_windows(gix_path::into_bstr(relative_path).ok()?);
                 if index
                     .as_ref()
-                    .is_some_and(|index| index.entry_by_path(git_path.as_bstr()).is_some())
+                    .is_some_and(|index| index.entry_index_by_path(git_path.as_bstr()).is_ok())
                 {
                     return Some(false);
                 }

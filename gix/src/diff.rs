@@ -130,39 +130,50 @@ pub(crate) mod utils {
     };
 
     /// Create an instance by reading all relevant information from the `config`uration, while being `lenient` or not.
-    /// Returns `Ok((None, false))` if nothing is configured, or `Ok((None, true))` if it's configured and disabled.
+    /// Returns `Ok((None, false))` if neither rename mode nor limit is configured, or `Ok((None, true))` if disabled.
     ///
     /// Note that missing values will be defaulted similar to what git does.
     pub fn new_rewrites(config: &gix_config::File, lenient: bool) -> Result<(Option<Rewrites>, bool)> {
         new_rewrites_inner(config, lenient, &Diff::RENAMES, &Diff::RENAME_LIMIT)
     }
 
+    /// Resolve rename mode and limit independently, falling back to their `diff` keys when unset.
     pub(crate) fn new_rewrites_inner(
         config: &gix_config::File,
         lenient: bool,
         renames: &'static crate::config::tree::diff::Renames,
         rename_limit: &'static crate::config::tree::keys::UnsignedInteger,
     ) -> Result<(Option<Rewrites>, bool)> {
-        let copies = match renames
+        let mut tracking = renames
             .try_into_renames(config.boolean(renames))
-            .with_leniency(lenient)?
-        {
-            Some(renames) => match renames {
-                Tracking::Disabled => return Ok((None, true)),
-                Tracking::Renames => None,
-                Tracking::RenamesAndCopies => Some(Copies::default()),
-            },
-            None => return Ok((None, false)),
+            .with_leniency(lenient)?;
+        if tracking.is_none() {
+            tracking = Diff::RENAMES
+                .try_into_renames(config.boolean(Diff::RENAMES))
+                .with_leniency(lenient)?;
+        }
+        let copies = match tracking {
+            Some(Tracking::Disabled) => return Ok((None, true)),
+            Some(Tracking::RenamesAndCopies) => Some(Copies::default()),
+            _ => None,
         };
+        let mut limit = rename_limit
+            .try_into_usize(config.integer(rename_limit))
+            .with_leniency(lenient)?;
+        if limit.is_none() {
+            limit = Diff::RENAME_LIMIT
+                .try_into_usize(config.integer(Diff::RENAME_LIMIT))
+                .with_leniency(lenient)?;
+        }
+        if tracking.is_none() && limit.is_none() {
+            return Ok((None, false));
+        }
 
         let default = Rewrites::default();
         Ok((
             Rewrites {
                 copies,
-                limit: rename_limit
-                    .try_into_usize(config.integer(rename_limit))
-                    .with_leniency(lenient)?
-                    .unwrap_or(default.limit),
+                limit: limit.unwrap_or(default.limit),
                 ..default
             }
             .into(),

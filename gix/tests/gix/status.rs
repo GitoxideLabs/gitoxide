@@ -26,6 +26,61 @@ mod into_iter {
     use crate::status::{repo, submodule_repo};
 
     #[test]
+    fn conflict_paths_are_reported_once_like_git() -> TestResult {
+        use gix::status::{
+            UntrackedFiles, index_worktree::Item as WorktreeItem, plumbing::index_as_worktree::EntryStatus,
+        };
+
+        let root = gix_testtools::scripted_fixture_read_only("conflicts.sh")?;
+        let baseline = std::fs::read_to_string(root.join(".git/baseline-status"))?;
+        assert_eq!(
+            baseline.lines().count(),
+            29,
+            "Git reports twenty-seven conflicts and two untracked files"
+        );
+        for ignore_case in [false, true] {
+            let repo = gix::open_opts(
+                &root,
+                gix::open::Options::isolated().config_overrides([format!("core.ignoreCase={ignore_case}")]),
+            )?;
+            for untracked in [UntrackedFiles::Files, UntrackedFiles::Collapsed] {
+                let items = repo
+                    .status(gix::progress::Discard)?
+                    .untracked_files(untracked)
+                    .into_iter(None)?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                let mut actual = Vec::new();
+                for item in items {
+                    let code = match &item {
+                        Item::IndexWorktree(WorktreeItem::Modification {
+                            status: EntryStatus::Conflict { summary, .. },
+                            ..
+                        }) => summary.as_str(),
+                        Item::IndexWorktree(WorktreeItem::DirectoryContents { entry, .. }) => {
+                            assert_eq!(
+                                entry.status,
+                                gix::dir::entry::Status::Untracked,
+                                "only untracked controls remain"
+                            );
+                            "??"
+                        }
+                        other => panic!("unexpected status item: {other:?}"),
+                    };
+                    actual.push(format!("{code} {}", item.location()));
+                }
+                actual.sort();
+                let mut expected: Vec<_> = baseline.lines().map(str::to_owned).collect();
+                expected.sort();
+                assert_eq!(
+                    actual, expected,
+                    "each conflict appears once, with Git's status (ignore_case={ignore_case})"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn item_size() {
         let actual = std::mem::size_of::<Item>();
         let sha1 = 280;

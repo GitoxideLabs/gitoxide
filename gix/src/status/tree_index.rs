@@ -3,8 +3,8 @@ use crate::{Repository, Result, config::tree};
 /// Specify how to perform rewrite tracking [Repository::tree_index_status()].
 #[derive(Default, Debug, Copy, Clone)]
 pub enum TrackRenames {
-    /// Check `status.renames` and then `diff.renames` if the former isn't set. Otherwise, default to performing rewrites if nothing
-    /// is set.
+    /// Check `status.renames` and `status.renameLimit`, independently falling back to `diff.renames` and
+    /// `diff.renameLimit` when unset. Default to performing rewrites if nothing is set.
     #[default]
     AsConfigured,
     /// Track renames according ot the given configuration.
@@ -54,16 +54,12 @@ impl Repository {
         let tree_index: gix_index::State = self.index_from_tree(tree_id)?.into();
         let rewrites = match renames {
             TrackRenames::AsConfigured => {
-                let (mut rewrites, mut is_configured) = crate::diff::utils::new_rewrites_inner(
+                let (mut rewrites, is_configured) = crate::diff::utils::new_rewrites_inner(
                     &self.config.resolved,
                     self.config.lenient_config,
                     &tree::Status::RENAMES,
                     &tree::Status::RENAME_LIMIT,
                 )?;
-                if !is_configured {
-                    (rewrites, is_configured) =
-                        crate::diff::utils::new_rewrites(&self.config.resolved, self.config.lenient_config)?;
-                }
                 if !is_configured {
                     rewrites = Some(Default::default());
                 }

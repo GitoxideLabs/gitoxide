@@ -56,7 +56,7 @@ pub fn query(
             .metadata()
             .ok()
             .map(|m| is_dir_to_mode(m.is_dir()))
-            .or_else(|| path.ends_with(b"/").then_some(gix::index::entry::Mode::DIR));
+            .or_else(|| is_directory_query(path.as_bstr()).then_some(gix::index::entry::Mode::DIR));
         let query_path = repo.normalize_path(&path)?;
         let entry = cache.at_entry(query_path.as_bstr(), mode)?;
         let match_ = entry
@@ -72,6 +72,10 @@ pub fn query(
     Ok(())
 }
 
+fn is_directory_query(path: &BStr) -> bool {
+    path.ends_with(b"/") || path.ends_with(b"/.")
+}
+
 fn print_match_unless_tracked(
     match_: Option<gix::ignore::search::Match<'_>>,
     index: &gix::index::State,
@@ -79,12 +83,16 @@ fn print_match_unless_tracked(
     display_path: &BStr,
     out: impl std::io::Write,
 ) -> std::io::Result<()> {
-    print_match(match_.filter(|_| !is_tracked(index, query_path)), display_path, out)
+    print_match(
+        match_.filter(|_| !is_tracked(index, query_path, is_directory_query(display_path))),
+        display_path,
+        out,
+    )
 }
 
-fn is_tracked(index: &gix::index::State, path: &BStr) -> bool {
+fn is_tracked(index: &gix::index::State, path: &BStr, is_directory_query: bool) -> bool {
     let path = path.trim_end_with(|b| b == '/').as_bstr();
-    index.entry_by_path(path).is_some() || index.path_is_directory(path)
+    (!is_directory_query && index.entry_index_by_path(path).is_ok()) || index.path_is_directory(path)
 }
 
 fn print_match(
