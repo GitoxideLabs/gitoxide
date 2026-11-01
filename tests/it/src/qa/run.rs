@@ -242,6 +242,7 @@ fn validate_settings(package: &Value) -> Result<()> {
             "wasm",
             "api-checker",
             "api-toolchain",
+            "downstream",
         ]
         .contains(&key.as_str())
         {

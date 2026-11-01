@@ -506,6 +506,22 @@ ignored = [
 ]
 
 [package.metadata.qa]
+# Major external consumers with advisory compatibility checks.
+# CI checks each repository's default branch; see DEVELOPMENT.md for the selection.
+downstream = [
+    { name = "built", repository = "lukaslueg/built", package = "built", features = ["gix"], default-features = false },
+    { name = "rustsec", repository = "rustsec/rustsec", package = "rustsec", features = ["gix-reqwest", "osv-export"], default-features = false },
+    { name = "crates-index", repository = "frewsxcv/rust-crates-index", package = "crates-index", features = ["git"], default-features = false },
+    { name = "cargo", repository = "rust-lang/cargo", package = "cargo" },
+    { name = "cargo-generate", repository = "cargo-generate/cargo-generate", package = "cargo-generate", features = ["git"], default-features = false },
+    { name = "jj", repository = "jj-vcs/jj", package = "jj-cli" },
+    { name = "jj-testutils", repository = "jj-vcs/jj", package = "testutils" },
+    { name = "gitbutler", repository = "gitbutlerapp/gitbutler", package = "but" },
+    { name = "gitbutler-gpui", repository = "gitbutlerapp/gitbutler", package = "but-gpui" },
+    { name = "starship", repository = "starship/starship", package = "starship" },
+    { name = "vergen-gix", repository = "rustyhorde/vergen", package = "vergen-gix" },
+    { name = "onefetch", repository = "o2sh/onefetch", package = "onefetch" },
+]
 msrv = { checks = [{ args = [] }, { args = ["--no-default-features", "--features", "async-network-client,max-performance,sha1"] }] }
 checks = [
     { args = ["--no-default-features", "--features", "sha1,async-network-client"] },

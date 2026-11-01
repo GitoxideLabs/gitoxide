@@ -3357,6 +3357,7 @@ dependencies = [
  "gix-testtools",
  "regex",
  "serde_json",
+ "toml_edit",
  "tracing-subscriber",
 ]
 
@@ -5487,6 +5488,7 @@ dependencies = [
  "indexmap",
  "toml_datetime",
  "toml_parser",
+ "toml_writer",
  "winnow",
 ]
 

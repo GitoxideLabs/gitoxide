@@ -193,8 +193,13 @@ fn validate_workflow(document: &Value, ci: bool) -> Result<()> {
         }
     }
     if ci {
-        if jobs.keys().map(String::as_str).collect::<BTreeSet<_>>() != BTreeSet::from(["plan", "run", "tests-pass"]) {
-            bail!("CI checks must be scheduled through the shared plan/run jobs");
+        if jobs.keys().map(String::as_str).collect::<BTreeSet<_>>()
+            != BTreeSet::from(["plan", "run", "downstream", "tests-pass"])
+        {
+            bail!("CI checks must use the planned QA and downstream jobs");
+        }
+        if dependencies(&jobs["downstream"])? != ["plan"] || jobs["downstream"]["continue-on-error"] != true {
+            bail!("Downstream checks must be planned and nonblocking");
         }
         if dependencies(&jobs["tests-pass"])?.into_iter().collect::<BTreeSet<_>>() != BTreeSet::from(["plan", "run"])
             || !jobs["tests-pass"]["if"]
@@ -944,9 +949,16 @@ mod tests {
         let mut workflow = json!({"jobs": {
             "plan": {"steps": [{"uses": "actions/checkout@version", "with": {"persist-credentials": false}}]},
             "run": {"needs": "plan"},
+            "downstream": {"needs": "plan", "continue-on-error": true},
             "tests-pass": {"needs": ["plan", "run"], "if": "always()"}
         }});
         validate_workflow(&workflow, true)?;
+        workflow["jobs"]["downstream"]["continue-on-error"] = false.into();
+        assert!(
+            validate_workflow(&workflow, true).is_err(),
+            "consumer incompatibilities cannot become blocking"
+        );
+        workflow["jobs"]["downstream"]["continue-on-error"] = true.into();
         workflow["jobs"]["plan"]["steps"][0]["with"]["persist-credentials"] = true.into();
         assert!(
             validate_workflow(&workflow, true).is_err(),

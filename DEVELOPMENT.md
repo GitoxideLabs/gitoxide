@@ -445,6 +445,49 @@ rustdoc's former second command had the same effective documented crate features
 removed. Journey builds remain adjacent to their runs because later configurations overwrite
 the same binary paths.
 
+### Downstream compatibility (CI only)
+
+GitHub Actions separately checks ten major external `gix` consumers from their current default
+branches in twelve package-specific jobs. These jobs are not part of local QA, including exhaustive
+runs. In fast mode they run only when the existing dependency selection includes `gix`;
+exhaustive CI runs select all twelve jobs.
+This is conservative: changes to any workspace dependency that can affect `gix` select every
+consumer, without downloading and resolving upstream projects in the planner.
+
+The declarations live in `gix/Cargo.toml` under `package.metadata.qa.downstream`. They enable each
+consumer's Git backend explicitly instead of enabling all unrelated features. The first five entries
+use total downloads from the [crates.io reverse dependencies API](https://crates.io/api/v1/crates/gix/reverse_dependencies?page=1&per_page=100)
+on 2026-11-01, excluding this repository and grouping crates by upstream project:
+
+| Consumer | Total downloads | Enabled consumer features |
+| --- | ---: | --- |
+| [built](https://github.com/lukaslueg/built) | 76,145,348 | `gix` |
+| [rustsec](https://github.com/rustsec/rustsec) | 15,074,921 | `gix-reqwest`, `osv-export` |
+| [crates-index](https://github.com/frewsxcv/rust-crates-index) | 9,182,813 | `git` |
+| [cargo](https://github.com/rust-lang/cargo) | 8,196,198 | defaults |
+| [cargo-generate](https://github.com/cargo-generate/cargo-generate) | 2,616,134 | `git` |
+| [jj](https://github.com/jj-vcs/jj) (`jj-cli`, `testutils`) | — | defaults |
+| [GitButler](https://github.com/gitbutlerapp/gitbutler) (`but`, `but-gpui`) | — | defaults |
+| [Starship](https://github.com/starship/starship) | — | defaults |
+| [vergen-gix](https://github.com/rustyhorde/vergen) | — | defaults |
+| [Onefetch](https://github.com/o2sh/onefetch) | — | defaults |
+
+Download counts include versions and builds where `gix` is disabled. Refresh this reviewed list
+from the paginated API when needed; jobs discover each repository's default branch at checkout.
+`jj` and GitButler extend coverage to version-control applications. Their CLI, test-support, and
+GUI packages each run in a separate job, preserving default features. GitButler jobs install their
+Linux development libraries; the GPUI job also installs Zig for its terminal dependency.
+Starship and Onefetch cover repository inspection in CLI applications; `vergen-gix` covers
+Git information emitted by build scripts.
+
+The `internal-tools` runner replaces direct Gitoxide library dependencies in the disposable
+consumer workspace with paths into the checkout under test, preserving requested features and
+default-feature settings. This also keeps explicitly used plumbing crates on the same source
+tree. It verifies that the selected build actually compiles local `gix`, so Cargo cannot silently
+check a published version or skip a disabled optional dependency. Consumer API errors, removed
+features, and other failures remain visible as advisory warnings while `gix` is pre-1.0.
+The jobs print the upstream revision and use separate Rust caches for each consumer.
+
 The original [main CI run on 2026-10-31](https://github.com/GitoxideLabs/gitoxide/actions/runs/41186371733)
 took 28m23s; Windows ARM fixture regeneration and Linux feature tests dominated. Fast mode avoids
 unaffected packages and additional architecture/fixture configurations. Actual savings depend

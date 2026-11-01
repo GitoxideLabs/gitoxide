@@ -28,6 +28,7 @@ jobs:
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
       plan: ${{ steps.plan.outputs.plan }}
+      downstream: ${{ steps.plan.outputs.downstream }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -176,6 +177,56 @@ jobs:
       - name: Run the selected checks
         # Keep Windows' native shell; the shared runner configures every task's environment.
         run: cargo run --profile qa --locked -p internal-tools --no-default-features --bin qa -- run --from-env
+
+  downstream:
+    name: Consumer / ${{ matrix.name }}
+    needs: plan
+    if: needs.plan.outputs.downstream != ''
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.downstream) }}
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the gix version under test
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: gitoxide
+          persist-credentials: false
+      - name: Check out the consumer's default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ matrix.repository }}
+          path: consumer
+          persist-credentials: false
+      - name: Install GitButler dependencies
+        if: matrix.repository == 'gitbutlerapp/gitbutler'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libdbus-1-dev pkg-config
+      - name: Install GitButler GPUI dependencies
+        if: matrix.name == 'gitbutler-gpui'
+        run: sudo apt-get install -y --no-install-recommends libxcb1-dev libxkbcommon-x11-dev libfontconfig-dev
+      - name: Install Zig for GitButler's terminal
+        if: matrix.name == 'gitbutler-gpui'
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.17.0
+          use-cache: false
+      - name: Install Rust
+        run: rustup update stable && rustup default stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: downstream-${{ matrix.name }}
+          workspaces: |
+            gitoxide -> target
+            consumer -> target
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Check the consumer with this gix
+        working-directory: gitoxide
+        env:
+          QA_DOWNSTREAM_NAME: ${{ matrix.name }}
+        run: cargo run --profile qa --locked -p internal-tools --no-default-features --bin qa -- downstream "$QA_DOWNSTREAM_NAME" --checkout ../consumer
 
   tests-pass:
     name: Tests pass

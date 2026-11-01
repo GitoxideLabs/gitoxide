@@ -1,10 +1,11 @@
 use std::{fs::OpenOptions, io::Write, path::PathBuf};
 
 use clap::{Parser, Subcommand};
-use gix_error::{OptionExt, Result, ResultExt, message};
+use gix_error::{OptionExt, Result, ResultExt, bail, message};
 use serde_json::{Value, json};
 
 mod catalog;
+mod downstream;
 mod features;
 mod native_tests;
 mod ops;
@@ -66,11 +67,30 @@ enum Action {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
         args: Vec<String>,
     },
+    /// Check a consumer checkout against this workspace (GitHub Actions only).
+    #[command(hide = true)]
+    Downstream {
+        name: String,
+        #[arg(long)]
+        checkout: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
     let current_dir = std::env::current_dir().or_raise(|| message("read current directory"))?;
+    if let Action::Downstream { name, checkout } = &args.command {
+        if std::env::var("GITHUB_ACTIONS").as_deref() != Ok("true") {
+            bail!("Downstream checks run only in GitHub Actions");
+        }
+        let result = downstream::execute(&current_dir, name, checkout);
+        if result.is_err() {
+            eprintln!(
+                "::warning::The downstream compatibility check failed; see the errors below. This check is advisory while gix is pre-1.0."
+            );
+        }
+        return result;
+    }
     if let Action::Exec { args } = &args.command {
         if args[0] == "native-tests" {
             return native_tests::execute(&current_dir, &args[1..]);
@@ -92,7 +112,15 @@ fn main() -> Result<()> {
         } => {
             let selected = plan::plan(&root, &metadata, &selection.mode, &selection.base)?;
             let platform = platform.unwrap_or_else(catalog::host);
-            let plan = catalog::plan(&metadata, &selected, &platform, all_platforms)?;
+            let mut plan = catalog::plan(&metadata, &selected, &platform, all_platforms)?;
+            let consumers = if all_platforms {
+                downstream::matrix(&metadata, &selected)?
+            } else {
+                json!({"include": []})
+            };
+            if all_platforms {
+                plan["downstream"] = consumers.clone();
+            }
             if let Some(path) = github_output {
                 let mut output = OpenOptions::new()
                     .create(true)
@@ -101,9 +129,14 @@ fn main() -> Result<()> {
                     .or_raise(|| message!("open GitHub output file {}", path.display()))?;
                 writeln!(
                     output,
-                    "matrix={}\nplan={}",
+                    "matrix={}\nplan={}\ndownstream={}",
                     json!({"include": plan["jobs"]}),
-                    execution_plan(&plan)
+                    execution_plan(&plan),
+                    if consumers["include"].as_array().is_some_and(|rows| !rows.is_empty()) {
+                        consumers.to_string()
+                    } else {
+                        String::new()
+                    }
                 )
                 .or_raise(|| message("write GitHub job outputs"))?;
             }
@@ -152,6 +185,7 @@ fn main() -> Result<()> {
             catalog::execute(&root, tasks, dry_run, ci_job)?;
         }
         Action::Exec { .. } => unreachable!("exec was handled before workspace discovery"),
+        Action::Downstream { .. } => unreachable!("downstream was handled before workspace discovery"),
     }
     Ok(())
 }
