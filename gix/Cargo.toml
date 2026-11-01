@@ -473,6 +473,32 @@ features = [
     "serde",
 ]
 
+# A sample for future api-checks. The API types show which crates eventually
+# need at least partial stabilisation once `gix` is headed for 1.0.
+# [package.metadata.api-check]
+# profiles = [
+#     { default-features = false, features = ["sha1"] },
+#     { default-features = true, features = ["blocking-network-client", "sha256", "serde"] },
+# ]
+# recursive = true
+# # Temporary support for foundational plumbing until the porcelain API reaches 1.0.
+# allowed-unstable-crates = ["gix_error"]
+# allowed-unstable-types = [
+#     "gix_hash::ObjectId",
+#     "gix_hash::oid",
+#     "gix_hash::Kind",
+#     "gix_hash::Prefix",
+#     "gix_hash::ChangeId",
+#     "gix_object::Kind",
+#     "gix_actor::Signature",
+#     "gix_actor::SignatureRef",
+#     "gix_actor::Identity",
+#     "gix_actor::IdentityRef",
+#     "gix_date::Time",
+#     "gix_date::SecondsSinceUnixEpoch",
+#     "gix_date::OffsetInSeconds",
+# ]
+
 [package.metadata.cargo-machete]
 ignored = [
     # Feature forwarding uses `prodash/*` in Cargo feature wiring without direct crate references.
