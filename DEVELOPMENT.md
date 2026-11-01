@@ -286,7 +286,7 @@ needs. Inspect the requirements of your selected work before installing tools:
 
 ```bash
 just qa-plan | jq '.tasks[].task | {id, requirements}'
-just qa-plan | jq '.jobs[] | {id, tools, rust_components, rust_toolchains, rust_targets, just, yq, diet, xz}'
+just qa-plan | jq '.jobs[] | {id, tools, rust_components, rust_toolchains, rust_targets, just, diet, xz}'
 ```
 
 The tool versions live in `[workspace.metadata.qa.tool-versions]` in the root manifest. CI
@@ -317,10 +317,14 @@ cargo install --locked cargo-auditable --version 0.7.6
 cargo install --locked cargo-diet --version 1.2.7
 ```
 
-Housekeeping needs [Mike Farah's `yq` 4.49.2](https://github.com/mikefarah/yq/releases/tag/v4.49.2),
-not the unrelated Cargo or Python programs of the same name. The pure-Rust check needs Docker;
-it uses a disposable Debian container, a read-only source mount, and the persistent Docker
-volume `gitoxide-ci-pure-rust` for Rust/download/build caches. Ordinary checks reuse `target`.
+Housekeeping parses workflow YAML directly in Rust. The same parser is available as
+`cargo run --locked -p internal-tools -- yaml-to-json FILE`; omit `FILE` or use `-` to read stdin.
+It emits JSON on stdout and rejects duplicate keys, non-string mapping keys, non-finite numbers,
+and multiple YAML documents.
+
+The pure-Rust check needs Docker; it uses a disposable Debian container, a read-only source mount,
+and the persistent Docker volume `gitoxide-ci-pure-rust` for Rust/download/build caches.
+Ordinary checks reuse `target`.
 
 The runner sets `CI=true` locally too, including journey assertions and Git-version checks.
 It disables snapshot/baseline updates and overrides inherited fixture-selection variables.

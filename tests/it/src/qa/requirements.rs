@@ -88,7 +88,7 @@ impl Requirements {
     }
 
     pub fn json(&self, metadata: &Value) -> Result<Value> {
-        let special = ["just", "yq", "cargo-diet", "xz", "docker"];
+        let special = ["just", "cargo-diet", "xz", "docker"];
         let mut tools = Vec::new();
         for tool in &self.tools {
             if !special.contains(&tool.as_str()) {
@@ -109,7 +109,6 @@ impl Requirements {
             "rust_targets": self.rust_targets.iter().map(|(toolchain, target)| json!({"toolchain":toolchain,"target":target})).collect::<Vec<_>>(),
             "history": self.history,
             "just": self.tools.contains("just"), "just_version": special_version("just")?,
-            "yq": self.tools.contains("yq"), "yq_version": special_version("yq")?,
             "diet": self.tools.contains("cargo-diet"), "diet_version": special_version("cargo-diet")?,
             "xz": self.tools.contains("xz"), "docker": self.tools.contains("docker"),
         }))

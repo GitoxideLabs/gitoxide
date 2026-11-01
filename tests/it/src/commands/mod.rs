@@ -18,3 +18,5 @@ pub use check_mode::function::check_mode;
 
 pub mod env;
 pub use env::function::env;
+
+pub mod yaml_to_json;

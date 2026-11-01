@@ -150,16 +150,6 @@ jobs:
         uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: ${{ join(matrix.tools, ',') }}
-      - name: Install the workflow YAML reader
-        if: matrix.yq
-        shell: bash
-        env:
-          YQ_VERSION: ${{ matrix.yq_version }}
-        run: |
-          curl -LSfs "https://github.com/mikefarah/yq/releases/download/v$YQ_VERSION/yq_linux_amd64" -o "$RUNNER_TEMP/yq"
-          mkdir -p "$HOME/.local/bin"
-          install -m 0755 "$RUNNER_TEMP/yq" "$HOME/.local/bin/yq"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Install archive test dependencies
         if: matrix.xz && runner.os == 'Linux'
         shell: bash

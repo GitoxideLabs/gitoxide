@@ -150,8 +150,9 @@ fn workflows(root: &Path) -> Result<()> {
         .iter()
         .filter(|path| matches!(path.extension().and_then(OsStr::to_str), Some("yml" | "yaml")))
     {
-        let document: Value = serde_json::from_slice(&output(Command::new("yq").args(["-o=json", "."]).arg(path))?)
-            .or_raise(|| message!("Parse workflow {}", path.display()))?;
+        let input = fs::read(path).or_raise(|| message!("Read workflow {}", path.display()))?;
+        let document =
+            internal_tools::yaml_to_json(&input).or_raise(|| message!("Parse workflow {}", path.display()))?;
         validate_workflow(&document, path.file_name() == Some(OsStr::new("ci.yml")))
             .or_raise(|| message!("Check workflow {}", path.display()))?;
     }
@@ -946,12 +947,29 @@ mod tests {
 
     #[test]
     fn workflow_checks_include_credentials_and_gate() -> gix_error::TestResult {
-        let mut workflow = json!({"jobs": {
-            "plan": {"steps": [{"uses": "actions/checkout@version", "with": {"persist-credentials": false}}]},
-            "run": {"needs": "plan"},
-            "downstream": {"needs": "plan", "continue-on-error": true},
-            "tests-pass": {"needs": ["plan", "run"], "if": "always()"}
-        }});
+        let mut workflow = internal_tools::yaml_to_json(
+            b"on: [push, pull_request]
+jobs:
+  plan:
+    steps:
+      - uses: actions/checkout@version
+        with:
+          persist-credentials: false
+  run:
+    needs: plan
+  downstream:
+    needs: plan
+    continue-on-error: true
+  tests-pass:
+    needs: [plan, run]
+    if: always()
+",
+        )?;
+        assert_eq!(
+            workflow["on"],
+            json!(["push", "pull_request"]),
+            "workflow event keys stay strings"
+        );
         validate_workflow(&workflow, true)?;
         workflow["jobs"]["downstream"]["continue-on-error"] = false.into();
         assert!(

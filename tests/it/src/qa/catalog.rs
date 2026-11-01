@@ -162,7 +162,7 @@ pub fn tasks(metadata: &Value, selection: &Value, platform: &str) -> Result<Vec<
             "housekeeping",
             &["housekeeping"],
             vec![
-                Command::new("@qa", &["workflows"]).requiring(&["yq"]),
+                Command::new("@qa", &["workflows"]),
                 Command::new("@qa", &["badge"]),
                 Command::new("@qa", &["mode"]),
             ],
@@ -571,7 +571,7 @@ mod tests {
             {"name":"gitoxide", "targets":[{"kind":["bin"],"test":false}], "metadata":{"qa":{"journey":true,"auditable":true}}}
         ],"metadata":{"qa":{"tool-versions":{
             "cargo-nextest":"0.9.122","cargo-deny":"0.20.0","cargo-machete":"0.9.1",
-            "cargo-semver-checks":"0.51.0","cargo-auditable":"0.7.6","cargo-diet":"1.2.7","just":"1.58.0","yq":"4.49.2"
+            "cargo-semver-checks":"0.51.0","cargo-auditable":"0.7.6","cargo-diet":"1.2.7","just":"1.58.0"
         }}}})
     }
 
