@@ -214,12 +214,12 @@ jobs:
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
       - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
-          tool: nextest
+          tool: nextest,cargo-semver-checks@0.51.0
       - name: test
         env:
           GIX_TEST_IGNORE_ARCHIVES: "1"
         # The lint job runs both documentation configurations.
-        run: just check unit-tests check-mode
+        run: just check unit-tests check-api check-mode
 
   auditable:
     name: cargo-auditable build

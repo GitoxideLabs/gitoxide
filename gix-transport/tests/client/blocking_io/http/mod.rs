@@ -379,8 +379,20 @@ Authorization: Basic dXNlcjpwYXNzd29yZA==
         .collect::<HashSet<_>>()
     );
 
-    server.next_read_and_respond_with(fixture_bytes("v1/http-handshake.response"));
-    client.request(client::WriteMode::Binary, client::MessageKind::Flush, false)?;
+    server.next_read_and_respond_with(
+        b"HTTP/1.1 200 OK
+Content-Type: application/x-git-upload-pack-result
+Content-Length: 4
+
+0000"
+            .to_vec(),
+    );
+    // Finish the POST before inspecting it; dropping its unread response can cancel it.
+    let (request, mut response) = client
+        .request(client::WriteMode::Binary, client::MessageKind::Flush, false)?
+        .into_parts();
+    drop(request);
+    io::copy(&mut response, &mut io::sink())?;
 
     assert_eq!(
         {

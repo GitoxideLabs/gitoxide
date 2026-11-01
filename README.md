@@ -71,16 +71,15 @@ Follow linked crate name for detailed status. Please note that all crates follow
 
 ### Production Grade
 
-* **Stability Tier 1**
-  - [gix-lock](https://github.com/GitoxideLabs/gitoxide/blob/main/gix-lock/README.md)
-
-* **Stability Tier 2**
-  - [gix-tempfile](https://github.com/GitoxideLabs/gitoxide/blob/main/gix-tempfile/README.md)
+* [gix-lock](https://github.com/GitoxideLabs/gitoxide/blob/main/gix-lock/README.md)
+* [gix-tempfile](https://github.com/GitoxideLabs/gitoxide/blob/main/gix-tempfile/README.md)
+* [gix-fs](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-fs)
 
 ### Stabilization Candidates
 
-Crates that seem feature complete and need to see some more use before they can be released as 1.0.
-Documentation is complete and was reviewed at least once.
+Crates whose chosen supported public API is nearly ready for a 1.0 compatibility commitment.
+Remaining experimental public APIs can stay behind a non-default `unstable` feature.
+Documentation for the supported API is complete and was reviewed at least once.
 
 * [gix-mailmap](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-mailmap)
 * [gix-chunk](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-chunk)
@@ -91,10 +90,11 @@ Documentation is complete and was reviewed at least once.
 * [gix-actor](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-actor)
 * [gix-hash](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-hash)
 
-### Initial Development
+### Major-Zero Crates
 
-These crates may be missing some features and thus are somewhat incomplete, but what's there
-is usable to some extent.
+A _major-zero crate_ (`0.x`) may introduce breaking API changes in minor releases. This says nothing about its
+quality, completeness, or suitability for production use. Crates used only as implementation details, without
+exposing their APIs through public crates, may remain _major-zero crates_ indefinitely.
 
 * **usable** _(with rough but complete docs, possibly incomplete functionality)_
   * [gix](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix) (**⬅ entrypoint**)
@@ -125,7 +125,6 @@ is usable to some extent.
   * [gix-command](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-command)
   * [gix-prompt](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-prompt)
   * [gix-refspec](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-refspec)
-  * [gix-fs](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-fs)
   * [gix-utils](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-utils)
   * [gix-hashtable](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-hashtable)
   * [gix-worktree](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-worktree)

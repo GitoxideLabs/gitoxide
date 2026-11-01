@@ -37,11 +37,76 @@ mod all {
     }
 
     #[test]
+    fn single_and_existing_directories_succeed() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let target = dir.path().join("new");
+        let retries = create::Retries {
+            to_create_entire_directory: 0,
+            on_create_directory_failure: 0,
+            on_interrupt: 0,
+        };
+        assert_eq!(
+            create::all(&target, retries, 0)?,
+            target,
+            "creating a single directory needs no retries"
+        );
+        assert!(target.is_dir(), "the destination was created");
+        assert_eq!(
+            create::all(&target, retries, 0)?,
+            target,
+            "an existing directory needs no retries"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn missing_parents_exhaust_the_configured_retries() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let target = dir.path().join("one/two");
+        for on_create_directory_failure in [0, 1] {
+            let retries = create::Retries {
+                on_create_directory_failure,
+                ..Default::default()
+            };
+            let failure = create::all(&target, retries, 0).expect_err("a single attempt cannot create missing parents");
+            assert_eq!(
+                failure.kind(),
+                std::io::ErrorKind::NotFound,
+                "the stable helper returns the underlying permanent failure"
+            );
+            assert!(
+                !dir.path().join("one").exists(),
+                "exhausting retries before visiting a parent leaves it uncreated"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn an_existing_file_cannot_be_a_destination_or_parent() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("file");
+        std::fs::write(&file, b"keep")?;
+        for target in [file.clone(), file.join("child")] {
+            let failure =
+                create::all(&target, Default::default(), 0).expect_err("a file cannot be used as a directory");
+            assert_eq!(
+                failure.kind(),
+                std::io::ErrorKind::NotADirectory,
+                "the stable helper reports file collisions as directory errors"
+            );
+        }
+        assert_eq!(std::fs::read(&file)?, b"keep", "the existing file remains untouched");
+        Ok(())
+    }
+
+    #[test]
     fn a_deeply_nested_directory() -> TestResult {
         let dir = tempfile::tempdir()?;
         let target = &dir.path().join("1").join("2").join("3").join("4").join("5").join("6");
         let dir = create::all(target, Default::default(), 0)?;
         assert_eq!(dir, target, "all subdirectories can be created");
+        assert!(target.is_dir(), "the deepest destination was created");
         Ok(())
     }
 }
@@ -209,6 +274,32 @@ mod iter {
         assert!(new_dir.is_file(), "file is untouched");
         Ok(())
     }
+    #[test]
+    fn racy_directory_creation_without_retries() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let parent_dir = dir.path().join("parent");
+        let new_dir = parent_dir.join("new");
+        let limits = Retries {
+            to_create_entire_directory: 0,
+            on_create_directory_failure: 2,
+            on_interrupt: 0,
+        };
+        let mut it = create::Iter::new(&new_dir, 0).retries(limits);
+        assert!(
+            matches!(it.nth(1), Some(Ok(dir)) if dir == parent_dir),
+            "the initial attempt creates the missing parent"
+        );
+        std::fs::remove_dir(&parent_dir)?;
+        assert!(
+            matches!(it.next(), Some(Err(Permanent { retries_left, retries, err, .. }))
+                if retries_left.to_create_entire_directory == 0 && retries == limits && err.kind() == NotFound),
+            "a zero budget stops directory recreation without underflow"
+        );
+        assert!(it.next().is_none(), "a permanent failure exhausts the iterator");
+        assert!(!parent_dir.exists(), "the removed parent is not recreated");
+        Ok(())
+    }
+
     #[test]
     fn racy_directory_creation_with_new_directory_being_deleted_not_enough_retries() -> TestResult {
         let dir = tempfile::tempdir()?;

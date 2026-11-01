@@ -2,6 +2,7 @@
 use std::path::Path;
 
 /// The amount of retries to do during various aspects of the directory creation.
+/// A zero budget allows the initial attempt but no retries for that failure.
 #[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq)]
 pub struct Retries {
     /// How many times the whole directory can be created in the light of racy interference.
@@ -31,7 +32,7 @@ mod error {
     use crate::dir::create::Retries;
 
     /// The error yielded by [`Iter`][super::Iter].
-    #[expect(missing_docs)]
+    #[cfg_attr(feature = "unstable", expect(missing_docs))]
     #[derive(Debug)]
     pub enum Error<'a> {
         /// A failure we will probably recover from by trying again.
@@ -79,6 +80,7 @@ mod error {
         }
     }
 }
+#[gix_macros::unstable(since = "2021-06-17")]
 pub use error::Error;
 
 enum State {
@@ -91,6 +93,7 @@ enum State {
 /// * `Some(Ok(created_directory))` is yielded once or more success, followed by `None`
 /// * `Some(Err(Error::Intermediate))` is yielded zero or more times while trying to create the directory.
 /// * `Some(Err(Error::Permanent))` is yielded exactly once on failure.
+#[gix_macros::unstable(since = "2021-06-17")]
 pub struct Iter<'a> {
     cursors: Vec<&'a Path>,
     retries: Retries,
@@ -103,7 +106,7 @@ pub struct Iter<'a> {
 impl<'a> Iter<'a> {
     /// Create a new instance that creates `target` when iterated with the default amount of [`Retries`].
     /// Apply Git's parsed sharing policy to newly created directories; `0` keeps the umask permissions.
-    /// See [`crate::adjust_shared_repository_permissions()`] for the encoding.
+    /// See [`crate::set_shared_repository_permissions()`] for the encoding.
     pub fn new(target: &'a Path, shared_repository_permissions: i32) -> Self {
         Iter {
             cursors: vec![target],
@@ -170,10 +173,12 @@ impl<'a> Iterator for Iter<'a> {
                     // collision apart from a directory that already exists.
                     AlreadyExists => self.permanent_failure(dir, std::io::Error::new(NotADirectory, err)),
                     NotFound => {
-                        self.retries.on_create_directory_failure -= 1;
+                        self.retries.on_create_directory_failure =
+                            self.retries.on_create_directory_failure.saturating_sub(1);
                         if let State::CurrentlyCreatingDirectories = self.state {
                             self.state = State::SearchingUpwardsForExistingDirectory;
-                            self.retries.to_create_entire_directory -= 1;
+                            self.retries.to_create_entire_directory =
+                                self.retries.to_create_entire_directory.saturating_sub(1);
                             if self.retries.to_create_entire_directory < 1 {
                                 return self.permanent_failure(dir, NotFound);
                             }
@@ -191,7 +196,7 @@ impl<'a> Iterator for Iter<'a> {
                         self.intermediate_failure(dir, err)
                     }
                     Interrupted => {
-                        self.retries.on_interrupt -= 1;
+                        self.retries.on_interrupt = self.retries.on_interrupt.saturating_sub(1);
                         if self.retries.on_interrupt <= 1 {
                             return self.permanent_failure(dir, Interrupted);
                         }
@@ -210,7 +215,7 @@ impl<'a> Iterator for Iter<'a> {
 ///
 /// Apply Git's parsed sharing policy to each newly created directory, or pass `0` to keep the umask permissions.
 /// Existing directories, including ancestors, retain their permissions.
-/// See [`crate::adjust_shared_repository_permissions()`] for the policy encoding.
+/// See [`crate::set_shared_repository_permissions()`] for the policy encoding.
 ///
 /// Returns the input `dir` on success to make it useful in expressions.
 pub fn all(dir: &Path, retries: Retries, shared_repository_permissions: i32) -> std::io::Result<&Path> {

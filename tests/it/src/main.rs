@@ -55,6 +55,16 @@ fn main() -> Result<()> {
             count,
             asset_dir,
         } => commands::create_diff_cases(dry_run, sliders_file, &worktree_dir, destination_dir, count, asset_dir),
+        Subcommands::CheckApi { baseline_root, command } => {
+            tracing_subscriber::fmt()
+                .without_time()
+                .with_target(false)
+                .with_ansi(false)
+                .with_writer(std::io::stderr)
+                .try_init()
+                .map_err(gix::Error::from_boxed)?;
+            commands::check_api(baseline_root, command)
+        }
         Subcommands::CheckMode {} => commands::check_mode(),
         Subcommands::Env {} => commands::env(),
     }

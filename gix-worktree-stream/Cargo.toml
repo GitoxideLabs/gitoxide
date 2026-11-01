@@ -29,7 +29,7 @@ gix-attributes = { version = "^0.37.1", path = "../gix-attributes" }
 gix-parallel = { version = "^0.50.1", path = "../gix-parallel", features = ["parallel"] }
 gix-filter = { version = "^0.36.1", path = "../gix-filter" }
 gix-traverse = { version = "^0.64.0", path = "../gix-traverse" }
-gix-fs = { version = "^0.24.1", path = "../gix-fs" }
+gix-fs = { version = "^1.0.0", path = "../gix-fs", features = ["unstable"] }
 gix-path = { version = "^0.14.1", path = "../gix-path" }
 
 gix-error = { version = "^0.5.2", path = "../gix-error" }

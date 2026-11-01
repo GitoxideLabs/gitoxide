@@ -205,6 +205,38 @@ mod at_path {
     }
 
     #[test]
+    fn it_supports_custom_directory_creation_retries_and_cleanup() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let first_dir = dir.path().join("custom");
+        let filename = first_dir.join("nested").join("file.tmp");
+        let handle = gix_tempfile::writable_at(
+            &filename,
+            ContainingDirectory::CreateAllRaceProof {
+                retries: gix_fs::dir::create::Retries {
+                    to_create_entire_directory: 2,
+                    on_create_directory_failure: 4,
+                    on_interrupt: 3,
+                },
+                shared_repository_permissions: 0,
+            },
+            AutoRemove::TempfileAndEmptyParentDirectoriesUntil {
+                boundary_directory: dir.path().into(),
+            },
+        )?;
+        assert!(
+            filename.is_file(),
+            "custom retries allow creation in missing parent directories"
+        );
+        drop(handle);
+        assert!(
+            !first_dir.exists(),
+            "cleanup removes the tempfile and all newly created empty parents"
+        );
+        assert!(dir.path().is_dir(), "cleanup preserves the boundary directory");
+        Ok(())
+    }
+
+    #[test]
     fn it_names_files_correctly_and_similarly_named_tempfiles_cannot_be_created() -> TestResult {
         let dir = tempfile::tempdir()?;
         let filename = dir.path().join("something-specific.ext");

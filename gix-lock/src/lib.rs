@@ -41,6 +41,7 @@
 
 use std::path::PathBuf;
 
+/// Registered tempfile implementation used by this crate.
 pub use gix_tempfile as tempfile;
 use gix_tempfile::handle::{Closed, Writable};
 
@@ -49,6 +50,8 @@ const DOT_LOCK_SUFFIX: &str = ".lock";
 ///
 pub mod acquire;
 
+/// Backoff implementation from an unstable plumbing crate.
+#[gix_macros::unstable(since = "2023-04-16")]
 pub use gix_utils::backoff;
 ///
 pub mod commit;

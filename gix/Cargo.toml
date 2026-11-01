@@ -9,8 +9,6 @@ version = "0.90.0"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
-# Rust 1.88 is required so hash-related dependencies can use Rust 2024 crates,
-# notably `sha2` 0.11 and `hashbrown` 0.17.
 rust-version = "1.88"
 
 [lib]
@@ -29,7 +27,14 @@ required-features = ["notes"]
 
 [features]
 
-default = ["max-performance", "comfort", "basic", "extras", "auto-chain-error", "sha1"]
+default = [
+    "max-performance",
+    "comfort",
+    "basic",
+    "extras",
+    "auto-chain-error",
+    "sha1",
+]
 
 #! There are various categories of features which help to optimize performance and build times. `gix` comes with 'batteries included' and everything is
 #! enabled as long as it doesn't sacrifice compatibility. Most users will be fine with that but will pay with higher compile times than necessary as they
@@ -134,7 +139,12 @@ dirwalk = ["dep:gix-dir", "attributes", "excludes"]
 credentials = ["dep:gix-credentials", "dep:gix-prompt", "dep:gix-negotiate"]
 
 ## Add, inspect, update, and remove worktrees.
-worktree-mutation = ["status", "dep:gix-worktree-state", "gix-worktree/add", "gix-worktree/remove"]
+worktree-mutation = [
+    "status",
+    "dep:gix-worktree-state",
+    "gix-worktree/add",
+    "gix-worktree/remove",
+]
 
 ## Retrieve a worktree stack for querying exclude information
 excludes = ["dep:gix-ignore", "dep:gix-worktree", "index"]
@@ -339,17 +349,23 @@ progress-tree = ["prodash/progress-tree"]
 cache-efficiency-debug = ["gix-utils/cache-efficiency-debug"]
 
 [dependencies]
-gix-parallel = { version = "^0.50.1", path = "../gix-parallel", features = ["once_cell"] }
+gix-parallel = { version = "^0.50.1", path = "../gix-parallel", features = [
+    "once_cell",
+] }
 gix-error = { version = "^0.5.2", path = "../gix-error", features = ["bstr"] }
-gix-utils = { version = "^0.5.2", path = "../gix-utils", features = ["bstr", "interrupt", "progress"] }
-gix-fs = { version = "^0.24.1", path = "../gix-fs" }
+gix-utils = { version = "^0.5.2", path = "../gix-utils", features = [
+    "bstr",
+    "interrupt",
+    "progress",
+] }
+gix-fs = { version = "^1.0.0", path = "../gix-fs", features = ["unstable"] }
 gix-ref = { version = "^0.69.1", path = "../gix-ref" }
 gix-discover = { version = "^0.57.1", path = "../gix-discover" }
-gix-tempfile = { version = "^26.0.0", path = "../gix-tempfile", default-features = false }
-gix-lock = { version = "^26.0.0", path = "../gix-lock" }
+gix-tempfile = { version = "^27.0.0", path = "../gix-tempfile", default-features = false }
+gix-lock = { version = "^27.0.0", path = "../gix-lock" }
 gix-validate = { version = "^0.13.1", path = "../gix-validate" }
 gix-sec = { version = "^0.16.1", path = "../gix-sec" }
-gix-date = { version = "^0.18.1", path = "../gix-date" }
+gix-date = { version = "^0.19.0", path = "../gix-date" }
 gix-refspec = { version = "^0.47.1", path = "../gix-refspec" }
 gix-filter = { version = "^0.36.1", path = "../gix-filter", optional = true }
 gix-dir = { version = "^0.32.0", path = "../gix-dir", optional = true }
@@ -360,7 +376,7 @@ gix-zlib = { version = "^0.4.0", path = "../gix-zlib" }
 gix-hash = { version = "^0.28.1", path = "../gix-hash" }
 gix-shallow = { version = "^0.15.1", path = "../gix-shallow" }
 gix-object = { version = "^0.66.1", path = "../gix-object" }
-gix-actor = { version = "^0.44.1", path = "../gix-actor" }
+gix-actor = { version = "^0.45.0", path = "../gix-actor" }
 gix-pack = { version = "^0.77.0", path = "../gix-pack", default-features = false, features = [
     "object-cache-dynamic",
 ] }
@@ -427,8 +443,12 @@ parking_lot = { version = "0.12.4", optional = true }
 document-features = { version = "0.2.0", optional = true }
 
 [dev-dependencies]
+gix-fs = { path = "../gix-fs", features = ["unstable"] }
+gix-lock = { path = "../gix-lock", features = ["unstable"] }
+gix-tempfile = { path = "../gix-tempfile", default-features = false, features = ["unstable"] }
 gix = { path = ".", default-features = false, features = [
-    "merge", "tree-error"
+    "merge",
+    "tree-error",
 ] }
 gix-hash = { version = "^0.28.1", path = "../gix-hash" }
 gix-pack = { version = "^0.77.0", path = "../gix-pack", default-features = false, features = [
@@ -452,6 +472,32 @@ features = [
     "blocking-http-transport-curl",
     "serde",
 ]
+
+# A sample for future api-checks. The API types show which crates eventually
+# need at least partial stabilisation once `gix` is headed for 1.0.
+# [package.metadata.api-check]
+# profiles = [
+#     { default-features = false, features = ["sha1"] },
+#     { default-features = true, features = ["blocking-network-client", "sha256", "serde"] },
+# ]
+# recursive = true
+# # Temporary support for foundational plumbing until the porcelain API reaches 1.0.
+# allowed-unstable-crates = ["gix_error"]
+# allowed-unstable-types = [
+#     "gix_hash::ObjectId",
+#     "gix_hash::oid",
+#     "gix_hash::Kind",
+#     "gix_hash::Prefix",
+#     "gix_hash::ChangeId",
+#     "gix_object::Kind",
+#     "gix_actor::Signature",
+#     "gix_actor::SignatureRef",
+#     "gix_actor::Identity",
+#     "gix_actor::IdentityRef",
+#     "gix_date::Time",
+#     "gix_date::SecondsSinceUnixEpoch",
+#     "gix_date::OffsetInSeconds",
+# ]
 
 [package.metadata.cargo-machete]
 ignored = [

@@ -1,0 +1,29 @@
+error: the instability reason must not be empty
+ --> tests/fixtures/unstable/invalid_reasons.rs:1:55
+  |
+1 | #[gix_macros::unstable(since = "2026-10-13", reason = "  ")]
+  |                                                       ^^^^
+
+error: expected `since` or `reason`
+ --> tests/fixtures/unstable/invalid_reasons.rs:4:24
+  |
+4 | #[gix_macros::unstable(why = "not the supported key")]
+  |                        ^^^
+
+error: the instability reason must not be empty
+ --> tests/fixtures/unstable/invalid_reasons.rs:9:47
+  |
+9 |     #[unstable(since = "2026-10-13", reason = "")]
+  |                                               ^^
+
+error: the instability reason must not be empty
+  --> tests/fixtures/unstable/invalid_reasons.rs:13:55
+   |
+13 | #[gix_macros::unstable(since = "2026-10-13", reason = "")]
+   |                                                       ^^
+
+error: the field already has an instability annotation
+  --> tests/fixtures/unstable/invalid_reasons.rs:19:5
+   |
+19 |     #[unstable(since = "2026-10-13", reason = "Another reason")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -1,0 +1,5 @@
+error: cannot restrict the visibility of macro-generated impl members
+  --> tests/fixtures/unstable/invalid_impl_macros.rs:13:5
+   |
+13 |     methods!();
+   |     ^^^^^^^^^^^

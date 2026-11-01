@@ -27,7 +27,7 @@ gix-trace = { version = "^0.3.1", path = "../gix-trace" }
 gix-utils = { version = "^0.5.2", path = "../gix-utils", features = ["interrupt", "progress"] }
 gix-parallel = { version = "^0.50.1", path = "../gix-parallel" }
 gix-index = { version = "^0.58.0", path = "../gix-index" }
-gix-fs = { version = "^0.24.1", path = "../gix-fs" }
+gix-fs = { version = "^1.0.0", path = "../gix-fs", features = ["unstable"] }
 gix-hash = { version = "^0.28.1", path = "../gix-hash" }
 gix-error = { version = "^0.5.2", path = "../gix-error" }
 gix-object = { version = "^0.66.1", path = "../gix-object" }
@@ -56,7 +56,7 @@ gix-status = { path = ".", features = ["worktree-rewrites", "sha1", "sha256"] }
 gix-parallel = { path = "../gix-parallel", features = ["parallel"] }
 gix-testtools = { path = "../tests/tools", default-features = false, features = ["sha1", "sha256"] }
 gix-index = { path = "../gix-index" }
-gix-fs = { path = "../gix-fs" }
+gix-fs = { path = "../gix-fs", features = ["unstable"] }
 gix-diff = { path = "../gix-diff" }
 gix-filter = { path = "../gix-filter" }
 gix-dir = { path = "../gix-dir" }

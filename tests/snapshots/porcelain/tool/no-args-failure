@@ -5,7 +5,7 @@ Usage: ein tool <COMMAND>
 Commands:
   find            Find all repositories in a given directory
   organize        Move all repositories found in a directory into a structure matching their clone URLs
-  query           a database accelerated engine to extract information and query it [aliases: q]
+  query           a database accelerated engine to extract information and query it [alias: q]
   estimate-hours  Estimate hours worked based on a commit history [aliases: h, hours]
   help            Print this message or the help of the given subcommand(s)
 

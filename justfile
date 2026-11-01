@@ -16,7 +16,7 @@ alias nt := nextest
 
 # Run the full check and test suite, including docs and journey tests
 [group('Development')]
-test: clippy check doc unit-tests doc-tests journey-tests-pure journey-tests-small journey-tests-async journey-tests check-mode
+test: clippy check doc unit-tests check-api doc-tests journey-tests-pure journey-tests-small journey-tests-async journey-tests check-mode
 
 # Run `cargo clippy` on all crates
 [group('Development')]
@@ -299,6 +299,11 @@ sbom *args:
 sbom-test:
     cargo test --locked -p gix-testtools --features sha1,sbom --test sbom -- --include-ignored
 
+# Run API-check regressions, including release comparisons (requires cargo-semver-checks 0.51+)
+[group('Tests')]
+check-api:
+    cargo test --locked -p internal-tools --test check_api -- --include-ignored
+
 # Run unit tests with `cargo nextest` (no doctests)
 [group('Development')]
 nextest *FLAGS='--workspace':
@@ -361,7 +366,7 @@ roll-release *csr-args:
 
 # Run checks, docs, and unit tests for CI
 [group('CI')]
-ci-test: check doc unit-tests check-mode
+ci-test: check doc unit-tests check-api check-mode
 
 # Run all journey tests (use a fresh clone or run `cargo clean` first)
 [group('CI')]

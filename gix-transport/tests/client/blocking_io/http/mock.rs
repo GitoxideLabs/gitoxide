@@ -56,6 +56,9 @@ impl Server {
 
         let mut out = Vec::with_capacity(header.len() + body.len() + 32);
         for line in header.lines() {
+            if line.to_ascii_lowercase().starts_with("connection:") {
+                continue;
+            }
             if line.to_ascii_lowercase().starts_with("content-length:") {
                 out.extend_from_slice(format!("Content-Length: {}", body.len()).as_bytes());
             } else {
@@ -63,7 +66,8 @@ impl Server {
             }
             out.extend_from_slice(b"\r\n");
         }
-        out.extend_from_slice(b"\r\n");
+        // Each command serves exactly one request on a new connection.
+        out.extend_from_slice(b"Connection: close\r\n\r\n");
         out.extend_from_slice(&body);
         out
     }

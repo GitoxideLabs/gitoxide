@@ -23,6 +23,7 @@ pub mod handler {
 
     /// Define how our signal handlers act
     #[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq)]
+    #[non_exhaustive]
     pub enum Mode {
         /// Do not install a signal handler at all, but have somebody else call our handler directly.
         None = 0,
