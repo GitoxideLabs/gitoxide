@@ -40,16 +40,21 @@ mod all {
     fn single_and_existing_directories_succeed() -> TestResult {
         let dir = tempfile::tempdir()?;
         let target = dir.path().join("new");
+        let retries = create::Retries {
+            to_create_entire_directory: 0,
+            on_create_directory_failure: 0,
+            on_interrupt: 0,
+        };
         assert_eq!(
-            create::all(&target, Default::default(), 0)?,
+            create::all(&target, retries, 0)?,
             target,
-            "creating a single directory returns the input path"
+            "creating a single directory needs no retries"
         );
         assert!(target.is_dir(), "the destination was created");
         assert_eq!(
-            create::all(&target, Default::default(), 0)?,
+            create::all(&target, retries, 0)?,
             target,
-            "an existing directory is also a successful destination"
+            "an existing directory needs no retries"
         );
         Ok(())
     }
@@ -58,21 +63,22 @@ mod all {
     fn missing_parents_exhaust_the_configured_retries() -> TestResult {
         let dir = tempfile::tempdir()?;
         let target = dir.path().join("one/two");
-        let retries = create::Retries {
-            to_create_entire_directory: 5,
-            on_create_directory_failure: 1,
-            on_interrupt: 10,
-        };
-        let failure = create::all(&target, retries, 0).expect_err("a single attempt cannot create missing parents");
-        assert_eq!(
-            failure.kind(),
-            std::io::ErrorKind::NotFound,
-            "the stable helper returns the underlying permanent failure"
-        );
-        assert!(
-            !dir.path().join("one").exists(),
-            "exhausting retries before visiting a parent leaves it uncreated"
-        );
+        for on_create_directory_failure in [0, 1] {
+            let retries = create::Retries {
+                on_create_directory_failure,
+                ..Default::default()
+            };
+            let failure = create::all(&target, retries, 0).expect_err("a single attempt cannot create missing parents");
+            assert_eq!(
+                failure.kind(),
+                std::io::ErrorKind::NotFound,
+                "the stable helper returns the underlying permanent failure"
+            );
+            assert!(
+                !dir.path().join("one").exists(),
+                "exhausting retries before visiting a parent leaves it uncreated"
+            );
+        }
         Ok(())
     }
 
@@ -268,6 +274,32 @@ mod iter {
         assert!(new_dir.is_file(), "file is untouched");
         Ok(())
     }
+    #[test]
+    fn racy_directory_creation_without_retries() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let parent_dir = dir.path().join("parent");
+        let new_dir = parent_dir.join("new");
+        let limits = Retries {
+            to_create_entire_directory: 0,
+            on_create_directory_failure: 2,
+            on_interrupt: 0,
+        };
+        let mut it = create::Iter::new(&new_dir, 0).retries(limits);
+        assert!(
+            matches!(it.nth(1), Some(Ok(dir)) if dir == parent_dir),
+            "the initial attempt creates the missing parent"
+        );
+        std::fs::remove_dir(&parent_dir)?;
+        assert!(
+            matches!(it.next(), Some(Err(Permanent { retries_left, retries, err, .. }))
+                if retries_left.to_create_entire_directory == 0 && retries == limits && err.kind() == NotFound),
+            "a zero budget stops directory recreation without underflow"
+        );
+        assert!(it.next().is_none(), "a permanent failure exhausts the iterator");
+        assert!(!parent_dir.exists(), "the removed parent is not recreated");
+        Ok(())
+    }
+
     #[test]
     fn racy_directory_creation_with_new_directory_being_deleted_not_enough_retries() -> TestResult {
         let dir = tempfile::tempdir()?;

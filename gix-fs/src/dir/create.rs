@@ -2,6 +2,7 @@
 use std::path::Path;
 
 /// The amount of retries to do during various aspects of the directory creation.
+/// A zero budget allows the initial attempt but no retries for that failure.
 #[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq)]
 pub struct Retries {
     /// How many times the whole directory can be created in the light of racy interference.
@@ -172,10 +173,12 @@ impl<'a> Iterator for Iter<'a> {
                     // collision apart from a directory that already exists.
                     AlreadyExists => self.permanent_failure(dir, std::io::Error::new(NotADirectory, err)),
                     NotFound => {
-                        self.retries.on_create_directory_failure -= 1;
+                        self.retries.on_create_directory_failure =
+                            self.retries.on_create_directory_failure.saturating_sub(1);
                         if let State::CurrentlyCreatingDirectories = self.state {
                             self.state = State::SearchingUpwardsForExistingDirectory;
-                            self.retries.to_create_entire_directory -= 1;
+                            self.retries.to_create_entire_directory =
+                                self.retries.to_create_entire_directory.saturating_sub(1);
                             if self.retries.to_create_entire_directory < 1 {
                                 return self.permanent_failure(dir, NotFound);
                             }
@@ -193,7 +196,7 @@ impl<'a> Iterator for Iter<'a> {
                         self.intermediate_failure(dir, err)
                     }
                     Interrupted => {
-                        self.retries.on_interrupt -= 1;
+                        self.retries.on_interrupt = self.retries.on_interrupt.saturating_sub(1);
                         if self.retries.on_interrupt <= 1 {
                             return self.permanent_failure(dir, Interrupted);
                         }
