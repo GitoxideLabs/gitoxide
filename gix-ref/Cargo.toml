@@ -31,7 +31,7 @@ serde = ["dep:serde", "gix-hash/serde", "gix-actor/serde", "gix-object/serde"]
 [dependencies]
 gix-parallel = { version = "^0.50.1", path = "../gix-parallel" }
 gix-error = { version = "^0.5.2", path = "../gix-error", features = ["bstr"] }
-gix-fs = { version = "^1.0.0", path = "../gix-fs", features = [
+gix-fs = { version = "~1.0.0", path = "../gix-fs", features = [
     "walkdir",
     "unstable",
 ] }

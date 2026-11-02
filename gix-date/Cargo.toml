@@ -23,7 +23,7 @@ unstable = []
 serde = ["dep:serde", "bstr/serde"]
 
 [dependencies]
-gix-macros = { version = "^0.2.0", path = "../gix-macros" }
+gix-macros = { version = "^0.2.1", path = "../gix-macros" }
 gix-error = { version = "^0.5.2", path = "../gix-error" }
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
