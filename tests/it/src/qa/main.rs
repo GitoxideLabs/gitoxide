@@ -16,6 +16,9 @@ mod run;
 #[derive(Parser)]
 #[command(about = "Plan and run quality-assurance checks locally or in CI")]
 struct Args {
+    /// Show compact progress and retain detailed task logs (automatic under Codex).
+    #[arg(long, global = true)]
+    agent: bool,
     #[command(subcommand)]
     command: Action,
 }
@@ -78,6 +81,7 @@ enum Action {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    let agent = args.agent || std::env::var_os("CODEX_THREAD_ID").is_some();
     let current_dir = std::env::current_dir().or_raise(|| message("read current directory"))?;
     if let Action::Downstream { name, checkout } = &args.command {
         if std::env::var("GITHUB_ACTIONS").as_deref() != Ok("true") {
@@ -178,11 +182,31 @@ fn main() -> Result<()> {
                     Some(plan) => plan["selection"].clone(),
                     None => plan::plan(&root, &metadata, &selection.mode, &selection.base)?,
                 };
-                eprintln!("QA selection: {selection}");
+                if agent {
+                    eprintln!(
+                        "QA selection: {} ({} packages)",
+                        selection["mode"].as_str().unwrap_or_default(),
+                        selection["packages"].as_array().map_or(0, Vec::len)
+                    );
+                    for reason in selection["reasons"].as_array().into_iter().flatten() {
+                        if selection["mode"] == "exhaustive" {
+                            eprintln!("{}", reason.as_str().unwrap_or_default());
+                        }
+                    }
+                } else {
+                    eprintln!("QA selection: {selection}");
+                }
                 catalog::select(catalog::tasks(&metadata, &selection, &catalog::host())?, &stage)?
             };
             eprintln!("{} tasks selected for {}", tasks.len(), catalog::host());
-            catalog::execute(&root, tasks, dry_run, ci_job)?;
+            let logs = if agent && !dry_run {
+                let logs = run::log_directory()?;
+                eprintln!("QA logs: {}", logs.display());
+                Some(logs)
+            } else {
+                None
+            };
+            catalog::execute(&root, tasks, dry_run, ci_job, logs.as_deref())?;
         }
         Action::Exec { .. } => unreachable!("exec was handled before workspace discovery"),
         Action::Downstream { .. } => unreachable!("downstream was handled before workspace discovery"),
@@ -213,10 +237,11 @@ mod tests {
     }
 
     #[test]
-    fn clap() {
-        use clap::CommandFactory;
+    fn clap() -> gix_error::TestResult {
+        use clap::{CommandFactory, Parser};
         let mut command = super::Args::command();
         command.clone().debug_assert();
+        command.build();
         let help = command
             .find_subcommand_mut("run")
             .expect("QA has a run subcommand")
@@ -226,5 +251,16 @@ mod tests {
             help.contains("[possible values: all, self-test, policy,"),
             "--help lists the available stage selectors"
         );
+        assert!(help.contains("--agent"), "agent output can be explicitly requested");
+        for args in [
+            vec!["qa", "--agent", "run", "--dry-run"],
+            vec!["qa", "run", "--agent", "--dry-run"],
+        ] {
+            assert!(
+                super::Args::try_parse_from(args)?.agent,
+                "--agent works before or after the subcommand"
+            );
+        }
+        Ok(())
     }
 }

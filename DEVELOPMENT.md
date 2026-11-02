@@ -223,12 +223,19 @@ just qa --base stable-gix            # compare a stacked PR against its own base
 just qa --mode exhaustive            # every applicable configuration on this host
 just test                           # alias for exhaustive QA
 just qa --dry-run                    # inspect commands without executing checks
+just qa --agent                      # compact progress, with detailed task logs
 just qa --help                       # list options and available stage selectors
 just qa --stage tests,doctests        # union of stages; overlapping selectors run once
 just qa-plan                         # JSON selection, reasons, tasks and job assignments
 just qa-plan --all-platforms          # CI's assignments, including other platforms
 just qa-plan --platform windows-x86_64 --mode exhaustive
 ```
+
+When `CODEX_THREAD_ID` is present, QA automatically enables agent output. Each task
+shows basic progress; failures name a retained log containing its commands, working
+directory, diagnostics, stdout, and stderr. The logs are in the printed temporary
+directory. `--agent` enables this output explicitly. JSON plans and `--dry-run`
+command listings remain available for detailed inspection.
 
 Fast mode compares against the merge base with `origin/main` by default, including staged,
 unstaged and untracked changes. Fetch your intended base before comparing. Selection includes
