@@ -79,7 +79,7 @@ gix-shallow = { version = "^0.15.1", path = "../gix-shallow" }
 gix-date = { version = "^0.19.0", path = "../gix-date" }
 gix-utils = { version = "^0.5.2", path = "../gix-utils", features = ["progress"] }
 gix-ref = { version = "^0.69.1", path = "../gix-ref" }
-gix-macros = { version = "^0.2.0", path = "../gix-macros" }
+gix-macros = { version = "^0.2.1", path = "../gix-macros" }
 
 gix-trace = { version = "^0.3.1", path = "../gix-trace", optional = true }
 gix-negotiate = { version = "^0.38.0", path = "../gix-negotiate", optional = true }

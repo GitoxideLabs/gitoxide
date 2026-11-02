@@ -30,7 +30,7 @@ serde = ["dep:serde", "faster-hex/serde"]
 bstr = ["dep:bstr"]
 
 [dependencies]
-gix-macros = { version = "^0.2.0", path = "../gix-macros" }
+gix-macros = { version = "^0.2.1", path = "../gix-macros" }
 gix-utils = { version = "^0.5.2", path = "../gix-utils", features = ["progress"] }
 gix-error = { version = "^0.5.2", path = "../gix-error" }
 
