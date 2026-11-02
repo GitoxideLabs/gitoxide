@@ -1,10 +1,290 @@
-use bstr::BString;
+use bstr::{BString, ByteSlice};
 use gix_credentials::{
     helper,
-    protocol::{Context, ContextOptions},
+    protocol::{Capability, Context, ContextOptions},
 };
+use gix_sec::identity::Credentials;
 
 use crate::helper::script_helper;
+
+#[test]
+fn follow_up_actions_discard_token_fields_rejected_in_wire_order() -> gix_testtools::TestResult {
+    for caller in [false, true] {
+        for accepted in [false, true] {
+            for line_ending in ["\n", "\r\n"] {
+                let response = format!(
+                    "authtype=Rejected
+credential=rejected-before-capability
+ephemeral=1
+capability[]=authtype
+{}username=user
+password=pass
+quit=0
+unknown=preserved
+
+capability[]=authtype
+authtype=Rejected
+credential=rejected-after-record
+ephemeral=1
+",
+                    if accepted {
+                        "authtype=Bearer
+credential=accepted-token
+ephemeral=0
+"
+                    } else {
+                        ""
+                    }
+                )
+                .replace('\n', line_ending);
+                let mut outcome = helper::invoke(
+                    &mut gix_credentials::Program::from_custom_definition(format!(
+                        "!f() {{ cat >/dev/null; printf '%s' '{response}'; }}; f"
+                    ))?,
+                    &helper::Action::Get(Context {
+                        capability: if caller { vec![Capability::Authtype] } else { Vec::new() },
+                        ..Default::default()
+                    }),
+                )?
+                .expect("the helper supplies at least username and password");
+                let credentials = outcome.consume_credentials().expect("complete credentials");
+                assert_eq!(
+                    credentials,
+                    if caller && accepted {
+                        Credentials::Encoded {
+                            authtype: "Bearer".into(),
+                            credential: "accepted-token".into(),
+                            oauth_refresh_token: None,
+                        }
+                    } else {
+                        Credentials::UsernamePassword {
+                            username: "user".into(),
+                            password: "pass".into(),
+                            oauth_refresh_token: None,
+                        }
+                    },
+                    "only fields accepted before the record terminator determine the credentials"
+                );
+                for action in [outcome.next.clone().store(), outcome.next.erase()] {
+                    let payload = action.payload().expect("follow-up actions have a payload");
+                    assert!(
+                        !payload.contains_str("rejected-"),
+                        "discarded secrets must not be forwarded, even if a later token was accepted"
+                    );
+                    assert!(
+                        payload.contains_str("accepted-token") == (caller && accepted),
+                        "only negotiated token fields survive"
+                    );
+                    assert!(
+                        payload.contains_str("unknown=preserved") && payload.contains_str("quit=0"),
+                        "unrelated legacy fields remain verbatim"
+                    );
+                    let context = Context::from_bytes(payload, Default::default())?;
+                    assert_eq!(
+                        context.credential.as_deref(),
+                        (caller && accepted).then_some("accepted-token"),
+                        "stored credentials match the accepted response"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn authtype_requires_caller_and_helper_negotiation_and_overrides_passwords() -> gix_testtools::TestResult {
+    for caller in [false, true] {
+        for responder in [false, true] {
+            let response = format!(
+                "{}authtype=Bearer
+credential=access-token
+ephemeral=1
+username=user
+password=pass
+",
+                if responder { "capability[]=authtype\n" } else { "" }
+            );
+            let mut outcome = helper::invoke(
+                &mut gix_credentials::Program::from_custom_definition(format!(
+                    "!f() {{ cat >/dev/null; printf '%s' '{response}'; }}; f"
+                ))?,
+                &helper::Action::Get(Context {
+                    capability: if caller { vec![Capability::Authtype] } else { Vec::new() },
+                    url: Some("https://example.com".into()),
+                    ..Default::default()
+                }),
+            )?
+            .expect("the helper always supplies a password");
+            let credentials = outcome
+                .consume_credentials()
+                .expect("complete credentials are available");
+            let negotiated = caller && responder;
+            assert_eq!(
+                credentials,
+                if negotiated {
+                    Credentials::Encoded {
+                        authtype: "Bearer".into(),
+                        credential: "access-token".into(),
+                        oauth_refresh_token: None,
+                    }
+                } else {
+                    Credentials::UsernamePassword {
+                        username: "user".into(),
+                        password: "pass".into(),
+                        oauth_refresh_token: None,
+                    }
+                },
+                "a complete token takes precedence over the password only when both parties announce support"
+            );
+            for action in [outcome.next.clone().store(), outcome.next.erase()] {
+                let payload = action.payload().expect("follow-up payload");
+                if !negotiated {
+                    assert!(
+                        !payload
+                            .windows(b"credential=".len())
+                            .any(|bytes| bytes == b"credential="),
+                        "unnegotiated token fields must not be forwarded to helpers"
+                    );
+                }
+                let context = Context::from_bytes(payload, Default::default())?;
+                assert_eq!(
+                    context.credential.as_deref(),
+                    negotiated.then_some("access-token"),
+                    "follow-up actions use only negotiated credentials"
+                );
+                assert_eq!(
+                    context.ephemeral,
+                    negotiated.then_some(true),
+                    "the ephemeral hint accompanies the credential"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn follow_up_actions_discard_unsupported_capabilities_and_state() -> gix_testtools::TestResult {
+    for capability in [
+        Vec::new(),
+        vec![
+            Capability::Unsupported("state".into()),
+            Capability::Unsupported("future".into()),
+        ],
+        vec![Capability::Authtype],
+        vec![
+            Capability::Unsupported("future".into()),
+            Capability::Authtype,
+            Capability::Unsupported("state".into()),
+        ],
+    ] {
+        for announcements in [
+            "",
+            "capability[]=state
+capability[]=future
+capability[]=authtype-extra
+capability[]=
+",
+            "capability[]=state
+capability[]=future
+capability[]=authtype
+",
+            "capability[]=authtype
+capability[]=state
+capability[]=future
+",
+            "capability[]=state
+capability[]=authtype
+capability[]=future
+",
+        ] {
+            let negotiated =
+                capability.contains(&Capability::Authtype) && announcements.contains("capability[]=authtype\n");
+            for (line_ending, escaped_line_ending) in [("\n", r"\n"), ("\r\n", r"\r\n")] {
+                let response = format!(
+                    "state[]=discard-before-announcement
+continue=1
+{announcements}authtype=Bearer
+credential=accepted-token
+ephemeral=0
+state[]=discard-after-announcement
+continue=0
+username=user
+password=pass
+oauth_refresh_token=refresh-token
+quit=0
+unknown=preserved
+
+capability[]=authtype
+credential=rejected-after-record
+state[]=discard-after-record
+unknown=discard-after-record
+"
+                )
+                .replace('\n', escaped_line_ending);
+                // Git for Windows' shell strips literal carriage returns from scripts.
+                let outcome = helper::invoke(
+                    &mut gix_credentials::Program::from_custom_definition(format!(
+                        "!f() {{ cat >/dev/null; printf '%b' '{response}'; }}; f"
+                    ))?,
+                    &helper::Action::Get(Context {
+                        capability: capability.clone(),
+                        ..Default::default()
+                    }),
+                )?
+                .expect("the helper supplies username and password even without authtype negotiation");
+                assert_eq!(
+                    outcome.credential.as_deref(),
+                    negotiated.then_some("accepted-token"),
+                    "unsupported announcements must neither enable nor disable authtype negotiation"
+                );
+                let expected = format!(
+                    "{}username=user
+password=pass
+oauth_refresh_token=refresh-token
+quit=0
+unknown=preserved
+",
+                    if negotiated {
+                        "capability[]=authtype
+authtype=Bearer
+credential=accepted-token
+ephemeral=0
+"
+                    } else {
+                        ""
+                    }
+                )
+                .replace('\n', line_ending);
+                for action in [outcome.next.clone().store(), outcome.next.erase()] {
+                    let payload = action.payload().expect("follow-up actions have a payload");
+                    assert_eq!(
+                        payload,
+                        expected.as_bytes().as_bstr(),
+                        "only negotiated capabilities and unrelated legacy fields survive verbatim, up to the record terminator"
+                    );
+                    let context = Context::from_bytes(payload, Default::default())?;
+                    assert_eq!(
+                        context.capability,
+                        if negotiated {
+                            vec![Capability::Authtype]
+                        } else {
+                            Vec::new()
+                        },
+                        "follow-up actions must never announce unsupported capabilities"
+                    );
+                    assert_eq!(
+                        context.credential.as_deref(),
+                        outcome.credential.as_deref(),
+                        "follow-up actions retain the accepted credential"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
 
 #[test]
 fn get() -> gix_testtools::TestResult {
@@ -14,8 +294,8 @@ fn get() -> gix_testtools::TestResult {
     )?
     .expect("mock provides credentials");
     assert_eq!(
-        outcome.consume_identity().expect("complete"),
-        gix_sec::identity::Account {
+        outcome.consume_credentials().expect("complete"),
+        Credentials::UsernamePassword {
             username: "user".into(),
             password: "pass".into(),
             oauth_refresh_token: None
@@ -109,9 +389,9 @@ mod program {
                 &helper::Action::get_for_url("/does/not/matter"),
             )?
             .expect("present")
-            .consume_identity()
+            .consume_credentials()
             .expect("complete"),
-            gix_sec::identity::Account {
+            gix_sec::identity::Credentials::UsernamePassword {
                 username: "user".into(),
                 password: "pass".into(),
                 oauth_refresh_token: None
@@ -132,9 +412,9 @@ mod program {
                 &helper::Action::get_for_url("/does/not/matter"),
             )?
             .expect("present")
-            .consume_identity()
+            .consume_credentials()
             .expect("complete"),
-            gix_sec::identity::Account {
+            gix_sec::identity::Credentials::UsernamePassword {
                 username: "user-script".into(),
                 password: "pass-script".into(),
                 oauth_refresh_token: None
@@ -151,9 +431,9 @@ mod program {
                 &helper::Action::get_for_url("/does/not/matter"),
             )?
             .expect("present")
-            .consume_identity()
+            .consume_credentials()
             .expect("complete"),
-            gix_sec::identity::Account {
+            gix_sec::identity::Credentials::UsernamePassword {
                 username: "user-script".into(),
                 password: "pass-script".into(),
                 oauth_refresh_token: None

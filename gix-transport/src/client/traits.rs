@@ -13,12 +13,12 @@ use crate::{Protocol, client::Error};
 /// implementation to share more code across blocking and async programs.
 pub trait TransportWithoutIO {
     /// If the handshake or subsequent reads failed with [`std::io::ErrorKind::PermissionDenied`], use this method to
-    /// inform the transport layer about the identity to use for subsequent calls.
-    /// If authentication continues to fail even with an identity set, consider communicating this to the provider
-    /// of the identity in order to mark it as invalid. Otherwise the user might have difficulty updating obsolete
+    /// inform the transport layer about the credentials to use for subsequent calls.
+    /// If authentication continues to fail even with credentials set, consider communicating this to the provider
+    /// of the credentials in order to mark them as invalid. Otherwise the user might have difficulty updating obsolete
     /// credentials.
     /// Please note that most transport layers are unauthenticated and thus return [an error][Error::AuthenticationUnsupported] here.
-    fn set_identity(&mut self, _identity: gix_sec::identity::Account) -> std::result::Result<(), Error> {
+    fn set_credentials(&mut self, _credentials: gix_sec::identity::Credentials) -> std::result::Result<(), Error> {
         Err(Error::AuthenticationUnsupported)
     }
 
@@ -54,8 +54,8 @@ pub trait TransportWithoutIO {
 
 // Would be nice if the box implementation could auto-forward to all implemented traits.
 impl<T: TransportWithoutIO + ?Sized> TransportWithoutIO for Box<T> {
-    fn set_identity(&mut self, identity: gix_sec::identity::Account) -> std::result::Result<(), Error> {
-        self.deref_mut().set_identity(identity)
+    fn set_credentials(&mut self, credentials: gix_sec::identity::Credentials) -> std::result::Result<(), Error> {
+        self.deref_mut().set_credentials(credentials)
     }
 
     fn to_url(&self) -> Cow<'_, BStr> {
@@ -76,8 +76,8 @@ impl<T: TransportWithoutIO + ?Sized> TransportWithoutIO for Box<T> {
 }
 
 impl<T: TransportWithoutIO + ?Sized> TransportWithoutIO for &mut T {
-    fn set_identity(&mut self, identity: gix_sec::identity::Account) -> std::result::Result<(), Error> {
-        self.deref_mut().set_identity(identity)
+    fn set_credentials(&mut self, credentials: gix_sec::identity::Credentials) -> std::result::Result<(), Error> {
+        self.deref_mut().set_credentials(credentials)
     }
 
     fn to_url(&self) -> Cow<'_, BStr> {

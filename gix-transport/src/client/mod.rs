@@ -15,7 +15,7 @@ pub mod capabilities;
 pub use capabilities::Capabilities;
 
 mod non_io_types;
-pub use gix_sec::identity::Account;
+pub use gix_sec::identity::Credentials;
 pub use non_io_types::{AuthenticationRequired, Error, MessageKind, WriteMode};
 
 ///

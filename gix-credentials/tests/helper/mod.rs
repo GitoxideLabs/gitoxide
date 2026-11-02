@@ -2,6 +2,90 @@ mod cascade;
 mod context;
 mod invoke;
 
+#[test]
+fn consume_credentials_prefers_encoded_credentials_and_preserves_username_password() {
+    use gix_credentials::{helper::Outcome, protocol::Context};
+    use gix_sec::identity::Credentials;
+
+    let mut outcome = Outcome {
+        username: Some("user".into()),
+        password: Some("pass".into()),
+        authtype: Some("Bearer".into()),
+        credential: Some("access-token".into()),
+        oauth_refresh_token: Some("refresh-token".into()),
+        quit: false,
+        next: Context::default().into(),
+    };
+    assert_eq!(
+        outcome.consume_credentials(),
+        Some(Credentials::Encoded {
+            authtype: "Bearer".into(),
+            credential: "access-token".into(),
+            oauth_refresh_token: Some("refresh-token".into()),
+        }),
+        "a complete encoded credential takes precedence and carries the refresh token"
+    );
+    assert_eq!(
+        outcome.consume_credentials(),
+        Some(Credentials::UsernamePassword {
+            username: "user".into(),
+            password: "pass".into(),
+            oauth_refresh_token: None,
+        }),
+        "the unused username/password pair remains intact, but the refresh token is consumed only once"
+    );
+    assert_eq!(outcome.consume_credentials(), None, "both complete pairs were consumed");
+}
+
+#[test]
+fn consume_credentials_preserves_incomplete_pairs_and_falls_back_to_username_password() {
+    use gix_credentials::{helper::Outcome, protocol::Context};
+    use gix_sec::identity::Credentials;
+
+    for (authtype, credential) in [(None, None), (Some("Bearer"), None), (None, Some("access-token"))] {
+        for (username, password) in [(None, None), (Some("user"), None), (None, Some("pass"))] {
+            let mut outcome = Outcome {
+                username: username.map(String::from),
+                password: password.map(String::from),
+                authtype: authtype.map(String::from),
+                credential: credential.map(String::from),
+                oauth_refresh_token: Some("refresh-token".into()),
+                quit: false,
+                next: Context::default().into(),
+            };
+            let original = outcome.clone();
+            assert_eq!(
+                outcome.consume_credentials(),
+                None,
+                "neither authentication pair is complete"
+            );
+            assert_eq!(outcome, original, "an unsuccessful conversion consumes no fields");
+
+            outcome.username = Some("user".into());
+            outcome.password = Some("pass".into());
+            assert_eq!(
+                outcome.consume_credentials(),
+                Some(Credentials::UsernamePassword {
+                    username: "user".into(),
+                    password: "pass".into(),
+                    oauth_refresh_token: Some("refresh-token".into()),
+                }),
+                "an incomplete encoded credential does not prevent username/password authentication"
+            );
+            assert_eq!(
+                outcome,
+                Outcome {
+                    username: None,
+                    password: None,
+                    oauth_refresh_token: None,
+                    ..original
+                },
+                "only the selected credential pair and refresh token are consumed"
+            );
+        }
+    }
+}
+
 mod invoke_outcome_to_helper_result {
     use gix_credentials::{helper, protocol, protocol::helper_outcome_to_result};
 
@@ -12,6 +96,8 @@ mod invoke_outcome_to_helper_result {
             Some(helper::Outcome {
                 username: None,
                 password: None,
+                authtype: None,
+                credential: None,
                 oauth_refresh_token: None,
                 quit: false,
                 next: protocol::Context::default().into(),
@@ -19,15 +105,15 @@ mod invoke_outcome_to_helper_result {
             action,
         )
         .unwrap_err();
-        insta::assert_debug_snapshot!(err, "missing username or password causes failure with get action", @"Could not obtain identity for context: url=does/not/matter");
+        insta::assert_debug_snapshot!(err, "missing username or password causes failure with get action", @"Could not obtain credentials for context: url=does/not/matter");
         assert!(
             err.is_unauthenticated(),
-            "missing credentials require obtaining an identity"
+            "missing credentials require obtaining credentials"
         );
     }
 
     #[test]
-    fn invalid_context_still_reports_missing_identity() {
+    fn invalid_context_still_reports_missing_credentials() {
         let mut error_snapshots = Vec::new();
         for value in ["invalid\nvalue", "invalid\0value", "invalid\rvalue"] {
             for context in [
@@ -46,25 +132,27 @@ mod invoke_outcome_to_helper_result {
                 );
             }
         }
-        insta::assert_debug_snapshot!(error_snapshots, "invalid context still reports missing identity", @"
+        insta::assert_debug_snapshot!(error_snapshots, "invalid context still reports missing credentials", @"
         [
-            Could not obtain identity for context: ,
-            Could not obtain identity for context: ,
-            Could not obtain identity for context: ,
-            Could not obtain identity for context: ,
-            Could not obtain identity for context: ,
-            Could not obtain identity for context: ,
+            Could not obtain credentials for context: ,
+            Could not obtain credentials for context: ,
+            Could not obtain credentials for context: ,
+            Could not obtain credentials for context: ,
+            Could not obtain credentials for context: ,
+            Could not obtain credentials for context: ,
         ]
         ");
     }
 
     #[test]
-    fn quit_message_in_context_causes_special_error_ignoring_missing_identity() {
+    fn quit_message_in_context_causes_special_error_ignoring_missing_credentials() {
         let action = helper::Action::get_for_url("does/not/matter");
         let err = helper_outcome_to_result(
             Some(helper::Outcome {
                 username: None,
                 password: None,
+                authtype: None,
+                credential: None,
                 oauth_refresh_token: None,
                 quit: true,
                 next: protocol::Context::default().into(),
@@ -72,7 +160,7 @@ mod invoke_outcome_to_helper_result {
             action,
         )
         .unwrap_err();
-        insta::assert_debug_snapshot!(err, "quit message in context causes special error ignoring missing identity", @"The handler asked to stop trying to obtain credentials");
+        insta::assert_debug_snapshot!(err, "quit message in context causes special error ignoring missing credentials", @"The handler asked to stop trying to obtain credentials");
         assert!(err.is_cancelled(), "helper quit requests stop the credential cascade");
         assert!(!err.is_retryable(), "cancellation must not invite a retry");
         assert!(!err.can_retry(), "cancellation vetoes conservative retries");

@@ -37,8 +37,8 @@ mod impls {
     use super::Transport;
 
     impl<T: client::TransportWithoutIO> client::TransportWithoutIO for Transport<T> {
-        fn set_identity(&mut self, identity: client::Account) -> std::result::Result<(), Error> {
-            self.inner.set_identity(identity)
+        fn set_credentials(&mut self, credentials: client::Credentials) -> std::result::Result<(), Error> {
+            self.inner.set_credentials(credentials)
         }
 
         fn to_url(&self) -> Cow<'_, BStr> {
@@ -95,8 +95,8 @@ mod impls {
     use super::Transport;
 
     impl<T: client::TransportWithoutIO + Send> client::TransportWithoutIO for Transport<T> {
-        fn set_identity(&mut self, identity: client::Account) -> Result<(), Error> {
-            self.inner.set_identity(identity)
+        fn set_credentials(&mut self, credentials: client::Credentials) -> Result<(), Error> {
+            self.inner.set_credentials(credentials)
         }
 
         fn to_url(&self) -> Cow<'_, BStr> {

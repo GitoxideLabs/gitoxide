@@ -12,6 +12,21 @@ mod http_authentication {
         if gix_testtools::run_in_isolated_process()? {
             return Ok(());
         }
+        check_cached_credentials(Some("Basic realm=\"GitHub\" domain_hint=\"example\""), false)
+    }
+
+    #[test]
+    fn authtype_credentials_are_selected_with_or_without_a_challenge() -> TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        for challenge in [Some("Bearer"), None] {
+            check_cached_credentials(challenge, true)?;
+        }
+        Ok(())
+    }
+
+    fn check_cached_credentials(challenge: Option<&str>, authtype: bool) -> TestResult {
         let _environment = gix_testtools::Env::new()
             .set("GIT_TERMINAL_PROMPT", "0")
             .set("GCM_INTERACTIVE", "never")
@@ -25,7 +40,17 @@ mod http_authentication {
         // The credentials are fictitious, and both the helper and gix must keep prompting disabled.
         repo.config_snapshot_mut().set_raw_value(
             "credential.helper",
-            r#"!f() {
+            if authtype {
+                r#"!f() {
+                    announced=no
+                    while IFS= read -r line; do
+                        test "$line" != 'capability[]=authtype' || announced=yes
+                    done
+                    test "$announced" = yes || exit 1
+                    printf 'capability[]=authtype\nauthtype=Bearer\ncredential=cached-token\nephemeral=1\n'
+                }; f"#
+            } else {
+                r#"!f() {
                 test "$GIT_TERMINAL_PROMPT" = 0 && test "$GCM_INTERACTIVE" = never || exit 1
                 hint=missing
                 while IFS= read -r line; do
@@ -35,7 +60,8 @@ mod http_authentication {
                 done
                 test "$hint" = present || exit 1
                 printf 'username=cached-user\npassword=cached-password\n'
-            }; f"#,
+            }; f"#
+            },
         )?;
         repo.config_snapshot_mut()
             .set_raw_value("gitoxide.credentials.terminalPrompt", "false")?;
@@ -45,6 +71,9 @@ mod http_authentication {
         let remote = repo.remote_at(url)?;
         let connection = remote.connect(gix::remote::Direction::Fetch)?;
         let mut authenticate = connection.configured_credentials_for_current_url();
+        let challenge = challenge
+            .map(|value| format!("WWW-Authenticate: {value}\r\n"))
+            .unwrap_or_default();
         let server = std::thread::spawn(move || -> std::io::Result<()> {
             let (stream, _) = listener.accept()?;
             stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
@@ -53,11 +82,9 @@ mod http_authentication {
             while stream.read_line(&mut line)? != 0 && line != "\r\n" {
                 line.clear();
             }
-            stream.get_mut().write_all(
-                b"HTTP/1.1 401 Unauthorized\r\n\
-                  WWW-Authenticate: Basic realm=\"GitHub\" domain_hint=\"example\"\r\n\
-                  Content-Length: 0\r\n\
-                  Connection: close\r\n\r\n",
+            write!(
+                stream.get_mut(),
+                "HTTP/1.1 401 Unauthorized\r\n{challenge}Content-Length: 0\r\nConnection: close\r\n\r\n"
             )
         });
 
@@ -78,12 +105,21 @@ mod http_authentication {
             .expect("the 401 response invokes the credential callback")?
             .expect("the cached credential is complete");
         assert_eq!(
-            outcome.identity.username, "cached-user",
-            "the challenge selects the cached account without allowing prompts"
-        );
-        assert_eq!(
-            outcome.identity.password, "cached-password",
-            "the cached secret is returned"
+            outcome.credentials,
+            if authtype {
+                gix::sec::identity::Credentials::Encoded {
+                    authtype: "Bearer".into(),
+                    credential: "cached-token".into(),
+                    oauth_refresh_token: None,
+                }
+            } else {
+                gix::sec::identity::Credentials::UsernamePassword {
+                    username: "cached-user".into(),
+                    password: "cached-password".into(),
+                    oauth_refresh_token: None,
+                }
+            },
+            "the selected authentication method and cached secret reach the transport credentials"
         );
         Ok(())
     }

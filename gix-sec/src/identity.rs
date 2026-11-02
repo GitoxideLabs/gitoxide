@@ -1,15 +1,30 @@
 use std::path::Path;
 
+/// Credentials with a complete pair of authentication fields.
+///
+/// Username/password authentication and pre-encoded credentials are mutually exclusive.
+/// Transports validate the field contents according to their protocol's requirements.
 #[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-/// An account based identity
-pub struct Account {
-    /// The user's name
-    pub username: String,
-    /// The user's password
-    pub password: String,
-    /// An OAuth refresh token that may accompany the password. It is to be treated confidentially, just like the password.
-    pub oauth_refresh_token: Option<String>,
+pub enum Credentials {
+    /// Authenticate with a username and password.
+    UsernamePassword {
+        /// The user's name.
+        username: String,
+        /// The user's password.
+        password: String,
+        /// An OAuth refresh token that may accompany the password. Treat it confidentially, just like the password.
+        oauth_refresh_token: Option<String>,
+    },
+    /// Authenticate with a pre-encoded credential rather than a username and password.
+    Encoded {
+        /// The HTTP authentication scheme, such as `Bearer`.
+        authtype: String,
+        /// The secret, pre-encoded credential for `authtype`.
+        credential: String,
+        /// An OAuth refresh token that may accompany the credential. Treat it confidentially, just like the credential.
+        oauth_refresh_token: Option<String>,
+    },
 }
 
 /// Returns true if the given `path` is owned by the user who is executing the current process.

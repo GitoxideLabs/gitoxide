@@ -40,7 +40,7 @@ pub(crate) fn scheme_is_safe(redirect_url: &str, original_url: &str) -> bool {
     original_url.scheme == gix_url::Scheme::Http && redirect_url.scheme == gix_url::Scheme::Https
 }
 
-pub(crate) fn can_reuse_identity(redirect_url: &str, original_url: &str) -> bool {
+pub(crate) fn can_reuse_credentials(redirect_url: &str, original_url: &str) -> bool {
     let Some((redirect_url, original_url)) = parse_two_urls(redirect_url, original_url) else {
         return false;
     };
@@ -172,42 +172,42 @@ mod tests {
     }
 
     #[test]
-    fn can_reuse_identity_complete() {
+    fn can_reuse_credentials_complete() {
         assert!(
-            can_reuse_identity("https://original/b", "https://original/a"),
+            can_reuse_credentials("https://original/b", "https://original/a"),
             "keeping the same https authority must be allowed"
         );
         assert!(
-            can_reuse_identity("https://original/b", "http://original/a"),
+            can_reuse_credentials("https://original/b", "http://original/a"),
             "upgrading from http to https on the same host must be allowed"
         );
         assert!(
-            can_reuse_identity("https://original:8080/b", "http://original:8080/a"),
+            can_reuse_credentials("https://original:8080/b", "http://original:8080/a"),
             "upgrading from http to https on the same host and port must be allowed"
         );
         assert!(
-            !can_reuse_identity("http://original/b", "https://original/a"),
+            !can_reuse_credentials("http://original/b", "https://original/a"),
             "downgrading from https to http must be rejected"
         );
         assert!(
-            !can_reuse_identity("https://redirected.org/b", "https://original/a"),
+            !can_reuse_credentials("https://redirected.org/b", "https://original/a"),
             "changing the host must be rejected"
         );
         assert!(
-            !can_reuse_identity("https://original:444/b", "https://original/a"),
+            !can_reuse_credentials("https://original:444/b", "https://original/a"),
             "changing the port on https must be rejected"
         );
         assert!(
-            !can_reuse_identity("https://original:444/b", "http://original/a"),
+            !can_reuse_credentials("https://original:444/b", "http://original/a"),
             "upgrading the scheme does not allow changing the port"
         );
         for delimiter in ['?', '#'] {
             assert!(
-                !can_reuse_identity(
+                !can_reuse_credentials(
                     &format!("https://redirected.org{delimiter}@original/b"),
                     "https://original/a"
                 ),
-                "an authority terminated by {delimiter} must not reuse another host's identity"
+                "an authority terminated by {delimiter} must not reuse another host's credentials"
             );
         }
     }

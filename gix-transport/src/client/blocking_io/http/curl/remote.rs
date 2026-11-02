@@ -366,7 +366,7 @@ impl curl::easy::Handler for Handler {
             });
             if let Some((status, err)) = err {
                 self.last_status = status;
-                // A 401 needs its headers before the caller can ask a credential helper for an account.
+                // A 401 needs its headers before the caller can ask a credential helper for credentials.
                 if status != 401
                     && let Some(writer) = self.send_header.as_mut()
                 {
@@ -516,8 +516,18 @@ pub fn new() -> Worker {
                     let creds = authenticate.lock().expect("no panics in other threads")(obtain_creds_action)
                         .or_raise(|| message("Could not obtain proxy credentials"))?
                         .expect("action to fetch credentials");
-                    curl!(handle.proxy_username(&creds.identity.username));
-                    curl!(handle.proxy_password(&creds.identity.password));
+                    match &creds.credentials {
+                        gix_sec::identity::Credentials::UsernamePassword { username, password, .. } => {
+                            curl!(handle.proxy_username(username));
+                            curl!(handle.proxy_password(password));
+                        }
+                        gix_sec::identity::Credentials::Encoded { .. } => {
+                            return Err(
+                                message("Pre-encoded credentials are not supported for proxy authentication")
+                                    .unsupported_error(),
+                            );
+                        }
+                    }
                     proxy_auth_action = Some((creds.next, authenticate));
                 }
             }

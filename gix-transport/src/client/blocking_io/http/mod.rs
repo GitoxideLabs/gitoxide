@@ -155,6 +155,7 @@ pub struct Options {
     pub proxy_auth_method: options::ProxyAuthMethod,
     /// If authentication is needed for the proxy as its URL contains a username, this method must be set to provide a password
     /// for it before making the request, and to store it if the connection succeeds.
+    /// The curl backend requires a username and password and rejects pre-encoded credentials.
     pub proxy_authenticate: Option<(gix_credentials::helper::Action, Arc<Mutex<options::AuthenticateFn>>)>,
     /// The `HTTP` `USER_AGENT` string presented to an `HTTP` server, notably not the user agent present to the `git` server.
     ///
@@ -219,7 +220,7 @@ pub struct Transport<H: Http> {
     http: H,
     service: Option<Service>,
     line_provider: Option<StreamingPeekableIter<H::ResponseBody>>,
-    identity: Option<gix_sec::identity::Account>,
+    credentials: Option<gix_sec::identity::Credentials>,
     trace: bool,
 }
 
@@ -228,14 +229,14 @@ impl<H: Http> Transport<H> {
     /// Note that we will always fallback to other versions as supported by the server.
     /// If `trace` is `true`, all packetlines received or sent will be passed to the facilities of the `gix-trace` crate.
     pub fn new_http(http: H, url: gix_url::Url, desired_version: Protocol, trace: bool) -> Self {
-        let identity = url
-            .user()
-            .zip(url.password())
-            .map(|(user, pass)| gix_sec::identity::Account {
-                username: user.to_string(),
-                password: pass.to_string(),
-                oauth_refresh_token: None,
-            });
+        let credentials =
+            url.user()
+                .zip(url.password())
+                .map(|(user, pass)| gix_sec::identity::Credentials::UsernamePassword {
+                    username: user.to_string(),
+                    password: pass.to_string(),
+                    oauth_refresh_token: None,
+                });
         Transport {
             url: url.to_bstring().to_string(),
             user_agent_header: concat!("User-Agent: git/oxide-", env!("CARGO_PKG_VERSION")),
@@ -244,25 +245,29 @@ impl<H: Http> Transport<H> {
             service: None,
             http,
             line_provider: None,
-            identity,
+            credentials,
             trace,
         }
     }
 }
 
 impl<H: Http> Transport<H> {
-    /// Returns the identity that the transport uses when connecting to the remote.
-    pub fn identity(&self) -> Option<&gix_sec::identity::Account> {
-        self.identity.as_ref()
+    /// Returns the credentials that the transport uses when connecting to the remote.
+    pub fn credentials(&self) -> Option<&gix_sec::identity::Credentials> {
+        self.credentials.as_ref()
     }
 
     fn sync_redirected_base_url(&mut self) {
-        Self::sync_redirected_base_url_from(&self.http, &mut self.url, &mut self.identity);
+        Self::sync_redirected_base_url_from(&self.http, &mut self.url, &mut self.credentials);
     }
 
     /// Update `url` with the backend's accepted redirect target, clearing credentials if the
-    /// redirected authority must not reuse the original identity.
-    fn sync_redirected_base_url_from(http: &H, url: &mut String, identity: &mut Option<gix_sec::identity::Account>) {
+    /// redirected authority must not reuse the original credentials.
+    fn sync_redirected_base_url_from(
+        http: &H,
+        url: &mut String,
+        credentials: &mut Option<gix_sec::identity::Credentials>,
+    ) {
         let Some(redirected_url) = http.redirected_base_url() else {
             return;
         };
@@ -270,8 +275,8 @@ impl<H: Http> Transport<H> {
             return;
         }
 
-        if !redirect::can_reuse_identity(&redirected_url, url) {
-            *identity = None;
+        if !redirect::can_reuse_credentials(&redirected_url, url) {
+            *credentials = None;
         }
         *url = redirected_url;
     }
@@ -316,23 +321,40 @@ impl<H: Http> Transport<H> {
         Ok(())
     }
 
-    fn add_basic_auth_if_present(&self, headers: &mut Vec<Cow<'_, str>>) -> std::result::Result<(), client::Error> {
-        if let Some(gix_sec::identity::Account {
-            username,
-            password,
-            oauth_refresh_token: _,
-        }) = &self.identity
-        {
+    fn add_auth_if_present(&self, headers: &mut Vec<Cow<'_, str>>) -> std::result::Result<(), client::Error> {
+        if let Some(credentials) = &self.credentials {
             #[cfg(not(feature = "http-client-insecure-credentials"))]
             if self.url.starts_with("http://") {
                 return Err(client::Error::AuthenticationRefused(
                     "Will not send credentials in clear text over http",
                 ));
             }
-            headers.push(Cow::Owned(format!(
-                "Authorization: Basic {}",
-                base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"))
-            )));
+            let authorization = match credentials {
+                gix_sec::identity::Credentials::UsernamePassword { username, password, .. } => format!(
+                    "Authorization: Basic {}",
+                    base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"))
+                ),
+                gix_sec::identity::Credentials::Encoded {
+                    authtype, credential, ..
+                } => {
+                    if authtype.is_empty()
+                        || !authtype
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
+                    {
+                        return Err(client::Error::AuthenticationRefused(
+                            "Invalid HTTP authentication scheme",
+                        ));
+                    }
+                    if credential.is_empty() || credential.bytes().any(|byte| byte.is_ascii_control()) {
+                        return Err(client::Error::AuthenticationRefused(
+                            "Invalid HTTP authentication credential",
+                        ));
+                    }
+                    format!("Authorization: {authtype} {credential}")
+                }
+            };
+            headers.push(Cow::Owned(authorization));
         }
         Ok(())
     }
@@ -348,8 +370,11 @@ fn append_url(base: &str, suffix: &str) -> String {
 }
 
 impl<H: Http> client::TransportWithoutIO for Transport<H> {
-    fn set_identity(&mut self, identity: gix_sec::identity::Account) -> std::result::Result<(), client::Error> {
-        self.identity = Some(identity);
+    fn set_credentials(
+        &mut self,
+        credentials: gix_sec::identity::Credentials,
+    ) -> std::result::Result<(), client::Error> {
+        self.credentials = Some(credentials);
         Ok(())
     }
 
@@ -397,7 +422,7 @@ impl<H: Http> blocking_io::Transport for Transport<H> {
             );
             dynamic_headers.push(format!("Git-Protocol: {parameters}").into());
         }
-        self.add_basic_auth_if_present(&mut dynamic_headers)?;
+        self.add_auth_if_present(&mut dynamic_headers)?;
         let GetResponse { headers, mut body } = self
             .http
             .get(url.as_ref(), &self.url, static_headers.iter().chain(&dynamic_headers))
@@ -480,7 +505,7 @@ impl<H: Http> blocking_io::Transport for Transport<H> {
             format!("Accept: application/x-{}-result", service.as_str()).into(),
         ];
         let mut dynamic_headers = Vec::new();
-        self.add_basic_auth_if_present(&mut dynamic_headers)?;
+        self.add_auth_if_present(&mut dynamic_headers)?;
         if self.actual_version != Protocol::V1 {
             dynamic_headers.push(Cow::Owned(format!(
                 "Git-Protocol: version={}",
@@ -644,6 +669,37 @@ mod tests {
         fn configure(&mut self, _config: &dyn Any) -> Result {
             Ok(())
         }
+    }
+
+    #[test]
+    #[cfg(not(feature = "http-client-insecure-credentials"))]
+    fn authentication_headers_refuse_cleartext() -> gix_error::TestResult {
+        for credentials in [
+            gix_sec::identity::Credentials::UsernamePassword {
+                username: "user".into(),
+                password: "secret".into(),
+                oauth_refresh_token: None,
+            },
+            gix_sec::identity::Credentials::Encoded {
+                authtype: "Bearer".into(),
+                credential: "secret".into(),
+                oauth_refresh_token: None,
+            },
+        ] {
+            let mut transport =
+                Transport::new_http(FailingHttp, "http://localhost/repo".try_into()?, Protocol::V2, false);
+            transport.credentials = Some(credentials);
+            let mut headers = Vec::new();
+            assert!(
+                matches!(
+                    transport.add_auth_if_present(&mut headers),
+                    Err(client::Error::AuthenticationRefused(_))
+                ),
+                "Basic passwords and pre-encoded tokens both require HTTPS"
+            );
+            assert!(headers.is_empty(), "refused credentials never become an HTTP header");
+        }
+        Ok(())
     }
 
     #[test]
