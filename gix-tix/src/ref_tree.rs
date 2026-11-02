@@ -5319,7 +5319,7 @@ mod tests {
 
         assert!(
             rendered.contains(&crate::change_id::display(&repo, id, 7)?),
-            "a displayed raw hash is immediately followed by its change ID: {rendered:?}"
+            "a displayed raw hash is immediately followed by its change ID"
         );
         Ok(())
     }
