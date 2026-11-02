@@ -67,6 +67,10 @@ use gix_error::{ResultExt, bail};
 /// `2008.02.14`) are also accepted when followed by a time. Slashes prefer month/day
 /// and dots prefer day/month when the year is last. Short years such as `08` in
 /// `02/14/08` use the same complete 70 pivot as textual dates. Four-digit years retain their literal value.
+/// Numeric and ISO dates without an explicit timezone use `now`'s timezone and the target
+/// date's offset, or UTC without a reference. Explicit offsets always take precedence.
+/// Ambiguous clocks choose the earlier occurrence. Nonexistent clocks move forward across
+/// the gap while retaining the supplied clock's inferred offset, as complete textual dates do.
 /// Slash- and dot-separated dates require nonempty ASCII digits after a clock's decimal point;
 /// these fractional seconds are discarded while preserving the explicit offset.
 /// Without a clock, slash- and dot-separated dates are rejected rather than guessed as relative fields.
@@ -230,8 +234,9 @@ pub fn parse(input: &str, now: Option<Zoned>) -> Result<Time> {
 /// Unlike [`parse()`] which handles all kinds of input, this function only parses the commit-header format
 /// like `1745582210 +0200`.
 ///
-/// Note that failure to parse the time zone isn't fatal, instead it will default to `0`. To know if
-/// the time is wonky, serialize the return value to see if it matches the `input.`
+/// Only the first timestamp and timezone are used; trailing fields are ignored, as in Git's identity reader.
+/// A missing or malformed timezone defaults to `0`. To detect noncanonical input, serialize the return
+/// value and compare it with `input`.
 pub fn parse_header(input: &str) -> Option<Time> {
     pub enum Sign {
         Plus,
@@ -263,11 +268,12 @@ pub fn parse_header(input: &str) -> Option<Time> {
         Some(offset_in_seconds)
     }
 
-    if input.contains(':') {
-        return None;
-    }
     let mut split = input.split_whitespace();
     let seconds = split.next()?;
+    let offset = split.next().unwrap_or_default();
+    if seconds.contains(':') || offset.contains(':') {
+        return None;
+    }
     let seconds = match seconds.parse::<SecondsSinceUnixEpoch>() {
         Ok(s) => s,
         Err(_err) => {
@@ -276,16 +282,7 @@ pub fn parse_header(input: &str) -> Option<Time> {
             first_digits.parse().ok()?
         }
     };
-    let offset = match split.next() {
-        None => 0,
-        Some(offset) => {
-            if split.next().is_some() {
-                0
-            } else {
-                parse_offset(offset).unwrap_or_default()
-            }
-        }
-    };
+    let offset = parse_offset(offset).unwrap_or_default();
     let time = Time { seconds, offset };
     Some(time)
 }

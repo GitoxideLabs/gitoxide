@@ -2,12 +2,10 @@ use gix_date::Time;
 use gix_testtools::TestResult;
 
 #[test]
-fn time_without_offset_defaults_to_utc() {
-    // Git parses datetime without offset and defaults to UTC (+0000)
-    let result = gix_date::parse("1979-02-26 18:30:00", Some(gix_date::Zoned::now()));
-    assert!(result.is_ok(), "Git parses datetime without offset, defaulting to UTC");
-    let time = result.unwrap();
-    assert_eq!(time.offset, 0, "Offset should default to UTC (+0000)");
+fn time_without_offset_defaults_to_utc_without_reference() -> TestResult {
+    let time = gix_date::parse("1979-02-26 18:30:00", None)?;
+    assert_eq!(time.offset, 0, "without a reference timezone, dates default to UTC");
+    Ok(())
 }
 
 #[test]
@@ -40,8 +38,7 @@ fn parse_header_is_not_too_lenient() {
             gix_date::parse_header(not_a_header_str).is_none(),
             "parse_header only accepts raw format (timestamp +offset), not ISO8601"
         );
-        // Note: gix_date::parse() DOES accept these formats, matching Git's behavior
-        // Git parses them with default UTC offset
+        // parse() accepts both forms with the reference timezone, or UTC without a reference.
     }
 }
 
@@ -282,6 +279,28 @@ fn raw() -> TestResult {
 }
 
 #[test]
+fn header_ignores_fields_after_the_first_timezone() -> gix_error::TestResult {
+    for (input, offset) in [
+        ("1112591163 +0200 1700000000 -0500", 7200),
+        ("1112591163 -0230 1700000000 +0500", -9000),
+        ("1112591163\t+0200\t1700000000\t-0500", 7200),
+        ("1112591163 +0200 extra", 7200),
+        ("1112591163 +0200 extra:fields", 7200),
+        ("1112591163 +020000 extra", 7200),
+        ("1112591163 +020 extra +0500", 0),
+    ] {
+        let expected = Time::new(1112591163, offset);
+        assert_eq!(
+            gix_date::parse_header(input),
+            Some(expected),
+            "{input}: trailing fields cannot replace or invalidate the first timezone"
+        );
+        assert_eq!(input.parse::<Time>()?, expected, "Time uses the same header parser");
+    }
+    Ok(())
+}
+
+#[test]
 fn bad_raw() {
     // Stored commit headers deliberately remain tolerant of malformed historical signatures.
     // The input-date parser is strict; parse_header recovers the timestamp when an offset is unusable.
@@ -293,7 +312,6 @@ fn bad_raw() {
         "123456 +10030",
         "123456 06000",
         "123456  0600",
-        "123456 +0600 extra",
         "123456+0600",
         "123456 + 600",
     ] {
