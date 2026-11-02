@@ -173,6 +173,20 @@ baseline '2008-02-14 20:30:45 +0000' ''  # from git t0006
 baseline '2008-02-14 20:30:45 -0500' ''  # from git t0006
 baseline '2016-06-15 16:13:20 +0200' 'ISO8601'  # from git t0006
 
+# Missing offsets use the target date's local timezone, regardless of the reference season.
+for date in '2008-02-14 20:30:45' '2008-02-14T20:30:45' \
+            '02/14/2008 20:30:45' '14.02.2008 20:30:45'; do
+    TZ=America/New_York baseline_relative "$date" '' 1752588000
+done
+for date in '2008-07-14 20:30:45' '2008-07-14T20:30:45' \
+            '07/14/2008 20:30:45' '14.07.2008 20:30:45'; do
+    TZ=America/New_York baseline_relative "$date" '' 1736953200
+done
+# Ambiguous clocks choose the earlier occurrence; nonexistent clocks move forward.
+# Offset assertions live in numeric_dates_without_offsets_use_the_reference_timezone.
+TZ=America/New_York baseline_relative '2024-03-10 02:30:00' '' 1736953200
+TZ=America/New_York baseline_relative '2024-11-03 01:30:00' '' 1752588000
+
 # ISO8601 with dots: "YYYY.MM.DD HH:MM:SS +/-ZZZZ" from git t0006
 baseline '2008.02.14 20:30:45 -0500' ''
 
