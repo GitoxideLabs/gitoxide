@@ -1,4 +1,4 @@
 interface:
   display_name: "Tix QA Sweep"
-  short_description: "Repair every Tix commit with fast or thorough QA."
-  default_prompt: "Use $tix-qa-sweep to ask for a QA profile, then visit and repair every commit in the current Tix stack until that profile passes."
+  short_description: "Fast Tix repairs, cumulative or thorough tip QA."
+  default_prompt: "Use $tix-qa-sweep to repair unchecked commits with fast QA and validate every resulting tip cumulatively, using full tip QA when I explicitly request thorough."
