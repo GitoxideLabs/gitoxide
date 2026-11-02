@@ -1,4 +1,11 @@
-use std::{collections::BTreeMap, path::Path, process};
+use std::{
+    collections::BTreeMap,
+    fs::{self, File},
+    io::Write,
+    path::{Path, PathBuf},
+    process,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use gix_error::{OptionExt, Result, ResultExt, bail, message};
 use serde_json::Value;
@@ -393,13 +400,33 @@ pub(super) fn process(root: &Path, command: &Command) -> Result<process::Command
     Ok(child)
 }
 
-pub(super) fn each_case(commands: Vec<Command>, mut execute: impl FnMut(Command) -> Result<()>) -> Result<()> {
+pub(super) fn each_case(
+    commands: Vec<Command>,
+    log: Option<&File>,
+    mut execute: impl FnMut(Command) -> Result<()>,
+) -> Result<()> {
     let mut failed = Vec::new();
     let count = commands.len();
     for (index, command) in commands.into_iter().enumerate() {
-        eprintln!("QA case {}/{count}: {} {:?}", index + 1, command.program, command.args);
+        if let Some(mut log) = log {
+            eprintln!("  QA case {}/{count}", index + 1);
+            writeln!(
+                log,
+                "QA case {}/{count}: {} {:?}",
+                index + 1,
+                command.program,
+                command.args
+            )
+            .or_raise(|| message("Write QA case to log"))?;
+        } else {
+            eprintln!("QA case {}/{count}: {} {:?}", index + 1, command.program, command.args);
+        }
         if let Err(error) = execute(command) {
-            eprintln!("{error:?}");
+            if let Some(mut log) = log {
+                writeln!(log, "{error:?}").or_raise(|| message("Write QA case failure to log"))?;
+            } else {
+                eprintln!("{error:?}");
+            }
             failed.push((index + 1).to_string());
         }
     }
@@ -409,7 +436,38 @@ pub(super) fn each_case(commands: Vec<Command>, mut execute: impl FnMut(Command)
     Ok(())
 }
 
-pub fn execute(root: &Path, commands: Vec<Command>, dry_run: bool) -> Result<()> {
+pub(super) fn log_directory() -> Result<PathBuf> {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .or_raise(|| message("Read time for QA logs"))?
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("qa-logs-{}-{stamp}", std::process::id()));
+    #[cfg(unix)]
+    let directory = {
+        use std::os::unix::fs::DirBuilderExt;
+        let mut directory = fs::DirBuilder::new();
+        directory.mode(0o700);
+        directory
+    };
+    #[cfg(not(unix))]
+    let directory = fs::DirBuilder::new();
+    directory
+        .create(&path)
+        .or_raise(|| message!("Create QA log directory {}", path.display()))?;
+    Ok(path)
+}
+
+pub(super) fn redirect(command: &mut process::Command, log: Option<&File>, stdout: bool) -> Result<()> {
+    if let Some(log) = log {
+        command.stderr(log.try_clone().or_raise(|| message("Clone QA stderr log"))?);
+        if stdout {
+            command.stdout(log.try_clone().or_raise(|| message("Clone QA stdout log"))?);
+        }
+    }
+    Ok(())
+}
+
+pub fn execute(root: &Path, commands: Vec<Command>, dry_run: bool, log: Option<&File>) -> Result<()> {
     for command in commands {
         let command = normalize(command);
         let mut parts = command
@@ -419,11 +477,17 @@ pub fn execute(root: &Path, commands: Vec<Command>, dry_run: bool) -> Result<()>
             .collect::<Vec<_>>();
         parts.push(command.program.clone());
         parts.extend(command.args.iter().map(|arg| format!("{arg:?}")));
-        eprintln!("{}", parts.join(" "));
+        if let Some(mut log) = log {
+            writeln!(log, "{}\n{}", root.display(), parts.join(" ")).or_raise(|| message("Write QA command to log"))?;
+        } else {
+            eprintln!("{}", parts.join(" "));
+        }
         if dry_run {
             continue;
         }
-        let status = process(root, &command)?
+        let mut child = process(root, &command)?;
+        redirect(&mut child, log, true)?;
+        let status = child
             .status()
             .or_raise(|| message!("Failed to start {}", command.program))?;
         if !status.success() {
@@ -439,6 +503,36 @@ mod tests {
 
     use super::*;
     use serde_json::json;
+
+    #[test]
+    #[cfg(unix)]
+    fn logging_stderr_preserves_machine_readable_stdout() -> gix_error::TestResult {
+        use std::os::unix::fs::PermissionsExt;
+
+        let logs = super::super::ops::Snapshot { path: log_directory()? };
+        assert_eq!(
+            fs::metadata(&logs.path)?.permissions().mode() & 0o777,
+            0o700,
+            "QA logs are private to the user"
+        );
+        let path = logs.path.join("metadata.log");
+        let log = File::create(&path)?;
+        let mut command = process::Command::new("sh");
+        command.args(["-c", "printf '{\"binaries\":[]}'; printf build-diagnostic >&2"]);
+        redirect(&mut command, Some(&log), false)?;
+        let output = command.output()?;
+        assert!(output.status.success(), "the metadata command succeeds");
+        assert_eq!(
+            output.stdout, b"{\"binaries\":[]}",
+            "metadata stdout remains available to the caller"
+        );
+        assert_eq!(
+            fs::read_to_string(path)?,
+            "build-diagnostic",
+            "compiler diagnostics go to the task log"
+        );
+        Ok(())
+    }
 
     fn metadata() -> Value {
         json!({"packages": [

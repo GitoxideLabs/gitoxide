@@ -1,5 +1,5 @@
 use std::{
-    fs,
+    fs::{self, File},
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
@@ -183,15 +183,15 @@ fn variant_arguments(mut command: run::Command) -> Result<(run::Command, Vec<Str
     Ok((run::normalize(command), filters))
 }
 
-pub fn variants(root: &Path, commands: Vec<run::Command>, dry_run: bool) -> Result<()> {
+pub fn variants(root: &Path, commands: Vec<run::Command>, dry_run: bool, log: Option<&File>) -> Result<()> {
     if commands.is_empty() {
         return Ok(());
     }
     if dry_run {
         eprintln!("Compile/list each variant in the checkout, then run it in one fresh shared source snapshot");
-        return run::each_case(commands, |command| {
+        return run::each_case(commands, log, |command| {
             let (build, filters) = variant_arguments(command)?;
-            run::execute(root, vec![build.clone()], true)?;
+            run::execute(root, vec![build.clone()], true, log)?;
             let mut replay = build;
             replay.args = [
                 "nextest",
@@ -207,7 +207,7 @@ pub fn variants(root: &Path, commands: Vec<run::Command>, dry_run: bool) -> Resu
             .map(String::from)
             .to_vec();
             replay.args.extend(filters);
-            run::execute(root, vec![replay], true)
+            run::execute(root, vec![replay], true, log)
         });
     }
     let before = source_state(root)?;
@@ -216,13 +216,17 @@ pub fn variants(root: &Path, commands: Vec<run::Command>, dry_run: bool) -> Resu
         let metadata = save_metadata(root, &snapshot.path)?;
         let binaries = snapshot.path.join(".git/binaries-metadata.json");
         eprintln!("Native variants use generated fixtures in {}", snapshot.path.display());
-        let result = run::each_case(commands, |command| {
+        let result = run::each_case(commands, log, |command| {
             let (mut build, filters) = variant_arguments(command)?;
-            let listed = output(run::process(root, &build)?.stderr(Stdio::inherit()))?;
+            let mut command = run::process(root, &build)?;
+            command.stderr(Stdio::inherit());
+            run::redirect(&mut command, log, false)?;
+            let listed = output(&mut command)?;
             fs::write(&binaries, listed).or_raise(|| message("Save nextest variant binaries"))?;
             build.args.clear();
             let mut command = run::process(root, &build)?;
             reuse_binaries(&mut command, &metadata, &binaries, &snapshot.path);
+            run::redirect(&mut command, log, true)?;
             checked(command.args(filters))
         });
         if let Err(error) = unchanged(&snapshot.path, &before) {
@@ -319,6 +323,7 @@ mod tests {
             ["first", "second", "third"]
                 .map(|name| run::Command::new(name, &[]))
                 .to_vec(),
+            None,
             |command| {
                 visited.push(command.program.clone());
                 if command.program != "second" {

@@ -1,9 +1,11 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fs::File,
+    io::Write,
     path::Path,
 };
 
-use gix_error::{OptionExt, Result, bail, message};
+use gix_error::{OptionExt, Result, ResultExt, bail, message};
 use serde_json::{Value, json};
 
 use super::{
@@ -529,30 +531,63 @@ pub fn job_tasks(metadata: &Value, plan: &Value, job_id: &str) -> Result<Vec<Tas
     Ok(selected)
 }
 
-pub fn execute(root: &Path, tasks: Vec<Task>, dry_run: bool, ci_job: bool) -> Result<()> {
+pub fn execute(root: &Path, tasks: Vec<Task>, dry_run: bool, ci_job: bool, logs: Option<&Path>) -> Result<()> {
     let mut failed = Vec::new();
-    for task in tasks {
-        eprintln!(
-            "\nQA task: {}{}",
-            task.id,
-            if task.blocking { "" } else { " (nonblocking)" }
-        );
-        let result = if matches!(task.id, "feature-tests" | "isolated-tests") {
-            super::native_tests::variants(root, task.commands, dry_run)
-        } else if task.id == "feature-builds" {
-            run::each_case(task.commands, |command| run::execute(root, vec![command], dry_run))
+    let mut nonblocking_failed = 0;
+    let count = tasks.len();
+    for (index, task) in tasks.into_iter().enumerate() {
+        let path = logs.map(|logs| logs.join(format!("{}.log", task.id)));
+        let log = path
+            .as_ref()
+            .map(|path| File::create(path).or_raise(|| message!("Create QA log {}", path.display())))
+            .transpose()?;
+        if logs.is_some() {
+            eprintln!("QA {}/{count}: {}", index + 1, task.id);
         } else {
-            run::execute(root, task.commands, dry_run)
+            eprintln!(
+                "\nQA task: {}{}",
+                task.id,
+                if task.blocking { "" } else { " (nonblocking)" }
+            );
+        }
+        let result = if matches!(task.id, "feature-tests" | "isolated-tests") {
+            super::native_tests::variants(root, task.commands, dry_run, log.as_ref())
+        } else if task.id == "feature-builds" {
+            run::each_case(task.commands, log.as_ref(), |command| {
+                run::execute(root, vec![command], dry_run, log.as_ref())
+            })
+        } else {
+            run::execute(root, task.commands, dry_run, log.as_ref())
         };
         if let Err(err) = result {
-            eprintln!("{err:?}");
+            if let (Some(mut log), Some(path)) = (log.as_ref(), path.as_ref()) {
+                writeln!(log, "{err:?}").or_raise(|| message("Write QA task failure to log"))?;
+                eprintln!(
+                    "FAIL {}{}; details: {}",
+                    task.id,
+                    if task.blocking || ci_job { "" } else { " (nonblocking)" },
+                    path.display()
+                );
+            } else {
+                eprintln!("{err:?}");
+            }
             // CI's continue-on-error preserves a visible failure for optional jobs.
             if task.blocking || ci_job {
                 failed.push(task.id);
             } else {
-                eprintln!("Nonblocking QA task failed: {}", task.id);
+                nonblocking_failed += 1;
+                if logs.is_none() {
+                    eprintln!("Nonblocking QA task failed: {}", task.id);
+                }
             }
         }
+    }
+    if logs.is_some() {
+        eprintln!(
+            "QA complete: {} passed, {} failed, {nonblocking_failed} nonblocking failures",
+            count - failed.len() - nonblocking_failed,
+            failed.len()
+        );
     }
     if !failed.is_empty() {
         bail!("Failed QA tasks: {}", failed.join(", "));
@@ -563,6 +598,82 @@ pub fn execute(root: &Path, tasks: Vec<Task>, dry_run: bool, ci_job: bool) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn agent_logs_preserve_failures_and_independent_tasks() -> gix_error::TestResult {
+        let logs = super::super::ops::Snapshot {
+            path: run::log_directory()?,
+        };
+        let failing = || Command::new("sh", &["-c", "printf stdout-marker; printf stderr-marker >&2; exit 17"]);
+        let tasks = vec![
+            Task::new("failure", "test", &[], vec![failing()]),
+            Task::new(
+                "missing",
+                "test",
+                &[],
+                vec![Command::new("qa-command-that-does-not-exist", &[])],
+            ),
+            Task::new("optional", "test", &[], vec![failing()]).optional(),
+            Task::new(
+                "feature-builds",
+                "test",
+                &[],
+                vec![
+                    failing(),
+                    Command::new("sh", &["-c", "printf continued > variant-visited"]),
+                ],
+            ),
+            Task::new(
+                "after",
+                "test",
+                &[],
+                vec![Command::new("sh", &["-c", "printf continued > visited"])],
+            ),
+        ];
+        let error = execute(&logs.path, tasks, false, false, Some(&logs.path))
+            .expect_err("required failures must still fail agent runs");
+        assert!(
+            error.to_string().contains("failure, missing"),
+            "the final error names every blocking task"
+        );
+        let failure = std::fs::read_to_string(logs.path.join("failure.log"))?;
+        for detail in ["stdout-marker", "stderr-marker", "17", "CI=\"true\""] {
+            assert!(failure.contains(detail), "the retained log includes {detail}");
+        }
+        assert!(
+            failure.contains(&logs.path.display().to_string()),
+            "logs record the command's working directory"
+        );
+        assert!(
+            std::fs::read_to_string(logs.path.join("missing.log"))?.contains("Failed to start"),
+            "spawn failures retain their diagnostic context"
+        );
+        assert_eq!(
+            std::fs::read_to_string(logs.path.join("visited"))?,
+            "continued",
+            "later tasks run after required and optional failures"
+        );
+        assert_eq!(
+            std::fs::read_to_string(logs.path.join("variant-visited"))?,
+            "continued",
+            "later cases run after a failed case in agent mode"
+        );
+        let cases = std::fs::read_to_string(logs.path.join("feature-builds.log"))?;
+        assert!(
+            cases.contains("QA case 1/2") && cases.contains("QA case 2/2") && cases.contains("stdout-marker"),
+            "case logs retain progress and subprocess diagnostics"
+        );
+        for ci_job in [false, true] {
+            let task = Task::new("optional", "test", &[], vec![failing()]).optional();
+            assert_eq!(
+                execute(&logs.path, vec![task], false, ci_job, Some(&logs.path)).is_err(),
+                ci_job,
+                "agent output preserves CI's nonblocking-job failure semantics"
+            );
+        }
+        Ok(())
+    }
 
     fn metadata() -> Value {
         json!({"packages": [
