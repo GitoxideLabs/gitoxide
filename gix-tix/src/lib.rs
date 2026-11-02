@@ -9901,7 +9901,7 @@ mod tests {
         ] {
             assert!(
                 resolve_pasted_commit(&repository, &invalid, [commit, sibling]).is_err(),
-                "copied pairs must contain exactly a commit hash and its full change ID: {invalid:?}"
+                "copied pairs must contain exactly a commit hash and its full change ID"
             );
         }
         for invalid in ["topic", "dead beef", ""] {
