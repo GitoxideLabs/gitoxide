@@ -556,6 +556,10 @@ pub fn execute(root: &Path, tasks: Vec<Task>, dry_run: bool, ci_job: bool, logs:
             run::each_case(task.commands, log.as_ref(), |command| {
                 run::execute(root, vec![command], dry_run, log.as_ref())
             })
+        } else if task.id == "size" && !dry_run {
+            // Cargo reads ignored fixture symlinks while gathering package status.
+            super::ops::source_snapshot(root)
+                .and_then(|snapshot| run::execute(&snapshot.path, task.commands, dry_run, log.as_ref()))
         } else {
             run::execute(root, task.commands, dry_run, log.as_ref())
         };

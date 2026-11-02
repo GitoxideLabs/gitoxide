@@ -830,7 +830,10 @@ mod tests {
         fs::create_dir(source.path.join("src"))?;
         fs::write(source.path.join("src/changed"), "current working contents")?;
         fs::write(source.path.join("untracked"), "not yet staged")?;
-        fs::write(source.path.join("ignored"), "not included by git")?;
+        fs::create_dir(source.path.join("ignored"))?;
+        fs::write(source.path.join("ignored/file"), "not included by git")?;
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(".gitignore", source.path.join("ignored/.gitignore"))?;
         let files = b"src/changed\0src/deleted\0untracked\0src/changed\0";
         let before = file_state(&source.path, files)?;
         let snapshot = snapshot_files(&source.path, files)?;
@@ -846,7 +849,7 @@ mod tests {
         );
         assert!(
             !snapshot.path.join("src/deleted").exists() && !snapshot.path.join("ignored").exists(),
-            "deleted and ignored files are absent from the snapshot"
+            "deleted files and ignored caches with unreadable symlinks are absent from the snapshot"
         );
         fs::write(snapshot.path.join("src/changed"), "test output")?;
         fs::remove_file(snapshot.path.join("untracked"))?;
