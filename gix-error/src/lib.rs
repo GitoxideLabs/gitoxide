@@ -68,6 +68,7 @@
 //! `/home/user/.cargo/registry/src/index.crates.io-hash/gix-url-0.39.0/src/parse.rs:349`
 //! is displayed as `gix-url/src/parse.rs:349`. Package-relative source paths are retained;
 //! paths whose package root cannot be inferred from these directory conventions fall back to the filename.
+//! Displayed paths use forward slashes on every platform.
 //!
 //! This only changes formatting: inspected locations retain the compiler-provided file, line, and column.
 //! A location contains no Cargo package metadata, so a directory that differs from the package name cannot

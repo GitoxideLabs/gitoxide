@@ -35,3 +35,15 @@ insta = "1.46.3"
 
 [package.metadata.docs.rs]
 features = ["sha1"]
+
+[package.metadata.qa]
+tests = [
+    { args = [], env = { GIX_TEST_FIXTURE_HASH = "sha1" } },
+    { args = [], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+]
+
+[package.metadata.qa.wasm]
+targets = ["wasm32-unknown-unknown", "wasm32-wasip1", "wasm32-wasip2"]
+checks = [
+    { args = ["--features", "sha1"] },
+]

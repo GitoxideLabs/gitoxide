@@ -1044,9 +1044,9 @@ mod exe_info {
     use serial_test::serial;
 
     #[cfg(unix)]
-    use crate::env::git::{ConfigPaths, config_paths_from_executable_at};
+    use crate::env::git::ConfigPaths;
     use crate::env::{
-        git::{NULL_DEVICE, config_paths_from_executable},
+        git::{NULL_DEVICE, config_paths_from_executable, config_paths_from_executable_at},
         tests::CurrentDir,
     };
 
@@ -1191,48 +1191,50 @@ mod exe_info {
         Env::new().unset("windir").unset("SystemRoot")
     }
 
-    fn check_exe_info() {
-        let path = exe_info()
-            .map(crate::from_bstring)
-            .transpose()
-            .expect("Git reports a representable configuration path")
-            .expect("It is present in the test environment (nonempty config)");
-
-        assert!(path.is_absolute(), "Git reports an absolute installation path");
-        assert!(
-            path.exists(),
-            "It should exist on disk, since `git config` just found an entry there"
-        );
+    fn check_exe_info() -> gix_error::TestResult {
+        let paths = config_paths_from_executable_at(crate::env::exe_invocation().to_owned())?;
+        if let Some(path) = paths.installation.map(crate::from_bstring).transpose()? {
+            assert!(path.is_absolute(), "Git reports an absolute installation path");
+            assert!(
+                path.exists(),
+                "It should exist on disk, since `git config` just found an entry there"
+            );
+        }
+        Ok(())
     }
 
     #[test]
     #[serial]
-    fn with_unmodified_environment() {
-        check_exe_info();
+    fn with_unmodified_environment() -> gix_error::TestResult {
+        let _isolation = gix_testtools::isolate_git_environment()?;
+        check_exe_info()
     }
 
     #[test]
     #[serial]
-    fn tolerates_broken_temp() {
+    fn tolerates_broken_temp() -> gix_error::TestResult {
+        let _isolation = gix_testtools::isolate_git_environment()?;
         let non = NonexistentLocation::new();
         let _env = set_temp_env_vars(non.path());
-        check_exe_info();
+        check_exe_info()
     }
 
     #[test]
     #[serial]
-    fn tolerates_oversanitized_env() {
+    fn tolerates_oversanitized_env() -> gix_error::TestResult {
+        let _isolation = gix_testtools::isolate_git_environment()?;
         // This test runs on all systems, but it is only checking for a Windows regression. Also, on
         // Windows, having both a broken temp dir and an over-sanitized environment is not supported.
         let _env = unset_windows_directory_vars();
-        check_exe_info();
+        check_exe_info()
     }
 
     #[test]
     #[serial]
-    fn tolerates_git_config_env_var() {
+    fn tolerates_git_config_env_var() -> gix_error::TestResult {
+        let _isolation = gix_testtools::isolate_git_environment()?;
         let _env = Env::new().set("GIT_CONFIG", NULL_DEVICE);
-        check_exe_info();
+        check_exe_info()
     }
 
     #[test]
@@ -1297,6 +1299,22 @@ mod exe_info {
             expected,
             "configuration discovery is independent of ambient overrides and repository-local configuration"
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn empty_config_has_no_installation_path() -> gix_error::TestResult {
+        let (_tempdir, executable) = fake_git(
+            "#!/bin/sh
+exit 0
+",
+        );
+        assert_eq!(
+            config_paths_from_executable_at(executable)?,
+            ConfigPaths::default(),
+            "a successful query with no config entries has no discoverable installation path"
+        );
+        Ok(())
     }
 
     #[test]

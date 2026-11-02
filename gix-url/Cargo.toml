@@ -38,3 +38,11 @@ serde_json = "1.0.150"
 [package.metadata.docs.rs]
 all-features = true
 features = ["document-features"]
+
+[package.metadata.qa]
+checks = [
+    { args = ["--all-features"] },
+]
+
+[package.metadata.qa.wasm]
+targets = ["wasm32-unknown-unknown", "wasm32-wasip1", "wasm32-wasip2"]

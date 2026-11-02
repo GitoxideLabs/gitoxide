@@ -284,6 +284,10 @@ sirocco = { opt-level = 3 }
 adler32furious = { opt-level = 3 }
 crc32fast = { opt-level = 3 }
 
+# Keep the running QA launcher separate from the debug binaries it builds on Windows.
+[profile.qa]
+inherits = "dev"
+
 [profile.release]
 overflow-checks = false
 lto = "thin"
@@ -493,3 +497,23 @@ large_stack_arrays = "allow"
 # Fix one day
 result_large_err = "allow"
 large_enum_variant = "allow"
+
+[package.metadata.qa]
+journey = true
+auditable = true
+checks = [
+    { args = ["--no-default-features", "--features", "small"] },
+    { args = ["--no-default-features", "--features", "lean"] },
+    { args = ["--no-default-features", "--features", "lean-async"] },
+    { args = ["--no-default-features", "--features", "max"] },
+    { args = ["--no-default-features", "--features", "max-control,sha1"] },
+]
+
+[workspace.metadata.qa.tool-versions]
+cargo-nextest = "0.9.122"
+cargo-semver-checks = "0.51.0"
+cargo-deny = "0.20.0"
+cargo-machete = "0.9.1"
+cargo-auditable = "0.7.6"
+just = "1.58.0"
+cargo-diet = "1.2.7"

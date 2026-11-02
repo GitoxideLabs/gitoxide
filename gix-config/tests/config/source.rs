@@ -14,17 +14,16 @@ fn git_config_no_system() {
         }),
         None
     );
-    assert!(
-        Source::GitInstallation
-            .storage_location(&mut |name| {
-                match name {
-                    "GIT_CONFIG_NOSYSTEM" => Some("false".into()),
-                    "GIT_CONFIG_SYSTEM" => None,
-                    _ => unreachable!("known set"),
-                }
-            })
-            .is_some(),
-        "it treats the variable as boolean"
+    assert_eq!(
+        Source::GitInstallation.storage_location(&mut |name| {
+            match name {
+                "GIT_CONFIG_NOSYSTEM" => Some("false".into()),
+                "GIT_CONFIG_SYSTEM" => None,
+                _ => unreachable!("known set"),
+            }
+        }),
+        gix_path::env::installation_config().map(ToOwned::to_owned),
+        "false preserves normal installation discovery, including when no configuration exists"
     );
     assert_eq!(
         Source::System.storage_location(&mut |name| {

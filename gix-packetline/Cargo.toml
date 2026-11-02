@@ -63,3 +63,21 @@ gix-macros = { path = "../gix-macros" }
 
 [package.metadata.docs.rs]
 features = ["document-features", "blocking-io", "serde"]
+
+[package.metadata.qa]
+checks = [
+    { args = ["--all-features"] },
+    { args = ["--features", "blocking-io"] },
+    { args = ["--features", "async-io"] },
+]
+tests = [
+    { args = ["--features", "blocking-io", "--test", "blocking-packetline"] },
+    { args = ["--features", "async-io", "--test", "async-packetline"] },
+]
+doctests = [
+    # `cargo nextest` doesn't run doctests, so cover feature-gated examples explicitly here.
+    { args = ["--features", "blocking-io"] },
+]
+
+[package.metadata.qa.wasm]
+targets = ["wasm32-unknown-unknown", "wasm32-wasip1", "wasm32-wasip2"]

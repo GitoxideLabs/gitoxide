@@ -504,3 +504,66 @@ ignored = [
     # Feature forwarding uses `prodash/*` in Cargo feature wiring without direct crate references.
     "prodash",
 ]
+
+[package.metadata.qa]
+# Major external consumers with advisory compatibility checks.
+# CI checks each repository's default branch; see DEVELOPMENT.md for the selection.
+downstream = [
+    { name = "built", repository = "lukaslueg/built", package = "built", features = ["gix"], default-features = false },
+    { name = "rustsec", repository = "rustsec/rustsec", package = "rustsec", features = ["gix-reqwest", "osv-export"], default-features = false },
+    { name = "crates-index", repository = "frewsxcv/rust-crates-index", package = "crates-index", features = ["git"], default-features = false },
+    { name = "cargo", repository = "rust-lang/cargo", package = "cargo" },
+    { name = "cargo-generate", repository = "cargo-generate/cargo-generate", package = "cargo-generate", features = ["git"], default-features = false },
+    { name = "jj", repository = "jj-vcs/jj", package = "jj-cli" },
+    { name = "jj-testutils", repository = "jj-vcs/jj", package = "testutils" },
+    { name = "gitbutler", repository = "gitbutlerapp/gitbutler", package = "but" },
+    { name = "gitbutler-gpui", repository = "gitbutlerapp/gitbutler", package = "but-gpui" },
+    { name = "starship", repository = "starship/starship", package = "starship" },
+    { name = "vergen-gix", repository = "rustyhorde/vergen", package = "vergen-gix" },
+    { name = "onefetch", repository = "o2sh/onefetch", package = "onefetch" },
+]
+msrv = { checks = [{ args = [] }, { args = ["--no-default-features", "--features", "async-network-client,max-performance,sha1"] }] }
+checks = [
+    { args = ["--no-default-features", "--features", "sha1,async-network-client"] },
+    { args = ["--no-default-features", "--features", "sha1,async-network-client-async-std"] },
+    { args = ["--no-default-features", "--features", "sha1,blocking-network-client"] },
+    { args = ["--no-default-features", "--features", "sha1,blocking-http-transport-curl"] },
+    { args = ["--no-default-features", "--features", "sha1,blocking-http-transport-reqwest"] },
+    { args = ["--no-default-features", "--features", "max-performance,sha1,sha256", "--tests"] },
+    { args = ["--no-default-features", "--features", "sha1"] },
+    { args = ["--no-default-features", "--features", "sha1,sha256"] },
+    { args = ["--no-default-features", "--features", "sha256"] },
+]
+tests = [
+    { args = ["--no-default-features", "--features", "basic,comfort,max-performance,sha1,sha256"] },
+    { args = ["--no-default-features", "--features", "basic,extras,comfort,sha1,sha256"] },
+    { args = ["--features", "async-network-client,sha256"] },
+    { args = ["--features", "async-network-client,sha256"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+    { args = ["--features", "blocking-network-client,sha256"] },
+    { args = ["--features", "blocking-network-client,sha256"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+    { args = ["--features", "sha256"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+    { args = ["--no-default-features", "--features", "sha256", "--lib"] },
+]
+doctests = [
+    { args = ["--no-default-features", "--features", "sha1,sha256"] },
+    { args = ["--no-default-features", "--features", "revision,sha1,sha256"] },
+    { args = ["--features", "sha256"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+]
+
+[package.metadata.qa.each-feature]
+# Check new components independently; aggregate and backend contracts have explicit cases.
+args = ["--no-default-features", "--tests"]
+base = ["sha1", "sha256"]
+exclude = [
+    # Bundles and backend choices retain their explicit build/test configurations.
+    "default", "basic", "extras", "comfort", "max-control", "max-performance",
+    "async-network-client", "async-network-client-async-std", "blocking-network-client",
+    "blocking-http-transport-curl", "blocking-http-transport-curl-rustls", "blocking-http-transport-curl-openssl",
+    "blocking-http-transport-reqwest", "blocking-http-transport-reqwest-rust-tls",
+    "blocking-http-transport-reqwest-rust-tls-trust-dns", "blocking-http-transport-reqwest-native-tls",
+    "document-features", "zlib-sirocco",
+    # Direct dependency switches are exercised through their component features.
+    "async-std", "gix-archive", "gix-status", "gix-worktree-stream", "prodash", "regex",
+    # The dev self-dependency already enables these in every --tests build.
+    "attributes", "blob-diff", "command", "excludes", "index", "merge", "tree-error",
+]

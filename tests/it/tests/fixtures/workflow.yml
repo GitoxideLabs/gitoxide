@@ -1,0 +1,18 @@
+# Preserve YAML 1.2 scalars, GitHub expressions, multiline scripts, and aliases.
+name: Example
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env: &environment
+      ENABLED: true
+      RETRIES: 3
+      TEXT: "3"
+    steps:
+      - uses: actions/checkout@version
+        with:
+          persist-credentials: false
+      - env: *environment
+        run: |
+          echo "${{ github.ref }}"
+          echo done

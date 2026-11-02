@@ -28,6 +28,9 @@
 # embed that absolute path.
 /make_fetch_repos.tar
 /make_fetch_repos_sha256.tar
+# The linked worktrees contain absolute paths to their shared repository.
+/make_fetch_worktrees.tar
+/make_fetch_worktrees_sha256.tar
 # Sets `core.worktree` to `$PWD/worktree` (an absolute path) on multiple
 # clones to test relative-vs-absolute worktree resolution.
 /make_core_worktree_repo.tar

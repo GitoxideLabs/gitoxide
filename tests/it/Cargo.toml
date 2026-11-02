@@ -9,16 +9,42 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 publish = false
 rust-version = "1.91"
+default-run = "it"
+
+[features]
+default = ["tools"]
+# Keep QA planning independent of the Git implementation and release tooling.
+tools = ["dep:gix", "dep:gix-testtools", "dep:regex", "dep:tracing-subscriber", "dep:cargo-smart-release-core"]
 
 [[bin]]
 name = "it"
 path = "src/main.rs"
+required-features = ["tools"]
+
+[[bin]]
+name = "qa"
+path = "src/qa/main.rs"
+
+[[test]]
+name = "check_api"
+required-features = ["tools"]
+
+[[test]]
+name = "yaml_to_json"
+required-features = ["tools"]
 
 [dependencies]
 clap = { version = "4.5.60", features = ["derive"] }
-gix = { version = "^0.90.0", path = "../../gix", default-features = false, features = ["attributes", "blame", "blob-diff", "error-print-location", "parallel", "revision", "sha1"] }
-gix-testtools = { path = "../tools", default-features = false, features = ["sha1"] }
-regex = { version = "1.12.3", default-features = false, features = ["std"] }
+gix = { version = "^0.90.0", path = "../../gix", optional = true, default-features = false, features = ["attributes", "blame", "blob-diff", "error-print-location", "parallel", "revision", "sha1"] }
+gix-testtools = { path = "../tools", optional = true, default-features = false, features = ["sha1"] }
+gix-error = { path = "../../gix-error" }
+regex = { version = "1.12.3", optional = true, default-features = false, features = ["std"] }
 serde_json = "1.0.150"
-tracing-subscriber = { version = "0.3.22", default-features = false, features = ["fmt"] }
-cargo-smart-release-core = "0.1.0"
+toml_edit = "0.25.13"
+yaml_serde = "0.10.7"
+tracing-subscriber = { version = "0.3.22", optional = true, default-features = false, features = ["fmt"] }
+cargo-smart-release-core = { version = "0.1.0", optional = true }
+
+[package.metadata.qa]
+api-checker = true
+api-toolchain = "1.99.0"

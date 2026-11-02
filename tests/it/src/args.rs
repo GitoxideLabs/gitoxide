@@ -15,6 +15,13 @@ pub struct Args {
 
 #[derive(Debug, clap::Subcommand)]
 pub enum Subcommands {
+    /// Convert one YAML document to JSON on stdout.
+    ///
+    /// Duplicate keys, non-string mapping keys, non-finite numbers, and multiple documents are rejected.
+    YamlToJson {
+        /// Read this file, or stdin if omitted or `-`.
+        file: Option<PathBuf>,
+    },
     /// Generate a shell script that creates a git repository containing all commits that are
     /// traversed when following a given file through the Git history just as `git blame` would.
     ///

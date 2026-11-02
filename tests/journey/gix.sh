@@ -486,7 +486,7 @@ title "gix commit-graph"
           git -c commit.gpgsign=false commit --allow-empty -q -m "first"
           git commit-graph write --reachable
           cp -R .git/objects/info ../graph-info
-          rm .git/objects/info/commit-graph
+          rm -f .git/objects/info/commit-graph
           git commit-graph write --reachable --split
           git -c commit.gpgsign=false commit --allow-empty -q -m "second"
           git commit-graph write --reachable --split=no-merge

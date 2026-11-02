@@ -50,3 +50,19 @@ gix-testtools = { path = "../tests/tools", default-features = false }
 [package.metadata.docs.rs]
 all-features = true
 features = ["sha1", "document-features"]
+
+[package.metadata.qa]
+checks = [
+    { args = ["--no-default-features", "--features", "sha1,bstr"] },
+    { args = ["--all-features"] },
+]
+tests = [
+    # The dev self-dependency already enables both hashes for every test build.
+    { args = ["--features", "sha1,sha256"] },
+]
+
+[package.metadata.qa.wasm]
+targets = ["wasm32-unknown-unknown", "wasm32-wasip1", "wasm32-wasip2"]
+checks = [
+    { args = ["--features", "sha1"] },
+]

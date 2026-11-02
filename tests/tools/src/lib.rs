@@ -11,8 +11,9 @@
 //! ## Script Isolation
 //!
 //! Fixture scripts and [`git()`] use `GIT_CONFIG_PARAMETERS` to disable signing and automatic maintenance
-//! and set `init.defaultBranch=main`. A script's own `GIT_CONFIG_COUNT` entries coexist with this configuration,
-//! with isolation taking precedence for shared keys. Explicit `git -c` options can override isolation.
+//! and set `init.defaultBranch=main` and `core.longpaths=true`. The latter lets Git for Windows use long paths
+//! without depending on external configuration. A script's own `GIT_CONFIG_COUNT` entries coexist with this
+//! configuration, with isolation taking precedence for shared keys. Explicit `git -c` options can override isolation.
 //! Bash fixtures trace commands to a separate descriptor so redirected stderr baselines remain unchanged.
 //! Bash older than 4.1 reports failed commands instead. Captured diagnostics are printed only on failure.
 //!
@@ -110,9 +111,11 @@ pub fn rename(from: impl AsRef<Path>, to: impl AsRef<Path>) -> std::io::Result<(
 ///
 /// The returned executable path is stable for the lifetime of the test process and avoids races with other
 /// concurrently running tests that may cause Cargo to update the shared example binary in `target/debug/examples`.
+/// Build in the original workspace so relocated nextest runs reuse that same target directory.
 pub fn build_example_for_test(package: &str, example: &str, target_tmpdir: impl Into<PathBuf>) -> PathBuf {
     let mut cargo = std::process::Command::new(env::var_os("CARGO").unwrap_or_else(|| OsString::from(env!("CARGO"))));
     let res = cargo
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
         .args(["build", "-p", package, "--example", example])
         .status()
         .expect("cargo should run fine");
@@ -417,6 +420,7 @@ const ISOLATED_GIT_CONFIG: &[(&str, &str)] = &[
     ("commit.gpgsign", "false"),
     ("tag.gpgsign", "false"),
     ("init.defaultBranch", "main"),
+    ("core.longpaths", "true"),
     ("protocol.file.allow", "always"),
     ("maintenance.auto", "false"),
     ("gc.auto", "0"),

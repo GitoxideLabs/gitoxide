@@ -1142,7 +1142,7 @@ Caused by:
     0: Message { message: "invalid input", class: Validation, values: {input: Bytes("ref\xff")} }"#;
     let compact = format!("{err:?}");
     let location = err.frame().location();
-    let at = format!(", at {}:{}", location.file(), location.line());
+    let at = format!(", at {}:{}", location.file().replace('\\', "/"), location.line());
     assert_eq!(
         compact,
         format!(
@@ -2182,7 +2182,7 @@ fn aggregated_public_errors_report_the_original_failure_locations() {
                 .expect("the error has a root")
                 .location()
                 .expect("raising records a location");
-            format!(", at {}:{}", location.file(), location.line())
+            format!(", at {}:{}", location.file().replace('\\', "/"), location.line())
         })
         .collect();
     let aggregate = message("batch failed").raise_all([first, second]);

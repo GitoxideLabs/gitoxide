@@ -64,3 +64,13 @@ tempfile = "3.26.0"
 [package.metadata.docs.rs]
 all-features = true
 features = ["document-features"]
+
+[package.metadata.qa]
+checks = [
+    { args = ["--no-default-features"] },
+    { args = ["--features", "walkdir"] },
+    { args = ["--all-features"] },
+]
+tests = [
+    { args = ["--all-features"] },
+]

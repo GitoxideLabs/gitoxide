@@ -211,6 +211,293 @@ _plumbing_ or _porcelain_. _Plumbing_ prioritizes composition, whereas _porcelai
 
 Run `just --list --group 'Maintenance'` to browse maintenance tasks. The `Makefile` retains specific build and fixture-generation targets used by CI.
 
+## QA locally and in CI
+
+`just qa` runs every selected quality-assurance check that can run on your host. CI uses the same task
+catalogue and commands, distributing them across jobs and additional platforms. Use fast
+mode while developing, and exhaustive mode to reproduce the checks used after integration:
+
+```bash
+just qa                             # fast: affected work, plus mandatory policy checks
+just qa --base stable-gix            # compare a stacked PR against its own base branch
+just qa --mode exhaustive            # every applicable configuration on this host
+just test                           # alias for exhaustive QA
+just qa --dry-run                    # inspect commands without executing checks
+just qa --help                       # list options and available stage selectors
+just qa --stage tests,doctests        # union of stages; overlapping selectors run once
+just qa-plan                         # JSON selection, reasons, tasks and job assignments
+just qa-plan --all-platforms          # CI's assignments, including other platforms
+just qa-plan --platform windows-x86_64 --mode exhaustive
+```
+
+Fast mode compares against the merge base with `origin/main` by default, including staged,
+unstaged and untracked changes. Fetch your intended base before comparing. Selection includes
+owning crates and all reverse workspace dependencies, including optional, dev, build and
+platform-specific dependencies. Known root prose files select no Rust work; crate documentation
+is a crate input because it can appear in rustdoc. Manifests, lockfiles, fuzzers, shared tests,
+CI/build configuration, unclassified paths and a missing base conservatively select exhaustive
+coverage. The plan explains each fallback. An unchanged checkout still checks licenses,
+dependency policy, advisories, workflow policy, script modes and the MSRV badge.
+
+All PRs request fast mode. Pushes to `main` or `run-ci/**`, and manual workflow dispatch,
+request exhaustive mode. Exhaustive checks on landed commits provide feedback for forward
+fixes when fast selection misses an undeclared dependency. CI cancels obsolete PR runs but
+keeps landed-commit runs. The `Tests pass` gate requires the planner and all required jobs.
+Advisory, package-size and WASM failures remain informational, locally and in CI.
+
+### What runs where
+
+Portable checks run locally on Linux, macOS or Windows. CI assigns them once to Linux x86-64
+instead of repeating them on every OS. Native tests run on Linux, macOS and Windows in fast
+mode; exhaustive CI adds Linux ARM64, Linux 32-bit x86/ARM, and Windows ARM64. Local Intel macOS
+is also supported. Only Windows runs the no-Git and 32-bit Windows cases; only Linux x86-64
+runs the constrained pure-Rust Docker check. Journey tests require Unix. CI also retains
+Windows baseline doctests and MSRV builds. `--all-platforms` shows these exact assignments;
+a local run never attempts another host's native checks.
+
+| Stage | Checks |
+| --- | --- |
+| `self-test` | Lightweight planner/runner tests; CI runs these once in the planning gate |
+| `policy`, `advisories`, `audit` | Dependency licenses, bans and sources; advisory reporting; `audit` selects both |
+| `housekeeping` | Workflow credentials/gate policy, executable script modes and MSRV badge |
+| `lint`, `check` | Formatting and Clippy; `check` also compiles selected manifest configurations; exhaustive adds machete and workspace feature contracts |
+| `tests`, `default-tests` | Native nextest, isolated package tests, and supported Windows checks; `tests` also includes declared feature/hash variants |
+| `doctests`, `docs` | Cargo doctests and rustdoc, including declared doctest variants |
+| `journey` | CLI journeys: affected `small` in fast mode; all four configurations in exhaustive mode |
+| `api` | Ignored API checker integration tests, on Rust 1.99.0 |
+| `msrv` | Minimal dependency resolution and declared MSRV builds, in an isolated source copy |
+| `auditable`, `size` | Auditable build and package-size reporting |
+| `wasm` | Affected supported packages/configurations for the three WASM targets |
+| `pure-rust` | Linux x86-64 Docker build with constrained C/C++ tooling |
+
+Independent tasks continue after failures; the command fails if any required task failed.
+Within a task, prerequisites remain ordered: a failed journey build cannot run a stale CLI.
+Missing tools produce visible failures. Use `--stage` to reproduce a subset without installing
+unrelated tools. `just unit-tests`, `just doc-tests`, `just check`, `just qa-test` and
+`etc/scripts/ci-check-local.sh --fast|--thorough` delegate to the shared runner. The script's
+profiles now mean the same fast/exhaustive modes; it no longer cleans fixtures or marks Tix
+commits as checked. Tix QA can set its check mark after verifying a clean checkout. The legacy
+`ci`, `ci-plan`, `ci-test` and `ci-journey-tests` recipes remain aliases for their `qa` counterparts.
+
+### Local prerequisites and isolation
+
+Each task declares the tools, Rust components/toolchains/targets and system dependencies it
+needs. Inspect the requirements of your selected work before installing tools:
+
+```bash
+just qa-plan | jq '.tasks[].task | {id, requirements}'
+just qa-plan | jq '.jobs[] | {id, tools, rust_components, rust_toolchains, rust_targets, just, diet, xz}'
+```
+
+The tool versions live in `[workspace.metadata.qa.tool-versions]` in the root manifest. CI
+provisions the requirements collected from its assigned tasks; the same requirements appear
+in the local plan. Component and target requirements retain their toolchain, for example
+`{"toolchain":"stable","component":"clippy"}` or
+`{"toolchain":"1.99.0","target":"wasm32-wasip1"}`. Pass that toolchain to
+`rustup component add --toolchain` or `rustup target add --toolchain`, after installing it.
+The following commands install the tools used across exhaustive QA.
+
+Install Git, Bash, `just` 1.58.0, `jq`, and a C toolchain, plus platform libraries required by
+the selected features (OpenSSL/pkg-config and liblzma where applicable). The shared runner
+selects stable Rust for ordinary tasks and Rust 1.99.0 for API tasks. Stable should match CI's
+current stable version; Git and system libraries also need compatible versions. MSRV uses the
+declaring package's `rust-version` and nightly Cargo for minimal-version resolution:
+
+```bash
+rustup toolchain install stable 1.99.0 nightly "$(just msrv)"
+rustup component add --toolchain stable clippy rustfmt
+rustup target add --toolchain stable wasm32-unknown-unknown wasm32-wasip1 wasm32-wasip2
+# Windows x86-64 also needs:
+# rustup target add --toolchain stable i686-pc-windows-msvc
+cargo install --locked cargo-nextest --version 0.9.122
+cargo install --locked cargo-deny --version 0.20.0
+cargo install --locked cargo-machete --version 0.9.1
+cargo install --locked cargo-semver-checks --version 0.51.0
+cargo install --locked cargo-auditable --version 0.7.6
+cargo install --locked cargo-diet --version 1.2.7
+```
+
+Housekeeping parses workflow YAML directly in Rust. The same parser is available as
+`cargo run --locked -p internal-tools -- yaml-to-json FILE`; omit `FILE` or use `-` to read stdin.
+It emits JSON on stdout and rejects duplicate keys, non-string mapping keys, non-finite numbers,
+and multiple YAML documents.
+
+The pure-Rust check needs Docker; it uses a disposable Debian container, a read-only source mount,
+and the persistent Docker volume `gitoxide-ci-pure-rust` for Rust/download/build caches.
+Ordinary checks reuse `target`.
+
+The runner sets `CI=true` locally too, including journey assertions and Git-version checks.
+It disables snapshot/baseline updates and overrides inherited fixture-selection variables.
+Native fast tests use freshly generated fixtures. Exhaustive native tests compile/list once,
+then reuse the same nextest binaries for archived and generated fixtures in separate temporary
+source copies. Feature/hash variants also run in an isolated copy, sharing compatible fixture
+caches within their task and continuing after individual failures. Their fixture caches cannot
+reuse a previous local run's extracted archives. Archive changes cause
+a failure and retain the changed copy for inspection. Explicit archive-only fixtures keep
+their normal semantics.
+
+Source copies include current tracked and visible untracked files, preserving local edits,
+deletions, permissions and safe relative symlinks. MSRV resolution changes only its copied
+lockfile. The runner never restores, cleans or stages your checkout. Native tests also check
+the original source for unexpected changes because compile-time Rust paths may still point
+there. Avoid editing while those checks run; concurrent edits are reported as changes too.
+
+### Maintaining QA selection
+
+The `qa` binary in `internal-tools` (`tests/it`) owns planning, the task catalogue, platform
+assignment and execution. Each task exposes its requirements, inferred from direct Cargo
+commands or declared alongside opaque scripts, recipes and internal operations. Job requirements
+are their task requirements combined, so the workflow does not maintain a second list of which
+checks need each tool. `.github/workflows/ci.yml` provisions those requirements and schedules the
+plan. Its gate builds with `--no-default-features`, requiring only Clap, JSON parsing and the
+dependency-free `gix-error`; the existing `it` binary retains the default `tools` feature.
+
+Launchers use the `qa` Cargo profile, which inherits `dev`, so workspace builds cannot replace
+the running executable on Windows. The checks retain their existing profiles and target
+directory, including `CARGO_TARGET_DIR` overrides. Use that profile for manual invocations too:
+
+```bash
+cargo run --profile qa --locked -p internal-tools --no-default-features --bin qa -- plan
+cargo test --locked -p internal-tools --no-default-features --bin qa
+just qa-plan > /tmp/qa-plan.json
+just qa --plan /tmp/qa-plan.json --dry-run
+```
+
+Plans use `cargo metadata --no-deps`, without resolving all external dependencies. Saved plans
+preserve selection; regenerate them after changing the checkout. A CI job can be reproduced
+with `--plan FILE --job ID` on its matching platform. Stage selection and normal local execution
+use the same tasks. Add custom automation in `tests/it/src/qa` or `tests/it/qa`; workflow command
+bodies only provision the declared prerequisites.
+
+Crate-specific variants live beside their features in `Cargo.toml`:
+
+```toml
+[package.metadata.qa]
+checks = [{ args = ["--features", "serde"] }]
+tests = [
+    { args = ["--features", "serde"] },
+    { args = ["--features", "sha256"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+]
+doctests = [{ args = ["--features", "blocking-io"] }]
+extra-inputs = ["another-crate/tests/fixtures"]
+```
+
+`checks` compiles the declared configurations with `cargo check`; `tests` runs nextest and
+`doctests` runs Cargo doctests. The owner package is implicit. Grouped cases can specify
+`packages = ["owner", "other"]` and run when any member is affected. Arguments go directly to
+Cargo/nextest; the runner supplies package selection and the appropriate locked/test options.
+Use `requires = ["xz"]` on a case that needs an extra system capability. Keep feature combinations
+separate when Cargo unification changes dependency features. Declare external crate input paths
+in `extra-inputs` (repository-relative files/directories, without globs).
+
+For a small set of independent features, opt in to checking each declared feature separately.
+For example, a package such as `gix-parallel` can use:
+
+```toml
+[package.metadata.qa.each-feature]
+args = ["--no-default-features"]
+exclude = ["default", "document-features"]
+```
+
+The policy checks the baseline, then adds each non-excluded feature to it once. New features
+automatically gain a check. `base = ["sha1"]` can supply a required baseline for a package that
+declares that feature; `args = ["--no-default-features", "--tests"]` also compiles its tests.
+Use `exclude` for unsupported combinations, aggregate features or redundant configurations,
+and explicit `checks` for combinations that matter together. The policy does not enumerate a
+cross product. Exact repeated cases are removed; meaningful combinations remain explicit.
+The same `each-feature` policy is available under `qa.wasm`.
+Fast mode runs these checks for affected packages. Exhaustive mode also runs the shared feature
+contracts, including expected compilation failures and separate fuzz workspaces.
+
+`gix` and `gix-utils` use this linear policy. Common `serde`, `parallel` and hash cases keep
+small explicit configurations: feature names alone do not establish compatible combinations,
+and dev-dependency feature unification can hide missing feature edges. Runtime combinations
+stay explicit, including their fixture settings; adding a compile check does not add a test run.
+
+WASM support is declared by each package. List the targets it supports and any required feature
+configurations; without `checks` or `each-feature`, the package builds with its default features:
+
+```toml
+[package.metadata.qa.wasm]
+targets = ["wasm32-unknown-unknown", "wasm32-wasip1", "wasm32-wasip2"]
+checks = [{ args = ["--features", "sha1"] }]
+```
+
+MSRV builds use the declaring package's `rust-version` and an explicit list of configurations:
+
+```toml
+[package.metadata.qa.msrv]
+checks = [
+    { args = [] },
+    { args = ["--no-default-features", "--features", "async-network-client,max-performance,sha1"] },
+]
+```
+
+In `[package.metadata.qa]`, packages whose tests require separate feature resolution set
+`isolated = true`; the workspace baseline excludes them and their declared cases run separately.
+`without-git = true` requests
+the supported Windows check without Git on `PATH`. CLI owners declare `journey = true` and
+`auditable = true` for their corresponding tasks. These roles keep crate selection beside the
+crate's other QA settings. The API checker declares `api-checker = true` and its `api-toolchain`.
+Nextest retains the settings in `.config/nextest.toml`. Cargo package selection saves compilation
+as well as execution, which nextest test filters alone cannot do.
+
+Explicit feature and hash variants complement the native baselines. Three equivalent
+`gix-hash` variants were combined after comparing their resolved feature graphs, as were two
+`gix-zlib` compile checks already covered by its tests. Clippy covers default compilation;
+rustdoc's former second command had the same effective documented crate features and was
+removed. Journey builds remain adjacent to their runs because later configurations overwrite
+the same binary paths.
+
+### Downstream compatibility (CI only)
+
+GitHub Actions separately checks ten major external `gix` consumers from their current default
+branches in twelve package-specific jobs. These jobs are not part of local QA, including exhaustive
+runs. In fast mode they run only when the existing dependency selection includes `gix`;
+exhaustive CI runs select all twelve jobs.
+This is conservative: changes to any workspace dependency that can affect `gix` select every
+consumer, without downloading and resolving upstream projects in the planner.
+
+The declarations live in `gix/Cargo.toml` under `package.metadata.qa.downstream`. They enable each
+consumer's Git backend explicitly instead of enabling all unrelated features. The first five entries
+use total downloads from the [crates.io reverse dependencies API](https://crates.io/api/v1/crates/gix/reverse_dependencies?page=1&per_page=100)
+on 2026-11-01, excluding this repository and grouping crates by upstream project:
+
+| Consumer | Total downloads | Enabled consumer features |
+| --- | ---: | --- |
+| [built](https://github.com/lukaslueg/built) | 76,145,348 | `gix` |
+| [rustsec](https://github.com/rustsec/rustsec) | 15,074,921 | `gix-reqwest`, `osv-export` |
+| [crates-index](https://github.com/frewsxcv/rust-crates-index) | 9,182,813 | `git` |
+| [cargo](https://github.com/rust-lang/cargo) | 8,196,198 | defaults |
+| [cargo-generate](https://github.com/cargo-generate/cargo-generate) | 2,616,134 | `git` |
+| [jj](https://github.com/jj-vcs/jj) (`jj-cli`, `testutils`) | — | defaults |
+| [GitButler](https://github.com/gitbutlerapp/gitbutler) (`but`, `but-gpui`) | — | defaults |
+| [Starship](https://github.com/starship/starship) | — | defaults |
+| [vergen-gix](https://github.com/rustyhorde/vergen) | — | defaults |
+| [Onefetch](https://github.com/o2sh/onefetch) | — | defaults |
+
+Download counts include versions and builds where `gix` is disabled. Refresh this reviewed list
+from the paginated API when needed; jobs discover each repository's default branch at checkout.
+`jj` and GitButler extend coverage to version-control applications. Their CLI, test-support, and
+GUI packages each run in a separate job, preserving default features. GitButler jobs install their
+Linux development libraries; the GPUI job also installs Zig for its terminal dependency.
+Starship and Onefetch cover repository inspection in CLI applications; `vergen-gix` covers
+Git information emitted by build scripts.
+
+The `internal-tools` runner replaces direct Gitoxide library dependencies in the disposable
+consumer workspace with paths into the checkout under test, preserving requested features and
+default-feature settings. This also keeps explicitly used plumbing crates on the same source
+tree. It verifies that the selected build actually compiles local `gix`, so Cargo cannot silently
+check a published version or skip a disabled optional dependency. Consumer API errors, removed
+features, and other failures remain visible as advisory warnings while `gix` is pre-1.0.
+The jobs print the upstream revision and use separate Rust caches for each consumer.
+
+The original [main CI run on 2026-10-31](https://github.com/GitoxideLabs/gitoxide/actions/runs/41186371733)
+took 28m23s; Windows ARM fixture regeneration and Linux feature tests dominated. Fast mode avoids
+unaffected packages and additional architecture/fixture configurations. Actual savings depend
+on the selected dependency closure and cache state; no new wall-clock CI speedup has yet been
+measured for this restructuring.
+
 ## Creating a release
 
 Use `just release` to publish crates with the repository's release defaults. Additional release-tool arguments can be passed to this recipe.

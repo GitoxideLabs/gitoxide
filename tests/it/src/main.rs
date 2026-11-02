@@ -6,6 +6,7 @@ mod commands;
 fn main() -> Result<()> {
     let args: Args = Args::parse();
     match args.cmd {
+        Subcommands::YamlToJson { file } => commands::yaml_to_json::yaml_to_json(file.as_deref()),
         Subcommands::GitToSh {
             count,
             verbatim,

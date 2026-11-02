@@ -30,3 +30,9 @@ gix-hash = { path = "../gix-hash", features = ["sha1"] }
 
 [package.metadata.docs.rs]
 features = ["sha1"]
+
+[package.metadata.qa.wasm]
+targets = ["wasm32-unknown-unknown", "wasm32-wasip1", "wasm32-wasip2"]
+checks = [
+    { args = ["--features", "sha1"] },
+]

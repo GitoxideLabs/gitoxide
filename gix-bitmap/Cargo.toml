@@ -20,3 +20,6 @@ gix-error = { version = "^0.5.2", path = "../gix-error" }
 
 [dev-dependencies]
 gix-testtools = { path = "../tests/tools", default-features = false }
+
+[package.metadata.qa.wasm]
+targets = ["wasm32-unknown-unknown", "wasm32-wasip1", "wasm32-wasip2"]

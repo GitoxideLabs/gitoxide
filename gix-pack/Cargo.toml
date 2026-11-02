@@ -94,3 +94,26 @@ insta = "1.46.3"
 [package.metadata.docs.rs]
 all-features = true
 features = ["sha1", "sha256", "document-features", "pack-cache-lru-dynamic", "object-cache-dynamic", "serde"]
+
+[package.metadata.qa]
+checks = [
+    { args = ["--no-default-features", "--features", "sha1"] },
+    { args = ["--no-default-features", "--features", "sha1,generate"] },
+    { args = ["--no-default-features", "--features", "sha1,streaming-input"] },
+    { args = ["--features", "sha1,serde"] },
+    { args = ["--features", "sha1,pack-cache-lru-static"] },
+    { args = ["--features", "sha1,pack-cache-lru-dynamic"] },
+    { args = ["--features", "sha1,object-cache-dynamic"] },
+]
+tests = [
+    { args = [], env = { GIX_TEST_FIXTURE_HASH = "sha1" } },
+    { args = [], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+    { args = ["--features", "parallel"] },
+]
+
+[package.metadata.qa.wasm]
+targets = ["wasm32-unknown-unknown", "wasm32-wasip1", "wasm32-wasip2"]
+checks = [
+    { args = ["--features", "sha1,wasm"] },
+    { args = ["--all-features"] },
+]
