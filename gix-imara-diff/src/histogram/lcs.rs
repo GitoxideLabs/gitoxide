@@ -85,8 +85,13 @@ impl LcsSearch {
                 if matches!((token1, token2), (Some(token1), Some(token2)) if token1 == token2) {
                     start1 -= 1;
                     start2 -= 1;
-                    let new_occurrences = histogram.num_token_occurrences(before[start1 as usize]);
-                    occurrences = occurrences.min(new_occurrences);
+                    // Once `occurrences` reaches 1, further lookups cannot change it, since
+                    // every matched token occurs in `before` at least once. The matching region
+                    // can still grow, though, so we can only skip count lookups.
+                    if occurrences > 1 {
+                        let new_occurrences = histogram.num_token_occurrences(before[start1 as usize]);
+                        occurrences = occurrences.min(new_occurrences);
+                    }
                 } else {
                     break;
                 }
@@ -98,8 +103,11 @@ impl LcsSearch {
                 let token1 = before.get(end1 as usize);
                 let token2 = after.get(end2 as usize);
                 if matches!((token1, token2), (Some(token1), Some(token2)) if token1 == token2) {
-                    let new_occurrences = histogram.num_token_occurrences(before[end1 as usize]);
-                    occurrences = occurrences.min(new_occurrences);
+                    // See above. Once `occurrences` reaches 1, it cannot further decrease.
+                    if occurrences > 1 {
+                        let new_occurrences = histogram.num_token_occurrences(before[end1 as usize]);
+                        occurrences = occurrences.min(new_occurrences);
+                    }
                     end1 += 1;
                     end2 += 1;
                 } else {
