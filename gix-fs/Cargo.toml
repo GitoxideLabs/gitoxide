@@ -33,7 +33,7 @@ profiles = [{ default-features = false, features = [] }]
 allowed-unstable-crates = ["gix_error"]
 
 [dependencies]
-gix-macros = { version = "^0.2.0", path = "../gix-macros" }
+gix-macros = { version = "^0.2.1", path = "../gix-macros" }
 gix-parallel = { version = "^0.50.1", path = "../gix-parallel" }
 bstr = "1.12.0"
 gix-path = { version = "^0.14.1", path = "../gix-path" }

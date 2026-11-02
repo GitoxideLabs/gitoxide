@@ -34,7 +34,7 @@ gix-filter = { version = "^0.36.1", path = "../gix-filter" }
 gix-worktree = { version = "^0.59.0", path = "../gix-worktree", default-features = false, features = ["attributes"] }
 gix-command = { version = "^0.12.1", path = "../gix-command" }
 gix-path = { version = "^0.14.1", path = "../gix-path" }
-gix-fs = { version = "^1.0.0", path = "../gix-fs", features = ["unstable"] }
+gix-fs = { version = "~1.0.0", path = "../gix-fs", features = ["unstable"] }
 gix-tempfile = { version = "^27.0.0", path = "../gix-tempfile" }
 gix-trace = { version = "^0.3.1", path = "../gix-trace" }
 gix-quote = { version = "^0.10.1", path = "../gix-quote" }
