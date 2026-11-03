@@ -140,7 +140,7 @@ pub mod tree {
 
         /// Create a fresh index from the recorded merge result, using `how` to select unmerged stages.
         /// Later edits to [`Self::tree`] do not change the recorded plan.
-        /// With `existing`, reuse unchanged entries' stat data and adapt `TREE`/`UNTR` caches for the same worktree.
+        /// With `existing`, reuse unchanged entries' stat data and adapt `TREE`, `UNTR`, and `FSMN` for the same worktree.
         /// New, changed, and unmerged entries have zero stat data until checkout refreshes them.
         pub fn index(
             &self,

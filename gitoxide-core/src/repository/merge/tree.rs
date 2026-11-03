@@ -111,9 +111,20 @@ pub(super) mod function {
         if let Some(message) = message {
             let head_id = repo.head_id()?;
             let commit_id = if update_head {
-                let commit_id = repo.commit("HEAD", message, tree_id, Some(head_id))?;
                 let mut index = repo.index_from_tree(&tree_id)?;
-                index.write(Default::default(), repo.refs.shared_repository_permissions)?;
+                if let Some(previous) = repo.try_index()?
+                    && let Err(_err) = index.copy_metadata_from(&previous)
+                {
+                    gix::trace::debug!(reason = %_err, "discarding unusable index metadata");
+                }
+                let commit_id = repo.commit("HEAD", message, tree_id, Some(head_id))?;
+                index.write(
+                    gix::index::write::Options {
+                        extensions: gix::index::write::Extensions::AllUnconditionally,
+                        ..Default::default()
+                    },
+                    repo.refs.shared_repository_permissions,
+                )?;
                 commit_id
             } else {
                 repo.new_commit(message, tree_id, Some(head_id))?.id()
