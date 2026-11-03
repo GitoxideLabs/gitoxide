@@ -125,7 +125,7 @@ where
                     let mut progress = self.progress;
                     move || -> Result<_> {
                         let repo = repo.to_thread_local();
-                        let out = repo.index_worktree_status(
+                        let (out, fsmonitor) = repo.index_worktree_status_inner(
                             &index,
                             patterns,
                             &mut collect,
@@ -142,6 +142,7 @@ where
                             changes: None,
                             skip_hash,
                             shared_repository_permissions: repo.config.shared_repository_permissions,
+                            fsmonitor,
                         })
                     }
                 }))
@@ -189,7 +190,7 @@ where
                 }
                 None => (Vec::new(), None),
             };
-            let out = repo.index_worktree_status(
+            let (out, fsmonitor) = repo.index_worktree_status_inner(
                 &index,
                 patterns,
                 &mut collect,
@@ -211,6 +212,7 @@ where
                 changes: None,
                 skip_hash,
                 shared_repository_permissions: self.repo.config.shared_repository_permissions,
+                fsmonitor,
             };
             items.extend(
                 collect

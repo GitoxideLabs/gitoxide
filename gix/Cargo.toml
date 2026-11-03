@@ -151,7 +151,7 @@ encoding-asian = ["gix-filter?/encoding-asian"]
 command = ["dep:gix-command", "gix-object/signature"]
 
 ## Obtain information similar to `git status`.
-status = ["gix-status", "dirwalk", "index", "blob-diff", "gix-diff/index"]
+status = ["gix-status", "dirwalk", "index", "blob-diff", "gix-diff/index", "command", "fsmonitor"]
 
 ## Expose object database connectivity checks as `gix::fsck`.
 fsck = ["dep:gix-fsck"]
