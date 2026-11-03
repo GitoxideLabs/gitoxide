@@ -379,6 +379,7 @@ pub(super) fn worktree_directories_reusing(
             excludes: Some(&mut excludes.inner),
             objects: &repo.objects,
             explicit_traversal_root: Some(root),
+            cached_listing: None,
         },
         gix_dir::walk::Options {
             precompose_unicode: caps.precompose_unicode,
