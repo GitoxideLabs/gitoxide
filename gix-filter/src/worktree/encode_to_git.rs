@@ -32,16 +32,14 @@ pub(crate) mod function {
                 ))
             })?;
         buf.clear();
-        buf.resize(buf_len, 0);
-        let (res, read, written) = decoder.decode_to_utf8_without_replacement(src, buf, true);
+        // Decode into a `String` that reuses the allocation of `buf`, so the round-trip check can use it as `&str`
+        // without validating it again.
+        let mut decoded = String::from_utf8(std::mem::take(buf)).expect("an empty buffer is valid UTF-8");
+        decoded.reserve(buf_len);
+        let (res, read) = decoder.decode_to_string_without_replacement(src, &mut decoded, true);
         match res {
             DecoderResult::InputEmpty => {
-                assert!(
-                    buf_len >= written,
-                    "encoding_rs estimates the maximum amount of bytes written correctly"
-                );
                 assert_eq!(read, src.len(), "input buffer should be fully consumed");
-                buf.truncate(written);
             }
             DecoderResult::OutputFull => {
                 unreachable!("we assure that the output buffer is big enough as per the encoder's estimate")
@@ -56,10 +54,7 @@ pub(crate) mod function {
 
         match round_trip {
             RoundTripCheck::Fail => {
-                // SAFETY: we trust `encoding_rs` to output valid UTF-8 only if we ask it to.
-                #[expect(unsafe_code)]
-                let str = unsafe { std::str::from_utf8_unchecked(buf) };
-                let (should_equal_src, _actual_encoding, _had_errors) = src_encoding.encode(str);
+                let (should_equal_src, _actual_encoding, _had_errors) = src_encoding.encode(&decoded);
                 if should_equal_src != src {
                     bail!(validation(format!(
                         "Encoding from '{}' to 'UTF-8' and back is not the same",
@@ -69,6 +64,7 @@ pub(crate) mod function {
             }
             RoundTripCheck::Skip => {}
         }
+        *buf = decoded.into_bytes();
         Ok(())
     }
 }

@@ -81,9 +81,9 @@ mod encode_to_git {
     fn simple() -> TestResult {
         let input = &b"hello"[..];
         for round_trip in [RoundTripCheck::Skip, RoundTripCheck::Fail] {
-            let mut buf = Vec::new();
+            let mut buf = b"previous content, not UTF-8: \xff".to_vec();
             worktree::encode_to_git(input, encoding_rs::UTF_8, &mut buf, round_trip)?;
-            assert_eq!(buf.as_bstr(), input);
+            assert_eq!(buf.as_bstr(), input, "the previous content of `buf` is replaced");
         }
         Ok(())
     }
