@@ -347,7 +347,10 @@ Ordinary checks reuse `target`.
 
 The runner sets `CI=true` locally too, including journey assertions and Git-version checks.
 It disables snapshot/baseline updates and overrides inherited fixture-selection variables.
-Native fast tests use freshly generated fixtures. Exhaustive native tests compile/list once,
+Native fast tests on Windows reuse valid checked-in fixture archives, falling back to generation
+when an archive is absent or stale. This avoids repeated expensive Git subprocesses on Windows;
+comparisons against freshly generated Git baselines still run in exhaustive QA. Linux and macOS
+fast tests use freshly generated fixtures. Exhaustive native tests compile/list once,
 then reuse the same nextest binaries for archived and generated fixtures in separate temporary
 source copies. Feature/hash variants also run in an isolated copy, sharing compatible fixture
 caches within their task and continuing after individual failures. Their fixture caches cannot

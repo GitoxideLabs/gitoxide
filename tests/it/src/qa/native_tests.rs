@@ -17,8 +17,9 @@ enum Fixtures {
     Generated,
 }
 
-fn fixture_modes(mode: &str) -> Result<&'static [Fixtures]> {
+fn fixture_modes(mode: &str, windows: bool) -> Result<&'static [Fixtures]> {
     match mode {
+        "fast" if windows => Ok(&[Fixtures::Archived]),
         "fast" => Ok(&[Fixtures::Generated]),
         "exhaustive" => Ok(&[Fixtures::Archived, Fixtures::Generated]),
         _ => bail!("Native test mode must be fast or exhaustive"),
@@ -76,7 +77,7 @@ pub fn execute(root: &Path, args: &[String]) -> Result<()> {
     let (mode, args) = args
         .split_first()
         .ok_or_raise(|| message("native-tests needs a mode and Cargo selection arguments"))?;
-    let modes = fixture_modes(mode)?;
+    let modes = fixture_modes(mode, cfg!(windows))?;
     let before = source_state(root)?;
     let result = run(root, args, modes);
     if before != source_state(root)? {
@@ -349,13 +350,20 @@ mod tests {
 
     #[test]
     fn modes_reuse_binaries_with_separate_fixture_environments() -> gix_error::TestResult {
-        assert_eq!(fixture_modes("fast")?, [Fixtures::Generated]);
-        assert_eq!(fixture_modes("exhaustive")?, [Fixtures::Archived, Fixtures::Generated]);
-        assert!(
-            fixture_modes("unknown").is_err(),
-            "unsupported modes must not silently skip tests"
-        );
-        for fixtures in fixture_modes("exhaustive")? {
+        assert_eq!(fixture_modes("fast", true)?, [Fixtures::Archived]);
+        assert_eq!(fixture_modes("fast", false)?, [Fixtures::Generated]);
+        for windows in [false, true] {
+            assert_eq!(
+                fixture_modes("exhaustive", windows)?,
+                [Fixtures::Archived, Fixtures::Generated],
+                "exhaustive QA still regenerates fixtures on every platform"
+            );
+            assert!(
+                fixture_modes("unknown", windows).is_err(),
+                "unsupported modes must not silently skip tests"
+            );
+        }
+        for fixtures in fixture_modes("exhaustive", true)? {
             let command = test_command(
                 Path::new("source"),
                 Path::new("cargo.json"),
