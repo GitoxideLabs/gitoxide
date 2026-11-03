@@ -28,6 +28,21 @@ fn full_format_parses_hash_portion_as_prefix() {
         })
     );
     assert_eq!(rec.calls, 1);
+
+    let rec = parse("foo--bar-12-g3bee7fb");
+    assert_eq!(
+        rec.prefix[0],
+        Some(gix_hash::Prefix::from_hex("3bee7fb").expect("valid hex"))
+    );
+    assert_eq!(
+        rec.prefix_hint[0],
+        Some(PrefixHintOwned::DescribeAnchor {
+            ref_name: "foo--bar".into(),
+            generation: 12,
+        }),
+        "the anchor's name keeps all of its tokens, including empty ones"
+    );
+    assert_eq!(rec.calls, 1);
 }
 
 #[test]
