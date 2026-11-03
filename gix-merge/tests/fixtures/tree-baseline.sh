@@ -124,14 +124,16 @@ function baseline () (
 
   our_commit_id="$(git rev-parse "$our_committish")"
   their_commit_id="$(git rev-parse "$their_committish")"
-  local maybe_expected_tree="$(git rev-parse expected^{tree})"
-  local maybe_expected_reversed_tree="$(git rev-parse expected-reversed^{tree})"
-  if [ "$maybe_expected_reversed_tree" == "expected-reversed^{tree}" ]; then
-     maybe_expected_reversed_tree="$(git rev-parse expected^{tree} || :)"
-  fi
+  # Only deviations need expected refs; ordinary cases compare directly with Git's merge output.
   if [ -z "$opt_deviation_message" ]; then
-    maybe_expected_tree="expected^{tree}"
-    maybe_expected_reversed_tree="expected^{tree}"
+    local maybe_expected_tree="expected^{tree}"
+    local maybe_expected_reversed_tree="expected^{tree}"
+  else
+    local maybe_expected_tree="$(git rev-parse expected^{tree})"
+    local maybe_expected_reversed_tree="$(git rev-parse expected-reversed^{tree})"
+    if [ "$maybe_expected_reversed_tree" == "expected-reversed^{tree}" ]; then
+       maybe_expected_reversed_tree="$(git rev-parse expected^{tree} || :)"
+    fi
   fi
 
   local merge_info="${output_name}.merge-info"
