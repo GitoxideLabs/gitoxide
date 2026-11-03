@@ -1,4 +1,5 @@
 use crate::Result;
+mod fsmonitor;
 pub fn submodule_repo(name: &str) -> Result<gix::Repository> {
     use crate::util::named_subrepo_opts;
     Ok(named_subrepo_opts(

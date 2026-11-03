@@ -34,6 +34,11 @@ impl Core {
     pub const FILE_MODE: keys::Boolean = keys::Boolean::new_boolean("fileMode", &config::Tree::CORE);
     /// The `core.fsCache` key.
     pub const FS_CACHE: keys::Boolean = keys::Boolean::new_boolean("fsCache", &config::Tree::CORE);
+    /// The `core.fsmonitor` boolean or hook command.
+    pub const FS_MONITOR: keys::Any = keys::Any::new("fsmonitor", &config::Tree::CORE);
+    /// The `core.fsmonitorHookVersion` key, selecting hook protocol 1 or 2.
+    pub const FS_MONITOR_HOOK_VERSION: keys::UnsignedInteger =
+        keys::UnsignedInteger::new_unsigned_integer("fsmonitorHookVersion", &config::Tree::CORE);
     /// The `core.ignoreCase` key.
     pub const IGNORE_CASE: keys::Boolean = keys::Boolean::new_boolean("ignoreCase", &config::Tree::CORE);
     /// The `core.configLockTimeout` key.
@@ -140,6 +145,8 @@ impl Section for Core {
             &Self::EDITOR,
             &Self::FILE_MODE,
             &Self::FS_CACHE,
+            &Self::FS_MONITOR,
+            &Self::FS_MONITOR_HOOK_VERSION,
             &Self::IGNORE_CASE,
             &Self::CONFIG_LOCK_TIMEOUT,
             &Self::FILES_REF_LOCK_TIMEOUT,

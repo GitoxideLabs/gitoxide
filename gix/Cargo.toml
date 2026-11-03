@@ -145,7 +145,7 @@ encoding-asian = ["gix-filter?/encoding-asian"]
 command = ["dep:gix-command", "gix-object/signature"]
 
 ## Obtain information similar to `git status`.
-status = ["gix-status", "dirwalk", "index", "blob-diff", "gix-diff/index"]
+status = ["gix-status", "dirwalk", "index", "blob-diff", "gix-diff/index", "command", "dep:gix-fsmonitor"]
 
 ## Utilities for interrupting computations and cleaning up tempfiles.
 interrupt = ["dep:signal-hook", "gix-tempfile/signals", "dep:parking_lot"]
@@ -435,6 +435,7 @@ gix-submodule = { version = "^0.36.1", path = "../gix-submodule", optional = tru
 gix-status = { version = "^0.37.0", path = "../gix-status", optional = true, features = [
     "worktree-rewrites",
 ] }
+gix-fsmonitor = { version = "^0.1.0", path = "../gix-fsmonitor", optional = true }
 gix-command = { version = "^0.12.1", path = "../gix-command", optional = true }
 
 gix-worktree-stream = { version = "^0.39.0", path = "../gix-worktree-stream", optional = true }
