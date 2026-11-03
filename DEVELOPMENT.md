@@ -260,8 +260,8 @@ mode; exhaustive CI adds Linux ARM64, Linux 32-bit x86/ARM, and Windows ARM64. L
 is also supported. Only Windows runs the no-Git and 32-bit Windows cases; only Linux x86-64
 runs the constrained pure-Rust Docker check. Journey tests require Unix. CI also retains
 Windows baseline doctests and MSRV builds. `--all-platforms` shows these exact assignments;
-a local run never attempts another host's native checks. Isolated package tests have their own CI
-jobs, preserving separate feature resolution while running concurrently with native tests.
+a local run never attempts another host's native checks. Isolated package tests and Windows binary
+checks have their own CI jobs to run concurrently with native tests, retaining their Cargo feature selections.
 
 Linux feature compilation checks and feature tests run in separate jobs, retaining every
 selected configuration. Linux and Windows CI runner builds use `CARGO_PROFILE_DEV_DEBUG=line-tables-only` (also inherited

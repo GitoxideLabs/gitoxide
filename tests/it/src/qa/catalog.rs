@@ -219,7 +219,7 @@ pub fn tasks(metadata: &Value, selection: &Value, platform: &str) -> Result<Vec<
             }
             out.push(Task::new(
                 "native-bins",
-                "tests",
+                "native-bins",
                 &["check", "tests", "default-tests"],
                 vec![command],
             ));
@@ -858,6 +858,14 @@ mod tests {
                     .iter()
                     .find(|job| job["id"] == format!("tests@{platform}"))
                     .expect("native tests");
+                if platform.starts_with("windows-") {
+                    let binaries = jobs
+                        .iter()
+                        .find(|job| job["id"] == format!("native-bins@{platform}"))
+                        .expect("Windows binary checks run concurrently with native tests");
+                    assert_eq!(binaries["tasks"], json!(["native-bins"]));
+                    assert_eq!(binaries["tools"], json!([]), "binary checks do not need nextest");
+                }
                 assert_eq!(
                     native["xz"], false,
                     "isolated-only requirements do not reach native jobs"
