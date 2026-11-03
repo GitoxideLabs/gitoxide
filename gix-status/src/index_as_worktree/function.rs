@@ -1,8 +1,8 @@
-use gix_error::Result;
+use gix_error::{Result, bail};
 use std::{
     path::Path,
     slice::Chunks,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use bstr::BStr;
@@ -66,6 +66,7 @@ pub fn index_as_worktree<'index, T, U, Find>(
         stack,
         filter,
         should_interrupt,
+        fsmonitor,
     }: Context<'_>,
     options: Options,
 ) -> Result<Outcome>
@@ -74,6 +75,9 @@ where
     U: Send,
     Find: gix_object::Find + Send + Clone,
 {
+    if fsmonitor.is_some_and(|valid| valid.len() != index.entries().len()) {
+        bail!(message("Filesystem-monitor validity must match the index entry count"));
+    }
     // the order is absolutely critical here we use the old timestamp to detect racy index entries
     // (modified at or after the last index update) during the index update we then set those
     // entries size to 0 (see below) to ensure they keep showing up as racy and reset the timestamp.
@@ -124,6 +128,7 @@ where
                     path_backing,
                     filter,
                     options,
+                    fsmonitor,
                     #[cfg(windows)]
                     fscache: options.fscache.then(|| FsCache::new(worktree)),
 
@@ -240,6 +245,7 @@ struct State<'a, 'b> {
     filter: gix_filter::Pipeline,
     path_backing: &'b gix_index::PathStorageRef,
     options: &'a Options,
+    fsmonitor: Option<&'a [AtomicBool]>,
     /// Optional lazy worktree stats cache for faster status checks on Windows.
     /// Lookups happen before falling back to per-file syscalls.
     #[cfg(windows)]
@@ -274,12 +280,16 @@ impl<'index> State<'_, 'index> {
     where
         Find: gix_object::Find,
     {
+        let can_use_fsmonitor = entry.stage_raw() == 0
+            && !entry.mode.is_submodule()
+            && !entry.flags.contains(gix_index::entry::Flags::INTENT_TO_ADD);
+        let fsmonitor_valid = self.fsmonitor.and_then(|valid| valid.get(entry_index));
         if entry.flags.intersects(
             gix_index::entry::Flags::UPTODATE
                 | gix_index::entry::Flags::SKIP_WORKTREE
-                | gix_index::entry::Flags::ASSUME_VALID
-                | gix_index::entry::Flags::FSMONITOR_VALID,
-        ) {
+                | gix_index::entry::Flags::ASSUME_VALID,
+        ) || (can_use_fsmonitor && fsmonitor_valid.is_some_and(|valid| valid.load(Ordering::Relaxed)))
+        {
             self.skipped_by_entry_flags.fetch_add(1, Ordering::Relaxed);
             return None;
         }
@@ -323,6 +333,12 @@ impl<'index> State<'_, 'index> {
         } else {
             self.compute_status(entry, path, diff, submodule, objects)
         };
+        if can_use_fsmonitor
+            && matches!(status, Ok(None | Some(EntryStatus::NeedsUpdate(_))))
+            && let Some(valid) = fsmonitor_valid
+        {
+            valid.store(true, Ordering::Relaxed);
+        }
         match status {
             Ok(None) => None,
             Ok(Some(status)) => Some(Ok((entry, entry_index, path, status))),

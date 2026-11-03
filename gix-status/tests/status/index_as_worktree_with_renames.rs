@@ -425,6 +425,7 @@ fn fixture_filtered_detailed(
         pathspec: search,
         resource_cache,
         should_interrupt: &Default::default(),
+        fsmonitor: None,
         dirwalk: DirwalkContext {
             git_dir_realpath: &git_dir_real,
             current_dir: &cwd,

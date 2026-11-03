@@ -319,6 +319,9 @@ pub struct Context<'a> {
     pub resource_cache: gix_diff::blob::Platform,
     /// A flag to query to learn if cancellation is requested.
     pub should_interrupt: &'a AtomicBool,
+    /// Filesystem-monitor validity for tracked entries, forwarded to
+    /// [`index_as_worktree::Context::fsmonitor`](crate::index_as_worktree::Context::fsmonitor).
+    pub fsmonitor: Option<&'a [AtomicBool]>,
     /// The context for the directory walk.
     pub dirwalk: DirwalkContext<'a>,
 }
