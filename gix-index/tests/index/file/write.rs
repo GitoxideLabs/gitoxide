@@ -198,8 +198,7 @@ fn untracked_caches_roundtrip_when_enabled() -> TestResult {
 #[test]
 fn default_write_invalidates_the_untracked_cache_after_an_index_edit() -> TestResult {
     let mut index = Generated("untracked_cache_nested").open();
-    assert!(index.untracked().is_some(), "the source has a populated cache");
-    let original_cache = format!("{:#?}", index.untracked());
+    let original_cache = index.set_untracked(None).expect("the source has a populated cache");
     let root = index
         .path()
         .parent()
@@ -207,6 +206,8 @@ fn default_write_invalidates_the_untracked_cache_after_an_index_edit() -> TestRe
         .expect("the generated index lives in .git")
         .to_owned();
     index.remove_entries(|_, path, _| path == "tracked-dir-with-ignore/tracked-file");
+    index.set_untracked(Some(original_cache));
+    let original_cache = format!("{:#?}", index.untracked());
     let temporary = gix_testtools::tempfile::TempDir::new()?;
     index.set_path(temporary.path().join("index"));
     index.write(Options::default(), Default::default())?;
