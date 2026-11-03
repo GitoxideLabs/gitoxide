@@ -145,7 +145,7 @@ encoding-asian = ["gix-filter?/encoding-asian"]
 command = ["dep:gix-command", "gix-object/signature"]
 
 ## Obtain information similar to `git status`.
-status = ["gix-status", "dirwalk", "index", "blob-diff", "gix-diff/index"]
+status = ["gix-status", "dirwalk", "index", "blob-diff", "gix-diff/index", "command", "fsmonitor"]
 
 ## Utilities for interrupting computations and cleaning up tempfiles.
 interrupt = ["dep:signal-hook", "gix-tempfile/signals", "dep:parking_lot"]

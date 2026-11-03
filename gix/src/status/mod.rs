@@ -1,5 +1,7 @@
 pub use gix_status as plumbing;
 
+mod fsmonitor;
+
 use crate::{Repository, Result, config, config::cache::util::ApplyLeniencyDefault, util::OwnedOrStaticAtomicBool};
 
 /// A structure to hold options configuring the status request, which can then be turned into an iterator.
@@ -66,6 +68,11 @@ impl Default for Submodule {
 /// Status
 impl Repository {
     /// Obtain a platform for configuring iterators for traversing git repository status information.
+    ///
+    /// Trusted `core.fsmonitor` hook commands accelerate tracked-file checks using protocol 1 or 2.
+    /// Failed or malformed queries fall back to ordinary checks. Untracked files are still discovered
+    /// by walking the worktree. Call [`Outcome::write_changes()`] after consuming the iterator to save
+    /// the refreshed monitor checkpoint and entry validity for later calls.
     ///
     /// By default, this is set to the fastest and most immediate way of obtaining a status,
     /// which is most similar to
