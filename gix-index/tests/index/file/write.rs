@@ -29,6 +29,19 @@ fn shared_permissions_apply_to_new_and_replaced_indexes() -> crate::Result {
     Ok(())
 }
 
+#[test]
+fn fsmonitor_extension_survives_writing() -> TestResult {
+    let index = Loose("FSMN").open();
+    let mut bytes = Vec::new();
+    index.write_to(&mut bytes, Default::default())?;
+    let (written, _) = State::from_bytes(&bytes, FileTime::now(), gix_hash::Kind::Sha1, Default::default())?;
+    assert!(
+        written.fs_monitor().is_some(),
+        "writing the index must retain the filesystem monitor token"
+    );
+    Ok(())
+}
+
 /// Round-trips should eventually be possible for all files we have, as we write them back exactly as they were read.
 #[test]
 fn roundtrips() -> TestResult {
