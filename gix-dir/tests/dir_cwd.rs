@@ -22,6 +22,7 @@ fn prefixes_work_as_expected() -> gix_testtools::TestResult {
         out,
         walk::Outcome {
             read_dir_calls: 2,
+            cached_dir_listings: 0,
             returned_entries: entries.len(),
             seen_entries: 3,
         }

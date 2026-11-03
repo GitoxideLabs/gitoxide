@@ -234,6 +234,7 @@ fn changed_and_untracked() {
         dirwalk,
         gix_dir::walk::Outcome {
             read_dir_calls: 3,
+            cached_dir_listings: 0,
             returned_entries: 2,
             seen_entries: 8,
         }
@@ -281,6 +282,7 @@ fn unreadable_untracked() {
         dirwalk,
         gix_dir::walk::Outcome {
             read_dir_calls: 1,
+            cached_dir_listings: 0,
             returned_entries: 1,
             seen_entries: 3,
         }
@@ -378,6 +380,7 @@ fn fixture_filtered_detailed(
             git_dir_realpath: &git_dir_real,
             current_dir: &cwd,
             ignore_case_index_lookup: None,
+            cached_listing: None,
         },
     };
     let options = Options {
