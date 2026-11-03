@@ -6,6 +6,7 @@ use gix_testtools::size_ok;
 pub use gix_testtools::Result;
 
 mod access;
+mod carry_over;
 mod entry;
 mod file;
 mod fs;
