@@ -144,7 +144,20 @@ impl Repository {
             // if unset, default to enabled on Windows. Good for missing Git installations that would turn it on by installation config
             .unwrap_or(cfg!(windows));
         let accelerate_lookup = fs_caps.ignore_case.then(|| index.prepare_icase_backing());
-        let fsmonitor = super::fsmonitor::refresh(self, index, accelerate_lookup.as_ref())?;
+        let mut fsmonitor = super::fsmonitor::refresh(self, index, accelerate_lookup.as_ref())?;
+        let cached_listing = fsmonitor
+            .as_mut()
+            .map(|monitor| {
+                monitor.cached_listing(
+                    self,
+                    index,
+                    accelerate_lookup.as_ref(),
+                    options.dirwalk_options,
+                    pathspec.search.patterns().len() != 0,
+                )
+            })
+            .transpose()?
+            .flatten();
         let resource_cache = crate::diff::resource_cache(
             self,
             gix_diff::blob::pipeline::Mode::ToGit,
@@ -172,7 +185,7 @@ impl Repository {
                     git_dir_realpath: git_dir_realpath.as_path(),
                     current_dir: cwd,
                     ignore_case_index_lookup: accelerate_lookup.as_ref(),
-                    cached_listing: None,
+                    cached_listing: cached_listing.as_ref(),
                 },
             },
             gix_status::index_as_worktree_with_renames::Options {
@@ -188,6 +201,13 @@ impl Repository {
                 rewrites: options.rewrites,
             },
         )?;
+        if let Some(_walk) = &out.dirwalk {
+            gix_trace::debug!(
+                read_dir_calls = _walk.read_dir_calls,
+                cached_dir_listings = _walk.cached_dir_listings,
+                "status directory walk finished"
+            );
+        }
         Ok((out, fsmonitor))
     }
 

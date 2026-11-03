@@ -71,9 +71,14 @@ impl Repository {
     ///
     /// Trusted `core.fsmonitor` hook commands accelerate tracked-file checks using protocol 1 or 2.
     /// Setting it to `true` queries Git's built-in daemon and starts it on demand when supported.
-    /// Failed or malformed queries fall back to ordinary checks. Untracked files are still discovered
-    /// by walking the worktree. Call [`Outcome::write_changes()`] after consuming the iterator to save
-    /// the refreshed monitor checkpoint and entry validity for later calls.
+    /// Failed or malformed queries fall back to ordinary checks. Compatible whole-worktree walks reuse
+    /// Git's existing untracked cache after validating monitor events, worktree identity, and ignore rules.
+    /// `core.untrackedCache=false` disables this reuse. Caches are preserved and invalidated, but are not
+    /// created or repopulated; run Git status to warm them. Other walk modes read directories normally.
+    /// Like Git, an existing cache assumes `core.ignoreCase` has not changed since it was populated.
+    /// After changing that setting, remove the cache with `git update-index --no-untracked-cache` before warming it again.
+    /// Call [`Outcome::write_changes()`] after consuming the iterator to save the refreshed monitor
+    /// checkpoint, entry validity, and invalidated directory listings for later calls.
     /// Daemon sockets in alternate locations on remote filesystems currently fall back to ordinary checks.
     ///
     /// By default, this is set to the fastest and most immediate way of obtaining a status,

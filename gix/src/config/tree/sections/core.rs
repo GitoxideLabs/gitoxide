@@ -39,6 +39,9 @@ impl Core {
     /// The `core.fsmonitorHookVersion` key, selecting hook protocol 1 or 2.
     pub const FS_MONITOR_HOOK_VERSION: keys::UnsignedInteger =
         keys::UnsignedInteger::new_unsigned_integer("fsmonitorHookVersion", &config::Tree::CORE);
+    /// The `core.untrackedCache` boolean, or `keep` to retain an existing cache.
+    pub const UNTRACKED_CACHE: keys::Any = keys::Any::new("untrackedCache", &config::Tree::CORE)
+        .with_note("status reuses existing Git caches; it does not create or populate them");
     /// The `core.ignoreCase` key.
     pub const IGNORE_CASE: keys::Boolean = keys::Boolean::new_boolean("ignoreCase", &config::Tree::CORE);
     /// The `core.configLockTimeout` key.
@@ -147,6 +150,7 @@ impl Section for Core {
             &Self::FS_CACHE,
             &Self::FS_MONITOR,
             &Self::FS_MONITOR_HOOK_VERSION,
+            &Self::UNTRACKED_CACHE,
             &Self::IGNORE_CASE,
             &Self::CONFIG_LOCK_TIMEOUT,
             &Self::FILES_REF_LOCK_TIMEOUT,
