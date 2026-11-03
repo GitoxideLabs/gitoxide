@@ -63,10 +63,6 @@ pub struct UntrackedCache {
 }
 
 /// The extension for keeping state on recent information provided by the filesystem monitor.
-#[expect(
-    dead_code,
-    reason = "for the time when we know what to do with it, for now we just ser-de it"
-)]
 #[derive(Clone)]
 pub struct FsMonitor {
     token: fs_monitor::Token,
@@ -76,7 +72,8 @@ pub struct FsMonitor {
 
 mod iter;
 
-pub(crate) mod fs_monitor;
+/// Filesystem monitor checkpoints and index extension support.
+pub mod fs_monitor;
 
 ///
 pub mod decode;
