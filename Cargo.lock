@@ -1566,6 +1566,7 @@ dependencies = [
  "gix-error",
  "gix-filter",
  "gix-fs",
+ "gix-fsmonitor",
  "gix-glob",
  "gix-hash",
  "gix-hashtable",
