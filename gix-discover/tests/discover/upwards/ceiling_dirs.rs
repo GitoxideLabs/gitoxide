@@ -142,22 +142,24 @@ fn more_restrictive_ceiling_dirs_overrule_less_restrictive_ones() -> TestResult 
 }
 
 #[test]
-fn ceiling_dirs_are_not_processed_differently_than_the_git_dir_candidate() -> TestResult {
-    let work_dir = repo_path()?;
-    let dir = work_dir.join("some/very/deeply/nested/subdir/../../../../../..");
+fn nonmatching_relative_ceiling_is_ignored_after_resolving_start_path() -> TestResult {
+    let outer = gix_testtools::scripted_fixture_read_only("make_nested_repos.sh")?;
+    let inner = std::env::current_dir()?.join(outer).join("inner");
+    let dir = Path::new("some/very/deeply/nested/subdir/../../../../../..");
     let (repo_path, _trust) = gix_discover::upwards_opts(
-        &dir,
+        dir,
         Options {
+            current_dir: Some(&inner),
             match_ceiling_dir_or_error: false,
             ceiling_dirs: vec![Path::new("./some").into()],
             ..Default::default()
         },
     )?;
 
-    assert_ne!(
-        &repo_path.as_ref().canonicalize()?,
-        &work_dir,
-        "a relative path that climbs above the test repo should yield the gitoxide repo"
+    assert_eq!(
+        repo_path.into_repository_and_work_tree_directories().1.as_deref(),
+        Some(Path::new("..")),
+        "the start path resolves to the outer fixture; the relative ceiling does not contain it and is ignored"
     );
 
     Ok(())
@@ -186,30 +188,38 @@ fn no_matching_ceiling_dirs_errors_by_default() -> TestResult {
 
 #[test]
 fn ceilings_are_adjusted_to_match_search_dir() -> TestResult {
-    let relative_work_dir = repo_path()?;
-    let cwd = std::env::current_dir()?;
-    let absolute_ceiling_dir = gix_path::realpath_opts(&relative_work_dir, &cwd, 8)?;
-    let dir = relative_work_dir.join("some");
-    assert!(dir.is_relative());
+    // This test changes the process-wide CWD to resolve relative search and ceiling paths against the fixture.
+    // Restoring it afterward does not prevent races with other tests, so run the body in an isolated child.
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let work_dir = std::env::current_dir()?.join(repo_path()?);
+    let _cwd = gix_testtools::set_current_dir(&work_dir)?;
     let (repo_path, _trust) = gix_discover::upwards_opts(
-        &dir,
+        Path::new("some"),
         Options {
-            ceiling_dirs: vec![absolute_ceiling_dir],
+            ceiling_dirs: vec![work_dir.clone()],
             ..Default::default()
         },
     )?;
-    assert_repo_is_current_workdir(repo_path, &relative_work_dir);
+    assert_eq!(
+        repo_path.into_repository_and_work_tree_directories().1.as_deref(),
+        Some(Path::new(".")),
+        "an absolute ceiling matches the relative search and preserves its relative result"
+    );
 
-    assert!(relative_work_dir.is_relative());
-    let absolute_dir = gix_path::realpath_opts(relative_work_dir.join("some").as_ref(), &cwd, 8)?;
     let (repo_path, _trust) = gix_discover::upwards_opts(
-        &absolute_dir,
+        &work_dir.join("some"),
         Options {
-            ceiling_dirs: vec![relative_work_dir.clone()],
+            ceiling_dirs: vec![Path::new(".").into()],
             ..Default::default()
         },
     )?;
-    assert_repo_is_current_workdir(repo_path, &relative_work_dir);
+    assert_eq!(
+        repo_path.into_repository_and_work_tree_directories().1.as_deref(),
+        Some(work_dir.as_path()),
+        "a relative ceiling matches the absolute search and preserves its absolute result"
+    );
     Ok(())
 }
 

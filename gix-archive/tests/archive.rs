@@ -59,7 +59,8 @@ mod from_tree {
 
     #[test]
     fn basic_usage_internal() -> TestResult {
-        Ok(basic_usage(Format::InternalTransientNonPersistable, |buf| {
+        let format = Format::InternalTransientNonPersistable;
+        Ok(basic_usage(format, |buf, link_target| {
             #[cfg(target_pointer_width = "64")]
             let expected_buffer_length = match gix_testtools::object_hash() {
                 gix_hash::Kind::Sha1 => 551,
@@ -72,7 +73,10 @@ mod from_tree {
                 gix_hash::Kind::Sha256 => todo!("let the test fail on CI and add the value here"),
                 _ => unimplemented!(),
             };
-            assert_eq!(buf.len(), expected_buffer_length);
+            assert_eq!(
+                buf.len(),
+                expected_buffer_length - b"../extra-file".len() + link_target.len()
+            );
 
             let mut stream = gix_worktree_stream::Stream::from_read(std::io::Cursor::new(buf));
             let mut paths_and_modes = Vec::new();
@@ -80,6 +84,9 @@ mod from_tree {
                 paths_and_modes.push((entry.relative_path().to_owned(), entry.mode.kind(), entry.id));
                 let mut buf = Vec::new();
                 entry.read_to_end(&mut buf).expect("stream can always be read");
+                if entry.relative_path() == "extra-dir/symlink-to-extra" {
+                    assert_eq!(buf.as_bstr(), link_target, "the symlink target is preserved");
+                }
             }
 
             assert_eq!(
@@ -143,7 +150,7 @@ mod from_tree {
     #[test]
     #[cfg(feature = "tar")]
     fn basic_usage_tar() -> TestResult {
-        Ok(basic_usage(Format::Tar, |buf| {
+        Ok(basic_usage(Format::Tar, |buf, _link_target| {
             use tar::EntryType;
             let mut ar = tar::Archive::new(buf.as_slice());
             let mut out = Vec::new();
@@ -197,10 +204,11 @@ mod from_tree {
             Format::TarGz {
                 compression_level: Some(9),
             },
-            |buf| {
+            |buf, link_target| {
+                let limit = 340 - b"../extra-file".len() + link_target.len();
                 assert!(
-                    buf.len() < 340,
-                    "quite a bit smaller than uncompressed: {} < 340",
+                    buf.len() < limit,
+                    "quite a bit smaller than uncompressed: {} < {limit}",
                     buf.len()
                 );
                 Ok(())
@@ -215,10 +223,11 @@ mod from_tree {
             Format::Zip {
                 compression_level: Some(9),
             },
-            |buf| {
+            |buf, link_target| {
+                let limit = 1400 - b"../extra-file".len() + link_target.len();
                 assert!(
-                    buf.len() < 1400,
-                    "much bigger than uncompressed for some reason (565): {} < 1400",
+                    buf.len() < limit,
+                    "ZIP metadata overhead stays bounded: {} < {limit}",
                     buf.len()
                 );
                 let ar = rawzip::ZipArchive::from_slice(buf.as_slice())?;
@@ -275,9 +284,11 @@ mod from_tree {
 
     fn basic_usage(
         format: gix_archive::Format,
-        make_assertion: impl FnOnce(Vec<u8>) -> gix_testtools::Result,
+        make_assertion: impl FnOnce(Vec<u8>, &gix_testtools::bstr::BStr) -> gix_testtools::Result,
     ) -> gix_testtools::Result {
         let (dir, head_tree, odb, mut cache) = basic()?;
+        // Windows can report an absolute target for this MSYS-created relative symlink.
+        let link_target = gix_path::into_bstr(std::fs::read_link(dir.join("extra-dir/symlink-to-extra"))?)?;
         let mut stream = gix_worktree_stream::from_tree(
             head_tree,
             odb.clone(),
@@ -328,7 +339,7 @@ mod from_tree {
                 "stream is exhausted, all written to buf"
             );
         }
-        make_assertion(buf).expect("all tests pass");
+        make_assertion(buf, link_target.as_ref()).expect("all tests pass");
         Ok(())
     }
 

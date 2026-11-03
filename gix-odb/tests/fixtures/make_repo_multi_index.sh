@@ -9,11 +9,14 @@ function write_files() {
   local base_dir=${1:?directory to write them into}
   local num_files=${2:?amount of files to write}
   local nonce=${3:?something to make files more unique}
+  local file_id file_name lines=''
 
   mkdir -p "$base_dir"
-  for file_id in $(seq -w "$num_files"); do
-    seq "$file_id" > "$base_dir/$file_id"
-    echo "$nonce" >> "$base_dir/$file_id"
+  # Grow the sequence in Bash to avoid launching `seq` once for each of the 810 files.
+  for ((file_id = 1; file_id <= num_files; file_id++)); do
+    printf -v file_name '%0*d' "${#num_files}" "$file_id"
+    lines+="$file_id"$'\n'
+    printf '%s%s\n' "$lines" "$nonce" > "$base_dir/$file_name"
   done
 }
 

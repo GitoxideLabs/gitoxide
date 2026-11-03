@@ -311,7 +311,7 @@ pub(super) fn source_snapshot(root: &Path) -> Result<Snapshot> {
     snapshot_files(root, &files)
 }
 
-fn snapshot_files(root: &Path, files: &[u8]) -> Result<Snapshot> {
+pub(super) fn empty_snapshot() -> Result<Snapshot> {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .or_raise(|| message("Read time for QA snapshot"))?
@@ -319,9 +319,15 @@ fn snapshot_files(root: &Path, files: &[u8]) -> Result<Snapshot> {
     // Git for Windows still limits some repository paths even with core.longpaths enabled.
     let mut id = DefaultHasher::new();
     (std::process::id(), stamp).hash(&mut id);
-    let path = std::env::temp_dir().join(format!("qa-{:x}", id.finish()));
+    let path = std::path::absolute(std::env::temp_dir())
+        .or_raise(|| message("Resolve QA temporary directory"))?
+        .join(format!("qa-{:x}", id.finish()));
     fs::create_dir(&path).or_raise(|| message!("Create QA snapshot {}", path.display()))?;
-    let snapshot = Snapshot { path };
+    Ok(Snapshot { path })
+}
+
+fn snapshot_files(root: &Path, files: &[u8]) -> Result<Snapshot> {
+    let snapshot = empty_snapshot()?;
     for path in source_paths(files)? {
         let source = root.join(&path);
         let Some(metadata) = source_metadata(root, &path)? else {
@@ -830,7 +836,10 @@ mod tests {
         fs::create_dir(source.path.join("src"))?;
         fs::write(source.path.join("src/changed"), "current working contents")?;
         fs::write(source.path.join("untracked"), "not yet staged")?;
-        fs::write(source.path.join("ignored"), "not included by git")?;
+        fs::create_dir(source.path.join("ignored"))?;
+        fs::write(source.path.join("ignored/file"), "not included by git")?;
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(".gitignore", source.path.join("ignored/.gitignore"))?;
         let files = b"src/changed\0src/deleted\0untracked\0src/changed\0";
         let before = file_state(&source.path, files)?;
         let snapshot = snapshot_files(&source.path, files)?;
@@ -846,7 +855,7 @@ mod tests {
         );
         assert!(
             !snapshot.path.join("src/deleted").exists() && !snapshot.path.join("ignored").exists(),
-            "deleted and ignored files are absent from the snapshot"
+            "deleted files and ignored caches with unreadable symlinks are absent from the snapshot"
         );
         fs::write(snapshot.path.join("src/changed"), "test output")?;
         fs::remove_file(snapshot.path.join("untracked"))?;

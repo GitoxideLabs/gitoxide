@@ -260,7 +260,34 @@ mode; exhaustive CI adds Linux ARM64, Linux 32-bit x86/ARM, and Windows ARM64. L
 is also supported. Only Windows runs the no-Git and 32-bit Windows cases; only Linux x86-64
 runs the constrained pure-Rust Docker check. Journey tests require Unix. CI also retains
 Windows baseline doctests and MSRV builds. `--all-platforms` shows these exact assignments;
-a local run never attempts another host's native checks.
+a local run never attempts another host's native checks. Isolated package tests and Windows binary
+checks have their own CI jobs to run concurrently with native tests, retaining their Cargo feature selections.
+
+Linux feature compilation checks and feature tests run in separate jobs, retaining every
+selected configuration.
+
+Local and CI builds use `debug = 0` and `strip = "debuginfo"` in the workspace's `dev`
+profile, also inherited by `test` and `qa`. This reduces object files, libraries and linked
+debug information while retaining debug assertions and overflow checks, including in
+dependencies with an optimized development profile. Panic messages and `gix-error` source
+locations remain available, but stack backtraces lose file/line information and debuggers
+cannot inspect local variables or types. MSVC builds still emit smaller PDBs for symbols.
+CI applies the same artifact settings to downstream workspaces through Cargo profile environment variables.
+
+For debugging, set `CARGO_PROFILE_DEV_DEBUG=2` and `CARGO_PROFILE_DEV_STRIP=none` before
+running Cargo or QA; use `line-tables-only` instead of `2` when only file/line backtraces
+are needed. Unset both variables to return to the smaller defaults. Release and benchmark
+profiles retain their separate settings.
+
+Local incremental compilation remains enabled to speed up rebuilds. Set `CARGO_INCREMENTAL=0`
+for builds where disk space matters more than recompilation speed; CI's Rust cache action
+already does this. Profile changes affect newly built artifacts and do not remove old
+artifacts or other toolchain/feature variants from `target`.
+
+Rust caches are saved by `main` runs and restored by PRs. They retain downloaded dependencies
+and their build artifacts; workspace crates are rebuilt. Job caches compete for the repository's
+storage allowance, so a correct key can still miss after eviction. Changes to the Cargo profile
+environment produce new cache keys that need a `main` run to populate.
 
 | Stage | Checks |
 | --- | --- |
@@ -335,19 +362,29 @@ Ordinary checks reuse `target`.
 
 The runner sets `CI=true` locally too, including journey assertions and Git-version checks.
 It disables snapshot/baseline updates and overrides inherited fixture-selection variables.
-Native fast tests use freshly generated fixtures. Exhaustive native tests compile/list once,
+Native fast tests on Windows reuse valid checked-in fixture archives, falling back to generation
+when an archive is absent or stale. This avoids repeated expensive Git subprocesses on Windows;
+comparisons against freshly generated Git baselines still run in exhaustive QA. Linux and macOS
+fast tests use freshly generated fixtures. Exhaustive native tests compile/list once,
 then reuse the same nextest binaries for archived and generated fixtures in separate temporary
-source copies. Feature/hash variants also run in an isolated copy, sharing compatible fixture
+source copies. The native passes share a fresh cache of generated read-only scripted fixtures.
+When no archive is available, the archived pass can generate a fixture once for both passes;
+the shared cache never substitutes extracted archives for generated fixtures. Fixtures that write archives or require
+execution in a writable destination keep their existing behavior. The cache and its source
+copies remain alive until both passes finish, and are retained together if a source copy changes.
+Feature/hash variants also run in an isolated copy, sharing compatible fixture
 caches within their task and continuing after individual failures. Their fixture caches cannot
 reuse a previous local run's extracted archives. Archive changes cause
 a failure and retain the changed copy for inspection. Explicit archive-only fixtures keep
 their normal semantics.
 
 Source copies include current tracked and visible untracked files, preserving local edits,
-deletions, permissions and safe relative symlinks. MSRV resolution changes only its copied
-lockfile. The runner never restores, cleans or stages your checkout. Native tests also check
-the original source for unexpected changes because compile-time Rust paths may still point
-there. Avoid editing while those checks run; concurrent edits are reported as changes too.
+deletions, permissions and safe relative symlinks. Native copies use an intent-to-add index
+to track paths without storing duplicate Git blobs; source checks hash the copied files directly.
+MSRV resolution changes only its copied lockfile. The runner never restores, cleans or stages
+your checkout. Native tests also check the original source for unexpected changes because
+compile-time Rust paths may still point there. Avoid editing while those checks run; concurrent
+edits are reported as changes too.
 
 ### Maintaining QA selection
 

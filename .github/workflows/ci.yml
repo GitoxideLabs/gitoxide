@@ -20,6 +20,9 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CLICOLOR: "1"
+  # Match the workspace profile, including builds in downstream workspaces.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_DEV_STRIP: debuginfo
 
 jobs:
   plan:
@@ -33,7 +36,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 0
+          # PR merge commits include the comparison base as a parent.
+          fetch-depth: ${{ github.event_name == 'pull_request' && '2' || '1' }}
       - name: Install Rust
         run: rustup update stable && rustup default stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -88,7 +92,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # API comparisons need release tags; other tasks consume the saved plan.
+          # Tasks consume the saved plan; release comparisons use fixture histories.
           fetch-depth: ${{ matrix.history && '0' || '1' }}
       - name: Install native Rust
         if: matrix.container == ''

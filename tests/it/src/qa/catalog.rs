@@ -219,7 +219,7 @@ pub fn tasks(metadata: &Value, selection: &Value, platform: &str) -> Result<Vec<
             }
             out.push(Task::new(
                 "native-bins",
-                "tests",
+                "native-bins",
                 &["check", "tests", "default-tests"],
                 vec![command],
             ));
@@ -263,14 +263,14 @@ pub fn tasks(metadata: &Value, selection: &Value, platform: &str) -> Result<Vec<
     if !isolated_tests.is_empty() {
         out.push(Task::new(
             "isolated-tests",
-            "tests",
+            "isolated-tests",
             &["tests", "default-tests"],
             isolated_tests,
         ));
     }
     let variants = core("variants")?;
     if !variants.is_empty() {
-        out.push(Task::new("feature-tests", "features", &["tests"], variants));
+        out.push(Task::new("feature-tests", "feature-tests", &["tests"], variants));
     }
     for (id, stage) in [
         ("default-doctests", "default-doctests"),
@@ -556,6 +556,10 @@ pub fn execute(root: &Path, tasks: Vec<Task>, dry_run: bool, ci_job: bool, logs:
             run::each_case(task.commands, log.as_ref(), |command| {
                 run::execute(root, vec![command], dry_run, log.as_ref())
             })
+        } else if task.id == "size" && !dry_run {
+            // Cargo reads ignored fixture symlinks while gathering package status.
+            super::ops::source_snapshot(root)
+                .and_then(|snapshot| run::execute(&snapshot.path, task.commands, dry_run, log.as_ref()))
         } else {
             run::execute(root, task.commands, dry_run, log.as_ref())
         };
@@ -802,13 +806,75 @@ mod tests {
 
     #[test]
     fn ci_jobs_partition_the_same_local_tasks() -> gix_error::TestResult {
+        let mut metadata = metadata();
+        metadata["packages"][0]["metadata"]["qa"]["checks"] = json!([{"args":["--all-features"]}]);
+        metadata["packages"][0]["metadata"]["qa"]["tests"] = json!([{"args":["--all-features"], "requires":["xz"]}]);
+        metadata["packages"].as_array_mut().expect("test packages").push(json!({
+            "name":"isolated-library", "targets":[{"kind":["lib"],"test":true}],
+            "metadata":{"qa":{"isolated":true,"tests":[
+                {"args":["--features","extra"],"requires":["xz"]}, {}
+            ]}}
+        }));
         for mode in ["fast", "exhaustive"] {
-            let selection = json!({"mode":mode, "packages":["gix-path","gitoxide","internal-tools"]});
-            let plan = plan(&metadata(), &selection, "linux-x86_64", true)?;
+            let selection =
+                json!({"mode":mode, "packages":["gix-path","gitoxide","internal-tools","isolated-library"]});
+            let plan = plan(&metadata, &selection, "linux-x86_64", true)?;
+            let jobs = plan["jobs"].as_array().expect("plan jobs");
+            let owner = |task| {
+                jobs.iter()
+                    .find(|job| job["tasks"].as_array().expect("job tasks").contains(&json!(task)))
+                    .expect("feature task has a CI job")
+            };
+            let builds = owner("feature-builds");
+            let tests = owner("feature-tests");
+            assert_ne!(
+                builds["id"], tests["id"],
+                "feature builds and tests can run concurrently"
+            );
+            assert_eq!(builds["tools"], json!([]), "build checks do not need nextest");
+            assert_eq!(tests["tools"], json!(["cargo-nextest@0.9.122"]));
+            assert_eq!(builds["xz"], false, "test-only requirements stay with the tests");
+            assert_eq!(tests["xz"], true);
+            if mode == "exhaustive" {
+                assert_eq!(
+                    owner("feature-contracts")["id"],
+                    builds["id"],
+                    "feature contracts remain with compilation checks"
+                );
+            }
+            for platform in if mode == "exhaustive" {
+                CI_PLATFORMS
+            } else {
+                &["linux-x86_64", "macos-aarch64", "windows-x86_64"]
+            } {
+                let isolated = jobs
+                    .iter()
+                    .find(|job| job["id"] == format!("isolated-tests@{platform}"))
+                    .expect("isolated tests have their own job on each native test platform");
+                assert_eq!(isolated["tasks"], json!(["isolated-tests"]));
+                assert_eq!(isolated["tools"], json!(["cargo-nextest@0.9.122"]));
+                assert_eq!(isolated["xz"], true, "isolated test requirements follow their job");
+                let native = jobs
+                    .iter()
+                    .find(|job| job["id"] == format!("tests@{platform}"))
+                    .expect("native tests");
+                if platform.starts_with("windows-") {
+                    let binaries = jobs
+                        .iter()
+                        .find(|job| job["id"] == format!("native-bins@{platform}"))
+                        .expect("Windows binary checks run concurrently with native tests");
+                    assert_eq!(binaries["tasks"], json!(["native-bins"]));
+                    assert_eq!(binaries["tools"], json!([]), "binary checks do not need nextest");
+                }
+                assert_eq!(
+                    native["xz"], false,
+                    "isolated-only requirements do not reach native jobs"
+                );
+            }
             let mut seen = BTreeSet::new();
-            for job in plan["jobs"].as_array().expect("plan jobs") {
+            for job in jobs {
                 let platform = job["platform"].as_str().expect("job platform");
-                let local = tasks(&metadata(), &selection, platform)?;
+                let local = tasks(&metadata, &selection, platform)?;
                 for id in job["tasks"].as_array().expect("job task IDs") {
                     let id = id.as_str().expect("task ID");
                     assert!(
@@ -822,7 +888,7 @@ mod tests {
                 }
             }
             for platform in CI_PLATFORMS {
-                for task in tasks(&metadata(), &selection, platform)? {
+                for task in tasks(&metadata, &selection, platform)? {
                     assert_eq!(
                         seen.contains(&(*platform, task.id)),
                         assigned(&task, platform, mode == "exhaustive"),

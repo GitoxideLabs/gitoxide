@@ -128,7 +128,11 @@ fn read_fixture(
     let baseline_path = worktree_path.join(&file_name);
     let baseline = std::fs::read(&baseline_path)?;
     let baseline = crate::blob::skip_header_and_fold_to_unidiff(&baseline);
-    let baseline_path = crate_root.join(&baseline_path).strip_prefix(project_root)?.to_owned();
+    let baseline_path = crate_root.join(&baseline_path);
+    let baseline_path = baseline_path
+        .strip_prefix(project_root)
+        .unwrap_or(&baseline_path)
+        .to_owned();
     let git_no_indent_heuristic = if read_no_indent {
         read_no_indent_baseline(worktree_path, &file_name)?
     } else {
@@ -166,7 +170,7 @@ fn cases_from_fixture(fixture: &str, read_no_indent: bool) -> gix_testtools::Res
 
 struct Case {
     file_name: String,
-    /// Location of the generated baseline, relative to the workspace root.
+    /// Location of the generated baseline, relative to the workspace root when possible.
     baseline_path: PathBuf,
     algorithm: Algorithm,
     /// The primary Git baseline, generated with `--indent-heuristic` and used for the pass/fail comparison.

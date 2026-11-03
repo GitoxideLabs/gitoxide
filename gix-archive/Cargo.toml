@@ -48,6 +48,7 @@ document-features = { version = "0.2.0", optional = true }
 
 [dev-dependencies]
 gix-testtools = { path = "../tests/tools" }
+gix-path = { path = "../gix-path" }
 gix-odb = { path = "../gix-odb", features = ["sha1", "sha256"] }
 gix-worktree = { path = "../gix-worktree", default-features = false, features = [
     "attributes",

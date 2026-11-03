@@ -147,6 +147,10 @@ git init --object-format=sha1 matrix
     done
   done
 
+  # Batch immutable state refs in operation order instead of resolving them for each case.
+  a_commit_ids=($(git rev-parse "${operations[@]/#/A-}"))
+  b_commit_ids=($(git rev-parse "${operations[@]/#/B-}"))
+
   : >cases.tsv
   for ((left = 0; left < ${#operations[@]}; left++))
   do
@@ -176,8 +180,8 @@ git init --object-format=sha1 matrix
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$left_operation" \
         "$right_operation" \
-        "$(git rev-parse "A-$left_operation")" \
-        "$(git rev-parse "B-$right_operation")" \
+        "${a_commit_ids[$left]}" \
+        "${b_commit_ids[$right]}" \
         "$forward_file" \
         "$forward_status" \
         "$reverse_file" \
@@ -306,6 +310,10 @@ git init --object-format=sha1 matrix-submodule
     done
   done
 
+  # Batch immutable state refs in operation order instead of resolving them for each case.
+  a_commit_ids=($(git rev-parse "${operations[@]/#/A-}"))
+  b_commit_ids=($(git rev-parse "${operations[@]/#/B-}"))
+
   : >cases.tsv
   for ((left = 0; left < ${#operations[@]}; left++))
   do
@@ -335,8 +343,8 @@ git init --object-format=sha1 matrix-submodule
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$left_operation" \
         "$right_operation" \
-        "$(git rev-parse "A-$left_operation")" \
-        "$(git rev-parse "B-$right_operation")" \
+        "${a_commit_ids[$left]}" \
+        "${b_commit_ids[$right]}" \
         "$forward_file" \
         "$forward_status" \
         "$reverse_file" \

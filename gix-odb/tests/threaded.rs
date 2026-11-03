@@ -2,8 +2,9 @@ use gix_object::Find;
 
 #[test]
 fn multi_threaded_access_will_not_panic() -> gix_testtools::TestResult {
-    for arg in ["no", "without-multi-index"] {
-        let base = gix_testtools::scripted_fixture_read_only_with_args("make_repo_multi_index.sh", Some(arg))?
+    // Share the default multi-index fixture with the other ODB tests instead of generating it again for `no`.
+    for arg in [None, Some("without-multi-index")] {
+        let base = gix_testtools::scripted_fixture_read_only_with_args("make_repo_multi_index.sh", arg)?
             .join(".git")
             .join("objects");
         let store = gix_odb::at(base, gix_testtools::object_hash())?;
