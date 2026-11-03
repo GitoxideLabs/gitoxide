@@ -104,17 +104,34 @@ function trace_fetch_baseline () {
   cd ..
 
   git init -q client && cd client
-    for i in $(seq 8); do
-      git checkout --orphan b$i &&
-      commit b$i.c0
-    done
-
-    for j in $(seq 19); do
-      for i in $(seq 8); do
-        git checkout b$i &&
-        commit b$i.c$j
+    # Eight independent histories with interleaved commit dates force multiple negotiation rounds.
+    # Import their 160 commits in one Git process; checkout/add/commit/tag per commit is costly on Windows.
+    # The original orphan checkouts retained earlier root files, so root bN contains b1.c0.t through bN.c0.t.
+    {
+      for ((j = 0; j <= 19; j++)); do
+        for ((i = 1; i <= 8; i++)); do
+          message=b$i.c$j
+          mark=$((j * 8 + i))
+          tick
+          printf 'commit refs/heads/b%s\nmark :%s\n' "$i" "$mark"
+          printf 'author %s <%s> %s\n' "$GIT_AUTHOR_NAME" "$GIT_AUTHOR_EMAIL" "$GIT_AUTHOR_DATE"
+          printf 'committer %s <%s> %s\n' "$GIT_COMMITTER_NAME" "$GIT_COMMITTER_EMAIL" "$GIT_COMMITTER_DATE"
+          printf 'data %s\n%s\n' "$((${#message} + 1))" "$message"
+          if ((j == 0)); then
+            for ((k = 1; k < i; k++)); do
+              root_message=b$k.c0
+              printf 'M 100644 inline %s.t\ndata %s\n%s\n' "$root_message" "$((${#root_message} + 1))" "$root_message"
+            done
+          fi
+          printf 'M 100644 inline %s.t\ndata %s\n%s\n\n' "$message" "$((${#message} + 1))" "$message"
+          printf 'reset refs/tags/%s\nfrom :%s\n\n' "$message" "$mark"
+        done
       done
-    done
+    } >.git/multi-round-import
+    git fast-import --quiet <.git/multi-round-import
+    rm .git/multi-round-import
+    git symbolic-ref HEAD refs/heads/b8
+    git reset --hard
   cd ..
   (cd server
     git fetch --no-tags "$PWD/../client" b1:refs/heads/b1
