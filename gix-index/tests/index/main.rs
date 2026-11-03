@@ -9,6 +9,7 @@ mod access;
 mod entry;
 mod file;
 mod fs;
+mod fs_monitor;
 mod fuzzed;
 mod init;
 
