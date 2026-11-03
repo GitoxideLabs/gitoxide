@@ -9,15 +9,28 @@ use gix_index::{entry::Flags, extension::fs_monitor::Token};
 
 mod daemon;
 mod hook;
+mod untracked;
 
 pub(super) struct Refresh {
     token: Option<Token>,
     pub(super) valid: Vec<AtomicBool>,
     changed: AtomicBool,
+    untracked: Option<gix_index::extension::UntrackedCache>,
+    use_untracked: bool,
 }
 
 impl Refresh {
     pub(super) fn has_changes(&self, index: &gix_index::State) -> bool {
+        if self
+            .untracked
+            .as_ref()
+            .map(|cache| cache.directories().iter().filter(|dir| dir.stat().is_some()).count())
+            != index
+                .untracked()
+                .map(|cache| cache.directories().iter().filter(|dir| dir.stat().is_some()).count())
+        {
+            return true;
+        }
         if self.token.as_ref() != index.fs_monitor().map(gix_index::extension::FsMonitor::token) {
             return true;
         }
@@ -46,6 +59,7 @@ impl Refresh {
             entry.flags.set(Flags::FSMONITOR_VALID, valid.into_inner());
         }
         index.set_fs_monitor_token(self.token);
+        index.set_untracked(self.untracked);
     }
 }
 
@@ -65,12 +79,30 @@ pub(super) fn refresh<'a>(
         Some(None) => true,
         Some(Some(value)) => gix_config::Boolean::try_from(value.as_bstr()).map_or(true, |value| value.0),
     };
+    let discard_untracked = repo
+        .config
+        .resolved
+        .boolean_filter(Core::UNTRACKED_CACHE, repo.filter_config_section())
+        .is_ok_and(|value| value == Some(false));
+    if !enabled && index.fs_monitor().is_none() && !(discard_untracked && index.untracked().is_some()) {
+        return Ok(None);
+    }
+    let mut untracked = if discard_untracked {
+        None
+    } else {
+        index.untracked().cloned()
+    };
     if !enabled {
+        if let Some(cache) = &mut untracked {
+            cache.invalidate_all();
+        }
         gix_trace::debug!("filesystem monitor disabled");
-        return Ok(index.fs_monitor().map(|_| Refresh {
+        return Ok(Some(Refresh {
             token: None,
             changed: AtomicBool::new(false),
             valid: (0..index.entries().len()).map(|_| AtomicBool::new(false)).collect(),
+            untracked,
+            use_untracked: false,
         }));
     }
 
@@ -111,13 +143,14 @@ pub(super) fn refresh<'a>(
         .ok()
         .flatten()
     };
-    let mut valid = index
+    let previous_valid = index
         .fs_monitor()
-        .and_then(|monitor| monitor.valid_entries(index.entries().len()))
-        .unwrap_or_else(|| {
-            gix_trace::debug!("no usable filesystem monitor bitmap; scanning all entries");
-            vec![false; index.entries().len()]
-        });
+        .and_then(|monitor| monitor.valid_entries(index.entries().len()));
+    let mut use_untracked = previous_valid.is_some();
+    let mut valid = previous_valid.unwrap_or_else(|| {
+        gix_trace::debug!("no usable filesystem monitor bitmap; scanning all entries");
+        vec![false; index.entries().len()]
+    });
     gix_trace::debug!(
         valid_entries = valid.iter().filter(|valid| **valid).count(),
         "restored filesystem monitor bitmap"
@@ -135,17 +168,35 @@ pub(super) fn refresh<'a>(
             },
             "received filesystem monitor changes"
         );
-        if !invalidate(index, &mut valid, &paths, lookup) {
+        if !invalidate(index, &mut valid, &paths, lookup, untracked.as_mut()) {
             valid.fill(false);
+            use_untracked = false;
         }
         Some(token)
     } else {
         gix_trace::debug!("filesystem monitor query failed or returned an invalid response; scanning all entries");
         valid.fill(false);
+        use_untracked = false;
         builtin.then(|| Token::V2 {
             token: "builtin:fake".into(),
         })
     };
+    // shortcut: UNTR does not record filename composition; reuse non-ASCII names once that policy can be validated.
+    if use_untracked
+        && untracked.as_ref().is_some_and(|cache| {
+            index.entries().iter().any(|entry| !entry.path(index).is_ascii())
+                || cache
+                    .directories()
+                    .iter()
+                    .any(|dir| !dir.name().is_ascii() || dir.untracked_entries().iter().any(|name| !name.is_ascii()))
+        })
+    {
+        gix_trace::debug!("untracked cache filename composition is uncertain; scanning directories");
+        use_untracked = false;
+    }
+    if !use_untracked && let Some(cache) = &mut untracked {
+        cache.invalidate_all();
+    }
     for (entry, valid) in index.entries().iter().zip(&mut valid) {
         if entry.mode.is_submodule() || entry.stage_raw() != 0 || entry.flags.contains(Flags::INTENT_TO_ADD) {
             *valid = false;
@@ -159,6 +210,8 @@ pub(super) fn refresh<'a>(
         token,
         changed: AtomicBool::new(false),
         valid: valid.into_iter().map(AtomicBool::new).collect(),
+        untracked,
+        use_untracked,
     }))
 }
 
@@ -167,16 +220,17 @@ fn invalidate<'a>(
     valid: &mut [bool],
     data: &[u8],
     lookup: Option<&gix_index::AccelerateLookup<'a>>,
+    mut untracked: Option<&mut gix_index::extension::UntrackedCache>,
 ) -> bool {
     if data.is_empty() {
         return true;
     }
-    for path in data.strip_suffix(b"\0").unwrap_or(data).split(|byte| *byte == 0) {
-        if path == b"/" {
+    for reported_path in data.strip_suffix(b"\0").unwrap_or(data).split(|byte| *byte == 0) {
+        if reported_path == b"/" {
             gix_trace::debug!("filesystem monitor requested a full scan");
             return false;
         }
-        let path = path.strip_suffix(b"/").unwrap_or(path);
+        let path = reported_path.strip_suffix(b"/").unwrap_or(reported_path);
         if path.is_empty()
             || path.starts_with(b"/")
             || path
@@ -187,6 +241,17 @@ fn invalidate<'a>(
             return false;
         }
         let path = path.as_bstr();
+        if let Some(cache) = &mut untracked {
+            let ignore_case = lookup.is_some();
+            let basename = path.rsplit(|byte| *byte == b'/').next().unwrap_or_default();
+            if basename == b".gitignore"
+                || (ignore_case && (!path.is_ascii() || basename.eq_ignore_ascii_case(b".gitignore")))
+            {
+                cache.invalidate_all();
+            } else {
+                cache.invalidate_path(path, ignore_case);
+            }
+        }
         if !invalidate_path(index, valid, path)
             && let Some(lookup) = lookup
         {
