@@ -755,12 +755,12 @@ fn commit_states(
     let marker = crate::enrich::marker(
         enrichment.todo,
         enrichment.note.is_some(),
-        tree_enrichment.checks_pass,
+        tree_enrichment.checks_pass.as_ref().map(|message| message.as_bstr()),
         patch_enrichment.refackiewed,
     );
     let mut out = Vec::with_capacity(6);
     if !marker.is_empty() {
-        out.push(marker);
+        out.push(marker.as_str());
     }
     if pending {
         out.push("↻");
@@ -2554,7 +2554,7 @@ mod tests {
         let (base, middle, tip, commits) = commits(&repo)?;
         crate::enrich::ensure_todo(&repo, middle, true)?;
         crate::enrich::set_note(&repo, middle, Some(b"follow up"))?;
-        crate::enrich::ensure_checks_pass(&repo, middle, true)?;
+        crate::enrich::set_checks_pass(&repo, middle, Some(b""))?;
 
         let id = crate::change_id::display_short(&repo, middle)?;
         let prepared = prepare_test(&repo, base, base, &commits, Some(tip))?;
