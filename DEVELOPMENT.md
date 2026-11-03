@@ -264,7 +264,7 @@ a local run never attempts another host's native checks. Isolated package tests 
 jobs, preserving separate feature resolution while running concurrently with native tests.
 
 Linux feature compilation checks and feature tests run in separate jobs, retaining every
-selected configuration. Linux CI runner builds use `CARGO_PROFILE_DEV_DEBUG=line-tables-only` (also inherited
+selected configuration. Linux and Windows CI runner builds use `CARGO_PROFILE_DEV_DEBUG=line-tables-only` (also inherited
 by the test and QA profiles) to reduce compilation and cache storage costs while preserving
 debug assertions, overflow checks, and file/line backtraces. Full debugger variable and type
 information is omitted. Reproduce this setting locally by exporting the same variable.

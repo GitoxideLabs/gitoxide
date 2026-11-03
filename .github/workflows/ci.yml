@@ -143,8 +143,8 @@ jobs:
         if: matrix.just
         with:
           just-version: ${{ matrix.just_version }} # zizmor: ignore[unpinned-tools] Exact version in Cargo.toml's workspace.metadata.qa.tool-versions.
-      - name: Reduce Linux debug artifacts while retaining backtraces
-        if: runner.os == 'Linux'
+      - name: Reduce Linux and Windows debug artifacts while retaining backtraces
+        if: runner.os == 'Linux' || runner.os == 'Windows'
         shell: bash
         run: echo 'CARGO_PROFILE_DEV_DEBUG=line-tables-only' >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
