@@ -1,4 +1,4 @@
-use std::{fs::OpenOptions, io::Write, path::PathBuf};
+use std::{fs::OpenOptions, io::Write, path::PathBuf, time::Instant};
 
 use clap::{Parser, Subcommand};
 use gix_error::{OptionExt, Result, ResultExt, bail, message};
@@ -10,6 +10,7 @@ mod features;
 mod native_tests;
 mod ops;
 mod plan;
+mod record;
 mod requirements;
 mod run;
 
@@ -81,6 +82,7 @@ enum Action {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    let started = Instant::now();
     let agent = args.agent || std::env::var_os("CODEX_THREAD_ID").is_some();
     let current_dir = std::env::current_dir().or_raise(|| message("read current directory"))?;
     if let Action::Downstream { name, checkout } = &args.command {
@@ -101,6 +103,20 @@ fn main() -> Result<()> {
         }
         return ops::execute(&current_dir, args);
     }
+    let checkout = if record::eligible(&args.command)
+        && std::env::var_os("CI").is_none()
+        && std::env::var_os("GITHUB_ACTIONS").is_none()
+    {
+        match record::Checkout::capture(&current_dir) {
+            Ok(checkout) => Some(checkout),
+            Err(error) => {
+                eprintln!("QA checks-pass recording is unavailable: {error}");
+                None
+            }
+        }
+    } else {
+        None
+    };
     let metadata = plan::metadata(&current_dir)?;
     let root = PathBuf::from(
         metadata["workspace_root"]
@@ -174,9 +190,9 @@ fn main() -> Result<()> {
             };
             let job = job.or_else(|| from_env.then(|| std::env::var("QA_JOB").ok()).flatten());
             let ci_job = job.is_some();
-            let tasks = if let Some(job) = job {
+            let (tasks, selected) = if let Some(job) = job {
                 let saved = saved.as_ref().ok_or_raise(|| message("--job requires a saved plan"))?;
-                catalog::job_tasks(&metadata, saved, &job)?
+                (catalog::job_tasks(&metadata, saved, &job)?, None)
             } else {
                 let selection = match &saved {
                     Some(plan) => plan["selection"].clone(),
@@ -196,7 +212,10 @@ fn main() -> Result<()> {
                 } else {
                     eprintln!("QA selection: {selection}");
                 }
-                catalog::select(catalog::tasks(&metadata, &selection, &catalog::host())?, &stage)?
+                (
+                    catalog::select(catalog::tasks(&metadata, &selection, &catalog::host())?, &stage)?,
+                    Some(selection),
+                )
             };
             eprintln!("{} tasks selected for {}", tasks.len(), catalog::host());
             let logs = if agent && !dry_run {
@@ -206,7 +225,10 @@ fn main() -> Result<()> {
             } else {
                 None
             };
-            catalog::execute(&root, tasks, dry_run, ci_job, logs.as_deref())?;
+            let timings = catalog::execute(&root, tasks, dry_run, ci_job, logs.as_deref())?;
+            if let (Some(checkout), Some(selected)) = (checkout, selected) {
+                record::finish(&root, checkout, &selected, &selection.base, &timings, started.elapsed())?;
+            }
         }
         Action::Exec { .. } => unreachable!("exec was handled before workspace discovery"),
         Action::Downstream { .. } => unreachable!("downstream was handled before workspace discovery"),

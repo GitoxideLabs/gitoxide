@@ -237,6 +237,17 @@ directory, diagnostics, stdout, and stderr. The logs are in the printed temporar
 directory. `--agent` enables this output explicitly. JSON plans and `--dry-run`
 command listings remain available for detailed inspection.
 
+When `tix` is installed, a successful complete local run records a checks-pass message
+on the tested commit's tree. Its gutter emoji distinguishes fast (`⚡`) from thorough
+(`🔬`, exhaustive mode) coverage, including automatic exhaustive fallbacks. The title
+shows the elapsed run time; the body records the host, comparison base, selected package
+count, selection reasons and elapsed time for each task, including setup. Timing starts
+inside the QA runner, after any compilation needed to launch it. Recording requires the
+same clean `HEAD` at the start and end of the run. Dirty runs, task
+failures (including nonblocking failures), stage subsets, saved plans, dry runs and CI
+jobs do not receive a checks-pass message. A missing `tix` or unavailable initial Git
+state skips recording; other Tix errors are reported separately from passing QA.
+
 Fast mode compares against the merge base with `origin/main` by default, including staged,
 unstaged and untracked changes. Fetch your intended base before comparing. Selection includes
 owning crates and all reverse workspace dependencies, including optional, dev, build and
@@ -309,8 +320,8 @@ Within a task, prerequisites remain ordered: a failed journey build cannot run a
 Missing tools produce visible failures. Use `--stage` to reproduce a subset without installing
 unrelated tools. `just unit-tests`, `just doc-tests`, `just check`, `just qa-test` and
 `etc/scripts/ci-check-local.sh --fast|--thorough` delegate to the shared runner. The script's
-profiles now mean the same fast/exhaustive modes; it no longer cleans fixtures or marks Tix
-commits as checked. Tix QA can set its check mark after verifying a clean checkout. The legacy
+profiles now mean the same fast/exhaustive modes; it no longer cleans fixtures. Complete
+local profiles use the same Tix checks-pass recording described above. The legacy
 `ci`, `ci-plan`, `ci-test` and `ci-journey-tests` recipes remain aliases for their `qa` counterparts.
 
 ### Local prerequisites and isolation

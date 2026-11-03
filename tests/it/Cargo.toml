@@ -45,6 +45,9 @@ yaml_serde = "0.10.7"
 tracing-subscriber = { version = "0.3.22", optional = true, default-features = false, features = ["fmt"] }
 cargo-smart-release-core = { version = "0.1.0", optional = true }
 
+[dev-dependencies]
+gix-testtools = { path = "../tools", default-features = false, features = ["sha1"] }
+
 [package.metadata.qa]
 api-checker = true
 api-toolchain = "1.99.0"

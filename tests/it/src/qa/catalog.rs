@@ -3,6 +3,7 @@ use std::{
     fs::File,
     io::Write,
     path::Path,
+    time::{Duration, Instant},
 };
 
 use gix_error::{OptionExt, Result, ResultExt, bail, message};
@@ -531,11 +532,27 @@ pub fn job_tasks(metadata: &Value, plan: &Value, job_id: &str) -> Result<Vec<Tas
     Ok(selected)
 }
 
-pub fn execute(root: &Path, tasks: Vec<Task>, dry_run: bool, ci_job: bool, logs: Option<&Path>) -> Result<()> {
+#[derive(Debug)]
+pub struct TaskTiming {
+    pub id: &'static str,
+    pub elapsed: Duration,
+    pub blocking: bool,
+    pub passed: bool,
+}
+
+pub fn execute(
+    root: &Path,
+    tasks: Vec<Task>,
+    dry_run: bool,
+    ci_job: bool,
+    logs: Option<&Path>,
+) -> Result<Vec<TaskTiming>> {
     let mut failed = Vec::new();
     let mut nonblocking_failed = 0;
     let count = tasks.len();
+    let mut timings = Vec::with_capacity(count);
     for (index, task) in tasks.into_iter().enumerate() {
+        let started = Instant::now();
         let path = logs.map(|logs| logs.join(format!("{}.log", task.id)));
         let log = path
             .as_ref()
@@ -563,6 +580,12 @@ pub fn execute(root: &Path, tasks: Vec<Task>, dry_run: bool, ci_job: bool, logs:
         } else {
             run::execute(root, task.commands, dry_run, log.as_ref())
         };
+        timings.push(TaskTiming {
+            id: task.id,
+            elapsed: started.elapsed(),
+            blocking: task.blocking,
+            passed: result.is_ok(),
+        });
         if let Err(err) = result {
             if let (Some(mut log), Some(path)) = (log.as_ref(), path.as_ref()) {
                 writeln!(log, "{err:?}").or_raise(|| message("Write QA task failure to log"))?;
@@ -596,7 +619,7 @@ pub fn execute(root: &Path, tasks: Vec<Task>, dry_run: bool, ci_job: bool, logs:
     if !failed.is_empty() {
         bail!("Failed QA tasks: {}", failed.join(", "));
     }
-    Ok(())
+    Ok(timings)
 }
 
 #[cfg(test)]
@@ -670,11 +693,21 @@ mod tests {
         );
         for ci_job in [false, true] {
             let task = Task::new("optional", "test", &[], vec![failing()]).optional();
+            let outcome = execute(&logs.path, vec![task], false, ci_job, Some(&logs.path));
             assert_eq!(
-                execute(&logs.path, vec![task], false, ci_job, Some(&logs.path)).is_err(),
+                outcome.is_err(),
                 ci_job,
                 "agent output preserves CI's nonblocking-job failure semantics"
             );
+            if let Ok(timings) = outcome {
+                assert_eq!(timings.len(), 1, "every completed task has a timing");
+                let task = &timings[0];
+                assert_eq!(task.id, "optional");
+                assert!(
+                    !task.passed && !task.blocking,
+                    "nonblocking failure remains visible to recording"
+                );
+            }
         }
         Ok(())
     }

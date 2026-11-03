@@ -5,7 +5,7 @@ description: "Visit unchecked visible commits in a clean Tix-managed stack or tr
 
 # Tix QA Sweep
 
-Repair every visible non-base commit whose tree is not already marked `✔️`, without squashing or reordering commits, then validate every resulting terminal tip. Use stable Tix change IDs because edits rewrite commit hashes.
+Repair every visible non-base commit whose tree does not already carry a checks-pass artifact (`✔️` by default, or its message's leading emoji), without squashing or reordering commits, then validate every resulting terminal tip. Use stable Tix change IDs because edits rewrite commit hashes.
 
 Read [tix](../tix/SKILL.md) and follow its repair policy and history mutation commands, including amendment versus fixup, review preservation, authorship, signing, and checkout restoration. This policy also applies to formatting repairs.
 
@@ -34,7 +34,7 @@ Preserve toolchains, environment, feature flags, package managers, working direc
 2. Require `tix` and only the tools needed by the selected QA commands.
 3. Create a private directory with `mktemp -d "${TMPDIR:-/tmp}/tix-qa-sweep.XXXXXX"`.
 4. Write `tix show` unchanged to `<temp-dir>/show.txt` and record the QA commands, working directories, environment, and exclusions in `<temp-dir>/qa-plan.md`. When using Gitoxide's script, copy it to `<temp-dir>/ci-check-local.sh` and run the copy from the repository root so the entrypoint survives travel. Inspect relative-path assumptions and required helpers before copying any runner: a copied launcher alone does not preserve a compiled runner or its source dependencies at older commits.
-5. Record the starting checkout and its stable change ID. From `show.txt`, collect every visible commit row except base separators, including rows marked `✔️`, ordered oldest first. Preserve topological order; for independent commits at the same depth, use their bottom-to-top display order. Stop if a displayed change-ID prefix is ambiguous or duplicated.
+5. Record the starting checkout and its stable change ID. From `show.txt`, collect every visible commit row except base separators, including rows with checks-pass artifacts, ordered oldest first. Preserve topological order; for independent commits at the same depth, use their bottom-to-top display order. Stop if a displayed change-ID prefix is ambiguous or duplicated.
 6. Record each terminal branch's stable tip change ID and its stack/fork comparison base as a resolved commit hash before edits. Derive these from the visible topology, base separators, and Git ancestry, honoring any user-specified base. A branched tree needs a tip-to-base map, not just the starting branch. Include shared visible ancestors in cumulative coverage; do not choose a later fork point that omits included stack changes. Preserve these bases throughout repairs rather than recomputing them from rewritten tips. Stop if the topology or intended base is ambiguous.
 
 ## Sweep
@@ -46,8 +46,8 @@ Reuse build caches and honor repository- or user-specific storage limits. For Gi
 For each recorded change ID:
 
 1. Run `tix travel <change-id>` directly, complete any travel conflict resolution below, and verify that `HEAD` is the intended change.
-2. Run a fresh `tix show` and inspect the intended change's leading enrichment field. If its current tree is marked `✔️`, continue to the next change ID. Do not use the initial `show.txt` marker or a changed commit hash to make this decision. Otherwise, record the comparison parent with `git rev-parse HEAD^` before any repair and run the fast QA commands in their recorded working directories. A root commit has no parent: use the runner's documented safe fallback and report it.
-3. Once all selected checks pass at the actual current `HEAD`, require a clean worktree and run `tix enrich tree checks-pass`. This is idempotent if the runner already set the mark. Require enrichment to succeed, then continue to the next recorded change ID without further edits.
+2. Run a fresh `tix show` and inspect the intended change's leading enrichment field. If its current tree has a checks-pass artifact (`✔️`, or a custom emoji such as QA's `⚡` or `🔬`), continue to the next change ID. Do not use the initial `show.txt` marker or a changed commit hash to make this decision. Otherwise, record the comparison parent with `git rev-parse HEAD^` before any repair and run the fast QA commands in their recorded working directories. A root commit has no parent: use the runner's documented safe fallback and report it.
+3. Once all selected checks pass at the actual current `HEAD`, verify that `HEAD` still names the tested commit and require a clean worktree. Preserve the runner's checks-pass artifact, including its custom gutter emoji, coverage and timing message. If the runner did not record one, run `tix enrich tree checks-pass "" --revision <tested-commit>` to set an empty artifact explicitly. The no-argument command toggles and can clear a passing result. Require enrichment to succeed, then continue to the next recorded change ID without further edits.
 4. If a configured formatter check fails, run its corresponding formatting command (for example, `cargo fmt --all`), inspect and stage the resulting formatting changes, and record them using the `tix` policy. Require a clean worktree and rerun fast QA at the resulting `HEAD`, retaining the recorded comparison parent. Formatting changes are always wanted and do not need the diagnostic repair loop.
 5. For any other failure, use the repair loop below and rerun fast QA until it passes.
 
@@ -65,9 +65,9 @@ When a repair creates a fixup, run fast QA on its actual new `HEAD` before proce
 
 After intermediate traversal, refresh `tix show` and reconcile every recorded terminal branch with the resulting topology, including amendments, fixups, and pending descendant replay. Validate every actual terminal tip, not an obsolete source commit or just the starting checkout.
 
-1. Travel to each resulting terminal change ID through Tix, resolve conflicts, and verify `HEAD`. Run cumulative fast QA against that branch's recorded stack/fork base, or exhaustive/full QA if explicitly requested. Never let an existing `✔️`, including one from an earlier fast run, bypass this final run; the mark records an exact tree, not its comparison base or coverage level.
+1. Travel to each resulting terminal change ID through Tix, resolve conflicts, and verify `HEAD`. Run cumulative fast QA against that branch's recorded stack/fork base, or exhaustive/full QA if explicitly requested. Never let an existing checks-pass artifact, including one from an earlier fast run, bypass this final run; it records an exact tree and its optional message does not substitute for the required cumulative coverage.
 2. On failure, use the same formatting/repair policy and repair loop. Rerun the final profile against the unchanged recorded base at the actual repaired `HEAD`, including any new fixup. Intermediate fast success cannot substitute for explicitly thorough final QA.
-3. After success, require a clean worktree, enrich the passing tree with `tix enrich tree checks-pass`, and record the resulting tip change ID, commit/tree hashes, base, effective commands, coverage, exclusions, and unavailable checks in `qa-plan.md`.
+3. After success, verify the tested `HEAD` and require a clean worktree. Preserve the runner's checks-pass message, or explicitly set an empty artifact with `tix enrich tree checks-pass "" --revision <tested-commit>` if it did not record one; never toggle an existing passing artifact. Record the resulting tip change ID, commit/tree hashes, base, effective commands, coverage, exclusions, and unavailable checks in `qa-plan.md`.
 4. After final repairs, travel to all terminal branches again to complete replay and verify that each actual tip tree still matches its final validation record. Rerun final QA for changed or newly resulting tips, retaining their recorded bases, until every terminal branch has current final coverage. A changed base, command, or profile also invalidates that record.
 
 ## Handle Travel Conflicts
