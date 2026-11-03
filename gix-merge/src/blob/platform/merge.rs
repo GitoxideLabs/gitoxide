@@ -386,9 +386,13 @@ impl<'parent> PlatformRef<'parent> {
     /// Note that at this stage, none-existing input data will simply default to an empty buffer when running the actual merge algorithm.
     /// Too-large resources will result in an error.
     ///
+    /// Like Git, an external merge driver exiting with a status from 1 to 128 has left conflicts in its result,
+    /// which is then returned with [`Resolution::Conflict`].
+    ///
     /// External merge driver launch errors provide `program` (Path), the invoked program name or path,
-    /// and preserve the underlying IO error as a cause. Unsuccessful exits additionally provide `exit_status`
-    /// (String), its display representation, and `exit_code` (I64) when available. Output streams are not captured.
+    /// and preserve the underlying IO error as a cause. Failed exits, i.e. those with a status above 128 or
+    /// by signal, additionally provide `exit_status` (String), its display representation, and `exit_code` (I64)
+    /// when available. Output streams are not captured.
     ///
     /// Generally, it is assumed that standard logic, like deletions of files, is handled before any of this is called, so we are lenient
     /// in terms of buffer handling to make it more useful in the face of missing local files.
@@ -408,17 +412,21 @@ impl<'parent> PlatformRef<'parent> {
                 let status = cmd.status().or_raise(|| {
                     message!("Failed to launch external merge driver: {:?}", cmd.cmd).with_program(cmd.get_program())
                 })?;
-                if !status.success() {
-                    let failure =
-                        message!("External merge driver failed: {:?}", cmd.cmd).with_command_status(&cmd, status);
-                    bail!(failure);
-                }
+                let resolution = match status.code() {
+                    Some(0) => Resolution::Complete,
+                    Some(1..=128) => Resolution::Conflict,
+                    _ => {
+                        let failure =
+                            message!("External merge driver failed: {:?}", cmd.cmd).with_command_status(&cmd, status);
+                        bail!(failure);
+                    }
+                };
                 out.clear();
                 cmd.open_result_file()
                     .or_raise(|| message("IO failed when dealing with merge-driver output"))?
                     .read_to_end(out)
                     .or_raise(|| message("IO failed when dealing with merge-driver output"))?;
-                Ok((inner::builtin_merge::Pick::Buffer, Resolution::Complete))
+                Ok((inner::builtin_merge::Pick::Buffer, resolution))
             }
             Err(builtin) => {
                 let mut input = imara_diff::InternedInput::new(&[][..], &[]);
