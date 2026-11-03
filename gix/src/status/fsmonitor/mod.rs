@@ -7,6 +7,7 @@ use crate::{
 };
 use gix_index::{entry::Flags, extension::fs_monitor::Token};
 
+mod daemon;
 mod hook;
 
 pub(super) struct Refresh {
@@ -66,8 +67,8 @@ pub(super) fn refresh<'a>(
         .as_ref()
         .is_none_or(|value| gix_config::Boolean::try_from(value.as_bstr()).is_ok_and(|value| value.0));
     let response = if builtin {
-        // Native daemon support is added separately; a full scan is always safe.
-        None
+        let token = previous.map_or_else(|| "builtin:fake".into(), |token| token_bytes(Some(token)));
+        daemon::query(repo, token.as_bstr()).ok().and_then(parse_v2)
     } else {
         let version = repo
             .config
@@ -98,7 +99,9 @@ pub(super) fn refresh<'a>(
         Some(token)
     } else {
         valid.fill(false);
-        None
+        builtin.then(|| Token::V2 {
+            token: "builtin:fake".into(),
+        })
     };
     for (entry, valid) in index.entries().iter().zip(&mut valid) {
         if entry.mode.is_submodule() || entry.stage_raw() != 0 || entry.flags.contains(Flags::INTENT_TO_ADD) {
