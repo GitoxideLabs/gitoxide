@@ -12,6 +12,7 @@ mod fs;
 mod fs_monitor;
 mod fuzzed;
 mod init;
+mod untracked_cache;
 
 static SHA1_TO_SHA256_HASHES: std::sync::LazyLock<std::collections::HashMap<&str, &str>> =
     std::sync::LazyLock::new(|| {

@@ -90,7 +90,14 @@ fn written_bitmap_tracks_current_entries_and_excludes_removed_entries() -> TestR
 }
 
 #[test]
-fn mutable_entry_and_path_access_invalidates_the_checkpoint() {
+fn mutable_entry_and_path_access_invalidates_the_checkpoint() -> TestResult {
+    let cache_index = gix_index::File::at(
+        crate::fixture_index_path_needs_archive("untracked_cache_populated"),
+        gix_testtools::object_hash(),
+        false,
+        Default::default(),
+    )?;
+    let cache = cache_index.untracked().expect("the fixture has an untracked cache");
     let mut index = State::new(gix_testtools::object_hash());
     push(&mut index, "a", entry::Flags::FSMONITOR_VALID, entry::Mode::FILE);
     let operations: &[fn(&mut State)] = &[
@@ -137,12 +144,18 @@ fn mutable_entry_and_path_access_invalidates_the_checkpoint() {
     for operation in operations {
         let mut index = index.clone();
         index.set_fs_monitor_token(Some(Token::V1 { nanos_since_1970: 1 }));
+        index.set_untracked(Some(cache.clone()));
         operation(&mut index);
         assert!(
             index.fs_monitor().is_none(),
             "mutable access cannot retain a position-based bitmap"
         );
+        assert!(
+            index.untracked().is_none(),
+            "mutable access invalidates cached index membership"
+        );
     }
+    Ok(())
 }
 
 #[test]
