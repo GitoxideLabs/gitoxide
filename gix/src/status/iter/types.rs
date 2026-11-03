@@ -103,6 +103,7 @@ impl Outcome {
             IndexPersistedOrInMemory::InMemory(index) => index.clone(),
         };
 
+        let untracked = index.set_untracked(None);
         let entries = index.entries_mut();
         for (entry_index, change) in changes {
             let entry = &mut entries[entry_index];
@@ -118,6 +119,8 @@ impl Outcome {
 
         if let Some(fsmonitor) = self.fsmonitor.take() {
             fsmonitor.apply(&mut index);
+        } else {
+            index.set_untracked(untracked);
         }
 
         Some(index.write(crate::index::write::Options {
