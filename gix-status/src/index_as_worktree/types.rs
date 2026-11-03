@@ -41,6 +41,15 @@ pub struct Context<'a> {
     pub filter: gix_filter::Pipeline,
     /// A flag to query to learn if cancellation is requested.
     pub should_interrupt: &'a AtomicBool,
+    /// Optional filesystem-monitor validity for each index entry, in index order.
+    ///
+    /// Entry `FSMONITOR_VALID` flags alone are not used: the mask must reflect a fresh monitor query.
+    /// Valid files are skipped; files confirmed clean are marked valid. `None` disables monitor shortcuts.
+    /// Conflicts, intent-to-add entries, and submodules never use or gain validity.
+    /// Other skipped entries retain their incoming validity.
+    /// The caller must invalidate entries reported changed by the monitor before each call, and must
+    /// not change these bits concurrently. A length different from the index entry count is an error.
+    pub fsmonitor: Option<&'a [AtomicBool]>,
 }
 
 /// Provide additional information collected during the runtime of [`index_as_worktree()`](crate::index_as_worktree()).
