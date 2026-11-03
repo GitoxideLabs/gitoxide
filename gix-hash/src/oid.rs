@@ -90,19 +90,9 @@ impl oid {
     pub fn try_from_bytes(digest: &[u8]) -> Result<&Self> {
         match digest.len() {
             #[cfg(feature = "sha1")]
-            SIZE_OF_SHA1_DIGEST => Ok(
-                #[expect(unsafe_code)]
-                unsafe {
-                    &*(std::ptr::from_ref::<[u8]>(digest) as *const oid)
-                },
-            ),
+            SIZE_OF_SHA1_DIGEST => Ok(Self::from_bytes(digest)),
             #[cfg(feature = "sha256")]
-            SIZE_OF_SHA256_DIGEST => Ok(
-                #[expect(unsafe_code)]
-                unsafe {
-                    &*(std::ptr::from_ref::<[u8]>(digest) as *const oid)
-                },
-            ),
+            SIZE_OF_SHA256_DIGEST => Ok(Self::from_bytes(digest)),
             len => Err(message!("Cannot instantiate git hash from a digest of length {len}").validation_error()),
         }
     }
@@ -114,7 +104,11 @@ impl oid {
     }
 
     /// Only from code that statically assures correct sizes using array conversions.
+    #[inline]
     pub(crate) fn from_bytes(value: &[u8]) -> &Self {
+        // SAFETY: `oid` is `#[repr(transparent)]` over `[u8]`, so both have the same layout, and the
+        //         pointer cast keeps the slice length as metadata. The returned reference borrows `value`.
+        //         An unexpected length is memory-safe; `kind()` panics on it.
         #[expect(unsafe_code)]
         unsafe {
             &*(std::ptr::from_ref::<[u8]>(value) as *const oid)
