@@ -263,7 +263,7 @@ pub fn tasks(metadata: &Value, selection: &Value, platform: &str) -> Result<Vec<
     if !isolated_tests.is_empty() {
         out.push(Task::new(
             "isolated-tests",
-            "tests",
+            "isolated-tests",
             &["tests", "default-tests"],
             isolated_tests,
         ));
@@ -809,8 +809,15 @@ mod tests {
         let mut metadata = metadata();
         metadata["packages"][0]["metadata"]["qa"]["checks"] = json!([{"args":["--all-features"]}]);
         metadata["packages"][0]["metadata"]["qa"]["tests"] = json!([{"args":["--all-features"], "requires":["xz"]}]);
+        metadata["packages"].as_array_mut().expect("test packages").push(json!({
+            "name":"isolated-library", "targets":[{"kind":["lib"],"test":true}],
+            "metadata":{"qa":{"isolated":true,"tests":[
+                {"args":["--features","extra"],"requires":["xz"]}, {}
+            ]}}
+        }));
         for mode in ["fast", "exhaustive"] {
-            let selection = json!({"mode":mode, "packages":["gix-path","gitoxide","internal-tools"]});
+            let selection =
+                json!({"mode":mode, "packages":["gix-path","gitoxide","internal-tools","isolated-library"]});
             let plan = plan(&metadata, &selection, "linux-x86_64", true)?;
             let jobs = plan["jobs"].as_array().expect("plan jobs");
             let owner = |task| {
@@ -833,6 +840,27 @@ mod tests {
                     owner("feature-contracts")["id"],
                     builds["id"],
                     "feature contracts remain with compilation checks"
+                );
+            }
+            for platform in if mode == "exhaustive" {
+                CI_PLATFORMS
+            } else {
+                &["linux-x86_64", "macos-aarch64", "windows-x86_64"]
+            } {
+                let isolated = jobs
+                    .iter()
+                    .find(|job| job["id"] == format!("isolated-tests@{platform}"))
+                    .expect("isolated tests have their own job on each native test platform");
+                assert_eq!(isolated["tasks"], json!(["isolated-tests"]));
+                assert_eq!(isolated["tools"], json!(["cargo-nextest@0.9.122"]));
+                assert_eq!(isolated["xz"], true, "isolated test requirements follow their job");
+                let native = jobs
+                    .iter()
+                    .find(|job| job["id"] == format!("tests@{platform}"))
+                    .expect("native tests");
+                assert_eq!(
+                    native["xz"], false,
+                    "isolated-only requirements do not reach native jobs"
                 );
             }
             let mut seen = BTreeSet::new();
