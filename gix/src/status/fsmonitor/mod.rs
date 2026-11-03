@@ -45,6 +45,7 @@ pub(super) fn refresh<'a>(
     index: &'a gix_index::State,
     lookup: Option<&gix_index::AccelerateLookup<'a>>,
 ) -> Result<Option<Refresh>> {
+    let _span = gix_trace::coarse!("gix::status::fsmonitor::refresh", index_entries = index.entries().len());
     let configured = repo
         .config
         .resolved
@@ -55,6 +56,7 @@ pub(super) fn refresh<'a>(
         Some(Some(value)) => gix_config::Boolean::try_from(value.as_bstr()).map_or(true, |value| value.0),
     };
     if !enabled {
+        gix_trace::debug!("filesystem monitor disabled");
         return Ok(index.fs_monitor().map(|_| Refresh {
             token: None,
             valid: (0..index.entries().len()).map(|_| AtomicBool::new(false)).collect(),
@@ -66,6 +68,11 @@ pub(super) fn refresh<'a>(
     let builtin = command
         .as_ref()
         .is_none_or(|value| gix_config::Boolean::try_from(value.as_bstr()).is_ok_and(|value| value.0));
+    gix_trace::debug!(
+        kind = if builtin { "daemon" } else { "hook" },
+        has_previous_token = previous.is_some(),
+        "querying filesystem monitor"
+    );
     let response = if builtin {
         let token = previous.map_or_else(|| "builtin:fake".into(), |token| token_bytes(Some(token)));
         daemon::query(repo, token.as_bstr()).ok().and_then(parse_v2)
@@ -91,13 +98,33 @@ pub(super) fn refresh<'a>(
     let mut valid = index
         .fs_monitor()
         .and_then(|monitor| monitor.valid_entries(index.entries().len()))
-        .unwrap_or_else(|| vec![false; index.entries().len()]);
+        .unwrap_or_else(|| {
+            gix_trace::debug!("no usable filesystem monitor bitmap; scanning all entries");
+            vec![false; index.entries().len()]
+        });
+    gix_trace::debug!(
+        valid_entries = valid.iter().filter(|valid| **valid).count(),
+        "restored filesystem monitor bitmap"
+    );
     let token = if let Some((token, paths)) = response {
+        gix_trace::debug!(
+            reported_paths = if paths.is_empty() {
+                0
+            } else {
+                paths
+                    .strip_suffix(b"\0")
+                    .unwrap_or(&paths)
+                    .split(|byte| *byte == 0)
+                    .count()
+            },
+            "received filesystem monitor changes"
+        );
         if !invalidate(index, &mut valid, &paths, lookup) {
             valid.fill(false);
         }
         Some(token)
     } else {
+        gix_trace::debug!("filesystem monitor query failed or returned an invalid response; scanning all entries");
         valid.fill(false);
         builtin.then(|| Token::V2 {
             token: "builtin:fake".into(),
@@ -108,6 +135,10 @@ pub(super) fn refresh<'a>(
             *valid = false;
         }
     }
+    gix_trace::debug!(
+        valid_entries = valid.iter().filter(|valid| **valid).count(),
+        "refreshed filesystem monitor bitmap"
+    );
     Ok(Some(Refresh {
         token,
         valid: valid.into_iter().map(AtomicBool::new).collect(),
@@ -124,6 +155,10 @@ fn invalidate<'a>(
         return true;
     }
     for path in data.strip_suffix(b"\0").unwrap_or(data).split(|byte| *byte == 0) {
+        if path == b"/" {
+            gix_trace::debug!("filesystem monitor requested a full scan");
+            return false;
+        }
         let path = path.strip_suffix(b"/").unwrap_or(path);
         if path.is_empty()
             || path.starts_with(b"/")
@@ -131,6 +166,7 @@ fn invalidate<'a>(
                 .split(|byte| *byte == b'/')
                 .any(|part| part == b".." || part == b".")
         {
+            gix_trace::debug!("filesystem monitor returned an invalid path; scanning all entries");
             return false;
         }
         let path = path.as_bstr();
@@ -171,13 +207,14 @@ fn token_bytes(token: Option<&Token>) -> BString {
 }
 
 fn parse_v2(data: Vec<u8>) -> Option<(Token, Vec<u8>)> {
-    let end = data.find_byte(0)?;
-    (end != 0).then(|| {
-        (
-            Token::V2 {
-                token: data[..end].into(),
-            },
-            data[end + 1..].to_vec(),
-        )
-    })
+    let Some(end) = data.find_byte(0).filter(|end| *end != 0) else {
+        gix_trace::debug!("filesystem monitor response has a missing or empty v2 token");
+        return None;
+    };
+    Some((
+        Token::V2 {
+            token: data[..end].into(),
+        },
+        data[end + 1..].to_vec(),
+    ))
 }
