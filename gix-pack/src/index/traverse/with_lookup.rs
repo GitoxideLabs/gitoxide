@@ -111,7 +111,8 @@ where
                         "collecting sorted index".into(),
                         ProgressId::CollectSortedIndexEntries.into(),
                     ),
-                );
+                    pack.alloc_limit_bytes,
+                )?;
 
                 let (chunk_size, thread_limit, available_cores) =
                     parallel::optimize_chunk_size_and_thread_limit(1000, Some(index_entries.len()), thread_limit, None);

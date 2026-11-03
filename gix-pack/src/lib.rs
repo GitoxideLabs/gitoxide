@@ -20,6 +20,8 @@
 
 use std::{borrow::Cow, ops::Deref, path::Path};
 
+use gix_error::Result;
+
 /// The default memory-backed storage for pack data and index files.
 pub use memmap2::Mmap as MMap;
 
@@ -115,6 +117,22 @@ fn exact_vec<T>(capacity: usize) -> Vec<T> {
     v
 }
 
+fn try_exact_vec<T>(capacity: usize, alloc_limit_bytes: Option<usize>) -> Result<Vec<T>> {
+    use gix_error::{OptionExt, ResourceExhaustionKind, ResultExt, bail, resource_exhaustion};
+
+    let allocation_error = |kind| resource_exhaustion(kind, "Pack traversal metadata is too large to fit in memory");
+    let allocation_bytes = capacity
+        .checked_mul(std::mem::size_of::<T>())
+        .ok_or_raise(|| allocation_error(ResourceExhaustionKind::AllocationFailure))?;
+    if alloc_limit_bytes.is_some_and(|limit| allocation_bytes > limit) {
+        bail!(allocation_error(ResourceExhaustionKind::AllocationLimit));
+    }
+    let mut v = Vec::new();
+    v.try_reserve_exact(capacity)
+        .or_raise(|| allocation_error(ResourceExhaustionKind::AllocationFailure))?;
+    Ok(v)
+}
+
 #[inline]
 fn fan_is_monotonically_increasing(fan: &[u32]) -> bool {
     !fan.windows(2).any(|window| window[0] > window[1])
@@ -122,6 +140,19 @@ fn fan_is_monotonically_increasing(fan: &[u32]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn traversal_metadata_allocation_failure_is_reported() {
+        let err =
+            super::try_exact_vec::<u64>(usize::MAX, None).expect_err("metadata capacity multiplication overflows");
+        assert!(
+            err.classify().any(|classification| {
+                classification.class()
+                    == gix_error::Class::ResourceExhaustion(gix_error::ResourceExhaustionKind::AllocationFailure)
+            }),
+            "impossible metadata allocations return a recoverable allocation error"
+        );
+    }
+
     #[test]
     fn exact_capacity_is_only_an_optimization() {
         let result = std::panic::catch_unwind(|| super::exact_vec::<u8>(usize::MAX));

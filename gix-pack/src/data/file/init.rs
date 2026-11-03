@@ -63,7 +63,7 @@ where
     ///
     /// Use `None` to disable the limit, which is also the default.
     ///
-    /// This is currently enforced when decoding pack entries and resolving delta chains.
+    /// This is currently enforced when decoding pack entries, resolving delta chains and collecting index metadata for lookup traversal.
     /// The limit applies to the combined size of buffers that hold both work data and delta instructions.
     /// Buffer growth uses exact reservations when a limit is set, and retains existing capacity.
     /// Callers that allocate from pack metadata directly should consult [`File::alloc_limit_bytes()`][crate::data::File::alloc_limit_bytes]

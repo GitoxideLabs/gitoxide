@@ -77,6 +77,7 @@ pub mod object;
 ///     &mut gix_utils::progress::Discard,
 ///     &AtomicBool::default(),
 ///     gix_hash::Kind::default(),
+///     None,                           // no allocation limit
 /// )?;
 /// // `tree.traverse(resolve, &pack, pack_end, inspect, Options { .. })` then
 /// // resolves every object in parallel across threads.
