@@ -9,6 +9,8 @@ use crate::{
     extension,
 };
 
+mod carry_over;
+
 // TODO: integrate this somehow, somewhere, depending on later usage.
 #[expect(dead_code, reason = "to be used for when we handle checkouts/resets better")]
 mod sparse;
