@@ -72,6 +72,7 @@ pub struct Outcome {
     pub worktree_index: IndexPersistedOrInMemory,
     pub(super) skip_hash: bool,
     pub(super) changes: Option<Vec<(usize, ApplyChange)>>,
+    pub(in crate::status) fsmonitor: Option<crate::status::fsmonitor::Refresh>,
 }
 
 impl Outcome {
@@ -81,13 +82,22 @@ impl Outcome {
     /// additional work can be prevented by writing the changes back to the index.
     pub fn has_changes(&self) -> bool {
         self.changes.as_ref().is_some_and(|changes| !changes.is_empty())
+            || self
+                .fsmonitor
+                .as_ref()
+                .is_some_and(|monitor| monitor.has_changes(&self.worktree_index))
     }
 
     /// Write the changes if there are any back to the index file.
     /// This can only be done once as the changes are consumed in the process, if there were any.
     pub fn write_changes(&mut self) -> Option<Result> {
         let _span = gix_trace::coarse!("gix::status::index_worktree::Outcome::write_changes()");
-        let changes = self.changes.take()?;
+        if !self.has_changes() {
+            self.changes = None;
+            self.fsmonitor = None;
+            return None;
+        }
+        let changes = self.changes.take().unwrap_or_default();
         let mut index = match &self.worktree_index {
             IndexPersistedOrInMemory::Persisted(persisted) => (***persisted).clone(),
             IndexPersistedOrInMemory::InMemory(index) => index.clone(),
@@ -104,6 +114,10 @@ impl Outcome {
                     entry.stat = new_stat;
                 }
             }
+        }
+
+        if let Some(fsmonitor) = self.fsmonitor.take() {
+            fsmonitor.apply(&mut index);
         }
 
         Some(index.write(crate::index::write::Options {
