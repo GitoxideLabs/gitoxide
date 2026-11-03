@@ -168,6 +168,7 @@ pub(super) mod function {
                                     stack,
                                     filter,
                                     should_interrupt: ctx.should_interrupt,
+                                    fsmonitor: ctx.fsmonitor,
                                 },
                                 tracked_file_modifications,
                             )

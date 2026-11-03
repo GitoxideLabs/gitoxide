@@ -478,6 +478,7 @@ fn fixture_filtered_detailed(
         pathspec: search.clone(),
         resource_cache: resource_cache.clone(),
         should_interrupt: &interrupt,
+        fsmonitor: None,
         dirwalk: DirwalkContext {
             git_dir_realpath: &git_dir_real,
             current_dir: &cwd,
