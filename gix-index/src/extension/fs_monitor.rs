@@ -129,9 +129,14 @@ impl FsMonitor {
 }
 
 fn entry_is_dirty(entry: &crate::Entry) -> bool {
-    !entry.flags.contains(crate::entry::Flags::FSMONITOR_VALID)
-        || entry.flags.contains(crate::entry::Flags::INTENT_TO_ADD)
-        || entry.stage_raw() != 0
-        || entry.mode.is_submodule()
-        || entry.mode.is_sparse()
+    !entry.flags.contains(crate::entry::Flags::FSMONITOR_VALID) || !entry_is_eligible(entry)
+}
+
+pub(crate) fn entry_is_eligible(entry: &crate::Entry) -> bool {
+    !entry
+        .flags
+        .intersects(crate::entry::Flags::INTENT_TO_ADD | crate::entry::Flags::REMOVE)
+        && entry.stage_raw() == 0
+        && !entry.mode.is_submodule()
+        && !entry.mode.is_sparse()
 }
