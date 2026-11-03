@@ -13,6 +13,7 @@ mod plan;
 mod record;
 mod requirements;
 mod run;
+mod scope;
 
 #[derive(Parser)]
 #[command(about = "Plan and run quality-assurance checks locally or in CI")]
@@ -130,7 +131,8 @@ fn main() -> Result<()> {
             all_platforms,
             github_output,
         } => {
-            let selected = plan::plan(&root, &metadata, &selection.mode, &selection.base)?;
+            let mut selected = plan::plan(&root, &metadata, &selection.mode, &selection.base)?;
+            scope::prune(&root, &metadata, &mut selected)?;
             let platform = platform.unwrap_or_else(catalog::host);
             let mut plan = catalog::plan(&metadata, &selected, &platform, all_platforms)?;
             let consumers = if all_platforms {
@@ -194,10 +196,17 @@ fn main() -> Result<()> {
                 let saved = saved.as_ref().ok_or_raise(|| message("--job requires a saved plan"))?;
                 (catalog::job_tasks(&metadata, saved, &job)?, None)
             } else {
-                let selection = match &saved {
+                let mut selection = match &saved {
                     Some(plan) => plan["selection"].clone(),
                     None => plan::plan(&root, &metadata, &selection.mode, &selection.base)?,
                 };
+                if saved.is_none()
+                    && stage
+                        .iter()
+                        .any(|stage| matches!(stage.as_str(), "all" | "check" | "tests" | "doctests" | "wasm"))
+                {
+                    scope::prune(&root, &metadata, &mut selection)?;
+                }
                 if agent {
                     eprintln!(
                         "QA selection: {} ({} packages)",
@@ -238,7 +247,11 @@ fn main() -> Result<()> {
 
 // Keep CI's environment payload below Windows' 32,767-character limit.
 fn execution_plan(plan: &Value) -> Value {
-    json!({"selection": {"mode": plan["selection"]["mode"], "packages": plan["selection"]["packages"]}, "jobs": plan["jobs"]})
+    let mut selection = json!({"mode": plan["selection"]["mode"], "packages": plan["selection"]["packages"]});
+    if let Some(commands) = plan["selection"].get("unaffected_dependencies") {
+        selection["unaffected_dependencies"] = commands.clone();
+    }
+    json!({"selection": selection, "jobs": plan["jobs"]})
 }
 
 #[cfg(test)]
@@ -255,6 +268,24 @@ mod tests {
                 "selection": {"mode": "fast", "packages": ["gix"]}, "jobs": plan["jobs"]
             }),
             "job execution needs only selection and assignment, even for very large diffs"
+        );
+    }
+
+    #[test]
+    fn ci_payload_keeps_dependency_configuration_exclusions() {
+        let plan = serde_json::json!({
+            "selection": {"mode": "fast", "packages": ["gix"], "changed_packages": ["gix-archive"],
+                "unaffected_dependencies": [{"args": ["-p", "gix"], "dev": false}]},
+            "jobs": []
+        });
+        let compact = super::execution_plan(&plan);
+        assert_eq!(
+            compact["selection"]["unaffected_dependencies"], plan["selection"]["unaffected_dependencies"],
+            "CI executes the same feature configurations selected locally"
+        );
+        assert!(
+            compact["selection"].get("changed_packages").is_none(),
+            "dependency queries already ran in the planning gate"
         );
     }
 

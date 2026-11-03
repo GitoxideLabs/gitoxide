@@ -379,7 +379,10 @@ pub fn tasks(metadata: &Value, selection: &Value, platform: &str) -> Result<Vec<
             }
         }
     }
-    let commands = super::ops::wasm_commands(metadata, &selected)?;
+    let mut commands = super::ops::wasm_commands(metadata, &selected)?;
+    if !exhaustive {
+        commands.retain(|command| !super::scope::is_unaffected(selection, command));
+    }
     if !commands.is_empty() {
         out.push(Task::new("wasm", "wasm", &["wasm"], commands).optional());
     }
@@ -721,6 +724,33 @@ mod tests {
             "cargo-nextest":"0.9.122","cargo-deny":"0.20.0","cargo-machete":"0.9.1",
             "cargo-semver-checks":"0.51.0","cargo-auditable":"0.7.6","cargo-diet":"1.2.7","just":"1.58.0"
         }}}})
+    }
+
+    #[test]
+    fn regression_unaffected_wasm_targets_need_no_job() -> gix_error::TestResult {
+        let mut metadata = metadata();
+        metadata["packages"][0]["metadata"]["qa"]["wasm"] = json!({"targets": ["wasm32-wasip1", "wasm32-wasip2"]});
+        let mut selection = json!({"mode": "fast", "packages": ["gix-path"],
+            "unaffected_dependencies": [{"args": ["-p", "gix-path"], "dev": false}]});
+        assert!(
+            !tasks(&metadata, &selection, "linux-x86_64")?
+                .iter()
+                .any(|task| task.id == "wasm"),
+            "unaffected WASM configurations require neither a job nor target installation"
+        );
+        selection["mode"] = "exhaustive".into();
+        let tasks = tasks(&metadata, &selection, "linux-x86_64")?;
+        assert_eq!(
+            tasks
+                .iter()
+                .find(|task| task.id == "wasm")
+                .expect("exhaustive WASM task")
+                .commands
+                .len(),
+            2,
+            "exhaustive mode retains every target"
+        );
+        Ok(())
     }
 
     #[test]

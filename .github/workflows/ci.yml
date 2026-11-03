@@ -44,6 +44,8 @@ jobs:
         with:
           shared-key: ci-plan
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Cache dependency metadata for offline feature selection
+        run: cargo fetch --locked
       - name: Test the planner without building Git tooling
         run: cargo run --profile qa --locked -p internal-tools --no-default-features --bin qa -- run --mode exhaustive --stage self-test
       - name: Select checks and distribute them across platforms
