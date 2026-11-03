@@ -264,10 +264,25 @@ a local run never attempts another host's native checks. Isolated package tests 
 checks have their own CI jobs to run concurrently with native tests, retaining their Cargo feature selections.
 
 Linux feature compilation checks and feature tests run in separate jobs, retaining every
-selected configuration. Linux and Windows CI runner builds use `CARGO_PROFILE_DEV_DEBUG=line-tables-only` (also inherited
-by the test and QA profiles) to reduce compilation and cache storage costs while preserving
-debug assertions, overflow checks, and file/line backtraces. Full debugger variable and type
-information is omitted. Reproduce this setting locally by exporting the same variable.
+selected configuration.
+
+Local and CI builds use `debug = 0` and `strip = "debuginfo"` in the workspace's `dev`
+profile, also inherited by `test` and `qa`. This reduces object files, libraries and linked
+debug information while retaining debug assertions and overflow checks, including in
+dependencies with an optimized development profile. Panic messages and `gix-error` source
+locations remain available, but stack backtraces lose file/line information and debuggers
+cannot inspect local variables or types. MSVC builds still emit smaller PDBs for symbols.
+CI applies the same artifact settings to downstream workspaces through Cargo profile environment variables.
+
+For debugging, set `CARGO_PROFILE_DEV_DEBUG=2` and `CARGO_PROFILE_DEV_STRIP=none` before
+running Cargo or QA; use `line-tables-only` instead of `2` when only file/line backtraces
+are needed. Unset both variables to return to the smaller defaults. Release and benchmark
+profiles retain their separate settings.
+
+Local incremental compilation remains enabled to speed up rebuilds. Set `CARGO_INCREMENTAL=0`
+for builds where disk space matters more than recompilation speed; CI's Rust cache action
+already does this. Profile changes affect newly built artifacts and do not remove old
+artifacts or other toolchain/feature variants from `target`.
 
 Rust caches are saved by `main` runs and restored by PRs. They retain downloaded dependencies
 and their build artifacts; workspace crates are rebuilt. Job caches compete for the repository's

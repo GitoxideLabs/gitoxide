@@ -20,13 +20,14 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CLICOLOR: "1"
+  # Match the workspace profile, including builds in downstream workspaces.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_DEV_STRIP: debuginfo
 
 jobs:
   plan:
     name: Select QA work
     runs-on: ubuntu-latest
-    env:
-      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
       plan: ${{ steps.plan.outputs.plan }}
@@ -35,7 +36,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 0
+          # PR merge commits include the comparison base as a parent.
+          fetch-depth: ${{ github.event_name == 'pull_request' && '2' || '1' }}
       - name: Install Rust
         run: rustup update stable && rustup default stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -90,7 +92,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # API comparisons need release tags; other tasks consume the saved plan.
+          # Tasks consume the saved plan; release comparisons use fixture histories.
           fetch-depth: ${{ matrix.history && '0' || '1' }}
       - name: Install native Rust
         if: matrix.container == ''
@@ -143,10 +145,6 @@ jobs:
         if: matrix.just
         with:
           just-version: ${{ matrix.just_version }} # zizmor: ignore[unpinned-tools] Exact version in Cargo.toml's workspace.metadata.qa.tool-versions.
-      - name: Reduce Linux and Windows debug artifacts while retaining backtraces
-        if: runner.os == 'Linux' || runner.os == 'Windows'
-        shell: bash
-        run: echo 'CARGO_PROFILE_DEV_DEBUG=line-tables-only' >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: ${{ matrix.cache || matrix.id }}
@@ -183,8 +181,6 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.downstream) }}
     continue-on-error: true
     runs-on: ubuntu-latest
-    env:
-      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
       - name: Check out the gix version under test
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
