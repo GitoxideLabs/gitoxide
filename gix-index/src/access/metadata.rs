@@ -84,6 +84,6 @@ fn invalidate(path: &BStr, tree: &mut Option<Tree>, untracked: &mut Option<Untra
         tree.invalidate_path(path);
     }
     if let Some(untracked) = untracked {
-        untracked.invalidate_path(path);
+        untracked.invalidate_index_path(path);
     }
 }

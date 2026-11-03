@@ -145,8 +145,11 @@ impl State {
                 extensions
                     .should_write(extension::untracked_cache::SIGNATURE)
                     .and_then(|signature| {
-                        self.untracked()
-                            .map(|cache| cache.write_to(write, self.object_hash, invalidate).map(|_| signature))
+                        self.untracked().map(|cache| {
+                            cache
+                                .write_to_inner(write, self.object_hash, invalidate)
+                                .map(|_| signature)
+                        })
                     })
             },
             &|write| {
