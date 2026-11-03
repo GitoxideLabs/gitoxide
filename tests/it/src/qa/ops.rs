@@ -311,7 +311,7 @@ pub(super) fn source_snapshot(root: &Path) -> Result<Snapshot> {
     snapshot_files(root, &files)
 }
 
-fn snapshot_files(root: &Path, files: &[u8]) -> Result<Snapshot> {
+pub(super) fn empty_snapshot() -> Result<Snapshot> {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .or_raise(|| message("Read time for QA snapshot"))?
@@ -319,9 +319,15 @@ fn snapshot_files(root: &Path, files: &[u8]) -> Result<Snapshot> {
     // Git for Windows still limits some repository paths even with core.longpaths enabled.
     let mut id = DefaultHasher::new();
     (std::process::id(), stamp).hash(&mut id);
-    let path = std::env::temp_dir().join(format!("qa-{:x}", id.finish()));
+    let path = std::path::absolute(std::env::temp_dir())
+        .or_raise(|| message("Resolve QA temporary directory"))?
+        .join(format!("qa-{:x}", id.finish()));
     fs::create_dir(&path).or_raise(|| message!("Create QA snapshot {}", path.display()))?;
-    let snapshot = Snapshot { path };
+    Ok(Snapshot { path })
+}
+
+fn snapshot_files(root: &Path, files: &[u8]) -> Result<Snapshot> {
+    let snapshot = empty_snapshot()?;
     for path in source_paths(files)? {
         let source = root.join(&path);
         let Some(metadata) = source_metadata(root, &path)? else {

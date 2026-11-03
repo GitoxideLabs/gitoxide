@@ -137,6 +137,8 @@ mod from_tree {
     #[test]
     fn will_provide_all_information_and_respect_export_ignore() -> gix_testtools::TestResult {
         let (dir, head_tree, odb, mut cache) = basic()?;
+        // Windows can report an absolute target for this MSYS-created relative symlink.
+        let link_target = gix_path::into_bstr(std::fs::read_link(dir.join("extra-dir/symlink-to-extra"))?)?;
         let mut stream = gix_worktree_stream::from_tree(
             head_tree,
             odb.clone(),
@@ -168,6 +170,9 @@ mod from_tree {
             paths_and_modes.push((entry.relative_path().to_owned(), entry.mode.kind(), entry.id));
             let mut buf = Vec::new();
             entry.read_to_end(&mut buf)?;
+            if entry.relative_path() == "extra-dir/symlink-to-extra" {
+                assert_eq!(buf.as_bstr(), link_target.as_ref(), "the symlink target is preserved");
+            }
             if !buf.is_empty() && entry.mode.is_blob() {
                 if entry.relative_path().contains_str("extra") {
                     assert!(
@@ -285,7 +290,7 @@ mod from_tree {
 
         assert_eq!(
             copy.lock().len(),
-            expected_buffer_length,
+            expected_buffer_length - b"../extra-file".len() + link_target.len(),
             "keep track of file size changes of the streaming format"
         );
 

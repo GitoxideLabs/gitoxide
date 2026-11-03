@@ -352,7 +352,12 @@ when an archive is absent or stale. This avoids repeated expensive Git subproces
 comparisons against freshly generated Git baselines still run in exhaustive QA. Linux and macOS
 fast tests use freshly generated fixtures. Exhaustive native tests compile/list once,
 then reuse the same nextest binaries for archived and generated fixtures in separate temporary
-source copies. Feature/hash variants also run in an isolated copy, sharing compatible fixture
+source copies. The native passes share a fresh cache of generated read-only scripted fixtures.
+When no archive is available, the archived pass can generate a fixture once for both passes;
+the shared cache never substitutes extracted archives for generated fixtures. Fixtures that write archives or require
+execution in a writable destination keep their existing behavior. The cache and its source
+copies remain alive until both passes finish, and are retained together if a source copy changes.
+Feature/hash variants also run in an isolated copy, sharing compatible fixture
 caches within their task and continuing after individual failures. Their fixture caches cannot
 reuse a previous local run's extracted archives. Archive changes cause
 a failure and retain the changed copy for inspection. Explicit archive-only fixtures keep
