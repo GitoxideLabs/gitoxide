@@ -150,6 +150,14 @@ impl State {
                     })
             },
             &|write| {
+                extensions
+                    .should_write(extension::fs_monitor::SIGNATURE)
+                    .and_then(|signature| {
+                        self.fs_monitor()
+                            .map(|monitor| monitor.write_to(write, self.entries()).map(|_| signature))
+                    })
+            },
+            &|write| {
                 self.is_sparse()
                     .then(|| extension::sparse::write_to(write).map(|_| extension::sparse::SIGNATURE))
             },
