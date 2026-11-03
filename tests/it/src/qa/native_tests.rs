@@ -137,7 +137,8 @@ fn run(root: &Path, args: &[String], modes: &[Fixtures]) -> Result<()> {
 fn snapshot(root: &Path) -> Result<(Snapshot, SourceState)> {
     let snapshot = source_snapshot(root)?;
     checked(git(&snapshot.path)?.args(["init", "--quiet"]))?;
-    checked(git(&snapshot.path)?.args(["add", "--force", "--all"]))?;
+    // Fixtures need tracked paths, while source_state hashes the actual files without storing Git blobs.
+    checked(git(&snapshot.path)?.args(["add", "--intent-to-add", "--force", "--all"]))?;
     let state = source_state(&snapshot.path)?;
     Ok((snapshot, state))
 }

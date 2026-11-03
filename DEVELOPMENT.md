@@ -359,10 +359,12 @@ a failure and retain the changed copy for inspection. Explicit archive-only fixt
 their normal semantics.
 
 Source copies include current tracked and visible untracked files, preserving local edits,
-deletions, permissions and safe relative symlinks. MSRV resolution changes only its copied
-lockfile. The runner never restores, cleans or stages your checkout. Native tests also check
-the original source for unexpected changes because compile-time Rust paths may still point
-there. Avoid editing while those checks run; concurrent edits are reported as changes too.
+deletions, permissions and safe relative symlinks. Native copies use an intent-to-add index
+to track paths without storing duplicate Git blobs; source checks hash the copied files directly.
+MSRV resolution changes only its copied lockfile. The runner never restores, cleans or stages
+your checkout. Native tests also check the original source for unexpected changes because
+compile-time Rust paths may still point there. Avoid editing while those checks run; concurrent
+edits are reported as changes too.
 
 ### Maintaining QA selection
 
