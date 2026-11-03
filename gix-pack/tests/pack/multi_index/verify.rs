@@ -6,6 +6,30 @@ use maplit::btreemap;
 use crate::{multi_index::multi_index, object_hash};
 
 #[test]
+fn integrity_respects_metadata_alloc_limit() -> gix_testtools::TestResult {
+    let (_, path) = multi_index(object_hash());
+    let file = gix_pack::multi_index::File::at(path, Some(1024))?;
+    for deep_check in [false, true] {
+        let err = if deep_check {
+            file.verify_integrity(&mut progress::Discard, &AtomicBool::new(false), Default::default())
+                .err()
+        } else {
+            file.verify_integrity_fast(&mut progress::Discard, &AtomicBool::new(false))
+                .err()
+        }
+        .expect("the per-object metadata exceeds the limit even though index names fit");
+        assert!(
+            err.classify().any(|classification| {
+                classification.class()
+                    == gix_error::Class::ResourceExhaustion(gix_error::ResourceExhaustionKind::AllocationLimit)
+            }),
+            "both verification modes bound multi-index metadata allocations"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn checksum() -> gix_testtools::TestResult {
     let (file, _) = multi_index(object_hash());
     assert_eq!(

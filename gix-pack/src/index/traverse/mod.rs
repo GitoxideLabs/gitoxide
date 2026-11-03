@@ -29,8 +29,9 @@ pub struct Options<F> {
     pub thread_limit: Option<usize>,
     /// The kinds of safety checks to perform.
     pub check: SafetyCheck,
-    /// If `Some`, rejects individual allocations above the given number of bytes while resolving decoded object and
-    /// delta result buffers during delta-tree traversal. `Some(0)` rejects all non-empty allocations.
+    /// If `Some`, rejects individual allocations above the given number of bytes for index metadata, delta-tree item
+    /// storage, decoded objects and delta result buffers during delta-tree traversal.
+    /// Lookup traversal uses the pack's allocation limit. `Some(0)` rejects all non-empty allocations covered by this limit.
     pub alloc_limit_bytes: Option<usize>,
     /// A function to create a pack cache
     pub make_pack_lookup_cache: F,

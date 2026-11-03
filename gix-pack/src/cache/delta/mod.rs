@@ -21,6 +21,8 @@ pub struct Tree<T> {
     future_child_offsets: Vec<(crate::data::Offset, usize)>,
     /// Child indices waiting for an in-pack object with the given id to be resolved.
     ref_child_indices: tree::RefDeltaChildren,
+    /// Maximum size of each root or child item allocation.
+    alloc_limit_bytes: Option<usize>,
 }
 
 ///

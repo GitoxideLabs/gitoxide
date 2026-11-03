@@ -22,6 +22,11 @@ impl<T> Tree<T> {
     /// * `resolve_in_pack_id(&gix_hash::oid) -> Result<Option<data::Offset>>` takes an object ID and tries to resolve it to an offset
     ///   within this pack. `Err` aborts the operation with the resolver's error unchanged; `Ok(None)` aborts with a missing-base error.
     ///   The callback is only called for ref-deltas, which refer to their base by object ID instead of an encoded offset.
+    /// * `alloc_limit_bytes` limits the requested total size of each of the two item buffers (roots and children)
+    ///   independently, including during growth, rather than just the added bytes. Together these buffers can request
+    ///   up to twice the limit. This is not a total tree-memory budget: child-index lists, bookkeeping, allocations
+    ///   owned by `T`, and allocator overhead are not counted, and reallocation can temporarily retain old buffers.
+    ///   `None` disables the limit.
     ///
     /// # Ref-delta bases
     ///
@@ -31,6 +36,7 @@ impl<T> Tree<T> {
     /// external bases. To complete thin packs, use the streaming indexing path with `data::input::LookupRefDeltaObjectsIter`.
     ///
     /// Note that the sort order is ascending. The given pack file path must match the provided offsets.
+    #[expect(clippy::too_many_arguments)]
     pub fn from_offsets_in_pack(
         pack_path: &std::path::Path,
         data_sorted_by_offsets: impl Iterator<Item = T>,
@@ -39,6 +45,7 @@ impl<T> Tree<T> {
         progress: &mut dyn Progress,
         should_interrupt: &AtomicBool,
         object_hash: gix_hash::Kind,
+        alloc_limit_bytes: Option<usize>,
     ) -> Result<Self> {
         let mut r = io::BufReader::with_capacity(
             8192 * 8, // this value directly corresponds to performance, 8k (default) is about 4x slower than 64k
@@ -52,7 +59,7 @@ impl<T> Tree<T> {
                 progress.init(Some(num_objects), progress::count("objects"));
             })
             .unwrap_or_default();
-        let mut tree = Tree::with_capacity(anticipated_num_objects, None)?;
+        let mut tree = Tree::with_capacity(anticipated_num_objects, alloc_limit_bytes)?;
 
         {
             // safety check - assure ourselves it's a pack we can handle

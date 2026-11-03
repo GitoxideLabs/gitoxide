@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use gix_error::{Message, OptionExt, ResourceExhaustionKind, Result, ResultExt, bail};
+use gix_error::{Message, ResourceExhaustionKind, Result, ResultExt, bail};
 
 use super::Tree;
 
@@ -52,23 +52,20 @@ fn allocation_error(kind: ResourceExhaustionKind) -> Message {
 }
 
 impl<T> Tree<T> {
-    /// Instantiate a empty tree capable of storing `num_objects` amounts of items.
+    /// Instantiate an empty tree with capacity estimated from `num_objects`, capped by the allocation limit.
     pub(crate) fn with_capacity(num_objects: usize, alloc_limit_bytes: Option<usize>) -> Result<Self> {
-        let capacity = num_objects / 2;
-        let allocation_bytes = capacity
-            .checked_mul(std::mem::size_of::<Item<T>>())
-            .ok_or_raise(|| allocation_error(ResourceExhaustionKind::AllocationFailure))?;
-        if alloc_limit_bytes.is_some_and(|limit| allocation_bytes > limit) {
-            bail!(allocation_error(ResourceExhaustionKind::AllocationLimit));
-        }
+        let capped_capacity = match alloc_limit_bytes {
+            Some(limit) => (num_objects / 2).min(limit / std::mem::size_of::<Item<T>>()),
+            None => num_objects / 2,
+        };
 
         let mut root_items = Vec::new();
         root_items
-            .try_reserve_exact(capacity)
+            .try_reserve_exact(capped_capacity)
             .or_raise(|| allocation_error(ResourceExhaustionKind::AllocationFailure))?;
         let mut child_items = Vec::new();
         child_items
-            .try_reserve_exact(capacity)
+            .try_reserve_exact(capped_capacity)
             .or_raise(|| allocation_error(ResourceExhaustionKind::AllocationFailure))?;
         Ok(Tree {
             root_items,
@@ -76,6 +73,7 @@ impl<T> Tree<T> {
             last_seen: None,
             future_child_offsets: Vec::new(),
             ref_child_indices: BTreeMap::new(),
+            alloc_limit_bytes,
         })
     }
 
@@ -138,6 +136,7 @@ impl<T> Tree<T> {
     /// custom `data` with it.
     pub(crate) fn add_root(&mut self, offset: crate::data::Offset, data: T) -> Result {
         self.assert_is_incrementing_and_update_next_offset(offset)?;
+        Self::reserve_item(&mut self.root_items, self.alloc_limit_bytes)?;
         self.last_seen = NodeKind::Root.into();
         self.root_items.push(Item {
             offset,
@@ -158,6 +157,7 @@ impl<T> Tree<T> {
         data: T,
     ) -> Result {
         self.assert_is_incrementing_and_update_next_offset(offset)?;
+        Self::reserve_item(&mut self.child_items, self.alloc_limit_bytes)?;
 
         let next_child_index = self.child_items.len();
         // SAFETY INVARIANT upheld:
@@ -202,6 +202,7 @@ impl<T> Tree<T> {
         data: T,
     ) -> Result {
         self.assert_is_incrementing_and_update_next_offset(offset)?;
+        Self::reserve_item(&mut self.child_items, self.alloc_limit_bytes)?;
 
         let child_index = self.child_items.len() as u32;
         self.ref_child_indices.entry(base_id).or_default().push(child_index);
@@ -214,10 +215,64 @@ impl<T> Tree<T> {
         });
         Ok(())
     }
+
+    fn reserve_item(items: &mut Vec<Item<T>>, alloc_limit_bytes: Option<usize>) -> Result {
+        if items.len() < items.capacity() {
+            return Ok(());
+        }
+        if let Some(limit) = alloc_limit_bytes {
+            let capacity = items
+                .capacity()
+                .saturating_mul(2)
+                .max(4)
+                .min(limit / std::mem::size_of::<Item<T>>());
+            if capacity <= items.len() {
+                bail!(allocation_error(ResourceExhaustionKind::AllocationLimit));
+            }
+            items
+                .try_reserve_exact(capacity - items.len())
+                .or_raise(|| allocation_error(ResourceExhaustionKind::AllocationFailure))?;
+        } else {
+            items
+                .try_reserve(1)
+                .or_raise(|| allocation_error(ResourceExhaustionKind::AllocationFailure))?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tree_growth_respects_alloc_limit() -> gix_testtools::TestResult {
+        let item_bytes = std::mem::size_of::<super::Item<()>>();
+        for roots in [false, true] {
+            let mut tree = super::Tree::with_capacity(2, Some(item_bytes * 2))?;
+            for index in 0..2 {
+                let offset = 12 + index;
+                if roots {
+                    tree.add_root(offset, ())?;
+                } else {
+                    tree.add_child(24, offset, ())?;
+                }
+            }
+            let err = if roots {
+                tree.add_root(14, ())
+            } else {
+                tree.add_child(24, 14, ())
+            }
+            .expect_err("growing either item vector past its limit must fail");
+            assert!(
+                err.classify().any(|classification| {
+                    classification.class()
+                        == gix_error::Class::ResourceExhaustion(gix_error::ResourceExhaustionKind::AllocationLimit)
+                }),
+                "the exact capacity boundary applies to roots and children alike"
+            );
+        }
+        Ok(())
+    }
+
     #[test]
     fn unresolved_ref_delta_parent_is_corruption() -> gix_testtools::TestResult {
         let mut tree = super::Tree::with_capacity(1, None)?;
@@ -264,11 +319,16 @@ mod tests {
     }
 
     #[test]
-    fn allocation_failure_is_reported() {
+    fn allocation_failure_is_reported() -> gix_testtools::TestResult {
         let err = super::Tree::<()>::with_capacity(usize::MAX, None)
             .err()
             .expect("an impossible attacker-controlled capacity must return an allocation error");
-        insta::assert_debug_snapshot!(err, "allocation failure is reported", @"The pack delta tree is too large to fit in memory");
+        insta::assert_debug_snapshot!(err, "allocation failure is reported", @"
+        The pack delta tree is too large to fit in memory
+
+        Caused by:
+            0: memory allocation failed because the computed capacity exceeded the collection's maximum
+        ");
         assert_eq!(
             err.classify().find_map(|classification| match classification.class() {
                 gix_error::Class::ResourceExhaustion(kind) => Some(kind),
@@ -277,9 +337,10 @@ mod tests {
             Some(gix_error::ResourceExhaustionKind::AllocationFailure)
         );
 
-        let err = super::Tree::<()>::with_capacity(2, Some(0))
-            .err()
-            .expect("the configured allocation limit must apply to delta-tree storage");
+        let mut tree = super::Tree::<()>::with_capacity(usize::MAX, Some(0))?;
+        let err = tree
+            .add_root(12, ())
+            .expect_err("the configured allocation limit must apply when the tree grows");
         insta::assert_debug_snapshot!(err, "allocation failure is reported", @"The pack delta tree is too large to fit in memory");
         assert_eq!(
             err.classify().find_map(|classification| match classification.class() {
@@ -288,6 +349,7 @@ mod tests {
             }),
             Some(gix_error::ResourceExhaustionKind::AllocationLimit)
         );
+        Ok(())
     }
 
     mod from_offsets_in_pack {
@@ -334,6 +396,7 @@ mod tests {
                 &mut gix_utils::progress::Discard,
                 &AtomicBool::new(false),
                 gix_hash::Kind::Sha1,
+                None,
             );
 
             assert!(result.is_err(), "an out-of-bounds delta base is corrupt pack data");
@@ -357,6 +420,7 @@ mod tests {
                     &mut gix_utils::progress::Discard,
                     &AtomicBool::new(false),
                     gix_hash::Kind::Sha1,
+                    None,
                 )
                 .err()
                 .expect("index offsets cannot duplicate or overlap pack entry headers");
@@ -403,6 +467,7 @@ mod tests {
                 &mut gix_utils::progress::Discard,
                 &AtomicBool::new(false),
                 gix_hash::Kind::Sha1,
+                None,
             )
             .err()
             .expect("a resolver error must abort tree construction");
@@ -447,6 +512,7 @@ mod tests {
                 &mut gix_utils::progress::Discard,
                 &AtomicBool::new(false),
                 gix_hash::Kind::Sha1,
+                None,
             )
             .err()
             .expect("Ok(None) means the ref-delta base is absent from the pack");
@@ -487,6 +553,7 @@ mod tests {
                 &mut gix_utils::progress::Discard,
                 &AtomicBool::new(false),
                 gix_hash::Kind::Sha1,
+                None,
             )?;
 
             assert_eq!(resolutions.get(), 1, "only the ref-delta requires a base lookup");
@@ -530,6 +597,7 @@ mod tests {
                 &mut gix_utils::progress::Discard,
                 &AtomicBool::new(false),
                 gix_hash::Kind::Sha1,
+                None,
             )?;
             Ok(())
         }
