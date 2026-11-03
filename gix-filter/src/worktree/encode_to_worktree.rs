@@ -13,6 +13,10 @@ pub(crate) mod function {
     ) -> Result {
         use gix_error::{OptionExt, ResultExt};
 
+        let src = std::str::from_utf8(src_utf8).or_raise(|| validation("Input was not UTF-8 encoded"))?;
+        if crate::worktree::encoding::encode_utf16(src, worktree_encoding, buf) {
+            return Ok(());
+        }
         let mut encoder = worktree_encoding.new_encoder();
         let buf_len = encoder
             .max_buffer_length_from_utf8_if_no_unmappables(src_utf8.len())
@@ -24,7 +28,6 @@ pub(crate) mod function {
             })?;
         buf.clear();
         buf.resize(buf_len, 0);
-        let src = std::str::from_utf8(src_utf8).or_raise(|| validation("Input was not UTF-8 encoded"))?;
         let (res, read, written) = encoder.encode_from_utf8_without_replacement(src, buf, true);
         match res {
             EncoderResult::InputEmpty => {

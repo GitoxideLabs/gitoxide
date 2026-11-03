@@ -114,6 +114,24 @@ mod encode_to_git {
         }
         Ok(())
     }
+
+    #[test]
+    fn utf16_passes_the_round_trip_check() -> TestResult {
+        for (encoding, input) in [
+            (encoding_rs::UTF_16LE, super::UTF16LE),
+            (encoding_rs::UTF_16BE, super::UTF16BE),
+        ] {
+            let mut buf = Vec::new();
+            worktree::encode_to_git(input, encoding, &mut buf, RoundTripCheck::Fail)?;
+            assert_eq!(
+                buf.as_bstr(),
+                super::UTF8,
+                "valid {} input can be stored as UTF-8 losslessly, which Git accepts as well",
+                encoding.name()
+            );
+        }
+        Ok(())
+    }
 }
 
 mod encode_to_worktree {
@@ -133,4 +151,33 @@ mod encode_to_worktree {
         assert_eq!(re_encoded.as_bstr(), input, "this should be round-trippable too");
         Ok(())
     }
+
+    #[test]
+    fn utf16() -> TestResult {
+        for (encoding, expected) in [
+            (encoding_rs::UTF_16LE, super::UTF16LE),
+            (encoding_rs::UTF_16BE, super::UTF16BE),
+        ] {
+            let mut buf = Vec::new();
+            worktree::encode_to_worktree(super::UTF8.as_bytes(), encoding, &mut buf)?;
+            assert_eq!(
+                buf.as_bstr(),
+                expected.as_bstr(),
+                "Git writes files with a `working-tree-encoding` of {} as UTF-16, not UTF-8",
+                encoding.name()
+            );
+
+            let mut re_encoded = Vec::new();
+            worktree::encode_to_git(&buf, encoding, &mut re_encoded, RoundTripCheck::Fail)?;
+            assert_eq!(re_encoded.as_bstr(), super::UTF8, "this should be round-trippable too");
+        }
+        Ok(())
+    }
 }
+
+/// Text with ASCII, a character from the Basic Multilingual Plane and one that needs a surrogate pair in UTF-16.
+const UTF8: &str = "hi あ😀\n";
+/// [`UTF8`] as `UTF-16LE`, without a byte order mark.
+const UTF16LE: &[u8] = b"h\0i\0 \0\x420\x3d\xd8\x00\xde\n\0";
+/// [`UTF8`] as `UTF-16BE`, without a byte order mark.
+const UTF16BE: &[u8] = b"\0h\0i\0 0\x42\xd8\x3d\xde\x00\0\n";

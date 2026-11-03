@@ -1,5 +1,5 @@
 //! Worktree encodings are powered by the `encoding_rs` crate, which has a narrower focus than the `iconv` library. Thus this implementation
-//! is inherently more limited but will handle the common cases.
+//! is inherently more limited but will handle the common cases. As `encoding_rs` can't encode to UTF-16, we do that ourselves.
 //!  
 //! Note that for encoding to legacy formats, [additional normalization steps](https://docs.rs/encoding_rs/0.8.32/encoding_rs/#preparing-text-for-the-encoders)
 //! can be taken, which we do not yet take unless there is specific examples or problems to solve.

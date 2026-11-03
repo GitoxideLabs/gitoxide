@@ -55,7 +55,12 @@ pub(crate) mod function {
         match round_trip {
             RoundTripCheck::Fail => {
                 let decoded = std::str::from_utf8(buf).or_raise(|| message("encoding-rs produced invalid UTF-8"))?;
-                let (should_equal_src, _actual_encoding, _had_errors) = src_encoding.encode(decoded);
+                let mut utf16 = Vec::new();
+                let should_equal_src = if crate::worktree::encoding::encode_utf16(decoded, src_encoding, &mut utf16) {
+                    utf16.into()
+                } else {
+                    src_encoding.encode(decoded).0
+                };
                 if should_equal_src != src {
                     bail!(validation(format!(
                         "Encoding from '{}' to 'UTF-8' and back is not the same",
