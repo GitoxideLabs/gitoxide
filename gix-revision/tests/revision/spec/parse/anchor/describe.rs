@@ -1,4 +1,4 @@
-use crate::spec::parse::{Options, PrefixHintOwned, parse, try_parse_opts};
+use crate::spec::parse::{Options, PrefixHintOwned, try_parse, try_parse_opts};
 
 fn anchor_hint() -> Option<PrefixHintOwned> {
     Some(PrefixHintOwned::DescribeAnchor {
@@ -8,18 +8,18 @@ fn anchor_hint() -> Option<PrefixHintOwned> {
 }
 
 #[test]
-fn full_format_parses_hash_portion_as_prefix() {
-    let rec = parse("cargo-smart-release-679-g3bee7fb");
+fn full_format_parses_hash_portion_as_prefix() -> gix_testtools::TestResult {
+    let rec = try_parse("cargo-smart-release-679-g3bee7fb")?;
     assert!(rec.kind.is_none());
     assert_eq!(rec.find_ref[0], None, "references are not resolved in describe output");
-    assert_eq!(rec.prefix[0], Some(gix_hash::Prefix::from_hex("3bee7fb").unwrap()));
+    assert_eq!(rec.prefix[0], Some(gix_hash::Prefix::from_hex("3bee7fb")?));
     assert_eq!(rec.prefix_hint[0], anchor_hint());
     assert_eq!(rec.calls, 1);
 
-    let rec = parse("v1.0-0-g3bee7fb");
+    let rec = try_parse("v1.0-0-g3bee7fb")?;
     assert!(rec.kind.is_none());
     assert_eq!(rec.find_ref[0], None, "references are not resolved in describe output");
-    assert_eq!(rec.prefix[0], Some(gix_hash::Prefix::from_hex("3bee7fb").unwrap()));
+    assert_eq!(rec.prefix[0], Some(gix_hash::Prefix::from_hex("3bee7fb")?));
     assert_eq!(
         rec.prefix_hint[0],
         Some(PrefixHintOwned::DescribeAnchor {
@@ -28,10 +28,30 @@ fn full_format_parses_hash_portion_as_prefix() {
         })
     );
     assert_eq!(rec.calls, 1);
+
+    let rec = try_parse("foo--bar-12-g3bee7fb")?;
+    assert_eq!(
+        rec.prefix[0],
+        Some(gix_hash::Prefix::from_hex("3bee7fb")?),
+        "an empty token in the anchor's name does not prevent parsing the trailing hash as a prefix"
+    );
+    assert_eq!(
+        rec.prefix_hint[0],
+        Some(PrefixHintOwned::DescribeAnchor {
+            ref_name: "foo--bar".into(),
+            generation: 12,
+        }),
+        "the anchor's name keeps all of its tokens, including empty ones"
+    );
+    assert_eq!(
+        rec.calls, 1,
+        "the prefix is accepted without falling back to reference lookup despite the empty anchor token"
+    );
+    Ok(())
 }
 
 #[test]
-fn full_format_lookalikes_fallback_to_ref() {
+fn full_format_lookalikes_fallback_to_ref() -> gix_testtools::TestResult {
     let spec = "cargo-smart-release-679-g3bee7fb";
     let rec = try_parse_opts(
         spec,
@@ -39,31 +59,31 @@ fn full_format_lookalikes_fallback_to_ref() {
             reject_prefix: true,
             ..Default::default()
         },
-    )
-    .unwrap();
+    )?;
     assert!(rec.kind.is_none());
     assert_eq!(rec.get_ref(0), spec);
     assert_eq!(rec.prefix[0], None);
     assert_eq!(rec.prefix_hint[0], None);
     assert_eq!(rec.calls, 2, "call prefix, then call ref");
+    Ok(())
 }
 
 #[test]
-fn any_hash_without_suffix_and_prefix_g_is_assumed_to_be_describe_output() {
+fn any_hash_without_suffix_and_prefix_g_is_assumed_to_be_describe_output() -> gix_testtools::TestResult {
     let spec = "foo--bar-gabcdef1";
-    let rec = parse(spec);
+    let rec = try_parse(spec)?;
     assert!(rec.kind.is_none());
     assert_eq!(rec.find_ref[0], None);
     assert_eq!(
         rec.prefix[0],
-        Some(gix_hash::Prefix::from_hex("abcdef1").unwrap()),
+        Some(gix_hash::Prefix::from_hex("abcdef1")?),
         "git does not parse very precisely here"
     );
     assert_eq!(rec.prefix_hint[0], Some(PrefixHintOwned::MustBeCommit));
     assert_eq!(rec.calls, 1);
 
     for invalid_describe in ["-gabcdef1", "gabcdef1"] {
-        let rec = parse(invalid_describe);
+        let rec = try_parse(invalid_describe)?;
         assert!(rec.kind.is_none());
         assert_eq!(
             rec.get_ref(0),
@@ -74,27 +94,29 @@ fn any_hash_without_suffix_and_prefix_g_is_assumed_to_be_describe_output() {
         assert_eq!(rec.prefix_hint[0], None);
         assert_eq!(rec.calls, 1);
     }
+    Ok(())
 }
 
 #[test]
-fn full_format_with_dirty_suffix_is_recognized() {
-    let rec = parse("cargo-smart-release-679-g3bee7fb-dirty");
+fn full_format_with_dirty_suffix_is_recognized() -> gix_testtools::TestResult {
+    let rec = try_parse("cargo-smart-release-679-g3bee7fb-dirty")?;
     assert!(rec.kind.is_none());
     assert_eq!(rec.find_ref[0], None, "git does not see this as prefix, we do");
-    assert_eq!(rec.prefix[0], Some(gix_hash::Prefix::from_hex("3bee7fb").unwrap()));
+    assert_eq!(rec.prefix[0], Some(gix_hash::Prefix::from_hex("3bee7fb")?));
     assert_eq!(rec.prefix_hint[0], anchor_hint());
     assert_eq!(rec.calls, 1);
+    Ok(())
 }
 
 #[test]
-fn partial_format_with_dirty_suffix_is_recognized() {
+fn partial_format_with_dirty_suffix_is_recognized() -> gix_testtools::TestResult {
     let spec = "abcdef1-dirty";
-    let rec = parse(spec);
+    let rec = try_parse(spec)?;
     assert!(rec.kind.is_none());
     assert_eq!(rec.find_ref[0], None);
     assert_eq!(
         rec.prefix[0],
-        Some(gix_hash::Prefix::from_hex("abcdef1").unwrap()),
+        Some(gix_hash::Prefix::from_hex("abcdef1")?),
         "git does not see this as prefix anymore, we do"
     );
     assert_eq!(
@@ -102,20 +124,22 @@ fn partial_format_with_dirty_suffix_is_recognized() {
         "This leaves room for improvement as we could assume that -dirty belongs to a revision, so this could be PrefixHint::MustBeCommit"
     );
     assert_eq!(rec.calls, 1);
+    Ok(())
 }
 
 #[test]
-fn partial_format_lookalikes_are_never_considered() {
+fn partial_format_lookalikes_are_never_considered() -> gix_testtools::TestResult {
     let spec = "abcdef1-dirty-laundry";
-    let rec = parse(spec);
+    let rec = try_parse(spec)?;
     assert!(rec.kind.is_none());
     assert_eq!(rec.get_ref(0), spec);
     assert_eq!(rec.prefix[0], None);
     assert_eq!(rec.calls, 1, "we don't even try the prefix");
+    Ok(())
 }
 
 #[test]
-fn partial_format_with_dirty_suffix_lookalikes_are_treated_as_refs() {
+fn partial_format_with_dirty_suffix_lookalikes_are_treated_as_refs() -> gix_testtools::TestResult {
     let spec = "abcdef1-dirty";
     let rec = try_parse_opts(
         spec,
@@ -123,10 +147,10 @@ fn partial_format_with_dirty_suffix_lookalikes_are_treated_as_refs() {
             reject_prefix: true,
             ..Default::default()
         },
-    )
-    .unwrap();
+    )?;
     assert!(rec.kind.is_none());
     assert_eq!(rec.get_ref(0), spec);
     assert_eq!(rec.prefix[0], None);
     assert_eq!(rec.calls, 2);
+    Ok(())
 }

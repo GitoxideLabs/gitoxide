@@ -259,15 +259,10 @@ fn long_describe_prefix(name: &BStr) -> Option<(&BStr, delegate::PrefixHint<'_>)
         })
         .and_then(|generation| {
             iter.next().map(|token| {
-                let last_token_len = token.len();
-                let first_token_ptr = iter.next_back().map_or(token.as_ptr(), <[_]>::as_ptr);
-                // SAFETY: both pointers are definitely part of the same object
-                #[expect(unsafe_code)]
-                let prior_tokens_len: usize = unsafe { token.as_ptr().offset_from(first_token_ptr) }
-                    .try_into()
-                    .expect("positive value");
+                // `token` is a sub-slice of `name`, and the anchor's name ends where `token` ends.
+                let ref_name_len = token.as_ptr_range().end.addr() - name.as_ptr().addr();
                 delegate::PrefixHint::DescribeAnchor {
-                    ref_name: name[..prior_tokens_len + last_token_len].as_bstr(),
+                    ref_name: name[..ref_name_len].as_bstr(),
                     generation,
                 }
             })
