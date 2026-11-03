@@ -64,6 +64,7 @@ impl State {
         backing: &'backing PathStorageRef,
     ) -> impl Iterator<Item = (&'state mut Entry, &'backing BStr)> {
         self.fs_monitor = None;
+        self.untracked = None;
         self.entries.iter_mut().map(move |e| {
             let path = backing[e.path.clone()].as_bstr();
             (e, path)
@@ -495,24 +496,28 @@ impl State {
             "BUG: return path backing only after taking it, once"
         );
         self.fs_monitor = None;
+        self.untracked = None;
         self.path_backing = backing;
     }
 
     /// Return mutable entries in a slice.
     pub fn entries_mut(&mut self) -> &mut [Entry] {
         self.fs_monitor = None;
+        self.untracked = None;
         &mut self.entries
     }
 
     /// Return a writable slice to entries and read-access to their path storage at the same time.
     pub fn entries_mut_and_pathbacking(&mut self) -> (&mut [Entry], &PathStorageRef) {
         self.fs_monitor = None;
+        self.untracked = None;
         (&mut self.entries, &self.path_backing)
     }
 
     /// Return mutable entries along with their paths in an iterator.
     pub fn entries_mut_with_paths(&mut self) -> impl Iterator<Item = (&mut Entry, &BStr)> {
         self.fs_monitor = None;
+        self.untracked = None;
         let paths = &self.path_backing;
         self.entries.iter_mut().map(move |e| {
             let path = paths[e.path.clone()].as_bstr();
@@ -536,6 +541,7 @@ impl State {
             "BUG: cannot take out backing multiple times"
         );
         self.fs_monitor = None;
+        self.untracked = None;
         std::mem::take(&mut self.path_backing)
     }
 
@@ -545,6 +551,7 @@ impl State {
     /// The `path` must use the repository-relative, slash-separated [`State`] path format.
     pub fn entry_mut_by_path_and_stage(&mut self, path: &BStr, stage: entry::Stage) -> Option<&mut Entry> {
         self.fs_monitor = None;
+        self.untracked = None;
         self.entry_index_by_path_and_stage(path, stage)
             .map(|idx| &mut self.entries[idx])
     }
@@ -570,6 +577,7 @@ impl State {
         path: &BStr,
     ) {
         self.fs_monitor = None;
+        self.untracked = None;
         let path = {
             let path_start = self.path_backing.len();
             self.path_backing.push_str(path);
@@ -588,6 +596,7 @@ impl State {
     /// Unconditionally sort entries as needed to perform lookups quickly.
     pub fn sort_entries(&mut self) {
         self.fs_monitor = None;
+        self.untracked = None;
         let path_backing = &self.path_backing;
         self.entries.sort_by(|a, b| {
             Entry::cmp_filepaths(a.path_in(path_backing), b.path_in(path_backing))
@@ -599,6 +608,7 @@ impl State {
     /// by path and stage as a third criteria.
     pub fn sort_entries_by(&mut self, mut compare: impl FnMut(&Entry, &Entry) -> Ordering) {
         self.fs_monitor = None;
+        self.untracked = None;
         let path_backing = &self.path_backing;
         self.entries.sort_by(|a, b| {
             Entry::cmp_filepaths(a.path_in(path_backing), b.path_in(path_backing))
@@ -618,6 +628,7 @@ impl State {
     /// them when [writing the index](Self::write_to()).
     pub fn remove_entries(&mut self, mut should_remove: impl FnMut(usize, &BStr, &mut Entry) -> bool) {
         self.fs_monitor = None;
+        self.untracked = None;
         let mut index = 0;
         let paths = &self.path_backing;
         self.entries.retain_mut(|e| {
@@ -636,6 +647,7 @@ impl State {
     /// that some extensions might refer to paths which are now deleted.
     pub fn remove_entry_at_index(&mut self, index: usize) -> Entry {
         self.fs_monitor = None;
+        self.untracked = None;
         self.entries.remove(index)
     }
 }
@@ -666,9 +678,16 @@ impl State {
     pub fn remove_resolve_undo(&mut self) -> Option<extension::resolve_undo::Paths> {
         self.resolve_undo.take()
     }
-    /// Obtain the untracked extension.
+    /// Obtain the untracked extension, which is removed by mutable entry or path access and monitor checkpoint changes.
     pub fn untracked(&self) -> Option<&extension::UntrackedCache> {
         self.untracked.as_ref()
+    }
+    /// Replace the untracked cache and return the previous one.
+    ///
+    /// Entry and path mutations, and changes to the filesystem monitor checkpoint, discard this cache.
+    /// Callers restoring it afterwards must invalidate listings affected by those changes first.
+    pub fn set_untracked(&mut self, cache: Option<extension::UntrackedCache>) -> Option<extension::UntrackedCache> {
+        std::mem::replace(&mut self.untracked, cache)
     }
     /// Obtain the fsmonitor extension, which is removed by mutable entry or path access.
     pub fn fs_monitor(&self) -> Option<&extension::FsMonitor> {
@@ -680,6 +699,9 @@ impl State {
     /// the monitor. The bitmap is rebuilt from these flags when writing, so removed or reordered
     /// entries cannot leave stale bitmap positions behind. Passing `None` removes the extension.
     pub fn set_fs_monitor_token(&mut self, token: Option<extension::fs_monitor::Token>) {
+        if token.as_ref() != self.fs_monitor.as_ref().map(extension::FsMonitor::token) {
+            self.untracked = None;
+        }
         self.fs_monitor = token.map(|token| extension::FsMonitor::from_entries(token, &self.entries));
     }
     /// Return `true` if the end-of-index extension was present when decoding this index.
