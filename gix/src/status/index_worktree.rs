@@ -125,6 +125,7 @@ impl Repository {
             self.objects.clone().into_arc().expect("arc conversion always works"),
             progress,
             gix_status::index_as_worktree_with_renames::Context {
+                fsmonitor: None,
                 pathspec: pathspec.search,
                 resource_cache,
                 should_interrupt,
