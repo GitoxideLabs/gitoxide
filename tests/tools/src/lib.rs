@@ -8,6 +8,30 @@
 //! Valid values are the names of hash functions supported by `gix_hash::Kind` (e.g., `sha1`, `sha256`).
 //! If not set, the default hash function via `gix_hash::Kind::default()` is used.
 //!
+//! ### `GIX_TEST_FIXTURE_CACHE` and `GIX_TEST_FIXTURE_SOURCE_ROOT`
+//!
+//! Set both to absolute paths to share generated read-only scripted fixtures across equivalent source
+//! snapshots within one owned test run.
+//!
+//! A source snapshot is a source tree kept at a fixed revision or working-tree state for testing, such
+//! as a checkout or an exported copy of the workspace. It contains the crates, fixture scripts and their
+//! inputs, not the generated fixtures. Equivalent snapshots can live at different absolute paths.
+//!
+//! - `GIX_TEST_FIXTURE_SOURCE_ROOT` names the current snapshot's workspace root, for example
+//!   `/tmp/qa-run-123/snapshot-a`, not a crate directory or its `tests/fixtures` directory.
+//!   An example fixture script would be at
+//!   `/tmp/qa-run-123/snapshot-a/gix-discover/tests/fixtures/make_nested_repos.sh`.
+//! - `GIX_TEST_FIXTURE_CACHE` names the shared output directory, for example
+//!   `/tmp/qa-run-123/fixture-cache`. Use a fresh cache namespace for each owned test run.
+//!   When shared caching applies, that script's generated test files are under
+//!   `/tmp/qa-run-123/fixture-cache/<key>/fixture-<suffix>/`, including `.git/HEAD` and
+//!   `inner/.git/HEAD`. Here `<key>` is the fixture-identity hash and `<suffix>` is a random directory suffix.
+//!
+//! Tests in a second equivalent snapshot at `/tmp/qa-run-123/snapshot-b` use that path for
+//! `GIX_TEST_FIXTURE_SOURCE_ROOT` but keep `GIX_TEST_FIXTURE_CACHE` pointing to the same
+//! `/tmp/qa-run-123/fixture-cache`. Crate and script paths are keyed relative to the source root, allowing
+//! equivalent requests from both snapshots to reuse a generated fixture despite their different roots.
+//!
 //! ## Script Isolation
 //!
 //! Fixture scripts and [`git()`] use `GIT_CONFIG_PARAMETERS` to disable signing and automatic maintenance
@@ -52,6 +76,8 @@ pub mod signature;
 
 /// Capture complete, stable repository state for integration-test assertions.
 pub mod repository;
+
+mod fixture_cache;
 
 const ARCHIVE_DIR_NAME: &str = "generated-archives";
 const BASH_FIXTURE_PRELUDE: &str = include_str!("scripted_fixture_prelude.sh");
@@ -1848,48 +1874,47 @@ where
         &script_identity,
         archive_policy.cache_variant(),
     );
-    let _marker = marker_if_needed(destination_dir, script_basename)?;
-
     let script_identity_for_archive = match args_in_hash {
         ArgsInHash::Yes => script_identity,
         ArgsInHash::No => 0,
     };
     let script_absolute_path = env::current_dir()?.join(&script_path);
+    let shared_cache = if !force_run
+        && archive_policy == ArchivePolicy::Normal
+        && fixture_cache::Cache::is_requested_from_env()
+        && (env::var_os("GIX_TEST_IGNORE_ARCHIVES").is_some() || !archive_file_path.try_exists()?)
+        && (should_skip_all_archive_creation() || excludes.is_excluded(&archive_file_path))
+    {
+        fixture_cache::Cache::from_env(&script_path, &args, object_hash, script_identity, post_version)?
+    } else {
+        None
+    };
     let post_process_closure = post_process.map(|(_, f)| f);
-
-    let res = run_fixture_generator_with_marker_handling(
-        &archive_file_path,
-        &script_result_directory,
-        script_identity_for_archive,
-        force_run,
-        archive_policy,
-        excludes,
-        &format!("using script \"{}\"", script_location.display()),
-        |fixture_state| {
-            if let FixtureState::Uninitialized(dir) = fixture_state {
-                // Bash 3.2 loses BASH_SOURCE after calling functions defined by `-c`. Sourcing a
-                // temporary prelude file preserves script context without exporting functions.
-                let prelude_file = if is_bash_fixture {
-                    let mut file = tempfile::NamedTempFile::new()?;
-                    std::io::Write::write_all(file.as_file_mut(), BASH_FIXTURE_PRELUDE.as_bytes())?;
-                    Some(file)
-                } else {
-                    None
-                };
-                let mut cmd = if let Some(file) = prelude_file.as_ref() {
-                    let mut cmd = command_with_environment_snapshot(bash_program());
-                    let prelude_path = gix_path::from_bstring(
-                        gix_path::to_unix_separators_on_windows(gix_path::into_bstr(file.path())?).into_owned(),
-                    )?;
-                    cmd.arg("-c")
-                        .arg("source \"$1\" || exit; shift; source \"$0\" \"$@\"")
-                        .arg(&script_absolute_path)
-                        .arg(prelude_path);
-                    cmd
-                } else {
-                    command_with_environment_snapshot(&script_absolute_path)
-                };
-                let output = match configure_command(&mut cmd, object_hash, &args, dir).output() {
+    let make_fixture = |fixture_state: FixtureState<'_>| {
+        if let FixtureState::Uninitialized(dir) = fixture_state {
+            // Bash 3.2 loses BASH_SOURCE after calling functions defined by `-c`. Sourcing a
+            // temporary prelude file preserves script context without exporting functions.
+            let prelude_file = if is_bash_fixture {
+                let mut file = tempfile::NamedTempFile::new()?;
+                std::io::Write::write_all(file.as_file_mut(), BASH_FIXTURE_PRELUDE.as_bytes())?;
+                Some(file)
+            } else {
+                None
+            };
+            let mut cmd = if let Some(file) = prelude_file.as_ref() {
+                let mut cmd = command_with_environment_snapshot(bash_program());
+                let prelude_path = gix_path::from_bstring(
+                    gix_path::to_unix_separators_on_windows(gix_path::into_bstr(file.path())?).into_owned(),
+                )?;
+                cmd.arg("-c")
+                    .arg("source \"$1\" || exit; shift; source \"$0\" \"$@\"")
+                    .arg(&script_absolute_path)
+                    .arg(prelude_path);
+                cmd
+            } else {
+                command_with_environment_snapshot(&script_absolute_path)
+            };
+            let output = match configure_command(&mut cmd, object_hash, &args, dir).output() {
                     Ok(out) => out,
                     Err(err)
                         if !is_bash_fixture
@@ -1901,18 +1926,32 @@ where
                     }
                     Err(err) => return Err(err.into()),
                 };
-                if !output.status.success() {
-                    eprintln!("stdout: {}", output.stdout.as_bstr());
-                    eprintln!("stderr: {}", output.stderr.as_bstr());
-                    return Err(format!("fixture script of {cmd:?} failed with {}", output.status).into());
-                }
+            if !output.status.success() {
+                eprintln!("stdout: {}", output.stdout.as_bstr());
+                eprintln!("stderr: {}", output.stderr.as_bstr());
+                return Err(format!("fixture script of {cmd:?} failed with {}", output.status).into());
             }
-            if let Some(mut f) = post_process_closure {
-                f(fixture_state).map(Some)
-            } else {
-                Ok(None)
-            }
-        },
+        }
+        if let Some(mut f) = post_process_closure {
+            f(fixture_state).map(Some)
+        } else {
+            Ok(None)
+        }
+    };
+
+    if let Some(cache) = shared_cache {
+        return Ok(Some(cache.obtain(make_fixture)?));
+    }
+    let _marker = marker_if_needed(destination_dir, script_basename)?;
+    let res = run_fixture_generator_with_marker_handling(
+        &archive_file_path,
+        &script_result_directory,
+        script_identity_for_archive,
+        force_run,
+        archive_policy,
+        excludes,
+        &format!("using script \"{}\"", script_location.display()),
+        make_fixture,
     )?;
 
     Ok(res.map(|res| (script_result_directory, res)))
