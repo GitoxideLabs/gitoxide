@@ -129,6 +129,7 @@ pub(super) mod function {
                                             excludes: excludes.as_mut(),
                                             objects: &objects,
                                             explicit_traversal_root: Some(worktree),
+                                            cached_listing: dirwalk_ctx.cached_listing,
                                         },
                                         options,
                                         &mut collect,
@@ -419,6 +420,10 @@ pub(super) mod function {
         }
 
         impl<T, U> gix_dir::walk::Delegate for Delegate<'_, '_, T, U> {
+            fn can_omit_ignored_directories(&self) -> bool {
+                true
+            }
+
             fn emit(&mut self, entry: EntryRef<'_>, collapsed_directory_status: Option<Status>) -> Action {
                 // Status never shows untracked entries of untrackable type
                 if entry.disk_kind != Some(gix_dir::entry::Kind::Untrackable) {

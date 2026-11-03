@@ -226,6 +226,7 @@ pub(super) fn worktree_directories(repo: &Repository, index: &gix_index::State) 
             excludes: Some(&mut excludes.inner),
             objects: &repo.objects,
             explicit_traversal_root: Some(root),
+            cached_listing: None,
         },
         gix_dir::walk::Options {
             precompose_unicode: caps.precompose_unicode,

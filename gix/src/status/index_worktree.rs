@@ -172,6 +172,7 @@ impl Repository {
                     git_dir_realpath: git_dir_realpath.as_path(),
                     current_dir: cwd,
                     ignore_case_index_lookup: accelerate_lookup.as_ref(),
+                    cached_listing: None,
                 },
             },
             gix_status::index_as_worktree_with_renames::Options {
