@@ -134,6 +134,14 @@ impl State {
                     })
             },
             &|write| {
+                extensions
+                    .should_write(extension::untracked_cache::SIGNATURE)
+                    .and_then(|signature| {
+                        self.untracked()
+                            .map(|cache| cache.write_to(write, self.object_hash).map(|_| signature))
+                    })
+            },
+            &|write| {
                 self.is_sparse()
                     .then(|| extension::sparse::write_to(write).map(|_| extension::sparse::SIGNATURE))
             },
