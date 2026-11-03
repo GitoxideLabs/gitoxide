@@ -813,7 +813,7 @@ fn draw_history(
         })
         .collect();
     let lanes = app.render_lanes(start..render_end);
-    let enrichment_gutter = Line::raw(crate::enrich::marker(true, true, true, true)).width() as u16;
+    let enrichment_gutter = Line::raw("🚧📝✔️✨").width() as u16;
     let has_duplicate_change_id = app.has_duplicate_change_ids();
     let change_id_gutter = if has_duplicate_change_id {
         Line::raw("👯‍♂️").width() as u16
@@ -883,6 +883,12 @@ fn draw_history(
                     .then(|| app.note(row.id))
                     .flatten()
                     .map(|note| gix::objs::commit::MessageRef::from_bytes(note).title);
+                let checks_title = row_selected
+                    .then(|| app.checks_pass_message(row.id))
+                    .flatten()
+                    .map(crate::enrich::checks_pass_message)
+                    .filter(|message| !message.is_empty())
+                    .map(|message| gix::objs::commit::MessageRef::from_bytes(message).title);
                 let mut metadata = metadata_columns(
                     row,
                     app.title(row),
@@ -899,6 +905,7 @@ fn draw_history(
                         show_trailers,
                         has_notes: !app.notes(row.id).is_empty(),
                         note_title: if compact_history { None } else { note_title },
+                        checks_title: if compact_history { None } else { checks_title },
                         title_format: if shorten_titles {
                             TitleFormat::Abbreviated
                         } else {
@@ -1251,11 +1258,17 @@ fn draw_history(
             color(highlight).add_modifier(Modifier::REVERSED)
         });
         let conflict = app.conflict_marker(row.id, head);
+        let checks_marker = app
+            .checks_pass_message(row.id)
+            .map_or("", crate::enrich::checks_pass_marker);
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::raw(if app.todo(row.id) { "🚧" } else { "  " }),
                 Span::raw(if app.note(row.id).is_some() { "📝" } else { "  " }),
-                Span::raw(if app.checks_pass(row.id) { "✔️" } else { "  " }),
+                Span::raw(format!(
+                    "{checks_marker}{}",
+                    " ".repeat(2usize.saturating_sub(Line::raw(checks_marker).width()))
+                )),
                 Span::raw(if app.refackiewed(row.id) { "✨" } else { "  " }),
             ])),
             Rect::new(body.x, y, enrichment_gutter, 1),
@@ -1337,7 +1350,7 @@ fn draw_history(
             );
             for x in body.x..end {
                 let cell = &mut buffer[(x, y)];
-                if cell.fg == Color::Black && cell.bg == Color::Yellow {
+                if cell.fg == Color::Black && matches!(cell.bg, Color::Yellow | Color::Green) {
                     cell.modifier.remove(Modifier::REVERSED);
                 }
             }
@@ -1557,7 +1570,11 @@ fn draw_history(
             let selected = app.selected.and_then(|index| app.rows.get(index)).map(|row| row.id);
             let notes = selected.map(|id| app.notes(id)).unwrap_or_default();
             let note = selected.and_then(|id| app.note(id));
-            render_commit_message(frame, area, message, note, notes, app.commit_offset)
+            let checks = selected
+                .and_then(|id| app.checks_pass_message(id))
+                .map(crate::enrich::checks_pass_message)
+                .filter(|message| !message.is_empty());
+            render_commit_message(frame, area, message, note, checks, notes, app.commit_offset)
         } else {
             0
         };
@@ -2370,6 +2387,7 @@ fn render_commit_message(
     area: Rect,
     message: &BStr,
     note: Option<&BStr>,
+    checks: Option<&BStr>,
     notes: &[BString],
     offset: usize,
 ) -> usize {
@@ -2388,7 +2406,8 @@ fn render_commit_message(
         return render_scrolling_paragraph(
             frame,
             area,
-            Paragraph::new(commit_text(note, parsed.title, parsed.body, notes, area.width)).wrap(Wrap { trim: false }),
+            Paragraph::new(commit_text(note, checks, parsed.title, parsed.body, notes, area.width))
+                .wrap(Wrap { trim: false }),
             offset,
         );
     }
@@ -2402,12 +2421,12 @@ fn render_commit_message(
             return render_scrolling_paragraph(
                 frame,
                 area,
-                Paragraph::new(commit_text(note, parsed.title, parsed.body, notes, area.width))
+                Paragraph::new(commit_text(note, checks, parsed.title, parsed.body, notes, area.width))
                     .wrap(Wrap { trim: false }),
                 offset,
             );
         }
-        let mut text = commit_text(note, parsed.title, body_message, notes, area.width);
+        let mut text = commit_text(note, checks, parsed.title, body_message, notes, area.width);
         text.lines.push(Line::default());
         for trailer in trailers {
             text.lines.extend(
@@ -2423,7 +2442,7 @@ fn render_commit_message(
     }
     let key_width = key_width as u16;
 
-    let text = commit_text(note, parsed.title, body_message, notes, area.width);
+    let text = commit_text(note, checks, parsed.title, body_message, notes, area.width);
     let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
     let body_height = paragraph.line_count(area.width);
     let value_x = area.x.saturating_add(key_width).saturating_add(2);
@@ -2496,15 +2515,22 @@ fn render_scrolling_paragraph(frame: &mut Frame<'_>, area: Rect, paragraph: Para
 
 fn commit_text<'a>(
     note: Option<&'a BStr>,
+    checks: Option<&'a BStr>,
     title: &'a BStr,
     body: Option<&'a BStr>,
     notes: &'a [BString],
     width: u16,
 ) -> Text<'a> {
     let mut text = message_text(title, body);
-    if let Some(note) = note {
+    for (note, style) in [(checks, color(Color::Green)), (note, Style::default())] {
+        let Some(note) = note else { continue };
         let parsed = gix::objs::commit::MessageRef::from_bytes(note);
         let mut prefixed = message_text(parsed.title, parsed.body);
+        for line in &mut prefixed.lines {
+            for span in &mut line.spans {
+                span.style = span.style.patch(style);
+            }
+        }
         prefixed.lines.push(Line::styled(
             "─".repeat(width as usize),
             Style::default().add_modifier(Modifier::DIM),
@@ -3037,6 +3063,7 @@ struct MetadataOptions<'a> {
     show_trailers: bool,
     has_notes: bool,
     note_title: Option<&'a BStr>,
+    checks_title: Option<&'a BStr>,
     title_format: TitleFormat,
     use_mailmap: bool,
     ref_mode: RefMode,
@@ -3102,6 +3129,7 @@ fn metadata_columns<'a>(
         show_trailers,
         has_notes,
         note_title,
+        checks_title,
         title_format,
         use_mailmap,
         ref_mode,
@@ -3306,10 +3334,14 @@ fn metadata_columns<'a>(
     }
     let mut title_spans = Vec::new();
     if !show_emails {
-        if let Some(note_title) = note_title {
+        for (note_title, style) in [
+            (note_title, note_style()),
+            (checks_title, note_style().bg(Color::Green)),
+        ] {
+            let Some(note_title) = note_title else { continue };
             let mut note_title = markdown_title_spans(note_title);
             for span in &mut note_title {
-                span.style = span.style.patch(note_style());
+                span.style = span.style.patch(style);
             }
             title_spans.extend(note_title);
             title_spans.push(Span::raw(" "));
@@ -3363,6 +3395,7 @@ pub(crate) fn plain_history_metadata(
             show_trailers: app.name_mode == NameMode::All && app.show_trailers,
             has_notes,
             note_title: None,
+            checks_title: None,
             title_format: TitleFormat::Original,
             use_mailmap: app.use_mailmap,
             ref_mode: app.ref_mode,
@@ -3399,6 +3432,7 @@ pub(crate) fn todo_metadata(app: &App, row: &CommitRow, mailmap: &gix::mailmap::
             show_trailers: app.name_mode == crate::app::NameMode::All && app.show_trailers,
             has_notes: !app.notes(row.id).is_empty(),
             note_title: None,
+            checks_title: None,
             title_format: TitleFormat::Original,
             use_mailmap: app.use_mailmap,
             ref_mode: app.ref_mode,
@@ -5102,7 +5136,12 @@ mod tests {
                 note: Some("follow-up *title*\n\nwhy it matters\n".into()),
             },
         );
-        app.set_tree_enrichment(id, crate::enrich::TreeEnrichment { checks_pass: true });
+        app.set_tree_enrichment(
+            id,
+            crate::enrich::TreeEnrichment {
+                checks_pass: Some(BString::default()),
+            },
+        );
         app.set_patch_enrichment(id, crate::app::PatchEnrichmentState::Fresh { refackiewed: true });
         let mut terminal = Terminal::new(TestBackend::new(80, 2))?;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
@@ -5214,6 +5253,61 @@ mod tests {
             " ",
             "a stale patch identity clears its marker without moving the remaining columns"
         );
+        for marker in ["👩🏽‍💻", "©"] {
+            app.set_tree_enrichment(
+                id,
+                crate::enrich::TreeEnrichment {
+                    checks_pass: Some(
+                        format!(
+                            "{marker} fast *checks*
+
+Native tests: 2s"
+                        )
+                        .into(),
+                    ),
+                },
+            );
+            terminal.draw(|frame| draw(frame, &mut app, &head))?;
+            let row = terminal.backend().buffer();
+            assert_eq!(
+                row[(4, 0)].symbol(),
+                marker,
+                "the entire leading emoji occupies the checks slot"
+            );
+            assert_eq!(
+                row[(8, 0)].symbol(),
+                ">",
+                "even a narrow emoji preserves the status column"
+            );
+            assert!(
+                rendered_line(&terminal, 0).contains("follow-up title fast checks subject"),
+                "only the checks title appears between the enrichment note and commit title"
+            );
+            let checks_x = (title_x + 16..80)
+                .find(|x| row[(*x, 0)].symbol() == "f")
+                .expect("the checks title is visible");
+            let checks = &row[(checks_x, 0)];
+            assert_eq!(
+                checks.fg,
+                Color::Black,
+                "the checks title remains readable on its background"
+            );
+            assert_eq!(
+                checks.bg,
+                Color::Green,
+                "checks use a different color from enrichment notes"
+            );
+            assert!(
+                !checks.modifier.contains(Modifier::REVERSED),
+                "HEAD selection preserves the checks title colors"
+            );
+        }
+        app.selected = None;
+        terminal.draw(|frame| draw(frame, &mut app, &head))?;
+        assert!(
+            !rendered_line(&terminal, 0).contains("fast checks"),
+            "unselected rows keep the checks emoji without their message title"
+        );
         Ok(())
     }
 
@@ -5250,7 +5344,12 @@ mod tests {
                 note: Some("note".into()),
             },
         );
-        app.set_tree_enrichment(ids[2], crate::enrich::TreeEnrichment { checks_pass: true });
+        app.set_tree_enrichment(
+            ids[2],
+            crate::enrich::TreeEnrichment {
+                checks_pass: Some(BString::default()),
+            },
+        );
         app.set_patch_enrichment(ids[3], crate::app::PatchEnrichmentState::Fresh { refackiewed: true });
         app.set_change_ids(
             std::collections::HashMap::new(),
@@ -7113,7 +7212,7 @@ mod tests {
             let y = (0..16)
                 .find(|y| rendered_line(terminal, *y).contains(&format!("commit {n}")))
                 .expect("each source and destination row remains visible");
-            let x = Line::raw(crate::enrich::marker(true, true, true, true)).width() as u16;
+            let x = Line::raw("🚧📝✔️✨").width() as u16;
             let marker: String = (x..x + 4)
                 .map(|x| terminal.backend().buffer()[(x, y)].symbol())
                 .collect();
@@ -10019,7 +10118,7 @@ mod tests {
         let message = b"subject\n\nbody\n\nShort: one two three four five six seven\nCo-authored-by: Alice".as_bstr();
 
         terminal.draw(|frame| {
-            render_commit_message(frame, frame.area(), message, None, &[], 0);
+            render_commit_message(frame, frame.area(), message, None, None, &[], 0);
         })?;
 
         assert_eq!(
@@ -10066,6 +10165,7 @@ mod tests {
                 frame.area(),
                 b"plain subject\n\nplain body".as_bstr(),
                 None,
+                None,
                 &[],
                 0,
             );
@@ -10086,7 +10186,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(60, 8))?;
         let message = b"subject\n\nnot a trailer\nSigned-off-by: Alice\nanother note\nSigned-off-by: Bob".as_bstr();
         terminal.draw(|frame| {
-            render_commit_message(frame, frame.area(), message, None, &[], 0);
+            render_commit_message(frame, frame.area(), message, None, None, &[], 0);
         })?;
         assert!(
             rendered_line(&terminal, 2).contains("not a trailer another note"),
@@ -10118,6 +10218,7 @@ mod tests {
                 frame.area(),
                 b"commit *subject*\n\ncommit ~~body~~\n\nSigned-off-by: Alice".as_bstr(),
                 Some(b"todo *subject*\n\ntodo **body**".as_bstr()),
+                None,
                 &[],
                 0,
             );
@@ -10144,6 +10245,84 @@ mod tests {
         assert!(
             rendered_line(&terminal, 8).contains("Alice"),
             "commit trailers retain their layout"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn checks_message_follows_the_enrichment_note_in_its_own_color() -> gix_testtools::Result {
+        let mut terminal = Terminal::new(TestBackend::new(40, 16))?;
+        terminal.draw(|frame| {
+            render_commit_message(
+                frame,
+                frame.area(),
+                b"commit subject
+
+commit body
+
+Signed-off-by: Alice"
+                    .as_bstr(),
+                Some(b"review note".as_bstr()),
+                Some(
+                    b"fast *checks*
+
+Native tests: **2s**
+
+Clippy: 1s"
+                        .as_bstr(),
+                ),
+                &[],
+                0,
+            );
+        })?;
+
+        for (line, expected) in [
+            (0, "review note"),
+            (2, "fast checks"),
+            (4, "Native tests: 2s"),
+            (6, "Clippy: 1s"),
+            (8, "commit subject"),
+        ] {
+            assert_eq!(
+                rendered_line(&terminal, line).trim(),
+                expected,
+                "notes, checks and commit stay ordered"
+            );
+        }
+        assert!(
+            rendered_line(&terminal, 12).contains("Alice"),
+            "commit trailers retain their position"
+        );
+        let buffer = terminal.backend().buffer();
+        assert_eq!(
+            buffer[(0, 0)].fg,
+            Color::Reset,
+            "ordinary enrichment notes retain their color"
+        );
+        for line in [2, 4, 6] {
+            assert_eq!(
+                buffer[(0, line)].fg,
+                Color::Green,
+                "checks title and body use the checks color"
+            );
+            assert_eq!(
+                buffer[(0, line)].bg,
+                Color::Reset,
+                "the message pane keeps its background"
+            );
+        }
+        assert!(
+            buffer[(5, 2)].modifier.contains(Modifier::ITALIC),
+            "checks titles render Markdown"
+        );
+        assert!(
+            buffer[(14, 4)].modifier.contains(Modifier::BOLD),
+            "checks bodies render Markdown"
+        );
+        assert_eq!(
+            buffer[(0, 8)].fg,
+            Color::Reset,
+            "checks colors do not leak into the commit"
         );
         Ok(())
     }
@@ -10509,6 +10688,7 @@ mod tests {
                 frame.area(),
                 b"subject\n\nbody\n\nSigned-off-by: Alice".as_bstr(),
                 None,
+                None,
                 &["review *note*".into()],
                 0,
             );
@@ -10805,6 +10985,7 @@ mod tests {
                 show_trailers: true,
                 has_notes: false,
                 note_title: None,
+                checks_title: None,
                 title_format: TitleFormat::Original,
                 use_mailmap: false,
                 ref_mode: RefMode::All,
@@ -10928,6 +11109,7 @@ mod tests {
                 show_trailers: false,
                 has_notes: false,
                 note_title: None,
+                checks_title: None,
                 title_format: TitleFormat::Original,
                 use_mailmap: false,
                 ref_mode: RefMode::None,

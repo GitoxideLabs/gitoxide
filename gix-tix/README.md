@@ -91,6 +91,14 @@ move lines or alter unrelated files. Changing the patch hides its old mark;
 returning to the approved version restores it. The existing `✔️` checks-pass
 mark still belongs to one exact tree.
 
+Use `tix enrich tree checks-pass` to toggle a tree's check result. Supplying a
+message sets or replaces it, for example `tix enrich tree checks-pass "⚡ Fast QA passed in 42s"`.
+The first emoji replaces `✔️` in the gutter. The message's title appears in green
+after the selected commit's enrichment note, and its body appears in the commit
+pane. Multiline messages work like commit messages, but arbitrary text is accepted.
+Use `--revision REVSPEC` to target another commit, `--clear` to remove the whole
+result, or an empty message (`""`) to set a plain check mark explicitly.
+
 Tix stores the patch identity in a commit header and the mark in worktree-local
 notes. Marking a commit without that header rewrites it and its descendants,
 preserving staged changes and worktree files; previously final descendants stay

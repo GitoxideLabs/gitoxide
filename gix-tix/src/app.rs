@@ -1556,9 +1556,13 @@ impl App {
     }
 
     pub(crate) fn checks_pass(&self, id: ObjectId) -> bool {
+        self.checks_pass_message(id).is_some()
+    }
+
+    pub(crate) fn checks_pass_message(&self, id: ObjectId) -> Option<&BStr> {
         self.tree_enrichments
             .get(&id)
-            .is_some_and(|enrichment| enrichment.checks_pass)
+            .and_then(|enrichment| enrichment.checks_pass.as_ref().map(|message| message.as_bstr()))
     }
 
     pub(crate) fn patch_enrichment_loaded(&self, id: ObjectId) -> bool {

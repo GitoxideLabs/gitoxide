@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     ffi::{OsStr, OsString},
     io::Write,
     path::PathBuf,
@@ -8,6 +8,7 @@ use std::{
 use clap::Parser;
 use gix::{
     Result,
+    bstr::ByteSlice,
     error::{OptionExt, ResultExt, bail, message},
 };
 use ratatui::text::Line;
@@ -652,16 +653,17 @@ fn write_history(
         }
     }
 
-    let mut checks_pass_ids = HashSet::new();
+    let mut checks_pass_messages = HashMap::new();
     let mut tree_enrichments = crate::enrich::open_tree(repository)?;
     for row in &app.rows {
         let loaded = crate::enrich::tree_id(repository, row.id)
             .and_then(|tree_id| crate::enrich::load_tree(&mut tree_enrichments, tree_id));
         match loaded {
-            Ok(enrichment) if enrichment.checks_pass => {
-                checks_pass_ids.insert(row.id);
+            Ok(enrichment) => {
+                if let Some(message) = enrichment.checks_pass {
+                    checks_pass_messages.insert(row.id, message);
+                }
             }
-            Ok(_) => {}
             Err(err) => tracing::warn!(commit_id = %row.id, error = %err, "ignored malformed tix tree enrichment"),
         }
     }
@@ -690,7 +692,7 @@ fn write_history(
             Line::raw(crate::enrich::marker(
                 todo_ids.contains(&row.id),
                 enrichment_note_ids.contains(&row.id),
-                checks_pass_ids.contains(&row.id),
+                checks_pass_messages.get(&row.id).map(|message| message.as_bstr()),
                 refackiewed_ids.contains(&row.id),
             ))
             .width()
@@ -711,7 +713,7 @@ fn write_history(
         let enrichment_marker = crate::enrich::marker(
             todo_ids.contains(&row.id),
             enrichment_note_ids.contains(&row.id),
-            checks_pass_ids.contains(&row.id),
+            checks_pass_messages.get(&row.id).map(|message| message.as_bstr()),
             refackiewed_ids.contains(&row.id),
         );
         let ambiguity_marker = if change_ids.ambiguous.contains(&row.id) {
@@ -721,8 +723,8 @@ fn write_history(
         };
         let mut gutter = String::new();
         if enrichment_gutter != 0 {
-            gutter.push_str(enrichment_marker);
-            gutter.push_str(&" ".repeat(enrichment_gutter.saturating_sub(Line::raw(enrichment_marker).width())));
+            gutter.push_str(&enrichment_marker);
+            gutter.push_str(&" ".repeat(enrichment_gutter.saturating_sub(Line::raw(&enrichment_marker).width())));
         }
         if let Some(width) = ambiguity_gutter {
             gutter.push_str(ambiguity_marker);
@@ -1561,7 +1563,8 @@ mod tests {
             &["tix", "enrich", "commit", "note", "topic"][..],
             &["tix", "enrich", "commit", "git-note"][..],
             &["tix", "enrich", "tree", "checks-pass"][..],
-            &["tix", "enrich", "tree", "checks-pass", "--clear", "topic"][..],
+            &["tix", "enrich", "tree", "checks-pass", "--clear", "--revision", "topic"][..],
+            &["tix", "enrich", "tree", "checks-pass", "⚡ fast checks"][..],
         ] {
             assert!(
                 matches!(
@@ -3163,7 +3166,11 @@ mod tests {
         let head_change_id = crate::change_id::for_commit(&repository, head)?;
         assert!(crate::enrich::toggle(&repository, head)?.todo);
         crate::enrich::set_note(&repository, head, Some(b"follow up"))?;
-        assert!(crate::enrich::toggle_checks_pass(&repository, head)?.checks_pass);
+        assert!(
+            crate::enrich::toggle_checks_pass(&repository, head)?
+                .checks_pass
+                .is_some()
+        );
         assert!(crate::enrich::ensure_refackiewed(&repository, head, true)?.refackiewed);
 
         let mut output = Vec::new();
@@ -3238,6 +3245,25 @@ mod tests {
             "the hidden boundary row is included"
         );
         assert!(!output.contains('\u{1b}'), "plain output contains no terminal escapes");
+
+        for marker in ["👩🏽‍💻", "©"] {
+            let message = format!("{marker} Fast QA result");
+            crate::enrich::set_checks_pass(&repository, head, Some(message.as_bytes()))?;
+            let mut output = Vec::new();
+            write_history(&repository, &[], &[OsString::from("v1")], &mut output)?;
+            let output = String::from_utf8(output)?;
+            assert!(
+                output
+                    .lines()
+                    .any(|line| line.starts_with(&format!("🚧📝{marker}✨💥├"))),
+                "plain history preserves the whole custom checks emoji in its gutter: {output:?}"
+            );
+            assert!(
+                !output.contains("Fast QA result"),
+                "plain history keeps message text out of commit titles"
+            );
+        }
+        crate::enrich::set_checks_pass(&repository, head, Some(b""))?;
 
         for header_state in ["missing", "stale", "pending"] {
             let mut variant = repository.find_commit(head)?.decode()?.into_owned()?;
