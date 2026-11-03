@@ -204,11 +204,17 @@ without trading responsiveness for metadata that is not visible.
 - `tix enrich commit todo [--clear] [REVSPEC]`, `tix enrich commit note
   [REVSPEC] [-m MESSAGE ... | -f FILE]`, `tix enrich commit git-note
   [REVSPEC] [-m MESSAGE ... | -f FILE]`, `tix enrich tree
-  checks-pass [--clear] [REVSPEC]`, and `tix enrich patch refackiewed [--clear]
+  checks-pass [MESSAGE | --clear] [--revision REVSPEC]`, and `tix enrich patch refackiewed [--clear]
   [REVSPEC]` expose the TUI's enrichment actions without opening it.
   Targets default to `HEAD` and accept Git revisions or unambiguous
-  reverse-hex change-ID prefixes from the default Tix view. Boolean commands
-  idempotently set their marker, or clear it with `--clear`. Note commands use
+  reverse-hex change-ID prefixes from the default Tix view. Todo and patch commands
+  idempotently set their marker, or clear it with `--clear`. Checks-pass without a
+  message toggles the result; a positional string replaces the single result and
+  its optional message, and an empty string explicitly sets a plain check mark.
+  `--clear` removes both mark and message. Setting the same result again leaves
+  notes and undo history unchanged. Message bytes are retained without requiring
+  a commit-message format. Checks-pass uses `--revision` for its target so arbitrary
+  text, including a revision name, remains an unambiguous message. Note commands use
   Git's editor by default. Like `tix reword`, repeated `-m/--message` values form
   paragraphs and `-f/--file` reads a complete message from a file, or standard
   input with `-`. Explicit input replaces the note without opening an editor;
@@ -217,7 +223,7 @@ without trading responsiveness for metadata that is not visible.
   lines and other enrichments, remove empty notes, and leave unchanged notes and
   undo history alone. Output
   starts with the target's abbreviated commit and change IDs before its status.
-  The patch command writes its status to stderr. Marking a legacy patch can
+  The patch and checks-pass commands write their status to stderr. Marking a legacy patch can
   rewrite its commit to add the identity described below; the status then
   identifies the rewritten commit.
 - `tix new [--index | --worktree | --worktree-untracked] [--allow-empty] [--todo]
@@ -695,18 +701,29 @@ without trading responsiveness for metadata that is not visible.
   diagnosed, while mutation refuses to overwrite them.
 - Tree enrichments use the same human-readable Git config format in notes headed
   at `refs/worktree/tix/enrich-tree`. They are keyed directly by tree object ID;
-  `[tree] checks-pass = true` therefore applies to every commit with that exact
-  tree and naturally disappears when a rewrite changes the tree.
+  `[tree] checks-pass = true` and its optional `checks-pass-message` value form
+  one result that applies to every commit with that exact tree and naturally
+  disappears when a rewrite changes the tree. Replacing the result replaces its
+  message; clearing it removes both keys. A message without an enabled mark is
+  never displayed.
 - Todo, note, checks-pass, and refackiewed enrichments receive leading `🚧`, `📝`,
   `✔️`, and `✨` markers in that order before the graph, with no gap between them
   or the following status field. The dedicated field remains visible alongside
   selection, dirty-worktree, and conflict markers.
   `tix show` emits the same field and aligns unmarked rows when any displayed
   commit has an enrichment. The TUI reserves two cells for each marker so an
-  enrichment update never shifts the graph or selection columns.
+  enrichment update never shifts the graph or selection columns. A checks-pass
+  message beginning with an emoji uses that entire grapheme instead of `✔️`,
+  including modifiers, flags, keycaps and joined sequences. The emoji and following
+  whitespace are omitted from the displayed message, while stored text is unchanged.
+  Emoji-only messages show just the gutter marker. Rebase todos use the same marker.
 - Only the selected history row prefixes its commit title with its note title,
   using black text on a yellow background followed by one unstyled space.
-  Unselected rows and `tix show` retain only the commit title.
+  A checks-pass message title follows the note title in black on green, then the
+  commit title. Both use the ordinary infallible commit-message title/body parser.
+  The commit pane displays the enrichment note, the checks-pass title and body in
+  green, then the commit message, with separators between them. Unselected rows
+  and `tix show` retain only the commit title.
 - Commit and selected-note titles render Markdown styling. Block-shaped title
   output is flattened onto the single history row; plain command output retains
   the rendered text without terminal styling. Markdown code preserves the
@@ -2686,6 +2703,7 @@ views.
   `[commit] note` in Git's editor as Markdown. Saving or removing a note preserves
   the todo flag, and toggling todo preserves the note. `n e` toggles
   `[tree] checks-pass` for any selected commit, including immutable boundaries.
+  Clearing also removes its message; toggling it back on creates a plain mark.
   `n r` toggles `refackiewed` for the selected patch under the patch-identity
   eligibility rules above, leaving the enrichment group open after a tap.
   `n g` edits the real Git note and remains available when the commit-specific

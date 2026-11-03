@@ -7,6 +7,7 @@ mod change_id;
 pub mod command;
 mod command_menu;
 mod edit;
+mod emoji;
 mod enrich;
 mod github;
 mod graph_tiles;
@@ -5153,7 +5154,7 @@ fn event_loop(
                         });
                     match result {
                         Ok((enrichment, changes)) => {
-                            let enabled = enrichment.checks_pass;
+                            let enabled = enrichment.checks_pass.is_some();
                             app.clear_enrichments();
                             app.set_tree_enrichment(id, enrichment);
                             leave_tracked_success(
