@@ -262,6 +262,17 @@ runs the constrained pure-Rust Docker check. Journey tests require Unix. CI also
 Windows baseline doctests and MSRV builds. `--all-platforms` shows these exact assignments;
 a local run never attempts another host's native checks.
 
+Linux feature compilation checks and feature tests run in separate jobs, retaining every
+selected configuration. Linux CI runner builds use `CARGO_PROFILE_DEV_DEBUG=line-tables-only` (also inherited
+by the test and QA profiles) to reduce compilation and cache storage costs while preserving
+debug assertions, overflow checks, and file/line backtraces. Full debugger variable and type
+information is omitted. Reproduce this setting locally by exporting the same variable.
+
+Rust caches are saved by `main` runs and restored by PRs. They retain downloaded dependencies
+and their build artifacts; workspace crates are rebuilt. Job caches compete for the repository's
+storage allowance, so a correct key can still miss after eviction. Changes to the Cargo profile
+environment produce new cache keys that need a `main` run to populate.
+
 | Stage | Checks |
 | --- | --- |
 | `self-test` | Lightweight planner/runner tests; CI runs these once in the planning gate |

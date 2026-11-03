@@ -25,6 +25,8 @@ jobs:
   plan:
     name: Select QA work
     runs-on: ubuntu-latest
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
       plan: ${{ steps.plan.outputs.plan }}
@@ -141,6 +143,10 @@ jobs:
         if: matrix.just
         with:
           just-version: ${{ matrix.just_version }} # zizmor: ignore[unpinned-tools] Exact version in Cargo.toml's workspace.metadata.qa.tool-versions.
+      - name: Reduce Linux debug artifacts while retaining backtraces
+        if: runner.os == 'Linux'
+        shell: bash
+        run: echo 'CARGO_PROFILE_DEV_DEBUG=line-tables-only' >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: ${{ matrix.cache || matrix.id }}
@@ -177,6 +183,8 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.downstream) }}
     continue-on-error: true
     runs-on: ubuntu-latest
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
       - name: Check out the gix version under test
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

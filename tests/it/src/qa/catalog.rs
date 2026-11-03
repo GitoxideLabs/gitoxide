@@ -270,7 +270,7 @@ pub fn tasks(metadata: &Value, selection: &Value, platform: &str) -> Result<Vec<
     }
     let variants = core("variants")?;
     if !variants.is_empty() {
-        out.push(Task::new("feature-tests", "features", &["tests"], variants));
+        out.push(Task::new("feature-tests", "feature-tests", &["tests"], variants));
     }
     for (id, stage) in [
         ("default-doctests", "default-doctests"),
@@ -806,13 +806,39 @@ mod tests {
 
     #[test]
     fn ci_jobs_partition_the_same_local_tasks() -> gix_error::TestResult {
+        let mut metadata = metadata();
+        metadata["packages"][0]["metadata"]["qa"]["checks"] = json!([{"args":["--all-features"]}]);
+        metadata["packages"][0]["metadata"]["qa"]["tests"] = json!([{"args":["--all-features"], "requires":["xz"]}]);
         for mode in ["fast", "exhaustive"] {
             let selection = json!({"mode":mode, "packages":["gix-path","gitoxide","internal-tools"]});
-            let plan = plan(&metadata(), &selection, "linux-x86_64", true)?;
+            let plan = plan(&metadata, &selection, "linux-x86_64", true)?;
+            let jobs = plan["jobs"].as_array().expect("plan jobs");
+            let owner = |task| {
+                jobs.iter()
+                    .find(|job| job["tasks"].as_array().expect("job tasks").contains(&json!(task)))
+                    .expect("feature task has a CI job")
+            };
+            let builds = owner("feature-builds");
+            let tests = owner("feature-tests");
+            assert_ne!(
+                builds["id"], tests["id"],
+                "feature builds and tests can run concurrently"
+            );
+            assert_eq!(builds["tools"], json!([]), "build checks do not need nextest");
+            assert_eq!(tests["tools"], json!(["cargo-nextest@0.9.122"]));
+            assert_eq!(builds["xz"], false, "test-only requirements stay with the tests");
+            assert_eq!(tests["xz"], true);
+            if mode == "exhaustive" {
+                assert_eq!(
+                    owner("feature-contracts")["id"],
+                    builds["id"],
+                    "feature contracts remain with compilation checks"
+                );
+            }
             let mut seen = BTreeSet::new();
-            for job in plan["jobs"].as_array().expect("plan jobs") {
+            for job in jobs {
                 let platform = job["platform"].as_str().expect("job platform");
-                let local = tasks(&metadata(), &selection, platform)?;
+                let local = tasks(&metadata, &selection, platform)?;
                 for id in job["tasks"].as_array().expect("job task IDs") {
                     let id = id.as_str().expect("task ID");
                     assert!(
@@ -826,7 +852,7 @@ mod tests {
                 }
             }
             for platform in CI_PLATFORMS {
-                for task in tasks(&metadata(), &selection, platform)? {
+                for task in tasks(&metadata, &selection, platform)? {
                     assert_eq!(
                         seen.contains(&(*platform, task.id)),
                         assigned(&task, platform, mode == "exhaustive"),
