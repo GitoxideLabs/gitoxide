@@ -10,7 +10,7 @@ pub enum RoundTripCheck {
 pub(crate) mod function {
     use encoding_rs::DecoderResult;
 
-    use gix_error::{OptionExt, Result, bail, validation};
+    use gix_error::{OptionExt, Result, ResultExt, bail, message, validation};
 
     use super::RoundTripCheck;
 
@@ -32,16 +32,13 @@ pub(crate) mod function {
                 ))
             })?;
         buf.clear();
+        // Bound decoding to the current estimate: the `String` decoder initializes all spare capacity,
+        // which may be much larger after a previous conversion.
         buf.resize(buf_len, 0);
         let (res, read, written) = decoder.decode_to_utf8_without_replacement(src, buf, true);
         match res {
             DecoderResult::InputEmpty => {
-                assert!(
-                    buf_len >= written,
-                    "encoding_rs estimates the maximum amount of bytes written correctly"
-                );
                 assert_eq!(read, src.len(), "input buffer should be fully consumed");
-                buf.truncate(written);
             }
             DecoderResult::OutputFull => {
                 unreachable!("we assure that the output buffer is big enough as per the encoder's estimate")
@@ -54,12 +51,11 @@ pub(crate) mod function {
             }
         }
 
+        buf.truncate(written);
         match round_trip {
             RoundTripCheck::Fail => {
-                // SAFETY: we trust `encoding_rs` to output valid UTF-8 only if we ask it to.
-                #[expect(unsafe_code)]
-                let str = unsafe { std::str::from_utf8_unchecked(buf) };
-                let (should_equal_src, _actual_encoding, _had_errors) = src_encoding.encode(str);
+                let decoded = std::str::from_utf8(buf).or_raise(|| message("encoding-rs produced invalid UTF-8"))?;
+                let (should_equal_src, _actual_encoding, _had_errors) = src_encoding.encode(decoded);
                 if should_equal_src != src {
                     bail!(validation(format!(
                         "Encoding from '{}' to 'UTF-8' and back is not the same",

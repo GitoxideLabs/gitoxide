@@ -81,9 +81,36 @@ mod encode_to_git {
     fn simple() -> TestResult {
         let input = &b"hello"[..];
         for round_trip in [RoundTripCheck::Skip, RoundTripCheck::Fail] {
-            let mut buf = Vec::new();
+            let mut buf = b"previous content, not UTF-8: \xff".to_vec();
             worktree::encode_to_git(input, encoding_rs::UTF_8, &mut buf, round_trip)?;
-            assert_eq!(buf.as_bstr(), input);
+            assert_eq!(buf.as_bstr(), input, "the previous content of `buf` is replaced");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn reuses_large_buffer_for_small_inputs() -> TestResult {
+        let large_input = vec![0x80; 128 * 1024];
+        for round_trip in [RoundTripCheck::Skip, RoundTripCheck::Fail] {
+            let mut buf = Vec::new();
+            worktree::encode_to_git(&large_input, encoding_rs::WINDOWS_1252, &mut buf, round_trip)?;
+            assert_eq!(
+                buf.as_bstr(),
+                "€".repeat(large_input.len()),
+                "decoding can expand the input"
+            );
+            let capacity = buf.capacity();
+            let allocation = buf.as_ptr();
+
+            for _ in 0..32 {
+                for (input, expected) in [(b"\x80".as_slice(), "€"), (b"a".as_slice(), "a"), (b"".as_slice(), "")] {
+                    buf.clear();
+                    worktree::encode_to_git(input, encoding_rs::WINDOWS_1252, &mut buf, round_trip)?;
+                    assert_eq!(buf.as_bstr(), expected, "only the current input is returned");
+                    assert_eq!(buf.capacity(), capacity, "small conversions retain the allocation");
+                    assert_eq!(buf.as_ptr(), allocation, "the allocation is reused, not replaced");
+                }
+            }
         }
         Ok(())
     }
