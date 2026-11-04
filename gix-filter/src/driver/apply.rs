@@ -1,11 +1,11 @@
 use gix_error::{Result, bail};
-use std::{collections::HashMap, io::Read, sync::Arc};
+use std::{io::Read, sync::Arc};
 
-use bstr::{BStr, BString};
+use bstr::BStr;
 
 use crate::{
     Driver, driver,
-    driver::{Operation, Process, State, process},
+    driver::{Operation, Process, ProcessMap, State},
 };
 
 /// What to do if delay is supported by a process filter.
@@ -52,6 +52,12 @@ impl State {
     ///
     /// Note that it's not an error if there is no filter process for `operation` or if a long-running process doesn't support
     /// the desired capability.
+    ///
+    /// Spawn and handshake errors provide the metadata documented in [`Self::maybe_launch_process()`].
+    /// Failed exits of required single-file drivers are reported by the returned reader as IO errors containing a
+    /// [`gix_error::Message`] whose [metadata](gix_error::Message::values) includes `program` (Path),
+    /// `command` (String, the prepared command's debug representation), `exit_status` (String), and `exit_code` (I64)
+    /// when available. Output streams are not recorded as metadata.
     ///
     /// ### Deviation
     ///
@@ -169,9 +175,9 @@ impl State {
                     Ok(Some(MaybeDelayed::Delayed(key)))
                 } else if status.is_success() {
                     // TODO: find a way to not have to do the 'borrow-dance'.
-                    let client = self.running.remove(&key.0).expect("present for borrowcheck dance");
-                    self.running.insert(key.0.clone(), client);
-                    let client = self.running.get_mut(&key.0).expect("just inserted");
+                    let running = self.running.remove(&key.0).expect("present for borrowcheck dance");
+                    self.running.insert(key.0.clone(), running);
+                    let client = &mut self.running.get_mut(&key.0).expect("just inserted").client;
 
                     Ok(Some(MaybeDelayed::Immediate(Box::new(client.as_read()))))
                 } else {
@@ -182,8 +188,8 @@ impl State {
                         }
                         "error" => {}
                         _strange => {
-                            let client = self.running.remove(&key.0).expect("we definitely have it");
-                            client.into_child().kill().ok();
+                            let running = self.running.remove(&key.0).expect("we definitely have it");
+                            running.client.into_child().kill().ok();
                         }
                     }
                     Err(message!("The invoked command '{command}' in process indicated an error: {status:?}").raise())
@@ -320,7 +326,7 @@ impl ReadFilterOutput {
     }
 }
 
-pub(crate) fn handle_io_err(err: &std::io::Error, running: &mut HashMap<BString, process::Client>, process: &BStr) {
+pub(super) fn handle_io_err(err: &std::io::Error, running: &mut ProcessMap, process: &BStr) {
     if matches!(
         err.kind(),
         std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::UnexpectedEof
@@ -366,8 +372,9 @@ impl std::io::Read for ReadFilterOutput {
                     if let Some((mut child, cmd)) = self.child.take() {
                         let status = child.wait()?;
                         if !status.success() {
-                            let failure =
-                                gix_error::message!("Driver process {cmd:?} failed").with_command_status(&cmd, status);
+                            let failure = gix_error::message("Driver process failed")
+                                .with_command(&cmd)
+                                .with_exit_status(status);
                             return Err(std::io::Error::other(failure));
                         }
                     }

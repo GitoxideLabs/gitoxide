@@ -413,11 +413,11 @@ fn filter_spawn_errors_are_not_collisions() -> TestResult {
     #[cfg(not(windows))]
     insta::assert_debug_snapshot!(error_snapshots, "filter spawn errors are not collisions", @r#"
     [
-        Failed to spawn driver: "<filter-program>", program="<filter-program>"
+        Failed to spawn driver, command="\"<filter-program>\"", program="<filter-program>"
         
         Caused by:
             0: FilesystemLoop,
-        Failed to spawn driver: "<filter-program>", program="<filter-program>"
+        Failed to spawn driver, command="\"<filter-program>\"", program="<filter-program>"
         
         Caused by:
             0: FilesystemLoop,
@@ -426,11 +426,11 @@ fn filter_spawn_errors_are_not_collisions() -> TestResult {
     #[cfg(windows)]
     insta::assert_debug_snapshot!(error_snapshots, "filter spawn errors are not collisions", @r#"
     [
-        Failed to spawn driver: "<filter-program>", program="<filter-program>"
+        Failed to spawn driver, command="\"<filter-program>\"", program="<filter-program>"
         
         Caused by:
             0: PermissionDenied,
-        Failed to spawn driver: "<filter-program>", program="<filter-program>"
+        Failed to spawn driver, command="\"<filter-program>\"", program="<filter-program>"
         
         Caused by:
             0: PermissionDenied,

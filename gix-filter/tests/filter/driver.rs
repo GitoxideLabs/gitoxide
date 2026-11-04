@@ -76,6 +76,50 @@ mod process {
                 class.iter().copied().collect::<Vec<_>>(),
                 "malformed responses and selecting an unadvertised version violate the protocol"
             );
+
+            let mut driver = super::apply::driver_with_process();
+            driver.process = Some(
+                format!(
+                    "{} handshake-response {}",
+                    super::driver_path(),
+                    gix_quote::single(response.as_bytes().into())
+                )
+                .into(),
+            );
+            let mut state = gix_filter::driver::State::new(gix_command::Context {
+                worktree_dir: Some(temp.path().to_owned()),
+                ..Default::default()
+            });
+            let err = state
+                .maybe_launch_process(&driver, gix_filter::driver::Operation::Clean, "file".into())
+                .err()
+                .expect("launching through State must preserve the handshake failure");
+            let diagnostic = err
+                .downcast_any_ref::<gix_error::Message>()
+                .expect("State adds command context to handshake failures");
+            assert_eq!(
+                diagnostic.message, "Process handshake failed",
+                "command details are recorded separately from the message"
+            );
+            assert!(
+                matches!(
+                    diagnostic.values.get("program"),
+                    Some(gix_error::MetadataValue::Path(_))
+                ),
+                "the invoked program is retained using the runtime failure schema"
+            );
+            assert!(
+                matches!(
+                    diagnostic.values.get("command"),
+                    Some(gix_error::MetadataValue::String(command)) if command.contains("handshake-response")
+                ),
+                "the prepared command, including its arguments, is available as metadata"
+            );
+            assert_eq!(
+                err.classify().map(|class| class.class()).collect::<Vec<_>>(),
+                class.iter().copied().collect::<Vec<_>>(),
+                "adding command metadata preserves the underlying protocol error classification"
+            );
         }
         Ok(())
     }
@@ -252,12 +296,31 @@ mod shutdown {
             outcome.processes[0].1.is_some(),
             "waiting records the process exit status"
         );
+        let expected_command = format!("{:?}", outcome.processes[0].0);
+        let expected_program = std::path::PathBuf::from(outcome.processes[0].0.get_program());
         let err = outcome.into_result().expect_err("the non-zero exit status is an error");
         assert!(
             err.classify().next().is_none(),
             "a subprocess exit status does not identify corruption or invalid input"
         );
-        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(env!("CARGO_BIN_EXE_gix-filter-test-arrow"), "<filter-driver>"), ("exit code:", "exit status:")]), "the failed command and status are retained", @r#"Filter process "\'<filter-driver>\' process fail-on-shutdown" failed, exit_code=1, exit_status="exit status: 1""#);
+        let values = err
+            .metadata()
+            .next()
+            .expect("shutdown failures provide command metadata");
+        assert_eq!(
+            values.get("command"),
+            Some(&gix_error::MetadataValue::from(expected_command)),
+            "shutdown diagnostics retain the prepared command, not just the configured command string"
+        );
+        assert_eq!(
+            values.get("program"),
+            Some(&gix_error::MetadataValue::Path(expected_program)),
+            "shutdown diagnostics identify the program that was actually invoked"
+        );
+        #[cfg(not(windows))]
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(env!("CARGO_BIN_EXE_gix-filter-test-arrow"), "<filter-driver>")]), "the prepared command, program, and status are retained", @r#"Filter process failed, command="\"/bin/sh\" \"-c\" \"'<filter-driver>' process fail-on-shutdown\" \"sh\"", exit_code=1, exit_status="exit status: 1", program="/bin/sh""#);
+        #[cfg(windows)]
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(env!("CARGO_BIN_EXE_gix-filter-test-arrow"), "<filter-driver>")]), "the prepared command, program, and status are retained", @r#"Filter process failed, command="\"<filter-driver>\" \"process\" \"fail-on-shutdown\"", exit_code=1, exit_status="exit code: 1", program="<filter-driver>""#);
         Ok(())
     }
 
@@ -345,6 +408,52 @@ pub(crate) mod apply {
             output.trim(),
             "true",
             "Git must find the repository after the filter changes cwd"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn spawn_failure_retains_command_metadata_and_io_cause() -> TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let temp = gix_testtools::tempfile::TempDir::new()?;
+        let mut state = driver::State::new(gix_command::Context {
+            worktree_dir: Some(temp.path().join("missing-worktree")),
+            ..Default::default()
+        });
+        let err = state
+            .maybe_launch_process(&driver_no_process(), Operation::Smudge, "file".into())
+            .err()
+            .expect("the nonexistent working directory prevents the driver from spawning");
+        assert!(
+            err.downcast_any_ref::<std::io::Error>().is_some(),
+            "adding metadata preserves the underlying IO error"
+        );
+        let diagnostic = err
+            .downcast_any_ref::<gix_error::Message>()
+            .expect("spawn failures provide command context");
+        assert_eq!(
+            diagnostic.message, "Failed to spawn driver",
+            "command details are recorded separately from the message"
+        );
+        assert!(
+            matches!(
+                diagnostic.values.get("program"),
+                Some(gix_error::MetadataValue::Path(_))
+            ),
+            "the invoked program is retained using the runtime failure schema"
+        );
+        assert!(
+            matches!(
+                diagnostic.values.get("command"),
+                Some(gix_error::MetadataValue::String(command)) if command.contains("smudge") && command.contains("file")
+            ),
+            "the prepared command retains its arguments"
+        );
+        assert!(
+            !diagnostic.values.contains_key("exit_status"),
+            "a process that could not be spawned has no exit status"
         );
         Ok(())
     }
@@ -516,14 +625,16 @@ pub(crate) mod apply {
             )?
             .expect("filter present");
         let mut buf = Vec::new();
-        let err = filtered.read_to_end(&mut buf).unwrap_err();
+        let err = filtered
+            .read_to_end(&mut buf)
+            .expect_err("a required driver failure is reported by the reader");
         #[cfg(not(windows))]
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(env!("CARGO_BIN_EXE_gix-filter-test-arrow"), "<filter-driver>")]), "smudge and clean failure is translated to observable error for required drivers", @r#"
         Custom {
             kind: Other,
             error: Message {
-                message: "Driver process \"/bin/sh\" \"-c\" \"'<filter-driver>' smudge 'do/fail'\" \"sh\" failed",
-                values: {exit_code: I64(101), exit_status: String("exit status: 101"), program: Path("/bin/sh")},
+                message: "Driver process failed",
+                values: {command: String("\"/bin/sh\" \"-c\" \"'<filter-driver>' smudge 'do/fail'\" \"sh\""), exit_code: I64(101), exit_status: String("exit status: 101"), program: Path("/bin/sh")},
             },
         }
         "#);
@@ -532,8 +643,8 @@ pub(crate) mod apply {
         Custom {
             kind: Other,
             error: Message {
-                message: "Driver process \"<filter-driver>\" \"smudge\" \"do/fail\" failed",
-                values: {exit_code: I64(101), exit_status: String("exit code: 101"), program: Path("<filter-driver>")},
+                message: "Driver process failed",
+                values: {command: String("\"<filter-driver>\" \"smudge\" \"do/fail\""), exit_code: I64(101), exit_status: String("exit code: 101"), program: Path("<filter-driver>")},
             },
         }
         "#);
@@ -652,7 +763,14 @@ pub(crate) mod apply {
 
     #[test]
     fn smudge_and_clean_delayed() -> TestResult {
-        let mut state = gix_filter::driver::State::default();
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let launch_dir = gix_testtools::tempfile::TempDir::new()?;
+        let mut state = gix_filter::driver::State::new(gix_command::Context {
+            worktree_dir: Some(launch_dir.path().to_owned()),
+            ..Default::default()
+        });
         let driver = driver_with_process();
         let input = "hello\nthere\n";
         let process_key = extract_delayed_key(state.apply_delayed(
@@ -684,6 +802,7 @@ pub(crate) mod apply {
         let paths = state.list_delayed_paths(&process_key)?;
         assert_eq!(paths.len(), 0, "delayed paths are consumed once fetched");
 
+        state.context.worktree_dir = None;
         let process_key = extract_delayed_key(state.apply_delayed(
             &driver,
             &mut buf.as_bytes(),
@@ -713,9 +832,32 @@ pub(crate) mod apply {
         let paths = state.list_delayed_paths(&process_key)?;
         assert_eq!(paths.len(), 0, "delayed paths are consumed once fetched");
 
-        state
+        let outcome = state
             .shutdown(gix_filter::driver::shutdown::Mode::WaitForProcesses)?
             .into_result()?;
+        assert_eq!(
+            outcome.processes.len(),
+            1,
+            "reusing the driver does not launch another process"
+        );
+        let (command, status) = &outcome.processes[0];
+        assert_eq!(
+            command.get_current_dir(),
+            Some(launch_dir.path()),
+            "shutdown returns the original prepared command, not one reconstructed from the current context"
+        );
+        assert_eq!(
+            command
+                .get_envs()
+                .find(|(name, _)| *name == "GIT_WORK_TREE")
+                .and_then(|(_, value)| value),
+            Some(launch_dir.path().as_os_str()),
+            "the environment passed to the original process remains available"
+        );
+        assert!(
+            status.as_ref().is_some_and(std::process::ExitStatus::success),
+            "the process shut down successfully"
+        );
         Ok(())
     }
 
