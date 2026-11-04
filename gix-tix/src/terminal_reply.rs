@@ -1,4 +1,4 @@
-//! Suppress terminal-query replies that arrive after startup color detection.
+//! Suppress terminal-query replies that arrive after startup detection.
 
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 
@@ -9,6 +9,10 @@ pub(crate) enum Sequence {
     Osc,
     #[cfg_attr(not(unix), allow(dead_code))]
     OscEscape,
+    #[cfg_attr(not(unix), allow(dead_code))]
+    Apc,
+    #[cfg_attr(not(unix), allow(dead_code))]
+    ApcEscape,
     Csi,
 }
 
@@ -55,8 +59,12 @@ impl ReplyFilter {
             return false;
         }
         if key.code == KeyCode::Esc {
-            // A short terminal read can split either an OSC opener or its ST terminator.
-            self.sequence = if self.pending || matches!(self.sequence, Sequence::Osc | Sequence::OscEscape) {
+            // A short terminal read can split a string opener or its ST terminator.
+            self.sequence = if self.pending
+                || matches!(
+                    self.sequence,
+                    Sequence::Osc | Sequence::OscEscape | Sequence::Apc | Sequence::ApcEscape
+                ) {
                 Sequence::Escape
             } else {
                 Sequence::Ground
@@ -67,14 +75,22 @@ impl ReplyFilter {
             self.clear();
             return false;
         }
-        // Crossterm decodes an OSC opener as Alt+], followed by ordinary character events.
-        if key.code == KeyCode::Char(']') && key.modifiers == KeyModifiers::ALT {
-            self.sequence = Sequence::Osc;
+        // Crossterm decodes string openers as Alt+] or Alt+_, then ordinary character events.
+        if matches!(key.code, KeyCode::Char(']' | '_')) && key.modifiers == KeyModifiers::ALT {
+            self.sequence = if key.code == KeyCode::Char(']') {
+                Sequence::Osc
+            } else {
+                Sequence::Apc
+            };
             return true;
         }
-        if matches!(self.sequence, Sequence::Osc | Sequence::OscEscape)
-            && ((key.code == KeyCode::Char('g') && key.modifiers == KeyModifiers::CONTROL)
-                || (key.code == KeyCode::Char('\\') && key.modifiers == KeyModifiers::ALT))
+        if matches!(
+            self.sequence,
+            Sequence::Osc | Sequence::OscEscape | Sequence::Apc | Sequence::ApcEscape
+        ) && ((matches!(self.sequence, Sequence::Osc | Sequence::OscEscape)
+            && key.code == KeyCode::Char('g')
+            && key.modifiers == KeyModifiers::CONTROL)
+            || (key.code == KeyCode::Char('\\') && key.modifiers == KeyModifiers::ALT))
         {
             self.sequence = Sequence::Ground;
             return true;
@@ -94,6 +110,7 @@ impl ReplyFilter {
             Sequence::Escape => {
                 self.sequence = match character {
                     ']' if self.pending => Sequence::Osc,
+                    '_' if self.pending => Sequence::Apc,
                     '[' if self.pending => Sequence::Csi,
                     '\\' => Sequence::Ground,
                     _ => {
@@ -103,13 +120,17 @@ impl ReplyFilter {
                 };
                 true
             }
-            Sequence::OscEscape if character == '\\' => {
+            Sequence::OscEscape | Sequence::ApcEscape if character == '\\' => {
                 self.sequence = Sequence::Ground;
                 true
             }
             // Keep no payload buffer, and never release an oversized reply's tail as commands.
-            Sequence::Osc | Sequence::OscEscape => {
-                self.sequence = Sequence::Osc;
+            Sequence::Osc | Sequence::OscEscape | Sequence::Apc | Sequence::ApcEscape => {
+                self.sequence = if matches!(self.sequence, Sequence::Apc | Sequence::ApcEscape) {
+                    Sequence::Apc
+                } else {
+                    Sequence::Osc
+                };
                 true
             }
             Sequence::Csi => {
@@ -129,6 +150,29 @@ mod tests {
 
     fn key(character: char, modifiers: KeyModifiers) -> Event {
         Event::Key(KeyEvent::new(KeyCode::Char(character), modifiers))
+    }
+
+    #[test]
+    fn delayed_graphics_replies_never_become_commands() {
+        let mut filter = ReplyFilter::new();
+        assert!(
+            filter.consume(&key('_', KeyModifiers::ALT)),
+            "APC replies are recognized after startup"
+        );
+        for character in "Gi=2130706433;OK".chars() {
+            assert!(
+                filter.consume(&key(character, KeyModifiers::NONE)),
+                "graphics payload stays out of command handling"
+            );
+        }
+        assert!(
+            filter.consume(&key('\\', KeyModifiers::ALT)),
+            "ST finishes the graphics reply"
+        );
+        assert!(
+            !filter.consume(&key('j', KeyModifiers::NONE)),
+            "normal navigation resumes after the reply"
+        );
     }
 
     #[test]
@@ -166,6 +210,9 @@ mod tests {
             (Sequence::Escape, "]4;0;rgb:f/0/0"),
             (Sequence::Osc, "f/0/0"),
             (Sequence::OscEscape, "\\"),
+            (Sequence::Escape, "_Gi=2130706433;OK"),
+            (Sequence::Apc, "OK"),
+            (Sequence::ApcEscape, "\\"),
             (Sequence::Escape, "[?62;4;22c"),
             (Sequence::Csi, ";4;22c"),
         ] {
@@ -178,7 +225,7 @@ mod tests {
                     "the consumed raw prefix cannot expose its remaining payload as keys"
                 );
             }
-            if matches!(filter.sequence, Sequence::Osc) {
+            if matches!(filter.sequence, Sequence::Osc | Sequence::Apc) {
                 assert!(filter.consume(&key('\\', KeyModifiers::ALT)));
             }
             assert!(

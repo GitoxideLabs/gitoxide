@@ -27,6 +27,26 @@ fn normal_quit_restores_the_terminal() -> gix_error::TestResult {
 }
 
 #[test]
+fn disabled_graphics_keeps_the_text_gutter() -> gix_error::TestResult {
+    let repository = fixture()?;
+    let (mut terminal, _) = Pty::spawn(repository.path(), true)?;
+    // Ghostty with image-storage-limit=0 still advertises itself, but ignores graphics queries.
+    terminal.graphics = false;
+    terminal.wait_for(|output| contains(output, b"second") && contains(output, "●".as_bytes()))?;
+    assert!(
+        contains(&terminal.output, b"\x1b_Ga=q,"),
+        "startup probes the advertised graphics protocol"
+    );
+    assert!(
+        !contains(&terminal.output, b"\x1b_Ga=t,") && !contains(&terminal.output, b"\x1b_Ga=p,"),
+        "a terminal that never acknowledges graphics retains the text graph without image uploads or placements"
+    );
+    terminal.master.write_all(b"qq")?;
+    assert!(terminal.wait_for_exit()?.success(), "the text view exits normally");
+    Ok(())
+}
+
+#[test]
 fn sigterm_restores_an_idle_terminal() -> gix_error::TestResult {
     check_shutdown(Some(Signal::TERM), View::Graph)
 }
@@ -61,7 +81,7 @@ fn terminal_hangup_exits_without_a_signal() -> gix_error::TestResult {
     let repository = fixture()?;
     // Without a controlling terminal, closing the master generates no SIGHUP.
     let (mut terminal, _) = Pty::spawn(repository.path(), false)?;
-    terminal.wait_for(|output| contains(output, b"\x1b_Ga=p,") && contains(output, b"\x1b[?2026l"))?;
+    terminal.wait_for(|output| contains(output, b"second") && contains(output, b"\x1b[?25l"))?;
     let idle_until = Instant::now() + Duration::from_millis(300);
     while Instant::now() < idle_until {
         terminal.pump()?;
@@ -232,6 +252,7 @@ struct Pty {
     master: File,
     output: Vec<u8>,
     parsed: usize,
+    graphics: bool,
 }
 
 impl Pty {
@@ -267,8 +288,8 @@ impl Pty {
                 "--nocapture",
                 "--test-threads=1",
             ])
-            .env("TERM", "xterm-kitty")
-            .env("TERM_PROGRAM", "kitty")
+            .env("TERM", "xterm-ghostty")
+            .env("TERM_PROGRAM", "ghostty")
             .env(PTY_CHILD, "1")
             .env_remove("TMUX")
             .env_remove("STY")
@@ -285,6 +306,7 @@ impl Pty {
                 master: File::from(master),
                 output: Vec::new(),
                 parsed: 0,
+                graphics: true,
             },
             original,
         ))
@@ -370,6 +392,19 @@ impl Pty {
             };
             let sequence = &pending[..end];
             match sequence {
+                _ if sequence.starts_with(b"\x1b_Ga=q,") && self.graphics => {
+                    let controls = sequence
+                        .strip_prefix(b"\x1b_G")
+                        .expect("a graphics query has its APC opener");
+                    let id = controls
+                        .split(|byte| *byte == b',')
+                        .find_map(|field| field.strip_prefix(b"i="))
+                        .and_then(|field| field.split(|byte| *byte == b';').next())
+                        .expect("the graphics probe identifies its reply");
+                    self.master.write_all(b"\x1b_Gi=")?;
+                    self.master.write_all(id)?;
+                    self.master.write_all(b";OK\x1b\\")?;
+                }
                 b"\x1b[c" | b"\x1b[0c" => self.master.write_all(b"\x1b[?62;4;22c")?,
                 b"\x1b[?u" => self.master.write_all(b"\x1b[?0u")?,
                 b"\x1b[6n" => self.master.write_all(b"\x1b[1;1R")?,
