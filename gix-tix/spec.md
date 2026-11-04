@@ -204,7 +204,7 @@ without trading responsiveness for metadata that is not visible.
 - `tix enrich commit todo [--clear] [REVSPEC]`, `tix enrich commit note
   [REVSPEC] [-m MESSAGE ... | -f FILE]`, `tix enrich commit git-note
   [REVSPEC] [-m MESSAGE ... | -f FILE]`, `tix enrich tree
-  checks-pass [MESSAGE | --clear] [--revision REVSPEC]`, and `tix enrich patch refackiewed [--clear]
+  checks-pass [MESSAGE | --clear | --show] [--revision REVSPEC]`, and `tix enrich patch refackiewed [--clear]
   [REVSPEC]` expose the TUI's enrichment actions without opening it.
   Targets default to `HEAD` and accept Git revisions or unambiguous
   reverse-hex change-ID prefixes from the default Tix view. Todo and patch commands
@@ -212,7 +212,12 @@ without trading responsiveness for metadata that is not visible.
   message toggles the result; a positional string replaces the single result and
   its optional message, and an empty string explicitly sets a plain check mark.
   `--clear` removes both mark and message. Setting the same result again leaves
-  notes and undo history unchanged. Message bytes are retained without requiring
+  notes and undo history unchanged. `--show` prints the full stored checks-pass
+  message to stdout, retaining its emoji, body, and exact bytes without adding a
+  newline or applying display formatting. A plain check mark succeeds with empty
+  output; an unmarked tree fails with a diagnostic on stderr and no stdout.
+  Querying cannot also supply a message or `--clear` and never changes notes,
+  undo history, HEAD, index, or worktree. Message bytes are retained without requiring
   a commit-message format. Checks-pass uses `--revision` for its target so arbitrary
   text, including a revision name, remains an unambiguous message. Note commands use
   Git's editor by default. Like `tix reword`, repeated `-m/--message` values form
@@ -221,7 +226,7 @@ without trading responsiveness for metadata that is not visible.
   for example, agents can use `tix enrich commit note "$fixup_change" --file "$note_file"`.
   Both input paths use the existing whitespace cleanup, preserve comment-looking
   lines and other enrichments, remove empty notes, and leave unchanged notes and
-  undo history alone. Output
+  undo history alone. Mutation output
   starts with the target's abbreviated commit and change IDs before its status.
   The patch and checks-pass commands write their status to stderr. Marking a legacy patch can
   rewrite its commit to add the identity described below; the status then
