@@ -4,6 +4,10 @@ use crate::{
 };
 
 impl Fetch {
+    /// The `fetch.prune` key.
+    pub const PRUNE: keys::Boolean = keys::Boolean::new_boolean("prune", &config::Tree::FETCH);
+    /// The `fetch.pruneTags` key.
+    pub const PRUNE_TAGS: keys::Boolean = keys::Boolean::new_boolean("pruneTags", &config::Tree::FETCH);
     /// The `fetch.negotiationAlgorithm` key.
     pub const NEGOTIATION_ALGORITHM: NegotiationAlgorithm = NegotiationAlgorithm::new_with_validate(
         "negotiationAlgorithm",
@@ -23,6 +27,8 @@ impl Section for Fetch {
 
     fn keys(&self) -> &[&dyn Key] {
         &[
+            &Self::PRUNE,
+            &Self::PRUNE_TAGS,
             &Self::NEGOTIATION_ALGORITHM,
             #[cfg(feature = "attributes")]
             &Self::RECURSE_SUBMODULES,

@@ -8,7 +8,7 @@ use winreg::{
 const UNINSTALL: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall";
 
 /// Installer registrations also cover custom roots, without guessing directories on each drive.
-pub(super) fn installation_bins() -> impl Iterator<Item = PathBuf> {
+pub(in crate::env) fn installation_bins() -> impl Iterator<Item = PathBuf> {
     let mut locations = Vec::new();
     // Prefer the current user's installations, and 64-bit entries within each hive.
     [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE]

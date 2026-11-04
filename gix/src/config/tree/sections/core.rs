@@ -34,6 +34,8 @@ impl Core {
     pub const FILE_MODE: keys::Boolean = keys::Boolean::new_boolean("fileMode", &config::Tree::CORE);
     /// The `core.fsCache` key.
     pub const FS_CACHE: keys::Boolean = keys::Boolean::new_boolean("fsCache", &config::Tree::CORE);
+    /// The `core.hooksPath` key.
+    pub const HOOKS_PATH: keys::Path = keys::Path::new_path("hooksPath", &config::Tree::CORE);
     /// The `core.ignoreCase` key.
     pub const IGNORE_CASE: keys::Boolean = keys::Boolean::new_boolean("ignoreCase", &config::Tree::CORE);
     /// The `core.configLockTimeout` key.
@@ -140,6 +142,7 @@ impl Section for Core {
             &Self::EDITOR,
             &Self::FILE_MODE,
             &Self::FS_CACHE,
+            &Self::HOOKS_PATH,
             &Self::IGNORE_CASE,
             &Self::CONFIG_LOCK_TIMEOUT,
             &Self::FILES_REF_LOCK_TIMEOUT,

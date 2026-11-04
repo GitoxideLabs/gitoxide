@@ -87,6 +87,7 @@ pub mod with_revision {
 impl PrepareFetch {
     /// Create a new repository at `path` with `create_opts` which is ready to clone from `url`, possibly after making additional adjustments to
     /// configuration and settings.
+    /// Initialization honors template settings as described in [`ThreadSafeRepository::init_opts()`][crate::ThreadSafeRepository::init_opts()].
     ///
     /// [`Kind::Bare`][crate::create::Kind::Bare] uses Git's bare-clone branch layout and omits the default fetch and upstream
     /// configuration. [`Kind::WithWorktree`][crate::create::Kind::WithWorktree] with [`fetch_only()`][Self::fetch_only()]
@@ -197,6 +198,8 @@ pub struct PrepareCheckout {
     pub(self) repo: Option<crate::Repository>,
     /// If `true`, drop removes the entire worktree. Otherwise leave it alone.
     pub(self) remove_worktree_on_drop: bool,
+    /// Literal environment overrides for checkout filter children.
+    pub(self) command_environment: Vec<(std::ffi::OsString, std::ffi::OsString)>,
 }
 
 fn cleanup_clone_destination_on_drop(repo: &crate::Repository, remove_worktree_on_drop: bool) {

@@ -62,9 +62,8 @@ pub struct Options {
 impl State {
     /// Serialize this instance to `out` with [`options`][Options].
     ///
-    /// Note that the `tree` (tree-cache) extension is written as-is and is **not** recomputed or
-    /// invalidated to match the entries; see [`File::write()`](crate::File::write()) for the
-    /// implications and the recommended workaround.
+    /// The tree cache is written as-is. Mutable entry access invalidates it; writing
+    /// does not recompute it. See [`File::write()`](crate::File::write()).
     pub fn write_to(
         &self,
         out: impl std::io::Write,

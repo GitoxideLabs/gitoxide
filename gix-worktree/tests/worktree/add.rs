@@ -485,3 +485,91 @@ fn rejects_occupied_destinations() -> gix_testtools::TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn in_place_preparation_preserves_contents_on_rollback_and_sparse_copy_failure() -> gix_testtools::TestResult {
+    let tmp = tempdir()?;
+    let common_dir = tmp.path().join("repo.git");
+    let work_dir = tmp.path().join("worktree");
+    fs::create_dir(&common_dir)?;
+    fs::create_dir_all(work_dir.join("nested"))?;
+    fs::write(work_dir.join("nested/keep"), b"original contents")?;
+    for explicit_rollback in [false, true] {
+        let prepared = gix_worktree::add::prepare_in_place(&work_dir, Context::new(&common_dir), Default::default())?;
+        let private_dir = prepared.git_dir().to_owned();
+        fs::write(work_dir.join("added-later"), b"caller contents")?;
+        if explicit_rollback {
+            prepared.rollback()?;
+        } else {
+            drop(prepared);
+        }
+        assert_eq!(
+            fs::read(work_dir.join("nested/keep"))?,
+            b"original contents",
+            "rollback preserves existing nested contents"
+        );
+        assert_eq!(
+            fs::read(work_dir.join("added-later"))?,
+            b"caller contents",
+            "rollback owns only the link, not newly added files"
+        );
+        assert!(!work_dir.join(".git").exists(), "rollback removes the created link");
+        assert!(!private_dir.exists(), "rollback removes the private registration");
+    }
+    let invalid_source = tmp.path().join("source");
+    fs::create_dir_all(invalid_source.join("info/sparse-checkout"))?;
+    gix_worktree::add::prepare_in_place(
+        &work_dir,
+        Context {
+            common_dir: &common_dir,
+            git_dir: Some(&invalid_source),
+        },
+        Default::default(),
+    )
+    .expect_err("a directory cannot be copied as sparse patterns");
+    assert_eq!(
+        fs::read(work_dir.join("nested/keep"))?,
+        b"original contents",
+        "preparation failure preserves original files"
+    );
+    assert!(
+        !work_dir.join(".git").exists(),
+        "failed preparation removes its own link"
+    );
+    assert_eq!(
+        fs::read_dir(common_dir.join("worktrees"))?.count(),
+        0,
+        "failed preparations leave no private registration"
+    );
+    Ok(())
+}
+
+#[test]
+fn in_place_preparation_never_replaces_an_existing_git_link() -> gix_testtools::TestResult {
+    let tmp = tempdir()?;
+    let common_dir = tmp.path().join("repo.git");
+    fs::create_dir(&common_dir)?;
+    for directory in [false, true] {
+        let work_dir = tmp.path().join(if directory { "directory" } else { "file" });
+        let dot_git = work_dir.join(".git");
+        fs::create_dir(&work_dir)?;
+        if directory {
+            fs::create_dir(&dot_git)?;
+            fs::write(dot_git.join("keep"), b"existing repository")?;
+        } else {
+            fs::write(&dot_git, b"existing link")?;
+        }
+        gix_worktree::add::prepare_in_place(&work_dir, Context::new(&common_dir), Default::default())
+            .expect_err("an existing .git entry blocks registration");
+        if directory {
+            assert_eq!(
+                fs::read(dot_git.join("keep"))?,
+                b"existing repository",
+                "existing Git directories stay intact"
+            );
+        } else {
+            assert_eq!(fs::read(&dot_git)?, b"existing link", "existing Git links stay intact");
+        }
+    }
+    Ok(())
+}

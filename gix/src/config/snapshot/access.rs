@@ -92,7 +92,7 @@ impl Snapshot<'_> {
 
 /// Utilities
 impl<'repo> SnapshotMut<'repo> {
-    /// Append configuration values of the form `core.abbrev=5` or `remote.origin.url = foo` or `core.bool-implicit-true`
+    /// Append configuration values of the form `core.abbrev=5` or `remote.origin.url=foo` or `core.bool-implicit-true`
     /// to the end of the repository configuration, with each section marked with the given `source`.
     ///
     /// Note that doing so applies the configuration at the very end, so it will always override what came before it

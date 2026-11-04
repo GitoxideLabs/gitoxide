@@ -48,6 +48,8 @@ pub trait ExtendedBufRead<'a>: ReadlineBufRead {
     ///
     /// Note that this is only possible if packet lines are sent in side band mode.
     fn set_progress_handler(&mut self, handle_progress: Option<HandleProgress<'a>>);
+    /// Set a handler receiving exact sideband payload bytes, including trailing newlines.
+    fn set_progress_handler_raw(&mut self, handle_progress: Option<HandleProgress<'a>>);
     /// Peek the next data packet line. Maybe None if the next line is a packet we stop at, queryable using
     /// [`stopped_at()`][ExtendedBufRead::stopped_at()].
     async fn peek_data_line(&mut self) -> Option<io::Result<std::result::Result<&[u8], Error>>>;
@@ -72,6 +74,10 @@ impl<T: ReadlineBufRead + ?Sized + Unpin> ReadlineBufRead for Box<T> {
 impl<'a, T: ExtendedBufRead<'a> + ?Sized + 'a + Unpin> ExtendedBufRead<'a> for Box<T> {
     fn set_progress_handler(&mut self, handle_progress: Option<HandleProgress<'a>>) {
         self.deref_mut().set_progress_handler(handle_progress);
+    }
+
+    fn set_progress_handler_raw(&mut self, handle_progress: Option<HandleProgress<'a>>) {
+        self.deref_mut().set_progress_handler_raw(handle_progress);
     }
 
     async fn peek_data_line(&mut self) -> Option<io::Result<std::result::Result<&[u8], Error>>> {
@@ -111,6 +117,10 @@ impl<'a, T: AsyncRead + Unpin> ReadlineBufRead for WithSidebands<'a, T, HandlePr
 impl<'a, T: AsyncRead + Unpin> ExtendedBufRead<'a> for WithSidebands<'a, T, HandleProgress<'a>> {
     fn set_progress_handler(&mut self, handle_progress: Option<HandleProgress<'a>>) {
         self.set_progress_handler(handle_progress);
+    }
+
+    fn set_progress_handler_raw(&mut self, handle_progress: Option<HandleProgress<'a>>) {
+        self.set_progress_handler_raw(handle_progress);
     }
     async fn peek_data_line(&mut self) -> Option<io::Result<std::result::Result<&[u8], Error>>> {
         match self.peek_data_line().await {

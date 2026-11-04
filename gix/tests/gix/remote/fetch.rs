@@ -333,6 +333,8 @@ mod blocking_and_async_io {
             Default::default(),
             gix::open::Options::isolated(),
         )?
+        // Exercise protocol negotiation, which native local clone does not perform.
+        .configure_connection(|_| Ok(()))
         .configure_remote({
             move |r| {
                 std::fs::write(
@@ -874,7 +876,17 @@ mod blocking_and_async_io {
             .await
             .unwrap_err();
 
-        insta::assert_debug_snapshot!(err, "fetching a missing explicit ref fails even if ls refs returns nothing", @"None of the refspec(s) refs/heads/does-not-exist matched any of the 0 refs on the remote");
+        assert!(
+            err.is_not_found(),
+            "a missing source can be classified without parsing diagnostics"
+        );
+        assert_eq!(
+            err.metadata_merged().get("ref"),
+            Some(&gix::error::MetadataValue::from(
+                b"refs/heads/does-not-exist".as_slice()
+            )),
+            "the failure identifies the requested source"
+        );
         Ok(())
     }
 
@@ -1067,4 +1079,327 @@ mod blocking_and_async_io {
         }
         Ok(())
     }
+}
+
+#[cfg(feature = "blocking-network-client")]
+mod prune {
+    use gix::remote::{Direction, fetch};
+    use gix_testtools::TestResult;
+
+    fn fixture() -> gix_testtools::Result<(gix_testtools::tempfile::TempDir, gix::Repository)> {
+        let fixture = gix_testtools::scripted_fixture_writable_with_args(
+            "make_fetch_prune_repo.sh",
+            std::iter::empty::<String>(),
+            gix_testtools::Creation::Execute,
+        )?;
+        let repo = gix::open_opts(fixture.path().join("client"), crate::restricted())?;
+        Ok((fixture, repo))
+    }
+
+    fn ref_map(repo: &gix::Repository) -> gix::Result<fetch::RefMap> {
+        let remote = repo.find_remote("origin")?.with_fetch_tags(fetch::Tags::All);
+        let (map, _) = remote
+            .connect(Direction::Fetch)?
+            .ref_map(gix::progress::Discard, Default::default())?;
+        Ok(map)
+    }
+
+    #[test]
+    fn prune_fetch_refs_matches_git_and_honors_dry_run() -> TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        for use_git in [true, false] {
+            let (_fixture, repo) = fixture()?;
+            let ref_map = ref_map(&repo)?;
+            if use_git {
+                gix_testtools::git(
+                    repo.workdir().expect("non-bare fixture"),
+                    "remote prune --dry-run origin",
+                )?;
+            } else {
+                let edits = repo.prune_fetch_refs(&ref_map, fetch::prune::Options { dry_run: true })?;
+                assert_eq!(edits.len(), 1, "only the stale tracking branch is eligible");
+                assert_eq!(edits[0].name.as_bstr(), "refs/remotes/origin/stale");
+            }
+            assert!(
+                repo.try_find_reference("refs/remotes/origin/stale")?.is_some(),
+                "dry-run preserves the stale branch"
+            );
+            if use_git {
+                gix_testtools::git(repo.workdir().expect("non-bare fixture"), "remote prune origin")?;
+            } else {
+                let edits = repo.prune_fetch_refs(&ref_map, Default::default())?;
+                assert_eq!(edits.len(), 1);
+                assert!(
+                    repo.prune_fetch_refs(&ref_map, Default::default())?.is_empty(),
+                    "pruning is repeatable"
+                );
+            }
+            assert!(
+                repo.try_find_reference("refs/remotes/origin/stale")?.is_none(),
+                "stale tracking branches are removed"
+            );
+            for name in [
+                "refs/remotes/origin/keep",
+                "refs/remotes/origin/shared",
+                "refs/remotes/origin/excluded",
+                "refs/remotes/origin/symbolic",
+                "refs/tags/stale-tag",
+            ] {
+                assert!(repo.try_find_reference(name)?.is_some(), "{name} is retained");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn prune_fetch_refs_can_prune_explicitly_mapped_tags() -> TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        for use_git in [true, false] {
+            let (_fixture, repo) = fixture()?;
+            gix_testtools::git(
+                repo.workdir().expect("non-bare fixture"),
+                "config --add remote.origin.fetch +refs/tags/*:refs/tags/*",
+            )?;
+            let repo = gix::open_opts(repo.workdir().expect("non-bare fixture"), crate::restricted())?;
+            if use_git {
+                gix_testtools::git(repo.workdir().expect("non-bare fixture"), "remote prune origin")?;
+            } else {
+                let edits = repo.prune_fetch_refs(&ref_map(&repo)?, Default::default())?;
+                assert_eq!(edits.len(), 2, "explicit tag mappings participate in pruning");
+            }
+            assert!(
+                repo.try_find_reference("refs/tags/stale-tag")?.is_none(),
+                "the explicitly mapped stale tag is removed"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn prune_fetch_refs_preserves_checked_out_branches_and_rolls_back_lock_failures() -> TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let (_fixture, repo) = fixture()?;
+        let ref_map = ref_map(&repo)?;
+        let lock = repo.git_dir().join("refs/remotes/origin/stale.lock");
+        std::fs::write(&lock, b"another writer")?;
+        repo.prune_fetch_refs(&ref_map, Default::default())
+            .expect_err("an existing lock blocks pruning");
+        assert!(
+            repo.try_find_reference("refs/remotes/origin/stale")?.is_some(),
+            "failed pruning preserves the stale reference"
+        );
+        std::fs::remove_file(lock)?;
+        let mut remote = repo.find_remote("origin")?;
+        remote.replace_refspecs(["refs/heads/missing:refs/heads/main"], Direction::Fetch)?;
+        let (map, _) = remote
+            .connect(Direction::Fetch)?
+            .ref_map(gix::progress::Discard, Default::default())?;
+        repo.prune_fetch_refs(&map, Default::default())
+            .expect_err("a checked-out branch cannot be pruned");
+        assert!(
+            repo.find_reference("refs/heads/main").is_ok(),
+            "the checked-out branch is retained"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn fetching_with_pruning_handles_reference_directory_collisions_like_git() -> TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        for use_git in [true, false] {
+            let (fixture, repo) = fixture()?;
+            gix_testtools::git(fixture.path().join("server"), "branch stale/child main")?;
+            let workdir = repo.workdir().expect("non-bare fixture");
+            gix_testtools::git(workdir, "config --unset-all remote.origin.fetch")?;
+            gix_testtools::git(
+                workdir,
+                "config remote.origin.fetch +refs/heads/*:refs/remotes/origin/*",
+            )?;
+            let repo = gix::open_opts(workdir, crate::restricted())?;
+            for dry_run in [true, false] {
+                if use_git {
+                    gix_testtools::git(
+                        workdir,
+                        if dry_run {
+                            "fetch --prune --dry-run --no-tags origin"
+                        } else {
+                            "fetch --prune --no-tags origin"
+                        },
+                    )?;
+                } else {
+                    let remote = repo.find_remote("origin")?.with_fetch_tags(fetch::Tags::None);
+                    let outcome = remote
+                        .connect(Direction::Fetch)?
+                        .prepare_fetch(gix::progress::Discard, Default::default())?
+                        .with_prune(true)
+                        .with_dry_run(dry_run)
+                        .receive(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
+                    assert!(
+                        outcome
+                            .pruned
+                            .iter()
+                            .any(|edit| edit.name.as_bstr() == "refs/remotes/origin/stale"),
+                        "the outcome reports the stale ref"
+                    );
+                }
+                assert_eq!(
+                    repo.try_find_reference("refs/remotes/origin/stale")?.is_some(),
+                    dry_run,
+                    "the old flat reference is retained only for dry-run"
+                );
+                assert_eq!(
+                    repo.try_find_reference("refs/remotes/origin/stale/child")?.is_some(),
+                    !dry_run,
+                    "the new nested reference is created after pruning"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn fetching_can_ignore_missing_explicit_refspecs_and_prune_their_destinations() -> TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let (_fixture, repo) = fixture()?;
+        let mut remote = repo.find_remote("origin")?.with_fetch_tags(fetch::Tags::None);
+        remote.replace_refspecs(["refs/heads/absent:refs/remotes/origin/stale"], Direction::Fetch)?;
+        remote
+            .connect(Direction::Fetch)?
+            .prepare_fetch(gix::progress::Discard, Default::default())?
+            .receive(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())
+            .expect_err("missing exact refs fail by default");
+        let outcome = remote
+            .connect(Direction::Fetch)?
+            .prepare_fetch(gix::progress::Discard, Default::default())?
+            .with_prune(true)
+            .with_missing_refs_allowed(true)
+            .receive(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
+        assert_eq!(outcome.pruned.len(), 1, "the missing ref's stale destination is pruned");
+        assert!(repo.try_find_reference("refs/remotes/origin/stale")?.is_none());
+        assert!(
+            matches!(outcome.status, fetch::Status::NoPackReceived { .. }),
+            "an empty selection receives no objects"
+        );
+        Ok(())
+    }
+}
+
+#[cfg(feature = "blocking-network-client")]
+#[test]
+fn forced_updates_respect_the_shallow_boundary() -> gix_testtools::TestResult {
+    let fixture = gix_testtools::scripted_fixture_writable("make_shallow_forced_fetch_repo.sh")?;
+    let expected = gix_testtools::scripted_fixture_writable("make_shallow_forced_fetch_repo.sh")?;
+    gix_testtools::git(
+        expected.path().join("client"),
+        "fetch --depth=1 --no-tags ../source +refs/heads/other:refs/remotes/origin/main",
+    )?;
+    let local = gix::open_opts(fixture.path().join("client"), gix::open::Options::isolated())?;
+    let mut remote = local
+        .remote_at(gix::path::into_bstr(fixture.path().join("source"))?)?
+        .with_fetch_tags(gix::remote::fetch::Tags::None);
+    remote.replace_refspecs(
+        ["+refs/heads/other:refs/remotes/origin/main"],
+        gix::remote::Direction::Fetch,
+    )?;
+    let outcome = remote
+        .connect(gix::remote::Direction::Fetch)?
+        .prepare_fetch(gix::progress::Discard, Default::default())?
+        .with_shallow(gix::remote::fetch::Shallow::DepthAtRemote(1.try_into()?))
+        .receive(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
+    let updates = match outcome.status {
+        gix::remote::fetch::Status::Change { update_refs, .. }
+        | gix::remote::fetch::Status::NoPackReceived { update_refs, .. } => update_refs,
+    };
+    assert_eq!(updates.updates[0].mode, gix::remote::fetch::refs::update::Mode::Forced);
+    assert_eq!(
+        gix_testtools::git(local.git_dir(), "rev-parse refs/remotes/origin/main")?,
+        gix_testtools::git(expected.path().join("client"), "rev-parse refs/remotes/origin/main")?
+    );
+    Ok(())
+}
+
+#[cfg(feature = "blocking-network-client")]
+#[test]
+fn fetch_does_not_walk_through_present_parents_of_a_shallow_commit() -> gix_testtools::TestResult {
+    let fixture = gix_testtools::scripted_fixture_writable("make_shallow_forced_fetch_repo.sh")?;
+    let expected = gix_testtools::scripted_fixture_writable("make_shallow_forced_fetch_repo.sh")?;
+    let output = gix_testtools::git_command(expected.path().join("client"))
+        .args([
+            "fetch",
+            "--depth=1",
+            "--no-tags",
+            "../source",
+            "refs/heads/main:refs/heads/selected",
+        ])
+        .output()?;
+    assert!(
+        !output.status.success(),
+        "Git rejects the update because the advertised tip is shallow"
+    );
+    let local = gix::open_opts(fixture.path().join("client"), gix::open::Options::isolated())?;
+    let mut remote = local
+        .remote_at(gix::path::into_bstr(fixture.path().join("source"))?)?
+        .with_fetch_tags(gix::remote::fetch::Tags::None);
+    remote.replace_refspecs(["refs/heads/main:refs/heads/selected"], gix::remote::Direction::Fetch)?;
+    let outcome = remote
+        .connect(gix::remote::Direction::Fetch)?
+        .prepare_fetch(gix::progress::Discard, Default::default())?
+        .with_shallow(gix::remote::fetch::Shallow::DepthAtRemote(1.try_into()?))
+        .receive(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
+    let updates = match outcome.status {
+        gix::remote::fetch::Status::Change { update_refs, .. }
+        | gix::remote::fetch::Status::NoPackReceived { update_refs, .. } => update_refs,
+    };
+    assert_eq!(
+        updates.updates[0].mode,
+        gix::remote::fetch::refs::update::Mode::RejectedNonFastForward
+    );
+    assert_eq!(
+        gix_testtools::git(local.git_dir(), "rev-parse refs/heads/selected")?,
+        gix_testtools::git(expected.path().join("client"), "rev-parse refs/heads/selected")?
+    );
+    Ok(())
+}
+
+#[cfg(feature = "blocking-network-client")]
+#[test]
+fn fetch_fast_forward_checks_do_not_assume_monotonic_commit_times() -> gix_testtools::TestResult {
+    let fixture = gix_testtools::scripted_fixture_writable("make_shallow_forced_fetch_repo.sh")?;
+    let expected = gix_testtools::scripted_fixture_writable("make_shallow_forced_fetch_repo.sh")?;
+    gix_testtools::git(
+        expected.path().join("client-skew"),
+        "fetch --no-tags ../source refs/heads/skew:refs/heads/selected",
+    )?;
+    let local = gix::open_opts(fixture.path().join("client-skew"), gix::open::Options::isolated())?;
+    let mut remote = local
+        .remote_at(gix::path::into_bstr(fixture.path().join("source"))?)?
+        .with_fetch_tags(gix::remote::fetch::Tags::None);
+    remote.replace_refspecs(["refs/heads/skew:refs/heads/selected"], gix::remote::Direction::Fetch)?;
+    let outcome = remote
+        .connect(gix::remote::Direction::Fetch)?
+        .prepare_fetch(gix::progress::Discard, Default::default())?
+        .receive(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
+    let updates = match outcome.status {
+        gix::remote::fetch::Status::Change { update_refs, .. }
+        | gix::remote::fetch::Status::NoPackReceived { update_refs, .. } => update_refs,
+    };
+    assert_eq!(
+        updates.updates[0].mode,
+        gix::remote::fetch::refs::update::Mode::FastForward
+    );
+    assert_eq!(
+        gix_testtools::git(local.git_dir(), "rev-parse refs/heads/selected")?,
+        gix_testtools::git(expected.path().join("client-skew"), "rev-parse refs/heads/selected")?
+    );
+    Ok(())
 }

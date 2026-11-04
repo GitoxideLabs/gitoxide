@@ -93,6 +93,8 @@ fn hash_path(id: &gix_hash::oid, mut root: PathBuf) -> PathBuf {
 mod find;
 ///
 pub mod iter;
+/// Prune unprotected loose objects by modification time.
+pub mod prune;
 ///
 pub mod verify;
 

@@ -12,8 +12,8 @@ use crate::transport::client::async_io::{SetServiceResponse, Transport};
 use crate::transport::client::blocking_io::{SetServiceResponse, Transport};
 use crate::{credentials, handshake::refs};
 
-fn credentials_rejected(err: std::io::Error, url: &bstr::BString) -> gix_error::Error {
-    let context = message!("Credentials provided for \"{url}\" were not accepted by the remote");
+fn credentials_rejected(err: std::io::Error) -> gix_error::Error {
+    let context = message("Credentials were not accepted by the remote");
     let err = err.raise();
     let context = if err.downcast_any_ref::<client::AuthenticationRequired>().is_some() {
         context.unauthenticated()
@@ -95,7 +95,7 @@ where
                     // Still no permission? Reject the credentials.
                     Err(client::Error::Io(err)) if err.kind() == std::io::ErrorKind::PermissionDenied => {
                         authenticate(next.erase()).or_raise(|| message("Failed to erase credentials"))?;
-                        return Err(credentials_rejected(err, &url));
+                        return Err(credentials_rejected(err));
                     }
                     // Otherwise, do nothing, as we don't know if it actually got to try the credentials.
                     // If they were previously stored, they remain. In the worst case, the user has to enter them again
@@ -147,16 +147,15 @@ where
 #[cfg(test)]
 mod tests {
     use super::credentials_rejected;
-    use bstr::BString;
     use gix_error::Class;
     use gix_transport::client::AuthenticationRequired;
 
     #[test]
     fn permission_denied_requires_a_typed_signal_to_classify_as_authentication() {
-        let err = credentials_rejected(
-            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "repository access denied"),
-            &BString::from("https://example.com/repo"),
-        );
+        let err = credentials_rejected(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "repository access denied",
+        ));
         assert_eq!(
             err.classify().map(|class| class.class()).collect::<Vec<_>>(),
             [Class::PermissionDenied],
@@ -167,10 +166,10 @@ mod tests {
             "the native access-denial source remains available"
         );
 
-        let err = credentials_rejected(
-            std::io::Error::new(std::io::ErrorKind::PermissionDenied, AuthenticationRequired::default()),
-            &BString::from("https://example.com/repo"),
-        );
+        let err = credentials_rejected(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            AuthenticationRequired::default(),
+        ));
         assert!(
             err.is_unauthenticated(),
             "a typed challenge verifies rejected credentials"
@@ -190,10 +189,7 @@ mod tests {
         use gix_error::{ErrorExt, message};
 
         let payload = AuthenticationRequired::default().and_raise(message("HTTP request failed"));
-        let err = credentials_rejected(
-            std::io::Error::new(std::io::ErrorKind::PermissionDenied, payload),
-            &BString::from("https://example.com/repo"),
-        );
+        let err = credentials_rejected(std::io::Error::new(std::io::ErrorKind::PermissionDenied, payload));
         assert!(
             err.is_unauthenticated(),
             "nested typed challenges verify authentication failures"

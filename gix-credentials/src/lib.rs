@@ -10,13 +10,26 @@
 #![forbid(unsafe_code)]
 
 use gix_error::Result;
-/// A program/executable implementing the credential helper protocol.
+/// A native or external implementation of the credential helper protocol.
 #[derive(Debug)]
 pub struct Program {
     /// The kind of program, ready for launch.
     pub kind: program::Kind,
+    /// Working directory for helper processes and relative native helper paths.
+    /// `None` uses the current process directory.
+    pub current_dir: Option<std::path::PathBuf>,
+    /// An explicit Git-compatible executable for subprocess calls to `credential` and native helpers.
+    /// `None` uses Git discovery. Static native store/cache operations remain in-process.
+    pub builtin_dispatcher: Option<std::path::PathBuf>,
     /// If true, stderr is enabled, which is the default.
     pub stderr: bool,
+    /// How long the native `store` helper waits for its file lock. Defaults to one second.
+    /// Corresponds to Git's `credentialStore.lockTimeoutMS`.
+    pub store_lock_timeout: gix_lock::acquire::Fail,
+    /// The executable and arguments used to start a native cache daemon when needed.
+    /// Without a launcher, existing daemons can be queried, but an absent daemon cannot store credentials.
+    #[cfg(unix)]
+    pub cache_daemon: Option<program::cache::DaemonCommand>,
     /// `Some(…)` if the process is running.
     child: Option<std::process::Child>,
 }

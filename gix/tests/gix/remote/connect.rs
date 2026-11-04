@@ -8,6 +8,41 @@ mod http_authentication {
     use std::io::{BufRead, Write};
 
     #[test]
+    fn invalid_transport_configuration_keeps_url_passwords_private() -> TestResult {
+        let mut repo = crate::remote::repo("base");
+        repo.config_snapshot_mut().set_raw_value("http.version", "invalid")?;
+        let remote = repo.remote_at("https://user:password-sentinel@example.com/repository")?;
+        for direction in [gix::remote::Direction::Fetch, gix::remote::Direction::Push] {
+            let connection = remote.connect(direction)?;
+            let error = match direction {
+                gix::remote::Direction::Fetch => connection
+                    .ref_map(gix::progress::Discard, Default::default())
+                    .expect_err("invalid HTTP configuration prevents connecting"),
+                gix::remote::Direction::Push => connection
+                    .push(
+                        [],
+                        Default::default(),
+                        gix::progress::Discard,
+                        |_, _| Ok(()),
+                        &std::sync::atomic::AtomicBool::new(false),
+                    )
+                    .expect_err("invalid HTTP configuration prevents connecting"),
+            };
+            for diagnostic in [format!("{error}"), format!("{error:?}")] {
+                assert!(
+                    !diagnostic.contains("password-sentinel"),
+                    "{direction:?} errors must not expose URL passwords: {diagnostic}"
+                );
+            }
+            assert!(
+                format!("{error:?}").contains("http.version"),
+                "the error chain retains the invalid setting"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn cached_credentials_are_selected_without_prompting() -> TestResult {
         if gix_testtools::run_in_isolated_process()? {
             return Ok(());
@@ -106,17 +141,7 @@ mod blocking_io {
                 let repo = remote::repo(name);
                 let remote = repo.find_remote("origin").unwrap();
                 let err = remote.connect(Fetch).err().expect("protocol is denied");
-                error_snapshots.push(gix_testtools::redact_debug_snapshot(
-                    &(err),
-                    &[(
-                        &(gix_testtools::scripted_fixture_read_only("make_remote_repos.sh")
-                            .expect("remote fixture")
-                            .canonicalize()
-                            .expect("fixture exists"))
-                        .to_string_lossy(),
-                        "<fixture>",
-                    )],
-                ));
+                error_snapshots.push(gix_testtools::redact_debug_snapshot(&err, &[]));
                 assert!(err.is_permission_denied(), "protocol policy requires authorization");
                 assert!(!err.is_validation(), "a policy denial is not malformed URL input");
                 let denial = err
@@ -124,14 +149,42 @@ mod blocking_io {
                     .filter(|classification| classification.class() == gix_error::Class::PermissionDenied)
                     .find_map(|classification| classification.error().downcast_ref::<gix::error::Message>())
                     .expect("protocol denial retains its policy details");
-                assert!(denial.values.contains_key("input"), "the denied URL is retained");
+                assert!(
+                    !denial.values.contains_key("input"),
+                    "the denied URL is omitted because it can contain credentials"
+                );
             }
             insta::assert_debug_snapshot!(error_snapshots, "deny", @r#"
             [
-                Protocol File is denied per configuration, input="<fixture>/base",
-                Protocol File is denied per configuration, input="<fixture>/base",
+                Protocol File is denied per configuration,
+                Protocol File is denied per configuration,
             ]
             "#);
+        }
+
+        #[test]
+        fn denied_protocols_keep_url_passwords_private() -> TestResult {
+            let mut repo = remote::repo("base");
+            repo.config_snapshot_mut().set_raw_value("protocol.allow", "never")?;
+            for url in [
+                "http://user:password-sentinel@example.com/repository",
+                "https://user:password-sentinel@example.com/repository",
+                "file://user:password-sentinel@example.com/repository",
+            ] {
+                let remote = repo.remote_at(url)?;
+                let error = remote.connect(Fetch).err().expect("all protocols are denied");
+                for diagnostic in [format!("{error}"), format!("{error:?}")] {
+                    assert!(
+                        !diagnostic.contains("password-sentinel"),
+                        "protocol policy diagnostics must not expose URL passwords: {diagnostic}"
+                    );
+                }
+                assert!(
+                    error.is_permission_denied(),
+                    "omitting the URL preserves the protocol policy classification"
+                );
+            }
+            Ok(())
         }
 
         #[test]

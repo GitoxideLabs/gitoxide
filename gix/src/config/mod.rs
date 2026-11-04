@@ -4,6 +4,8 @@ use gix_parallel::OnceCell;
 use crate::{Repository, repository::identity};
 
 pub(crate) mod cache;
+mod comment;
+pub use comment::comment_prefix;
 pub mod file_mut;
 
 mod snapshot;

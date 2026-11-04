@@ -32,6 +32,8 @@ pub(crate) mod root {
         pub const CORE: sections::Core = sections::Core;
         /// The `credential` section.
         pub const CREDENTIAL: sections::Credential = sections::Credential;
+        /// The `credentialStore` section.
+        pub const CREDENTIAL_STORE: sections::CredentialStore = sections::CredentialStore;
         /// The `diff` section.
         #[cfg(feature = "blob-diff")]
         pub const DIFF: sections::Diff = sections::Diff;
@@ -43,6 +45,8 @@ pub(crate) mod root {
         pub const GITOXIDE: sections::Gitoxide = sections::Gitoxide;
         /// The `gpg` section.
         pub const GPG: sections::Gpg = sections::Gpg;
+        /// The `hook` section.
+        pub const HOOK: sections::Hook = sections::Hook;
         /// The `http` section.
         pub const HTTP: sections::Http = sections::Http;
         /// The `index` section.
@@ -88,12 +92,14 @@ pub(crate) mod root {
                 &Self::COMMIT,
                 &Self::CORE,
                 &Self::CREDENTIAL,
+                &Self::CREDENTIAL_STORE,
                 #[cfg(feature = "blob-diff")]
                 &Self::DIFF,
                 &Self::EXTENSIONS,
                 &Self::FETCH,
                 &Self::GITOXIDE,
                 &Self::GPG,
+                &Self::HOOK,
                 &Self::HTTP,
                 &Self::INDEX,
                 &Self::INIT,
@@ -118,9 +124,10 @@ pub(crate) mod root {
 
 mod sections;
 pub use sections::{
-    Author, Branch, Checkout, Clone, Commit, Committer, Core, Credential, Extensions, Fetch, Gitoxide, Gpg, Http,
-    Index, Init, Mailmap, Merge, Notes, Pack, Protocol, Push, Remote, Safe, Ssh, Url, User, Worktree, branch, checkout,
-    commit, core, credential, extensions, fetch, gitoxide, gpg, http, index, notes, protocol, push, remote, ssh,
+    Author, Branch, Checkout, Clone, Commit, Committer, Core, Credential, CredentialStore, Extensions, Fetch, Gitoxide,
+    Gpg, Hook, Http, Index, Init, Mailmap, Merge, Notes, Pack, Protocol, Push, Remote, Safe, Ssh, Url, User, Worktree,
+    branch, checkout, commit, core, credential, extensions, fetch, gitoxide, gpg, http, index, notes, protocol, push,
+    remote, ssh,
 };
 #[cfg(feature = "blob-diff")]
 pub use sections::{Diff, diff};

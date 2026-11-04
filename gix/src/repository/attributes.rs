@@ -72,6 +72,22 @@ impl Repository {
         index: &gix_index::State,
         attributes_source: gix_worktree::stack::state::attributes::Source,
     ) -> Result<AttributeStack<'_>> {
+        self.attributes_only_with_root(index, attributes_source, self.workdir().unwrap_or(self.git_dir()))
+    }
+
+    /// Like [`attributes_only()`](Self::attributes_only()), with an explicit root for attribute-file lookups.
+    ///
+    /// This supports virtual or alternate worktrees, including a working directory associated with a bare
+    /// object repository. Repository configuration and `info/attributes` still come from this repository;
+    /// per-directory attribute files are read below `worktree_root` according to `attributes_source`.
+    /// This does not change the repository's own worktree or the supplied index mappings.
+    #[cfg(feature = "attributes")]
+    pub fn attributes_only_with_root(
+        &self,
+        index: &gix_index::State,
+        attributes_source: gix_worktree::stack::state::attributes::Source,
+        worktree_root: impl Into<std::path::PathBuf>,
+    ) -> Result<AttributeStack<'_>> {
         let case = if self.config.ignore_case {
             gix_glob::pattern::Case::Fold
         } else {
@@ -86,14 +102,7 @@ impl Repository {
         let state = gix_worktree::stack::State::AttributesStack(attributes);
         let attribute_list = state.id_mappings_from_index(index, index.path_backing(), case);
         Ok(AttributeStack::new(
-            gix_worktree::Stack::new(
-                // this is alright as we don't cause mutation of that directory, it's virtual.
-                self.workdir().unwrap_or(self.git_dir()),
-                state,
-                case,
-                buf,
-                attribute_list,
-            ),
+            gix_worktree::Stack::new(worktree_root, state, case, buf, attribute_list),
             self,
         ))
     }

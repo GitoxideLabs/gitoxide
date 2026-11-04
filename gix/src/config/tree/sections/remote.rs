@@ -6,6 +6,18 @@ use crate::{
 const NAME_PARAMETER: Option<SubSectionRequirement> = Some(SubSectionRequirement::Parameter("name"));
 
 impl Remote {
+    /// The `remote.<name>.uploadpack` command.
+    pub const UPLOAD_PACK: keys::Program =
+        keys::Program::new_program("uploadpack", &config::Tree::REMOTE).with_subsection_requirement(NAME_PARAMETER);
+    /// The `remote.<name>.receivepack` command.
+    pub const RECEIVE_PACK: keys::Program =
+        keys::Program::new_program("receivepack", &config::Tree::REMOTE).with_subsection_requirement(NAME_PARAMETER);
+    /// The `remote.<name>.prune` key.
+    pub const PRUNE: keys::Boolean =
+        keys::Boolean::new_boolean("prune", &config::Tree::REMOTE).with_subsection_requirement(NAME_PARAMETER);
+    /// The `remote.<name>.pruneTags` key.
+    pub const PRUNE_TAGS: keys::Boolean =
+        keys::Boolean::new_boolean("pruneTags", &config::Tree::REMOTE).with_subsection_requirement(NAME_PARAMETER);
     /// The `remote.pushDefault` key
     pub const PUSH_DEFAULT: keys::RemoteName = keys::RemoteName::new_remote_name("pushDefault", &config::Tree::REMOTE);
     /// The `remote.<name>.tagOpt` key
@@ -40,6 +52,10 @@ impl Section for Remote {
 
     fn keys(&self) -> &[&dyn Key] {
         &[
+            &Self::UPLOAD_PACK,
+            &Self::RECEIVE_PACK,
+            &Self::PRUNE,
+            &Self::PRUNE_TAGS,
             &Self::PUSH_DEFAULT,
             &Self::TAG_OPT,
             &Self::URL,

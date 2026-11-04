@@ -1,14 +1,18 @@
 use crate::parse::parse;
 
 fn assert_validation(input: &str, has_cause: bool) -> gix_error::Error {
+    assert_validation_with_input(input, input, has_cause)
+}
+
+fn assert_validation_with_input(input: &str, diagnostic_input: &str, has_cause: bool) -> gix_error::Error {
     let err = parse(input).expect_err("the URL must be rejected");
     assert_eq!(
         err.metadata()
             .next()
             .expect("diagnostic metadata is retained")
             .get("input"),
-        Some(&gix_error::MetadataValue::from(input.as_bytes())),
-        "the rejected URL is retained"
+        Some(&gix_error::MetadataValue::from(diagnostic_input.as_bytes())),
+        "the rejected URL is retained unless it could contain credentials"
     );
     assert_eq!(
         err.iter_errors().count() > 1,
@@ -16,6 +20,36 @@ fn assert_validation(input: &str, has_cause: bool) -> gix_error::Error {
         "cause expectation for {input:?}"
     );
     err
+}
+
+#[test]
+fn malformed_urls_keep_credentials_out_of_diagnostics() {
+    let mut invalid_utf8 = b"https://user:password-sentinel@example.com/".to_vec();
+    invalid_utf8.push(0xff);
+    for input in [
+        b"https://user:password-sentinel@example.com:bad/repository".to_vec(),
+        b"https://user:password-sentinel@example.com/invalid path".to_vec(),
+        b"ssh://user:password-sentinel@example.com".to_vec(),
+        b"file://user:password-sentinel@example.com".to_vec(),
+        format!(
+            "https://user:password-sentinel{}@example.com/repository",
+            "x".repeat(1024)
+        )
+        .into_bytes(),
+        invalid_utf8,
+    ] {
+        let error = gix_url::parse(input.as_slice()).expect_err("the URL is malformed");
+        for diagnostic in [format!("{error}"), format!("{error:?}")] {
+            assert!(
+                !diagnostic.contains("password-sentinel"),
+                "malformed URL diagnostics must not retain credentials: {diagnostic}"
+            );
+        }
+        assert!(
+            error.is_validation(),
+            "redaction preserves the input-error classification"
+        );
+    }
 }
 
 #[test]
@@ -166,8 +200,8 @@ fn url_with_space_in_path() {
 #[test]
 fn url_with_space_in_username() {
     // Spaces in username should be rejected for http URLs per RFC 3986
-    insta::assert_debug_snapshot!(assert_validation("http://user name@example.com/path", true), "url with space in username", @r#"
-    URL can not be parsed as valid URL, input="http://user name@example.com/path"
+    insta::assert_debug_snapshot!(assert_validation_with_input("http://user name@example.com/path", "<redacted URL>", true), "url with space in username", @r#"
+    URL can not be parsed as valid URL, input="<redacted URL>"
 
     Caused by:
         0: invalid domain character
@@ -177,8 +211,8 @@ fn url_with_space_in_username() {
 #[test]
 fn url_with_space_in_password() {
     // Spaces in password should be rejected for http URLs per RFC 3986
-    insta::assert_debug_snapshot!(assert_validation("http://user:pass word@example.com/path", true), "url with space in password", @r#"
-    URL can not be parsed as valid URL, input="http://user:pass word@example.com/path"
+    insta::assert_debug_snapshot!(assert_validation_with_input("http://user:pass word@example.com/path", "<redacted URL>", true), "url with space in password", @r#"
+    URL can not be parsed as valid URL, input="<redacted URL>"
 
     Caused by:
         0: invalid domain character
@@ -210,8 +244,8 @@ fn url_with_newline_in_path() {
 #[test]
 fn url_with_tab_in_username() {
     // Tabs in username should be rejected for http URLs per RFC 3986
-    insta::assert_debug_snapshot!(assert_validation("http://user\tname@example.com/path", true), "url with tab in username", @r#"
-    URL can not be parsed as valid URL, input="http://user\tname@example.com/path"
+    insta::assert_debug_snapshot!(assert_validation_with_input("http://user\tname@example.com/path", "<redacted URL>", true), "url with tab in username", @r#"
+    URL can not be parsed as valid URL, input="<redacted URL>"
 
     Caused by:
         0: invalid domain character
@@ -221,8 +255,8 @@ fn url_with_tab_in_username() {
 #[test]
 fn url_with_tab_in_password() {
     // Tabs in password should be rejected for http URLs per RFC 3986
-    insta::assert_debug_snapshot!(assert_validation("http://user:pass\tword@example.com/path", true), "url with tab in password", @r#"
-    URL can not be parsed as valid URL, input="http://user:pass\tword@example.com/path"
+    insta::assert_debug_snapshot!(assert_validation_with_input("http://user:pass\tword@example.com/path", "<redacted URL>", true), "url with tab in password", @r#"
+    URL can not be parsed as valid URL, input="<redacted URL>"
 
     Caused by:
         0: invalid domain character

@@ -379,7 +379,12 @@ impl std::io::Read for ReadFilterOutput {
                         }
                     }
 
-                    write_result?;
+                    // A successful filter can intentionally stop consuming stdin.
+                    if let Err(err) = write_result
+                        && err.kind() != std::io::ErrorKind::BrokenPipe
+                    {
+                        return Err(err);
+                    }
                 }
                 Ok(num_read)
             }

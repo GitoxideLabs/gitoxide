@@ -506,7 +506,7 @@ impl<H: Http> blocking_io::Transport for Transport<H> {
             .as_mut()
             .expect("handshake to have been called first");
         line_provider.replace(body);
-        Ok(RequestWriter::new_from_bufread(
+        Ok(RequestWriter::new_from_bufread_with_send(
             post_body,
             Box::new(HeadersThenBody::<H, _> {
                 service,
@@ -570,6 +570,10 @@ impl<H: Http, B: ReadlineBufRead + Unpin> ReadlineBufRead for HeadersThenBody<H,
 impl<'a, H: Http, B: ExtendedBufRead<'a> + Unpin> ExtendedBufRead<'a> for HeadersThenBody<H, B> {
     fn set_progress_handler(&mut self, handle_progress: Option<HandleProgress<'a>>) {
         self.body.set_progress_handler(handle_progress);
+    }
+
+    fn set_progress_handler_raw(&mut self, handle_progress: Option<HandleProgress<'a>>) {
+        self.body.set_progress_handler_raw(handle_progress);
     }
 
     fn peek_data_line(&mut self) -> Option<std::io::Result<std::result::Result<&[u8], client::Error>>> {

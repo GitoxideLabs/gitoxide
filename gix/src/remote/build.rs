@@ -4,6 +4,31 @@ use crate::{Remote, Result, bstr::BStr, remote};
 
 /// Builder methods
 impl Remote<'_> {
+    /// Set environment values for this remote's transport, credential, and receive-hook commands.
+    ///
+    /// These values affect child processes and authentication program selection without modifying
+    /// the current process environment. Repeated keys use their last value. They are not persisted
+    /// when saving this remote to configuration. Required protocol and repository context wins over
+    /// conflicting values. This does not reinterpret repository configuration from `GIT_CONFIG_*`.
+    pub fn with_command_environment(
+        mut self,
+        environment: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+    ) -> Self {
+        self.command_environment = environment.into_iter().collect();
+        self
+    }
+
+    /// Set the directory against which relative local URLs and helper paths are resolved.
+    ///
+    /// Transport and authentication commands run in this directory. Receive hooks still run in
+    /// the receiving repository, as required by Git. Relative directories are made absolute now;
+    /// the process working directory is never changed and this setting is not saved to configuration.
+    /// Without this override, the process working directory is used.
+    pub fn with_working_dir(mut self, directory: impl AsRef<std::path::Path>) -> Result<Self> {
+        self.working_dir = Some(std::path::absolute(directory).or_error()?);
+        Ok(self)
+    }
+
     /// Override the `url` to be used when fetching data from a remote.
     ///
     /// Note that this URL is typically set during instantiation with [`crate::Repository::remote_at()`].

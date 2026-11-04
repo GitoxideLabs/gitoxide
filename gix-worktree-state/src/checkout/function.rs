@@ -35,15 +35,26 @@ where
     Find: gix_object::Find + Send + Clone,
 {
     let paths = index.take_path_backing();
-    let res = checkout_inner(index, &paths, dir, objects, files, bytes, should_interrupt, options);
+    let res = checkout_inner(
+        index,
+        &paths,
+        None,
+        dir,
+        objects,
+        files,
+        bytes,
+        should_interrupt,
+        options,
+    );
     index.return_path_backing(paths);
     res
 }
 
 #[expect(clippy::too_many_arguments)]
-fn checkout_inner<Find>(
+pub(super) fn checkout_inner<Find>(
     index: &mut gix_index::State,
     paths: &gix_index::PathStorage,
+    selected_entries: Option<&[usize]>,
     dir: impl Into<std::path::PathBuf>,
     objects: Find,
     files: &dyn gix_utils::progress::Count,
@@ -59,7 +70,7 @@ where
     let dir = dir.into();
     let (chunk_size, thread_limit, num_threads) = gix_parallel::optimize_chunk_size_and_thread_limit(
         100,
-        index.entries().len().into(),
+        selected_entries.map_or(index.entries().len(), <[usize]>::len).into(),
         options.thread_limit(),
         None,
     );
@@ -86,6 +97,17 @@ where
         objects,
     };
 
+    let entries_with_paths = interrupt::Iter::new(
+        index
+            .entries_mut_with_paths_in(paths)
+            .enumerate()
+            .filter_map(|(position, entry)| {
+                selected_entries
+                    .is_none_or(|selected| selected.binary_search(&position).is_ok())
+                    .then_some(entry)
+            }),
+        should_interrupt,
+    );
     let chunk::Outcome {
         mut collisions,
         mut errors,
@@ -95,7 +117,6 @@ where
         delayed_paths_unknown,
         delayed_paths_unprocessed,
     } = if num_threads == 1 {
-        let entries_with_paths = interrupt::Iter::new(index.entries_mut_with_paths_in(paths), should_interrupt);
         let mut delayed_filter_results = Vec::new();
         let mut out = chunk::process(
             entries_with_paths,
@@ -107,7 +128,6 @@ where
         chunk::process_delayed_filter_results(delayed_filter_results, &num_files, &num_bytes, &mut out, &mut ctx)?;
         out
     } else {
-        let entries_with_paths = interrupt::Iter::new(index.entries_mut_with_paths_in(paths), should_interrupt);
         in_parallel_with_finalize(
             gix_utils::iter::Chunks {
                 inner: entries_with_paths,

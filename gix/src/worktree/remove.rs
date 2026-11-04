@@ -56,6 +56,52 @@ impl Target<'_> {
 }
 
 impl Target<'_> {
+    /// Disconnect this linked worktree while preserving its checkout directory and files.
+    ///
+    /// Remove its `.git` link followed by its private administrative directory, including the index and
+    /// worktree-specific reflogs. Shared branch references are retained, and unrelated registrations are
+    /// never pruned. A missing checkout or `.git` link is allowed; an existing link must still point to
+    /// this registration. An error after link removal can leave only the private administration behind.
+    ///
+    /// Modified and untracked checkout files are always retained, including when `force` is used.
+    /// Initialized submodules require [`Force::DiscardChanges`] because their private Git metadata may
+    /// be removed with the registration. A locked worktree requires [`Force::OverrideLock`].
+    /// The main worktree cannot be selected for unlinking. Callers must prevent concurrent changes to
+    /// the checkout's `.git` entry while unlinking.
+    pub fn unlink(self, force: Force) -> Result<()> {
+        let Target { proxy, base, .. } = self;
+        let work_dir = proxy.parent.current_dir().join(base);
+        let git_dir = proxy.parent.current_dir().join(proxy.git_dir());
+        if force != Force::OverrideLock && proxy.is_locked() {
+            bail!(Error::Locked {
+                path: work_dir,
+                reason: proxy.lock_reason()
+            });
+        }
+        if force == Force::Never {
+            let linked_repo = proxy
+                .clone()
+                .into_repo_with_possibly_inaccessible_worktree()
+                .or_raise(|| message("Could not open the linked worktree repository"))?;
+            if has_populated_submodule(&linked_repo)? {
+                bail!(Error::ContainsSubmodule { path: work_dir });
+            }
+        }
+        let dot_git = work_dir.join(gix_discover::DOT_GIT_DIR);
+        match std::fs::symlink_metadata(&dot_git) {
+            Ok(_) => {
+                validate_backlink(&work_dir, &git_dir, proxy.parent.config.ignore_case)?;
+                std::fs::remove_file(&dot_git)
+                    .or_raise(|| message("Could not remove the linked worktree .git file"))?;
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => bail!(err.and_raise(message("Could not inspect the linked worktree .git file"))),
+        }
+        std::fs::remove_dir_all(&git_dir)
+            .or_raise(|| message("Could not remove the linked worktree administration"))?;
+        Ok(())
+    }
+
     /// Validate and remove this linked worktree.
     ///
     /// The main worktree cannot be prepared for removal or removed. With [`Force::Never`], modified or
@@ -175,6 +221,21 @@ impl Target<'_> {
 }
 
 impl crate::worktree::Proxy<'_> {
+    /// Disconnect this linked worktree from its registered checkout, preserving the checkout's files.
+    ///
+    /// No path or suffix lookup is performed. See [`Target::unlink()`] for validation and cleanup behavior.
+    pub fn unlink(self, force: Force) -> Result<()> {
+        let base = self
+            .base()
+            .or_raise(|| message("Could not read the linked worktree checkout location"))?;
+        Target {
+            proxy: self,
+            base,
+            options: Options::default(),
+        }
+        .unlink(force)
+    }
+
     /// Remove this linked worktree at its registered checkout path, using [`Options::default()`].
     ///
     /// No path or suffix lookup is performed. See [`Target::remove()`] for removal behavior and examples.
@@ -286,6 +347,14 @@ impl std::error::Error for Error {
 }
 
 impl crate::Repository {
+    /// Disconnect the selected linked worktree while preserving its checkout directory and files.
+    ///
+    /// Combines [`Self::prepare_remove_worktree()`] with [`Target::unlink()`]. The target selection rules
+    /// are the same as for removal, while only the selected registration and `.git` link are removed.
+    pub fn unlink_worktree(&self, target: impl AsRef<Path>, force: Force) -> Result<()> {
+        self.prepare_remove_worktree(target)?.unlink(force)
+    }
+
     /// Resolve `target` for later inspection and removal.
     ///
     /// See [`Target::remove()`] for target selection, removal behavior, and examples.

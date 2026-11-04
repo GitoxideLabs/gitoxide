@@ -195,7 +195,7 @@ fn http_status_500_is_communicated_via_special_io_error() -> TestResult {
         Caused by:
             0: I/O error (ConnectionAborted)
             1: Received HTTP status 500
-            2: HTTP status server error (500 Internal Server Error) for url (http://127.0.0.1:<port>/path/not-important/info/refs?service=git-upload-pack)
+            2: HTTP status server error (500 Internal Server Error)
         ");
     }
     Ok(())
@@ -1009,7 +1009,7 @@ fn redirects_are_not_followed_with_configured_extra_headers() -> TestResult {
 
         Caused by:
             0: I/O error (Other)
-            1: error following redirect for url (http://127.0.0.1:<original-port>/repo/info/refs?service=git-upload-pack)
+            1: error following redirect
             2: refusing to follow redirect after request headers were configured
         ");
     }
@@ -1044,7 +1044,7 @@ fn http_error_results_in_observable_error() -> TestResult {
         Caused by:
             0: I/O error (Other)
             1: Received HTTP status 404
-            2: HTTP status client error (404 Not Found) for url (http://127.0.0.1:<port>/path/not-important/info/refs?service=git-upload-pack)
+            2: HTTP status client error (404 Not Found)
         ");
     }
     Ok(())

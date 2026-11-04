@@ -953,3 +953,43 @@ fn overrides_with_implicit_booleans_work_across_sections() -> gix_testtools::Tes
     assert_eq!(config.boolean("a.b")?, Some(true), "empty implicit booleans ");
     Ok(())
 }
+
+#[test]
+fn section_body_iteration_preserves_implicit_values_and_normalizes_explicit_values() -> TestResult {
+    let file = File::try_from(
+        r#"[core]
+    repeated
+    repeated =
+    repeated = ""
+    Escaped = "a\n\tb\\\""
+    continued = one\
+two
+    repeated # still implicit
+"#,
+    )?;
+    let body = file.section("core", None)?.body();
+    let expected = vec![
+        ("repeated".to_owned(), None),
+        ("repeated".to_owned(), Some(BString::default())),
+        ("repeated".to_owned(), Some(BString::default())),
+        ("Escaped".to_owned(), Some(BString::from("a\n\tb\\\""))),
+        ("continued".to_owned(), Some(BString::from("onetwo"))),
+        ("repeated".to_owned(), None),
+    ];
+    let mut actual = body.into_iter_implicit();
+    assert_eq!(
+        actual.by_ref().collect::<Vec<_>>(),
+        expected,
+        "iteration retains key spelling, duplicates, and implicit values while decoding explicit values"
+    );
+    assert!(actual.next().is_none(), "the iterator stays exhausted");
+    assert_eq!(
+        body.into_iter().collect::<Vec<_>>(),
+        expected
+            .into_iter()
+            .map(|(key, value)| (key, value.unwrap_or_default()))
+            .collect::<Vec<_>>(),
+        "ordinary iteration retains its existing implicit-as-empty behavior"
+    );
+    Ok(())
+}

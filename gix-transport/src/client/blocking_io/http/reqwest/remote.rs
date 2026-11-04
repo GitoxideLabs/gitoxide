@@ -18,6 +18,7 @@ use crate::client::blocking_io::http::{
 };
 
 fn classify_reqwest(err: reqwest::Error) -> Error {
+    let err = err.without_url();
     let class = match err.status() {
         Some(reqwest::StatusCode::FORBIDDEN) => Some(Class::PermissionDenied),
         Some(reqwest::StatusCode::CONFLICT) => Some(Class::Conflict),
@@ -103,11 +104,7 @@ impl Default for Remote {
                                                     if curr_url.as_str().ends_with(redirect_tail.as_str()) {
                                                         attempt.follow()
                                                     } else {
-                                                        let curr_url = curr_url.as_str().to_owned();
-                                                        let redirect_tail = redirect_tail.to_string();
-                                                        attempt.error(format!(
-                                                            "redirect url {curr_url:?} does not end with expected request suffix {redirect_tail:?}",
-                                                        ))
+                                                        attempt.error("redirect URL does not end with the expected request suffix")
                                                     }
                                                 }
                                                 _ => attempt.follow(),

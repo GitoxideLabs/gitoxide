@@ -212,6 +212,7 @@ impl Pipeline {
         };
 
         out.clear();
+        let command_context = self.worktree_filter.driver_state_mut().context.clone();
         attributes(rela_path, &mut self.attrs);
         let attr = self.attrs.iter_selected().next().expect("pre-initialized with 'diff'");
         let driver_index = attr
@@ -265,7 +266,7 @@ impl Pipeline {
                         _ => {
                             match driver
                                 .filter(|_| convert.to_worktree())
-                                .map(|d| d.prepare_binary_to_text_cmd(&self.path))
+                                .map(|d| d.prepare_binary_to_text_cmd_with_context(&self.path, &command_context))
                                 .transpose()?
                                 .flatten()
                             {
@@ -405,7 +406,7 @@ impl Pipeline {
                                         })
                                         .and_then(|tmp_file| {
                                             Ok((
-                                                d.prepare_binary_to_text_cmd(&self.path)
+                                                d.prepare_binary_to_text_cmd_with_context(&self.path, &command_context)
                                                     .map_err(|err| {
                                                         std::io::Error::new(std::io::ErrorKind::InvalidInput, err)
                                                     })?
@@ -533,18 +534,31 @@ impl Driver {
     /// Produce an invocable command pre-configured to produce the filtered output on stdout after reading `path`.
     /// Returns an error if the configured command cannot be represented by the platform.
     pub fn prepare_binary_to_text_cmd(&self, path: &Path) -> Result<Option<std::process::Command>> {
+        self.prepare_binary_to_text_cmd_with_context(path, &Default::default())
+    }
+
+    fn prepare_binary_to_text_cmd_with_context(
+        &self,
+        path: &Path,
+        context: &gix_command::Context,
+    ) -> Result<Option<std::process::Command>> {
         let Some(command) = self.binary_to_text_command.as_deref() else {
             return Ok(None);
         };
-        let cmd = gix_command::prepare(gix_path::from_bstr(command.as_bstr())?.into_owned())
-            // TODO: Add support for an actual Context, validate it *can* match Git
-            .with_context(Default::default())
+        let mut context = context.clone();
+        // Textconv output is consumed by the caller, including stderr for failure diagnostics.
+        context.stderr = None;
+        let working_dir = context.worktree_dir.as_ref().or(context.git_dir.as_ref()).cloned();
+        let mut prepared = gix_command::prepare(gix_path::from_bstr(command.as_bstr())?.into_owned())
+            .with_context(context)
             .with_shell()
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .arg(path)
-            .try_into()?;
-        Ok(Some(cmd))
+            .arg(path);
+        if let Some(working_dir) = working_dir {
+            prepared = prepared.current_dir(working_dir);
+        }
+        Ok(Some(prepared.try_into()?))
     }
 }

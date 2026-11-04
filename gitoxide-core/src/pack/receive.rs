@@ -146,6 +146,7 @@ where
         gix::protocol::fetch::Options {
             shallow_file: "no shallow file required as we reject it to keep it simple".into(),
             shallow: &Default::default(),
+            filter: None,
             tags: Default::default(),
             reject_shallow_remote: true,
         },

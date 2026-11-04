@@ -153,6 +153,25 @@ impl crate::Repository {
         Some(Ok(tracking))
     }
 
+    /// Return all existing local branches whose configured fetch upstream is `tracking_ref`.
+    ///
+    /// Branch names are resolved through [`Self::branch_remote_tracking_ref_name()`], so local
+    /// names may differ from the source branch or the fetch refspec's destination. The tracking
+    /// reference need not exist. Branch configuration without a local reference is ignored.
+    /// Results follow reference-name order; no candidate is preferred when several branches match.
+    /// Reference enumeration and upstream-configuration errors are propagated.
+    pub fn local_branches_tracking_ref(&self, tracking_ref: &FullNameRef) -> Result<Vec<crate::Reference<'_>>> {
+        let mut matches = Vec::new();
+        for branch in self.references()?.local_branches()? {
+            let branch = branch?;
+            let upstream = branch.remote_tracking_ref_name(remote::Direction::Fetch).transpose()?;
+            if upstream.as_ref().map(AsRef::as_ref) == Some(tracking_ref) {
+                matches.push(branch);
+            }
+        }
+        Ok(matches)
+    }
+
     /// Given a local `tracking_branch` name, find the remote that maps to it along with the name of the branch on
     /// the side of the remote, also called upstream branch.
     ///

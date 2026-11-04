@@ -21,6 +21,8 @@ impl Default for Options {
             use_repository_local_environment: true,
             retain_inferred_worktree_when_bare: false,
             current_dir: None,
+            #[cfg(all(unix, feature = "credentials"))]
+            credential_cache_daemon: None,
         }
     }
 }
@@ -51,6 +53,8 @@ impl Options {
             open_path_as_is: self.open_path_as_is,
             retain_inferred_worktree_when_bare: self.retain_inferred_worktree_when_bare,
             current_dir: self.current_dir.clone(),
+            #[cfg(all(unix, feature = "credentials"))]
+            credential_cache_daemon: self.credential_cache_daemon.clone(),
         }
     }
 
@@ -80,6 +84,21 @@ impl Options {
 
 /// Builder methods
 impl Options {
+    /// Use `command` to start native credential-cache daemons when a configured `cache` helper stores credentials.
+    ///
+    /// The executable must implement the daemon readiness protocol described by
+    /// [`gix_credentials::program::cache::DaemonCommand`]. No executable is inferred by default.
+    /// This choice applies to repository, remote and HTTP-proxy credential helpers, and is retained
+    /// when these options are reused to open linked worktrees or submodules.
+    #[cfg(all(unix, feature = "credentials"))]
+    pub fn credential_cache_daemon(
+        mut self,
+        command: impl Into<Option<gix_credentials::program::cache::DaemonCommand>>,
+    ) -> Self {
+        self.credential_cache_daemon = command.into().map(Box::new);
+        self
+    }
+
     /// Apply the given configuration `values` like `init.defaultBranch=special` or `core.bool-implicit-true` in memory to as early
     /// as the configuration is initialized to allow affecting the repository instantiation phase, both on disk or when opening.
     /// The configuration is marked with [source API][gix_config::Source::Api].
@@ -88,7 +107,7 @@ impl Options {
         self
     }
 
-    /// Set configuration values of the form `core.abbrev=5` or `remote.origin.url = foo` or `core.bool-implicit-true` for application
+    /// Set configuration values of the form `core.abbrev=5` or `remote.origin.url=foo` or `core.bool-implicit-true` for application
     /// as CLI overrides to the repository configuration, marked with [source CLI][gix_config::Source::Cli].
     /// These are equivalent to CLI overrides passed with `-c` in `git`, for example.
     pub fn cli_overrides(mut self, values: impl IntoIterator<Item = impl Into<BString>>) -> Self {
@@ -206,6 +225,16 @@ impl Options {
         self
     }
 
+    /// Reuse these options to open a subrepository at a known path.
+    ///
+    /// Permissions, explicit configuration overrides, and configuration-source paths are retained.
+    /// Repository-local environment overrides, such as `GIT_WORK_TREE`, `GIT_INDEX_FILE`, and
+    /// `GIT_NAMESPACE`, are ignored, and trust is determined from the new repository's ownership.
+    /// Path interpretation and inferred-worktree settings are reset for the new repository.
+    pub fn for_subrepository(&self) -> Self {
+        self.clone_without_trust()
+    }
+
     /// Open a repository at `path` with the options set so far.
     pub fn open(self, path: impl Into<PathBuf>) -> Result<ThreadSafeRepository> {
         ThreadSafeRepository::open_opts(path, self)
@@ -245,6 +274,8 @@ impl gix_sec::trust::DefaultForLevel for Options {
                 system_config_path: None,
                 use_repository_local_environment: true,
                 current_dir: None,
+                #[cfg(all(unix, feature = "credentials"))]
+                credential_cache_daemon: None,
             },
             gix_sec::Trust::Reduced => Options {
                 object_store_slots: gix_odb::store::init::Slots::Given(32), // limit resource usage
@@ -262,6 +293,8 @@ impl gix_sec::trust::DefaultForLevel for Options {
                 system_config_path: None,
                 use_repository_local_environment: true,
                 current_dir: None,
+                #[cfg(all(unix, feature = "credentials"))]
+                credential_cache_daemon: None,
             },
         }
     }

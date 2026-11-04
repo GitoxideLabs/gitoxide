@@ -6,3 +6,6 @@ pub mod commit;
 
 /// Tree traversal
 pub mod tree;
+
+/// Traverse the complete graph of reachable Git objects.
+pub mod object;

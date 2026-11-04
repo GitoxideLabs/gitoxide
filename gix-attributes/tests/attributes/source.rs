@@ -32,12 +32,15 @@ fn system_attributes(runtime: &str, mixed: bool) -> gix_testtools::Result {
     } else {
         std::fs::create_dir(installation.path().join(runtime))?;
     }
-    // GIT_EXEC_PATH selects the active runtime when EXEPATH is ambiguous.
+    // PATH selects the active installation when EXEPATH is ambiguous.
     // Git for Windows builds ETC_GITATTRIBUTES as ../etc/gitattributes for both runtimes.
     let core_dir = installation.path().join(runtime).join("libexec/git-core");
+    std::fs::create_dir_all(&core_dir)?;
+    let bin = installation.path().join("bin");
+    std::fs::create_dir(&bin)?;
     let _env = gix_testtools::Env::new()
         .set("EXEPATH", installation.path().to_str().expect("UTF-8 temporary path"))
-        .set("GIT_EXEC_PATH", core_dir.to_str().expect("UTF-8 temporary path"));
+        .set("PATH", bin.to_str().expect("UTF-8 temporary path"));
     assert_eq!(
         Source::System.storage_location(&mut |_| None),
         Some(installation.path().join("etc/gitattributes")),

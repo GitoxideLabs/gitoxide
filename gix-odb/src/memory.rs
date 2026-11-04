@@ -159,6 +159,58 @@ where
     }
 }
 
+impl<T> gix_pack::Find for Proxy<T>
+where
+    T: gix_pack::Find,
+{
+    fn contains(&self, id: &gix_hash::oid) -> bool {
+        self.memory.as_ref().is_some_and(|map| map.borrow().contains_key(id)) || self.inner.contains(id)
+    }
+
+    fn try_find_cached<'a>(
+        &self,
+        id: &gix_hash::oid,
+        buffer: &'a mut Vec<u8>,
+        pack_cache: &mut dyn gix_pack::cache::DecodeEntry,
+    ) -> Result<Option<(Data<'a>, Option<gix_pack::data::entry::Location>)>> {
+        if let Some(map) = self.memory.as_ref() {
+            let map = map.borrow();
+            if let Some((kind, data)) = map.get(id) {
+                buffer.clear();
+                buffer.extend_from_slice(data);
+                return Ok(Some((
+                    Data {
+                        kind: *kind,
+                        object_hash: id.kind(),
+                        data: &*buffer,
+                    },
+                    None,
+                )));
+            }
+        }
+        self.inner.try_find_cached(id, buffer, pack_cache)
+    }
+
+    fn location_by_oid(
+        &self,
+        id: &gix_hash::oid,
+        buf: &mut Vec<u8>,
+    ) -> Result<Option<gix_pack::data::entry::Location>> {
+        if self.memory.as_ref().is_some_and(|map| map.borrow().contains_key(id)) {
+            return Ok(None);
+        }
+        self.inner.location_by_oid(id, buf)
+    }
+
+    fn pack_offsets_and_oid(&self, pack_id: u32) -> Result<Option<Vec<(gix_pack::data::Offset, gix_hash::ObjectId)>>> {
+        self.inner.pack_offsets_and_oid(pack_id)
+    }
+
+    fn entry_by_location(&self, location: &gix_pack::data::entry::Location) -> Option<gix_pack::find::Entry> {
+        self.inner.entry_by_location(location)
+    }
+}
+
 impl<T> gix_object::Exists for Proxy<T>
 where
     T: gix_object::Exists,
