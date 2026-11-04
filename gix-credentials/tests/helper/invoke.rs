@@ -353,6 +353,68 @@ mod program {
     use crate::helper::script_helper;
 
     #[test]
+    fn builtin_negotiates_tokens_with_a_url_and_forwards_them() -> TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        if gix_testtools::should_skip_as_git_version_is_smaller_than(2, 46, 0) {
+            return Ok(());
+        }
+        let temp = gix_testtools::tempfile::tempdir()?;
+        let _cwd = gix_testtools::set_current_dir(temp.path())?;
+        let _env = gix_testtools::Env::new()
+            .set("GIT_CONFIG_COUNT", "1")
+            .set("GIT_CONFIG_KEY_0", "credential.helper")
+            .set(
+                "GIT_CONFIG_VALUE_0",
+                r#"!f() {
+                    capability= scheme= token=
+                    while IFS= read -r line; do
+                        case "$line" in
+                            'capability[]=authtype') capability=yes ;;
+                            authtype=Bearer) scheme=yes ;;
+                            credential=access-token) token=yes ;;
+                        esac
+                    done
+                    if test "$1" = get; then
+                        if test "$capability" = yes; then
+                            printf 'capability[]=authtype\nauthtype=Bearer\ncredential=access-token\nephemeral=1\n'
+                        else
+                            echo quit=1
+                        fi
+                    elif test "$capability$scheme$token" = yesyesyes; then
+                        printf '%s\n' "$1" >> callbacks
+                    fi
+                }; f"#,
+            );
+        let mut context = gix_credentials::protocol::Context::from_url("https://example.com/repo", Default::default());
+        context.capability.push(gix_credentials::protocol::Capability::Authtype);
+        let outcome = gix_credentials::builtin(helper::Action::Get(context))?
+            .expect("Git forwards the capability to its configured helper");
+        assert_eq!(
+            outcome.credentials,
+            gix_sec::identity::Credentials::Encoded {
+                authtype: "Bearer".into(),
+                credential: "access-token".into(),
+                oauth_refresh_token: None,
+            },
+            "parsing the URL must not clear the capability needed for token lookup"
+        );
+        let mut context = gix_credentials::protocol::Context::try_from(&outcome.next)?;
+        context.url = Some("https://example.com/repo".into());
+        let next: helper::NextAction = context.into();
+        for action in [next.clone().store(), next.erase()] {
+            gix_credentials::builtin(action)?;
+        }
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("callbacks"))?,
+            "store\nerase\n",
+            "restoring the URL must preserve token fields in Git-backed follow-up callbacks"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn builtin() -> TestResult {
         // Other tests resolve fixture paths relative to the working directory, so change it only in a child.
         if gix_testtools::run_in_isolated_process()? {

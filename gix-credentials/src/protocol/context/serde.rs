@@ -41,16 +41,17 @@ mod write {
                 // credential helper invocation chain.
                 quit: _,
             } = self;
-            for value in capability {
-                match value {
-                    Capability::Authtype => write_key(&mut out, "capability[]", "authtype".into())?,
-                    Capability::Unsupported(_) => {}
-                }
-            }
             for (key, value) in [("url", url), ("path", path)] {
                 if let Some(value) = value {
                     validate(key, value.as_slice().into(), *protect_protocol).map_err(std::io::Error::other)?;
                     write_key(&mut out, key, value.as_ref()).ok();
+                }
+            }
+            // Git clears capability flags when parsing a URL, so announce them afterward.
+            for value in capability {
+                match value {
+                    Capability::Authtype => write_key(&mut out, "capability[]", "authtype".into())?,
+                    Capability::Unsupported(_) => {}
                 }
             }
             for (key, value) in [

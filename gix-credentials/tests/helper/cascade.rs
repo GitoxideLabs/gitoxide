@@ -70,8 +70,8 @@ wwwauth[]=Bearer
         for action in [outcome.next.clone().store(), outcome.next.erase()] {
             let payload = action.payload().expect("store and erase have a payload");
             assert!(
-                payload.starts_with_str("capability[]=authtype\n"),
-                "the capability precedes its fields"
+                payload.starts_with_str("url=https://example.com\ncapability[]=authtype\n"),
+                "the capability follows the URL and precedes its fields so Git retains it"
             );
             assert!(
                 !payload.contains_str("state") && !payload.contains_str("continue=") && !payload.contains_str("future"),
