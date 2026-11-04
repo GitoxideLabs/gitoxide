@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
-  contents: read
+  contents: read # Required to check out the repository.
 
 env:
   CARGO_TERM_COLOR: always
@@ -44,6 +44,8 @@ jobs:
         with:
           shared-key: ci-plan
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Cache dependency metadata for offline feature selection
+        run: cargo fetch --locked
       - name: Test the planner without building Git tooling
         run: cargo run --profile qa --locked -p internal-tools --no-default-features --bin qa -- run --mode exhaustive --stage self-test
       - name: Select checks and distribute them across platforms
@@ -63,9 +65,14 @@ jobs:
     continue-on-error: ${{ !matrix.blocking }}
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }} # zizmor: ignore[unpinned-images] SHA256 pins in tests/it/src/qa/catalog.rs.
+    permissions:
+      contents: read # Required to check out the repository.
+      actions: read # Required to find and download the base commit's coverage artifacts.
     env:
       QA_PLAN: ${{ needs.plan.outputs.plan }}
       QA_JOB: ${{ matrix.id }}
+      # Main provides reusable indexes; PR cache misses run ordinary QA without collecting throwaway data.
+      GIX_QA_COVERAGE: ${{ vars.QA_COVERAGE != 'off' && (contains(matrix.tasks, 'native-tests') || contains(matrix.tasks, 'isolated-tests') || contains(matrix.tasks, 'feature-tests')) && (github.event_name == 'pull_request' && (vars.QA_COVERAGE == 'shadow' && 'shadow' || 'prune') || github.ref == 'refs/heads/main' && 'collect') || 'off' }}
     steps:
       # Native 32-bit containers need libraries for the runner's 64-bit Node.js.
       - name: Install container prerequisites
@@ -92,8 +99,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # Tasks consume the saved plan; release comparisons use fixture histories.
-          fetch-depth: ${{ matrix.history && '0' || '1' }}
+          # Automatic coverage compares with the base parent of GitHub's PR merge commit.
+          fetch-depth: ${{ matrix.history && '0' || github.event_name == 'pull_request' && '2' || '1' }}
       - name: Install native Rust
         if: matrix.container == ''
         shell: bash
@@ -168,9 +175,37 @@ jobs:
         run: |
           curl -LSfs "https://raw.githubusercontent.com/the-lean-crate/cargo-diet/refs/tags/$CARGO_DIET_TAG/ci/install.sh" |
             sh -s -- --git the-lean-crate/cargo-diet --target x86_64-unknown-linux-musl --tag "$CARGO_DIET_TAG"
+      - name: Install optional coverage tools
+        if: env.GIX_QA_COVERAGE == 'collect'
+        continue-on-error: true
+        shell: bash
+        run: rustup component add llvm-tools-preview --toolchain stable
+      - name: Download optional coverage indexes from the PR base
+        if: env.GIX_QA_COVERAGE == 'shadow' || env.GIX_QA_COVERAGE == 'prune'
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COVERAGE_BASE: ${{ github.event.pull_request.base.sha }}
+          COVERAGE_ARTIFACT: qa-coverage-${{ matrix.id }}
+        run: |
+          coverage_run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main \
+            --commit "$COVERAGE_BASE" --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+          test -n "$coverage_run"
+          gh run download "$coverage_run" --repo "$GITHUB_REPOSITORY" --name "$COVERAGE_ARTIFACT" \
+            --dir target/qa-coverage/indexes
       - name: Run the selected checks
         # Keep Windows' native shell; the shared runner configures every task's environment.
         run: cargo run --profile qa --locked -p internal-tools --no-default-features --bin qa -- run --from-env
+      - name: Publish optional coverage indexes
+        if: success() && env.GIX_QA_COVERAGE == 'collect'
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: qa-coverage-${{ matrix.id }}
+          path: target/qa-coverage/indexes/*.json
+          if-no-files-found: ignore
+          retention-days: 14
 
   downstream:
     name: Consumer / ${{ matrix.name }}

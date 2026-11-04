@@ -3356,6 +3356,7 @@ dependencies = [
  "gix-error",
  "gix-testtools",
  "regex",
+ "serde",
  "serde_json",
  "toml_edit",
  "tracing-subscriber",

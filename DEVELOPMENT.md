@@ -237,14 +237,117 @@ directory, diagnostics, stdout, and stderr. The logs are in the printed temporar
 directory. `--agent` enables this output explicitly. JSON plans and `--dry-run`
 command listings remain available for detailed inspection.
 
+When `tix` is installed, a successful complete local run records a checks-pass message
+on the tested commit's tree. Its gutter emoji distinguishes fast (`⚡`) from thorough
+(`🔬`, exhaustive mode) coverage, including automatic exhaustive fallbacks. The title
+shows the elapsed run time; the body records the host, comparison base, selected package
+count, selection reasons and elapsed time for each task, including setup. Timing starts
+inside the QA runner, after any compilation needed to launch it. Recording requires the
+same clean `HEAD` at the start and end of the run. Dirty runs, task
+failures (including nonblocking failures), stage subsets, saved plans, dry runs and CI
+jobs do not receive a checks-pass message. A missing `tix` or unavailable initial Git
+state skips recording; other Tix errors are reported separately from passing QA.
+
 Fast mode compares against the merge base with `origin/main` by default, including staged,
 unstaged and untracked changes. Fetch your intended base before comparing. Selection includes
-owning crates and all reverse workspace dependencies, including optional, dev, build and
-platform-specific dependencies. Known root prose files select no Rust work; crate documentation
-is a crate input because it can appear in rustdoc. Manifests, lockfiles, fuzzers, shared tests,
-CI/build configuration, unclassified paths and a missing base conservatively select exhaustive
-coverage. The plan explains each fallback. An unchanged checkout still checks licenses,
-dependency policy, advisories, workflow policy, script modes and the MSRV badge.
+owning crates and reverse normal/build workspace dependencies, including optional and
+platform-specific dependencies. Their dev consumers are selected too, without propagating
+further through those dev-only edges. Known root prose files and Markdown documents under `etc/plan/`
+select no Rust work; crate documentation is a crate input because it can appear in rustdoc.
+Manifests, lockfiles, fuzzers, shared tests, CI/build configuration, unclassified paths and a
+missing base conservatively select exhaustive coverage. The plan explains each fallback.
+An unchanged checkout still checks licenses, dependency policy, advisories, workflow policy,
+script modes and the MSRV badge.
+
+Fast mode also checks declared feature and WASM configurations with Cargo
+(`cargo tree --locked --offline --target all`). It omits a configuration only when its normal, build and
+applicable dev dependencies exclude every directly changed package. Direct edits retain all
+of that package's configurations; shared fixture consumers count as directly changed inputs.
+Cargo resolves optional dependencies, renamed dependencies and feature unification, including
+self dev-dependencies. Queries include all targets so the same plan remains conservative on
+other CI platforms, and configurations sharing a dependency selection reuse the query.
+
+An [investigation of LSP-based test selection](etc/plan/qa-test-selection.md) measured finer
+selection with rust-analyzer. Missing call edges and mismatched feature configurations currently
+prevent using those results to omit individual tests safely.
+
+Fast QA automatically attempts **experimental** LLVM coverage selection for native, isolated and feature
+tests when stable Rust's matching LLVM tools are available. It uses a compatible local index
+to select individual tests. If the configuration has no usable index, it runs the full selected case
+with per-test coverage collection and saves the result for later QA invocations. This first run pays
+for collection and analysis; subsequent runs can reuse the index. New or unrecorded tests always run.
+
+```bash
+just qa                             # use coverage when available; otherwise collect for later runs
+just qa --coverage off              # use only package/configuration selection
+```
+
+The tools can be installed with `rustup component add llvm-tools-preview --toolchain stable`.
+Local QA does not install them automatically. Missing tools or unsupported configuration retain ordinary
+QA. Unknown changed paths and non-Rust changes retain the full test case; unavailable or invalid
+coverage cannot cause tests to be omitted. Exhaustive mode keeps ordinary execution without automatic
+collection; use `--coverage collect` to seed those configurations explicitly. Actual test failures
+still fail QA. Automatic runs use the same separate, reusable instrumented build cache whether
+collecting or pruning. A workspace compiler wrapper preserves configured Rust flags and does not
+replace existing custom compiler wrappers.
+
+If a valid index cannot classify changed inputs, automatic mode runs the full case and refreshes it
+when source contents differ from its last capture. A source-content hash avoids repeated collection
+for the same unknown or disabled inputs; it never permits test omission. Newly added tests run until
+a refreshed index records their coverage. Partial coverage, including unmapped functions from child
+executables, leaves that individual test unrecorded so it always runs.
+
+Historical runtime coverage is **not complete dependency analysis**: constants, type layouts and
+other compile-time inputs can affect tests without executing their source files. Runs that omit tests
+do not record ordinary Tix checks-pass. The layer does not prune compilation, clippy, doctests or shell
+journeys. See the [measurements and limits](etc/plan/qa-test-selection.md#llvm-coverage-prototype).
+
+The coverage modes can also be selected explicitly:
+
+```bash
+just qa --coverage collect           # run all selected tests and measure per-test file coverage
+just qa --coverage shadow            # compare the historical selection while running all tests
+just qa --coverage prune             # reuse saved indexes without collecting missing configurations
+```
+
+Collection uses stable Rust's `-C instrument-coverage` and the matching LLVM tools; no nightly compiler
+is required. Missing/corrupt indexes and unsupported custom Nextest scripts/profiles retain ordinary QA.
+
+Automatic collection and `collect` write indexes under `target/qa-coverage/indexes`, never committed.
+They are published only after the whole QA run succeeds with unchanged checkout contents and `HEAD`.
+Automatic collection from a dirty checkout records its `HEAD` and dirty paths; those paths remain
+part of subsequent selection even if the edits are later reverted. Raw profiles are discarded after
+each case; compiler build caches remain reusable. Explicit `collect` still requires a clean checkout
+for publication. Each index records the exact Cargo package batch, features, compiler, inherited
+Cargo configuration, fixture mode and runtime hash. Exhaustive native
+workspace builds therefore cannot supply an index for a differently batched PR build; matching
+per-package feature cases can reuse their own indexes. An older index must name an ancestor of
+`HEAD`; selection includes the entire diff from that ancestor, the QA comparison base, recorded dirty
+paths, and current staged, unstaged and untracked inputs.
+New/unrecorded tests always run, and unknown changed paths or non-Rust inputs retain the complete case.
+Exhaustive mode never omits tests. Runs which actually omit tests do not record ordinary Tix checks-pass.
+
+This is historical execution evidence: constants, type layouts, imports, macros and compile-time
+evaluation can affect tests without executing their source files.
+Use `shadow` to compare selections while retaining complete execution. It does not prune compilation,
+clippy, doctests or shell journeys, and collecting coverage runs the tests being measured; reuse is
+what can make later runs faster.
+
+CI enables collection and reuse by default for native, isolated and feature tests. Main jobs attempt
+to install LLVM tools, collect complete configuration indexes and publish 14-day Actions artifacts.
+PR jobs attempt to download the matching job's artifact from a successful run at their base commit
+and use `prune`; a missing index retains ordinary execution without collecting an unused PR index.
+Unavailable tools, artifact services, GitHub CLI or baseline runs retain ordinary QA. Set the repository
+variable `QA_COVERAGE` to `shadow` to report PR selections while running all tests, or `off` to disable
+CI coverage. No repository variable is needed for the default behavior. Locally, `GIX_QA_COVERAGE`
+selects the mode, and an explicit `--coverage` takes precedence. Downloaded JSON indexes can also be
+placed in `target/qa-coverage/indexes` for local reuse without Git LFS.
+
+Unavailable cached dependencies and unfamiliar arguments retain the original checks. Saved
+plans carry the exclusions, capped at 12 KiB to leave room for job metadata in Windows'
+environment variables; excess configurations remain selected. CI fetches the lockfile's
+dependencies into its planning cache so offline queries also work there. Local planning does
+not fetch dependencies. Exhaustive mode retains every configuration.
 
 All PRs request fast mode. Pushes to `main` or `run-ci/**`, and manual workflow dispatch,
 request exhaustive mode. Exhaustive checks on landed commits provide feedback for forward
@@ -309,8 +412,8 @@ Within a task, prerequisites remain ordered: a failed journey build cannot run a
 Missing tools produce visible failures. Use `--stage` to reproduce a subset without installing
 unrelated tools. `just unit-tests`, `just doc-tests`, `just check`, `just qa-test` and
 `etc/scripts/ci-check-local.sh --fast|--thorough` delegate to the shared runner. The script's
-profiles now mean the same fast/exhaustive modes; it no longer cleans fixtures or marks Tix
-commits as checked. Tix QA can set its check mark after verifying a clean checkout. The legacy
+profiles now mean the same fast/exhaustive modes; it no longer cleans fixtures. Complete
+local profiles use the same Tix checks-pass recording described above. The legacy
 `ci`, `ci-plan`, `ci-test` and `ci-journey-tests` recipes remain aliases for their `qa` counterparts.
 
 ### Local prerequisites and isolation
@@ -367,14 +470,15 @@ when an archive is absent or stale. This avoids repeated expensive Git subproces
 comparisons against freshly generated Git baselines still run in exhaustive QA. Linux and macOS
 fast tests use freshly generated fixtures. Exhaustive native tests compile/list once,
 then reuse the same nextest binaries for archived and generated fixtures in separate temporary
-source copies. The native passes share a fresh cache of generated read-only scripted fixtures.
+source copies. Native passes and feature/hash or isolated test variants within one QA run
+share a fresh cache of generated read-only scripted fixtures, locally and within each CI job.
 When no archive is available, the archived pass can generate a fixture once for both passes;
 the shared cache never substitutes extracted archives for generated fixtures. Fixtures that write archives or require
 execution in a writable destination keep their existing behavior. The cache and its source
-copies remain alive until both passes finish, and are retained together if a source copy changes.
-Feature/hash variants also run in an isolated copy, sharing compatible fixture
-caches within their task and continuing after individual failures. Their fixture caches cannot
-reuse a previous local run's extracted archives. Archive changes cause
+copies remain alive until the run finishes, and are retained together if a source copy changes.
+Changes to source files between stages prevent cache reuse. Feature/hash variants also run in
+an isolated copy and continue after individual failures. Separate runs and CI jobs never reuse
+each other's generated fixtures or extracted archives. Archive changes cause
 a failure and retain the changed copy for inspection. Explicit archive-only fixtures keep
 their normal semantics.
 

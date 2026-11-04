@@ -3,6 +3,7 @@ use std::{
     fs::File,
     io::Write,
     path::Path,
+    time::{Duration, Instant},
 };
 
 use gix_error::{OptionExt, Result, ResultExt, bail, message};
@@ -378,7 +379,10 @@ pub fn tasks(metadata: &Value, selection: &Value, platform: &str) -> Result<Vec<
             }
         }
     }
-    let commands = super::ops::wasm_commands(metadata, &selected)?;
+    let mut commands = super::ops::wasm_commands(metadata, &selected)?;
+    if !exhaustive {
+        commands.retain(|command| !super::scope::is_unaffected(selection, command));
+    }
     if !commands.is_empty() {
         out.push(Task::new("wasm", "wasm", &["wasm"], commands).optional());
     }
@@ -531,11 +535,29 @@ pub fn job_tasks(metadata: &Value, plan: &Value, job_id: &str) -> Result<Vec<Tas
     Ok(selected)
 }
 
-pub fn execute(root: &Path, tasks: Vec<Task>, dry_run: bool, ci_job: bool, logs: Option<&Path>) -> Result<()> {
+#[derive(Debug)]
+pub struct TaskTiming {
+    pub id: &'static str,
+    pub elapsed: Duration,
+    pub blocking: bool,
+    pub passed: bool,
+}
+
+pub fn execute(
+    root: &Path,
+    tasks: Vec<Task>,
+    dry_run: bool,
+    ci_job: bool,
+    logs: Option<&Path>,
+    coverage: &mut Option<super::coverage::Run>,
+) -> Result<Vec<TaskTiming>> {
     let mut failed = Vec::new();
     let mut nonblocking_failed = 0;
     let count = tasks.len();
+    let mut timings = Vec::with_capacity(count);
+    let mut snapshots = super::native_tests::NativeSnapshots::default();
     for (index, task) in tasks.into_iter().enumerate() {
+        let started = Instant::now();
         let path = logs.map(|logs| logs.join(format!("{}.log", task.id)));
         let log = path
             .as_ref()
@@ -550,8 +572,16 @@ pub fn execute(root: &Path, tasks: Vec<Task>, dry_run: bool, ci_job: bool, logs:
                 if task.blocking { "" } else { " (nonblocking)" }
             );
         }
-        let result = if matches!(task.id, "feature-tests" | "isolated-tests") {
-            super::native_tests::variants(root, task.commands, dry_run, log.as_ref())
+        let result = if task.id == "native-tests" && !dry_run {
+            super::native_tests::execute(
+                root,
+                &task.commands[0].args[1..],
+                &mut snapshots,
+                log.as_ref(),
+                coverage,
+            )
+        } else if matches!(task.id, "feature-tests" | "isolated-tests") {
+            super::native_tests::variants(root, task.commands, dry_run, &mut snapshots, log.as_ref(), coverage)
         } else if task.id == "feature-builds" {
             run::each_case(task.commands, log.as_ref(), |command| {
                 run::execute(root, vec![command], dry_run, log.as_ref())
@@ -563,6 +593,12 @@ pub fn execute(root: &Path, tasks: Vec<Task>, dry_run: bool, ci_job: bool, logs:
         } else {
             run::execute(root, task.commands, dry_run, log.as_ref())
         };
+        timings.push(TaskTiming {
+            id: task.id,
+            elapsed: started.elapsed(),
+            blocking: task.blocking,
+            passed: result.is_ok(),
+        });
         if let Err(err) = result {
             if let (Some(mut log), Some(path)) = (log.as_ref(), path.as_ref()) {
                 writeln!(log, "{err:?}").or_raise(|| message("Write QA task failure to log"))?;
@@ -596,7 +632,7 @@ pub fn execute(root: &Path, tasks: Vec<Task>, dry_run: bool, ci_job: bool, logs:
     if !failed.is_empty() {
         bail!("Failed QA tasks: {}", failed.join(", "));
     }
-    Ok(())
+    Ok(timings)
 }
 
 #[cfg(test)]
@@ -635,7 +671,7 @@ mod tests {
                 vec![Command::new("sh", &["-c", "printf continued > visited"])],
             ),
         ];
-        let error = execute(&logs.path, tasks, false, false, Some(&logs.path))
+        let error = execute(&logs.path, tasks, false, false, Some(&logs.path), &mut None)
             .expect_err("required failures must still fail agent runs");
         assert!(
             error.to_string().contains("failure, missing"),
@@ -670,11 +706,21 @@ mod tests {
         );
         for ci_job in [false, true] {
             let task = Task::new("optional", "test", &[], vec![failing()]).optional();
+            let outcome = execute(&logs.path, vec![task], false, ci_job, Some(&logs.path), &mut None);
             assert_eq!(
-                execute(&logs.path, vec![task], false, ci_job, Some(&logs.path)).is_err(),
+                outcome.is_err(),
                 ci_job,
                 "agent output preserves CI's nonblocking-job failure semantics"
             );
+            if let Ok(timings) = outcome {
+                assert_eq!(timings.len(), 1, "every completed task has a timing");
+                let task = &timings[0];
+                assert_eq!(task.id, "optional");
+                assert!(
+                    !task.passed && !task.blocking,
+                    "nonblocking failure remains visible to recording"
+                );
+            }
         }
         Ok(())
     }
@@ -688,6 +734,33 @@ mod tests {
             "cargo-nextest":"0.9.122","cargo-deny":"0.20.0","cargo-machete":"0.9.1",
             "cargo-semver-checks":"0.51.0","cargo-auditable":"0.7.6","cargo-diet":"1.2.7","just":"1.58.0"
         }}}})
+    }
+
+    #[test]
+    fn regression_unaffected_wasm_targets_need_no_job() -> gix_error::TestResult {
+        let mut metadata = metadata();
+        metadata["packages"][0]["metadata"]["qa"]["wasm"] = json!({"targets": ["wasm32-wasip1", "wasm32-wasip2"]});
+        let mut selection = json!({"mode": "fast", "packages": ["gix-path"],
+            "unaffected_dependencies": [{"args": ["-p", "gix-path"], "dev": false}]});
+        assert!(
+            !tasks(&metadata, &selection, "linux-x86_64")?
+                .iter()
+                .any(|task| task.id == "wasm"),
+            "unaffected WASM configurations require neither a job nor target installation"
+        );
+        selection["mode"] = "exhaustive".into();
+        let tasks = tasks(&metadata, &selection, "linux-x86_64")?;
+        assert_eq!(
+            tasks
+                .iter()
+                .find(|task| task.id == "wasm")
+                .expect("exhaustive WASM task")
+                .commands
+                .len(),
+            2,
+            "exhaustive mode retains every target"
+        );
+        Ok(())
     }
 
     #[test]

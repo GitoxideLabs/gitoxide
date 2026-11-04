@@ -13,6 +13,7 @@ struct Package {
     name: String,
     directory: PathBuf,
     dependencies: BTreeSet<PathBuf>,
+    dev_dependencies: BTreeSet<PathBuf>,
     extra_inputs: Vec<PathBuf>,
 }
 
@@ -116,12 +117,16 @@ fn packages(metadata: &Value) -> Result<Vec<Package>> {
                 .to_owned();
             let dependencies = package["dependencies"]
                 .as_array()
-                .ok_or_raise(|| message!("{name} is missing dependencies"))?
-                .iter()
-                .filter_map(|dependency| dependency["path"].as_str())
-                .filter_map(|path| Path::new(path).strip_prefix(root).ok())
-                .map(Path::to_owned)
-                .collect();
+                .ok_or_raise(|| message!("{name} is missing dependencies"))?;
+            let workspace_dependencies = |dev| {
+                dependencies
+                    .iter()
+                    .filter(|dependency| (dependency["kind"] == "dev") == dev)
+                    .filter_map(|dependency| dependency["path"].as_str())
+                    .filter_map(|path| Path::new(path).strip_prefix(root).ok())
+                    .map(Path::to_owned)
+                    .collect()
+            };
             let mut extra_inputs = Vec::new();
             if let Some(inputs) = package["metadata"]["qa"].get("extra-inputs") {
                 for input in inputs
@@ -146,7 +151,8 @@ fn packages(metadata: &Value) -> Result<Vec<Package>> {
             Ok(Package {
                 name,
                 directory,
-                dependencies,
+                dependencies: workspace_dependencies(false),
+                dev_dependencies: workspace_dependencies(true),
                 extra_inputs,
             })
         })
@@ -198,6 +204,7 @@ fn select(packages: &[Package], paths: &BTreeSet<PathBuf>) -> Value {
             return exhaustive(packages, &format!("Unclassified input changed: {}", path.display()));
         }
     }
+    let changed = selected.clone();
     loop {
         let previous_count = selected.len();
         for package in packages {
@@ -209,13 +216,25 @@ fn select(packages: &[Package], paths: &BTreeSet<PathBuf>) -> Value {
             break;
         }
     }
+    // Dev dependencies affect a consumer's tests, not the library used by its dependents.
+    let affected = selected.clone();
+    for package in packages {
+        if !affected.is_disjoint(&package.dev_dependencies) {
+            selected.insert(package.directory.clone());
+        }
+    }
     if selected.is_empty() {
         reasons.push("No build or test inputs changed".into());
     } else {
-        reasons.push("Includes reverse normal, build, dev, optional, and target-specific dependencies".into());
+        reasons.push(
+            "Includes reverse normal, build, optional, and target-specific dependencies, plus their dev consumers"
+                .into(),
+        );
     }
     json!({
         "mode": "fast",
+        "changed_packages": packages.iter().filter(|package| changed.contains(&package.directory))
+            .map(|package| package.name.as_str()).collect::<BTreeSet<_>>(),
         "packages": packages.iter().filter(|package| selected.contains(&package.directory))
             .map(|package| package.name.as_str()).collect::<BTreeSet<_>>(),
         "reasons": reasons,
@@ -258,7 +277,7 @@ fn prose_only(path: &Path) -> bool {
                 | "general-tasks.md"
                 | "tasks.md"
         )
-    )
+    ) || (path.starts_with("etc/plan") && path.extension().is_some_and(|ext| ext == "md"))
 }
 
 #[cfg(test)]
@@ -303,6 +322,41 @@ mod tests {
     }
 
     #[test]
+    fn dev_consumers_do_not_propagate_but_normal_paths_still_do() -> TestResult {
+        let mut packages = workspace()?;
+        packages.push(Package {
+            name: "dev-consumer".into(),
+            directory: "dev-consumer".into(),
+            dependencies: BTreeSet::from(["dev".into()]),
+            dev_dependencies: BTreeSet::new(),
+            extra_inputs: Vec::new(),
+        });
+        let changed = BTreeSet::from(["leaf/src/lib.rs".into()]);
+        let plan = select(&packages, &changed);
+        assert_eq!(
+            plan["packages"],
+            json!(["build", "dev", "leaf", "normal", "optional", "platform"]),
+            "A changed dev dependency does not change the consumer's library"
+        );
+        assert_eq!(plan["changed_packages"], json!(["leaf"]), "Only input owners changed");
+
+        packages[3].dependencies.insert("normal".into());
+        let plan = select(&packages, &changed);
+        assert_eq!(
+            plan["packages"],
+            json!(["build", "dev", "dev-consumer", "leaf", "normal", "optional", "platform"]),
+            "A normal path still propagates when the same package also has a dev path"
+        );
+        let plan = select(&packages, &BTreeSet::from(["dev/src/lib.rs".into()]));
+        assert_eq!(
+            plan["packages"],
+            json!(["dev", "dev-consumer"]),
+            "Editing a dev consumer directly changes its library too"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn deleted_paths_and_both_rename_ends_are_retained() -> TestResult {
         let mut paths = BTreeSet::new();
         assert!(
@@ -332,6 +386,7 @@ mod tests {
             name: "internal-tools".into(),
             directory: "tests/it".into(),
             dependencies: BTreeSet::new(),
+            dev_dependencies: BTreeSet::new(),
             extra_inputs: Vec::new(),
         });
         for path in [
@@ -344,6 +399,9 @@ mod tests {
             "tests/it/qa/check-features.sh",
             "tests/helpers.sh",
             "unknown-crate/src/lib.rs",
+            "etc/plan/reproduce.sh",
+            "etc/plan/Cargo.toml",
+            "etc/planning/design.md",
         ] {
             let plan = select(&packages, &BTreeSet::from([path.into()]));
             assert_eq!(
@@ -351,8 +409,16 @@ mod tests {
                 "Unclassified or global path {path} cannot skip checks"
             );
         }
-        let plan = select(&packages, &BTreeSet::from(["DEVELOPMENT.md".into()]));
-        assert_eq!(plan["packages"], json!([]), "Known prose changes need no Rust builds");
+        for path in [
+            "DEVELOPMENT.md",
+            "etc/plan/qa-test-selection.md",
+            "etc/plan/performance.md",
+            "etc/plan/nested/design.md",
+        ] {
+            let plan = select(&packages, &BTreeSet::from([path.into()]));
+            assert_eq!(plan["mode"], "fast", "Known prose {path} keeps fast selection");
+            assert_eq!(plan["packages"], json!([]), "Known prose {path} needs no Rust builds");
+        }
         Ok(())
     }
 
@@ -361,6 +427,11 @@ mod tests {
         let mut packages = workspace()?;
         packages[0].extra_inputs.push("unrelated/tests/fixtures".into());
         let plan = select(&packages, &BTreeSet::from(["unrelated/tests/fixtures/input".into()]));
+        assert_eq!(
+            plan["changed_packages"],
+            json!(["leaf", "unrelated"]),
+            "Shared fixture consumers are direct inputs alongside the owning crate"
+        );
         assert_eq!(
             plan["packages"].as_array().map(Vec::len),
             Some(7),
@@ -374,6 +445,13 @@ mod tests {
             plan["packages"],
             json!(["unrelated"]),
             "Input prefixes match whole path components"
+        );
+        packages[0].extra_inputs.push("etc/plan/input.md".into());
+        let plan = select(&packages, &BTreeSet::from(["etc/plan/input.md".into()]));
+        assert_eq!(
+            plan["changed_packages"],
+            json!(["leaf"]),
+            "Explicit build or test inputs take precedence over prose classification"
         );
         Ok(())
     }

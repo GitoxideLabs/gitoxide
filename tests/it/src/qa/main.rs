@@ -1,17 +1,20 @@
-use std::{fs::OpenOptions, io::Write, path::PathBuf};
+use std::{fs::OpenOptions, io::Write, path::PathBuf, time::Instant};
 
 use clap::{Parser, Subcommand};
 use gix_error::{OptionExt, Result, ResultExt, bail, message};
 use serde_json::{Value, json};
 
 mod catalog;
+mod coverage;
 mod downstream;
 mod features;
 mod native_tests;
 mod ops;
 mod plan;
+mod record;
 mod requirements;
 mod run;
+mod scope;
 
 #[derive(Parser)]
 #[command(about = "Plan and run quality-assurance checks locally or in CI")]
@@ -64,6 +67,9 @@ enum Action {
         stage: Vec<String>,
         #[arg(long)]
         dry_run: bool,
+        /// Automatically collect and reuse per-test coverage when LLVM is available; off disables it.
+        #[arg(long, value_enum)]
+        coverage: Option<coverage::Mode>,
     },
     #[command(hide = true)]
     Exec {
@@ -80,7 +86,11 @@ enum Action {
 }
 
 fn main() -> Result<()> {
+    if std::env::var_os("GIX_QA_COVERAGE_RUSTC").as_deref() == Some(std::ffi::OsStr::new("1")) {
+        return coverage::compiler(&std::env::args_os().skip(1).collect::<Vec<_>>());
+    }
     let args = Args::parse();
+    let started = Instant::now();
     let agent = args.agent || std::env::var_os("CODEX_THREAD_ID").is_some();
     let current_dir = std::env::current_dir().or_raise(|| message("read current directory"))?;
     if let Action::Downstream { name, checkout } = &args.command {
@@ -96,11 +106,34 @@ fn main() -> Result<()> {
         return result;
     }
     if let Action::Exec { args } = &args.command {
+        if args[0] == "coverage-test" {
+            return coverage::test(&args[1..]);
+        }
         if args[0] == "native-tests" {
-            return native_tests::execute(&current_dir, &args[1..]);
+            return native_tests::execute(
+                &current_dir,
+                &args[1..],
+                &mut native_tests::NativeSnapshots::default(),
+                None,
+                &mut None,
+            );
         }
         return ops::execute(&current_dir, args);
     }
+    let checkout = if record::eligible(&args.command)
+        && std::env::var_os("CI").is_none()
+        && std::env::var_os("GITHUB_ACTIONS").is_none()
+    {
+        match record::Checkout::capture(&current_dir) {
+            Ok(checkout) => Some(checkout),
+            Err(error) => {
+                eprintln!("QA checks-pass recording is unavailable: {error}");
+                None
+            }
+        }
+    } else {
+        None
+    };
     let metadata = plan::metadata(&current_dir)?;
     let root = PathBuf::from(
         metadata["workspace_root"]
@@ -114,7 +147,8 @@ fn main() -> Result<()> {
             all_platforms,
             github_output,
         } => {
-            let selected = plan::plan(&root, &metadata, &selection.mode, &selection.base)?;
+            let mut selected = plan::plan(&root, &metadata, &selection.mode, &selection.base)?;
+            scope::prune(&root, &metadata, &mut selected)?;
             let platform = platform.unwrap_or_else(catalog::host);
             let mut plan = catalog::plan(&metadata, &selected, &platform, all_platforms)?;
             let consumers = if all_platforms {
@@ -156,6 +190,7 @@ fn main() -> Result<()> {
             job,
             stage,
             dry_run,
+            coverage,
         } => {
             let saved: Option<Value> = if let Some(path) = saved {
                 Some(
@@ -174,14 +209,21 @@ fn main() -> Result<()> {
             };
             let job = job.or_else(|| from_env.then(|| std::env::var("QA_JOB").ok()).flatten());
             let ci_job = job.is_some();
-            let tasks = if let Some(job) = job {
+            let (tasks, selected) = if let Some(job) = job {
                 let saved = saved.as_ref().ok_or_raise(|| message("--job requires a saved plan"))?;
-                catalog::job_tasks(&metadata, saved, &job)?
+                (catalog::job_tasks(&metadata, saved, &job)?, None)
             } else {
-                let selection = match &saved {
+                let mut selection = match &saved {
                     Some(plan) => plan["selection"].clone(),
                     None => plan::plan(&root, &metadata, &selection.mode, &selection.base)?,
                 };
+                if saved.is_none()
+                    && stage
+                        .iter()
+                        .any(|stage| matches!(stage.as_str(), "all" | "check" | "tests" | "doctests" | "wasm"))
+                {
+                    scope::prune(&root, &metadata, &mut selection)?;
+                }
                 if agent {
                     eprintln!(
                         "QA selection: {} ({} packages)",
@@ -196,7 +238,10 @@ fn main() -> Result<()> {
                 } else {
                     eprintln!("QA selection: {selection}");
                 }
-                catalog::select(catalog::tasks(&metadata, &selection, &catalog::host())?, &stage)?
+                (
+                    catalog::select(catalog::tasks(&metadata, &selection, &catalog::host())?, &stage)?,
+                    Some(selection),
+                )
             };
             eprintln!("{} tasks selected for {}", tasks.len(), catalog::host());
             let logs = if agent && !dry_run {
@@ -206,7 +251,37 @@ fn main() -> Result<()> {
             } else {
                 None
             };
-            catalog::execute(&root, tasks, dry_run, ci_job, logs.as_deref())?;
+            let fast = selected
+                .as_ref()
+                .or_else(|| saved.as_ref().map(|saved| &saved["selection"]))
+                .is_some_and(|selection| selection["mode"] == "fast");
+            let mut coverage = if dry_run
+                || !tasks
+                    .iter()
+                    .any(|task| matches!(task.id, "native-tests" | "feature-tests" | "isolated-tests"))
+            {
+                None
+            } else {
+                let base = selected
+                    .as_ref()
+                    .or_else(|| saved.as_ref().map(|saved| &saved["selection"]))
+                    .and_then(|selection| selection["base"].as_str());
+                coverage::Run::optional(&root, coverage, fast, base)
+            };
+            let timings = catalog::execute(&root, tasks, dry_run, ci_job, logs.as_deref(), &mut coverage)?;
+            if let Some(coverage) = &mut coverage {
+                coverage.finish(&root);
+                if coverage.omitted > 0 {
+                    eprintln!(
+                        "QA passed with {} tests omitted by experimental coverage selection; ordinary checks-pass was not recorded.",
+                        coverage.omitted
+                    );
+                    return Ok(());
+                }
+            }
+            if let (Some(checkout), Some(selected)) = (checkout, selected) {
+                record::finish(&root, checkout, &selected, &selection.base, &timings, started.elapsed())?;
+            }
         }
         Action::Exec { .. } => unreachable!("exec was handled before workspace discovery"),
         Action::Downstream { .. } => unreachable!("downstream was handled before workspace discovery"),
@@ -216,7 +291,14 @@ fn main() -> Result<()> {
 
 // Keep CI's environment payload below Windows' 32,767-character limit.
 fn execution_plan(plan: &Value) -> Value {
-    json!({"selection": {"mode": plan["selection"]["mode"], "packages": plan["selection"]["packages"]}, "jobs": plan["jobs"]})
+    let mut selection = json!({"mode": plan["selection"]["mode"], "packages": plan["selection"]["packages"]});
+    if let Some(base) = plan["selection"].get("base") {
+        selection["base"] = base.clone();
+    }
+    if let Some(commands) = plan["selection"].get("unaffected_dependencies") {
+        selection["unaffected_dependencies"] = commands.clone();
+    }
+    json!({"selection": selection, "jobs": plan["jobs"]})
 }
 
 #[cfg(test)]
@@ -233,6 +315,28 @@ mod tests {
                 "selection": {"mode": "fast", "packages": ["gix"]}, "jobs": plan["jobs"]
             }),
             "job execution needs only selection and assignment, even for very large diffs"
+        );
+    }
+
+    #[test]
+    fn ci_payload_keeps_dependency_configuration_exclusions() {
+        let plan = serde_json::json!({
+            "selection": {"mode": "fast", "packages": ["gix"], "changed_packages": ["gix-archive"], "base": "base-commit",
+                "unaffected_dependencies": [{"args": ["-p", "gix"], "dev": false}]},
+            "jobs": []
+        });
+        let compact = super::execution_plan(&plan);
+        assert_eq!(
+            compact["selection"]["base"], "base-commit",
+            "workers compare the same base for automatic coverage selection"
+        );
+        assert_eq!(
+            compact["selection"]["unaffected_dependencies"], plan["selection"]["unaffected_dependencies"],
+            "CI executes the same feature configurations selected locally"
+        );
+        assert!(
+            compact["selection"].get("changed_packages").is_none(),
+            "dependency queries already ran in the planning gate"
         );
     }
 

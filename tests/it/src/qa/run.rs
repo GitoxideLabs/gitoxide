@@ -169,7 +169,9 @@ pub fn commands(metadata: &Value, selection: &Value, stages: &[String]) -> Resul
                             bail!("{name}: QA case packages must name existing workspace packages");
                         }
                         let command = case_command(args, &case_packages, &case)?;
-                        if case_packages.iter().any(|name| selected.contains(name)) {
+                        if case_packages.iter().any(|name| selected.contains(name))
+                            && (exhaustive || !super::scope::is_unaffected(selection, &command))
+                        {
                             out.push(command);
                         }
                     }
@@ -585,6 +587,22 @@ mod tests {
                 "{name} must match CI"
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn regression_exclusions_only_trim_fast_configurations() -> gix_error::TestResult {
+        let mut selection = plan("fast", &["b"]);
+        selection["unaffected_dependencies"] = json!([{"args": ["-p", "a", "-p", "b"], "dev": true}]);
+        assert!(
+            commands(&metadata(), &selection, &["variants".into()])?.is_empty(),
+            "saved dependency exclusions omit unaffected grouped variants"
+        );
+        selection["mode"] = "exhaustive".into();
+        assert!(
+            !commands(&metadata(), &selection, &["variants".into()])?.is_empty(),
+            "exhaustive coverage ignores fast dependency exclusions"
+        );
         Ok(())
     }
 
