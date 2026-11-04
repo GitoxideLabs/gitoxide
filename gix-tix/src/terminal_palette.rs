@@ -1,4 +1,4 @@
-//! Startup-only ANSI palette queries, before Crossterm owns terminal input.
+//! Startup-only graphics and ANSI palette queries, before Crossterm owns terminal input.
 //!
 //! A DA1 reply finishes each query without reading subsequent input. An incomplete
 //! query retains its parser state for suppressing late replies in the event loop.
@@ -14,8 +14,26 @@ type Palette = [[u8; 3]; 16];
 const MAX_SEQUENCE: usize = 1024;
 const MAX_RESPONSE: usize = 16 * 1024;
 const DA1: &[u8] = b"\x1b[c";
+const GRAPHICS_QUERY: &[u8] = b"\x1b_Ga=q,i=2130706433,s=1,v=1,f=24,t=d;AAAA\x1b\\";
 
 pub(crate) fn query(timeout: Duration, pending: &mut ReplyFilter) -> io::Result<Option<Palette>> {
+    with_tty(timeout, pending, query_with).map(Option::flatten)
+}
+
+pub(crate) fn graphics_supported(timeout: Duration, pending: &mut ReplyFilter) -> io::Result<bool> {
+    with_tty(timeout, pending, |tty, started, timeout, pending| {
+        let mut received = 0;
+        query_protocol(tty, started, timeout, pending, Protocol::Graphics, &mut received)
+            .map(|replies| replies.is_some_and(|replies| replies.graphics))
+    })
+    .map(|supported| supported.unwrap_or(false))
+}
+
+fn with_tty<T>(
+    timeout: Duration,
+    pending: &mut ReplyFilter,
+    query: impl FnOnce(&mut Tty, Instant, Duration, &mut ReplyFilter) -> io::Result<T>,
+) -> io::Result<Option<T>> {
     use std::os::unix::fs::OpenOptionsExt;
 
     if timeout.is_zero() {
@@ -34,10 +52,10 @@ pub(crate) fn query(timeout: Duration, pending: &mut ReplyFilter) -> io::Result<
     let result = if rustix::io::ioctl_fionread(&tty.input)? > 0 {
         Ok(None)
     } else {
-        query_with(&mut tty, started, timeout, pending)
+        query(&mut tty, started, timeout, pending).map(Some)
     };
     let restored = raw_mode.restore();
-    result.and_then(|palette| restored.map(|()| palette))
+    result.and_then(|reply| restored.map(|()| reply))
 }
 
 struct Tty {
@@ -89,6 +107,7 @@ impl Drop for RawMode {
 
 #[derive(Clone, Copy)]
 enum Protocol {
+    Graphics,
     Kitty,
     Xterm,
 }
@@ -101,53 +120,70 @@ fn query_with(
 ) -> io::Result<Option<Palette>> {
     let mut received = 0;
     for protocol in [Protocol::Kitty, Protocol::Xterm] {
-        if started.elapsed() >= timeout {
+        let Some(replies) = query_protocol(tty, started, timeout, pending, protocol, &mut received)? else {
             return Ok(None);
-        }
-        let mut request = match protocol {
-            Protocol::Kitty => b"\x1b]21".to_vec(),
-            Protocol::Xterm => b"\x1b]4".to_vec(),
         };
+        if let Some(palette) = replies.palette() {
+            return Ok(Some(palette));
+        }
+    }
+    Ok(None)
+}
+
+fn query_protocol(
+    tty: &mut (impl Read + Write),
+    started: Instant,
+    timeout: Duration,
+    pending: &mut ReplyFilter,
+    protocol: Protocol,
+    received: &mut usize,
+) -> io::Result<Option<Replies>> {
+    if started.elapsed() >= timeout {
+        return Ok(None);
+    }
+    let mut request = match protocol {
+        Protocol::Graphics => GRAPHICS_QUERY.to_vec(),
+        Protocol::Kitty => b"\x1b]21".to_vec(),
+        Protocol::Xterm => b"\x1b]4".to_vec(),
+    };
+    if !matches!(protocol, Protocol::Graphics) {
         for index in 0..16 {
             match protocol {
+                Protocol::Graphics => unreachable!("only palette queries have color indices"),
                 Protocol::Kitty => write!(request, ";{index}=?")?,
                 Protocol::Xterm => write!(request, ";{index};?")?,
             }
         }
         request.extend_from_slice(b"\x1b\\");
-        request.extend_from_slice(DA1);
-        pending.arm();
-        // Requests use a blocking handle so the read deadline cannot truncate an outgoing OSC.
-        tty.write_all(&request)?;
-        tty.flush()?;
-        let mut replies = Replies::new(protocol);
-        loop {
-            if started.elapsed() >= timeout || received == MAX_RESPONSE {
-                return Ok(None);
-            }
-            // Reading a byte at a time leaves anything after the completion marker queued.
-            let mut byte = [0];
-            match tty.read(&mut byte) {
-                Ok(0) => return Ok(None),
-                Ok(_) => {
-                    received += 1;
-                    let complete = replies.push(byte[0]);
-                    pending.set_sequence(replies.sequence);
-                    if complete {
-                        pending.clear();
-                        if let Some(palette) = replies.palette() {
-                            return Ok(Some(palette));
-                        }
-                        break;
-                    }
+    }
+    request.extend_from_slice(DA1);
+    pending.arm();
+    // Blocking writes keep the read deadline from truncating outgoing control strings.
+    tty.write_all(&request)?;
+    tty.flush()?;
+    let mut replies = Replies::new(protocol);
+    loop {
+        if started.elapsed() >= timeout || *received == MAX_RESPONSE {
+            return Ok(None);
+        }
+        // Reading a byte at a time leaves anything after the completion marker queued.
+        let mut byte = [0];
+        match tty.read(&mut byte) {
+            Ok(0) => return Ok(None),
+            Ok(_) => {
+                *received += 1;
+                let complete = replies.push(byte[0]);
+                pending.set_sequence(replies.sequence);
+                if complete {
+                    pending.clear();
+                    return Ok(Some(replies));
                 }
-                Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => pause(started, timeout),
-                Err(err) => return Err(err),
             }
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => pause(started, timeout),
+            Err(err) => return Err(err),
         }
     }
-    Ok(None)
 }
 
 fn pause(started: Instant, timeout: Duration) {
@@ -161,6 +197,7 @@ struct Replies {
     oversized: bool,
     colors: [Option<[u8; 3]>; 16],
     invalid: bool,
+    graphics: bool,
 }
 
 impl Replies {
@@ -172,6 +209,7 @@ impl Replies {
             oversized: false,
             colors: [None; 16],
             invalid: false,
+            graphics: false,
         }
     }
 
@@ -180,6 +218,7 @@ impl Replies {
         match (self.sequence, byte) {
             (Ground | Escape, 0x1b) => self.sequence = Escape,
             (Escape, b']') | (Ground, 0x9d) => self.sequence = Osc,
+            (Escape, b'_') | (Ground, 0x9f) => self.sequence = Apc,
             (Escape, b'[') | (Ground, 0x9b) => self.sequence = Csi,
             (Osc | OscEscape, 0x07 | 0x9c) | (OscEscape, b'\\') => {
                 if self.oversized {
@@ -193,6 +232,27 @@ impl Replies {
             (OscEscape, _) => {
                 self.oversized = true;
                 self.sequence = Osc;
+            }
+            (ApcEscape, b'\\') | (Apc | ApcEscape, 0x9c) => {
+                if !self.oversized
+                    && matches!(self.protocol, Protocol::Graphics)
+                    && let Some((controls, message)) = std::str::from_utf8(&self.body)
+                        .ok()
+                        .and_then(|body| body.strip_prefix('G'))
+                        .and_then(|body| body.split_once(';'))
+                    && controls
+                        .split(',')
+                        .filter_map(|field| field.strip_prefix("i="))
+                        .eq(["2130706433"])
+                {
+                    self.graphics = message == "OK";
+                }
+                self.reset();
+            }
+            (Apc | ApcEscape, 0x1b) => self.sequence = ApcEscape,
+            (ApcEscape, _) => {
+                self.oversized = true;
+                self.sequence = Apc;
             }
             (Csi, 0x40..=0x7e) => {
                 let done = byte == b'c'
@@ -209,7 +269,7 @@ impl Replies {
                 self.reset();
                 self.sequence = Escape;
             }
-            (Osc | Csi, _) => {
+            (Osc | Apc | Csi, _) => {
                 if self.body.len() < MAX_SEQUENCE {
                     self.body.push(byte);
                 } else {
@@ -229,6 +289,7 @@ impl Replies {
 
     fn apply_osc(&mut self) {
         let prefix = match self.protocol {
+            Protocol::Graphics => return,
             Protocol::Kitty => b"21;".as_slice(),
             Protocol::Xterm => b"4;".as_slice(),
         };
@@ -240,6 +301,7 @@ impl Replies {
             let mut fields = body.split(';');
             while let Some(field) = fields.next() {
                 let (index, color) = match self.protocol {
+                    Protocol::Graphics => unreachable!("graphics queries do not parse OSC colors"),
                     Protocol::Kitty => field.split_once('=')?,
                     Protocol::Xterm => (field, fields.next()?),
                 };
@@ -296,6 +358,96 @@ mod tests {
 
     const MARKER: &[u8] = b"\x1b[?62;4;22c";
 
+    #[test]
+    fn graphics_requires_a_matching_success_reply_and_preserves_following_input() -> gix_error::TestResult {
+        for (reply, supported) in [
+            (b"\x1b_Gi=2130706433;OK\x1b\\".as_slice(), true),
+            (b"\x1b_Gp=2,i=2130706433;OK\x1b\\", true),
+            (b"\x9fGi=2130706433;OK\x9c", true),
+            (b"", false),
+            (b"\x1b_Gi=2130706433;ENOTSUP\x1b\\", false),
+            (b"\x1b_Gi=7;OK\x1b\\", false),
+            (b"\x1b_Gi=7,i=2130706433;OK\x1b\\", false),
+            (b"\x1b_Gi=2130706433;OK\x07", false),
+        ] {
+            let mut response = reply.to_vec();
+            response.extend_from_slice(MARKER);
+            response.push(b'j');
+            let mut terminal = Terminal {
+                responses: [response].into(),
+                ..Terminal::default()
+            };
+            let replies = query_protocol(
+                &mut terminal,
+                Instant::now(),
+                Duration::from_millis(10),
+                &mut Default::default(),
+                Protocol::Graphics,
+                &mut 0,
+            )?;
+            assert_eq!(
+                replies.is_some_and(|replies| replies.graphics),
+                supported,
+                "only the probe's complete OK reply enables images: {reply:?}"
+            );
+            // An unterminated APC consumes the marker as payload and reaches the deadline.
+            if reply.ends_with(b"\x07") {
+                assert!(terminal.input.is_empty(), "BEL does not terminate an APC");
+            } else {
+                assert_eq!(terminal.input, [b'j'], "DA1 leaves later typing queued");
+            }
+            assert_eq!(
+                terminal.output,
+                [GRAPHICS_QUERY, DA1].concat(),
+                "probing uses a one-pixel direct query without allocating or placing an image"
+            );
+        }
+        assert!(
+            !graphics_supported(Duration::ZERO, &mut Default::default())?,
+            "no budget keeps the text graph"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn graphics_timeouts_and_read_errors_retain_partial_reply_state() -> gix_error::TestResult {
+        use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+
+        for (prefix, next) in [
+            (b"\x1b".as_slice(), '_'),
+            (b"\x1b_Gi=2130706433;O", 'K'),
+            (b"\x1b_Gi=2130706433;OK\x1b", '\\'),
+            (b"\x1b_Gi=2130706433;OK\x1b\\\x1b[?62;", '4'),
+        ] {
+            for fail_when_empty in [false, true] {
+                let mut terminal = Terminal {
+                    responses: [prefix.to_vec()].into(),
+                    fail_when_empty,
+                    ..Terminal::default()
+                };
+                let mut pending = ReplyFilter::default();
+                let reply = query_protocol(
+                    &mut terminal,
+                    Instant::now(),
+                    Duration::from_millis(2),
+                    &mut pending,
+                    Protocol::Graphics,
+                    &mut 0,
+                );
+                if fail_when_empty {
+                    assert!(reply.is_err(), "transport errors are propagated");
+                } else {
+                    assert!(reply?.is_none(), "even an OK reply needs the completion marker");
+                }
+                assert!(
+                    pending.consume(&Event::Key(KeyEvent::new(KeyCode::Char(next), KeyModifiers::NONE))),
+                    "a partial graphics reply cannot execute an application command"
+                );
+            }
+        }
+        Ok(())
+    }
+
     #[derive(Default)]
     struct Terminal {
         responses: VecDeque<Vec<u8>>,
@@ -335,6 +487,7 @@ mod tests {
     fn response(protocol: Protocol, count: usize) -> Vec<u8> {
         let mut response = String::new();
         match protocol {
+            Protocol::Graphics => unreachable!("this helper constructs palette responses"),
             Protocol::Kitty => {
                 response.push_str("\x1b]21");
                 for index in 0..count {

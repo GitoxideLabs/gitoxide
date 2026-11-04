@@ -29,11 +29,26 @@ pub(crate) fn cleanup_process_images(mut writer: impl Write) -> io::Result<()> {
 }
 
 pub(crate) fn supported() -> bool {
-    supported_terminal() && cell_size().is_some()
+    #[cfg(unix)]
+    {
+        supported_terminal()
+            && cell_size().is_some()
+            && crate::terminal_palette::graphics_supported(
+                crate::THEME_QUERY_TIMEOUT,
+                &mut gix::parallel::lock(&crate::TERMINAL_REPLIES),
+            )
+            .unwrap_or_else(|err| {
+                tracing::debug!(error = %err, "terminal graphics detection unavailable");
+                false
+            })
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
 }
 
 pub(crate) fn supported_terminal() -> bool {
-    // shortcut: conservative detection avoids APC replies becoming crossterm key events; use a query after it supports APC.
     std::io::stdout().is_terminal()
         && std::env::var_os("TMUX").is_none()
         && std::env::var_os("STY").is_none()
