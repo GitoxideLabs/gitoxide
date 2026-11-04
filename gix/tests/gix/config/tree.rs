@@ -68,6 +68,10 @@ mod keys {
             (&gix::config::tree::Commit::GPG_SIGN, BStr::new(b"false")),
             (&gix::config::tree::gitoxide::Core::SHALLOW_FILE, BStr::new(b"shallow")),
             (
+                &gix::config::tree::gitoxide::FsMonitor::FORCE_UPDATE_THRESHOLD,
+                BStr::new(b"100"),
+            ),
+            (
                 &gix::config::tree::gitoxide::Objects::REPLACE_REF_BASE,
                 BStr::new(b"refs/replace/"),
             ),

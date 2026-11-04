@@ -16,6 +16,8 @@ impl Gitoxide {
     pub const COMMITTER: Committer = Committer;
     /// The `gitoxide.credentials` section.
     pub const CREDENTIALS: Credentials = Credentials;
+    /// The `gitoxide.fsmonitor` section.
+    pub const FS_MONITOR: FsMonitor = FsMonitor;
     /// The `gitoxide.http` section.
     pub const HTTP: Http = Http;
     /// The `gitoxide.https` section.
@@ -75,6 +77,7 @@ impl Section for Gitoxide {
             &Self::COMMIT,
             &Self::COMMITTER,
             &Self::CREDENTIALS,
+            &Self::FS_MONITOR,
             &Self::HTTP,
             &Self::HTTPS,
             &Self::OBJECTS,
@@ -94,6 +97,37 @@ mod subsections {
             tree::{Gitoxide, Key, Section, http, keys},
         },
     };
+
+    /// The `gitoxide.fsmonitor` sub-section.
+    #[derive(Copy, Clone, Default)]
+    pub struct FsMonitor;
+
+    impl FsMonitor {
+        /// The default number of reported paths above which a checkpoint write is requested, matching Git.
+        pub const FORCE_UPDATE_THRESHOLD_DEFAULT: usize = 100;
+        /// The `gitoxide.fsmonitor.forceUpdateThreshold` key.
+        ///
+        /// Request index writeback when a successful incremental response contains more than this many paths.
+        /// Counts include duplicate, untracked and ignored paths. Zero forces a write for every nonempty
+        /// incremental response; token-only responses do not independently request a write.
+        pub const FORCE_UPDATE_THRESHOLD: keys::UnsignedInteger =
+            keys::UnsignedInteger::new_unsigned_integer("forceUpdateThreshold", &Gitoxide::FS_MONITOR)
+                .with_default(b"100");
+    }
+
+    impl Section for FsMonitor {
+        fn name(&self) -> &str {
+            "fsmonitor"
+        }
+
+        fn keys(&self) -> &[&dyn Key] {
+            &[&Self::FORCE_UPDATE_THRESHOLD]
+        }
+
+        fn parent(&self) -> Option<&dyn Section> {
+            Some(&Tree::GITOXIDE)
+        }
+    }
 
     /// The `Core` sub-section.
     #[derive(Copy, Clone, Default)]
@@ -613,7 +647,9 @@ mod subsections {
         }
     }
 }
-pub use subsections::{Allow, Author, Commit, Committer, Core, Credentials, Http, Https, Objects, Pathspec, Ssh, User};
+pub use subsections::{
+    Allow, Author, Commit, Committer, Core, Credentials, FsMonitor, Http, Https, Objects, Pathspec, Ssh, User,
+};
 
 pub mod validate {
     use gix_error::bail;

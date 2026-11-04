@@ -57,7 +57,7 @@ impl super::Refresh {
                     .flags
                     .intersects(gix_index::entry::Flags::SKIP_WORKTREE | gix_index::entry::Flags::ASSUME_VALID)
             {
-                cache.invalidate_path(entry.path(index), lookup.is_some());
+                *self.changed.get_mut() |= cache.invalidate_path(entry.path(index), lookup.is_some());
             }
         }
         if cache.directories().iter().all(|dir| dir.stat().is_none()) {
@@ -79,7 +79,7 @@ impl super::Refresh {
             }
             Err(_err) => {
                 gix_trace::debug!(reason = %_err, "untracked cache validation failed; scanning directories");
-                cache.invalidate_all();
+                *self.changed.get_mut() |= cache.invalidate_all();
                 Ok(None)
             }
         }
