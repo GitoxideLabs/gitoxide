@@ -10,6 +10,25 @@ fn paths(repo: &gix::Repository) -> gix::Result<Vec<String>> {
     Ok(paths)
 }
 
+fn status_outcome(repo: &gix::Repository) -> gix::Result<gix::status::Outcome> {
+    let mut iter = repo.status(gix::progress::Discard)?.into_index_worktree_iter(None)?;
+    iter.by_ref().collect::<gix::Result<Vec<_>>>()?;
+    Ok(iter.into_outcome().expect("fully consumed status has an outcome"))
+}
+
+fn set_hook_token(root: &std::path::Path, token: &str) -> TestResult {
+    std::fs::write(
+        root.join(".git/fsmonitor-hook"),
+        "#!/bin/sh
+cat .git/fsmonitor-token
+printf '\\000'
+cat .git/fsmonitor-paths
+",
+    )?;
+    std::fs::write(root.join(".git/fsmonitor-token"), token)?;
+    Ok(())
+}
+
 #[test]
 fn hook_skips_unreported_files_but_keeps_dirty_entries_and_untracked_files() -> TestResult {
     if gix_testtools::run_in_isolated_process()? {
@@ -133,13 +152,14 @@ fn persisted_tokens_and_partial_status_keep_unvisited_dirty_entries() -> TestRes
     let fixture = gix_testtools::scripted_fixture_writable("make_status_fsmonitor.sh")?;
     let root = fixture.path();
     let repo = gix::open_opts(root, gix::open::Options::isolated())?;
+    set_hook_token(root, "after-partial-status")?;
     std::fs::write(root.join(".git/fsmonitor-paths"), b"reported\0dir\0unreported\0")?;
     let mut iter = repo
         .status(gix::progress::Discard)?
-        .into_index_worktree_iter(["reported".into()])?;
+        .into_index_worktree_iter(["reported".into(), "dir/b".into()])?;
     assert_eq!(iter.by_ref().collect::<gix::Result<Vec<_>>>()?.len(), 1);
     let mut outcome = iter.into_outcome().expect("fully consumed iterator has an outcome");
-    assert!(outcome.has_changes(), "advancing the monitor token needs writeback");
+    assert!(outcome.has_changes(), "revalidating clean dir/b requests writeback");
     outcome.write_changes().expect("monitor state is pending")?;
     assert!(!outcome.has_changes(), "writeback consumes all pending state");
     assert!(outcome.write_changes().is_none(), "writeback happens once");
@@ -148,7 +168,7 @@ fn persisted_tokens_and_partial_status_keep_unvisited_dirty_entries() -> TestRes
     assert_eq!(
         monitor.token(),
         &gix::index::extension::fs_monitor::Token::V2 {
-            token: "next-token".into()
+            token: "after-partial-status".into()
         }
     );
     std::fs::write(root.join(".git/fsmonitor-paths"), b"")?;
@@ -243,7 +263,48 @@ fn untrusted_configuration_cannot_enable_a_monitor() -> TestResult {
 }
 
 #[test]
-fn first_query_and_token_only_writeback_prime_clean_entries() -> TestResult {
+fn checkpoint_threshold_respects_config_leniency_and_trust() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let (root, ()) = gix_testtools::scripted_fixture_read_only_with_post("make_status_fsmonitor.sh", 9, |fixture| {
+        if let gix_testtools::FixtureState::Uninitialized(path) = fixture {
+            std::fs::write(path.join(".git/fsmonitor-paths"), b"not-tracked\0")?;
+        }
+        Ok(())
+    })?;
+    for (value, strict, trusted, expected_changes) in [
+        ("-1", true, true, None),
+        ("invalid", true, true, None),
+        ("-1", false, true, Some(false)),
+        ("invalid", false, true, Some(false)),
+        ("0", true, true, Some(true)),
+        ("0", true, false, Some(false)),
+        ("invalid", true, false, Some(false)),
+    ] {
+        let mut options = gix::open::Options::isolated()
+            .strict_config(strict)
+            .config_overrides([format!("gitoxide.fsmonitor.forceUpdateThreshold={value}")]);
+        if !trusted {
+            options = options.filter_config_section(|metadata| metadata.source != gix::config::Source::Api);
+        }
+        let repo = gix::open_opts(&root, options)?;
+        let outcome = status_outcome(&repo);
+        if let Some(expected_changes) = expected_changes {
+            assert_eq!(
+                outcome?.has_changes(),
+                expected_changes,
+                "threshold {value}, strict={strict}, trusted={trusted}"
+            );
+        } else {
+            assert!(outcome.is_err(), "strict configuration rejects threshold {value}");
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn first_query_primes_clean_entries_and_persists_checkpoint() -> TestResult {
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
     }
@@ -280,7 +341,7 @@ fn first_query_and_token_only_writeback_prime_clean_entries() -> TestResult {
 }
 
 #[test]
-fn repeated_queries_do_not_request_redundant_index_writes() -> TestResult {
+fn repeated_queries_only_write_for_revalidated_clean_entries() -> TestResult {
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
     }
@@ -296,9 +357,7 @@ fn repeated_queries_do_not_request_redundant_index_writes() -> TestResult {
             root,
             gix::open::Options::isolated().config_overrides([format!("core.fsmonitor={hook}")]),
         )?;
-        let mut first = repo.status(gix::progress::Discard)?.into_index_worktree_iter(None)?;
-        first.by_ref().collect::<gix::Result<Vec<_>>>()?;
-        let mut outcome = first.into_outcome().expect("fully consumed status has an outcome");
+        let mut outcome = status_outcome(&repo)?;
         assert!(outcome.has_changes(), "the first {hook} query changes monitor state");
         outcome.write_changes().expect("the monitor state changed")?;
         assert_eq!(
@@ -307,13 +366,114 @@ fn repeated_queries_do_not_request_redundant_index_writes() -> TestResult {
             "only a successful hook retains the monitor checkpoint"
         );
 
-        let mut repeated = repo.status(gix::progress::Discard)?.into_index_worktree_iter(None)?;
-        repeated.by_ref().collect::<gix::Result<Vec<_>>>()?;
-        let outcome = repeated.into_outcome().expect("fully consumed status has an outcome");
-        assert!(
-            !outcome.has_changes(),
-            "repeating {hook} with identical monitor state must not rewrite the index"
+        let mut repeated = status_outcome(&repo)?;
+        assert_eq!(
+            repeated.has_changes(),
+            hook == ".git/fsmonitor-hook",
+            "only a successful repeated directory event revalidates clean dir/b"
         );
+        if let Some(write) = repeated.write_changes() {
+            write?;
+        }
+        std::fs::write(root.join(".git/fsmonitor-paths"), b"")?;
+        let mut unchanged = status_outcome(&repo)?;
+        assert!(
+            !unchanged.has_changes(),
+            "an empty repeated response does not request writeback"
+        );
+        assert!(unchanged.write_changes().is_none(), "there is no pending index write");
+    }
+    Ok(())
+}
+
+#[test]
+fn checkpoint_writes_follow_the_reported_path_threshold() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    for (threshold, path, count, terminated, should_write) in [
+        (None, "not-tracked", 0, true, false),
+        (None, "reported", 1, true, false),
+        (None, "not-tracked", 100, true, false),
+        (None, "not-tracked", 101, true, true),
+        (None, "not-tracked", 101, false, true),
+        (Some(2), "not-tracked", 2, false, false),
+        (Some(2), "not-tracked", 3, false, true),
+        (Some(0), "not-tracked", 0, true, false),
+        (Some(0), "not-tracked", 1, false, true),
+    ] {
+        let fixture = gix_testtools::scripted_fixture_writable("make_status_fsmonitor.sh")?;
+        let root = fixture.path();
+        set_hook_token(root, "advanced-token")?;
+        // Duplicate unmatched paths still count, including a final record without a terminator.
+        let mut events = format!("{path}\0").into_bytes().repeat(count);
+        if !terminated {
+            events.pop();
+        }
+        std::fs::write(root.join(".git/fsmonitor-paths"), events)?;
+        let repo = gix::open_opts(
+            root,
+            gix::open::Options::isolated()
+                .config_overrides(threshold.map(|value| format!("gitoxide.fsmonitor.forceUpdateThreshold={value}"))),
+        )?;
+        let previous_token = repo.index()?.fs_monitor().expect("fixture has FSMN").token().clone();
+        let new_token = gix::index::extension::fs_monitor::Token::V2 {
+            token: "advanced-token".into(),
+        };
+        let expected_token = if should_write { &new_token } else { &previous_token };
+        let before = std::fs::read(root.join(".git/index"))?;
+        let mut outcome = status_outcome(&repo)?;
+        assert_eq!(
+            outcome.has_changes(),
+            should_write,
+            "{count} records for {path} at threshold {threshold:?}, terminated={terminated}"
+        );
+        if threshold.is_none() {
+            // Git also writes racy indexes, independently of filesystem monitor changes.
+            let newest_entry = repo
+                .index()?
+                .entries()
+                .iter()
+                .map(|entry| entry.stat.mtime.secs)
+                .max()
+                .expect("fixture has tracked entries");
+            std::fs::File::options()
+                .write(true)
+                .open(root.join(".git/index"))?
+                .set_modified(
+                    std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(u64::from(newest_entry) + 1),
+                )?;
+            let git = gix_testtools::git_command(root)
+                .args(["status", "--porcelain"])
+                .output()?;
+            assert!(git.status.success(), "Git status succeeds: {:?}", git.stderr);
+            let index = gix::index::File::at(root.join(".git/index"), repo.object_hash(), false, Default::default())?;
+            assert_eq!(
+                index.fs_monitor().expect("Git retains FSMN").token(),
+                expected_token,
+                "Git: {count} records for {path}, terminated={terminated}"
+            );
+            std::fs::write(root.join(".git/index"), &before)?;
+        }
+        let write = outcome.write_changes();
+        assert_eq!(write.is_some(), should_write, "only requested writes are performed");
+        write.transpose()?;
+        let index = gix::index::File::at(root.join(".git/index"), repo.object_hash(), false, Default::default())?;
+        assert_eq!(
+            index.fs_monitor().expect("write policy retains FSMN").token(),
+            expected_token
+        );
+        if !should_write {
+            assert_eq!(
+                std::fs::read(root.join(".git/index"))?,
+                before,
+                "skipped writes leave the old checkpoint intact"
+            );
+            assert!(
+                !status_outcome(&repo)?.has_changes(),
+                "querying the old checkpoint again still avoids a write"
+            );
+        }
     }
     Ok(())
 }

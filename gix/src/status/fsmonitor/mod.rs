@@ -3,7 +3,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::{
     Repository, Result,
     bstr::{BStr, BString, ByteSlice},
-    config::tree::Core,
+    config::{
+        cache::util::ApplyLeniency,
+        tree::{Core, gitoxide::FsMonitor},
+    },
 };
 use gix_index::{entry::Flags, extension::fs_monitor::Token};
 
@@ -16,33 +19,20 @@ pub(super) struct Refresh {
     pub(super) valid: Vec<AtomicBool>,
     untracked: Option<gix_index::extension::UntrackedCache>,
     use_untracked: bool,
+    pub(super) changed: AtomicBool,
 }
 
 impl Refresh {
-    pub(super) fn has_changes(&self, index: &gix_index::State) -> bool {
-        if self
-            .untracked
-            .as_ref()
-            .map(|cache| cache.directories().iter().filter(|dir| dir.stat().is_some()).count())
-            != index
-                .untracked()
-                .map(|cache| cache.directories().iter().filter(|dir| dir.stat().is_some()).count())
-        {
-            return true;
-        }
-        if self.token.as_ref() != index.fs_monitor().map(gix_index::extension::FsMonitor::token) {
-            return true;
-        }
-        self.token.is_some()
-            && index
-                .fs_monitor()
-                .and_then(|monitor| monitor.valid_entries(self.valid.len()))
-                .is_none_or(|previous| {
-                    previous
-                        .into_iter()
-                        .zip(&self.valid)
-                        .any(|(previous, valid)| previous != valid.load(Ordering::Relaxed))
-                })
+    pub(super) fn has_changes(&self) -> bool {
+        self.changed.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn status(&self) -> Option<gix_status::index_as_worktree::FsMonitor<'_>> {
+        self.token.as_ref()?;
+        Some(gix_status::index_as_worktree::FsMonitor {
+            valid: &self.valid,
+            changed: &self.changed,
+        })
     }
 
     pub(super) fn apply(self, index: &mut gix_index::State) {
@@ -82,9 +72,10 @@ pub(super) fn refresh<'a>(
     } else {
         index.untracked().cloned()
     };
+    let mut changed = discard_untracked && index.untracked().is_some();
     if !enabled {
         if let Some(cache) = &mut untracked {
-            cache.invalidate_all();
+            changed |= cache.invalidate_all();
         }
         gix_trace::debug!("filesystem monitor disabled");
         return Ok(Some(Refresh {
@@ -92,9 +83,18 @@ pub(super) fn refresh<'a>(
             valid: (0..index.entries().len()).map(|_| AtomicBool::new(false)).collect(),
             untracked,
             use_untracked: false,
+            changed: AtomicBool::new(changed || index.fs_monitor().is_some()),
         }));
     }
 
+    let force_update_threshold = FsMonitor::FORCE_UPDATE_THRESHOLD
+        .try_into_usize(
+            repo.config
+                .resolved
+                .integer_filter(FsMonitor::FORCE_UPDATE_THRESHOLD, repo.filter_config_section()),
+        )
+        .with_leniency(repo.config.lenient_config)?
+        .unwrap_or(FsMonitor::FORCE_UPDATE_THRESHOLD_DEFAULT);
     let previous = index.fs_monitor().map(gix_index::extension::FsMonitor::token);
     let command = configured.flatten();
     let builtin = command
@@ -130,7 +130,8 @@ pub(super) fn refresh<'a>(
     let previous_valid = index
         .fs_monitor()
         .and_then(|monitor| monitor.valid_entries(index.entries().len()));
-    let mut use_untracked = previous_valid.is_some();
+    let has_checkpoint = previous_valid.is_some();
+    let mut use_untracked = has_checkpoint;
     let mut valid = previous_valid.unwrap_or_else(|| {
         gix_trace::debug!("no usable filesystem monitor bitmap; scanning all entries");
         vec![false; index.entries().len()]
@@ -139,31 +140,32 @@ pub(super) fn refresh<'a>(
         valid_entries = valid.iter().filter(|valid| **valid).count(),
         "restored filesystem monitor bitmap"
     );
-    let token = if let Some((token, paths)) = response {
+    let had_valid_entries = valid.iter().any(|valid| *valid);
+    let reported_paths = response
+        .as_ref()
+        .and_then(|(_, paths)| invalidate(index, &mut valid, paths, lookup, untracked.as_mut(), &mut changed));
+    if let Some(count) = reported_paths {
+        changed |= count > force_update_threshold;
         gix_trace::debug!(
-            reported_paths = if paths.is_empty() {
-                0
-            } else {
-                paths
-                    .strip_suffix(b"\0")
-                    .unwrap_or(&paths)
-                    .split(|byte| *byte == 0)
-                    .count()
-            },
+            reported_paths = count,
+            force_update_threshold,
             "received filesystem monitor changes"
         );
-        if !invalidate(index, &mut valid, &paths, lookup, untracked.as_mut()) {
-            valid.fill(false);
-            use_untracked = false;
-        }
-        Some(token)
     } else {
-        gix_trace::debug!("filesystem monitor query failed or returned an invalid response; scanning all entries");
+        gix_trace::debug!("filesystem monitor requires a full scan");
+        changed |= had_valid_entries;
         valid.fill(false);
         use_untracked = false;
+    }
+    let token = response.map(|(token, _)| token).or_else(|| {
         builtin.then(|| Token::V2 {
             token: "builtin:fake".into(),
         })
+    });
+    changed |= if token.is_some() {
+        !has_checkpoint
+    } else {
+        previous.is_some()
     };
     // shortcut: UNTR does not record filename composition; reuse non-ASCII names once that policy can be validated.
     if use_untracked
@@ -179,10 +181,11 @@ pub(super) fn refresh<'a>(
         use_untracked = false;
     }
     if !use_untracked && let Some(cache) = &mut untracked {
-        cache.invalidate_all();
+        changed |= cache.invalidate_all();
     }
     for (entry, valid) in index.entries().iter().zip(&mut valid) {
         if entry.mode.is_submodule() || entry.stage_raw() != 0 || entry.flags.contains(Flags::INTENT_TO_ADD) {
+            changed |= *valid;
             *valid = false;
         }
     }
@@ -195,6 +198,7 @@ pub(super) fn refresh<'a>(
         valid: valid.into_iter().map(AtomicBool::new).collect(),
         untracked,
         use_untracked,
+        changed: AtomicBool::new(changed),
     }))
 }
 
@@ -204,14 +208,16 @@ fn invalidate<'a>(
     data: &[u8],
     lookup: Option<&gix_index::AccelerateLookup<'a>>,
     mut untracked: Option<&mut gix_index::extension::UntrackedCache>,
-) -> bool {
+    changed: &mut bool,
+) -> Option<usize> {
     if data.is_empty() {
-        return true;
+        return Some(0);
     }
+    let mut count = 0;
     for reported_path in data.strip_suffix(b"\0").unwrap_or(data).split(|byte| *byte == 0) {
         if reported_path == b"/" {
             gix_trace::debug!("filesystem monitor requested a full scan");
-            return false;
+            return None;
         }
         let path = reported_path.strip_suffix(b"/").unwrap_or(reported_path);
         if path.is_empty()
@@ -221,14 +227,14 @@ fn invalidate<'a>(
                 .any(|part| part == b".." || part == b".")
         {
             gix_trace::debug!("filesystem monitor returned an invalid path; scanning all entries");
-            return false;
+            return None;
         }
         let path = path.as_bstr();
         if let Some(cache) = &mut untracked {
             if lookup.is_some() || reported_path.rsplit(|byte| *byte == b'/').next() == Some(b".gitignore".as_slice()) {
-                cache.invalidate_all();
+                *changed |= cache.invalidate_all();
             } else {
-                cache.invalidate_path(reported_path.as_bstr());
+                *changed |= cache.invalidate_path(reported_path.as_bstr());
             }
         }
         if !invalidate_path(index, valid, path)
@@ -240,8 +246,9 @@ fn invalidate<'a>(
                 invalidate_path(index, valid, entry.path(index)[..path.len()].as_bstr());
             }
         }
+        count += 1;
     }
-    true
+    Some(count)
 }
 
 fn invalidate_path(index: &gix_index::State, valid: &mut [bool], path: &BStr) -> bool {
