@@ -7,6 +7,7 @@ use std::{
 };
 
 use gix_error::{OptionExt, Result, ResultExt, bail, message};
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::super::ops::output;
@@ -43,6 +44,23 @@ pub(super) fn discover(toolchain: &str) -> Result<Tools> {
         profdata,
         cov,
     })
+}
+
+// Ignore counters and regions: selection only needs a function-to-file map.
+#[derive(Deserialize)]
+struct Export {
+    data: Vec<ExportUnit>,
+}
+
+#[derive(Deserialize)]
+struct ExportUnit {
+    functions: Vec<Function>,
+}
+
+#[derive(Deserialize)]
+struct Function {
+    name: String,
+    filenames: Vec<String>,
 }
 
 impl Tools {
@@ -95,23 +113,30 @@ impl Tools {
         let analysis = raw.join("analysis");
         fs::create_dir_all(&analysis).or_error()?;
         let mut binaries: BTreeMap<String, Vec<(String, PathBuf, BTreeSet<String>)>> = BTreeMap::new();
-        for (index, ((binary, name), profiles)) in captures.into_iter().enumerate() {
-            let profile = if let [profile] = profiles.as_slice() {
-                profile.clone()
-            } else {
-                let merged = analysis.join(format!("test-{index}.profdata"));
-                self.merge(&profiles, &merged)?;
-                merged
-            };
-            // Instrumentation profiles do not support llvm-profdata's JSON output.
-            let names = String::from_utf8(output(
-                Command::new(&self.profdata).args(["show", "--covered"]).arg(&profile),
-            )?)
-            .or_error()?
-            .lines()
-            .filter(|name| !name.is_empty())
-            .map(str::to_owned)
-            .collect();
+        let captures: Vec<_> = captures.into_iter().enumerate().collect();
+        // Bound simultaneous LLVM processes and their profile buffers.
+        let workers = std::thread::available_parallelism().map_or(1, usize::from).min(8);
+        for (binary, name, profile, names) in
+            parallel_profiles(&captures, workers, |(index, ((binary, name), profiles))| {
+                let profile = if let [profile] = profiles.as_slice() {
+                    profile.clone()
+                } else {
+                    let merged = analysis.join(format!("test-{index}.profdata"));
+                    self.merge(profiles, &merged)?;
+                    merged
+                };
+                // Instrumentation profiles do not support llvm-profdata's JSON output.
+                let names = String::from_utf8(output(
+                    Command::new(&self.profdata).args(["show", "--covered"]).arg(&profile),
+                )?)
+                .or_error()?
+                .lines()
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned)
+                .collect();
+                Ok((binary.clone(), name.clone(), profile, names))
+            })?
+        {
             binaries.entry(binary).or_default().push((name, profile, names));
         }
 
@@ -123,7 +148,7 @@ impl Tools {
             // llvm-cov needs an indexed profile even when llvm-profdata can read the raw capture.
             self.merge(std::slice::from_ref(&tests[0].1), &merged)?;
             let executable = string(&suites[&binary], "binary-path")?;
-            let export: Value = serde_json::from_slice(&output(
+            let export: Export = serde_json::from_slice(&output(
                 Command::new(&self.cov)
                     .arg("export")
                     .arg(executable)
@@ -181,7 +206,7 @@ impl Tools {
         fs::write(&list, inputs).or_error()?;
         output(
             Command::new(&self.profdata)
-                .args(["merge", "-sparse"])
+                .args(["merge", "-sparse", "--num-threads=1"])
                 .arg("--input-files")
                 .arg(list)
                 .arg("-o")
@@ -189,6 +214,36 @@ impl Tools {
         )?;
         Ok(())
     }
+}
+
+fn parallel_profiles<T: Sync, R: Send>(
+    items: &[T],
+    workers: usize,
+    process: impl Fn(&T) -> Result<R> + Sync,
+) -> Result<Vec<R>> {
+    let chunk_size = items.len().div_ceil(workers.max(1)).max(1);
+    std::thread::scope(|scope| {
+        let process = &process;
+        let handles: Vec<_> = items
+            .chunks(chunk_size)
+            .map(|chunk| {
+                std::thread::Builder::new()
+                    .spawn_scoped(scope, move || chunk.iter().map(process).collect::<Result<Vec<_>>>())
+            })
+            .collect();
+        // Join every worker before propagating errors, including panics, to keep analysis optional.
+        let batches: Vec<_> = handles
+            .into_iter()
+            .map(|handle| match handle.or_error()?.join() {
+                Ok(result) => result,
+                Err(_) => bail!("Coverage profile worker panicked"),
+            })
+            .collect();
+        batches.into_iter().try_fold(Vec::new(), |mut results, batch| {
+            results.extend(batch?);
+            Ok(results)
+        })
+    })
 }
 
 fn string<'a>(value: &'a Value, key: &str) -> Result<&'a str> {
@@ -206,25 +261,13 @@ fn covered_files(functions: &BTreeMap<String, BTreeSet<String>>, names: &BTreeSe
     Some(covered)
 }
 
-fn function_files(root: &Path, export: &Value) -> Result<BTreeMap<String, BTreeSet<String>>> {
-    let data = export["data"]
-        .as_array()
-        .ok_or_raise(|| message("LLVM export has no data array"))?;
+fn function_files(root: &Path, export: &Export) -> Result<BTreeMap<String, BTreeSet<String>>> {
     let mut functions: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut sources = BTreeMap::new();
-    for unit in data {
-        for function in unit["functions"]
-            .as_array()
-            .ok_or_raise(|| message("LLVM export has no functions array"))?
-        {
-            let files = functions.entry(string(function, "name")?.into()).or_default();
-            for filename in function["filenames"]
-                .as_array()
-                .ok_or_raise(|| message("LLVM function has no filenames array"))?
-            {
-                let filename = filename
-                    .as_str()
-                    .ok_or_raise(|| message("LLVM filename is not a string"))?;
+    for unit in &export.data {
+        for function in &unit.functions {
+            let files = functions.entry(function.name.clone()).or_default();
+            for filename in &function.filenames {
                 if !sources.contains_key(filename) {
                     sources.insert(filename.to_owned(), relative_source(root, filename)?);
                 }
@@ -264,6 +307,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn profile_workers_preserve_order_and_propagate_failure() -> gix_error::TestResult {
+        let input: Vec<_> = (0..17).collect();
+        let expected: Vec<_> = input.iter().map(|value| value * 2).collect();
+        for workers in [0, 1, 3, 8] {
+            assert_eq!(
+                parallel_profiles(&input, workers, |value| Ok(value * 2))?,
+                expected,
+                "profile order does not depend on worker count"
+            );
+        }
+        assert!(parallel_profiles(&[] as &[usize], 3, |value| Ok(*value))?.is_empty());
+        assert!(
+            parallel_profiles(&input, 3, |value| {
+                if *value == 6 {
+                    bail!("invalid profile");
+                }
+                Ok(*value)
+            })
+            .is_err(),
+            "one malformed profile invalidates the complete index"
+        );
+        assert!(
+            parallel_profiles(&input, 3, |value| {
+                assert_ne!(*value, 6, "exercise optional worker panic handling");
+                Ok(*value)
+            })
+            .is_err(),
+            "worker failure cannot turn optional analysis into a QA panic"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn unmapped_child_functions_invalidate_the_entire_test_profile() {
         let files = BTreeSet::from(["src/lib.rs".into()]);
         let functions = BTreeMap::from([("parent".into(), files.clone())]);
@@ -281,12 +357,12 @@ mod tests {
     #[test]
     fn mappings_union_duplicate_names_and_skip_external_sources() -> gix_error::TestResult {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).canonicalize()?;
-        let export = json!({"data":[{"functions":[
+        let export: Export = serde_json::from_value(json!({"data":[{"functions":[
             {"name":"shared","filenames":["Cargo.toml"]},
             {"name":"shared","filenames":["src/main.rs"]},
             {"name":"unexecuted","count":0,"filenames":["src/main.rs"]},
             {"name":"external","filenames":[root.join("../../Cargo.toml")]}
-        ]}]});
+        ]}]}))?;
         let functions = function_files(&root, &export)?;
         assert_eq!(
             functions["shared"],
@@ -302,9 +378,34 @@ mod tests {
             "mapped files remain known even when their functions did not execute"
         );
         assert!(
-            function_files(&root, &json!({"data":[{}]})).is_err(),
+            serde_json::from_value::<Export>(json!({"data":[{}]})).is_err(),
             "malformed exports are not empty coverage"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn sparse_export_ignores_unused_data_but_requires_function_metadata() -> gix_error::TestResult {
+        let export: Export = serde_json::from_value(json!({"data":[{
+            "functions":[{"name":"covered", "filenames":["src/lib.rs"], "regions":{"unused":true}}],
+            "files":{"segments":"unused"}
+        }]}))?;
+        assert_eq!(export.data[0].functions[0].name, "covered");
+        assert_eq!(export.data[0].functions[0].filenames, ["src/lib.rs"]);
+        for invalid in [
+            json!({}),
+            json!({"data":{}}),
+            json!({"data":[{"functions":null}]}),
+            json!({"data":[{"functions":[{"filenames":[]}]}]}),
+            json!({"data":[{"functions":[{"name":3,"filenames":[]}]}]}),
+            json!({"data":[{"functions":[{"name":"f"}]}]}),
+            json!({"data":[{"functions":[{"name":"f","filenames":[3]}]}]}),
+        ] {
+            assert!(
+                serde_json::from_value::<Export>(invalid).is_err(),
+                "missing or malformed function metadata cannot produce a usable export"
+            );
+        }
         Ok(())
     }
 }

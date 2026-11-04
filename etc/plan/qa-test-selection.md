@@ -316,7 +316,8 @@ plan against `HEAD`, and runs `qa run --stage tests`. This exercises the affecte
 native and feature test stages, including fixture variants; it does not measure
 clippy, doctests, journeys, or a complete local/CI QA run.
 
-The probes use the same checkout and retain build and shared fixture caches.
+The probes use the same checkout and retain build caches. Each QA process has
+a fresh fixture cache, shared across its stages.
 Each case runs ordinary QA, automatic collection/reuse, cached automatic QA, then
 ordinary QA again. The table compares the final warm ordinary execution with
 cached selection. These are individual measurements, not statistical averages.
@@ -371,3 +372,51 @@ Failure probes also verified that a broken archive writer fails within the 14
 selected native tests, and a newly added failing test runs in a 16-test selection.
 All nine archive feature cases passed with LLVM tools deliberately unavailable.
 Neither failing runs nor missing-tool fallback modified the saved indexes.
+
+### Reducing collection overhead
+
+The 335-second archive result included ordinary test and build work. Its largest
+additional cost was 171 seconds of serial profile analysis: one
+`llvm-profdata show --covered` invocation per test. On 128 retained profiles, serial decoding
+took 2.82 seconds; eight concurrent workers took 0.41 seconds with identical
+output. Launching the tool 128 times without profile processing alone took 1.26
+seconds. Merging profiles together would lose per-test identity.
+
+Collection now processes profiles with at most eight workers, capped by available
+CPU parallelism. Each LLVM merge uses one internal thread. Results retain their
+original order, and every worker is joined before any error or panic propagates.
+The function map also deserializes only names and filenames, avoiding allocation
+of unused counters and regions. Required fields remain validated, and unmapped
+child functions still leave their owning test unpruned.
+
+For the same 635 retained `gix` tests, complete index construction dropped from
+17.92 seconds to 4.34 seconds and produced byte-identical JSON. Phase profiling
+also measured JSON decoding at 2.05 seconds before sparse deserialization versus
+1.04 seconds afterward. The final implementation passed all 76 QA self-tests,
+Clippy with warnings denied, and workflow checks.
+
+The full archive test-stage comparison used the same 17 configurations and
+5,640 test executions. All collections passed:
+
+| Component | Previous collection | Optimized collection | Optimized, warm builds |
+| --- | ---: | ---: | ---: |
+| Instrumented compilation | 52.16s | 57.25s | 5.76s |
+| Test execution | 100.27s | 98.85s | 98.61s |
+| Index construction | 170.70s | 44.43s | 44.53s |
+| Other orchestration | 11.74s | 11.19s | 11.28s |
+| Total | 334.87s | 211.71s | 160.18s |
+
+The comparable compilation/test costs show that faster analysis accounts for
+the improvement. The second optimized run retains compiled artifacts but still
+collects every test again; its fixture cache is fresh and shared across stages.
+This removes much of the extra collection cost, while a fresh runtime index
+still requires executing the selected tests once. The earlier ordinary warm
+archive test stages took 108.26 seconds.
+
+Measurements use the same macOS/aarch64 host, stable Rust 1.99.1 and Nextest
+0.9.122. Gains depend on available cores. The full collections were forced with
+`--coverage collect` against the saved archive plan during development; dirty
+source prevented publishing these benchmark indexes. Index publication and
+pruning policy are unchanged. Logs, scripts, retained-profile comparisons and
+phase timings are under `target/qa-coverage/collection`. Linux, Windows and
+GitHub-runner performance have not been measured.
