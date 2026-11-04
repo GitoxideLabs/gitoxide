@@ -2,7 +2,7 @@ use gix_error::{Result, bail};
 use std::{
     path::Path,
     slice::Chunks,
-    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use bstr::BStr;
@@ -18,7 +18,7 @@ use crate::index_as_worktree::types::ConflictIndexEntry;
 use crate::{
     AtomicU64, SymlinkCheck,
     index_as_worktree::{
-        Change, Conflict, Context, EntryStatus, Outcome, VisitEntry, traits,
+        Change, Conflict, Context, EntryStatus, FsMonitor, Outcome, VisitEntry, traits,
         traits::{CompareBlobs, SubmoduleStatus, read_data::Stream},
         types::Options,
     },
@@ -75,7 +75,7 @@ where
     U: Send,
     Find: gix_object::Find + Send + Clone,
 {
-    if fsmonitor.is_some_and(|valid| valid.len() != index.entries().len()) {
+    if fsmonitor.is_some_and(|monitor| monitor.valid.len() != index.entries().len()) {
         bail!(message("Filesystem-monitor validity must match the index entry count"));
     }
     // the order is absolutely critical here we use the old timestamp to detect racy index entries
@@ -245,7 +245,7 @@ struct State<'a, 'b> {
     filter: gix_filter::Pipeline,
     path_backing: &'b gix_index::PathStorageRef,
     options: &'a Options,
-    fsmonitor: Option<&'a [AtomicBool]>,
+    fsmonitor: Option<FsMonitor<'a>>,
     /// Optional lazy worktree stats cache for faster status checks on Windows.
     /// Lookups happen before falling back to per-file syscalls.
     #[cfg(windows)]
@@ -283,7 +283,7 @@ impl<'index> State<'_, 'index> {
         let can_use_fsmonitor = entry.stage_raw() == 0
             && !entry.mode.is_submodule()
             && !entry.flags.contains(gix_index::entry::Flags::INTENT_TO_ADD);
-        let fsmonitor_valid = self.fsmonitor.and_then(|valid| valid.get(entry_index));
+        let fsmonitor_valid = self.fsmonitor.and_then(|monitor| monitor.valid.get(entry_index));
         if entry.flags.intersects(
             gix_index::entry::Flags::UPTODATE
                 | gix_index::entry::Flags::SKIP_WORKTREE
@@ -335,9 +335,10 @@ impl<'index> State<'_, 'index> {
         };
         if can_use_fsmonitor
             && matches!(status, Ok(None | Some(EntryStatus::NeedsUpdate(_))))
-            && let Some(valid) = fsmonitor_valid
+            && let Some(monitor) = self.fsmonitor
         {
-            valid.store(true, Ordering::Relaxed);
+            monitor.valid[entry_index].store(true, Ordering::Relaxed);
+            monitor.changed.store(true, Ordering::Relaxed);
         }
         match status {
             Ok(None) => None,

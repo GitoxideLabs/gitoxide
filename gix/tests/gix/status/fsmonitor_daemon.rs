@@ -12,7 +12,7 @@ fn paths(repo: &gix::Repository, write_back: bool) -> TestResult<Vec<String>> {
         iter.into_outcome()
             .expect("a fully consumed iterator has an outcome")
             .write_changes()
-            .expect("the new monitor token needs writeback")?;
+            .transpose()?;
     }
     paths.sort();
     Ok(paths)
@@ -177,7 +177,7 @@ fn mock_daemon_refreshes_tokens_skips_unreported_paths_and_falls_back_on_failure
         "a token-only response skips valid files but retains previously dirty entries"
     );
     assert_eq!(
-        mock_status(&repo, root, b"mock-two", b"0008x", false)?,
+        mock_status(&repo, root, b"mock-one", b"0008x", false)?,
         [
             "dir/a",
             "dir/b",

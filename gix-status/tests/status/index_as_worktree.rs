@@ -1722,14 +1722,16 @@ mod fsmonitor {
         Ok(())
     }
 
+    #[expect(clippy::type_complexity)]
     fn run<'index>(
         index: &'index gix_index::State,
         worktree: &std::path::Path,
         valid: &[AtomicBool],
         patterns: &[&str],
         interrupt: bool,
-    ) -> Result<(Vec<Record<'index, (), ()>>, Outcome)> {
+    ) -> Result<(Vec<Record<'index, (), ()>>, Outcome, bool)> {
         let mut recorder = Recorder::default();
+        let changed = AtomicBool::new(false);
         let outcome = index_as_worktree(
             index,
             worktree,
@@ -1743,7 +1745,10 @@ mod fsmonitor {
                 stack: attributes_stack(worktree, index),
                 filter: gix_filter::Pipeline::new(Default::default(), gix_testtools::object_hash(), Default::default()),
                 should_interrupt: &AtomicBool::new(interrupt),
-                fsmonitor: Some(valid),
+                fsmonitor: Some(gix_status::index_as_worktree::FsMonitor {
+                    valid,
+                    changed: &changed,
+                }),
             },
             Options {
                 fs: gix_fs::Capabilities::probe(&worktree.join(".git")),
@@ -1751,7 +1756,7 @@ mod fsmonitor {
                 ..Default::default()
             },
         )?;
-        Ok((recorder.records, outcome))
+        Ok((recorder.records, outcome, changed.into_inner()))
     }
 
     #[test]
@@ -1768,7 +1773,8 @@ mod fsmonitor {
             entry.flags.insert(Flags::FSMONITOR_VALID);
         }
         let valid: Vec<_> = index.entries().iter().map(|_| AtomicBool::new(false)).collect();
-        let (records, first) = run(&index, &worktree, &valid, &[], false)?;
+        let (records, first, changed) = run(&index, &worktree, &valid, &[], false)?;
+        assert!(changed, "confirming invalid entries clean requests validity writeback");
         assert_eq!(
             first.symlink_metadata_calls,
             valid.len(),
@@ -1785,7 +1791,8 @@ mod fsmonitor {
             "all confirmed clean entries gain validity"
         );
 
-        let (records, second) = run(&index, &worktree, &valid, &[], false)?;
+        let (records, second, changed) = run(&index, &worktree, &valid, &[], false)?;
+        assert!(!changed, "skipping already valid entries does not request writeback");
         assert!(records.is_empty(), "valid entries need no further checks");
         assert_eq!(second.symlink_metadata_calls, 0, "valid entries avoid metadata calls");
         assert_eq!(
@@ -1819,7 +1826,8 @@ mod fsmonitor {
         for valid in &valid {
             valid.store(false, Ordering::Relaxed);
         }
-        run(&index, &worktree, &valid, &[], true)?;
+        let (_, _, changed) = run(&index, &worktree, &valid, &[], true)?;
+        assert!(!changed, "interruption cannot validate unchecked entries");
         assert!(
             valid.iter().all(|valid| !valid.load(Ordering::Relaxed)),
             "interruption leaves unchecked entries invalid"
@@ -1833,7 +1841,7 @@ mod fsmonitor {
             Default::default(),
         )?;
         let valid: Vec<_> = index.entries().iter().map(|_| AtomicBool::new(false)).collect();
-        let (records, _) = run(&index, &worktree, &valid, &[], false)?;
+        let (records, _, _) = run(&index, &worktree, &valid, &[], false)?;
         assert!(
             records
                 .iter()
@@ -1877,7 +1885,7 @@ mod fsmonitor {
                     .iter()
                     .map(|_| AtomicBool::new(initially_valid))
                     .collect();
-                let (records, _) = run(&index, &worktree, &valid, &[], false)?;
+                let (records, _, _) = run(&index, &worktree, &valid, &[], false)?;
                 let special = records
                     .iter()
                     .find(|record| {

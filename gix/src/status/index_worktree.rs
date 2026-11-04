@@ -177,7 +177,7 @@ impl Repository {
             self.objects.clone().into_arc().expect("arc conversion always works"),
             progress,
             gix_status::index_as_worktree_with_renames::Context {
-                fsmonitor: fsmonitor.as_ref().map(|monitor| monitor.valid.as_slice()),
+                fsmonitor: fsmonitor.as_ref().and_then(super::fsmonitor::Refresh::status),
                 pathspec: pathspec.search,
                 resource_cache,
                 should_interrupt,
