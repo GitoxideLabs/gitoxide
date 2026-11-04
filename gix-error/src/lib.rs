@@ -154,6 +154,8 @@
 //! Merging independent causes discards their origin; later-visited values win. [`Metadata`] documents common schemas
 //! for input validation and external program runtime failures.
 //! These conventions do not require collecting additional information or imply a classification.
+//! Metadata is printed without redaction and may expose personally identifiable information (PII) or secrets;
+//! see [metadata privacy](Metadata#privacy), especially before opting into [`Message::with_command()`].
 //! To identify a specific failure without inspecting its values, see
 //! [matching a specific failure](#matching-a-specific-failure).
 //!
