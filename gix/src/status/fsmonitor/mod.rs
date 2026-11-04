@@ -107,7 +107,8 @@ pub(super) fn refresh<'a>(
     );
     let response = if builtin {
         let token = previous.map_or_else(|| "builtin:fake".into(), |token| token_bytes(Some(token)));
-        daemon::query(repo, token.as_bstr()).ok().and_then(parse_v2)
+        let options = daemon::options(repo)?;
+        daemon::query(repo, token.as_bstr(), options).ok().and_then(parse_v2)
     } else {
         let version = repo
             .config
