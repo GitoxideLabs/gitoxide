@@ -231,13 +231,41 @@ fn mock_status(
         let mut request = vec![0; expected.len()];
         stream.read_exact(&mut request)?;
         assert_eq!(request, expected, "each query uses the previously persisted token");
-        for byte in response {
-            stream.write_all(&[byte])?;
-        }
+        stream.write_all(&response)?;
         Ok(())
     });
     let result = paths(repo, write_back);
     server.join().expect("the mock server must finish without panicking")?;
     std::fs::remove_file(socket)?;
     result
+}
+
+#[test]
+#[cfg(unix)]
+fn configured_response_limit_controls_monitor_fallback() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let fixture = gix_testtools::scripted_fixture_writable("make_status_fsmonitor.sh")?;
+    let root = fixture.path();
+    for limit in [0, 8, 9] {
+        let repo = gix::open_opts(
+            root,
+            gix::open::Options::isolated().config_overrides([
+                "core.fsmonitor=true".to_owned(),
+                format!("gitoxide.fsmonitor.maxResponseSize={limit}"),
+            ]),
+        )?;
+        let actual = mock_status(&repo, root, b"next-token", b"000dmock-two\x000000", false)?;
+        let expected: &[&str] = if limit == 9 {
+            &["dirty", "untracked"]
+        } else {
+            &["dir/a", "directory", "dirty", "reported", "unreported", "untracked"]
+        };
+        assert_eq!(
+            actual, expected,
+            "the 9-byte payload must fit the configured limit {limit}"
+        );
+    }
+    Ok(())
 }

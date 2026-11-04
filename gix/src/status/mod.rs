@@ -81,6 +81,8 @@ impl Repository {
     /// checkpoint, entry validity, and invalidated directory listings when a write is warranted.
     /// Token-only updates retain the old checkpoint on disk; `gitoxide.fsmonitor.forceUpdateThreshold`
     /// bounds the number of repeated events before requesting a write, as in Git (default: 100 paths).
+    /// Daemon retry, timeout, and response-size limits are configured through
+    /// [`gitoxide.fsmonitor`](crate::config::tree::gitoxide::FsMonitor).
     /// Daemon sockets in alternate locations on remote filesystems currently fall back to ordinary checks.
     ///
     /// By default, this is set to the fastest and most immediate way of obtaining a status,
