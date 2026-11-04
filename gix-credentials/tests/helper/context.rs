@@ -1,6 +1,265 @@
 use crate::TestResult;
 use bstr::ByteSlice;
-use gix_credentials::protocol::{Context, ContextOptions};
+use gix_credentials::protocol::{Capability, Context, ContextOptions};
+
+#[test]
+fn unsupported_capabilities_are_retained_but_not_announced() -> TestResult {
+    let context = Context::from_bytes(
+        b"capability[]=state
+state[]=helper:opaque-state
+continue=1
+capability[]=authtype
+authtype=Bearer
+credential=access-token
+ephemeral=1
+capability[]=future
+",
+        Default::default(),
+    )?;
+    assert_eq!(
+        context.capability,
+        [
+            Capability::Unsupported("state".into()),
+            Capability::Authtype,
+            Capability::Unsupported("future".into()),
+        ],
+        "unsupported names remain available for inspection in their original order"
+    );
+    let expected = b"capability[]=authtype
+authtype=Bearer
+credential=access-token
+ephemeral=1
+";
+    let mut output = Vec::new();
+    context.write_to(&mut output)?;
+    assert_eq!(
+        output, expected,
+        "only supported capabilities and their fields are serialized"
+    );
+    assert_eq!(
+        Context::from_bytes(&output, Default::default())?.capability,
+        [Capability::Authtype],
+        "unsupported announcements intentionally do not round-trip"
+    );
+    let next: gix_credentials::helper::NextAction = context.into();
+    for action in [next.clone().store(), next.erase()] {
+        assert_eq!(
+            action.payload().expect("store and erase have a payload"),
+            expected.as_bstr(),
+            "context-based follow-up actions cannot claim support for discarded capabilities"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn unsupported_capabilities_never_enable_or_inject_fields() -> TestResult {
+    for name in [
+        "state",
+        "authtype",
+        "future\ncapability[]=authtype",
+        "future\r",
+        "future\0",
+    ] {
+        let context = Context {
+            capability: vec![Capability::Unsupported(name.into())],
+            authtype: Some("Bearer".into()),
+            credential: Some("access-token".into()),
+            ephemeral: Some(true),
+            ..Default::default()
+        };
+        let mut output = Vec::new();
+        gix_credentials::helper::Action::Get(context).send(&mut output)?;
+        assert!(
+            output.is_empty(),
+            "the unsupported variant is inert regardless of its name or protocol delimiters"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn decoding_unsupported_capabilities_still_validates_the_protocol() {
+    for input in [
+        b"capability[]=future\0\n".as_slice(),
+        b"capability[]=future\rname\n",
+        b"capability[]=\xff\n",
+    ] {
+        assert!(
+            Context::from_bytes(input, Default::default()).is_err(),
+            "introspection must not bypass protocol and UTF-8 validation"
+        );
+    }
+}
+
+#[test]
+fn authtype_fields_roundtrip_only_after_their_capability_and_hide_secrets() -> TestResult {
+    let fields = b"authtype=Bearer
+credential=access-token
+ephemeral=1
+";
+    for capability in [b"".as_slice(), b"capability[]=unknown\n"] {
+        let input = [capability, fields, b"capability[]=authtype\n"].concat();
+        let context = Context::from_bytes(&input, Default::default())?;
+        assert_eq!(
+            context.authtype, None,
+            "a later or unknown capability does not enable fields retroactively"
+        );
+        assert_eq!(context.credential, None, "unnegotiated credentials are discarded");
+        assert_eq!(
+            context.ephemeral, None,
+            "the lifetime flag requires the same capability"
+        );
+    }
+    let input = [b"capability[]=authtype\n".as_slice(), fields].concat();
+    let mut context = Context::from_bytes(&input, Default::default())?;
+    assert_eq!(
+        context.to_bstring(),
+        input,
+        "capabilities precede all dependent fields during serialization"
+    );
+    let redacted = context.clone().redacted();
+    assert_eq!(
+        redacted.credential.as_deref(),
+        Some("<redacted>"),
+        "token credentials are secrets"
+    );
+    let err = gix_credentials::protocol::helper_outcome_to_result(
+        None,
+        gix_credentials::helper::Action::Get(context.clone()),
+    )
+    .expect_err("a missing helper outcome produces context for diagnostics");
+    assert!(
+        !err.to_string().contains("access-token"),
+        "missing-credentials diagnostics must not expose credentials"
+    );
+    context.clear_secrets();
+    assert_eq!(
+        context.credential, None,
+        "clearing passwords also clears pre-encoded credentials"
+    );
+    Ok(())
+}
+
+#[test]
+fn authtype_protocol_fields_reject_record_injection() {
+    for value in ["Bearer\nusername=injected", "Bearer\rusername=injected", "Bearer\0"] {
+        for context in [
+            Context {
+                capability: vec![Capability::Authtype],
+                authtype: Some(value.into()),
+                ..Default::default()
+            },
+            Context {
+                capability: vec![Capability::Authtype],
+                credential: Some(value.into()),
+                ..Default::default()
+            },
+        ] {
+            assert!(
+                context.write_to(Vec::new()).is_err(),
+                "credential fields cannot inject protocol records"
+            );
+        }
+    }
+}
+
+#[test]
+fn invalid_secrets_never_appear_in_encoding_diagnostics_or_metadata() -> TestResult {
+    for value in [
+        "secret-token\rcontent",
+        "secret-token
+content",
+        "secret-token\0content",
+    ] {
+        for (key, context) in [
+            (
+                "password",
+                Context {
+                    password: Some(value.into()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "credential",
+                Context {
+                    capability: vec![Capability::Authtype],
+                    credential: Some(value.into()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "oauth_refresh_token",
+                Context {
+                    oauth_refresh_token: Some(value.into()),
+                    ..Default::default()
+                },
+            ),
+        ] {
+            let write_error = context
+                .write_to(Vec::new())
+                .expect_err("protocol delimiters in secrets are rejected");
+            let cascade_error = gix_credentials::helper::Cascade::default()
+                .invoke(
+                    gix_credentials::helper::Action::Get(context),
+                    gix_prompt::Options {
+                        mode: gix_prompt::Mode::Disable,
+                        askpass: None,
+                    },
+                )
+                .expect_err("the cascade validates secrets before invoking helpers");
+            for error in [gix_error::Error::from_error(write_error), cascade_error] {
+                assert!(
+                    !error.to_string().contains("secret-token") && !format!("{error:?}").contains("secret-token"),
+                    "encoding and cascade diagnostics must not expose any part of the rejected {key}"
+                );
+                assert!(
+                    error.metadata().all(|values| !values.contains_key("input")),
+                    "rejected {key} values must not be retained in diagnostic metadata"
+                );
+                assert!(
+                    error.to_string().contains(key),
+                    "the rejected secret field remains identifiable"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn invalid_secrets_never_appear_in_decoding_diagnostics_or_metadata() -> TestResult {
+    for key in ["password", "credential", "oauth_refresh_token"] {
+        for value in [
+            b"secret-token\xff".as_slice(),
+            b"secret-token\rcontent",
+            b"secret-token\0content",
+        ] {
+            let input = [
+                b"capability[]=authtype\n".as_slice(),
+                key.as_bytes(),
+                b"=",
+                value,
+                b"\n",
+            ]
+            .concat();
+            let error = Context::from_bytes(&input, Default::default()).expect_err("invalid secret bytes are rejected");
+            assert!(
+                !error.to_string().contains("secret-token") && !format!("{error:?}").contains("secret-token"),
+                "decoding diagnostics must not expose invalid {key} values"
+            );
+            assert!(
+                error.metadata().all(|values| !values.contains_key("input")),
+                "neither protocol nor UTF-8 validation may retain the secret {key} input"
+            );
+            assert!(
+                error.to_string().contains(key),
+                "the rejected secret field remains identifiable"
+            );
+        }
+    }
+    Ok(())
+}
 
 #[test]
 fn authentication_challenges_survive_a_protocol_roundtrip() -> TestResult {

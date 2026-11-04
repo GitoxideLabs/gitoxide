@@ -69,13 +69,18 @@ where
                 drop(result); // needed to workaround this: https://github.com/rust-lang/rust/issues/76149
                 let url = transport.to_url().into_owned();
                 progress.set_name("authentication".into());
-                let credentials::protocol::Outcome { identity, next } = authenticate(credentials::helper::Action::Get(
-                    credentials::protocol::Context {
+                let credentials::protocol::Outcome { credentials, next } = authenticate(
+                    credentials::helper::Action::Get(credentials::protocol::Context {
                         url: Some(url.clone()),
+                        capability: if url.starts_with(b"http://") || url.starts_with(b"https://") {
+                            vec![credentials::protocol::Capability::Authtype]
+                        } else {
+                            Vec::new()
+                        },
                         www_authenticate,
                         ..Default::default()
-                    },
-                ))
+                    }),
+                )
                 .or_raise(|| message("Failed to obtain credentials"))?
                 .ok_or_raise(|| {
                     gix_error::unauthenticated(
@@ -83,8 +88,8 @@ where
                     )
                 })?;
                 transport
-                    .set_identity(identity)
-                    .or_raise(|| message("Could not set transport identity"))?;
+                    .set_credentials(credentials)
+                    .or_raise(|| message("Could not set transport credentials"))?;
                 progress.step();
                 progress.set_name("handshake (authenticated)".into());
                 match transport.handshake(service, &extra_parameters).await {

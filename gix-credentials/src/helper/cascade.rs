@@ -2,7 +2,7 @@ use crate::{
     Program, helper,
     helper::Cascade,
     protocol,
-    protocol::{Context, ContextOptions},
+    protocol::{Capability, Context, ContextOptions},
 };
 use gix_error::Result;
 use gix_error::ResultExt;
@@ -65,8 +65,9 @@ impl Cascade {
     }
 
     /// If `toggle` is true, a bogus password will be provided to prevent any helper program from prompting for it, nor will
-    /// we prompt for the password. The resulting identity will have a bogus password and it's expected to not be used by the
+    /// we prompt for the password. The resulting credentials will have a bogus password and are not meant to be used by the
     /// consuming transport.
+    /// The `authtype` capability is disabled because token credentials need not identify a username.
     pub fn query_user_only(mut self, toggle: bool) -> Self {
         self.query_user_only = toggle;
         self
@@ -88,6 +89,9 @@ impl Cascade {
     ) -> Result<Option<protocol::Outcome>> {
         if let Some(ctx) = action.context_mut() {
             ctx.options = self.context_options;
+            if self.query_user_only {
+                ctx.capability.retain(|capability| *capability != Capability::Authtype);
+            }
             ctx.write_to(std::io::sink()).or_error()?;
         }
         let mut url = action
@@ -114,11 +118,15 @@ impl Cascade {
                 Ok(Some(stdout)) => {
                     let Context {
                         options: _,
+                        capability: _,
                         protocol,
                         host,
                         path,
                         username,
                         password,
+                        authtype,
+                        credential,
+                        ephemeral,
                         oauth_refresh_token,
                         password_expiry_utc,
                         // Authentication challenges only flow from the server to helpers.
@@ -127,6 +135,17 @@ impl Cascade {
                         quit,
                     } = Context::from_bytes(&stdout, self.context_options)?;
                     if let Some(dst_ctx) = action.context_mut() {
+                        if dst_ctx.supports_authtype() {
+                            if let Some(src) = authtype {
+                                dst_ctx.authtype = Some(src);
+                            }
+                            if let Some(src) = credential {
+                                dst_ctx.credential = Some(src);
+                            }
+                            if let Some(src) = ephemeral {
+                                dst_ctx.ephemeral = Some(src);
+                            }
+                        }
                         if let Some(src) = path {
                             dst_ctx.path = Some(src);
                         }
@@ -154,8 +173,10 @@ impl Cascade {
                         {
                             dst_ctx.password_expiry_utc = None;
                             dst_ctx.clear_secrets();
+                            dst_ctx.authtype = None;
+                            dst_ctx.ephemeral = None;
                         }
-                        if dst_ctx.username.is_some() && dst_ctx.password.is_some() {
+                        if dst_ctx.has_complete_credentials() {
                             break;
                         }
                         if quit.unwrap_or_default() {
@@ -178,14 +199,14 @@ impl Cascade {
             && let Some(ctx) = action.context_mut()
         {
             ctx.url = url;
-            if ctx.username.is_none() {
+            if !ctx.has_complete_credentials() && ctx.username.is_none() {
                 let message = ctx.to_prompt("Username");
                 prompt.mode = gix_prompt::Mode::Visible;
                 ctx.username = gix_prompt::ask(&message, &prompt)
                     .or_raise(|| gix_error::message!("Couldn't obtain {message}"))?
                     .into();
             }
-            if ctx.password.is_none() {
+            if !ctx.has_complete_credentials() && ctx.password.is_none() {
                 let message = ctx.to_prompt("Password");
                 prompt.mode = gix_prompt::Mode::Hidden;
                 ctx.password = gix_prompt::ask(&message, &prompt)
@@ -195,8 +216,7 @@ impl Cascade {
         }
 
         if let Some(ctx) = action.context_mut()
-            && ctx.username.is_some()
-            && ctx.password.is_some()
+            && ctx.has_complete_credentials()
         {
             ctx.www_authenticate.clear();
         }
@@ -205,6 +225,8 @@ impl Cascade {
             action.context().map(|ctx| helper::Outcome {
                 username: ctx.username.clone(),
                 password: ctx.password.clone(),
+                authtype: ctx.supports_authtype().then(|| ctx.authtype.clone()).flatten(),
+                credential: ctx.supports_authtype().then(|| ctx.credential.clone()).flatten(),
                 oauth_refresh_token: ctx.oauth_refresh_token.clone(),
                 quit: ctx.quit.unwrap_or(false),
                 next: ctx.to_owned().into(),

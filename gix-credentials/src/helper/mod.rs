@@ -23,34 +23,52 @@ pub struct Cascade {
 /// The outcome of the credentials helper [invocation][crate::helper::invoke()].
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Outcome {
-    /// The username to use in the identity, if set.
+    /// The username to use in the credentials, if set.
     pub username: Option<String>,
-    /// The password to use in the identity, if set.
+    /// The password to use in the credentials, if set.
     pub password: Option<String>,
+    /// The authentication scheme for [`credential`](Self::credential), if negotiated with the helper.
+    pub authtype: Option<String>,
+    /// A secret, pre-encoded credential to use with [`authtype`](Self::authtype).
+    pub credential: Option<String>,
     /// An OAuth refresh token that may accompany a password. It is to be treated confidentially, just like the password.
     pub oauth_refresh_token: Option<String>,
-    /// If set, the helper asked to stop the entire process, whether the identity is complete or not.
+    /// If set, the helper asked to stop the entire process, whether the credentials are complete or not.
     pub quit: bool,
     /// A handle to the action to perform next in another call to [`helper::invoke()`][crate::helper::invoke()].
     pub next: NextAction,
 }
 
 impl Outcome {
-    /// Try to fetch username _and_ password to form an identity. This will fail if one of them is not set.
+    /// Consume a complete authentication scheme and credential, or a username and password, to form credentials.
     ///
-    /// This does nothing if only one of the fields is set, or consume both.
-    pub fn consume_identity(&mut self) -> Option<gix_sec::identity::Account> {
+    /// A complete scheme and credential take precedence. Only the selected pair and the optional
+    /// refresh token are consumed; unused or incomplete pairs are left untouched.
+    pub fn consume_credentials(&mut self) -> Option<gix_sec::identity::Credentials> {
+        if self.authtype.is_some() && self.credential.is_some() {
+            return self
+                .authtype
+                .take()
+                .zip(self.credential.take())
+                .map(|(authtype, credential)| gix_sec::identity::Credentials::Encoded {
+                    authtype,
+                    credential,
+                    oauth_refresh_token: self.oauth_refresh_token.take(),
+                });
+        }
         if self.username.is_none() || self.password.is_none() {
             return None;
         }
         self.username
             .take()
             .zip(self.password.take())
-            .map(|(username, password)| gix_sec::identity::Account {
-                username,
-                password,
-                oauth_refresh_token: self.oauth_refresh_token.take(),
-            })
+            .map(
+                |(username, password)| gix_sec::identity::Credentials::UsernamePassword {
+                    username,
+                    password,
+                    oauth_refresh_token: self.oauth_refresh_token.take(),
+                },
+            )
     }
 }
 

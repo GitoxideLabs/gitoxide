@@ -202,7 +202,7 @@ fn http_status_500_is_communicated_via_special_io_error() -> TestResult {
 }
 
 #[test]
-fn http_identity_is_picked_up_from_url() -> TestResult {
+fn http_credentials_are_picked_up_from_url() -> TestResult {
     let transport = gix_transport::client::blocking_io::http::connect::<Remote>(
         "https://user:pass@example.com/repo".try_into()?,
         Protocol::V2,
@@ -210,8 +210,8 @@ fn http_identity_is_picked_up_from_url() -> TestResult {
     );
     assert_eq!(transport.to_url().as_ref(), "https://user:pass@example.com/repo");
     assert_eq!(
-        transport.identity(),
-        Some(&gix_sec::identity::Account {
+        transport.credentials(),
+        Some(&gix_sec::identity::Credentials::UsernamePassword {
             username: "user".into(),
             password: "pass".into(),
             oauth_refresh_token: None,
@@ -312,7 +312,7 @@ fn http_will_use_pipelining() {
         Err(err) => unreachable!("{err:?}"),
     }
     client
-        .set_identity(gix_sec::identity::Account {
+        .set_credentials(gix_sec::identity::Credentials::UsernamePassword {
             username: "foo".into(),
             password: "bar".into(),
             oauth_refresh_token: None,
@@ -338,7 +338,7 @@ fn http_will_use_pipelining() {
 }
 
 #[test]
-fn http_authentication_error_can_be_differentiated_and_identity_is_transmitted() -> TestResult {
+fn http_authentication_error_can_be_differentiated_and_credentials_are_transmitted() -> TestResult {
     let (server, mut client, err) = assert_error_status(401, std::io::ErrorKind::PermissionDenied)?;
     insta::assert_debug_snapshot!(err, "HTTP authentication failures retain the status and permission-denied cause", @"
     An IO error occurred when talking to the server
@@ -348,7 +348,7 @@ fn http_authentication_error_can_be_differentiated_and_identity_is_transmitted()
         1: Received HTTP status 401
     ");
     server.next_read_and_respond_with(fixture_bytes("v1/http-handshake.response"));
-    client.set_identity(gix_sec::identity::Account {
+    client.set_credentials(gix_sec::identity::Credentials::UsernamePassword {
         username: "user".into(),
         password: "password".into(),
         oauth_refresh_token: None,
@@ -431,6 +431,124 @@ Authorization: Basic dXNlcjpwYXNzd29yZA==
 }
 
 #[test]
+fn http_authtype_credentials_are_transmitted_in_get_and_post() -> TestResult {
+    let (server, mut client) = mock::serve_and_connect("v1/http-handshake.response", "repo", Protocol::V1)?;
+    client.set_credentials(gix_sec::identity::Credentials::Encoded {
+        authtype: "Bearer".into(),
+        credential: "pre-encoded-token".into(),
+        oauth_refresh_token: None,
+    })?;
+    let SetServiceResponse { refs, .. } = client.handshake(Service::UploadPack, &[])?;
+    io::copy(&mut refs.expect("refs in protocol V1"), &mut io::sink())?;
+    let get = server.received_as_string();
+
+    server.next_read_and_respond_with(
+        b"HTTP/1.1 200 OK
+Content-Type: application/x-git-upload-pack-result
+Content-Length: 4
+
+0000"
+            .to_vec(),
+    );
+    let (request, mut response) = client
+        .request(client::WriteMode::Binary, client::MessageKind::Flush, false)?
+        .into_parts();
+    drop(request);
+    io::copy(&mut response, &mut io::sink())?;
+    for request in [get, server.received_as_string()] {
+        assert_eq!(
+            request
+                .lines()
+                .filter(|line| line.to_ascii_lowercase().starts_with("authorization:"))
+                .collect::<Vec<_>>(),
+            ["Authorization: Bearer pre-encoded-token"],
+            "GET and POST use the supplied scheme and credential without Basic encoding"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn http_authtype_rejects_invalid_header_values() -> TestResult {
+    for (authtype, credential) in [
+        ("", "secret"),
+        ("Bearer token", "secret"),
+        ("Bearer:", "secret"),
+        ("Béarer", "secret"),
+        ("Bearer\r\nInjected: yes", "secret"),
+        ("Bearer", ""),
+        ("Bearer", "secret\r\nInjected: yes"),
+        ("Bearer", "secret\0"),
+        ("Bearer", "secret\t"),
+        ("Bearer", "secret\u{7f}"),
+    ] {
+        let mut client = http::connect::<Remote>("https://127.0.0.1:1/repo".try_into()?, Protocol::V1, false);
+        client.set_credentials(gix_sec::identity::Credentials::Encoded {
+            authtype: authtype.into(),
+            credential: credential.into(),
+            oauth_refresh_token: None,
+        })?;
+        let err = client
+            .handshake(Service::UploadPack, &[])
+            .err()
+            .expect("invalid authorization is rejected before connecting");
+        assert!(
+            matches!(err, client::Error::AuthenticationRefused(_)),
+            "invalid scheme or credential cannot reach either HTTP backend: {err}"
+        );
+        assert!(
+            !err.to_string().contains("secret"),
+            "authentication errors must not disclose the credential"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "http-client-curl")]
+fn curl_proxy_rejects_encoded_credentials() -> gix_error::TestResult {
+    let mut client = http::connect::<Remote>("https://127.0.0.1:1/repo".try_into()?, Protocol::V1, false);
+    client.configure(&http::Options {
+        proxy: Some("http://user@127.0.0.1:1".into()),
+        connect_timeout: Some(std::time::Duration::from_secs(1)),
+        proxy_authenticate: Some((
+            gix_credentials::helper::Action::get_for_url("http://user@127.0.0.1:1"),
+            std::sync::Arc::new(std::sync::Mutex::new(|action| {
+                assert!(
+                    matches!(action, gix_credentials::helper::Action::Get(_)),
+                    "unsupported proxy credentials must not be stored or erased"
+                );
+                Ok(Some(gix_credentials::protocol::Outcome {
+                    credentials: gix_sec::identity::Credentials::Encoded {
+                        authtype: "Bearer".into(),
+                        credential: "secret-token".into(),
+                        oauth_refresh_token: Some("secret-refresh-token".into()),
+                    },
+                    next: gix_credentials::protocol::Context::default().into(),
+                }))
+            })),
+        )),
+        ..Default::default()
+    })?;
+    let err = client
+        .handshake(Service::UploadPack, &[])
+        .err()
+        .expect("curl proxies cannot use pre-encoded credentials");
+    assert!(
+        matches!(err, client::Error::Http(_)),
+        "the proxy rejection is propagated from the HTTP backend"
+    );
+    let err = gix_error::Error::from(err);
+    assert!(err.is_unsupported(), "encoded proxy authentication is unsupported");
+    let diagnostic = format!("{err:?}");
+    assert!(
+        diagnostic.contains("proxy") && !diagnostic.contains("secret"),
+        "the rejection identifies proxy authentication without exposing secrets: {diagnostic}"
+    );
+    Ok(())
+}
+
+#[test]
 fn authentication_challenges_are_preserved_per_response() -> TestResult {
     let mut error_snapshots = Vec::new();
     let server = mock::Server::new(
@@ -501,7 +619,7 @@ fn authentication_challenges_are_preserved_per_response() -> TestResult {
 
 /// Reproducer for GHSA-9857-6mw7-fq2m: after an initial cross-host redirect, neither the
 /// redirected handshake nor any follow-up POST may forward `Authorization` derived from the
-/// original URL or configured identity to the redirected host, regardless of HTTP backend.
+/// original URL or configured credentials to the redirected host, regardless of HTTP backend.
 ///
 /// A minimal sketch of the vulnerable flow is:
 ///
@@ -631,7 +749,7 @@ fn redirected_post_does_not_forward_basic_auth_to_the_new_host() -> TestResult {
         Protocol::V1,
         false,
     );
-    client.set_identity(gix_sec::identity::Account {
+    client.set_credentials(gix_sec::identity::Credentials::UsernamePassword {
         username: "user".into(),
         password: "password".into(),
         oauth_refresh_token: None,
@@ -664,8 +782,8 @@ fn redirected_post_does_not_forward_basic_auth_to_the_new_host() -> TestResult {
         "the redirected POST must not forward credentials to the new host, got {redirected_post:?}"
     );
     assert!(
-        client.identity().is_none(),
-        "cross-host redirects must clear the original identity"
+        client.credentials().is_none(),
+        "cross-host redirects must clear the original credentials"
     );
     assert!(
         !redirected_get.is_empty(),

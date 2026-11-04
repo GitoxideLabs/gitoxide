@@ -134,7 +134,7 @@ mod error {
                 Error::ExpectedDataLine => f.write_str("Expected a data line, but got a delimiter"),
                 Error::AuthenticationUnsupported => f.write_str("The transport layer does not support authentication"),
                 Error::AuthenticationRefused(reason) => {
-                    write!(f, "The transport layer refuses to use a given identity: {reason}")
+                    write!(f, "The transport layer refuses to use the given credentials: {reason}")
                 }
                 Error::UnsupportedProtocolVersion(version) => {
                     write!(f, "The protocol version indicated by {version:?} is unsupported")

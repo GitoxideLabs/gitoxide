@@ -159,10 +159,14 @@ impl SpawnProcessOnDemand {
 }
 
 impl client::TransportWithoutIO for SpawnProcessOnDemand {
-    fn set_identity(&mut self, identity: gix_sec::identity::Account) -> std::result::Result<(), client::Error> {
-        if self.url.scheme == gix_url::Scheme::Ssh {
-            self.url
-                .set_user((!identity.username.is_empty()).then_some(identity.username));
+    fn set_credentials(
+        &mut self,
+        credentials: gix_sec::identity::Credentials,
+    ) -> std::result::Result<(), client::Error> {
+        if self.url.scheme == gix_url::Scheme::Ssh
+            && let gix_sec::identity::Credentials::UsernamePassword { username, .. } = credentials
+        {
+            self.url.set_user((!username.is_empty()).then_some(username));
             Ok(())
         } else {
             Err(client::Error::AuthenticationUnsupported)

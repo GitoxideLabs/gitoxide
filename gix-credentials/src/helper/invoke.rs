@@ -1,5 +1,6 @@
 use std::io::Read;
 
+use bstr::ByteSlice;
 use gix_error::{ErrorExt, Result, ResultExt, message};
 
 use crate::helper::{Action, Context, NextAction, Outcome};
@@ -20,19 +21,50 @@ impl Action {
 
 /// Invoke the given `helper` with `action` in `context`.
 ///
-/// Usually the first call is performed with [`Action::Get`] to obtain `Some` identity, which subsequently can be used if it is complete.
-/// Note that it may also only contain the username _or_ password, and should start out with everything the helper needs.
+/// Usually the first call is performed with [`Action::Get`] to obtain `Some` credentials, which subsequently can be used if they are complete.
+/// Note that these may also only contain the username _or_ password, and should start out with everything the helper needs.
 /// On successful usage, use [`NextAction::store()`], otherwise [`NextAction::erase()`], which is when this function
 /// returns `Ok(None)` as no outcome is expected.
 pub fn invoke(helper: &mut crate::Program, action: &Action) -> Result<Option<Outcome>> {
     let options = action.context().map(|ctx| ctx.options).unwrap_or_default();
     match raw(helper, action)? {
         None => Ok(None),
-        Some(stdout) => {
-            let ctx = Context::from_bytes(stdout.as_slice(), options)?;
+        Some(mut stdout) => {
+            let mut ctx = Context::from_bytes(stdout.as_slice(), options)?;
+            let caller_supports_authtype = action.context().is_some_and(Context::supports_authtype);
+            if !caller_supports_authtype {
+                ctx.authtype = None;
+                ctx.credential = None;
+            }
+            let mut authtype_negotiated = false;
+            stdout = stdout
+                .lines()
+                .zip(stdout.lines_with_terminator())
+                .take_while(|(line, _)| !line.is_empty())
+                .filter(|(line, _)| {
+                    if *line == b"capability[]=authtype" {
+                        authtype_negotiated = caller_supports_authtype;
+                        return authtype_negotiated;
+                    }
+                    if line.starts_with(b"capability[]=")
+                        || line.starts_with(b"state[]=")
+                        || line.starts_with(b"continue=")
+                    {
+                        return false;
+                    }
+                    authtype_negotiated
+                        || (!line.starts_with(b"authtype=")
+                            && !line.starts_with(b"credential=")
+                            && !line.starts_with(b"ephemeral="))
+                })
+                .flat_map(|(_, line)| line)
+                .copied()
+                .collect();
             Ok(Some(Outcome {
                 username: ctx.username,
                 password: ctx.password,
+                authtype: ctx.authtype,
+                credential: ctx.credential,
                 oauth_refresh_token: ctx.oauth_refresh_token,
                 quit: ctx.quit.unwrap_or(false),
                 next: NextAction {
