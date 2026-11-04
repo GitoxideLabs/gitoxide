@@ -849,10 +849,10 @@ fn run_ui(
         "starting tix"
     );
     let quit_on_finish = options.quit_on_finish.is_some();
-    let graphics = !quit_on_finish && kitty::supported();
     #[cfg(unix)]
     let theme_query_started = Instant::now();
     let terminal_colors = detect_terminal_colors();
+    let graphics = !quit_on_finish && kitty::supported();
     #[cfg(not(unix))]
     let ansi_colors = None;
     #[cfg(unix)]
