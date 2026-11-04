@@ -21,12 +21,13 @@ impl State {
     pub fn list_delayed_paths(&mut self, process: &driver::Key) -> Result<Vec<BString>> {
         use gix_error::{ErrorExt, OptionExt, message};
 
-        let client = self.running.get_mut(&process.0).ok_or_raise(|| {
+        let running = self.running.get_mut(&process.0).ok_or_raise(|| {
             message!(
                 "Could not get process named '{}' which should be running and tracked",
                 process.0
             )
         })?;
+        let client = &mut running.client;
 
         let mut out = Vec::new();
         let result = client.invoke_without_content("list_available_blobs", &mut None.into_iter(), &mut |line| {
@@ -51,8 +52,8 @@ impl State {
             match message {
                 "error" | "abort" => {}
                 _strange => {
-                    let client = self.running.remove(&process.0).expect("we definitely have it");
-                    client.into_child().kill().ok();
+                    let running = self.running.remove(&process.0).expect("we definitely have it");
+                    running.client.into_child().kill().ok();
                 }
             }
             Err(
@@ -73,12 +74,13 @@ impl State {
     ) -> Result<impl std::io::Read + '_> {
         use gix_error::{ErrorExt, OptionExt, message};
 
-        let client = self.running.get_mut(&process.0).ok_or_raise(|| {
+        let running = self.running.get_mut(&process.0).ok_or_raise(|| {
             message!(
                 "Could not get process named '{}' which should be running and tracked",
                 process.0
             )
         })?;
+        let client = &mut running.client;
 
         let result = client.invoke(
             operation.as_str(),
@@ -96,9 +98,9 @@ impl State {
         };
         if status.is_success() {
             // TODO: find a way to not have to do the 'borrow-dance'.
-            let client = self.running.remove(&process.0).expect("present for borrowcheck dance");
-            self.running.insert(process.0.clone(), client);
-            let client = self.running.get_mut(&process.0).expect("just inserted");
+            let running = self.running.remove(&process.0).expect("present for borrowcheck dance");
+            self.running.insert(process.0.clone(), running);
+            let client = &mut self.running.get_mut(&process.0).expect("just inserted").client;
 
             Ok(client.as_read())
         } else {
@@ -109,8 +111,8 @@ impl State {
                 }
                 "error" => {}
                 _strange => {
-                    let client = self.running.remove(&process.0).expect("we definitely have it");
-                    client.into_child().kill().ok();
+                    let running = self.running.remove(&process.0).expect("we definitely have it");
+                    running.client.into_child().kill().ok();
                 }
             }
             Err(message!(

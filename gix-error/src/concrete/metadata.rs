@@ -10,6 +10,14 @@ use crate::{Class, Error, ErrorExt, ResourceExhaustionKind};
 /// Debug formatting and [`Message`]'s display omit key quotes for non-empty names containing only ASCII
 /// letters, digits, `_`, `-`, or `.`. Other keys use quoted, escaped string formatting.
 ///
+/// # Privacy
+///
+/// Metadata is not redacted. [`Message`] includes its values in both [`fmt::Display`] and [`fmt::Debug`], so
+/// printing an error carrying a message can expose these values without explicitly accessing its metadata.
+/// Paths, command arguments, environment values, and captured output may contain personally identifiable
+/// information (PII), such as user names and email addresses, or secrets such as passwords and access tokens.
+/// Omit or sanitize sensitive information before attaching it, and consider where errors will be logged or shared.
+///
 /// # Common schemas
 ///
 /// These schemas define conventional keys, not required fields. Store only information already available at the
@@ -32,6 +40,7 @@ use crate::{Class, Error, ErrorExt, ResourceExhaustionKind};
 /// | Key | Value | Meaning |
 /// | --- | --- | --- |
 /// | `program` | [`MetadataValue::Path`] | The invoked program name or path, without resolving it. |
+/// | `command` | [`MetadataValue::String`] | The debug representation of the prepared command, or of the configured command when the prepared command is no longer available. |
 /// | `exit_status` | [`MetadataValue::String`] | The display representation of [`std::process::ExitStatus`], including termination without an exit code. |
 /// | `exit_code` | [`MetadataValue::I64`] | The exit code, when [`std::process::ExitStatus::code()`] returns one. |
 /// | `stdout` | [`MetadataValue::Bytes`] | Captured standard output, without text decoding. |
@@ -40,6 +49,10 @@ use crate::{Class, Error, ErrorExt, ResourceExhaustionKind};
 /// Use [`Message::with_command_status()`] to record `program`, `exit_status`, and an available `exit_code` together,
 /// or [`Message::with_command_output()`] to include already-captured output. [`Message::with_program()`] and
 /// [`Message::with_exit_status()`] record the fields available at spawn failures or after program identity was lost.
+/// [`Message::with_command()`] records `program` and opts into command text, with its
+/// [privacy implications](Message::with_command). The text is diagnostic, not a stable or executable command line.
+/// If the prepared command is no longer available, use [`Message::with()`] to record the configured command's
+/// debug representation under `command` without inferring `program`.
 ///
 /// A failed exit status does not by itself establish a recovery class. Preserve native errors from spawning or
 /// communicating with a program as causes; their contexts can also use `program`, without an exit status or output.
@@ -408,12 +421,31 @@ impl Message {
         self.with("input", input)
     }
 
+    /// Record command details using the [external program runtime failure schema](Metadata#external-program-runtime-failure).
+    ///
+    /// Records `program` from [`std::process::Command::get_program()`] without resolving it, and `command` as
+    /// the command's [`fmt::Debug`] representation. The text is for diagnostics, not a stable or executable command line.
+    /// Does not execute the command, capture output, or record exit status; use [`Self::with_exit_status()`] for the latter.
+    /// Inspect values through [`crate::Error::metadata()`] or [`crate::Exn::metadata()`] on typed exceptions.
+    ///
+    /// # Privacy
+    ///
+    /// Command details may contain personally identifiable information (PII) or secrets in arguments, paths,
+    /// or explicitly configured environment values. They are stored without redaction and can be exposed when
+    /// the message or its enclosing error is printed with [`fmt::Display`] or [`fmt::Debug`]. Only record details
+    /// that are safe to include in diagnostics; omit or sanitize sensitive information before calling this method.
+    pub fn with_command(self, command: &std::process::Command) -> Self {
+        self.with_program(command.get_program())
+            .with("command", format!("{command:?}"))
+    }
+
     /// Record a command's program and exit status using the [external program runtime failure schema](Metadata#external-program-runtime-failure).
     ///
     /// Replaces `program` with the native program name or path from [`std::process::Command::get_program()`], without
     /// resolving it, and `exit_status` with the status's display representation. Sets `exit_code` when available,
     /// otherwise removes any previous `exit_code`. Other values, the message, and the classification are unchanged.
-    /// This does not require a failed status or imply a recovery class, and does not capture output.
+    /// This does not require a failed status or imply a recovery class, and does not capture output or command text.
+    /// Recording command text requires opting into [`Self::with_command()`] and its privacy implications.
     pub fn with_command_status(self, command: &std::process::Command, status: std::process::ExitStatus) -> Self {
         self.with_program(command.get_program()).with_exit_status(status)
     }
@@ -446,6 +478,7 @@ impl Message {
     /// Like [`Self::with_command_status()`], replaces the program and status fields, then replaces `stdout` and
     /// `stderr` with the captured bytes, including empty buffers. Does not execute a command or capture more output.
     /// Only use this when both streams are appropriate for diagnostics; in particular, do not record credential output.
+    /// Recording command text requires opting into [`Self::with_command()`] and its privacy implications.
     pub fn with_command_output(self, command: &std::process::Command, output: std::process::Output) -> Self {
         self.with_command_status(command, output.status)
             .with("stdout", output.stdout)

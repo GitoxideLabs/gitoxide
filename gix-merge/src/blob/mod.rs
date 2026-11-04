@@ -103,6 +103,8 @@ pub struct Driver {
     /// ```
     ///
     /// The driver is expected to leave its version in the file at `%A`, by overwriting it.
+    /// It exits with `0` if the merge is clean, or with a status of up to `128` if conflicts remain in `%A`.
+    /// Any other exit status, or termination by signal, is considered a failure of the driver.
     pub command: BString,
     /// If `true`, this is the `name` of the driver to use when a virtual-merge-base is created, as a merge of all
     /// available merge-bases if there are more than one.

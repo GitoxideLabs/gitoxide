@@ -267,8 +267,45 @@ theirs
     }
 
     #[test]
+    fn external_driver_conflict_exit_codes_yield_the_conflicted_result() -> TestResult {
+        for exit_code in [1, 2, 128] {
+            let mut platform = new_platform(
+                [gix_merge::blob::Driver {
+                    name: "b".into(),
+                    command: format!("printf 'with conflict markers\\n' >\"%A\"; exit {exit_code}").into(),
+                    ..Default::default()
+                }],
+                pipeline::Mode::ToGit,
+            );
+            let db = object_db();
+            for (content, kind) in [
+                ("base", ResourceKind::CommonAncestorOrBase),
+                ("ours", ResourceKind::CurrentOrOurs),
+                ("theirs", ResourceKind::OtherOrTheirs),
+            ] {
+                let blob_id = insert(&db, content)?;
+                platform.set_resource(blob_id, EntryKind::Blob, "b".into(), kind, &db)?;
+            }
+            let platform_ref = platform.prepare_merge(&db, Default::default())?;
+            let mut buf = Vec::new();
+            let res = platform_ref.merge(&mut buf, default_labels(), &Default::default())?;
+            assert_eq!(
+                res,
+                (Pick::Buffer, Resolution::Conflict),
+                "like Git, exit code {exit_code} means the driver left conflicts in %A"
+            );
+            assert_eq!(
+                buf.as_bstr(),
+                "with conflict markers\n",
+                "the conflicted result is read back from %A"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn external_driver_failure_is_unclassified() -> TestResult {
-        for exit_code in [1, 2] {
+        for exit_code in [129, 255] {
             let mut platform = new_platform(
                 [gix_merge::blob::Driver {
                     name: "b".into(),
@@ -289,19 +326,25 @@ theirs
             let platform_ref = platform.prepare_merge(&db, Default::default())?;
             let err = platform_ref
                 .merge(&mut Vec::new(), default_labels(), &Default::default())
-                .expect_err("the external driver exits unsuccessfully");
+                .expect_err("like Git, exit codes above 128 mean the external driver failed");
             assert!(
                 err.classify().next().is_none(),
-                "an external driver conflict or failure does not establish invalid input, corruption, or retryability"
+                "an external driver failure does not establish invalid input, corruption, or retryability"
             );
             let diagnostic = err
                 .iter_errors()
                 .find_map(|err| err.downcast_ref::<gix_error::Message>())
                 .expect("the external driver failure has a diagnostic message");
+            assert_eq!(
+                diagnostic.message, "External merge driver failed",
+                "command and status details belong in metadata rather than the message"
+            );
             assert!(
-                diagnostic.message.starts_with("External merge driver failed: ")
-                    && !diagnostic.message.contains("exit status"),
-                "the external driver's failure diagnostic retains the command without repeating its status"
+                matches!(
+                    diagnostic.values.get("command"),
+                    Some(gix_error::MetadataValue::String(command)) if command.contains(&format!("exit {exit_code};"))
+                ),
+                "the external driver's command, including its arguments, is retained in metadata"
             );
             assert_eq!(
                 diagnostic.values.get("exit_code"),
