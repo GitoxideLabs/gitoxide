@@ -10,7 +10,7 @@ pub enum RoundTripCheck {
 pub(crate) mod function {
     use encoding_rs::DecoderResult;
 
-    use gix_error::{OptionExt, Result, bail, validation};
+    use gix_error::{OptionExt, Result, ResultExt, bail, message, validation};
 
     use super::RoundTripCheck;
 
@@ -32,11 +32,10 @@ pub(crate) mod function {
                 ))
             })?;
         buf.clear();
-        // Decode into a `String` that reuses the allocation of `buf`, so the round-trip check can use it as `&str`
-        // without validating it again.
-        let mut decoded = String::from_utf8(std::mem::take(buf)).expect("an empty buffer is valid UTF-8");
-        decoded.reserve(buf_len);
-        let (res, read) = decoder.decode_to_string_without_replacement(src, &mut decoded, true);
+        // Bound decoding to the current estimate: the `String` decoder initializes all spare capacity,
+        // which may be much larger after a previous conversion.
+        buf.resize(buf_len, 0);
+        let (res, read, written) = decoder.decode_to_utf8_without_replacement(src, buf, true);
         match res {
             DecoderResult::InputEmpty => {
                 assert_eq!(read, src.len(), "input buffer should be fully consumed");
@@ -52,9 +51,11 @@ pub(crate) mod function {
             }
         }
 
+        buf.truncate(written);
         match round_trip {
             RoundTripCheck::Fail => {
-                let (should_equal_src, _actual_encoding, _had_errors) = src_encoding.encode(&decoded);
+                let decoded = std::str::from_utf8(buf).or_raise(|| message("encoding-rs produced invalid UTF-8"))?;
+                let (should_equal_src, _actual_encoding, _had_errors) = src_encoding.encode(decoded);
                 if should_equal_src != src {
                     bail!(validation(format!(
                         "Encoding from '{}' to 'UTF-8' and back is not the same",
@@ -64,7 +65,6 @@ pub(crate) mod function {
             }
             RoundTripCheck::Skip => {}
         }
-        *buf = decoded.into_bytes();
         Ok(())
     }
 }

@@ -53,7 +53,7 @@ gix-path = { version = "^0.14.1", path = "../gix-path" }
 gix-packetline = { version = "^0.24.1", path = "../gix-packetline", features = ["blocking-io"] }
 gix-attributes = { version = "^0.37.1", path = "../gix-attributes" }
 
-encoding_rs = "0.8.32"
+encoding_rs = "0.8.44"
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
 gix-error = { version = "^0.5.2", path = "../gix-error" }
 smallvec = "1.15.1"
