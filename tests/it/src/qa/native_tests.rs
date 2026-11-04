@@ -121,13 +121,19 @@ fn test_command(
     Ok(command)
 }
 
-pub fn execute(root: &Path, args: &[String], snapshots: &mut NativeSnapshots, log: Option<&File>) -> Result<()> {
+pub fn execute(
+    root: &Path,
+    args: &[String],
+    snapshots: &mut NativeSnapshots,
+    log: Option<&File>,
+    coverage: &mut Option<super::coverage::Run>,
+) -> Result<()> {
     let (mode, args) = args
         .split_first()
         .ok_or_raise(|| message("native-tests needs a mode and Cargo selection arguments"))?;
     let modes = fixture_modes(mode, cfg!(windows))?;
     let before = source_state(root)?;
-    let result = run(root, args, modes, snapshots, log);
+    let result = run(root, args, modes, snapshots, log, coverage);
     if before != source_state(root)? {
         bail!("Native tests changed tracked or visible untracked source files; changes were retained for inspection");
     }
@@ -140,6 +146,7 @@ fn run(
     modes: &[Fixtures],
     snapshots: &mut NativeSnapshots,
     log: Option<&File>,
+    coverage: &mut Option<super::coverage::Run>,
 ) -> Result<()> {
     let mut build = cargo(root)?;
     build
@@ -155,7 +162,7 @@ fn run(
         .args(args)
         .stderr(Stdio::inherit());
     run::redirect(&mut build, log, false)?;
-    let binaries = output(&mut build)?;
+    let (binaries, instrumented) = super::coverage::build(&mut build, coverage.as_ref(), log)?;
     let first = snapshots.add(root, modes.len())?;
     // Keep metadata beside the first snapshot's index, outside fixture status checks.
     let state = snapshots.sources[first].0.path.join(".git");
@@ -180,8 +187,11 @@ fn run(
             *fixtures,
             cfg!(all(windows, target_arch = "aarch64")),
         )?;
-        run::redirect(&mut command, log, true)?;
-        let test_result = checked(&mut command);
+        let configuration = coverage
+            .as_ref()
+            .map(|coverage| coverage.configuration(&build, &command));
+        let test_result =
+            super::coverage::execute(root, configuration, &mut command, instrumented, coverage.as_mut(), log);
         snapshots.check()?;
         if test_result.is_err() {
             result = test_result;
@@ -247,6 +257,7 @@ pub fn variants(
     dry_run: bool,
     snapshots: &mut NativeSnapshots,
     log: Option<&File>,
+    coverage: &mut Option<super::coverage::Run>,
 ) -> Result<()> {
     if commands.is_empty() {
         return Ok(());
@@ -283,10 +294,10 @@ pub fn variants(
         eprintln!("Native variants use generated fixtures in {}", snapshot.path.display());
         let result = run::each_case(commands, log, |command| {
             let (mut build, filters) = variant_arguments(command)?;
-            let mut command = run::process(root, &build)?;
-            command.stderr(Stdio::inherit());
-            run::redirect(&mut command, log, false)?;
-            let listed = output(&mut command)?;
+            let mut compilation = run::process(root, &build)?;
+            compilation.stderr(Stdio::inherit());
+            run::redirect(&mut compilation, log, false)?;
+            let (listed, instrumented) = super::coverage::build(&mut compilation, coverage.as_ref(), log)?;
             fs::write(&binaries, listed).or_raise(|| message("Save nextest variant binaries"))?;
             build.args.clear();
             let mut command = run::process(root, &build)?;
@@ -301,8 +312,11 @@ pub fn variants(
                     .expect("adding a snapshot creates the cache")
                     .path,
             );
-            run::redirect(&mut command, log, true)?;
-            checked(command.args(filters))
+            command.args(filters);
+            let configuration = coverage
+                .as_ref()
+                .map(|coverage| coverage.configuration(&compilation, &command));
+            super::coverage::execute(root, configuration, &mut command, instrumented, coverage.as_mut(), log)
         });
         snapshots.check()?;
         result

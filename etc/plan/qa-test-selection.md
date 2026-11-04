@@ -203,3 +203,59 @@ Local probe source, JSON inputs/results, the small fixture and test logs are
 retained under ignored `target/qa-lsp` in the investigation worktree. The probe
 is deliberately not a shipped QA component. Its protocol/containment tests and
 Clippy passed; those checks validate the client, not the soundness of selection.
+
+## LLVM coverage prototype
+
+The follow-up experiment implements an optional owned collector and selector in
+`tests/it/src/qa/coverage`. It uses current Nextest inventory and isolated source
+snapshots. One LLVM coverage export per test binary supplies function-to-file
+mapping; each test's `llvm-profdata show --covered` output supplies the functions
+observed at runtime. Duplicate function-name mappings and macro source files are
+unioned conservatively. The shared file dictionary includes zero-execution
+functions too, distinguishing known unexecuted source from unknown/new files.
+Tests store integer file IDs. No Bloom filter was needed.
+
+Local macOS observations, with warm fixtures and separate instrumentation build
+caches, are exploratory rather than benchmark distributions:
+
+| Configuration | Normal tests | Tests with capture | Build-independent indexing | JSON index | zstd index |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Small reachability fixture, 12 tests | — | 0.10 s | 0.18 s | 1,006 B | 255 B |
+| `gix-archive`, formats + SHA-1, 4 tests | — | 0.18 s | 0.36 s | 15,062 B | 2,924 B |
+| `gix-diff`, default + SHA-1, 111 tests | 0.47 s | 0.52 s | 1.89 s | 38,294 B | 5,267 B |
+| `gix`, default, 635 tests | 5.39 s | 6.04 s | 16.25 s | 383,927 B | 34,588 B |
+| CLI library, default, 7 tests | 0.08 s | 0.08 s | 1.10 s | 30,221 B | 5,500 B |
+
+Sizes above describe the membership payload, before the configuration/baseline
+envelope. The archive and diff raw profiles occupied 2.18 MB and 66.5 MB. Exporting
+archive coverage separately for every test took 0.80 seconds and produced about
+30.8 MB of JSON; sharing its binary mapping reduced analysis to 0.52 seconds.
+The final converter also reads single raw profiles directly and exports the
+complete function map from one representative profile per binary. This reduced
+gix indexing from 26.02 seconds to about 16 seconds without changing test/file
+associations, including tests with multiple profiles. Its 649 raw profiles
+occupied 1.11 GB. LLVM advertises JSON
+profile output but rejects it for instrumentation profiles, so the collector
+uses the supported covered-name output rather than an undocumented binary parser.
+
+The archive map associates `write.rs` with tar/tar.gz/zip tests and excludes the
+internal-format test. In gix defaults, that writer file is known but unexecuted,
+selecting 0 of 635 tests. In diff, `blob/mod.rs` selects 9 tests, `tree/recorder.rs`
+selects 23, and `tree/function.rs` selects 24. The fixture confirms coverage of
+the macro-generated, renamed-export, generic-trait, static-function-pointer,
+implicit-drop and overloaded-add paths missed by the LSP experiment.
+
+Capture was inexpensive, but redoing analysis exceeded the complete warm test
+runtime for diff. Consequently collection is explicit and indexes are reused;
+fresh runtime collection cannot accelerate the same execution being measured.
+The prototype offers `collect`, `shadow`, and explicitly experimental `prune`
+modes. Missing data/tools retain existing selection, and new tests are included
+from a freshly compiled inventory. Constants/types and other compile-time
+dependencies remain outside historical execution evidence, as acknowledged by
+[testtrim](https://docs.rs/crate/testtrim/0.14.11#known-known-issues) too.
+
+Raw measurements and reproduction scripts remain under ignored
+`target/qa-coverage`. Initial archive-without-hash and diff-without-`CI=true`
+harness failures are retained there, but excluded from the successful figures.
+The integrated QA collector preserves its normal hash configurations and fixture
+isolation, including archive/source mutation checks.

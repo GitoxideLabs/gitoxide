@@ -270,6 +270,45 @@ An [investigation of LSP-based test selection](etc/plan/qa-test-selection.md) me
 selection with rust-analyzer. Missing call edges and mismatched feature configurations currently
 prevent using those results to omit individual tests safely.
 
+An optional **experimental** LLVM coverage layer can refine native test selection:
+
+```bash
+just qa --coverage collect           # run all selected tests and measure per-test file coverage
+just qa --coverage shadow            # compare the historical selection while running all tests
+just qa --coverage prune             # opt in to historical test omission in fast mode
+```
+
+Collection uses stable Rust's `-C instrument-coverage` and matching
+`rustup component add llvm-tools-preview --toolchain stable`; no nightly compiler is required.
+Missing tools, unsupported configuration, missing/corrupt indexes, or export errors retain ordinary
+QA. Actual test failures still fail QA. Collection preserves configured Rust flags through a
+workspace compiler wrapper, keeps its builds separate, and does not replace existing custom wrappers.
+Existing custom Nextest scripts/profiles also retain ordinary execution.
+
+Indexes are automatically generated under `target/qa-coverage/indexes`, never committed. They are
+published only after a successful collection run at an unchanged clean `HEAD`. Raw profiles are
+temporary; compiler build caches remain reusable. Each index records the exact Cargo package batch,
+features, compiler, inherited Cargo configuration, fixture mode and runtime hash. Exhaustive native
+workspace builds therefore cannot supply an index for a differently batched PR build; matching
+per-package feature cases can reuse their own indexes. An older index must name an ancestor of
+`HEAD`; selection includes the entire diff from that ancestor plus staged, unstaged and untracked inputs.
+New/unrecorded tests always run, and unknown changed paths or non-Rust inputs retain the complete case.
+Exhaustive mode never omits tests. Runs which actually omit tests do not record ordinary Tix checks-pass.
+
+This is historical execution evidence, **not complete dependency analysis**: constants, type layouts,
+imports, macros and compile-time evaluation can affect tests without executing their source files.
+Use `shadow` to evaluate the proposal before opting into this tradeoff. It does not prune compilation,
+clippy, doctests or shell journeys, and collecting coverage runs the tests being measured; reuse is
+what can make later runs faster. See the [measurements and limits](etc/plan/qa-test-selection.md#llvm-coverage-prototype).
+
+For optional CI collection and sharing, set the repository variable `QA_COVERAGE` to `shadow`
+or `prune`. Main runs collect complete configuration indexes as 14-day Actions artifacts; PR jobs
+attempt to download the matching job's artifact from a successful run at their base commit.
+Unavailable tools, artifact services, GitHub CLI or baseline runs retain ordinary QA. The variable
+is unset by default; no repository setting is changed by adding this support. Locally, the equivalent
+environment variable is `GIX_QA_COVERAGE`; an explicit `--coverage` takes precedence. Downloaded JSON
+indexes can be placed in `target/qa-coverage/indexes` for local reuse without Git LFS.
+
 Unavailable cached dependencies and unfamiliar arguments retain the original checks. Saved
 plans carry the exclusions, capped at 12 KiB to leave room for job metadata in Windows'
 environment variables; excess configurations remain selected. CI fetches the lockfile's

@@ -549,6 +549,7 @@ pub fn execute(
     dry_run: bool,
     ci_job: bool,
     logs: Option<&Path>,
+    coverage: &mut Option<super::coverage::Run>,
 ) -> Result<Vec<TaskTiming>> {
     let mut failed = Vec::new();
     let mut nonblocking_failed = 0;
@@ -572,9 +573,15 @@ pub fn execute(
             );
         }
         let result = if task.id == "native-tests" && !dry_run {
-            super::native_tests::execute(root, &task.commands[0].args[1..], &mut snapshots, log.as_ref())
+            super::native_tests::execute(
+                root,
+                &task.commands[0].args[1..],
+                &mut snapshots,
+                log.as_ref(),
+                coverage,
+            )
         } else if matches!(task.id, "feature-tests" | "isolated-tests") {
-            super::native_tests::variants(root, task.commands, dry_run, &mut snapshots, log.as_ref())
+            super::native_tests::variants(root, task.commands, dry_run, &mut snapshots, log.as_ref(), coverage)
         } else if task.id == "feature-builds" {
             run::each_case(task.commands, log.as_ref(), |command| {
                 run::execute(root, vec![command], dry_run, log.as_ref())
@@ -664,7 +671,7 @@ mod tests {
                 vec![Command::new("sh", &["-c", "printf continued > visited"])],
             ),
         ];
-        let error = execute(&logs.path, tasks, false, false, Some(&logs.path))
+        let error = execute(&logs.path, tasks, false, false, Some(&logs.path), &mut None)
             .expect_err("required failures must still fail agent runs");
         assert!(
             error.to_string().contains("failure, missing"),
@@ -699,7 +706,7 @@ mod tests {
         );
         for ci_job in [false, true] {
             let task = Task::new("optional", "test", &[], vec![failing()]).optional();
-            let outcome = execute(&logs.path, vec![task], false, ci_job, Some(&logs.path));
+            let outcome = execute(&logs.path, vec![task], false, ci_job, Some(&logs.path), &mut None);
             assert_eq!(
                 outcome.is_err(),
                 ci_job,

@@ -5,6 +5,7 @@ use gix_error::{OptionExt, Result, ResultExt, bail, message};
 use serde_json::{Value, json};
 
 mod catalog;
+mod coverage;
 mod downstream;
 mod features;
 mod native_tests;
@@ -66,6 +67,9 @@ enum Action {
         stage: Vec<String>,
         #[arg(long)]
         dry_run: bool,
+        /// Optional historical test coverage: collect, compare without skipping, or experimentally prune.
+        #[arg(long, value_enum)]
+        coverage: Option<coverage::Mode>,
     },
     #[command(hide = true)]
     Exec {
@@ -82,6 +86,9 @@ enum Action {
 }
 
 fn main() -> Result<()> {
+    if std::env::var_os("GIX_QA_COVERAGE_RUSTC").as_deref() == Some(std::ffi::OsStr::new("1")) {
+        return coverage::compiler(&std::env::args_os().skip(1).collect::<Vec<_>>());
+    }
     let args = Args::parse();
     let started = Instant::now();
     let agent = args.agent || std::env::var_os("CODEX_THREAD_ID").is_some();
@@ -99,12 +106,16 @@ fn main() -> Result<()> {
         return result;
     }
     if let Action::Exec { args } = &args.command {
+        if args[0] == "coverage-test" {
+            return coverage::test(&args[1..]);
+        }
         if args[0] == "native-tests" {
             return native_tests::execute(
                 &current_dir,
                 &args[1..],
                 &mut native_tests::NativeSnapshots::default(),
                 None,
+                &mut None,
             );
         }
         return ops::execute(&current_dir, args);
@@ -179,6 +190,7 @@ fn main() -> Result<()> {
             job,
             stage,
             dry_run,
+            coverage,
         } => {
             let saved: Option<Value> = if let Some(path) = saved {
                 Some(
@@ -239,7 +251,26 @@ fn main() -> Result<()> {
             } else {
                 None
             };
-            let timings = catalog::execute(&root, tasks, dry_run, ci_job, logs.as_deref())?;
+            let fast = selected
+                .as_ref()
+                .or_else(|| saved.as_ref().map(|saved| &saved["selection"]))
+                .is_some_and(|selection| selection["mode"] == "fast");
+            let mut coverage = if dry_run {
+                None
+            } else {
+                coverage::Run::optional(&root, coverage, fast)
+            };
+            let timings = catalog::execute(&root, tasks, dry_run, ci_job, logs.as_deref(), &mut coverage)?;
+            if let Some(coverage) = &mut coverage {
+                coverage.finish(&root);
+                if coverage.omitted > 0 {
+                    eprintln!(
+                        "QA passed with {} tests omitted by experimental coverage selection; ordinary checks-pass was not recorded.",
+                        coverage.omitted
+                    );
+                    return Ok(());
+                }
+            }
             if let (Some(checkout), Some(selected)) = (checkout, selected) {
                 record::finish(&root, checkout, &selected, &selection.base, &timings, started.elapsed())?;
             }
