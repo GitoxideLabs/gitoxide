@@ -17,33 +17,48 @@ enum Fixtures {
     Generated,
 }
 
-struct NativeSnapshots {
+#[derive(Default)]
+pub(super) struct NativeSnapshots {
     sources: Vec<(Snapshot, SourceState)>,
     // Only generated fixtures use this cache; extracted archives stay in their source snapshot.
     cache: Option<Snapshot>,
 }
 
 impl NativeSnapshots {
-    fn new(root: &Path, count: usize) -> Result<Self> {
-        Ok(Self {
-            sources: (0..count).map(|_| snapshot(root)).collect::<Result<_>>()?,
-            cache: (count > 1).then(empty_snapshot).transpose()?,
-        })
+    fn add(&mut self, root: &Path, count: usize) -> Result<usize> {
+        let first = self.sources.len();
+        for _ in 0..count {
+            let source = snapshot(root)?;
+            if self.sources.first().is_some_and(|(_, before)| *before != source.1) {
+                self.retain();
+                bail!("Source files changed between native test stages; refusing to reuse generated fixtures");
+            }
+            self.sources.push(source);
+        }
+        if self.cache.is_none() {
+            self.cache = Some(empty_snapshot()?);
+        }
+        Ok(first)
     }
 
-    fn check(self, index: usize) -> Result<Self> {
-        let (snapshot, before) = &self.sources[index];
-        if let Err(error) = unchanged(&snapshot.path, before) {
-            for (snapshot, _) in &self.sources {
-                eprintln!("Retained native test snapshot at {}", snapshot.path.display());
+    fn check(&mut self) -> Result<()> {
+        for (snapshot, before) in &self.sources {
+            if let Err(error) = unchanged(&snapshot.path, before) {
+                self.retain();
+                return Err(error);
             }
-            if let Some(cache) = &self.cache {
-                eprintln!("Retained native fixture cache at {}", cache.path.display());
-            }
-            std::mem::forget(self);
-            return Err(error);
         }
-        Ok(self)
+        Ok(())
+    }
+
+    fn retain(&mut self) {
+        for (snapshot, _) in &self.sources {
+            eprintln!("Retained native test snapshot at {}", snapshot.path.display());
+        }
+        if let Some(cache) = &self.cache {
+            eprintln!("Retained native fixture cache at {}", cache.path.display());
+        }
+        std::mem::forget(std::mem::take(self));
     }
 }
 
@@ -60,7 +75,7 @@ fn cargo(root: &Path) -> Result<Command> {
     run::process(root, &run::normalize(run::Command::new("cargo", &[])))
 }
 
-fn reuse_binaries(command: &mut Command, metadata: &Path, binaries: &Path, snapshot: &Path) {
+fn reuse_binaries(command: &mut Command, metadata: &Path, binaries: &Path, snapshot: &Path, cache: &Path) {
     command
         .args(["nextest", "run", "--cargo-metadata"])
         .arg(metadata)
@@ -68,7 +83,9 @@ fn reuse_binaries(command: &mut Command, metadata: &Path, binaries: &Path, snaps
         .arg(binaries)
         .arg("--workspace-remap")
         .arg(snapshot)
-        .arg("--no-fail-fast");
+        .arg("--no-fail-fast")
+        .env("GIX_TEST_FIXTURE_CACHE", cache)
+        .env("GIX_TEST_FIXTURE_SOURCE_ROOT", snapshot);
 }
 
 fn test_command(
@@ -76,21 +93,16 @@ fn test_command(
     metadata: &Path,
     binaries: &Path,
     snapshot: &Path,
-    cache: Option<&Path>,
+    cache: &Path,
     fixtures: Fixtures,
     windows_arm: bool,
 ) -> Result<Command> {
     let mut command = cargo(root)?;
-    reuse_binaries(&mut command, metadata, binaries, snapshot);
+    reuse_binaries(&mut command, metadata, binaries, snapshot, cache);
     command
         .args(["--no-tests", "pass"])
         .env_remove("GIX_TEST_IGNORE_ARCHIVES")
         .env_remove("GIX_TEST_CREATE_ARCHIVES_EVEN_ON_CI");
-    if let Some(cache) = cache {
-        command
-            .env("GIX_TEST_FIXTURE_CACHE", cache)
-            .env("GIX_TEST_FIXTURE_SOURCE_ROOT", snapshot);
-    }
     command.env(
         match fixtures {
             Fixtures::Archived => "GIX_TEST_CREATE_ARCHIVES_EVEN_ON_CI",
@@ -109,54 +121,68 @@ fn test_command(
     Ok(command)
 }
 
-pub fn execute(root: &Path, args: &[String]) -> Result<()> {
+pub fn execute(root: &Path, args: &[String], snapshots: &mut NativeSnapshots, log: Option<&File>) -> Result<()> {
     let (mode, args) = args
         .split_first()
         .ok_or_raise(|| message("native-tests needs a mode and Cargo selection arguments"))?;
     let modes = fixture_modes(mode, cfg!(windows))?;
     let before = source_state(root)?;
-    let result = run(root, args, modes);
+    let result = run(root, args, modes, snapshots, log);
     if before != source_state(root)? {
         bail!("Native tests changed tracked or visible untracked source files; changes were retained for inspection");
     }
     result
 }
 
-fn run(root: &Path, args: &[String], modes: &[Fixtures]) -> Result<()> {
-    let binaries = output(
-        cargo(root)?
-            .args([
-                "nextest",
-                "list",
-                "--list-type",
-                "binaries-only",
-                "--message-format",
-                "json",
-                "--locked",
-            ])
-            .args(args)
-            .stderr(Stdio::inherit()),
-    )?;
-    let mut snapshots = NativeSnapshots::new(root, modes.len())?;
+fn run(
+    root: &Path,
+    args: &[String],
+    modes: &[Fixtures],
+    snapshots: &mut NativeSnapshots,
+    log: Option<&File>,
+) -> Result<()> {
+    let mut build = cargo(root)?;
+    build
+        .args([
+            "nextest",
+            "list",
+            "--list-type",
+            "binaries-only",
+            "--message-format",
+            "json",
+            "--locked",
+        ])
+        .args(args)
+        .stderr(Stdio::inherit());
+    run::redirect(&mut build, log, false)?;
+    let binaries = output(&mut build)?;
+    let first = snapshots.add(root, modes.len())?;
     // Keep metadata beside the first snapshot's index, outside fixture status checks.
-    let state = snapshots.sources[0].0.path.join(".git");
-    let metadata_path = save_metadata(root, &snapshots.sources[0].0.path)?;
+    let state = snapshots.sources[first].0.path.join(".git");
+    let metadata_path = save_metadata(root, &snapshots.sources[first].0.path)?;
     let binaries_path = state.join("binaries-metadata.json");
     fs::write(&binaries_path, binaries).or_raise(|| message("Save nextest binaries for native tests"))?;
     let mut result = Ok(());
     for (index, fixtures) in modes.iter().enumerate() {
+        let index = first + index;
         let (snapshot, _) = &snapshots.sources[index];
         eprintln!("Native tests with {fixtures:?} fixtures in {}", snapshot.path.display());
-        let test_result = checked(&mut test_command(
+        let mut command = test_command(
             root,
             &metadata_path,
             &binaries_path,
             &snapshot.path,
-            snapshots.cache.as_ref().map(|cache| cache.path.as_path()),
+            &snapshots
+                .cache
+                .as_ref()
+                .expect("adding a snapshot creates the cache")
+                .path,
             *fixtures,
             cfg!(all(windows, target_arch = "aarch64")),
-        )?);
-        snapshots = snapshots.check(index)?;
+        )?;
+        run::redirect(&mut command, log, true)?;
+        let test_result = checked(&mut command);
+        snapshots.check()?;
         if test_result.is_err() {
             result = test_result;
         }
@@ -215,7 +241,13 @@ fn variant_arguments(mut command: run::Command) -> Result<(run::Command, Vec<Str
     Ok((run::normalize(command), filters))
 }
 
-pub fn variants(root: &Path, commands: Vec<run::Command>, dry_run: bool, log: Option<&File>) -> Result<()> {
+pub fn variants(
+    root: &Path,
+    commands: Vec<run::Command>,
+    dry_run: bool,
+    snapshots: &mut NativeSnapshots,
+    log: Option<&File>,
+) -> Result<()> {
     if commands.is_empty() {
         return Ok(());
     }
@@ -244,7 +276,8 @@ pub fn variants(root: &Path, commands: Vec<run::Command>, dry_run: bool, log: Op
     }
     let before = source_state(root)?;
     let result = (|| {
-        let (snapshot, before) = snapshot(root)?;
+        let index = snapshots.add(root, 1)?;
+        let (snapshot, _) = &snapshots.sources[index];
         let metadata = save_metadata(root, &snapshot.path)?;
         let binaries = snapshot.path.join(".git/binaries-metadata.json");
         eprintln!("Native variants use generated fixtures in {}", snapshot.path.display());
@@ -257,15 +290,21 @@ pub fn variants(root: &Path, commands: Vec<run::Command>, dry_run: bool, log: Op
             fs::write(&binaries, listed).or_raise(|| message("Save nextest variant binaries"))?;
             build.args.clear();
             let mut command = run::process(root, &build)?;
-            reuse_binaries(&mut command, &metadata, &binaries, &snapshot.path);
+            reuse_binaries(
+                &mut command,
+                &metadata,
+                &binaries,
+                &snapshot.path,
+                &snapshots
+                    .cache
+                    .as_ref()
+                    .expect("adding a snapshot creates the cache")
+                    .path,
+            );
             run::redirect(&mut command, log, true)?;
             checked(command.args(filters))
         });
-        if let Err(error) = unchanged(&snapshot.path, &before) {
-            eprintln!("Retained native variant snapshot at {}", snapshot.path.display());
-            std::mem::forget(snapshot);
-            return Err(error);
-        }
+        snapshots.check()?;
         result
     })();
     if before != source_state(root)? {
@@ -293,24 +332,79 @@ mod tests {
     use super::*;
 
     #[test]
+    fn native_and_variant_replays_share_the_generated_fixture_cache() -> gix_error::TestResult {
+        let mut variant = cargo(Path::new("source"))?;
+        variant.env("GIX_TEST_FIXTURE_HASH", "sha256");
+        reuse_binaries(
+            &mut variant,
+            Path::new("cargo.json"),
+            Path::new("binaries.json"),
+            Path::new("variant-snapshot"),
+            Path::new("fixture-cache"),
+        );
+        let env: BTreeMap<_, _> = variant.get_envs().collect();
+        assert_eq!(
+            env.get(OsStr::new("GIX_TEST_FIXTURE_CACHE")),
+            Some(&Some(OsStr::new("fixture-cache"))),
+            "variant replays must use the run's generated fixture cache"
+        );
+        assert_eq!(
+            env.get(OsStr::new("GIX_TEST_FIXTURE_SOURCE_ROOT")),
+            Some(&Some(OsStr::new("variant-snapshot"))),
+            "each replay identifies its own source snapshot"
+        );
+        assert_eq!(
+            env.get(OsStr::new("GIX_TEST_FIXTURE_HASH")),
+            Some(&Some(OsStr::new("sha256"))),
+            "sharing preserves the variant's fixture identity"
+        );
+        let native = test_command(
+            Path::new("source"),
+            Path::new("cargo.json"),
+            Path::new("binaries.json"),
+            Path::new("native-snapshot"),
+            Path::new("fixture-cache"),
+            Fixtures::Generated,
+            false,
+        )?;
+        let native_env: BTreeMap<_, _> = native.get_envs().collect();
+        assert_eq!(
+            native_env.get(OsStr::new("GIX_TEST_FIXTURE_CACHE")),
+            env.get(OsStr::new("GIX_TEST_FIXTURE_CACHE")),
+            "native and variant replays share one cache despite different source snapshots"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn native_cache_is_fresh_and_retained_with_changed_snapshots() -> gix_error::TestResult {
         let source = empty_snapshot()?;
         checked(git(&source.path)?.args(["init", "--quiet"]))?;
         fs::write(source.path.join("input"), "original")?;
         checked(git(&source.path)?.args(["add", "input"]))?;
-        assert!(
-            NativeSnapshots::new(&source.path, 1)?.cache.is_none(),
-            "fast mode's single replay already shares its local fixture cache"
-        );
         let mut previous_cache = PathBuf::new();
         for changed in [false, true] {
-            let snapshots = NativeSnapshots::new(&source.path, 2)?;
+            let mut snapshots = NativeSnapshots::default();
+            assert!(snapshots.cache.is_none(), "tasks without tests create no fixture cache");
+            assert_eq!(snapshots.add(&source.path, 1)?, 0);
             let cache = snapshots
                 .cache
                 .as_ref()
-                .expect("two replays share generated fixtures")
+                .expect("even fast mode prepares generated fixtures for later tasks")
                 .path
                 .clone();
+            fs::write(cache.join("generated"), "fixture")?;
+            snapshots.check()?;
+            assert_eq!(snapshots.add(&source.path, 1)?, 1);
+            assert_eq!(
+                snapshots
+                    .cache
+                    .as_ref()
+                    .expect("the cache survives between stages")
+                    .path,
+                cache,
+                "later native stages reuse the same cache"
+            );
             let sources: Vec<_> = snapshots
                 .sources
                 .iter()
@@ -322,26 +416,27 @@ mod tests {
             );
             assert_ne!(cache, previous_cache, "each invocation owns a new cache");
             assert!(
-                fs::read_dir(&cache)?.next().is_none(),
-                "previous runs cannot populate the cache"
+                fs::read_dir(&cache)?.count() == 1,
+                "only this run can populate the cache"
             );
             assert_ne!(
                 sources[0], sources[1],
-                "archive and generated source snapshots stay separate"
+                "different stages keep separate source snapshots alive"
             );
-            fs::write(cache.join("generated"), "fixture")?;
-            let snapshots = snapshots.check(0)?;
             assert_eq!(
                 fs::read(cache.join("generated"))?,
                 b"fixture",
                 "the cache survives the first replay"
             );
             if changed {
-                fs::write(sources[1].join("input"), "changed")?;
+                fs::write(sources[0].join("input"), "changed through a cached fixture")?;
             }
-            let result = snapshots.check(1);
+            let result = snapshots.check();
             if changed {
-                assert!(result.is_err(), "actual source edits fail the integrity check");
+                assert!(
+                    result.is_err(),
+                    "later stages cannot change even an earlier source snapshot through a shared fixture"
+                );
                 assert!(
                     cache.is_dir() && sources.iter().all(|path| path.is_dir()),
                     "inspection retains the cache and every source snapshot it may reference"
@@ -355,13 +450,48 @@ mod tests {
                     drop(Snapshot { path });
                 }
             } else {
-                drop(result?);
+                result?;
+                drop(snapshots);
                 assert!(
                     !cache.exists() && sources.iter().all(|path| !path.exists()),
                     "completion removes both source snapshots and the shared cache"
                 );
             }
             previous_cache = cache;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn source_changes_between_stages_cannot_reuse_fixtures() -> gix_error::TestResult {
+        let source = empty_snapshot()?;
+        checked(git(&source.path)?.args(["init", "--quiet"]))?;
+        fs::write(source.path.join("input"), "original")?;
+        checked(git(&source.path)?.args(["add", "input"]))?;
+        let mut snapshots = NativeSnapshots::default();
+        snapshots.add(&source.path, 1)?;
+        let copy = snapshots.sources[0].0.path.clone();
+        let cache = snapshots
+            .cache
+            .as_ref()
+            .expect("the first stage creates a cache")
+            .path
+            .clone();
+        fs::write(source.path.join("input"), "changed between stages")?;
+        assert!(
+            snapshots.add(&source.path, 1).is_err(),
+            "cache identities cannot account for changes to arbitrary fixture helper inputs"
+        );
+        assert!(
+            copy.is_dir() && cache.is_dir(),
+            "prior snapshots and cache survive for inspection"
+        );
+        assert!(
+            snapshots.sources.is_empty() && snapshots.cache.is_none(),
+            "retained caches cannot be reused"
+        );
+        for path in [copy, cache] {
+            drop(Snapshot { path });
         }
         Ok(())
     }
@@ -474,7 +604,7 @@ mod tests {
                 Path::new("cargo.json"),
                 Path::new("binaries.json"),
                 Path::new("snapshot"),
-                Some(Path::new("fixture-cache")),
+                Path::new("fixture-cache"),
                 *fixtures,
                 false,
             )?;
@@ -529,7 +659,7 @@ mod tests {
             Path::new("cargo.json"),
             Path::new("binaries.json"),
             Path::new("snapshot"),
-            None,
+            Path::new("fixture-cache"),
             Fixtures::Generated,
             true,
         )?;
@@ -544,11 +674,14 @@ mod tests {
             "Windows ARM retains its performance-test exclusions"
         );
         let env: BTreeMap<_, _> = command.get_envs().collect();
-        for name in ["GIX_TEST_FIXTURE_CACHE", "GIX_TEST_FIXTURE_SOURCE_ROOT"] {
+        for (name, value) in [
+            ("GIX_TEST_FIXTURE_CACHE", "fixture-cache"),
+            ("GIX_TEST_FIXTURE_SOURCE_ROOT", "snapshot"),
+        ] {
             assert_eq!(
                 env.get(OsStr::new(name)),
-                Some(&None),
-                "fast mode must not inherit an external fixture cache"
+                Some(&Some(OsStr::new(value))),
+                "fast mode uses the run-owned cache and source snapshot"
             );
         }
         Ok(())

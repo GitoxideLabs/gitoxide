@@ -554,6 +554,7 @@ pub fn execute(
     let mut nonblocking_failed = 0;
     let count = tasks.len();
     let mut timings = Vec::with_capacity(count);
+    let mut snapshots = super::native_tests::NativeSnapshots::default();
     for (index, task) in tasks.into_iter().enumerate() {
         let started = Instant::now();
         let path = logs.map(|logs| logs.join(format!("{}.log", task.id)));
@@ -570,8 +571,10 @@ pub fn execute(
                 if task.blocking { "" } else { " (nonblocking)" }
             );
         }
-        let result = if matches!(task.id, "feature-tests" | "isolated-tests") {
-            super::native_tests::variants(root, task.commands, dry_run, log.as_ref())
+        let result = if task.id == "native-tests" && !dry_run {
+            super::native_tests::execute(root, &task.commands[0].args[1..], &mut snapshots, log.as_ref())
+        } else if matches!(task.id, "feature-tests" | "isolated-tests") {
+            super::native_tests::variants(root, task.commands, dry_run, &mut snapshots, log.as_ref())
         } else if task.id == "feature-builds" {
             run::each_case(task.commands, log.as_ref(), |command| {
                 run::execute(root, vec![command], dry_run, log.as_ref())

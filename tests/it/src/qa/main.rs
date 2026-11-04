@@ -100,7 +100,12 @@ fn main() -> Result<()> {
     }
     if let Action::Exec { args } = &args.command {
         if args[0] == "native-tests" {
-            return native_tests::execute(&current_dir, &args[1..]);
+            return native_tests::execute(
+                &current_dir,
+                &args[1..],
+                &mut native_tests::NativeSnapshots::default(),
+                None,
+            );
         }
         return ops::execute(&current_dir, args);
     }

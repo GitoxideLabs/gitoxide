@@ -312,18 +312,22 @@ pub(super) fn source_snapshot(root: &Path) -> Result<Snapshot> {
 }
 
 pub(super) fn empty_snapshot() -> Result<Snapshot> {
-    let stamp = SystemTime::now()
+    let mut stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .or_raise(|| message("Read time for QA snapshot"))?
         .as_nanos();
-    // Git for Windows still limits some repository paths even with core.longpaths enabled.
-    let mut id = DefaultHasher::new();
-    (std::process::id(), stamp).hash(&mut id);
-    let path = std::path::absolute(std::env::temp_dir())
-        .or_raise(|| message("Resolve QA temporary directory"))?
-        .join(format!("qa-{:x}", id.finish()));
-    fs::create_dir(&path).or_raise(|| message!("Create QA snapshot {}", path.display()))?;
-    Ok(Snapshot { path })
+    let directory = std::path::absolute(std::env::temp_dir()).or_raise(|| message("Resolve QA temporary directory"))?;
+    loop {
+        // Git for Windows still limits some repository paths even with core.longpaths enabled.
+        let mut id = DefaultHasher::new();
+        (std::process::id(), stamp).hash(&mut id);
+        let path = directory.join(format!("qa-{:x}", id.finish()));
+        match fs::create_dir(&path) {
+            Ok(()) => return Ok(Snapshot { path }),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => stamp += 1,
+            Err(error) => return Err(error).or_raise(|| message!("Create QA snapshot {}", path.display())),
+        }
+    }
 }
 
 fn snapshot_files(root: &Path, files: &[u8]) -> Result<Snapshot> {
