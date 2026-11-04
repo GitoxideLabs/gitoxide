@@ -49,7 +49,17 @@ pub struct Context<'a> {
     /// Other skipped entries retain their incoming validity.
     /// The caller must invalidate entries reported changed by the monitor before each call, and must
     /// not change these bits concurrently. A length different from the index entry count is an error.
-    pub fsmonitor: Option<&'a [AtomicBool]>,
+    pub fsmonitor: Option<FsMonitor<'a>>,
+}
+
+/// Refreshed filesystem-monitor validity and changes recorded while checking entries.
+#[derive(Clone, Copy)]
+pub struct FsMonitor<'a> {
+    /// One validity bit per index entry, after applying the monitor response.
+    pub valid: &'a [AtomicBool],
+    /// Set when an invalid entry is confirmed clean, so its validity should be persisted.
+    /// The caller initializes this flag and must not clear it while status is running.
+    pub changed: &'a AtomicBool,
 }
 
 /// Provide additional information collected during the runtime of [`index_as_worktree()`](crate::index_as_worktree()).

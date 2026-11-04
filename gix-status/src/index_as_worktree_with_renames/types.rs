@@ -321,7 +321,7 @@ pub struct Context<'a> {
     pub should_interrupt: &'a AtomicBool,
     /// Filesystem-monitor validity for tracked entries, forwarded to
     /// [`index_as_worktree::Context::fsmonitor`](crate::index_as_worktree::Context::fsmonitor).
-    pub fsmonitor: Option<&'a [AtomicBool]>,
+    pub fsmonitor: Option<crate::index_as_worktree::FsMonitor<'a>>,
     /// The context for the directory walk.
     pub dirwalk: DirwalkContext<'a>,
 }

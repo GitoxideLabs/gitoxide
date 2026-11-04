@@ -39,37 +39,41 @@ impl UntrackedCache {
     }
 
     /// Invalidate all cached directory listings while retaining their structure and exclusion metadata.
-    pub fn invalidate_all(&mut self) {
+    /// Return whether any cached data changed.
+    pub fn invalidate_all(&mut self) -> bool {
+        let mut changed = false;
         for directory in &mut self.directories {
-            directory.invalidate();
+            changed |= directory.invalidate();
         }
+        changed
     }
 
     /// Invalidate the listing containing the repository-relative `path`, its ancestors, and any cached subtree at `path`.
     ///
     /// A trailing slash is optional. Invalid relative paths conservatively invalidate the entire cache.
     /// Changes to inherited ignore rules require invalidating every affected descendant as well.
-    pub fn invalidate_path(&mut self, path: &BStr) {
+    /// Return whether any cached data changed.
+    pub fn invalidate_path(&mut self, path: &BStr) -> bool {
         let path = path.strip_suffix(b"/").unwrap_or(path);
         if path.is_empty()
             || path
                 .split(|byte| *byte == b'/')
                 .any(|part| part.is_empty() || part == b"." || part == b"..")
         {
-            self.invalidate_all();
-            return;
+            return self.invalidate_all();
         }
+        let mut changed = false;
         let mut directory_index = 0;
         for component in path.split(|byte| *byte == b'/') {
             let Some(directory) = self.directories.get_mut(directory_index) else {
-                return;
+                return changed;
             };
-            directory.invalidate();
+            changed |= directory.invalidate();
             let Ok(next) = self.directories[directory_index]
                 .sub_directories
                 .binary_search_by(|&index| self.directories[index].name.as_slice().cmp(component))
             else {
-                return;
+                return changed;
             };
             directory_index = self.directories[directory_index].sub_directories[next];
         }
@@ -77,9 +81,10 @@ impl UntrackedCache {
         while let Some(index) = pending.pop() {
             if let Some(directory) = self.directories.get_mut(index) {
                 pending.extend_from_slice(&directory.sub_directories);
-                directory.invalidate();
+                changed |= directory.invalidate();
             }
         }
+        changed
     }
 
     /// Serialize this extension, including its header, using `object_hash` for every stored object id.
@@ -230,9 +235,10 @@ pub struct Directory {
 }
 
 impl Directory {
-    fn invalidate(&mut self) {
-        self.stat = None;
+    fn invalidate(&mut self) -> bool {
+        let changed = self.stat.take().is_some() || !self.untracked_entries.is_empty();
         self.untracked_entries.clear();
+        changed
     }
 
     /// The directory name, or an empty string if this is the root directory.

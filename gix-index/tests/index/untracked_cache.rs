@@ -83,7 +83,11 @@ fn invalidation_covers_directory_descendants_and_ancestors() -> TestResult {
     let original = index.untracked().expect("nested fixture has cached directories");
     for path in ["tracked-dir-with-ignore", "tracked-dir-with-ignore/"] {
         let mut cache = original.clone();
-        cache.invalidate_path(path.into());
+        assert!(cache.invalidate_path(path.into()), "cached data was invalidated");
+        assert!(
+            !cache.invalidate_path(path.into()),
+            "repeated invalidation does not change persisted data"
+        );
         for directory in cache.directories() {
             if [
                 "",
@@ -115,9 +119,25 @@ fn invalidation_covers_directory_descendants_and_ancestors() -> TestResult {
                 );
             }
         }
+        assert!(cache.invalidate_all(), "unreported siblings still had cached data");
+        assert!(
+            cache
+                .directories()
+                .iter()
+                .all(|dir| dir.stat().is_none() && dir.untracked_entries().is_empty()),
+            "global invalidation visits every directory even after finding a change"
+        );
+        assert!(!cache.invalidate_all(), "all directories were already invalidated");
     }
     let mut cache = original.clone();
-    cache.invalidate_path("tracked-dir-with-ignore/visible-untracked-file".into());
+    assert!(
+        cache.invalidate_path("tracked-dir-with-ignore/visible-untracked-file".into()),
+        "a file event invalidates its ancestor listings"
+    );
+    assert!(
+        !cache.invalidate_path("tracked-dir-with-ignore/visible-untracked-file".into()),
+        "repeating the file event has no persisted changes"
+    );
     let nested = cache
         .directories()
         .iter()
@@ -129,7 +149,11 @@ fn invalidation_covers_directory_descendants_and_ancestors() -> TestResult {
     );
     for path in ["/", "../outside", "tracked-dir-with-ignore//file", ""] {
         let mut cache = original.clone();
-        cache.invalidate_path(path.into());
+        assert!(cache.invalidate_path(path.into()), "invalid paths reset cached data");
+        assert!(
+            !cache.invalidate_path(path.into()),
+            "a repeated full reset has no persisted changes"
+        );
         assert!(
             cache
                 .directories()

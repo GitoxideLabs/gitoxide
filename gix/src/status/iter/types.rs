@@ -80,12 +80,14 @@ impl Outcome {
     ///
     /// If they are not written back, subsequent `status` operations will take longer to complete, whereas the
     /// additional work can be prevented by writing the changes back to the index.
+    /// Filesystem-monitor token changes alone do not request a write unless the reported path count exceeds
+    /// `gitoxide.fsmonitor.forceUpdateThreshold` (100 by default, matching Git).
     pub fn has_changes(&self) -> bool {
         self.changes.as_ref().is_some_and(|changes| !changes.is_empty())
             || self
                 .fsmonitor
                 .as_ref()
-                .is_some_and(|monitor| monitor.has_changes(&self.worktree_index))
+                .is_some_and(super::super::fsmonitor::Refresh::has_changes)
     }
 
     /// Write the changes if there are any back to the index file.
