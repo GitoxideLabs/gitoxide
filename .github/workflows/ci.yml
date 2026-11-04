@@ -81,14 +81,29 @@ jobs:
             curl
             git
             jq
+            libcurl4-openssl-dev
+            libexpat1-dev
             libssl-dev
             "libstdc++6:$RUNNER_ARCHITECTURE"
             pkgconf
             python3-minimal
+            xz-utils
+            zlib1g-dev
           )
           dpkg --add-architecture "$RUNNER_ARCHITECTURE"
           apt-get update
           apt-get install --no-install-recommends -y -- "${prerequisites[@]}"
+          # Git parity tests require the current release, not Debian stable's Git 2.47.
+          git_version=2.56.0
+          git_build_dir=$(mktemp -d)
+          trap 'rm -rf "$git_build_dir"' EXIT
+          git_archive="$git_build_dir/git-$git_version.tar.xz"
+          curl --proto '=https' --tlsv1.2 -fsSL "https://www.kernel.org/pub/software/scm/git/git-$git_version.tar.xz" -o "$git_archive"
+          printf '%s  %s\n' 26c56c296b38c0695b26fa95f475f1d01704d2d38e73465ca30b0b2f5dc789d3 "$git_archive" | sha256sum -c -
+          tar -xJf "$git_archive" -C "$git_build_dir"
+          make -C "$git_build_dir/git-$git_version" -j"$(nproc)" prefix=/usr/local CFLAGS="-O2 -D_FILE_OFFSET_BITS=64 -D_TIME_BITS=64" NO_GETTEXT=YesPlease NO_TCLTK=YesPlease NO_RUST=YesPlease all
+          make -C "$git_build_dir/git-$git_version" prefix=/usr/local CFLAGS="-O2 -D_FILE_OFFSET_BITS=64 -D_TIME_BITS=64" NO_GETTEXT=YesPlease NO_TCLTK=YesPlease NO_RUST=YesPlease install
+          test "$(git --version)" = "git version $git_version"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
