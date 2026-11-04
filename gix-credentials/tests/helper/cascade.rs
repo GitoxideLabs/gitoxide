@@ -91,6 +91,79 @@ ephemeral=1
     }
 
     #[test]
+    fn later_helpers_preserve_or_explicitly_override_ephemeral() -> TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let temp = gix_testtools::tempfile::tempdir()?;
+        let _cwd = gix_testtools::set_current_dir(temp.path())?;
+        for later_ephemeral in [None, Some(false), Some(true)] {
+            let first_helper = r#"!f() {
+                cat >/dev/null
+                printf 'capability[]=authtype\nauthtype=Bearer\nephemeral=1\n'
+            }; f"#;
+            let second_helper = format!(
+                "!f() {{ cat >/dev/null; printf '%s' 'capability[]=authtype
+credential=access-token
+{}'; }}; f",
+                later_ephemeral.map_or_else(String::new, |value| format!("ephemeral={}\n", u8::from(value)))
+            );
+            let mut context = Context::from_url("https://example.com/repo", Default::default());
+            context.capability.push(Capability::Authtype);
+            let outcome = Cascade::default()
+                .extend([
+                    Program::from_custom_definition(first_helper)?,
+                    Program::from_custom_definition(second_helper.as_str())?,
+                ])
+                .invoke(
+                    Action::Get(context.clone()),
+                    gix_prompt::Options {
+                        mode: gix_prompt::Mode::Disable,
+                        askpass: None,
+                    },
+                )?
+                .expect("the helpers jointly supply complete token credentials");
+            assert_eq!(
+                outcome.credentials,
+                Credentials::Encoded {
+                    authtype: "Bearer".into(),
+                    credential: "access-token".into(),
+                    oauth_refresh_token: None,
+                },
+                "the later helper completes the token supplied across the exchange"
+            );
+            for action in [outcome.next.clone().store(), outcome.next.clone().erase()] {
+                let payload = action.payload().expect("follow-up actions have a payload");
+                assert_eq!(
+                    Context::from_bytes(payload, Default::default())?.ephemeral,
+                    Some(later_ephemeral.unwrap_or(true)),
+                    "omitting ephemeral preserves the no-cache hint; an explicit value overrides it"
+                );
+            }
+            if !gix_testtools::should_skip_as_git_version_is_smaller_than(2, 46, 0) {
+                let _env = gix_testtools::Env::new()
+                    .set("GIT_CONFIG_COUNT", "2")
+                    .set("GIT_CONFIG_KEY_0", "credential.helper")
+                    .set("GIT_CONFIG_VALUE_0", first_helper)
+                    .set("GIT_CONFIG_KEY_1", "credential.helper")
+                    .set("GIT_CONFIG_VALUE_1", second_helper);
+                let git_outcome = gix_credentials::builtin(Action::Get(context))?
+                    .expect("Git also completes the token across both helpers");
+                assert_eq!(
+                    git_outcome.credentials, outcome.credentials,
+                    "credential selection matches Git"
+                );
+                assert_eq!(
+                    Context::try_from(&git_outcome.next)?.ephemeral.unwrap_or(false),
+                    Context::try_from(&outcome.next)?.ephemeral.unwrap_or(false),
+                    "the lifetime semantics match Git, which omits a false flag from its output"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn incomplete_unnegotiated_or_expired_authtype_allows_password_fallback() -> TestResult {
         for (announce, response) in [
             (

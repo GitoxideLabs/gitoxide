@@ -141,8 +141,8 @@ impl Cascade {
                             }
                             if let Some(src) = credential {
                                 dst_ctx.credential = Some(src);
-                                dst_ctx.ephemeral = ephemeral;
-                            } else if let Some(src) = ephemeral {
+                            }
+                            if let Some(src) = ephemeral {
                                 dst_ctx.ephemeral = Some(src);
                             }
                         }
