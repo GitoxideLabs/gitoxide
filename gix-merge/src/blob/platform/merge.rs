@@ -389,9 +389,10 @@ impl<'parent> PlatformRef<'parent> {
     /// Like Git, an external merge driver exiting with a status from 1 to 128 has left conflicts in its result,
     /// which is then returned with [`Resolution::Conflict`].
     ///
-    /// External merge driver launch errors provide `program` (Path), the invoked program name or path,
-    /// and preserve the underlying IO error as a cause. Failed exits, i.e. those with a status above 128 or
-    /// by signal, additionally provide `exit_status` (String), its display representation, and `exit_code` (I64)
+    /// External merge driver launch errors provide [metadata](gix_error::Error::metadata) with `program` (Path),
+    /// the invoked program name or path, and `command` (String), the prepared command's debug representation,
+    /// and preserve the underlying IO error as a cause. Failed exits, i.e. those with a status above 128 or by
+    /// signal, additionally provide `exit_status` (String), its display representation, and `exit_code` (I64)
     /// when available. Output streams are not captured.
     ///
     /// Generally, it is assumed that standard logic, like deletions of files, is handled before any of this is called, so we are lenient
@@ -409,15 +410,16 @@ impl<'parent> PlatformRef<'parent> {
                 let mut cmd = self
                     .prepare_external_driver(driver.command.clone(), labels, context.clone())
                     .or_raise(|| message("Failed to prepare external merge driver"))?;
-                let status = cmd.status().or_raise(|| {
-                    message!("Failed to launch external merge driver: {:?}", cmd.cmd).with_program(cmd.get_program())
-                })?;
+                let status = cmd
+                    .status()
+                    .or_raise(|| message("Failed to launch external merge driver").with_command(&cmd))?;
                 let resolution = match status.code() {
                     Some(0) => Resolution::Complete,
                     Some(1..=128) => Resolution::Conflict,
                     _ => {
-                        let failure =
-                            message!("External merge driver failed: {:?}", cmd.cmd).with_command_status(&cmd, status);
+                        let failure = message("External merge driver failed")
+                            .with_command(&cmd)
+                            .with_exit_status(status);
                         bail!(failure);
                     }
                 };

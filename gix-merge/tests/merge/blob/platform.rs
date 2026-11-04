@@ -335,10 +335,16 @@ theirs
                 .iter_errors()
                 .find_map(|err| err.downcast_ref::<gix_error::Message>())
                 .expect("the external driver failure has a diagnostic message");
+            assert_eq!(
+                diagnostic.message, "External merge driver failed",
+                "command and status details belong in metadata rather than the message"
+            );
             assert!(
-                diagnostic.message.starts_with("External merge driver failed: ")
-                    && !diagnostic.message.contains("exit status"),
-                "the external driver's failure diagnostic retains the command without repeating its status"
+                matches!(
+                    diagnostic.values.get("command"),
+                    Some(gix_error::MetadataValue::String(command)) if command.contains(&format!("exit {exit_code};"))
+                ),
+                "the external driver's command, including its arguments, is retained in metadata"
             );
             assert_eq!(
                 diagnostic.values.get("exit_code"),
