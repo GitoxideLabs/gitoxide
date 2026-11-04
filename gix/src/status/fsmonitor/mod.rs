@@ -152,22 +152,9 @@ pub(super) fn refresh<'a>(
             },
             "received filesystem monitor changes"
         );
-        if !invalidate(index, &mut valid, &paths, lookup) {
+        if !invalidate(index, &mut valid, &paths, lookup, untracked.as_mut()) {
             valid.fill(false);
             use_untracked = false;
-        } else if let Some(cache) = &mut untracked {
-            for path in paths
-                .strip_suffix(b"\0")
-                .unwrap_or(&paths)
-                .split(|byte| *byte == 0)
-                .filter(|path| !path.is_empty())
-            {
-                if lookup.is_some() || path.rsplit(|byte| *byte == b'/').next() == Some(b".gitignore".as_slice()) {
-                    cache.invalidate_all();
-                } else {
-                    cache.invalidate_path(path.as_bstr());
-                }
-            }
         }
         Some(token)
     } else {
@@ -216,16 +203,17 @@ fn invalidate<'a>(
     valid: &mut [bool],
     data: &[u8],
     lookup: Option<&gix_index::AccelerateLookup<'a>>,
+    mut untracked: Option<&mut gix_index::extension::UntrackedCache>,
 ) -> bool {
     if data.is_empty() {
         return true;
     }
-    for path in data.strip_suffix(b"\0").unwrap_or(data).split(|byte| *byte == 0) {
-        if path == b"/" {
+    for reported_path in data.strip_suffix(b"\0").unwrap_or(data).split(|byte| *byte == 0) {
+        if reported_path == b"/" {
             gix_trace::debug!("filesystem monitor requested a full scan");
             return false;
         }
-        let path = path.strip_suffix(b"/").unwrap_or(path);
+        let path = reported_path.strip_suffix(b"/").unwrap_or(reported_path);
         if path.is_empty()
             || path.starts_with(b"/")
             || path
@@ -236,6 +224,13 @@ fn invalidate<'a>(
             return false;
         }
         let path = path.as_bstr();
+        if let Some(cache) = &mut untracked {
+            if lookup.is_some() || reported_path.rsplit(|byte| *byte == b'/').next() == Some(b".gitignore".as_slice()) {
+                cache.invalidate_all();
+            } else {
+                cache.invalidate_path(reported_path.as_bstr());
+            }
+        }
         if !invalidate_path(index, valid, path)
             && let Some(lookup) = lookup
         {
