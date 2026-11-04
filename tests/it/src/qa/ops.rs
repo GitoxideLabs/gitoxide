@@ -474,6 +474,14 @@ pub(super) struct SourceState {
     files: BTreeMap<PathBuf, Option<u64>>,
 }
 
+impl SourceState {
+    pub fn content_hash(&self) -> u64 {
+        let mut hash = DefaultHasher::new();
+        self.files.hash(&mut hash);
+        hash.finish()
+    }
+}
+
 pub(super) fn source_state(root: &Path) -> Result<SourceState> {
     let index = output(git(root)?.args(["ls-files", "--stage", "-v", "-z"]))?;
     let files = output(git(root)?.args(["ls-files", "--cached", "--others", "--exclude-standard", "-z"]))?;

@@ -137,22 +137,14 @@ impl Tools {
             // Keep mapped but unexecuted sources distinct from new or otherwise unknown files.
             files.extend(functions.values().flat_map(|files| files.iter()).cloned());
             for (name, _, names) in tests {
-                let mut covered = BTreeSet::new();
-                for function in names {
-                    covered.extend(
-                        functions
-                            .get(&function)
-                            .ok_or_raise(|| message!("Missing LLVM coverage mapping for {function}"))?
-                            .iter()
-                            .cloned(),
-                    );
-                }
-                if !covered.is_empty() {
-                    recorded.push((binary.clone(), name, covered));
-                }
+                let covered = covered_files(&functions, &names).unwrap_or_else(|| {
+                    eprintln!("Coverage: unmapped functions in {binary}::{name}; this test will always run");
+                    BTreeSet::new()
+                });
+                recorded.push((binary.clone(), name, covered));
             }
         }
-        if recorded.is_empty() {
+        if recorded.iter().all(|(_, _, covered)| covered.is_empty()) {
             bail!("LLVM profiles contain no covered workspace source files");
         }
         let files: Vec<_> = files.into_iter().collect();
@@ -203,6 +195,15 @@ fn string<'a>(value: &'a Value, key: &str) -> Result<&'a str> {
     value[key]
         .as_str()
         .ok_or_raise(|| message!("Coverage metadata is missing string field {key}"))
+}
+
+fn covered_files(functions: &BTreeMap<String, BTreeSet<String>>, names: &BTreeSet<String>) -> Option<BTreeSet<String>> {
+    let mut covered = BTreeSet::new();
+    for name in names {
+        // Child executables can add functions absent from this binary; partial coverage cannot prune safely.
+        covered.extend(functions.get(name)?.iter().cloned());
+    }
+    Some(covered)
 }
 
 fn function_files(root: &Path, export: &Value) -> Result<BTreeMap<String, BTreeSet<String>>> {
@@ -261,6 +262,21 @@ fn relative_source(root: &Path, filename: &str) -> Result<Option<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unmapped_child_functions_invalidate_the_entire_test_profile() {
+        let files = BTreeSet::from(["src/lib.rs".into()]);
+        let functions = BTreeMap::from([("parent".into(), files.clone())]);
+        assert_eq!(
+            covered_files(&functions, &BTreeSet::from(["parent".into()])),
+            Some(files),
+            "complete profiles retain their covered sources"
+        );
+        assert!(
+            covered_files(&functions, &BTreeSet::from(["parent".into(), "z-child".into()])).is_none(),
+            "an unmapped child discards even the already resolved parent coverage"
+        );
+    }
 
     #[test]
     fn mappings_union_duplicate_names_and_skip_external_sources() -> gix_error::TestResult {

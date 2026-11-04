@@ -71,8 +71,8 @@ jobs:
     env:
       QA_PLAN: ${{ needs.plan.outputs.plan }}
       QA_JOB: ${{ matrix.id }}
-      # An unset repository variable leaves ordinary QA unchanged. Main always measures all tests.
-      GIX_QA_COVERAGE: ${{ (vars.QA_COVERAGE == 'shadow' || vars.QA_COVERAGE == 'prune') && (contains(matrix.tasks, 'native-tests') || contains(matrix.tasks, 'isolated-tests') || contains(matrix.tasks, 'feature-tests')) && (github.event_name == 'pull_request' && vars.QA_COVERAGE || github.ref == 'refs/heads/main' && 'collect') || '' }}
+      # Main provides reusable indexes; PR cache misses run ordinary QA without collecting throwaway data.
+      GIX_QA_COVERAGE: ${{ vars.QA_COVERAGE != 'off' && (contains(matrix.tasks, 'native-tests') || contains(matrix.tasks, 'isolated-tests') || contains(matrix.tasks, 'feature-tests')) && (github.event_name == 'pull_request' && (vars.QA_COVERAGE == 'shadow' && 'shadow' || 'prune') || github.ref == 'refs/heads/main' && 'collect') || 'off' }}
     steps:
       # Native 32-bit containers need libraries for the runner's 64-bit Node.js.
       - name: Install container prerequisites
@@ -99,8 +99,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # Optional coverage compares with the base parent of GitHub's PR merge commit.
-          fetch-depth: ${{ matrix.history && '0' || github.event_name == 'pull_request' && env.GIX_QA_COVERAGE != '' && '2' || '1' }}
+          # Automatic coverage compares with the base parent of GitHub's PR merge commit.
+          fetch-depth: ${{ matrix.history && '0' || github.event_name == 'pull_request' && '2' || '1' }}
       - name: Install native Rust
         if: matrix.container == ''
         shell: bash

@@ -246,7 +246,7 @@ the macro-generated, renamed-export, generic-trait, static-function-pointer,
 implicit-drop and overloaded-add paths missed by the LSP experiment.
 
 Capture was inexpensive, but redoing analysis exceeded the complete warm test
-runtime for diff. Consequently collection is explicit and indexes are reused;
+runtime for diff. The prototype therefore used explicit collection and reused indexes;
 fresh runtime collection cannot accelerate the same execution being measured.
 The prototype offers `collect`, `shadow`, and explicitly experimental `prune`
 modes. Missing data/tools retain existing selection, and new tests are included
@@ -259,3 +259,115 @@ Raw measurements and reproduction scripts remain under ignored
 harness failures are retained there, but excluded from the successful figures.
 The integrated QA collector preserves its normal hash configurations and fixture
 isolation, including archive/source mutation checks.
+
+A follow-up tried creating a fresh binary-to-file map using `llvm-cov export
+--empty-profile --summary-only`. This needs no test execution or saved index,
+and each feature configuration supplies its own compiled binaries. It can only
+omit whole test binaries. In a local comparison, it omitted 1,274 tests but took
+164 seconds versus 155 seconds with ordinary selection: instrumented compilation
+and analysis exceeded the saved execution time. These are exploratory single-run
+observations. Fresh binary mapping was discarded as the automatic approach.
+
+The runner instead automates the per-test runtime coverage experiment. When the
+matching LLVM tools and a compatible index are available, fast QA applies the
+historical selection. Without a usable index, it runs the complete selected case
+with coverage collection and saves a local index for later invocations. Both
+paths reuse the instrumented build cache. Tools or configurations that cannot
+support collection keep ordinary QA. Exhaustive QA retains ordinary execution
+without automatic collection; explicit `collect` can seed those configurations.
+
+If a valid index cannot classify changed inputs, automatic mode refreshes it
+when source contents differ from the previous capture. A source-content hash
+avoids repeatedly analyzing identical unknown or disabled inputs; it never
+authorizes omission. Unmapped child-executable functions invalidate coverage
+for that individual test, which then always runs. Other tests retain usable
+coverage. Raw profiles are discarded after each case.
+
+Indexes belong to exact compiler, Cargo, feature and fixture configurations.
+Automatic collection can start from a clean or dirty checkout but publishes only
+after the whole QA run succeeds with unchanged checkout contents and `HEAD`. Dirty
+captures record their `HEAD` and dirty paths; later selection includes those
+paths even after a revert, together with the current diff and QA comparison
+base. Current Nextest inventory includes new
+tests, and tests without coverage always run. Unknown changed files and non-Rust
+inputs retain the full test case. Explicit `collect` still requires a clean
+checkout to publish.
+
+CI main jobs explicitly collect native, isolated and feature configurations and
+publish 14-day artifacts. PR jobs download the matching artifact from their base
+commit and use `prune`, falling back to ordinary execution without collecting on
+cache misses. This is the default with no repository variable required;
+`QA_COVERAGE=shadow` reports selections without skipping, and `off` disables it.
+LLVM installation and artifact transfer are optional steps; their failure does
+not fail QA.
+
+Automatic runtime selection remains experimental because execution evidence
+does not describe every compile-time dependency. Actual test omissions do not
+certify ordinary Tix checks-pass. Use `--coverage off` to retain only
+package/configuration selection; `collect`, `shadow` and `prune` remain available
+for explicitly controlled experiments.
+
+### Automatic coverage selection: local measurements
+
+Measured on this macOS/aarch64 worktree with stable Rust 1.99.1, matching LLVM
+tools and Nextest 0.9.122 on 2026-11-04.
+Each probe appends one harmless comment to the named Rust file, generates a fast
+plan against `HEAD`, and runs `qa run --stage tests`. This exercises the affected
+native and feature test stages, including fixture variants; it does not measure
+clippy, doctests, journeys, or a complete local/CI QA run.
+
+The probes use the same checkout and retain build and shared fixture caches.
+Each case runs ordinary QA, automatic collection/reuse, cached automatic QA, then
+ordinary QA again. The table compares the final warm ordinary execution with
+cached selection. These are individual measurements, not statistical averages.
+
+| Changed file | Packages | Warm ordinary | Cached selection | Test executions |
+| --- | ---: | ---: | ---: | ---: |
+| `gix-archive/src/write.rs` | 6 | 108.26s | 15.43s | 5,640 → 44 |
+| `gix/src/repository/revision.rs` | 5 | 105.30s | 34.56s | 6,132 → 649 |
+| `src/plumbing/main.rs` | 1 | 2.82s | 3.36s | 7 → 2 |
+| `gix-diff/src/tree/recorder.rs` | 58 | 214.86s | 83.58s | 11,283 → 514 |
+
+Execution counts include repeated tests across configurations. Archive selects
+14/1,587 native tests and 30/4,053 executions across 16 feature cases. Its
+19-test configuration has no coverage record for the changed file, so all 19 run.
+CLI has no applicable feature cases; reducing seven very short tests to two costs
+0.54s more overall because the analysis overhead exceeds the saved test time.
+Diff retains three merge tests taking about 22 seconds each: fewer tests do not
+produce proportional time savings when the remaining tests are expensive.
+
+The initial implementation's 16KiB filter cap retained all native tests for gix
+and diff. Its cached runs took 63.82s and 149.75s, respectively. Their feature
+stages selected 232/4,549 executions across nine cases and 188/6,067 across 25.
+Passing native executions now confirm 417/1,583 gix tests and 326/5,216 diff
+tests with file-backed filters. Large filters use a temporary Nextest
+configuration while preserving existing settings; unsupported custom profiles
+or platform-specific default filters retain ordinary execution.
+
+For that replay, the final runner is built first, its tracked source edits are
+reversed temporarily, and the same probe tree/configuration is measured against
+the existing index baseline. The edits are then reapplied and committed. This
+isolates the runner fix from source changes that would invalidate old indexes.
+The replay is warmed before measuring the cached timing, so recompilation after
+restoring/reapplying a probe does not enter only one side of the comparison.
+
+Initial collection is expensive: archive's automatic run took 334.87s, including
+52.16s building, 100.27s executing tests, and 170.70s creating indexes. The CLI
+collection took 17.76s. Gix took 217.21s and diff 424.95s, but those runs collected
+only four and 17 configurations while reusing six and nine already captured
+configurations, respectively; they are not fully cold collection measurements.
+Diff spent 154.56s indexing, including 128.96s for its native tests. Its native
+JSON index is 1,773,900 bytes for 5,216 tests and 1,332 source files; archive's is
+1,048,717 bytes for 1,587 tests. The reusable index is small despite expensive
+initial profile processing. Raw profiles are discarded after each case.
+
+All 16 original comparison runs and five large-filter replay runs passed. Logs,
+exit statuses, plans, source backups, and copied task output are under
+`target/qa-coverage/automatic/{archive,gix,cli,diff}-final`; final filter replay
+artifacts are under the corresponding `gix-filtered` and `*-filtered-warm`
+directories. No remote CI execution was measured.
+
+Failure probes also verified that a broken archive writer fails within the 14
+selected native tests, and a newly added failing test runs in a 16-test selection.
+All nine archive feature cases passed with LLVM tools deliberately unavailable.
+Neither failing runs nor missing-tool fallback modified the saved indexes.

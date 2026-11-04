@@ -67,7 +67,7 @@ enum Action {
         stage: Vec<String>,
         #[arg(long)]
         dry_run: bool,
-        /// Optional historical test coverage: collect, compare without skipping, or experimentally prune.
+        /// Automatically collect and reuse per-test coverage when LLVM is available; off disables it.
         #[arg(long, value_enum)]
         coverage: Option<coverage::Mode>,
     },
@@ -255,10 +255,18 @@ fn main() -> Result<()> {
                 .as_ref()
                 .or_else(|| saved.as_ref().map(|saved| &saved["selection"]))
                 .is_some_and(|selection| selection["mode"] == "fast");
-            let mut coverage = if dry_run {
+            let mut coverage = if dry_run
+                || !tasks
+                    .iter()
+                    .any(|task| matches!(task.id, "native-tests" | "feature-tests" | "isolated-tests"))
+            {
                 None
             } else {
-                coverage::Run::optional(&root, coverage, fast)
+                let base = selected
+                    .as_ref()
+                    .or_else(|| saved.as_ref().map(|saved| &saved["selection"]))
+                    .and_then(|selection| selection["base"].as_str());
+                coverage::Run::optional(&root, coverage, fast, base)
             };
             let timings = catalog::execute(&root, tasks, dry_run, ci_job, logs.as_deref(), &mut coverage)?;
             if let Some(coverage) = &mut coverage {
@@ -284,6 +292,9 @@ fn main() -> Result<()> {
 // Keep CI's environment payload below Windows' 32,767-character limit.
 fn execution_plan(plan: &Value) -> Value {
     let mut selection = json!({"mode": plan["selection"]["mode"], "packages": plan["selection"]["packages"]});
+    if let Some(base) = plan["selection"].get("base") {
+        selection["base"] = base.clone();
+    }
     if let Some(commands) = plan["selection"].get("unaffected_dependencies") {
         selection["unaffected_dependencies"] = commands.clone();
     }
@@ -310,11 +321,15 @@ mod tests {
     #[test]
     fn ci_payload_keeps_dependency_configuration_exclusions() {
         let plan = serde_json::json!({
-            "selection": {"mode": "fast", "packages": ["gix"], "changed_packages": ["gix-archive"],
+            "selection": {"mode": "fast", "packages": ["gix"], "changed_packages": ["gix-archive"], "base": "base-commit",
                 "unaffected_dependencies": [{"args": ["-p", "gix"], "dev": false}]},
             "jobs": []
         });
         let compact = super::execution_plan(&plan);
+        assert_eq!(
+            compact["selection"]["base"], "base-commit",
+            "workers compare the same base for automatic coverage selection"
+        );
         assert_eq!(
             compact["selection"]["unaffected_dependencies"], plan["selection"]["unaffected_dependencies"],
             "CI executes the same feature configurations selected locally"

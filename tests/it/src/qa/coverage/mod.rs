@@ -17,8 +17,15 @@ use super::{ops, run};
 mod index;
 mod llvm;
 
+const PROFILE_SINK: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
+const INLINE_FILTER_LIMIT: usize = 16 * 1024;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub(super) enum Mode {
+    /// Automatically collect missing coverage and reuse matching per-test indexes in fast QA.
+    Auto,
+    /// Use ordinary package and feature selection without coverage.
+    Off,
     /// Run all selected tests with instrumentation and record a local index.
     Collect,
     /// Report the historical selection, but run all selected tests.
@@ -36,6 +43,9 @@ pub(super) struct Run {
     tools: Option<llvm::Tools>,
     baseline: Option<String>,
     pending: BTreeMap<String, Value>,
+    changed: BTreeSet<String>,
+    dirty: BTreeSet<String>,
+    source: Option<ops::SourceState>,
     cases: usize,
     pub omitted: usize,
 }
@@ -52,21 +62,26 @@ impl Drop for Run {
 }
 
 impl Run {
-    pub fn optional(root: &Path, mode: Option<Mode>, fast: bool) -> Option<Self> {
-        let mode = mode.or_else(|| {
-            use clap::ValueEnum;
-            let value = std::env::var("GIX_QA_COVERAGE")
-                .ok()
-                .filter(|value| !value.is_empty())?;
-            match Mode::from_str(&value, false) {
-                Ok(mode) => Some(mode),
-                Err(error) => {
-                    eprintln!("Coverage disabled: {error}");
-                    None
+    pub fn optional(root: &Path, mode: Option<Mode>, fast: bool, base: Option<&str>) -> Option<Self> {
+        let mode = mode
+            .or_else(|| {
+                use clap::ValueEnum;
+                let value = std::env::var("GIX_QA_COVERAGE")
+                    .ok()
+                    .filter(|value| !value.is_empty())?;
+                match Mode::from_str(&value, false) {
+                    Ok(mode) => Some(mode),
+                    Err(error) => {
+                        eprintln!("Coverage disabled: {error}");
+                        Some(Mode::Off)
+                    }
                 }
-            }
-        })?;
-        match Self::new(root, mode, fast) {
+            })
+            .unwrap_or(Mode::Auto);
+        if mode == Mode::Off || (mode == Mode::Auto && !fast) {
+            return None;
+        }
+        match Self::new(root, mode, fast, base) {
             Ok(run) => Some(run),
             Err(error) => {
                 unavailable(&error);
@@ -75,12 +90,31 @@ impl Run {
         }
     }
 
-    fn new(root: &Path, mut mode: Mode, fast: bool) -> Result<Self> {
+    fn new(root: &Path, mut mode: Mode, fast: bool, base: Option<&str>) -> Result<Self> {
         if mode == Mode::Prune && !fast {
             eprintln!("Coverage: exhaustive QA reports candidates but never omits tests.");
             mode = Mode::Shadow;
         }
-        let tools = (mode == Mode::Collect).then(|| llvm::discover("stable")).transpose()?;
+        let changed = if mode == Mode::Auto {
+            let paths = changed_paths(root, base.ok_or_raise(|| message("Missing QA comparison base"))?)?;
+            if paths.is_empty()
+                || paths
+                    .iter()
+                    .any(|path| Path::new(path).extension().is_none_or(|ext| ext != "rs"))
+            {
+                bail!("Automatic coverage requires a nonempty Rust-only change");
+            }
+            paths
+        } else if matches!(mode, Mode::Prune | Mode::Shadow)
+            && let Some(base) = base
+        {
+            changed_paths(root, base)?
+        } else {
+            BTreeSet::new()
+        };
+        let tools = matches!(mode, Mode::Auto | Mode::Collect)
+            .then(|| llvm::discover("stable"))
+            .transpose()?;
         let compiler = if let Some(tools) = &tools {
             tools.compiler.clone()
         } else {
@@ -92,7 +126,18 @@ impl Run {
             )?)
             .or_error()?
         };
-        let baseline = clean_head(root)?;
+        // Capture before enumerating dirty paths so an intervening edit cannot escape provenance.
+        let source = (mode == Mode::Auto).then(|| ops::source_state(root)).transpose()?;
+        let baseline = if mode == Mode::Auto {
+            Some(head(root)?)
+        } else {
+            clean_head(root)?
+        };
+        let dirty = if mode == Mode::Auto {
+            changed_paths(root, baseline.as_deref().expect("automatic coverage has a HEAD"))?
+        } else {
+            BTreeSet::new()
+        };
         let cargo_config = cargo_config(root)?;
         let directory = root.join("target/qa-coverage");
         fs::create_dir_all(&directory).or_error()?;
@@ -112,6 +157,9 @@ impl Run {
             tools,
             baseline,
             pending: BTreeMap::new(),
+            changed,
+            dirty,
+            source,
             cases: 0,
             omitted: 0,
         })
@@ -133,7 +181,7 @@ impl Run {
             .env("GIX_QA_COVERAGE_RUSTC", "1")
             .env("RUSTUP_AUTO_INSTALL", "0")
             .env("CARGO_TARGET_DIR", self.directory.join("build"))
-            .env("LLVM_PROFILE_FILE", self.work.join("build/%p-%m.profraw"));
+            .env("LLVM_PROFILE_FILE", PROFILE_SINK);
         Ok(command)
     }
 
@@ -147,16 +195,72 @@ impl Run {
     ) -> Result<()> {
         self.cases += 1;
         let raw = self.work.join(format!("case-{}", self.cases));
+        let mut collect = self.mode == Mode::Collect;
         if instrumented {
             // Listing and unwrapped subprocesses must not leave profiles in the source snapshot.
-            command.env("LLVM_PROFILE_FILE", self.work.join("unattributed/%p-%m.profraw"));
+            command.env("LLVM_PROFILE_FILE", PROFILE_SINK);
         }
         let preparation = (|| {
             supported_compiler(&configuration["build"])?;
             let started = Instant::now();
             let inventory = current_inventory(command, log)?;
             eprintln!("Coverage: list tests {:.3}s", started.elapsed().as_secs_f64());
-            if self.mode == Mode::Collect {
+            if matches!(self.mode, Mode::Auto | Mode::Prune | Mode::Shadow) {
+                let started = Instant::now();
+                let cached = (|| {
+                    let data = self.load(&configuration)?;
+                    let baseline = data["baseline"]
+                        .as_str()
+                        .ok_or_raise(|| message("Missing coverage baseline"))?;
+                    let paths = affected_paths(&data, changed_paths(root, baseline)?, &self.changed)?;
+                    Ok((data, paths))
+                })();
+                match cached {
+                    Ok((data, paths)) => {
+                        let selection = match index::select(&data, &inventory, &paths) {
+                            Ok(selection) => Some(selection),
+                            Err(error)
+                                if self.mode == Mode::Auto
+                                    && needs_refresh(
+                                        &data,
+                                        self.source
+                                            .as_ref()
+                                            .expect("automatic coverage captures source state")
+                                            .content_hash(),
+                                    ) =>
+                            {
+                                eprintln!("Coverage: refreshing an unusable index for changed source inputs: {error}");
+                                collect = true;
+                                None
+                            }
+                            Err(error) => return Err(error),
+                        };
+                        if let Some(selection) = selection {
+                            eprintln!(
+                                "Coverage: {:?} selects {}/{} tests ({:.3}s)",
+                                self.mode,
+                                selection.selected,
+                                selection.total,
+                                started.elapsed().as_secs_f64()
+                            );
+                            if matches!(self.mode, Mode::Auto | Mode::Prune) && selection.selected < selection.total {
+                                let candidate = filtered_with_file(root, &raw, command, &selection.filter)?;
+                                if selection.filter.len() > INLINE_FILTER_LIMIT {
+                                    current_inventory(&candidate, log)?;
+                                }
+                                *command = candidate;
+                                self.omitted += selection.total - selection.selected;
+                            }
+                        }
+                    }
+                    Err(error) if self.mode == Mode::Auto => {
+                        eprintln!("Coverage: collecting this complete configuration for reuse: {error}");
+                        collect = true;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            if collect {
                 if !instrumented {
                     bail!("Coverage instrumentation was unavailable for this configuration");
                 }
@@ -174,39 +278,6 @@ impl Run {
                 // Configuration/tool-version errors are optional preparation failures, not test failures.
                 current_inventory(&candidate, log)?;
                 *command = candidate;
-            } else {
-                let started = Instant::now();
-                let path = self
-                    .directory
-                    .join("indexes")
-                    .join(format!("{}.json", key(&configuration)));
-                let data: Value = serde_json::from_slice(&fs::read(&path).or_raise(|| {
-                    message!(
-                        "No usable coverage index at {}; collect this exact configuration first",
-                        path.display()
-                    )
-                })?)
-                .or_error()?;
-                if data["version"] != 1 || data["configuration"] != configuration {
-                    bail!("Coverage index schema or configuration differs");
-                }
-                let baseline = data["baseline"]
-                    .as_str()
-                    .ok_or_raise(|| message("Missing coverage baseline"))?;
-                let paths = changed_paths(root, baseline)?;
-                let selection = index::select(&data, &inventory, &paths)?;
-                eprintln!(
-                    "Coverage: {:?} selects {}/{} tests from {} changed paths ({:.3}s)",
-                    self.mode,
-                    selection.selected,
-                    selection.total,
-                    paths.len(),
-                    started.elapsed().as_secs_f64()
-                );
-                if self.mode == Mode::Prune && selection.selected < selection.total {
-                    *command = filtered(command, &selection.filter)?;
-                    self.omitted += selection.total - selection.selected;
-                }
             }
             Ok(inventory)
         })();
@@ -222,20 +293,22 @@ impl Run {
         // Once tests start, their failure remains a QA failure, even when recording fails separately.
         ops::checked(command)?;
         eprintln!("Coverage: test execution {:.3}s", started.elapsed().as_secs_f64());
-        if self.mode == Mode::Collect
-            && let Some(inventory) = inventory
-        {
+        if collect && let Some(inventory) = inventory {
             let started = Instant::now();
             let result = self
                 .tools
                 .as_ref()
-                .expect("collect mode discovers LLVM tools")
+                .expect("collection discovers LLVM tools")
                 .index(root, &inventory, &raw);
             match result {
                 Ok(mut data) => {
-                    data["version"] = 1.into();
+                    data["version"] = 2.into();
                     data["configuration"] = configuration.clone();
                     data["baseline"] = json!(self.baseline);
+                    data["dirty_paths"] = json!(self.dirty);
+                    if let Some(source) = &self.source {
+                        data["source_hash"] = json!(source.content_hash());
+                    }
                     eprintln!(
                         "Coverage: index {} tests, {} files, {} bytes in {:.3}s",
                         data["tests"].as_array().map_or(0, Vec::len),
@@ -247,6 +320,9 @@ impl Run {
                 }
                 Err(error) => unavailable(&error),
             }
+            if let Err(error) = fs::remove_dir_all(&raw) {
+                eprintln!("Could not remove processed coverage profiles: {error}");
+            }
         }
         Ok(())
     }
@@ -256,9 +332,14 @@ impl Run {
             if self.pending.is_empty() {
                 return Ok(());
             }
-            if self.baseline.is_none() || self.baseline != clean_head(root)? {
+            let unchanged = if let Some(source) = &self.source {
+                self.baseline.as_deref() == Some(head(root)?.as_str()) && *source == ops::source_state(root)?
+            } else {
+                self.baseline.is_some() && self.baseline == clean_head(root)?
+            };
+            if !unchanged {
                 eprintln!(
-                    "Coverage: measurements retained only for this run; publishing requires an unchanged clean HEAD."
+                    "Coverage: not publishing measurements because the source checkout changed or collection needs a clean HEAD."
                 );
                 return Ok(());
             }
@@ -279,6 +360,53 @@ impl Run {
             unavailable(&error);
         }
     }
+
+    fn load(&self, configuration: &Value) -> Result<Value> {
+        let path = self
+            .directory
+            .join("indexes")
+            .join(format!("{}.json", key(configuration)));
+        let data: Value = serde_json::from_slice(
+            &fs::read(&path).or_raise(|| message!("No usable coverage index at {}", path.display()))?,
+        )
+        .or_error()?;
+        if !matches!(data["version"].as_u64(), Some(1 | 2)) || data["configuration"] != *configuration {
+            bail!("Coverage index schema or configuration differs");
+        }
+        Ok(data)
+    }
+}
+
+fn recorded_dirty(data: &Value) -> Result<BTreeSet<String>> {
+    if data["version"] == 1 {
+        return Ok(BTreeSet::new());
+    }
+    data["dirty_paths"]
+        .as_array()
+        .ok_or_raise(|| message("Missing capture-time dirty paths"))?
+        .iter()
+        .map(|path| {
+            path.as_str()
+                .map(str::to_owned)
+                .ok_or_raise(|| message("Invalid capture-time dirty path"))
+        })
+        .collect()
+}
+
+fn needs_refresh(data: &Value, source_hash: u64) -> bool {
+    // This hash only avoids repeated optional analysis; a match never authorizes test omission.
+    data["source_hash"].as_u64() != Some(source_hash)
+}
+
+fn affected_paths(
+    data: &Value,
+    mut current: BTreeSet<String>,
+    requested: &BTreeSet<String>,
+) -> Result<BTreeSet<String>> {
+    current.extend(requested.iter().cloned());
+    // A capture made with local edits is not the baseline commit, even after those edits are reverted.
+    current.extend(recorded_dirty(data)?);
+    Ok(current)
 }
 
 fn unavailable(error: &gix_error::Error) {
@@ -286,7 +414,7 @@ fn unavailable(error: &gix_error::Error) {
 }
 
 pub(super) fn build(command: &mut Command, coverage: Option<&Run>, log: Option<&File>) -> Result<(Vec<u8>, bool)> {
-    if let Some(coverage) = coverage.filter(|coverage| coverage.mode == Mode::Collect) {
+    if let Some(coverage) = coverage.filter(|coverage| matches!(coverage.mode, Mode::Auto | Mode::Collect)) {
         let started = Instant::now();
         let result = (|| {
             let mut instrumented = coverage.instrument(command)?;
@@ -378,6 +506,9 @@ fn replay_args(command: &Command, list: bool, filter: Option<&str>) -> Result<Ve
     let mut out: Vec<OsString> = vec!["nextest".into(), if list { "list" } else { "run" }.into()];
     while let Some(arg) = args.next() {
         match arg.to_str() {
+            Some(arg) if filter.is_some() && (arg == "--run-ignored" || arg.starts_with("--run-ignored=")) => {
+                bail!("Coverage keeps custom ignored-test selection unchanged");
+            }
             Some("--no-fail-fast") if list => {}
             Some("--no-tests") if list || filter.is_some() => {
                 args.next().ok_or_raise(|| message("Missing --no-tests value"))?;
@@ -423,7 +554,60 @@ fn current_inventory(command: &Command, log: Option<&File>) -> Result<Value> {
 }
 
 fn filtered(command: &Command, filter: &str) -> Result<Command> {
+    if filter.len() > INLINE_FILTER_LIMIT {
+        bail!("Coverage filter exceeds the 16 KiB command argument limit");
+    }
     Ok(with_args(command, replay_args(command, false, Some(filter))?))
+}
+
+fn filtered_with_file(root: &Path, directory: &Path, command: &Command, filter: &str) -> Result<Command> {
+    if filter.len() <= INLINE_FILTER_LIMIT {
+        return filtered(command, filter);
+    }
+    if signature(command)["env"]["NEXTEST_PROFILE"].is_string()
+        || command.get_args().any(|arg| {
+            let Some(arg) = arg.to_str() else { return false };
+            matches!(
+                arg,
+                "--profile" | "--config-file" | "--tool-config-file" | "--ignore-default-filter"
+            ) || ["-P", "--profile=", "--config-file=", "--tool-config-file="]
+                .iter()
+                .any(|prefix| arg.starts_with(prefix))
+        })
+    {
+        bail!("File-backed coverage filters keep custom Nextest profiles and configuration unchanged");
+    }
+    let mut candidate = filtered(command, "all()")?;
+    let mut config = match fs::read_to_string(root.join(".config/nextest.toml")) {
+        Ok(config) => config.parse::<toml_edit::DocumentMut>().or_error()?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => toml_edit::DocumentMut::new(),
+        Err(error) => return Err(error).or_error(),
+    };
+    let profiles = config
+        .entry("profile")
+        .or_insert(toml_edit::Item::Table(toml_edit::Table::new()))
+        .as_table_mut()
+        .ok_or_raise(|| message("Nextest profiles must be a table"))?;
+    let profile = profiles
+        .entry("default")
+        .or_insert(toml_edit::Item::Table(toml_edit::Table::new()))
+        .as_table_mut()
+        .ok_or_raise(|| message("The default Nextest profile must be a table"))?;
+    if let Some(overrides) = profile.get("overrides") {
+        let overrides = overrides
+            .as_array_of_tables()
+            .ok_or_raise(|| message("File-backed coverage filters require table-array Nextest overrides"))?;
+        if overrides.iter().any(|rule| rule.contains_key("default-filter")) {
+            bail!("File-backed coverage filters keep platform-specific default filters unchanged");
+        }
+    }
+    // Nextest intersects -E all() with this exact selection without putting it on the command line.
+    profile["default-filter"] = toml_edit::value(filter);
+    fs::create_dir_all(directory).or_error()?;
+    let path = directory.join("selection.toml");
+    fs::write(&path, config.to_string()).or_error()?;
+    candidate.arg("--config-file").arg(path);
+    Ok(candidate)
 }
 
 fn signature(command: &Command) -> Value {
@@ -551,12 +735,16 @@ fn clean_head(root: &Path) -> Result<Option<String>> {
     if !ops::output(ops::git(root)?.args(["status", "--porcelain=v1", "-z", "--untracked-files=all"]))?.is_empty() {
         return Ok(None);
     }
-    Ok(Some(
+    Ok(Some(head(root)?))
+}
+
+fn head(root: &Path) -> Result<String> {
+    Ok(
         String::from_utf8(ops::output(ops::git(root)?.args(["rev-parse", "HEAD"]))?)
             .or_error()?
             .trim()
             .into(),
-    ))
+    )
 }
 
 fn changed_paths(root: &Path, baseline: &str) -> Result<BTreeSet<String>> {
@@ -654,6 +842,46 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reverted_capture_edits_and_the_requested_base_remain_affected() -> gix_error::TestResult {
+        let data = json!({"version":2, "dirty_paths":["a.rs"], "files":["a.rs","b.rs"], "tests":[
+            {"binary":"suite", "name":"a", "files":[0]},
+            {"binary":"suite", "name":"b", "files":[1]}
+        ]});
+        let test = json!({"kind":"test", "ignored":false, "filter-match":{"status":"matches"}});
+        let inventory =
+            json!({"rust-suites":{"suite":{"binary-id":"suite","status":"listed","testcases":{"a":test,"b":test}}}});
+        let paths = affected_paths(&data, BTreeSet::new(), &BTreeSet::from(["b.rs".into()]))?;
+        let selection = index::select(&data, &inventory, &paths)?;
+        assert_eq!(
+            selection.selected, 2,
+            "the reverted capture edit and the requested QA change both keep their tests"
+        );
+        assert_eq!(
+            recorded_dirty(&json!({"version":1}))?,
+            BTreeSet::new(),
+            "legacy indexes were published only for clean commits"
+        );
+        assert!(
+            recorded_dirty(&json!({"version":2})).is_err(),
+            "dirty-capable indexes require their capture inputs"
+        );
+        assert!(recorded_dirty(&json!({"version":2,"dirty_paths":[false]})).is_err());
+        assert!(
+            needs_refresh(&json!({}), 7),
+            "legacy unusable indexes get one automatic refresh"
+        );
+        assert!(
+            needs_refresh(&json!({"source_hash":6}), 7),
+            "changed source permits a new collection"
+        );
+        assert!(
+            !needs_refresh(&json!({"source_hash":7}), 7),
+            "unchanged unknown/disabled files do not cause repeated collection"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn selected_replays_replace_union_filters_and_keep_the_environment() -> gix_error::TestResult {
         let mut original = Command::new("cargo");
         original
@@ -697,6 +925,104 @@ mod tests {
         );
         assert!(!listed.contains(&"--no-fail-fast".into()) && !listed.contains(&"--no-tests".into()));
         assert!(replay_args(&Command::new("cargo"), true, None).is_err());
+        original.arg("--run-ignored=all");
+        assert!(
+            filtered(&original, "none()").is_err(),
+            "unsupported ignored-test selection keeps ordinary execution"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn large_filter_files_preserve_settings_and_keep_command_arguments_small() -> gix_error::TestResult {
+        let root = gix_testtools::tempfile::tempdir()?;
+        fs::create_dir(root.path().join(".config"))?;
+        let original_config = r#"
+[profile.default]
+test-threads = 3
+fail-fast = false
+default-filter = "not test(slow)"
+
+[profile.default.junit]
+path = "results.xml"
+
+[[profile.default.overrides]]
+filter = "test(first)"
+priority = 10
+"#;
+        let config_path = root.path().join(".config/nextest.toml");
+        fs::write(&config_path, original_config)?;
+        let mut command = Command::new("cargo");
+        command
+            .args(["nextest", "run", "-E", "package(a)"])
+            .env_remove("NEXTEST_PROFILE");
+        let filter = (0..1000)
+            .map(|id| format!("test(=long_module::test_{id})"))
+            .collect::<Vec<_>>()
+            .join(" | ");
+        assert!(filter.len() > INLINE_FILTER_LIMIT);
+        assert!(
+            filtered(&command, &filter).is_err(),
+            "large filters cannot enter argv directly"
+        );
+        let directory = root.path().join("selection");
+        let selected = filtered_with_file(root.path(), &directory, &command, &filter)?;
+        let args: Vec<_> = selected.get_args().filter_map(OsStr::to_str).collect();
+        assert!(args.iter().all(|arg| arg.len() <= INLINE_FILTER_LIMIT));
+        assert!(args.windows(2).any(|args| args == ["-E", "all()"]));
+        assert!(args.contains(&"--config-file") && !args.contains(&"package(a)"));
+        let config = fs::read_to_string(directory.join("selection.toml"))?.parse::<toml_edit::DocumentMut>()?;
+        assert_eq!(
+            config["profile"]["default"]["default-filter"].as_str(),
+            Some(filter.as_str())
+        );
+        assert_eq!(config["profile"]["default"]["test-threads"].as_integer(), Some(3));
+        assert_eq!(config["profile"]["default"]["fail-fast"].as_bool(), Some(false));
+        assert_eq!(
+            config["profile"]["default"]["junit"]["path"].as_str(),
+            Some("results.xml")
+        );
+        assert_eq!(
+            config["profile"]["default"]["overrides"][0]["priority"].as_integer(),
+            Some(10)
+        );
+        assert_eq!(
+            fs::read_to_string(&config_path)?,
+            original_config,
+            "the source configuration is untouched"
+        );
+        let short_directory = root.path().join("short");
+        filtered_with_file(root.path(), &short_directory, &command, "none()")?;
+        assert!(!short_directory.exists(), "small filters need no additional file");
+        for arg in [
+            "--ignore-default-filter",
+            "--profile=with-xml",
+            "-Pwith-xml",
+            "--config-file=custom.toml",
+            "--tool-config-file=tool:custom.toml",
+        ] {
+            let mut unsupported = copy_command(&command);
+            unsupported.arg(arg);
+            assert!(filtered_with_file(root.path(), &directory, &unsupported, &filter).is_err());
+        }
+        command.env("NEXTEST_PROFILE", "with-xml");
+        assert!(filtered_with_file(root.path(), &directory, &command, &filter).is_err());
+        command.env_remove("NEXTEST_PROFILE");
+        for config in [
+            "[[profile.default.overrides]]
+platform = 'cfg(unix)'
+default-filter = 'none()'
+",
+            "[profile.default]
+overrides = [{ platform = 'cfg(unix)', default-filter = 'none()' }]
+",
+        ] {
+            fs::write(&config_path, config)?;
+            assert!(
+                filtered_with_file(root.path(), &directory, &command, &filter).is_err(),
+                "platform default filters cannot override the generated selection"
+            );
+        }
         Ok(())
     }
 
@@ -774,9 +1100,10 @@ mod tests {
             "an existing wrapper is not silently replaced"
         );
         assert!(
-            Run::optional(root.path(), None, true).is_none(),
-            "ordinary QA needs no tool discovery"
+            Run::optional(root.path(), Some(Mode::Off), true, None).is_none(),
+            "disabled coverage needs no tool discovery"
         );
+        assert!(Run::optional(root.path(), Some(Mode::Auto), false, None).is_none());
         Ok(())
     }
 }

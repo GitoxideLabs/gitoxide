@@ -6,6 +6,8 @@ use std::{
 use gix_error::{OptionExt, Result, bail, message};
 use serde_json::Value;
 
+const MAX_FILTER_BYTES: usize = 1024 * 1024;
+
 #[derive(Debug)]
 pub(super) struct Selection {
     pub filter: String,
@@ -96,6 +98,8 @@ pub(super) fn select(index: &Value, inventory: &Value, changed: &BTreeSet<String
             Some("skipped" | "skipped-default-filter") if cases.is_empty() => continue,
             _ => bail!("Unsupported Nextest suite listing status: {id}"),
         }
+        let mut selected = Vec::new();
+        let mut complete = true;
         for (name, test) in cases {
             filter_name(Some(name))?;
             let ignored = test["ignored"]
@@ -106,6 +110,7 @@ pub(super) fn select(index: &Value, inventory: &Value, changed: &BTreeSet<String
             {
                 bail!("Unsupported Nextest test kind or filter status: {binary}::{name}");
             }
+            complete &= test["filter-match"]["status"] == "matches";
             if ignored || test["filter-match"]["status"] != "matches" {
                 continue;
             }
@@ -116,22 +121,37 @@ pub(super) fn select(index: &Value, inventory: &Value, changed: &BTreeSet<String
             usable |= coverage.is_some();
             // Historical execution is a heuristic, not evidence about compile-time dependencies.
             if !changed.is_empty() && coverage.is_some_and(|coverage| coverage.is_disjoint(&changed_ids)) {
+                complete = false;
                 continue;
             }
-            if result.selected != 0 {
-                result.filter.push_str(" | ");
+            selected.push(name);
+        }
+        if selected.is_empty() {
+            continue;
+        }
+        result.selected += selected.len();
+        if !result.filter.is_empty() {
+            result.filter.push_str(" | ");
+        }
+        if complete {
+            write!(result.filter, "binary_id(={})", binary.replace('/', "\\/"))
+                .expect("writing to a String cannot fail");
+        } else {
+            write!(result.filter, "(binary_id(={}) & (", binary.replace('/', "\\/"))
+                .expect("writing to a String cannot fail");
+            for (index, name) in selected.iter().enumerate() {
+                if index != 0 {
+                    result.filter.push_str(" | ");
+                }
+                write!(result.filter, "test(={})", name.replace('/', "\\/")).expect("writing to a String cannot fail");
+                if result.filter.len() > MAX_FILTER_BYTES {
+                    bail!("Coverage filter exceeds 1 MiB");
+                }
             }
-            write!(
-                result.filter,
-                "(binary_id(={}) & test(={}))",
-                binary.replace('/', "\\/"),
-                name.replace('/', "\\/")
-            )
-            .expect("writing to a String cannot fail");
-            if result.filter.len() > 16 * 1024 {
-                bail!("Coverage filter exceeds 16 KiB");
-            }
-            result.selected += 1;
+            result.filter.push_str("))");
+        }
+        if result.filter.len() > MAX_FILTER_BYTES {
+            bail!("Coverage filter exceeds 1 MiB");
         }
     }
     if result.total == 0 {
@@ -200,12 +220,43 @@ mod tests {
     fn exact_binary_identity_separates_equal_test_names() -> gix_error::TestResult {
         let selected = select(&index(), &inventory(), &changed())?;
         assert_eq!((selected.selected, selected.total), (1, 2));
-        assert_eq!(selected.filter, "(binary_id(=a::integration) & test(=same))");
+        assert_eq!(selected.filter, "binary_id(=a::integration)");
         let all = select(&index(), &inventory(), &BTreeSet::new())?;
         assert_eq!(
             (all.selected, all.total),
             (2, 2),
             "an empty diff preserves policy scope"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn groups_tests_by_binary_without_restoring_filtered_tests() -> gix_error::TestResult {
+        let mut inventory = inventory();
+        let cases = &mut inventory["rust-suites"]["a::integration"]["testcases"];
+        let test = cases["same"].clone();
+        for id in 0..320 {
+            cases[format!("group::test_{id:03}")] = test.clone();
+        }
+        cases["ignored"] = json!({"kind":"test", "ignored":true, "filter-match":{"status":"matches"}});
+        let selected = select(&index(), &inventory, &changed())?;
+        assert_eq!((selected.selected, selected.total), (321, 322));
+        assert_eq!(
+            selected.filter, "binary_id(=a::integration)",
+            "a complete binary folds even when it has ignored tests"
+        );
+
+        inventory["rust-suites"]["a::integration"]["testcases"]["filtered"] =
+            json!({"kind":"test", "ignored":false, "filter-match":{"status":"mismatch"}});
+        let selected = select(&index(), &inventory, &changed())?;
+        assert_eq!((selected.selected, selected.total), (321, 322));
+        assert_eq!(selected.filter.matches("binary_id(=").count(), 1);
+        assert!(selected.filter.starts_with("(binary_id(=a::integration) & ("));
+        assert_eq!(selected.filter.matches("test(=").count(), 321);
+        assert!(selected.filter.ends_with("))"));
+        assert!(
+            !selected.filter.contains("test(=filtered)") && !selected.filter.contains("test(=ignored)"),
+            "factoring the binary predicate cannot expand the original test selection"
         );
         Ok(())
     }
@@ -257,7 +308,7 @@ mod tests {
         index["tests"][0]["binary"] = "a::bin/test".into();
         assert_eq!(
             select(&index, &inventory, &changed())?.filter,
-            "(binary_id(=a::bin\\/test) & test(=same))"
+            "binary_id(=a::bin\\/test)"
         );
         Ok(())
     }
@@ -386,13 +437,17 @@ mod tests {
     }
 
     #[test]
-    fn bounds_command_length() {
-        let mut inventory = inventory();
-        let tests = &mut inventory["rust-suites"]["a::integration"]["testcases"];
-        tests["x".repeat(16 * 1024)] = json!({"kind":"test", "ignored":false, "filter-match":{"status":"matches"}});
-        assert!(
-            select(&index(), &inventory, &changed()).is_err(),
-            "oversized filters retain full execution"
-        );
+    fn bounds_filter_size_without_imposing_the_command_line_limit() {
+        for (size, overflow) in [(16 * 1024, false), (MAX_FILTER_BYTES, true)] {
+            let mut inventory = inventory();
+            let tests = &mut inventory["rust-suites"]["a::integration"]["testcases"];
+            tests["same"]["filter-match"]["status"] = "mismatch".into();
+            tests["x".repeat(size)] = json!({"kind":"test", "ignored":false, "filter-match":{"status":"matches"}});
+            assert_eq!(
+                select(&index(), &inventory, &changed()).is_err(),
+                overflow,
+                "large filters can use a file, but their size remains bounded"
+            );
+        }
     }
 }

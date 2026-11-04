@@ -270,44 +270,77 @@ An [investigation of LSP-based test selection](etc/plan/qa-test-selection.md) me
 selection with rust-analyzer. Missing call edges and mismatched feature configurations currently
 prevent using those results to omit individual tests safely.
 
-An optional **experimental** LLVM coverage layer can refine native test selection:
+Fast QA automatically attempts **experimental** LLVM coverage selection for native, isolated and feature
+tests when stable Rust's matching LLVM tools are available. It uses a compatible local index
+to select individual tests. If the configuration has no usable index, it runs the full selected case
+with per-test coverage collection and saves the result for later QA invocations. This first run pays
+for collection and analysis; subsequent runs can reuse the index. New or unrecorded tests always run.
+
+```bash
+just qa                             # use coverage when available; otherwise collect for later runs
+just qa --coverage off              # use only package/configuration selection
+```
+
+The tools can be installed with `rustup component add llvm-tools-preview --toolchain stable`.
+Local QA does not install them automatically. Missing tools or unsupported configuration retain ordinary
+QA. Unknown changed paths and non-Rust changes retain the full test case; unavailable or invalid
+coverage cannot cause tests to be omitted. Exhaustive mode keeps ordinary execution without automatic
+collection; use `--coverage collect` to seed those configurations explicitly. Actual test failures
+still fail QA. Automatic runs use the same separate, reusable instrumented build cache whether
+collecting or pruning. A workspace compiler wrapper preserves configured Rust flags and does not
+replace existing custom compiler wrappers.
+
+If a valid index cannot classify changed inputs, automatic mode runs the full case and refreshes it
+when source contents differ from its last capture. A source-content hash avoids repeated collection
+for the same unknown or disabled inputs; it never permits test omission. Newly added tests run until
+a refreshed index records their coverage. Partial coverage, including unmapped functions from child
+executables, leaves that individual test unrecorded so it always runs.
+
+Historical runtime coverage is **not complete dependency analysis**: constants, type layouts and
+other compile-time inputs can affect tests without executing their source files. Runs that omit tests
+do not record ordinary Tix checks-pass. The layer does not prune compilation, clippy, doctests or shell
+journeys. See the [measurements and limits](etc/plan/qa-test-selection.md#llvm-coverage-prototype).
+
+The coverage modes can also be selected explicitly:
 
 ```bash
 just qa --coverage collect           # run all selected tests and measure per-test file coverage
 just qa --coverage shadow            # compare the historical selection while running all tests
-just qa --coverage prune             # opt in to historical test omission in fast mode
+just qa --coverage prune             # reuse saved indexes without collecting missing configurations
 ```
 
-Collection uses stable Rust's `-C instrument-coverage` and matching
-`rustup component add llvm-tools-preview --toolchain stable`; no nightly compiler is required.
-Missing tools, unsupported configuration, missing/corrupt indexes, or export errors retain ordinary
-QA. Actual test failures still fail QA. Collection preserves configured Rust flags through a
-workspace compiler wrapper, keeps its builds separate, and does not replace existing custom wrappers.
-Existing custom Nextest scripts/profiles also retain ordinary execution.
+Collection uses stable Rust's `-C instrument-coverage` and the matching LLVM tools; no nightly compiler
+is required. Missing/corrupt indexes and unsupported custom Nextest scripts/profiles retain ordinary QA.
 
-Indexes are automatically generated under `target/qa-coverage/indexes`, never committed. They are
-published only after a successful collection run at an unchanged clean `HEAD`. Raw profiles are
-temporary; compiler build caches remain reusable. Each index records the exact Cargo package batch,
-features, compiler, inherited Cargo configuration, fixture mode and runtime hash. Exhaustive native
+Automatic collection and `collect` write indexes under `target/qa-coverage/indexes`, never committed.
+They are published only after the whole QA run succeeds with unchanged checkout contents and `HEAD`.
+Automatic collection from a dirty checkout records its `HEAD` and dirty paths; those paths remain
+part of subsequent selection even if the edits are later reverted. Raw profiles are discarded after
+each case; compiler build caches remain reusable. Explicit `collect` still requires a clean checkout
+for publication. Each index records the exact Cargo package batch, features, compiler, inherited
+Cargo configuration, fixture mode and runtime hash. Exhaustive native
 workspace builds therefore cannot supply an index for a differently batched PR build; matching
 per-package feature cases can reuse their own indexes. An older index must name an ancestor of
-`HEAD`; selection includes the entire diff from that ancestor plus staged, unstaged and untracked inputs.
+`HEAD`; selection includes the entire diff from that ancestor, the QA comparison base, recorded dirty
+paths, and current staged, unstaged and untracked inputs.
 New/unrecorded tests always run, and unknown changed paths or non-Rust inputs retain the complete case.
 Exhaustive mode never omits tests. Runs which actually omit tests do not record ordinary Tix checks-pass.
 
-This is historical execution evidence, **not complete dependency analysis**: constants, type layouts,
-imports, macros and compile-time evaluation can affect tests without executing their source files.
-Use `shadow` to evaluate the proposal before opting into this tradeoff. It does not prune compilation,
+This is historical execution evidence: constants, type layouts, imports, macros and compile-time
+evaluation can affect tests without executing their source files.
+Use `shadow` to compare selections while retaining complete execution. It does not prune compilation,
 clippy, doctests or shell journeys, and collecting coverage runs the tests being measured; reuse is
-what can make later runs faster. See the [measurements and limits](etc/plan/qa-test-selection.md#llvm-coverage-prototype).
+what can make later runs faster.
 
-For optional CI collection and sharing, set the repository variable `QA_COVERAGE` to `shadow`
-or `prune`. Main runs collect complete configuration indexes as 14-day Actions artifacts; PR jobs
-attempt to download the matching job's artifact from a successful run at their base commit.
-Unavailable tools, artifact services, GitHub CLI or baseline runs retain ordinary QA. The variable
-is unset by default; no repository setting is changed by adding this support. Locally, the equivalent
-environment variable is `GIX_QA_COVERAGE`; an explicit `--coverage` takes precedence. Downloaded JSON
-indexes can be placed in `target/qa-coverage/indexes` for local reuse without Git LFS.
+CI enables collection and reuse by default for native, isolated and feature tests. Main jobs attempt
+to install LLVM tools, collect complete configuration indexes and publish 14-day Actions artifacts.
+PR jobs attempt to download the matching job's artifact from a successful run at their base commit
+and use `prune`; a missing index retains ordinary execution without collecting an unused PR index.
+Unavailable tools, artifact services, GitHub CLI or baseline runs retain ordinary QA. Set the repository
+variable `QA_COVERAGE` to `shadow` to report PR selections while running all tests, or `off` to disable
+CI coverage. No repository variable is needed for the default behavior. Locally, `GIX_QA_COVERAGE`
+selects the mode, and an explicit `--coverage` takes precedence. Downloaded JSON indexes can also be
+placed in `target/qa-coverage/indexes` for local reuse without Git LFS.
 
 Unavailable cached dependencies and unfamiliar arguments retain the original checks. Saved
 plans carry the exclusions, capped at 12 KiB to leave room for job metadata in Windows'
