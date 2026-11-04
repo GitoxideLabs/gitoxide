@@ -277,7 +277,7 @@ fn prose_only(path: &Path) -> bool {
                 | "general-tasks.md"
                 | "tasks.md"
         )
-    )
+    ) || (path.starts_with("etc/plan") && path.extension().is_some_and(|ext| ext == "md"))
 }
 
 #[cfg(test)]
@@ -399,6 +399,9 @@ mod tests {
             "tests/it/qa/check-features.sh",
             "tests/helpers.sh",
             "unknown-crate/src/lib.rs",
+            "etc/plan/reproduce.sh",
+            "etc/plan/Cargo.toml",
+            "etc/planning/design.md",
         ] {
             let plan = select(&packages, &BTreeSet::from([path.into()]));
             assert_eq!(
@@ -406,8 +409,16 @@ mod tests {
                 "Unclassified or global path {path} cannot skip checks"
             );
         }
-        let plan = select(&packages, &BTreeSet::from(["DEVELOPMENT.md".into()]));
-        assert_eq!(plan["packages"], json!([]), "Known prose changes need no Rust builds");
+        for path in [
+            "DEVELOPMENT.md",
+            "etc/plan/qa-test-selection.md",
+            "etc/plan/performance.md",
+            "etc/plan/nested/design.md",
+        ] {
+            let plan = select(&packages, &BTreeSet::from([path.into()]));
+            assert_eq!(plan["mode"], "fast", "Known prose {path} keeps fast selection");
+            assert_eq!(plan["packages"], json!([]), "Known prose {path} needs no Rust builds");
+        }
         Ok(())
     }
 
@@ -434,6 +445,13 @@ mod tests {
             plan["packages"],
             json!(["unrelated"]),
             "Input prefixes match whole path components"
+        );
+        packages[0].extra_inputs.push("etc/plan/input.md".into());
+        let plan = select(&packages, &BTreeSet::from(["etc/plan/input.md".into()]));
+        assert_eq!(
+            plan["changed_packages"],
+            json!(["leaf"]),
+            "Explicit build or test inputs take precedence over prose classification"
         );
         Ok(())
     }

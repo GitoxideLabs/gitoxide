@@ -252,11 +252,12 @@ Fast mode compares against the merge base with `origin/main` by default, includi
 unstaged and untracked changes. Fetch your intended base before comparing. Selection includes
 owning crates and reverse normal/build workspace dependencies, including optional and
 platform-specific dependencies. Their dev consumers are selected too, without propagating
-further through those dev-only edges. Known root prose files select no Rust work; crate documentation
-is a crate input because it can appear in rustdoc. Manifests, lockfiles, fuzzers, shared tests,
-CI/build configuration, unclassified paths and a missing base conservatively select exhaustive
-coverage. The plan explains each fallback. An unchanged checkout still checks licenses,
-dependency policy, advisories, workflow policy, script modes and the MSRV badge.
+further through those dev-only edges. Known root prose files and Markdown documents under `etc/plan/`
+select no Rust work; crate documentation is a crate input because it can appear in rustdoc.
+Manifests, lockfiles, fuzzers, shared tests, CI/build configuration, unclassified paths and a
+missing base conservatively select exhaustive coverage. The plan explains each fallback.
+An unchanged checkout still checks licenses, dependency policy, advisories, workflow policy,
+script modes and the MSRV badge.
 
 Fast mode also checks declared feature and WASM configurations with Cargo
 (`cargo tree --locked --offline --target all`). It omits a configuration only when its normal, build and

@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
-  contents: read
+  contents: read # Required to check out the repository.
 
 env:
   CARGO_TERM_COLOR: always
@@ -66,8 +66,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }} # zizmor: ignore[unpinned-images] SHA256 pins in tests/it/src/qa/catalog.rs.
     permissions:
-      contents: read
-      actions: read
+      contents: read # Required to check out the repository.
+      actions: read # Required to find and download the base commit's coverage artifacts.
     env:
       QA_PLAN: ${{ needs.plan.outputs.plan }}
       QA_JOB: ${{ matrix.id }}
