@@ -189,6 +189,9 @@ mod windows {
 
     #[test]
     fn url_from_absolute_path() -> gix_testtools::TestResult {
+        for input in [r"\\?\C:\users\repo", r"\\server\share\na:me"] {
+            assert_url_roundtrip(input, url_alternate(Scheme::File, None, None, None, input.as_bytes()))?;
+        }
         // Test with a Windows path directly instead of using url::Url::from_directory_path
         assert_url(
             r"C:\users\1\",
