@@ -498,7 +498,7 @@ without trading responsiveness for metadata that is not visible.
   Simple lane turns use rounded corners in both the TUI and `tix show`; merge
   tees and crossings remain orthogonal so every commit still occupies one row.
 - Interactive history and ref-tree views use Kitty graphics in recognized Kitty,
-  WezTerm, and Ghostty terminals.
+  WezTerm, and Ghostty terminals after verifying protocol support.
   Commit circles connect continuously to their actual parents and children;
   tips and roots have no invented continuation. History routes preserve their
   actual endpoints, using consistent cell proportions to keep
@@ -567,10 +567,16 @@ without trading responsiveness for metadata that is not visible.
   floating-point rounding and pixel coverage.
   Unknown terminals, terminal multiplexers, invalid reported pixel dimensions,
   other native query errors, and diagnostic `--quit-on-finish` output use the
-  existing text graph. Detection does not send graphics queries: their replies
-  cannot safely pass through the current keyboard-event parser. `tix show` remains plain text.
+  existing text graph. On Unix, startup sends a one-pixel direct graphics query
+  before keyboard input starts. Only an `OK` reply matching the query's image ID,
+  followed by the device-attributes completion reply, enables graphics. Rejected
+  or missing replies, including Ghostty with `image-storage-limit=0`, retain the
+  text gutter. Detection has a 100 ms deadline, skips prequeued input, and leaves
+  input after the completion reply queued. Late and partially read graphics
+  replies are suppressed by built-in input handling. Platforms without a safe
+  raw query reader use the text graph. `tix show` remains plain text.
 - Graph tiles use reported terminal cell pixel dimensions when available. When
-  the native pixel-size query is unsupported, as on Windows, a bounded 32x64
+  the native pixel-size query is unsupported, a bounded 32x64
   raster is used instead. Explicit one-cell Kitty placements let the terminal
   scale those tiles to its actual font size without adding input queries.
   Tiles are uploaded lazily using quiet, chunked direct transfers. Graphical
