@@ -11,7 +11,8 @@ mod write {
         /// Write the serializable fields to `out` for decoding with [`from_bytes()`][Self::from_bytes()].
         /// Unsupported capabilities and `quit` are omitted. Fields enabled by `authtype` are only
         /// written if that capability is set.
-        /// Invalid field values are retained as `input` bytes in the I/O error.
+        /// Invalid field values, except `password`, `credential`, and `oauth_refresh_token` secrets,
+        /// are retained as `input` bytes in the I/O error.
         /// After [wrapping](gix_error::Error::from_error()), inspect them with
         /// [metadata](gix_error::Error::metadata()).
         pub fn write_to(&self, mut out: impl std::io::Write) -> std::io::Result<()> {
@@ -106,7 +107,10 @@ pub mod decode {
 
     use gix_error::{ErrorExt, Result, bail, validation};
 
-    use crate::protocol::{Capability, Context, ContextOptions, context::serde::validate};
+    use crate::protocol::{
+        Capability, Context, ContextOptions,
+        context::serde::{is_secret_field, validate},
+    };
 
     impl Context {
         /// Decode ourselves from `input` which is the format written by [`write_to()`][Self::write_to()].
@@ -114,7 +118,8 @@ pub mod decode {
         /// Unsupported capability names are retained for inspection, but do not enable any fields
         /// and are omitted when encoding the context again.
         /// `options` control what to support during deserialization.
-        /// Invalid line or value bytes are stored as `input` in [`gix_error::Message::values`].
+        /// Invalid line or value bytes, except `password`, `credential`, and `oauth_refresh_token` secrets,
+        /// are stored as `input` in [`gix_error::Message::values`].
         /// After [wrapping](gix_error::Error::from_error()), inspect them with
         /// [metadata](gix_error::Error::metadata()).
         pub fn from_bytes(input: &[u8], options: ContextOptions) -> Result<Self> {
@@ -165,7 +170,11 @@ pub mod decode {
                     | "credential"
                     | "capability[]" => {
                         if !value.is_utf8() {
-                            bail!(validation(format!("Illformed UTF-8 in value of key {key:?}")).with_input(value));
+                            let mut error = validation(format!("Illformed UTF-8 in value of key {key:?}"));
+                            if !is_secret_field(key) {
+                                error = error.with_input(value);
+                            }
+                            bail!(error);
                         }
                         let value = value.to_string();
                         if key == "capability[]" {
@@ -206,6 +215,10 @@ pub mod decode {
     }
 }
 
+fn is_secret_field(key: &str) -> bool {
+    matches!(key, "password" | "credential" | "oauth_refresh_token")
+}
+
 fn validate(key: &str, value: &BStr, protect_protocol: bool) -> Result {
     if key.contains('\0')
         || key.contains('\n')
@@ -214,6 +227,11 @@ fn validate(key: &str, value: &BStr, protect_protocol: bool) -> Result {
         || value.contains(&b'\n')
         || (protect_protocol && value.contains(&b'\r'))
     {
+        if is_secret_field(key) {
+            bail!(gix_error::validation(format!(
+                "{key:?} must not contain null bytes or newlines"
+            )));
+        }
         bail!(
             gix_error::validation(format!(
                 "{key:?}={value:?} must not contain null bytes or newlines neither in key nor in value."

@@ -165,6 +165,103 @@ fn authtype_protocol_fields_reject_record_injection() {
 }
 
 #[test]
+fn invalid_secrets_never_appear_in_encoding_diagnostics_or_metadata() -> TestResult {
+    for value in [
+        "secret-token\rcontent",
+        "secret-token
+content",
+        "secret-token\0content",
+    ] {
+        for (key, context) in [
+            (
+                "password",
+                Context {
+                    password: Some(value.into()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "credential",
+                Context {
+                    capability: vec![Capability::Authtype],
+                    credential: Some(value.into()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "oauth_refresh_token",
+                Context {
+                    oauth_refresh_token: Some(value.into()),
+                    ..Default::default()
+                },
+            ),
+        ] {
+            let write_error = context
+                .write_to(Vec::new())
+                .expect_err("protocol delimiters in secrets are rejected");
+            let cascade_error = gix_credentials::helper::Cascade::default()
+                .invoke(
+                    gix_credentials::helper::Action::Get(context),
+                    gix_prompt::Options {
+                        mode: gix_prompt::Mode::Disable,
+                        askpass: None,
+                    },
+                )
+                .expect_err("the cascade validates secrets before invoking helpers");
+            for error in [gix_error::Error::from_error(write_error), cascade_error] {
+                assert!(
+                    !error.to_string().contains("secret-token") && !format!("{error:?}").contains("secret-token"),
+                    "encoding and cascade diagnostics must not expose any part of the rejected {key}"
+                );
+                assert!(
+                    error.metadata().all(|values| !values.contains_key("input")),
+                    "rejected {key} values must not be retained in diagnostic metadata"
+                );
+                assert!(
+                    error.to_string().contains(key),
+                    "the rejected secret field remains identifiable"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn invalid_secrets_never_appear_in_decoding_diagnostics_or_metadata() -> TestResult {
+    for key in ["password", "credential", "oauth_refresh_token"] {
+        for value in [
+            b"secret-token\xff".as_slice(),
+            b"secret-token\rcontent",
+            b"secret-token\0content",
+        ] {
+            let input = [
+                b"capability[]=authtype\n".as_slice(),
+                key.as_bytes(),
+                b"=",
+                value,
+                b"\n",
+            ]
+            .concat();
+            let error = Context::from_bytes(&input, Default::default()).expect_err("invalid secret bytes are rejected");
+            assert!(
+                !error.to_string().contains("secret-token") && !format!("{error:?}").contains("secret-token"),
+                "decoding diagnostics must not expose invalid {key} values"
+            );
+            assert!(
+                error.metadata().all(|values| !values.contains_key("input")),
+                "neither protocol nor UTF-8 validation may retain the secret {key} input"
+            );
+            assert!(
+                error.to_string().contains(key),
+                "the rejected secret field remains identifiable"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn authentication_challenges_survive_a_protocol_roundtrip() -> TestResult {
     let input = b"protocol=https
 host=github.com
