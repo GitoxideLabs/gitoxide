@@ -68,6 +68,22 @@ mod keys {
             (&gix::config::tree::Commit::GPG_SIGN, BStr::new(b"false")),
             (&gix::config::tree::gitoxide::Core::SHALLOW_FILE, BStr::new(b"shallow")),
             (
+                &gix::config::tree::gitoxide::FsMonitor::CONNECT_RETRIES,
+                BStr::new(b"100"),
+            ),
+            (
+                &gix::config::tree::gitoxide::FsMonitor::CONNECT_RETRY_DELAY,
+                BStr::new(b"50"),
+            ),
+            (
+                &gix::config::tree::gitoxide::FsMonitor::SOCKET_TIMEOUT,
+                BStr::new(b"30000"),
+            ),
+            (
+                &gix::config::tree::gitoxide::FsMonitor::MAX_RESPONSE_SIZE,
+                BStr::new(b"64m"),
+            ),
+            (
                 &gix::config::tree::gitoxide::FsMonitor::FORCE_UPDATE_THRESHOLD,
                 BStr::new(b"100"),
             ),
