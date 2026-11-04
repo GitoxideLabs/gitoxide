@@ -725,32 +725,33 @@ pub(crate) mod apply {
     }
 
     #[test]
-    fn successful_non_required_driver_can_close_stdin_early() -> TestResult {
-        let mut state = gix_filter::driver::State::default();
-        let mut driver = driver_no_process();
-        driver.required = false;
-        driver.clean = Some({
-            let mut command = driver_path();
-            command.push_str(" take-one");
-            command
-        });
-        let input = vec![b'a'; 1024 * 1024];
+    fn successful_driver_can_close_stdin_early() -> TestResult {
+        for required in [false, true] {
+            let mut state = gix_filter::driver::State::default();
+            let mut driver = driver_no_process();
+            driver.required = required;
+            driver.clean = Some({
+                let mut command = driver_path();
+                command.push_str(" take-one");
+                command
+            });
+            let input = vec![b'a'; 1024 * 1024];
 
-        let mut filtered = state
-            .apply(
-                &driver,
-                &mut input.as_slice(),
-                driver::Operation::Clean,
-                context_from_path("ignored"),
-            )?
-            .expect("filter present");
-        let mut output = Vec::new();
-        filtered.read_to_end(&mut output)?;
-        assert_eq!(
-            output, b"a",
-            "a successful filter may intentionally consume only part of its input"
-        );
-
+            let mut filtered = state
+                .apply(
+                    &driver,
+                    &mut input.as_slice(),
+                    driver::Operation::Clean,
+                    context_from_path("ignored"),
+                )?
+                .expect("filter present");
+            let mut output = Vec::new();
+            filtered.read_to_end(&mut output)?;
+            assert_eq!(
+                output, b"a",
+                "a successful filter may intentionally consume only part of its input"
+            );
+        }
         Ok(())
     }
 
