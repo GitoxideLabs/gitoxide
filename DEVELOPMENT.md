@@ -266,6 +266,10 @@ Cargo resolves optional dependencies, renamed dependencies and feature unificati
 self dev-dependencies. Queries include all targets so the same plan remains conservative on
 other CI platforms, and configurations sharing a dependency selection reuse the query.
 
+An [investigation of LSP-based test selection](etc/plan/qa-test-selection.md) measured finer
+selection with rust-analyzer. Missing call edges and mismatched feature configurations currently
+prevent using those results to omit individual tests safely.
+
 Unavailable cached dependencies and unfamiliar arguments retain the original checks. Saved
 plans carry the exclusions, capped at 12 KiB to leave room for job metadata in Windows'
 environment variables; excess configurations remain selected. CI fetches the lockfile's
