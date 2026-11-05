@@ -4,6 +4,8 @@ use gix_error::Result;
 impl File {
     /// Write the index to `out` with `options`, to be readable by [`File::at()`], returning the version that was actually written
     /// to retain all information of this index.
+    /// Also returns the checksum written to the trailer, which is null if [`write::Options::skip_hash`] is set.
+    /// Unlike [`File::checksum()`], this preserves the on-disk representation of an omitted checksum.
     ///
     /// Note that the `tree` (tree-cache) extension is written as-is and is **not** recomputed or
     /// invalidated to match the current entries; see [`File::write()`] for the implications and the
@@ -30,7 +32,7 @@ impl File {
 
     /// Write ourselves to the path we were read from after acquiring a lock, using `options`.
     ///
-    /// Note that the hash produced will be stored which is why we need to be mutable.
+    /// The checksum is updated after a successful write, or cleared if [`write::Options::skip_hash`] is set.
     ///
     /// ### The `tree` (tree-cache) extension is written as-is
     ///
@@ -77,7 +79,7 @@ impl File {
             }
         };
         self.state.version = version;
-        self.checksum = Some(digest);
+        self.checksum = (!digest.is_null()).then_some(digest);
         Ok(())
     }
 }

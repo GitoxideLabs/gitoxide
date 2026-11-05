@@ -52,39 +52,28 @@ fn roundtrips() -> TestResult {
 fn skip_hash() -> TestResult {
     let tmp = gix_testtools::tempfile::TempDir::new()?;
     let path = tmp.path().join("index");
-    let mut expected = Loose("conflicting-file").open();
-    assert!(expected.checksum().is_some());
+    let mut expected = Generated("v2_more_files").open();
+    assert!(expected.checksum().is_some(), "the fixture starts with a checksum");
 
     expected.set_path(&path);
-    expected.write(Options {
-        extensions: Default::default(),
-        skip_hash: false,
-    })?;
+    for skip_hash in [false, true, false] {
+        expected.write(Options {
+            extensions: Default::default(),
+            skip_hash,
+        })?;
+        assert_eq!(
+            expected.checksum().is_none(),
+            skip_hash,
+            "writing without a hash clears the checksum; hashing again restores it"
+        );
 
-    let actual = gix_index::File::at(
-        &path,
-        expected.checksum().expect("present").kind(),
-        false,
-        Default::default(),
-    )?;
-    assert_eq!(
-        actual.checksum(),
-        expected.checksum(),
-        "a hash is written by default and it matches"
-    );
-
-    expected.write(Options {
-        extensions: Default::default(),
-        skip_hash: true,
-    })?;
-
-    let actual = gix_index::File::at(
-        &path,
-        expected.checksum().expect("present").kind(),
-        false,
-        Default::default(),
-    )?;
-    assert_eq!(actual.checksum(), None, "no hash is produced in this case");
+        let actual = gix_index::File::at(&path, expected.object_hash(), false, Default::default())?;
+        assert_eq!(
+            actual.checksum(),
+            expected.checksum(),
+            "checksum availability and value agree immediately after writing and after reopening"
+        );
+    }
 
     Ok(())
 }
