@@ -29,7 +29,7 @@ impl Stream {
                 Ok(Some(Entry {
                     path_buf: self.path_buf.take(),
                     parent: self,
-                    id,
+                    id: (!id.is_null()).then_some(id),
                     mode,
                     remaining,
                 }))

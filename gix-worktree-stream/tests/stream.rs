@@ -77,6 +77,51 @@ mod from_tree {
     }
 
     #[test]
+    fn additional_entries_have_optional_ids_independently_of_content() -> gix_testtools::TestResult {
+        let (_dir, tree_id, odb, _cache) = basic()?;
+        let mut stream =
+            gix_worktree_stream::from_tree(
+                tree_id,
+                odb,
+                mutating_pipeline(false),
+                |_, _, _| Ok::<_, Infallible>(()),
+            );
+        let blob_id = gix_object::compute_hash(gix_testtools::object_hash(), gix_object::Kind::Blob, b"content")?;
+        for (index, id) in [None, Some(gix_testtools::object_hash().null()), Some(blob_id)]
+            .into_iter()
+            .enumerate()
+        {
+            stream.add_entry(gix_worktree_stream::AdditionalEntry {
+                id,
+                mode: EntryKind::Blob.into(),
+                relative_path: format!("optional-{index}").into(),
+                source: gix_worktree_stream::entry::Source::Memory(b"content".to_vec()),
+            });
+        }
+        let mut additional = 0;
+        while let Some(mut entry) = stream.next_entry()? {
+            let mut content = Vec::new();
+            entry.read_to_end(&mut content)?;
+            if entry.relative_path().starts_with(b"optional-") {
+                assert_eq!(
+                    entry.id,
+                    (additional == 2).then_some(blob_id),
+                    "null IDs normalize to None"
+                );
+                assert_eq!(
+                    content, b"content",
+                    "an unavailable hash does not hide existing content"
+                );
+                additional += 1;
+            } else {
+                assert!(entry.id.is_some(), "tree entries retain their original object IDs");
+            }
+        }
+        assert_eq!(additional, 3);
+        Ok(())
+    }
+
+    #[test]
     fn can_receive_err_if_root_is_not_found() {
         let mut stream = gix_worktree_stream::from_tree(
             gix_testtools::object_hash().null(),
@@ -150,13 +195,12 @@ mod from_tree {
                     .map(|_| ())
             },
         );
-        let object_hash = gix_testtools::object_hash();
         stream
-            .add_entry_from_path(&dir, &dir.join("extra-file"), object_hash)?
-            .add_entry_from_path(&dir, &dir.join("extra-bigfile"), object_hash)?
-            .add_entry_from_path(&dir, &dir.join("extra-exe"), object_hash)?
-            .add_entry_from_path(&dir, &dir.join("extra-dir-empty"), object_hash)?
-            .add_entry_from_path(&dir, &dir.join("extra-dir").join("symlink-to-extra"), object_hash)?;
+            .add_entry_from_path(&dir, &dir.join("extra-file"))?
+            .add_entry_from_path(&dir, &dir.join("extra-bigfile"))?
+            .add_entry_from_path(&dir, &dir.join("extra-exe"))?
+            .add_entry_from_path(&dir, &dir.join("extra-dir-empty"))?
+            .add_entry_from_path(&dir, &dir.join("extra-dir").join("symlink-to-extra"))?;
 
         let tee_read = TeeToMemory {
             read: stream.into_read(),
@@ -198,69 +242,69 @@ mod from_tree {
                 (
                     ".gitattributes".into(),
                     EntryKind::Blob,
-                    hex_to_id(
+                    Some(hex_to_id(
                         "45c160c35c17ad264b96431cceb9793160396e99",
                         "e34ae8e2c517230c6c613202a955b5f2095567830de5c3bb7081d72f1af393dd"
-                    )
+                    ))
                 ),
                 (
                     "a".into(),
                     EntryKind::Blob,
-                    hex_to_id(
+                    Some(hex_to_id(
                         "45b983be36b73c0788dc9cbcb76cbb80fc7bb057",
                         "96c18f0297e38d01f4b2dacddea4259aea6b2961eb0822bd2c0c3f6029030045"
-                    )
+                    ))
                 ),
                 (
                     "bigfile".into(),
                     EntryKind::Blob,
-                    hex_to_id(
+                    Some(hex_to_id(
                         "4995fde49ed64e043977e22539f66a0d372dd129",
                         "527a170c0c29520af58bf61a383c4e99a7a7c63c0475cbb630cf98d38d6c0dce"
-                    )
+                    ))
                 ),
                 (
                     "symlink-to-a".into(),
                     EntryKind::Link,
-                    hex_to_id(
+                    Some(hex_to_id(
                         "2e65efe2a145dda7ee51d1741299f848e5bf752e",
                         "eb337bcee2061c5313c9a1392116b6c76039e9e30d71467ae359b36277e17dc7"
-                    )
+                    ))
                 ),
                 (
                     "dir/.gitattributes".into(),
                     EntryKind::Blob,
-                    hex_to_id(
+                    Some(hex_to_id(
                         "81b9a375276405703e05be6cecf0fc1c8b8eed64",
                         "4b74474eca46ad7e1807afe8855e7a511d132b314d3d0f481bb55a331b249fb7"
-                    )
+                    ))
                 ),
                 (
                     "dir/b".into(),
                     EntryKind::Blob,
-                    hex_to_id(
+                    Some(hex_to_id(
                         "ab4a98190cf776b43cb0fe57cef231fb93fd07e6",
                         "cf84f9ae227fa5c481dacd97f6d6506de727dabd30377c6907f623ef1192637a"
-                    )
+                    ))
                 ),
                 (
                     "dir/subdir/exe".into(),
                     EntryKind::BlobExecutable,
-                    hex_to_id(
+                    Some(hex_to_id(
                         "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
                         "473a0f4c3be8a93681a267e3b1e9a7dcda1185436fe141f7749120a303721813"
-                    )
+                    ))
                 ),
                 (
                     "dir/subdir/streamed".into(),
                     EntryKind::Blob,
-                    hex_to_id(
+                    Some(hex_to_id(
                         "08991f58f4de5d85b61c0f87f3ac053c79d0e739",
                         "8c13ad7df9686daf00357f34700922485802cb0be33e684ec5171f7d0d8a84fd"
-                    )
+                    ))
                 ),
-                ("extra-file".into(), EntryKind::Blob, object_hash.null()),
-                ("extra-bigfile".into(), EntryKind::Blob, object_hash.null()),
+                ("extra-file".into(), EntryKind::Blob, None),
+                ("extra-bigfile".into(), EntryKind::Blob, None),
                 (
                     "extra-exe".into(),
                     if cfg!(windows) {
@@ -268,10 +312,10 @@ mod from_tree {
                     } else {
                         EntryKind::BlobExecutable
                     },
-                    object_hash.null()
+                    None
                 ),
-                ("extra-dir-empty".into(), EntryKind::Tree, object_hash.null()),
-                ("extra-dir/symlink-to-extra".into(), EntryKind::Link, object_hash.null())
+                ("extra-dir-empty".into(), EntryKind::Tree, None),
+                ("extra-dir/symlink-to-extra".into(), EntryKind::Link, None)
             ]
         );
 
