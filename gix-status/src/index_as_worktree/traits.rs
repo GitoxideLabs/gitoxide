@@ -78,6 +78,19 @@ pub mod read_data {
         pub fn size(&self) -> Option<u64> {
             self.len
         }
+
+        /// Prepare to read an unconverted worktree file again from its start, this time without assuming its size.
+        pub(crate) fn restart_with_unknown_size(&mut self) -> std::io::Result<()> {
+            let ToGitOutcome::Unchanged(file) = &mut self.inner else {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "only an unconverted worktree file can be read again",
+                ));
+            };
+            std::io::Seek::rewind(file)?;
+            self.len = None;
+            Ok(())
+        }
     }
 
     impl std::io::Read for Stream<'_> {
@@ -144,21 +157,36 @@ impl CompareBlobs for HashEq {
             }
             None => {
                 let file_hash = match stream.size() {
-                    None => {
-                        stream.read_to_end(buf).map_err(gix_hash::io::from_std_io)?;
-                        gix_object::compute_hash(entry.id.kind(), gix_object::Kind::Blob, buf)?
-                    }
-                    Some(len) => gix_object::compute_stream_hash(
+                    None => hash_to_end(entry.id.kind(), &mut stream, buf)?,
+                    Some(len) => match gix_object::compute_stream_hash(
                         entry.id.kind(),
                         gix_object::Kind::Blob,
                         &mut stream,
                         len,
                         &mut gix_utils::progress::Discard,
                         &AtomicBool::default(),
-                    )?,
+                    ) {
+                        // The file shrank after its size was obtained, so it changed while being read, which
+                        // Git reports as a modification. Hash what it contains now instead of failing the status.
+                        Err(err) if is_premature_eof(&err) => {
+                            stream.restart_with_unknown_size().map_err(gix_hash::io::from_std_io)?;
+                            hash_to_end(entry.id.kind(), &mut stream, buf)?
+                        }
+                        file_hash => file_hash?,
+                    },
                 };
                 Ok((entry.id != file_hash).then_some(file_hash))
             }
         }
     }
+}
+
+fn hash_to_end(kind: gix_hash::Kind, stream: &mut read_data::Stream<'_>, buf: &mut Vec<u8>) -> Result<ObjectId> {
+    stream.read_to_end(buf).map_err(gix_hash::io::from_std_io)?;
+    gix_object::compute_hash(kind, gix_object::Kind::Blob, buf)
+}
+
+fn is_premature_eof(err: &gix_error::Error) -> bool {
+    err.downcast_any_ref::<std::io::Error>()
+        .is_some_and(|err| err.kind() == std::io::ErrorKind::UnexpectedEof)
 }
