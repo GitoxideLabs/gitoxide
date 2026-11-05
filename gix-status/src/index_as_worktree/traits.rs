@@ -1,4 +1,4 @@
-use gix_error::{Result, bail, message};
+use gix_error::Result;
 
 use bstr::BStr;
 use gix_hash::ObjectId;
@@ -61,10 +61,10 @@ pub mod read_data {
     /// A stream with worktree file data.
     pub struct Stream<'a> {
         pub(crate) inner: ToGitOutcome<'a, std::fs::File>,
-        /// Counter of consumed worktree bytes, including bytes read again during retries.
+        /// Counter of consumed worktree bytes.
         pub(crate) bytes: Option<&'a AtomicU64>,
         /// Expected length of an unconverted file, from metadata that may already be stale.
-        /// Refreshed on retries; `None` for filtered streams or buffered content.
+        /// `None` for filtered streams or buffered content.
         pub(crate) len: Option<u64>,
     }
 
@@ -114,18 +114,6 @@ pub mod read_data {
                 },
             }
         }
-
-        /// Prepare to read an unconverted worktree file again from its start, with the size it has now.
-        pub(crate) fn restart_with_current_size(&mut self) -> std::io::Result<()> {
-            let ToGitOutcome::Unchanged(file) = &mut self.inner else {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Unsupported,
-                    "only an unconverted worktree file can be read again",
-                ));
-            };
-            self.len = Some(file.metadata()?.len());
-            std::io::Seek::rewind(file)
-        }
     }
 
     impl std::io::Read for Stream<'_> {
@@ -169,12 +157,16 @@ impl CompareBlobs for FastEq {
     }
 }
 
-/// Compares files to blobs by *always* comparing their hashes.
+/// Compares files to blobs by hashing their contents, without the size-mismatch shortcut of [`FastEq`].
 ///
-/// Same as [`FastEq`] but does not contain a fast path for files with mismatched files and
-/// therefore always returns an OID that can be reused later.
-/// A file that shrinks while being read is reported as changed even if its retry hash matches the index,
-/// as the original metadata is stale.
+/// The result of [`CompareBlobs::compare_blobs()`] distinguishes:
+/// * `None`: the content matches the index.
+/// * `Some(Some(id))`: the content changed, and its blob hash is available for reuse.
+/// * `Some(None)`: the file shrank while being read, so it changed but its blob hash is unavailable.
+///
+/// Like Git, a short read is reported as a modification without retrying, even if the remaining content
+/// matches the index, as the original metadata is stale.
+///
 /// Like [`FastEq`] and Git, growth of unconverted files is not detected, as checking their size again would
 /// require additional I/O. Appends beyond the announced size while streaming can therefore result in a
 /// false-equal comparison.
@@ -182,7 +174,7 @@ impl CompareBlobs for FastEq {
 pub struct HashEq;
 
 impl CompareBlobs for HashEq {
-    type Output = ObjectId;
+    type Output = Option<ObjectId>;
 
     fn compare_blobs<'a, 'b>(
         &mut self,
@@ -191,21 +183,10 @@ impl CompareBlobs for HashEq {
         data: impl ReadData<'a>,
         buf: &mut Vec<u8>,
     ) -> Result<Option<Self::Output>> {
-        /// How often to a file that keeps shrinking while it is read before giving up.
-        const HASH_ATTEMPTS_OF_SHRINKING_FILE: usize = 3;
         let mut stream = data.stream_worktree_file()?;
-        let mut attempts_left = HASH_ATTEMPTS_OF_SHRINKING_FILE;
-        loop {
-            if let Some(file_hash) = stream.hash(entry.id.kind(), buf)? {
-                let had_short_read = attempts_left < HASH_ATTEMPTS_OF_SHRINKING_FILE;
-                return Ok((had_short_read || entry.id != file_hash).then_some(file_hash));
-            }
-            attempts_left -= 1;
-            if attempts_left == 0 {
-                bail!(message("The worktree file kept shrinking while it was hashed"));
-            }
-            // An object id has to describe actual content, so stream the file again with the size it has now.
-            stream.restart_with_current_size().map_err(gix_hash::io::from_std_io)?;
-        }
+        Ok(match stream.hash(entry.id.kind(), buf)? {
+            Some(file_hash) => (entry.id != file_hash).then_some(Some(file_hash)),
+            None => Some(None),
+        })
     }
 }

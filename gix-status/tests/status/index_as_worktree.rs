@@ -1598,7 +1598,7 @@ where
     // An old `mtime` makes the stat comparison fail even if the sizes match, so the file content must be read.
     index.entries_mut()[0].stat.mtime.secs = 940040400;
     let mut recorder = Recorder { records: Vec::new() };
-    index_as_worktree(
+    let outcome = index_as_worktree(
         &index,
         worktree,
         &mut recorder,
@@ -1622,6 +1622,11 @@ where
             ..Options::default()
         },
     )?;
+    assert_eq!(
+        outcome.worktree_bytes,
+        content.len() as u64,
+        "a short read reports a modification without reading the file again"
+    );
     Ok(recorder.records.into_iter().map(|record| record.status).collect())
 }
 
@@ -1643,21 +1648,27 @@ fn file_shrinking_while_read_is_modified() -> gix_testtools::TestResult {
     );
     assert_eq!(
         status_with_file_rewritten_before_read(HashEq, b"bar", b"f")?,
-        [modified(gix_object::compute_hash(
-            gix_testtools::object_hash(),
-            gix_object::Kind::Blob,
-            b"f"
-        )?)],
-        "the hash of a file that shrank is computed from the content it has now"
+        [modified(None)],
+        "a shrinking file is modified, but its hash is unavailable without retrying"
     );
     assert_eq!(
         status_with_file_rewritten_before_read(HashEq, b"foox", b"foo")?,
-        [modified(gix_object::compute_hash(
+        [modified(None)],
+        "a short read remains a modification even if the content now matches the index, preventing a stale stat update"
+    );
+    assert_eq!(
+        status_with_file_rewritten_before_read(HashEq, b"bar", b"")?,
+        [modified(None)],
+        "truncating to empty also reports a modification without retrying to compute the empty-blob hash"
+    );
+    assert_eq!(
+        status_with_file_rewritten_before_read(HashEq, b"f", b"f")?,
+        [modified(Some(gix_object::compute_hash(
             gix_testtools::object_hash(),
             gix_object::Kind::Blob,
-            b"foo"
-        )?)],
-        "a short read remains a modification even if the retry matches the index, preventing a stale stat update"
+            b"f"
+        )?))],
+        "without a short read, the modified content's hash is available even when its size differs from the index"
     );
     assert!(
         matches!(
