@@ -69,6 +69,8 @@ fn relative_paths_retain_runtime_state_and_the_selected_index_after_changing_cwd
     let original_index = repo.index()?;
     repo.config_snapshot_mut().set_raw_value("core.abbrev", "8")?;
     repo.config_snapshot_mut()
+        .set_raw_value("core.sharedRepository", "0640")?;
+    repo.config_snapshot_mut()
         .set_raw_value("gitoxide.core.indexFile", "different-index")?;
     repo.set_namespace("location")?;
     repo.reference(
@@ -90,6 +92,14 @@ fn relative_paths_retain_runtime_state_and_the_selected_index_after_changing_cwd
         "every selected path is joined to the captured CWD without canonicalization or reselecting the index"
     );
     assert_eq!(repo.current_dir(), current_dir, "the opening CWD remains unchanged");
+    assert_eq!(
+        repo.refs.shared_repository_permissions, -0o640,
+        "anchoring retains the reference store's sharing policy"
+    );
+    assert_eq!(
+        repo.objects.shared_repository_permissions, -0o640,
+        "anchoring retains the object handle's sharing policy"
+    );
     assert_eq!(
         repo.config_snapshot().to_bstring(),
         config,

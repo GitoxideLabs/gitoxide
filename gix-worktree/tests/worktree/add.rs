@@ -165,6 +165,58 @@ fn invalid_source_sparse_pattern_file_rolls_back_new_and_caller_owned_destinatio
 }
 
 #[test]
+#[cfg(unix)]
+fn shared_permissions_include_linking_files_but_preserve_existing_directories() -> crate::Result {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempdir()?;
+    let common_dir = tmp.path().join("repo.git");
+    fs::create_dir(&common_dir)?;
+    fs::set_permissions(&common_dir, fs::Permissions::from_mode(0o700))?;
+    let options = gix_worktree::add::Options {
+        shared_repository_permissions: -0o640,
+        ..Default::default()
+    };
+    let destination = tmp.path().join("parent/worktree");
+    let prepared = gix_worktree::add::prepare(&destination, Context::new(&common_dir), options)?;
+    for path in [
+        destination.join(".git"),
+        prepared.git_dir().join("gitdir"),
+        prepared.git_dir().join("commondir"),
+        prepared.git_dir().join("locked"),
+    ] {
+        assert_eq!(
+            fs::metadata(path)?.permissions().mode() & 0o777,
+            0o640,
+            "all linking files follow the explicit sharing policy"
+        );
+    }
+    for path in [tmp.path().join("parent"), destination, common_dir.join("worktrees")] {
+        assert_eq!(
+            fs::metadata(path)?.permissions().mode() & 0o777,
+            0o750,
+            "new directories include search permissions"
+        );
+    }
+    assert_eq!(
+        fs::metadata(&common_dir)?.permissions().mode() & 0o777,
+        0o700,
+        "existing repository permissions are unchanged"
+    );
+    let existing = tmp.path().join("existing");
+    fs::create_dir(&existing)?;
+    fs::set_permissions(&existing, fs::Permissions::from_mode(0o700))?;
+    let prepared = gix_worktree::add::prepare(&existing, Context::new(&common_dir), options)?;
+    prepared.rollback()?;
+    assert_eq!(
+        fs::metadata(existing)?.permissions().mode() & 0o777,
+        0o700,
+        "a caller-owned destination retains its mode after rollback"
+    );
+    Ok(())
+}
+
+#[test]
 fn relative_input_paths_are_made_absolute_with_default_options() -> gix_testtools::TestResult {
     let cwd = std::env::current_dir()?;
     let tmp = gix_testtools::tempfile::tempdir_in(&cwd)?;
@@ -386,7 +438,10 @@ fn linking_paths_preserve_backslashes_in_unix_filenames() -> gix_testtools::Test
         let prepared = gix_worktree::add::prepare(
             &work_dir,
             Context::new(&common_dir),
-            gix_worktree::add::Options { relative_paths },
+            gix_worktree::add::Options {
+                relative_paths,
+                ..Default::default()
+            },
         )?;
         let dot_git = prepared.work_dir().join(".git");
         let git_dir = gix_discover::path::from_gitdir_file(&dot_git)?;

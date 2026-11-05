@@ -531,7 +531,10 @@ fn materialize_conflict(
     super::delete::apply_tree_transition(workdir, ours_tree, merged_tree)
         .or_raise(|| message("could not check out the conflicting merge result"))?;
     if let Err(err) = index
-        .write(gix::index::write::Options::default())
+        .write(
+            gix::index::write::Options::default(),
+            repo.refs.shared_repository_permissions,
+        )
         .or_raise(|| message("could not write the conflicting index"))
     {
         return match super::delete::apply_tree_transition(workdir, merged_tree, ours_tree) {
@@ -2714,9 +2717,10 @@ impl Prepared {
         if let Err(mut err) = completed {
             if let Some(merged_tree) = materialized_tree {
                 let restored = (|| -> Result<()> {
-                    self.repo
-                        .index_from_tree(&merged_tree)?
-                        .write(gix::index::write::Options::default())?;
+                    self.repo.index_from_tree(&merged_tree)?.write(
+                        gix::index::write::Options::default(),
+                        self.repo.refs.shared_repository_permissions,
+                    )?;
                     super::delete::apply_tree_transition(
                         self.repo
                             .workdir()
@@ -3029,7 +3033,10 @@ fn reset_index_paths(repo: &gix::Repository, id: ObjectId, paths: &[BString]) ->
     index.sort_entries();
     index.remove_tree();
     index
-        .write(gix::index::write::Options::default())
+        .write(
+            gix::index::write::Options::default(),
+            repo.refs.shared_repository_permissions,
+        )
         .or_raise(|| message("could not update selected index paths"))
 }
 
