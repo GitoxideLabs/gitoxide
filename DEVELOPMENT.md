@@ -238,11 +238,15 @@ directory. `--agent` enables this output explicitly. JSON plans and `--dry-run`
 command listings remain available for detailed inspection.
 
 When `tix` is installed, a successful complete local run records a checks-pass message
-on the tested commit's tree. Its gutter emoji distinguishes fast (`⚡`) from thorough
-(`🔬`, exhaustive mode) coverage, including automatic exhaustive fallbacks. The title
-shows the elapsed run time; the body records the host, comparison base, selected package
-count, selection reasons and elapsed time for each task, including setup. Timing starts
-inside the QA runner, after any compilation needed to launch it. Recording requires the
+on the tested commit's tree: the selected QA profile passed with the recorded scope.
+Its gutter emoji distinguishes fast (`⚡`) and thorough (`🔬`, exhaustive mode) coverage,
+including automatic exhaustive fallbacks. Fast runs that omit tests include `coverage selection` in the title.
+The title shows the elapsed run time; the body records the host, comparison base, selected
+package count, selection reasons, package/configuration planning time and elapsed time for
+each task, including setup. Coverage reports include the effective mode, observed test
+execution and omission counts, and index reuse, collection or fallback. Inventory and
+per-test selection timings are a breakdown of task times, not additional elapsed time.
+Timing starts inside the QA runner, after any compilation needed to launch it. Recording requires the
 same clean `HEAD` at the start and end of the run. Dirty runs, task
 failures (including nonblocking failures), stage subsets, saved plans, dry runs and CI
 jobs do not receive a checks-pass message. A missing `tix` or unavailable initial Git
@@ -271,7 +275,7 @@ An [investigation of LSP-based test selection](etc/plan/qa-test-selection.md) me
 selection with rust-analyzer. Missing call edges and mismatched feature configurations currently
 prevent using those results to omit individual tests safely.
 
-Fast QA automatically attempts **experimental** LLVM coverage selection for native, isolated and feature
+Fast QA automatically uses LLVM coverage selection for native, isolated and feature
 tests when stable Rust's matching LLVM tools are available. It uses a compatible local index
 to select individual tests. If the configuration has no usable index, it runs the full selected case
 with per-test coverage collection and saves the result for later QA invocations. This first run pays
@@ -297,10 +301,13 @@ for the same unknown or disabled inputs; it never permits test omission. Newly a
 a refreshed index records their coverage. Partial coverage, including unmapped functions from child
 executables, leaves that individual test unrecorded so it always runs.
 
-Historical runtime coverage is **not complete dependency analysis**: constants, type layouts and
-other compile-time inputs can affect tests without executing their source files. Runs that omit tests
-do not record ordinary Tix checks-pass. The layer does not prune compilation, clippy, doctests or shell
-journeys. See the [measurements and limits](etc/plan/qa-test-selection.md#llvm-coverage-prototype).
+Coverage records executed source files. Constants, type layouts and other compile-time inputs can
+affect tests without executing those files. Checks-pass records success of the selected profile and
+reports test omissions. The layer does not prune compilation, clippy, doctests or shell journeys.
+See the [measurements and limits](etc/plan/qa-test-selection.md#llvm-coverage-selection).
+
+Tix QA sweeps retain automatic coverage selection unless explicitly disabled by the user and preserve
+the runner's checks-pass artifact with its coverage and timing report.
 
 The coverage modes can also be selected explicitly:
 
@@ -325,13 +332,10 @@ per-package feature cases can reuse their own indexes. An older index must name 
 `HEAD`; selection includes the entire diff from that ancestor, the QA comparison base, recorded dirty
 paths, and current staged, unstaged and untracked inputs.
 New/unrecorded tests always run, and unknown changed paths or non-Rust inputs retain the complete case.
-Exhaustive mode never omits tests. Runs which actually omit tests do not record ordinary Tix checks-pass.
+Exhaustive mode never omits tests.
 
-This is historical execution evidence: constants, type layouts, imports, macros and compile-time
-evaluation can affect tests without executing their source files.
-Use `shadow` to compare selections while retaining complete execution. It does not prune compilation,
-clippy, doctests or shell journeys, and collecting coverage runs the tests being measured; reuse is
-what can make later runs faster.
+Use `shadow` to compare selections while retaining complete execution. Collecting coverage runs the
+tests being measured; reuse is what can make later runs faster.
 
 CI enables collection and reuse by default for native, isolated and feature tests. Main jobs attempt
 to install LLVM tools, collect complete configuration indexes and publish 14-day Actions artifacts.
