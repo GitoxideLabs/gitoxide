@@ -104,7 +104,9 @@ mod access {
             &self.path
         }
 
-        /// The checksum over the file that was read or written to disk, or `None` if the state in memory was never serialized.
+        /// The checksum over the file that was read or written to disk.
+        /// Returns `None` if the state in memory was never serialized or the checksum was omitted
+        /// via [`crate::write::Options::skip_hash`].
         ///
         /// Note that even if `Some`, it will only represent the state in memory right after reading or [writing][File::write()].
         pub fn checksum(&self) -> Option<gix_hash::ObjectId> {

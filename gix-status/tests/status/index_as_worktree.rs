@@ -14,7 +14,7 @@ use gix_status::{
     index_as_worktree::{
         Change as WorktreeChange, Conflict, Context, EntryStatus as WorktreeEntryStatus, Options, Outcome, Record,
         Recorder,
-        traits::{CompareBlobs, FastEq, ReadData, SubmoduleStatus},
+        traits::{CompareBlobs, FastEq, HashEq, ReadData, SubmoduleStatus},
     },
 };
 
@@ -1546,6 +1546,143 @@ fn racy_git() -> gix_testtools::TestResult {
             .into(),
         )],
         "racy change is correctly detected"
+    );
+    Ok(())
+}
+
+/// A comparison that rewrites the worktree file after `status` obtained its metadata but before the file is read,
+/// like an editor or agent that truncates and rewrites a file in place while `status` runs.
+#[derive(Clone)]
+struct RewriteBeforeRead<C> {
+    path: std::path::PathBuf,
+    content: &'static [u8],
+    compare: C,
+}
+
+impl<C: CompareBlobs> CompareBlobs for RewriteBeforeRead<C> {
+    type Output = C::Output;
+
+    fn compare_blobs<'a, 'b>(
+        &mut self,
+        entry: &Entry,
+        worktree_file_size: u64,
+        data: impl ReadData<'a>,
+        buf: &mut Vec<u8>,
+    ) -> Result<Option<Self::Output>> {
+        std::fs::write(&self.path, self.content).expect("the fixture is writable");
+        self.compare.compare_blobs(entry, worktree_file_size, data, buf)
+    }
+}
+
+/// Run `status` on the `racy_git` fixture, whose single file has indexed content `foo`, while `compare`
+/// rewrites `initial_content` with `content` between reading its metadata and reading its data.
+fn status_with_file_rewritten_before_read<C>(
+    compare: C,
+    initial_content: &[u8],
+    content: &'static [u8],
+) -> gix_error::TestResult<Vec<WorktreeEntryStatus<C::Output, ()>>>
+where
+    C: CompareBlobs + Send + Clone,
+    C::Output: Send,
+{
+    let dir = crate::scripted_fixture_writable("racy_git.sh")?;
+    let worktree = dir.path();
+    std::fs::write(worktree.join("content"), initial_content)?;
+    let git_dir = worktree.join(".git");
+    let mut index = gix_index::File::at(
+        git_dir.join("index"),
+        gix_testtools::object_hash(),
+        false,
+        Default::default(),
+    )?;
+    // An old `mtime` makes the stat comparison fail even if the sizes match, so the file content must be read.
+    index.entries_mut()[0].stat.mtime.secs = 940040400;
+    let mut recorder = Recorder { records: Vec::new() };
+    let outcome = index_as_worktree(
+        &index,
+        worktree,
+        &mut recorder,
+        RewriteBeforeRead {
+            path: worktree.join("content"),
+            content,
+            compare,
+        },
+        SubmoduleStatusMock { dirty: false },
+        gix_object::find::Never,
+        &mut gix_utils::progress::Discard,
+        Context {
+            pathspec: default_pathspec(),
+            stack: attributes_stack(worktree, &index),
+            filter: gix_filter::Pipeline::new(Default::default(), gix_testtools::object_hash(), Default::default()),
+            should_interrupt: &AtomicBool::default(),
+        },
+        Options {
+            fs: gix_fs::Capabilities::probe(&git_dir),
+            stat: TEST_OPTIONS,
+            ..Options::default()
+        },
+    )?;
+    assert_eq!(
+        outcome.worktree_bytes,
+        content.len() as u64,
+        "a short read reports a modification without reading the file again"
+    );
+    Ok(recorder.records.into_iter().map(|record| record.status).collect())
+}
+
+#[test]
+fn file_shrinking_while_read_is_modified() -> gix_testtools::TestResult {
+    fn modified<T>(content_change: T) -> WorktreeEntryStatus<T, ()> {
+        WorktreeChange::Modification {
+            executable_bit_changed: false,
+            content_change: Some(content_change),
+            set_entry_stat_size_zero: false,
+        }
+        .into()
+    }
+
+    assert_eq!(
+        status_with_file_rewritten_before_read(FastEq, b"bar", b"f")?,
+        [modified(())],
+        "like Git, a file that yields fewer bytes than its metadata announced changed while it was read"
+    );
+    assert_eq!(
+        status_with_file_rewritten_before_read(HashEq, b"bar", b"f")?,
+        [modified(None)],
+        "a shrinking file is modified, but its hash is unavailable without retrying"
+    );
+    assert_eq!(
+        status_with_file_rewritten_before_read(HashEq, b"foox", b"foo")?,
+        [modified(None)],
+        "a short read remains a modification even if the content now matches the index, preventing a stale stat update"
+    );
+    assert_eq!(
+        status_with_file_rewritten_before_read(HashEq, b"bar", b"")?,
+        [modified(None)],
+        "truncating to empty also reports a modification without retrying to compute the empty-blob hash"
+    );
+    assert_eq!(
+        status_with_file_rewritten_before_read(HashEq, b"f", b"f")?,
+        [modified(Some(gix_object::compute_hash(
+            gix_testtools::object_hash(),
+            gix_object::Kind::Blob,
+            b"f"
+        )?))],
+        "without a short read, the modified content's hash is available even when its size differs from the index"
+    );
+    assert!(
+        matches!(
+            status_with_file_rewritten_before_read(HashEq, b"bar", b"foo")?.as_slice(),
+            [WorktreeEntryStatus::NeedsUpdate(_)]
+        ),
+        "a matching hash without a short read still allows a stat update"
+    );
+    assert!(
+        matches!(
+            status_with_file_rewritten_before_read(FastEq, b"bar", b"foo")?.as_slice(),
+            [WorktreeEntryStatus::NeedsUpdate(_)]
+        ),
+        "rewriting the indexed content of the same size before the read leaves the file unmodified"
     );
     Ok(())
 }

@@ -50,7 +50,9 @@ pub(crate) type SharedErrorSlot = Arc<parking_lot::Mutex<Option<gix_error::Error
 pub struct Entry<'a> {
     /// The kind of entry at [`relative_path`][Self::relative_path()].
     pub mode: gix_object::tree::EntryMode,
-    /// The hash of the object, uniquely identifying it.
+    /// The hash of the object, uniquely identifying it when available.
+    /// A [`null()`][gix_hash::ObjectId::null()] hash means the hash is unavailable, not that the entry has no content.
+    /// This is the case for entries added with [`Stream::add_entry_from_path()`].
     pub id: gix_hash::ObjectId,
     /// Access to our parent
     parent: &'a mut Stream,
@@ -66,8 +68,9 @@ pub struct Entry<'a> {
 ///
 /// It may overwrite previously written paths, which may or may not work for the consumer of the stream.
 pub struct AdditionalEntry {
-    /// The hash of the object, uniquely identifying it.
-    /// Note that it can be [`null()`][gix_hash::ObjectId::null()] as the hash is typically ignored by consumers of the stream.
+    /// The hash of the object, uniquely identifying it when available.
+    /// It can be [`null()`][gix_hash::ObjectId::null()] to indicate that the hash is unavailable, not that the entry has no content.
+    /// The hash is typically ignored by consumers of the stream.
     pub id: gix_hash::ObjectId,
     /// The kind of entry to create.
     pub mode: gix_object::tree::EntryMode,

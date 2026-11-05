@@ -1,5 +1,4 @@
 use gix_error::Result;
-use std::{io::Read, sync::atomic::AtomicBool};
 
 use bstr::BStr;
 use gix_hash::ObjectId;
@@ -48,16 +47,24 @@ pub trait ReadData<'a> {
 
 ///
 pub mod read_data {
-    use std::sync::atomic::Ordering;
+    use std::{
+        io::Read,
+        sync::atomic::{AtomicBool, Ordering},
+    };
 
+    use gix_error::Result;
     use gix_filter::pipeline::convert::ToGitOutcome;
+    use gix_hash::ObjectId;
 
     use crate::AtomicU64;
 
     /// A stream with worktree file data.
     pub struct Stream<'a> {
         pub(crate) inner: ToGitOutcome<'a, std::fs::File>,
+        /// Counter of consumed worktree bytes.
         pub(crate) bytes: Option<&'a AtomicU64>,
+        /// Expected length of an unconverted file, from metadata that may already be stale.
+        /// `None` for filtered streams or buffered content.
         pub(crate) len: Option<u64>,
     }
 
@@ -77,6 +84,35 @@ pub mod read_data {
         /// Return the size of the stream in bytes if it is known in advance.
         pub fn size(&self) -> Option<u64> {
             self.len
+        }
+
+        /// Hash this stream as a blob, or return `None` if it yielded fewer bytes than its size announced,
+        /// which means the file shrank while it was read.
+        pub(crate) fn hash(&mut self, kind: gix_hash::Kind, buf: &mut Vec<u8>) -> Result<Option<ObjectId>> {
+            fn is_premature_eof(err: &gix_error::Error) -> bool {
+                err.downcast_any_ref::<std::io::Error>()
+                    .is_some_and(|err| err.kind() == std::io::ErrorKind::UnexpectedEof)
+            }
+            if let Some(buffer) = self.as_bytes() {
+                return gix_object::compute_hash(kind, gix_object::Kind::Blob, buffer).map(Some);
+            }
+            match self.size() {
+                None => {
+                    self.read_to_end(buf).map_err(gix_hash::io::from_std_io)?;
+                    gix_object::compute_hash(kind, gix_object::Kind::Blob, buf).map(Some)
+                }
+                Some(len) => match gix_object::compute_stream_hash(
+                    kind,
+                    gix_object::Kind::Blob,
+                    self,
+                    len,
+                    &mut gix_utils::progress::Discard,
+                    &AtomicBool::default(),
+                ) {
+                    Err(err) if is_premature_eof(&err) => Ok(None),
+                    file_hash => file_hash.map(Some),
+                },
+            }
         }
     }
 
@@ -113,21 +149,32 @@ impl CompareBlobs for FastEq {
         if u64::from(entry.stat.size) != worktree_file_size && (entry.id.is_empty_blob() || entry.stat.size != 0) {
             return Ok(Some(()));
         }
-        HashEq
-            .compare_blobs(entry, worktree_file_size, data, buf)
-            .map(|opt| opt.map(|_| ()))
+        let mut stream = data.stream_worktree_file()?;
+        Ok(match stream.hash(entry.id.kind(), buf)? {
+            Some(file_hash) => (entry.id != file_hash).then_some(()),
+            None => Some(()),
+        })
     }
 }
 
-/// Compares files to blobs by *always* comparing their hashes.
+/// Compares files to blobs by hashing their contents, without the size-mismatch shortcut of [`FastEq`].
 ///
-/// Same as [`FastEq`] but does not contain a fast path for files with mismatched files and
-/// therefore always returns an OID that can be reused later.
+/// The result of [`CompareBlobs::compare_blobs()`] distinguishes:
+/// * `None`: the content matches the index.
+/// * `Some(Some(id))`: the content changed, and its blob hash is available for reuse.
+/// * `Some(None)`: the file shrank while being read, so it changed but its blob hash is unavailable.
+///
+/// Like Git, a short read is reported as a modification without retrying, even if the remaining content
+/// matches the index, as the original metadata is stale.
+///
+/// Like [`FastEq`] and Git, growth of unconverted files is not detected, as checking their size again would
+/// require additional I/O. Appends beyond the announced size while streaming can therefore result in a
+/// false-equal comparison.
 #[derive(Clone)]
 pub struct HashEq;
 
 impl CompareBlobs for HashEq {
-    type Output = ObjectId;
+    type Output = Option<ObjectId>;
 
     fn compare_blobs<'a, 'b>(
         &mut self,
@@ -137,28 +184,9 @@ impl CompareBlobs for HashEq {
         buf: &mut Vec<u8>,
     ) -> Result<Option<Self::Output>> {
         let mut stream = data.stream_worktree_file()?;
-        match stream.as_bytes() {
-            Some(buffer) => {
-                let file_hash = gix_object::compute_hash(entry.id.kind(), gix_object::Kind::Blob, buffer)?;
-                Ok((entry.id != file_hash).then_some(file_hash))
-            }
-            None => {
-                let file_hash = match stream.size() {
-                    None => {
-                        stream.read_to_end(buf).map_err(gix_hash::io::from_std_io)?;
-                        gix_object::compute_hash(entry.id.kind(), gix_object::Kind::Blob, buf)?
-                    }
-                    Some(len) => gix_object::compute_stream_hash(
-                        entry.id.kind(),
-                        gix_object::Kind::Blob,
-                        &mut stream,
-                        len,
-                        &mut gix_utils::progress::Discard,
-                        &AtomicBool::default(),
-                    )?,
-                };
-                Ok((entry.id != file_hash).then_some(file_hash))
-            }
-        }
+        Ok(match stream.hash(entry.id.kind(), buf)? {
+            Some(file_hash) => (entry.id != file_hash).then_some(Some(file_hash)),
+            None => Some(None),
+        })
     }
 }
