@@ -490,7 +490,13 @@ mod program {
         assert_eq!(
             gix_credentials::helper::invoke(
                 &mut script_helper("custom-helper"),
-                &helper::Action::get_for_url("/does/not/matter"),
+                &helper::Action::Get(gix_credentials::protocol::Context {
+                    url: Some("https://example.com/repo".into()),
+                    // Exceed the pipe buffer before the capability write to detect unread input reliably.
+                    path: Some(vec![b'x'; 1024 * 1024].into()),
+                    capability: vec![gix_credentials::protocol::Capability::Authtype],
+                    ..Default::default()
+                }),
             )?
             .expect("present")
             .consume_credentials()
@@ -499,7 +505,8 @@ mod program {
                 username: "user-script".into(),
                 password: "pass-script".into(),
                 oauth_refresh_token: None
-            }
+            },
+            "the fixture consumes the full request before returning credentials"
         );
         Ok(())
     }
