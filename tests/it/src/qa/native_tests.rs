@@ -648,6 +648,8 @@ mod tests {
                 ("INSTA_UPDATE", Some("no")),
                 ("INSTA_FORCE_PASS", Some("0")),
                 ("GIX_TEST_FIXTURE_HASH", None),
+                ("QA_PLAN", None),
+                ("QA_JOB", None),
                 ("GIX_TEST_FIXTURE_CACHE", Some("fixture-cache")),
                 ("GIX_TEST_FIXTURE_SOURCE_ROOT", Some("snapshot")),
                 ("GIX_MERGE_UPDATE_CARTESIAN_BASELINE", None),

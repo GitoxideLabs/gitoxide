@@ -382,6 +382,9 @@ pub(super) fn process(root: &Path, command: &Command) -> Result<process::Command
     // `cargo run` sets this for QA; cargo-machete uses its absence to recognize Cargo invocations.
     child.env_remove("CARGO_PKG_NAME");
     for name in [
+        // Only the scheduler needs these; large plans exhaust MSYS xargs' argument budget.
+        "QA_PLAN",
+        "QA_JOB",
         "GIX_TEST_IGNORE_ARCHIVES",
         "GIX_TEST_CREATE_ARCHIVES_EVEN_ON_CI",
         "GIX_TEST_FIXTURE_HASH",
@@ -580,6 +583,8 @@ mod tests {
             ("WITH_SNAPSHOT", None),
             ("SNAPSHOT_FILTER", None),
             ("CARGO_PKG_NAME", None),
+            ("QA_PLAN", None),
+            ("QA_JOB", None),
         ] {
             assert_eq!(
                 env.get(OsStr::new(name)),
@@ -587,6 +592,34 @@ mod tests {
                 "{name} must match CI"
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn task_subprocesses_do_not_inherit_the_ci_schedule() -> gix_error::TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let plan = "p".repeat(15_087);
+        let _env = gix_testtools::Env::new()
+            .set("QA_PLAN", &plan)
+            .set("QA_JOB", "tests@windows-x86_64");
+        let root = gix_testtools::tempfile::tempdir()?;
+        let mut command = Command::new(
+            &gix_testtools::bash_program().to_string_lossy(),
+            &[
+                "-c",
+                r#"printf '%s:%s:%s' "${QA_PLAN+inherited}" "${QA_JOB+inherited}" "$GIX_TEST_FIXTURE_HASH""#,
+            ],
+        );
+        command.env.insert("GIX_TEST_FIXTURE_HASH".into(), "sha256".into());
+        let output = process(root.path(), &normalize(command))?.output()?;
+        assert!(output.status.success(), "the task subprocess succeeds: {output:?}");
+        assert_eq!(
+            output.stdout, b"::sha256",
+            "tasks omit the CI schedule while retaining their fixture variant"
+        );
+        assert_eq!(std::env::var("QA_PLAN")?, plan, "the runner retains its plan");
         Ok(())
     }
 
