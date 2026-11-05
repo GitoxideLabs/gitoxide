@@ -23,7 +23,8 @@ pub struct Count {
 #[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Entry {
-    /// The hash of the object to write
+    /// The hash of the object to write, or null for an [`invalid`](Self::is_invalid) entry.
+    /// Invalid entries preserve input positions but are skipped by the pack writer.
     pub id: ObjectId,
     /// The kind of entry represented by `data`. It's used alongside with it to complete the pack entry
     /// at rest or in transit.
