@@ -51,9 +51,10 @@ pub struct Entry<'a> {
     /// The kind of entry at [`relative_path`][Self::relative_path()].
     pub mode: gix_object::tree::EntryMode,
     /// The hash of the object, uniquely identifying it when available.
-    /// A [`null()`][gix_hash::ObjectId::null()] hash means the hash is unavailable, not that the entry has no content.
+    /// `None` means the hash is unavailable, not that the entry has no content.
     /// This is the case for entries added with [`Stream::add_entry_from_path()`].
-    pub id: gix_hash::ObjectId,
+    /// For tree entries this identifies the original Git object, before worktree filters transform the streamed bytes.
+    pub id: Option<gix_hash::ObjectId>,
     /// Access to our parent
     parent: &'a mut Stream,
     /// The path relative to the repository at which data should be written.
@@ -69,9 +70,10 @@ pub struct Entry<'a> {
 /// It may overwrite previously written paths, which may or may not work for the consumer of the stream.
 pub struct AdditionalEntry {
     /// The hash of the object, uniquely identifying it when available.
-    /// It can be [`null()`][gix_hash::ObjectId::null()] to indicate that the hash is unavailable, not that the entry has no content.
+    /// `None` means the hash is unavailable, not that the entry has no content.
+    /// [`Stream::add_entry()`] normalizes `Some(null)` to `None`.
     /// The hash is typically ignored by consumers of the stream.
-    pub id: gix_hash::ObjectId,
+    pub id: Option<gix_hash::ObjectId>,
     /// The kind of entry to create.
     pub mode: gix_object::tree::EntryMode,
     /// The path relative to the repository at which content should be located.
@@ -122,7 +124,8 @@ impl Stream {
     /// The entry will be returned after the one contained in the tree, in order of addition.
     /// # Panics
     /// If called after the first call to [`Self::next_entry()`].
-    pub fn add_entry(&mut self, entry: AdditionalEntry) -> &mut Self {
+    pub fn add_entry(&mut self, mut entry: AdditionalEntry) -> &mut Self {
+        entry.id = entry.id.filter(|id| !id.is_null());
         self.extra_entries
             .as_ref()
             .expect("BUG: must not add entries after the start of entries traversal")
@@ -133,21 +136,15 @@ impl Stream {
 
     /// Add the item at `path` as entry to this stream, which is expected to be under `root`.
     ///
-    /// Note that the created entries will always have a null hash, and that we access this path
+    /// Note that the created entries will always have `None` as their ID, and that we access this path
     /// to determine its type, and will access it again when it is requested.
-    pub fn add_entry_from_path(
-        &mut self,
-        root: &Path,
-        path: &Path,
-        object_hash: gix_hash::Kind,
-    ) -> std::io::Result<&mut Self> {
+    pub fn add_entry_from_path(&mut self, root: &Path, path: &Path) -> std::io::Result<&mut Self> {
         let rela_path = path.strip_prefix(root).map_err(std::io::Error::other)?;
         let meta = path.symlink_metadata()?;
         let relative_path = gix_path::to_unix_separators_on_windows(
             gix_path::into_bstr(rela_path).map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?,
         )
         .into_owned();
-        let id = object_hash.null();
 
         let entry = if meta.is_symlink() {
             let content = std::fs::read_link(path)?;
@@ -155,14 +152,14 @@ impl Stream {
                 .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?
                 .into_owned();
             AdditionalEntry {
-                id,
+                id: None,
                 mode: gix_object::tree::EntryKind::Link.into(),
                 relative_path,
                 source: entry::Source::Memory(content.into()),
             }
         } else if meta.is_dir() {
             AdditionalEntry {
-                id,
+                id: None,
                 mode: gix_object::tree::EntryKind::Tree.into(),
                 relative_path,
                 source: entry::Source::Null,
@@ -175,7 +172,7 @@ impl Stream {
             }
             .into();
             AdditionalEntry {
-                id,
+                id: None,
                 mode,
                 relative_path,
                 source: entry::Source::Path(path.to_owned()),

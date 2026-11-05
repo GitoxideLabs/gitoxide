@@ -37,13 +37,13 @@ pub fn stream(
         })?)?;
         for path in add_paths {
             stream
-                .add_entry_from_path(&root, &gix::path::realpath(&path)?, repo.object_hash())
+                .add_entry_from_path(&root, &gix::path::realpath(&path)?)
                 .or_error()?;
         }
     }
     for (path, content) in files {
         stream.add_entry(gix::worktree::stream::AdditionalEntry {
-            id: gix::hash::Kind::Sha1.null(),
+            id: None,
             mode: gix::object::tree::EntryKind::Blob.into(),
             relative_path: path.into(),
             source: gix::worktree::stream::entry::Source::Memory(content.into()),

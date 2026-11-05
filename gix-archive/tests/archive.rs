@@ -21,10 +21,6 @@ static SHA1_TO_SHA256_HASHES: std::sync::LazyLock<std::collections::HashMap<&str
                 "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
                 "473a0f4c3be8a93681a267e3b1e9a7dcda1185436fe141f7749120a303721813",
             ),
-            (
-                "0000000000000000000000000000000000000000",
-                "0000000000000000000000000000000000000000000000000000000000000000",
-            ),
         ]
         .into()
     });
@@ -95,33 +91,29 @@ mod from_tree {
                     (
                         ".gitattributes".into(),
                         EntryKind::Blob,
-                        hex_to_id("45c160c35c17ad264b96431cceb9793160396e99")
+                        Some(hex_to_id("45c160c35c17ad264b96431cceb9793160396e99"))
                     ),
                     (
                         "a".into(),
                         EntryKind::Blob,
-                        hex_to_id("45b983be36b73c0788dc9cbcb76cbb80fc7bb057")
+                        Some(hex_to_id("45b983be36b73c0788dc9cbcb76cbb80fc7bb057"))
                     ),
                     (
                         "symlink-to-a".into(),
                         EntryKind::Link,
-                        hex_to_id("2e65efe2a145dda7ee51d1741299f848e5bf752e")
+                        Some(hex_to_id("2e65efe2a145dda7ee51d1741299f848e5bf752e"))
                     ),
                     (
                         "dir/b".into(),
                         EntryKind::Blob,
-                        hex_to_id("ab4a98190cf776b43cb0fe57cef231fb93fd07e6")
+                        Some(hex_to_id("ab4a98190cf776b43cb0fe57cef231fb93fd07e6"))
                     ),
                     (
                         "dir/subdir/exe".into(),
                         EntryKind::BlobExecutable,
-                        hex_to_id("e69de29bb2d1d6434b8b29ae775ad8c2e48c5391")
+                        Some(hex_to_id("e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"))
                     ),
-                    (
-                        "extra-file".into(),
-                        EntryKind::Blob,
-                        hex_to_id("0000000000000000000000000000000000000000")
-                    ),
+                    ("extra-file".into(), EntryKind::Blob, None),
                     (
                         "extra-exe".into(),
                         if cfg!(windows) {
@@ -129,18 +121,10 @@ mod from_tree {
                         } else {
                             EntryKind::BlobExecutable
                         },
-                        hex_to_id("0000000000000000000000000000000000000000")
+                        None
                     ),
-                    (
-                        "extra-dir-empty".into(),
-                        EntryKind::Tree,
-                        hex_to_id("0000000000000000000000000000000000000000")
-                    ),
-                    (
-                        "extra-dir/symlink-to-extra".into(),
-                        EntryKind::Link,
-                        hex_to_id("0000000000000000000000000000000000000000")
-                    )
+                    ("extra-dir-empty".into(), EntryKind::Tree, None),
+                    ("extra-dir/symlink-to-extra".into(), EntryKind::Link, None)
                 ]
             );
             Ok(())
@@ -300,12 +284,11 @@ mod from_tree {
                     .map(|_| ())
             },
         );
-        let object_hash = gix_testtools::object_hash();
         stream
-            .add_entry_from_path(&dir, &dir.join("extra-file"), object_hash)?
-            .add_entry_from_path(&dir, &dir.join("extra-exe"), object_hash)?
-            .add_entry_from_path(&dir, &dir.join("extra-dir-empty"), object_hash)?
-            .add_entry_from_path(&dir, &dir.join("extra-dir").join("symlink-to-extra"), object_hash)?;
+            .add_entry_from_path(&dir, &dir.join("extra-file"))?
+            .add_entry_from_path(&dir, &dir.join("extra-exe"))?
+            .add_entry_from_path(&dir, &dir.join("extra-dir-empty"))?
+            .add_entry_from_path(&dir, &dir.join("extra-dir").join("symlink-to-extra"))?;
 
         let mut buf = Vec::new();
         if format == Format::InternalTransientNonPersistable {
