@@ -128,7 +128,9 @@ impl Pipeline {
     /// its index version for line-ending conversion. Null IDs are never looked up in `objects`.
     /// If the worktree file doesn't exist, or no root is present and `id` [is null](gix_hash::ObjectId::is_null()),
     /// then `out` will be left cleared and the output data will be `None`.
-    /// This is useful to simplify the calling code as empty buffers signal that nothing is there.
+    /// An existing empty resource instead returns `Some(Data::Buffer)`. Buffer emptiness alone does not indicate
+    /// absence: missing resources, empty content, and resources that are too large to load all leave `out` empty.
+    /// Inspect the returned value to distinguish these states.
     ///
     /// Note that `mode` is trusted, and we will not re-validate that the entry in the worktree actually is of that mode.
     /// Only blobs are allowed.

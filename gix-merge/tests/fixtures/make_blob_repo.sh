@@ -9,6 +9,8 @@ echo union > union
 echo e > e-no-attr
 echo unset > unset
 echo unspecified > unspecified
+# A zero-byte file must remain distinct from an absent worktree resource.
+: > empty
 
 cat <<EOF >.gitattributes
 just-set merge conflict-marker-size=32

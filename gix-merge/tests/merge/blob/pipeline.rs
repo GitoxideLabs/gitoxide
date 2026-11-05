@@ -236,10 +236,10 @@ fn above_large_file_threshold() -> TestResult {
 
 #[test]
 fn non_existing() -> TestResult {
-    let tmp = gix_testtools::tempfile::TempDir::new()?;
+    let root = gix_testtools::scripted_fixture_read_only("make_blob_repo.sh")?;
     let mut filter = Pipeline::new(
         WorktreeRoots {
-            common_ancestor_root: Some(tmp.path().to_owned()),
+            common_ancestor_root: Some(root.clone()),
             ..Default::default()
         },
         gix_filter::Pipeline::new(Default::default(), gix_testtools::object_hash(), Default::default()),
@@ -249,10 +249,7 @@ fn non_existing() -> TestResult {
     let null = gix_hash::Kind::Sha1.null();
     let mut buf = vec![1];
     let a_name = "a";
-    assert!(
-        !tmp.path().join(a_name).exists(),
-        "precondition: worktree file doesn't exist"
-    );
+    assert!(!root.join(a_name).exists(), "precondition: worktree file doesn't exist");
     let out = filter.convert_to_mergeable(
         &null,
         EntryKind::Blob,
@@ -269,7 +266,33 @@ fn non_existing() -> TestResult {
     );
     assert_eq!(buf.len(), 0, "always cleared");
 
-    drop(tmp);
+    let db = object_db();
+    let empty_blob_id = insert(&db, "")?;
+    for (blob_id, kind) in [
+        (&null, ResourceKind::CommonAncestorOrBase),
+        (&empty_blob_id, ResourceKind::OtherOrTheirs),
+    ] {
+        buf.push(1);
+        let out = filter.convert_to_mergeable(
+            blob_id,
+            EntryKind::Blob,
+            "empty".into(),
+            kind,
+            &mut |_, _| {},
+            &db,
+            pipeline::Mode::ToGit,
+            &mut buf,
+        )?;
+        assert_eq!(
+            out,
+            Some(pipeline::Data::Buffer),
+            "an empty worktree file or stored blob is present, unlike a missing resource"
+        );
+        assert!(
+            buf.is_empty(),
+            "empty content clears the buffer without implying absence"
+        );
+    }
 
     buf.push(1);
     let out = filter.convert_to_mergeable(

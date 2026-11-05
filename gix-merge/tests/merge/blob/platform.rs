@@ -10,9 +10,9 @@ mod merge {
         BuiltinDriver, Resolution, ResourceKind, builtin_driver,
         builtin_driver::text::ConflictStyle,
         pipeline, platform,
-        platform::{DriverChoice, builtin_merge::Pick},
+        platform::{DriverChoice, builtin_merge::Pick, resource::Data},
     };
-    use gix_object::tree::EntryKind;
+    use gix_object::{Write, tree::EntryKind};
 
     use crate::{
         blob::{
@@ -211,8 +211,8 @@ theirs
         );
         assert!(buf.is_empty(), "it tells us where to get the content from");
         assert_eq!(
-            platform_ref.buffer_by_pick(res.0).unwrap().unwrap().as_bstr(),
-            "ours",
+            platform_ref.data_by_pick(res.0, &buf),
+            Data::Buffer(b"ours"),
             "getting access to the content is simplified"
         );
         assert_eq!(
@@ -249,7 +249,11 @@ theirs
             platform_ref.options.resolve_binary_with = Some(resolve);
             let res = platform_ref.merge(&mut buf, default_labels(), &Default::default())?;
             assert_eq!(res, (expected_pick, Resolution::CompleteWithAutoResolvedConflict));
-            assert_eq!(platform_ref.buffer_by_pick(res.0).unwrap().unwrap().as_bstr(), expected);
+            assert_eq!(
+                platform_ref.data_by_pick(res.0, &buf),
+                Data::Buffer(expected.as_bytes()),
+                "the selected resource retains its content"
+            );
 
             assert_eq!(
                 platform_ref
@@ -527,9 +531,9 @@ field: theirs
             "merge drivers deal with binary themselves"
         );
         assert_eq!(
-            platform_ref.buffer_by_pick(res.0),
-            Ok(None),
-            "This indicates the buffer must be read"
+            platform_ref.data_by_pick(res.0, &buf),
+            Data::Buffer(&buf),
+            "the merge output is returned directly, without selecting an input resource"
         );
 
         let marker = hex_to_id("ffffffffffffffffffffffffffffffffffffffff");
@@ -654,66 +658,345 @@ cat "%B" >> "%A""#
     }
 
     #[test]
-    fn missing_buffers_are_empty_buffers() -> TestResult {
+    fn data_by_pick_preserves_resource_state() -> TestResult {
         let mut platform = new_platform(None, pipeline::Mode::ToGit);
+        platform.filter.roots = Default::default();
+        platform.filter.options.large_file_threshold_bytes = 9;
+        let db = object_db();
+        let cases = [
+            (gix_hash::Kind::Sha1.null(), Data::Missing, None),
+            (insert(&db, "")?, Data::Buffer(b""), Some(b"".as_slice())),
+            (
+                insert(&db, "content")?,
+                Data::Buffer(b"content"),
+                Some(b"content".as_slice()),
+            ),
+            (insert(&db, "too large to load")?, Data::TooLarge { size: 17 }, None),
+        ];
+        let picks = [
+            (Pick::Ancestor, ResourceKind::CommonAncestorOrBase),
+            (Pick::Ours, ResourceKind::CurrentOrOurs),
+            (Pick::Theirs, ResourceKind::OtherOrTheirs),
+        ];
+        for offset in 0..cases.len() {
+            for (index, (_, kind)) in picks.iter().enumerate() {
+                let (blob_id, _, _) = cases[(offset + index) % cases.len()];
+                platform.set_resource(blob_id, EntryKind::Blob, "no-attributes".into(), *kind, &db)?;
+            }
+            let prepared = platform.prepare_merge(&db, Default::default())?;
+            for merged in [b"".as_slice(), b"merged".as_slice()] {
+                for (index, (pick, _)) in picks.iter().enumerate() {
+                    let (blob_id, expected, expected_slice) = cases[(offset + index) % cases.len()];
+                    let actual = prepared.data_by_pick(*pick, merged);
+                    assert_eq!(actual, expected, "{pick:?} retains its state, including any size");
+                    assert_eq!(
+                        actual.as_slice(),
+                        expected_slice,
+                        "{pick:?}: only a present buffer exposes a slice, even when it is empty"
+                    );
+                    assert_eq!(
+                        prepared.id_by_pick(*pick, merged, |_| -> Result<_, Infallible> {
+                            panic!("missing resources have no ID, and stored blobs already have one")
+                        })?,
+                        if expected == Data::Missing { None } else { Some(blob_id) },
+                        "{pick:?}: a missing input stays absent instead of writing the merged buffer"
+                    );
+                }
+                let actual = prepared.data_by_pick(Pick::Buffer, merged);
+                assert_eq!(
+                    actual,
+                    Data::Buffer(merged),
+                    "an explicit output never selects an input"
+                );
+                assert_eq!(
+                    actual.as_slice(),
+                    Some(merged),
+                    "even empty output is present, independently of missing or too-large inputs"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn missing_resources_are_empty_only_for_merge_drivers() -> TestResult {
+        let db = object_db();
+        let empty_blob_id = gix_object::compute_hash(gix_hash::Kind::Sha1, gix_object::Kind::Blob, b"")?;
+        for (ancestor_path, ancestor_bytes) in
+            [("just-set", b"just-set\n".as_slice()), ("also-missing", b"".as_slice())]
+        {
+            let mut platform = new_platform(None, pipeline::Mode::ToGit);
+            platform.set_resource(
+                gix_hash::Kind::Sha1.null(),
+                EntryKind::Blob,
+                ancestor_path.into(),
+                ResourceKind::CommonAncestorOrBase,
+                &gix_object::find::Never,
+            )?;
+
+            for kind in [ResourceKind::CurrentOrOurs, ResourceKind::OtherOrTheirs] {
+                platform.set_resource(
+                    gix_hash::Kind::Sha1.null(),
+                    EntryKind::Blob,
+                    "does not matter for driver".into(),
+                    kind,
+                    &gix_object::find::Never,
+                )?;
+            }
+            let platform_ref = platform.prepare_merge(&gix_object::find::Never, Default::default())?;
+            for pick in [Pick::Ancestor, Pick::Ours, Pick::Theirs] {
+                if pick == Pick::Ancestor && !ancestor_bytes.is_empty() {
+                    continue;
+                }
+                assert_eq!(
+                    platform_ref.data_by_pick(pick, b"unrelated output"),
+                    Data::Missing,
+                    "{pick:?}: selecting a missing input does not turn it into an empty blob"
+                );
+                assert_eq!(
+                    platform_ref.id_by_pick(pick, b"unrelated output", |_| -> Result<_, Infallible> {
+                        panic!("selecting a missing input must not invoke the blob writer")
+                    })?,
+                    None,
+                    "{pick:?}: selecting a missing input produces no object ID"
+                );
+            }
+
+            let mut buf = b"stale output".to_vec();
+            let res = platform_ref.merge(&mut buf, Default::default(), &Default::default())?;
+            assert_eq!(
+                res,
+                (Pick::Buffer, Resolution::Complete),
+                "two missing sides are merged as empty, even when the ancestor is missing too"
+            );
+            assert_eq!(
+                platform_ref.data_by_pick(res.0, &buf),
+                Data::Buffer(b""),
+                "an explicitly produced empty merge output is present, not missing"
+            );
+            let mut writes = 0;
+            assert_eq!(
+                platform_ref.id_by_pick(res.0, &buf, |data| {
+                    writes += 1;
+                    assert!(data.is_empty(), "the writer receives the explicit empty output");
+                    db.write_buf(gix_object::Kind::Blob, data)
+                })?,
+                Some(empty_blob_id),
+                "present empty output writes a blob even if every input was missing"
+            );
+            assert_eq!(writes, 1, "the explicit output invokes the blob writer exactly once");
+
+            let mut input = imara_diff::InternedInput::new(&[][..], &[]);
+            for driver in [BuiltinDriver::Text, BuiltinDriver::Union] {
+                buf.extend_from_slice(b"stale output");
+                let res = platform_ref.builtin_merge(driver, &mut buf, &mut input, Default::default());
+                assert_eq!(
+                    res,
+                    (Pick::Buffer, Resolution::Complete),
+                    "{driver:?} explicitly treats missing input as empty"
+                );
+                assert!(buf.is_empty(), "{driver:?} replaces stale output with an empty buffer");
+            }
+
+            let temp_dir = gix_testtools::tempfile::TempDir::new()?;
+            let print_all = r#"for arg in "$@" "%O" "%A" "%B" %L %P %S %X %Y %F; do printf '%s\n' "$arg"; done"#;
+            let mut cmd = platform_ref.prepare_external_driver(
+                print_all.into(),
+                default_labels(),
+                gix_command::Context {
+                    worktree_dir: Some(temp_dir.path().to_owned()),
+                    ..Default::default()
+                },
+            )?;
+            let output = cmd.stdout(Stdio::piped()).output()?;
+            assert!(
+                output.status.success(),
+                "the prepared external command runs successfully"
+            );
+            let mut lines = cleaned_driver_lines(&output.stdout)?;
+            for (tmp_file, expected) in lines.by_ref().take(3).zip([ancestor_bytes, b"", b""]) {
+                assert!(tmp_file.contains_str(&b".tmp"[..]), "{tmp_file}");
+                assert_eq!(
+                    std::fs::read(gix_path::from_bstr(tmp_file)?)?,
+                    expected,
+                    "external drivers receive empty tempfiles for missing inputs, and content for present inputs"
+                );
+            }
+            let lines: Vec<_> = lines.collect();
+            assert_eq!(
+                lines,
+                [
+                    "7",
+                    "does not matter for driver",
+                    "ancestor label",
+                    "current label",
+                    "other label",
+                    "%F"
+                ],
+                "word splitting is prevented thanks to proper quoting"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn missing_and_empty_resources_have_distinct_result_ids() -> TestResult {
+        use gix_object::Write;
+
+        let db = object_db();
+        let empty_blob_id = insert(&db, "")?;
+        let null_blob_id = gix_hash::Kind::Sha1.null();
+        for from_worktree in [false, true] {
+            let mut platform = new_platform(None, pipeline::Mode::ToGit);
+            if from_worktree {
+                platform.filter.roots.current_root = platform.filter.roots.common_ancestor_root.clone();
+                platform.filter.roots.other_root = platform.filter.roots.common_ancestor_root.clone();
+            }
+            platform.set_resource(
+                null_blob_id,
+                EntryKind::Blob,
+                "absent".into(),
+                ResourceKind::CommonAncestorOrBase,
+                &db,
+            )?;
+
+            for (ours_present, theirs_present) in [(false, false), (false, true), (true, false), (true, true)] {
+                for (present, kind) in [
+                    (ours_present, ResourceKind::CurrentOrOurs),
+                    (theirs_present, ResourceKind::OtherOrTheirs),
+                ] {
+                    platform.set_resource(
+                        if present && !from_worktree {
+                            empty_blob_id
+                        } else {
+                            null_blob_id
+                        },
+                        EntryKind::Blob,
+                        if present { "empty" } else { "absent" }.into(),
+                        kind,
+                        &db,
+                    )?;
+                }
+                let prepared = platform.prepare_merge(&db, Default::default())?;
+                for (resource, present) in [(prepared.current, ours_present), (prepared.other, theirs_present)] {
+                    assert_eq!(
+                        resource.data,
+                        if present {
+                            platform::resource::Data::Buffer(&[])
+                        } else {
+                            platform::resource::Data::Missing
+                        },
+                        "resource state preserves existence even when its byte view is empty"
+                    );
+                    assert_eq!(
+                        resource.data.as_slice(),
+                        present.then_some(&[][..]),
+                        "only a present empty resource exposes an empty slice; missing data has no slice"
+                    );
+                }
+
+                for driver in [BuiltinDriver::Text, BuiltinDriver::Union, BuiltinDriver::Binary] {
+                    let mut out = Vec::new();
+                    let mut input = imara_diff::InternedInput::new(&[][..], &[]);
+                    let (expected_pick, expected_resolution, expected_blob_id, expected_writes) =
+                        if driver == BuiltinDriver::Binary {
+                            (
+                                Pick::Ours,
+                                if ours_present == theirs_present {
+                                    Resolution::Complete
+                                } else {
+                                    Resolution::Conflict
+                                },
+                                ours_present.then_some(empty_blob_id),
+                                usize::from(from_worktree && ours_present),
+                            )
+                        } else {
+                            (Pick::Buffer, Resolution::Complete, Some(empty_blob_id), 1)
+                        };
+                    let (pick, resolution) = prepared.builtin_merge(driver, &mut out, &mut input, Default::default());
+                    assert_eq!(
+                        (pick, resolution),
+                        (expected_pick, expected_resolution),
+                        "only binary merging distinguishes missing from empty: {driver:?}, worktree={from_worktree}, ours={ours_present}, theirs={theirs_present}"
+                    );
+                    assert_eq!(
+                        prepared.data_by_pick(pick, &out),
+                        if pick == Pick::Ours && !ours_present {
+                            Data::Missing
+                        } else {
+                            Data::Buffer(b"")
+                        },
+                        "selected missing inputs stay missing, while empty resources and explicit output stay present"
+                    );
+                    let mut writes = 0;
+                    let result_blob_id = prepared.id_by_pick(pick, &out, |data| {
+                        assert!(
+                            data.is_empty(),
+                            "content merges and present empty resources write an empty blob"
+                        );
+                        writes += 1;
+                        db.write_buf(gix_object::Kind::Blob, data)
+                    })?;
+                    assert_eq!(
+                        (result_blob_id, writes),
+                        (expected_blob_id, expected_writes),
+                        "selected absence is not written, existing IDs are reused, and new empty content is stored: {driver:?}, worktree={from_worktree}, ours={ours_present}, theirs={theirs_present}"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn binary_merge_requires_available_identity_or_content() -> TestResult {
+        let mut platform = new_platform(None, pipeline::Mode::ToGit);
+        platform.filter.options.large_file_threshold_bytes = 9;
+        platform.filter.roots.current_root = platform.filter.roots.common_ancestor_root.clone();
+        platform.filter.roots.other_root = platform.filter.roots.common_ancestor_root.clone();
+        let null_id = gix_testtools::object_hash().null();
+        let known_id = gix_object::compute_hash(gix_testtools::object_hash(), gix_object::Kind::Blob, b"b\n")?;
         platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
+            null_id,
             EntryKind::Blob,
             "just-set".into(),
             ResourceKind::CommonAncestorOrBase,
             &gix_object::find::Never,
         )?;
 
-        // Two deletions
-        for kind in [ResourceKind::CurrentOrOurs, ResourceKind::OtherOrTheirs] {
-            platform.set_resource(
-                gix_hash::Kind::Sha1.null(),
-                EntryKind::Blob,
-                "does not matter for driver".into(),
-                kind,
-                &gix_object::find::Never,
-            )?;
+        for (ours, theirs, current_id, other_id, expected) in [
+            ("unspecified", "unspecified", null_id, null_id, Resolution::Conflict),
+            ("absent", "unspecified", null_id, null_id, Resolution::Conflict),
+            ("unspecified", "absent", null_id, null_id, Resolution::Conflict),
+            ("b", "b", null_id, null_id, Resolution::Complete),
+            ("b", "union", null_id, null_id, Resolution::Conflict),
+            ("absent", "b", known_id, known_id, Resolution::Conflict),
+            ("absent", "absent", known_id, null_id, Resolution::Complete),
+        ] {
+            for (path, blob_id, kind) in [
+                (ours, current_id, ResourceKind::CurrentOrOurs),
+                (theirs, other_id, ResourceKind::OtherOrTheirs),
+            ] {
+                platform.set_resource(blob_id, EntryKind::Blob, path.into(), kind, &gix_object::find::Never)?;
+            }
+            let prepared = platform.prepare_merge(&gix_object::find::Never, Default::default())?;
+            let mut out = Vec::new();
+            let mut input = imara_diff::InternedInput::new(&[][..], &[]);
+            assert_eq!(
+                prepared.builtin_merge(BuiltinDriver::Binary, &mut out, &mut input, Default::default()),
+                (Pick::Ours, expected),
+                "missing or unread content cannot establish binary equality: {ours} vs {theirs}"
+            );
+            if ours == "absent" || ours == "unspecified" {
+                assert_eq!(
+                    prepared.id_by_pick(Pick::Ours, &out, |_| -> Result<_, Infallible> {
+                        panic!("missing or unread content cannot be written")
+                    })?,
+                    None,
+                    "an absent resource or unavailable hash has no result ID"
+                );
+            }
         }
-
-        let platform_ref = platform.prepare_merge(&gix_object::find::Never, Default::default())?;
-
-        let mut buf = Vec::new();
-        let res = platform_ref.merge(&mut buf, Default::default(), &Default::default())?;
-        assert_eq!(
-            res,
-            (Pick::Buffer, Resolution::Complete),
-            "both versions are deleted, an actual merge happened"
-        );
-        assert!(
-            buf.is_empty(),
-            "the new buffer is considered empty, both sides were deleted, too"
-        );
-
-        let mut input = imara_diff::InternedInput::new(&[][..], &[]);
-        let res = platform_ref.builtin_merge(BuiltinDriver::Text, &mut buf, &mut input, Default::default());
-        assert_eq!(res, (Pick::Buffer, Resolution::Complete), "both versions are deleted");
-        assert!(buf.is_empty(), "the result is the same on direct invocation");
-
-        let print_all = "for arg in $@ %O %A %B %L %P %S %X %Y %F; do echo $arg; done";
-        let mut cmd = platform_ref.prepare_external_driver(print_all.into(), default_labels(), Default::default())?;
-        let stdout = cmd.stdout(Stdio::piped()).output()?.stdout;
-        let mut lines = cleaned_driver_lines(&stdout)?;
-        for tmp_file in lines.by_ref().take(3) {
-            assert!(tmp_file.contains_str(&b".tmp"[..]), "{tmp_file}");
-        }
-        let lines: Vec<_> = lines.collect();
-        assert_eq!(
-            lines,
-            [
-                "7",
-                "does not matter for driver",
-                "ancestor label",
-                "current label",
-                "other label",
-                "%F"
-            ],
-            "word splitting is prevented thanks to proper quoting"
-        );
         Ok(())
     }
 
@@ -758,10 +1041,17 @@ cat "%B" >> "%A""#
         );
 
         let mut input = imara_diff::InternedInput::new(&[][..], &[]);
+        for driver in [BuiltinDriver::Text, BuiltinDriver::Union] {
+            assert_eq!(
+                platform_ref.builtin_merge(driver, &mut out, &mut input, Default::default()),
+                res,
+                "{driver:?} falls back to binary instead of treating too-large input as empty"
+            );
+        }
         assert_eq!(
-            platform_ref.builtin_merge(BuiltinDriver::Text, &mut out, &mut input, Default::default()),
-            res,
-            "we can't enforce it, it will just default to using binary"
+            platform_ref.data_by_pick(Pick::Theirs, &out),
+            Data::TooLarge { size: 12 },
+            "selecting unread worktree content retains its size rather than reporting it missing"
         );
 
         let err = platform_ref
