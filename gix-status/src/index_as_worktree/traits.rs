@@ -1,4 +1,4 @@
-use gix_error::Result;
+use gix_error::{Result, bail, message};
 use std::{io::Read, sync::atomic::AtomicBool};
 
 use bstr::BStr;
@@ -79,17 +79,16 @@ pub mod read_data {
             self.len
         }
 
-        /// Prepare to read an unconverted worktree file again from its start, this time without assuming its size.
-        pub(crate) fn restart_with_unknown_size(&mut self) -> std::io::Result<()> {
+        /// Prepare to read an unconverted worktree file again from its start, with the size it has now.
+        pub(crate) fn restart_with_current_size(&mut self) -> std::io::Result<()> {
             let ToGitOutcome::Unchanged(file) = &mut self.inner else {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::Unsupported,
                     "only an unconverted worktree file can be read again",
                 ));
             };
-            std::io::Seek::rewind(file)?;
-            self.len = None;
-            Ok(())
+            self.len = Some(file.metadata()?.len());
+            std::io::Seek::rewind(file)
         }
     }
 
@@ -126,9 +125,12 @@ impl CompareBlobs for FastEq {
         if u64::from(entry.stat.size) != worktree_file_size && (entry.id.is_empty_blob() || entry.stat.size != 0) {
             return Ok(Some(()));
         }
-        HashEq
-            .compare_blobs(entry, worktree_file_size, data, buf)
-            .map(|opt| opt.map(|_| ()))
+        let mut stream = data.stream_worktree_file()?;
+        // Like Git, a file that shrank while it was read changed, so there is no need to read it again.
+        Ok(match hash_worktree_stream(entry.id.kind(), &mut stream, buf)? {
+            Some(file_hash) => (entry.id != file_hash).then_some(()),
+            None => Some(()),
+        })
     }
 }
 
@@ -150,40 +152,51 @@ impl CompareBlobs for HashEq {
         buf: &mut Vec<u8>,
     ) -> Result<Option<Self::Output>> {
         let mut stream = data.stream_worktree_file()?;
-        match stream.as_bytes() {
-            Some(buffer) => {
-                let file_hash = gix_object::compute_hash(entry.id.kind(), gix_object::Kind::Blob, buffer)?;
-                Ok((entry.id != file_hash).then_some(file_hash))
+        let mut attempts_left = HASH_ATTEMPTS_OF_SHRINKING_FILE;
+        loop {
+            if let Some(file_hash) = hash_worktree_stream(entry.id.kind(), &mut stream, buf)? {
+                return Ok((entry.id != file_hash).then_some(file_hash));
             }
-            None => {
-                let file_hash = match stream.size() {
-                    None => hash_to_end(entry.id.kind(), &mut stream, buf)?,
-                    Some(len) => match gix_object::compute_stream_hash(
-                        entry.id.kind(),
-                        gix_object::Kind::Blob,
-                        &mut stream,
-                        len,
-                        &mut gix_utils::progress::Discard,
-                        &AtomicBool::default(),
-                    ) {
-                        // The file shrank after its size was obtained, so it changed while being read, which
-                        // Git reports as a modification. Hash what it contains now instead of failing the status.
-                        Err(err) if is_premature_eof(&err) => {
-                            stream.restart_with_unknown_size().map_err(gix_hash::io::from_std_io)?;
-                            hash_to_end(entry.id.kind(), &mut stream, buf)?
-                        }
-                        file_hash => file_hash?,
-                    },
-                };
-                Ok((entry.id != file_hash).then_some(file_hash))
+            attempts_left -= 1;
+            if attempts_left == 0 {
+                bail!(message("The worktree file kept shrinking while it was hashed"));
             }
+            // An object id has to describe actual content, so stream the file again with the size it has now.
+            stream.restart_with_current_size().map_err(gix_hash::io::from_std_io)?;
         }
     }
 }
 
-fn hash_to_end(kind: gix_hash::Kind, stream: &mut read_data::Stream<'_>, buf: &mut Vec<u8>) -> Result<ObjectId> {
-    stream.read_to_end(buf).map_err(gix_hash::io::from_std_io)?;
-    gix_object::compute_hash(kind, gix_object::Kind::Blob, buf)
+/// How often [`HashEq`] hashes a file that keeps shrinking while it is read before giving up.
+const HASH_ATTEMPTS_OF_SHRINKING_FILE: usize = 3;
+
+/// Hash `stream` as a blob, or return `None` if it yielded fewer bytes than its size announced,
+/// which means the file shrank while it was read.
+fn hash_worktree_stream(
+    kind: gix_hash::Kind,
+    stream: &mut read_data::Stream<'_>,
+    buf: &mut Vec<u8>,
+) -> Result<Option<ObjectId>> {
+    if let Some(buffer) = stream.as_bytes() {
+        return gix_object::compute_hash(kind, gix_object::Kind::Blob, buffer).map(Some);
+    }
+    match stream.size() {
+        None => {
+            stream.read_to_end(buf).map_err(gix_hash::io::from_std_io)?;
+            gix_object::compute_hash(kind, gix_object::Kind::Blob, buf).map(Some)
+        }
+        Some(len) => match gix_object::compute_stream_hash(
+            kind,
+            gix_object::Kind::Blob,
+            stream,
+            len,
+            &mut gix_utils::progress::Discard,
+            &AtomicBool::default(),
+        ) {
+            Err(err) if is_premature_eof(&err) => Ok(None),
+            file_hash => file_hash.map(Some),
+        },
+    }
 }
 
 fn is_premature_eof(err: &gix_error::Error) -> bool {
