@@ -1,7 +1,11 @@
 use std::process::Command;
 
-use gix_diff::blob::{Algorithm, Platform, ResourceKind, pipeline, platform, platform::prepare_diff::Operation};
+use gix_diff::blob::{
+    Algorithm, DiffLineStats, Platform, ResourceKind, pipeline, platform,
+    platform::prepare_diff::{Operation, TextChange},
+};
 use gix_object::{
+    Write,
     bstr::{BString, ByteSlice},
     tree::EntryKind,
 };
@@ -15,6 +19,16 @@ use crate::{
 
 #[test]
 fn byte_lines_without_terminator() -> TestResult {
+    let mut platform = new_platform(
+        Some(gix_diff::blob::Driver {
+            name: "a".into(),
+            is_binary: Some(false),
+            ..Default::default()
+        }),
+        pipeline::Mode::default(),
+    );
+    platform.filter.roots.old_root = None;
+    let db = object_db();
     let cases: &[(&[u8], &[&[u8]])] = &[
         (b"", &[]),
         (b"\n", &[b""]),
@@ -35,6 +49,28 @@ fn byte_lines_without_terminator() -> TestResult {
         );
         assert_eq!(lines.next(), None, "the iterator remains exhausted");
         assert_eq!(lines.next(), None, "repeated calls remain exhausted");
+
+        let blob_id = db.write_buf(gix_object::Kind::Blob, input)?;
+        for kind in [ResourceKind::OldOrSource, ResourceKind::NewOrDestination] {
+            platform.set_resource(blob_id, EntryKind::Blob, "a".into(), kind, &db)?;
+        }
+        let out = platform.prepare_diff()?;
+        let Operation::InternalDiff { change, .. } = out.operation else {
+            panic!("explicitly forced text is diffable: {:?}", out.operation);
+        };
+        assert_eq!(
+            change.patch_data(),
+            (input, input),
+            "patch bytes retain line terminators"
+        );
+        let input = change.patch_input();
+        for tokens in [&input.before, &input.after] {
+            assert_eq!(
+                tokens.iter().map(|&token| input.interner[token]).collect::<Vec<_>>(),
+                expected,
+                "validated patch input strips only LF and its immediately preceding CR"
+            );
+        }
     }
     Ok(())
 }
@@ -84,11 +120,14 @@ fn resources_of_worktree_and_odb_and_check_link() -> TestResult {
     assert_eq!(new.rela_path, "a", "location is kept directly as provided");
 
     let out = platform.prepare_diff()?;
-    assert_eq!(
-        out.operation,
-        Operation::InternalDiff {
-            algorithm: Algorithm::Histogram
-        },
+    assert!(
+        matches!(
+            out.operation,
+            Operation::InternalDiff {
+                algorithm: Algorithm::Histogram,
+                change: TextChange::Modification(_)
+            }
+        ),
         "it ends up with the default, as it's not overridden anywhere"
     );
 
@@ -148,11 +187,14 @@ fn resources_of_worktree_and_odb_and_check_link() -> TestResult {
     assert_eq!(new.rela_path, "a");
 
     let out = platform.prepare_diff()?;
-    assert_eq!(
-        out.operation,
-        Operation::InternalDiff {
-            algorithm: Algorithm::Histogram
-        },
+    assert!(
+        matches!(
+            out.operation,
+            Operation::InternalDiff {
+                algorithm: Algorithm::Histogram,
+                change: TextChange::Modification(_)
+            }
+        ),
         "it would still diff, despite this being blob-with-link now. But that's fine."
     );
 
@@ -310,7 +352,8 @@ fn diff_performed_despite_external_command() -> TestResult {
         matches!(
             out.operation,
             Operation::InternalDiff {
-                algorithm: Algorithm::Myers
+                algorithm: Algorithm::Myers,
+                change: TextChange::Modification(_)
             }
         ),
         "by default, we prepare for internal diffs, unless external commands are enabled.\
@@ -348,12 +391,28 @@ fn diff_skipped_due_to_external_command_and_enabled_option() -> TestResult {
     platform.set_resource(id, EntryKind::Blob, "b".into(), ResourceKind::NewOrDestination, &db)?;
 
     let out = platform.prepare_diff()?;
+    let Operation::ExternalCommand {
+        command: actual_command,
+        change,
+    } = out.operation
+    else {
+        panic!(
+            "an enabled external command receives validated text: {:?}",
+            out.operation
+        );
+    };
     assert_eq!(
-        out.operation,
-        Operation::ExternalCommand {
-            command: command.as_ref()
-        },
+        actual_command, command,
         "now we provide all information that is needed to run the overridden diff command"
+    );
+    assert!(
+        matches!(change, TextChange::Modification(_)),
+        "both resources exist and are text"
+    );
+    assert_eq!(
+        change.patch_data(),
+        (b"a\n".as_slice(), a_content.as_bytes()),
+        "external commands carry the same validated bytes as internal diffs"
     );
     Ok(())
 }
@@ -367,6 +426,14 @@ fn source_and_destination_do_not_exist() -> TestResult {
         "unset resources have a distinct recovery variant"
     );
     assert!(err.is_validation(), "unset resources are invalid input");
+    assert!(
+        err.classify()
+            .next()
+            .expect("validation classification")
+            .error()
+            .is::<platform::prepare_diff::Error>(),
+        "the constant marker classifies the preparation error"
+    );
     platform.set_resource(
         gix_hash::Kind::Sha1.null(),
         EntryKind::Blob,
@@ -391,21 +458,11 @@ fn source_and_destination_do_not_exist() -> TestResult {
     assert_eq!(new.driver_index, None);
     assert_eq!(new.mode, EntryKind::BlobExecutable);
 
-    let err = platform.prepare_diff().expect_err("both resources are missing");
-    assert!(
-        matches!(err.error(), platform::prepare_diff::Error::SourceAndDestinationRemoved),
-        "removed resources are distinguishable from resources that were never set"
+    assert_eq!(
+        platform.prepare_diff()?.operation,
+        Operation::NeitherExists,
+        "removed resources are a successful no-op, unlike resources that were never set"
     );
-    assert!(err.is_validation(), "two removed resources are invalid input");
-    assert!(
-        err.classify()
-            .next()
-            .expect("validation classification")
-            .error()
-            .is::<platform::prepare_diff::Error>(),
-        "the constant marker classifies the preparation error"
-    );
-    insta::assert_debug_snapshot!(err, "source and destination do not exist", @"Tried to diff resources that are both considered removed");
 
     let program = Command::try_from(gix_diff::command::prepare("test"))?;
     assert_eq!(
@@ -430,6 +487,278 @@ fn source_and_destination_do_not_exist() -> TestResult {
             }
         )
     );
+    Ok(())
+}
+
+#[test]
+fn validated_text_changes_cover_resource_states() -> TestResult {
+    use platform::resource::Data;
+
+    let db = object_db();
+    let states = [
+        ("missing", gix_testtools::object_hash().null(), "a", Data::Missing),
+        (
+            "empty",
+            insert(&db, "")?,
+            "a",
+            Data::Buffer {
+                buf: b"",
+                is_derived: false,
+            },
+        ),
+        (
+            "text",
+            insert(&db, "text\n")?,
+            "a",
+            Data::Buffer {
+                buf: b"text\n",
+                is_derived: false,
+            },
+        ),
+        ("binary", insert(&db, "binary\0")?, "a", Data::Binary { size: 7 }),
+        (
+            "derived text",
+            insert(&db, "text\0\n")?,
+            "b",
+            Data::Buffer {
+                buf: b"text\n",
+                is_derived: true,
+            },
+        ),
+        (
+            "derived empty",
+            insert(&db, "\0")?,
+            "b",
+            Data::Buffer {
+                buf: b"",
+                is_derived: true,
+            },
+        ),
+    ];
+    for external in [false, true] {
+        let command = "external-diff-not-executed";
+        let mut platform = new_platform(
+            [
+                gix_diff::blob::Driver {
+                    name: "a".into(),
+                    command: Some(command.into()),
+                    algorithm: Some(Algorithm::Myers),
+                    ..Default::default()
+                },
+                gix_diff::blob::Driver {
+                    name: "b".into(),
+                    command: Some(command.into()),
+                    algorithm: Some(Algorithm::Myers),
+                    is_binary: Some(true),
+                    binary_to_text_command: Some("tr -d '\\000' <".into()),
+                },
+            ],
+            pipeline::Mode::ToWorktreeAndBinaryToText,
+        );
+        platform.filter.roots.old_root = None;
+        platform.options.skip_internal_diff_if_external_is_configured = external;
+        for &(old_name, old_blob_id, old_path, old_data) in &states {
+            for &(new_name, new_blob_id, new_path, new_data) in &states {
+                let case = format!("{old_name} -> {new_name}, external={external}");
+                platform.set_resource(
+                    old_blob_id,
+                    EntryKind::Blob,
+                    old_path.into(),
+                    ResourceKind::OldOrSource,
+                    &db,
+                )?;
+                platform.set_resource(
+                    new_blob_id,
+                    EntryKind::Blob,
+                    new_path.into(),
+                    ResourceKind::NewOrDestination,
+                    &db,
+                )?;
+                let out = platform.prepare_diff()?;
+                assert_eq!(out.old.data, old_data, "source state: {case}");
+                assert_eq!(out.new.data, new_data, "destination state: {case}");
+                assert_eq!(
+                    out.old_or_new_is_derived,
+                    old_data.is_derived() || new_data.is_derived(),
+                    "conversion provenance includes either resource: {case}"
+                );
+                if matches!((old_data, new_data), (Data::Missing, Data::Missing)) {
+                    assert_eq!(out.operation, Operation::NeitherExists, "no text is fabricated: {case}");
+                    continue;
+                }
+                if matches!(old_data, Data::Binary { .. }) || matches!(new_data, Data::Binary { .. }) {
+                    assert_eq!(
+                        out.operation,
+                        Operation::SourceOrDestinationIsBinary,
+                        "binary resources never yield validated text, even with an external command: {case}"
+                    );
+                    continue;
+                }
+                let change = match out.operation {
+                    Operation::InternalDiff { algorithm, change } => {
+                        assert!(!external, "configured external commands take precedence: {case}");
+                        assert_eq!(
+                            algorithm,
+                            Algorithm::Myers,
+                            "source driver selects the algorithm: {case}"
+                        );
+                        change
+                    }
+                    Operation::ExternalCommand {
+                        command: actual,
+                        change,
+                    } => {
+                        assert!(external, "external diff must be enabled explicitly: {case}");
+                        assert_eq!(actual, command, "source driver supplies the command: {case}");
+                        change
+                    }
+                    other => panic!("expected validated text for {case}, got {other:?}"),
+                };
+                let (old, new) = match change {
+                    TextChange::Addition { new } => (None, Some(new)),
+                    TextChange::Deletion { old } => (Some(old), None),
+                    TextChange::Modification(pair) => (Some(pair.before()), Some(pair.after())),
+                };
+                for (text, data) in [(old, old_data), (new, new_data)] {
+                    assert_eq!(
+                        text.map(|text| (text.as_slice(), text.is_derived())),
+                        data.as_slice().map(|buf| (buf, data.is_derived())),
+                        "only missing sides are absent; empty buffers retain their provenance: {case}"
+                    );
+                }
+                assert_eq!(
+                    change.patch_data(),
+                    (
+                        old_data.as_slice().unwrap_or_default(),
+                        new_data.as_slice().unwrap_or_default()
+                    ),
+                    "only patch rendering maps absent sides to empty bytes: {case}"
+                );
+                let input = change.patch_input();
+                for (tokens, data) in [(&input.before, old_data), (&input.after, new_data)] {
+                    assert_eq!(
+                        tokens.iter().map(|&token| input.interner[token]).collect::<Vec<_>>(),
+                        data.as_slice().unwrap_or_default().lines().collect::<Vec<_>>(),
+                        "patch input uses validated text and strips line terminators: {case}"
+                    );
+                }
+                if let TextChange::Modification(pair) = change {
+                    let stats = pair.similarity(Algorithm::Histogram);
+                    let old_bytes = pair.before().as_slice();
+                    let new_bytes = pair.after().as_slice();
+                    assert!(stats.similarity.is_finite(), "empty comparisons remain finite: {case}");
+                    assert_eq!(
+                        stats.similarity,
+                        if old_bytes == new_bytes { 1.0 } else { 0.0 },
+                        "identical converted bytes match regardless of provenance, including empty text: {case}"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn one_unset_resource_is_not_a_missing_resource() -> TestResult {
+    let db = object_db();
+    let mut platform = new_platform(None, pipeline::Mode::default());
+    platform.filter.roots.old_root = None;
+    for kind in [ResourceKind::OldOrSource, ResourceKind::NewOrDestination] {
+        for blob_id in [
+            gix_testtools::object_hash().null(),
+            insert(&db, "")?,
+            insert(&db, "text\n")?,
+            insert(&db, "binary\0")?,
+        ] {
+            platform.clear_resource_cache();
+            platform.set_resource(blob_id, EntryKind::Blob, "a".into(), kind, &db)?;
+            let err = platform.prepare_diff().expect_err("one resource was never set");
+            assert!(
+                matches!(err.error(), platform::prepare_diff::Error::SourceOrDestinationUnset),
+                "an unset side is an error even when the other side is missing, empty, text, or binary: {kind:?}"
+            );
+            assert!(err.is_validation(), "unset resources remain invalid input");
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn text_pair_similarity_preserves_line_terminators() -> TestResult {
+    let cases = [
+        ("", "", (0, 0, 0, 0, 1.0)),
+        ("", "a\n", (0, 1, 0, 1, 0.0)),
+        ("a\n", "", (1, 0, 1, 0, 0.0)),
+        ("a\n", "a\n", (0, 0, 1, 1, 1.0)),
+        ("a\n", "a", (1, 1, 1, 1, 0.0)),
+        ("a", "a\n", (1, 1, 1, 1, 0.0)),
+        ("a\r\n", "a\n", (1, 1, 1, 1, 0.0)),
+        ("a\n", "a\r\n", (1, 1, 1, 1, 0.0)),
+        (
+            "a
+bb
+",
+            "a
+c
+",
+            (1, 1, 2, 2, 0.4),
+        ),
+    ];
+    let db = object_db();
+    let mut platform = new_platform(None, pipeline::Mode::default());
+    platform.filter.roots.old_root = None;
+    for (old, new, (removals, insertions, before, after, similarity)) in cases {
+        let old_blob_id = insert(&db, old)?;
+        let new_blob_id = insert(&db, new)?;
+        platform.set_resource(old_blob_id, EntryKind::Blob, "a".into(), ResourceKind::OldOrSource, &db)?;
+        platform.set_resource(
+            new_blob_id,
+            EntryKind::Blob,
+            "b".into(),
+            ResourceKind::NewOrDestination,
+            &db,
+        )?;
+        let out = platform.prepare_diff()?;
+        let Operation::InternalDiff {
+            change: TextChange::Modification(pair),
+            ..
+        } = out.operation
+        else {
+            panic!(
+                "two present buffers are a modification, even when empty: {:?}",
+                out.operation
+            );
+        };
+        assert_eq!(
+            pair.before().as_slice(),
+            old.as_bytes(),
+            "the source bytes are unchanged"
+        );
+        assert_eq!(
+            pair.after().as_slice(),
+            new.as_bytes(),
+            "the destination bytes are unchanged"
+        );
+        for algorithm in [Algorithm::Histogram, Algorithm::Myers, Algorithm::MyersMinimal] {
+            let actual = pair.similarity(algorithm);
+            assert!(
+                actual.similarity.is_finite(),
+                "similarity is defined for {old:?} -> {new:?}"
+            );
+            assert_eq!(
+                actual,
+                DiffLineStats {
+                    removals,
+                    insertions,
+                    before,
+                    after,
+                    similarity,
+                },
+                "similarity counts matching bytes with their terminators, not just matching lines: {old:?} -> {new:?}, {algorithm:?}"
+            );
+        }
+    }
     Ok(())
 }
 

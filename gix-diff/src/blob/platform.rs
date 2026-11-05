@@ -171,26 +171,6 @@ pub mod resource {
                 id: &key.id,
             }
         }
-
-        /// Produce an iterator over lines, separated by LF or CRLF and thus keeping newlines.
-        ///
-        /// Note that this will cause unusual diffs if a file didn't end in newline but lines were added
-        /// on the other side.
-        ///
-        /// Suitable to create tokens using [`crate::blob::InternedInput`].
-        pub fn intern_source(&self) -> imara_diff::sources::ByteLines<'a> {
-            crate::blob::sources::byte_lines(self.data.as_slice().unwrap_or_default())
-        }
-
-        /// Produce an iterator over lines, but remove LF or CRLF.
-        ///
-        /// This produces the expected diffs when lines were added at the end of a file that didn't end
-        /// with a newline before the change.
-        ///
-        /// Suitable to create tokens using [`crate::blob::InternedInput`].
-        pub fn intern_source_strip_newline_separators(&self) -> ByteLinesWithoutTerminator<'a> {
-            ByteLinesWithoutTerminator::new(self.data.as_slice().unwrap_or_default())
-        }
     }
 
     /// The data of a diffable resource, as it could be determined and computed previously.
@@ -300,7 +280,130 @@ pub mod set_resource {
 pub mod prepare_diff {
     use bstr::BStr;
 
-    use crate::blob::platform::Resource;
+    use crate::blob::{
+        DiffLineStats,
+        platform::{Resource, resource::ByteLinesWithoutTerminator},
+    };
+
+    /// A present resource with available diffable text, which may be empty or derived by a text conversion.
+    /// Obtain this from [`TextChange`]; missing and binary resources cannot be represented by this type.
+    #[derive(Debug, Copy, Clone, Eq, PartialEq)]
+    pub struct TextResource<'a> {
+        buf: &'a [u8],
+        is_derived: bool,
+    }
+
+    impl<'a> TextResource<'a> {
+        pub(super) fn new(buf: &'a [u8], is_derived: bool) -> Self {
+            Self { buf, is_derived }
+        }
+
+        /// Return the available text bytes. An empty slice still represents a present resource.
+        pub fn as_slice(&self) -> &'a [u8] {
+            self.buf
+        }
+
+        /// Return whether these bytes were produced by a binary-to-text conversion.
+        pub fn is_derived(&self) -> bool {
+            self.is_derived
+        }
+    }
+
+    /// Two present resources with available text, suitable for similarity comparisons.
+    /// Obtain this from [`TextChange::Modification`]; absent or binary sides cannot form a pair.
+    #[derive(Debug, Copy, Clone, Eq, PartialEq)]
+    pub struct TextPair<'a> {
+        old: TextResource<'a>,
+        new: TextResource<'a>,
+    }
+
+    impl<'a> TextPair<'a> {
+        pub(super) fn from_text(old: TextResource<'a>, new: TextResource<'a>) -> Self {
+            Self { old, new }
+        }
+
+        /// Return the present source text.
+        pub fn before(&self) -> TextResource<'a> {
+            self.old
+        }
+
+        /// Return the present destination text.
+        pub fn after(&self) -> TextResource<'a> {
+            self.new
+        }
+
+        /// Compare the matching bytes of two present resources using `algorithm`.
+        /// Unlike patch tokenization, line terminators participate in equality and byte counts.
+        /// Two empty resources have similarity `1.0`; only one empty resource has similarity `0.0`.
+        /// Whether empty resources are eligible for rename tracking is a separate caller policy.
+        pub fn similarity(&self, algorithm: crate::blob::Algorithm) -> DiffLineStats {
+            let input = crate::blob::InternedInput::new(
+                crate::blob::sources::byte_lines(self.old.buf),
+                crate::blob::sources::byte_lines(self.new.buf),
+            );
+            let diff = crate::blob::Diff::compute(algorithm, &input);
+            let removed_bytes: usize = diff
+                .hunks()
+                .map(|hunk| {
+                    input.before[hunk.before.start as usize..hunk.before.end as usize]
+                        .iter()
+                        .map(|token| input.interner[*token].len())
+                        .sum::<usize>()
+                })
+                .sum();
+            let max_len = self.old.buf.len().max(self.new.buf.len());
+            DiffLineStats {
+                removals: diff.count_removals(),
+                insertions: diff.count_additions(),
+                before: input.before.len(),
+                after: input.after.len(),
+                similarity: if max_len == 0 {
+                    1.0
+                } else {
+                    (self.old.buf.len() - removed_bytes) as f32 / max_len as f32
+                },
+            }
+        }
+    }
+
+    /// A text change retaining the distinction between absent and present, possibly empty, resources.
+    #[derive(Debug, Copy, Clone, Eq, PartialEq)]
+    pub enum TextChange<'a> {
+        /// Only the destination exists.
+        Addition {
+            /// The present destination text.
+            new: TextResource<'a>,
+        },
+        /// Only the source exists.
+        Deletion {
+            /// The present source text.
+            old: TextResource<'a>,
+        },
+        /// Both resources exist, even when one or both have empty content.
+        Modification(TextPair<'a>),
+    }
+
+    impl<'a> TextChange<'a> {
+        /// Return source and destination bytes for patch generation, explicitly representing an absent side as empty.
+        /// Use [`TextChange::Modification`] and [`TextPair::similarity()`] for similarity comparisons instead.
+        pub fn patch_data(&self) -> (&'a [u8], &'a [u8]) {
+            match self {
+                Self::Addition { new } => (&[], new.buf),
+                Self::Deletion { old } => (old.buf, &[]),
+                Self::Modification(pair) => (pair.old.buf, pair.new.buf),
+            }
+        }
+
+        /// Tokenize validated text for patch generation, interpreting an absent side as empty.
+        /// Line terminators are removed to improve diffs when lines follow a previously unterminated final line.
+        pub fn patch_input(&self) -> crate::blob::InternedInput<&'a [u8]> {
+            let (old, new) = self.patch_data();
+            crate::blob::InternedInput::new(
+                ByteLinesWithoutTerminator::new(old),
+                ByteLinesWithoutTerminator::new(new),
+            )
+        }
+    }
 
     /// A failure to prepare a diff from the configured resources.
     #[derive(Debug)]
@@ -308,8 +411,6 @@ pub mod prepare_diff {
     pub enum Error {
         /// At least one side has not been set successfully.
         SourceOrDestinationUnset,
-        /// Both sides were set, but neither resource exists.
-        SourceAndDestinationRemoved,
     }
 
     impl std::fmt::Display for Error {
@@ -318,7 +419,6 @@ pub mod prepare_diff {
                 Self::SourceOrDestinationUnset => {
                     "Either the source or the destination of the diff operation were not set"
                 }
-                Self::SourceAndDestinationRemoved => "Tried to diff resources that are both considered removed",
             })
         }
     }
@@ -337,8 +437,8 @@ pub mod prepare_diff {
         /// *or* [Options::skip_internal_diff_if_external_is_configured](super::Options::skip_internal_diff_if_external_is_configured)
         /// is `false`.
         ///
-        /// Use [`Outcome::interned_input()`] to easily obtain an interner for use with [`crate::blob::Diff::compute()`], or maintain one yourself
-        /// for greater reuse.
+        /// Use [`TextChange::patch_input()`] for patch generation, or match [`TextChange::Modification`]
+        /// to obtain a pair suitable for similarity checking.
         InternalDiff {
             /// The algorithm we determined should be used, which is one of (in order, first set one wins):
             ///
@@ -346,6 +446,8 @@ pub mod prepare_diff {
             /// * the platforms own configuration (typically from git-config)
             /// * the default algorithm
             algorithm: imara_diff::Algorithm,
+            /// The validated text and its presence on each side.
+            change: TextChange<'a>,
         },
         /// Run the external diff program according as configured in the `source`-resources driver.
         /// This only happens if [Options::skip_internal_diff_if_external_is_configured](super::Options::skip_internal_diff_if_external_is_configured)
@@ -354,7 +456,11 @@ pub mod prepare_diff {
             /// The command as extracted from [Driver::command](super::super::Driver::command).
             /// Use it in [`Platform::prepare_diff_command`](super::Platform::prepare_diff_command()) to easily prepare a compatible invocation.
             command: &'a BStr,
+            /// Validated text available for optional internal patch statistics.
+            change: TextChange<'a>,
         },
+        /// Both resources were set successfully, but neither exists. No comparison can be performed.
+        NeitherExists,
         /// One of the involved resources, [`old`](Outcome::old) or [`new`](Outcome::new), was binary and thus no diff
         /// can be performed.
         SourceOrDestinationIsBinary,
@@ -374,20 +480,6 @@ pub mod prepare_diff {
         pub old: Resource<'a>,
         /// The new or destination of the diff operation.
         pub new: Resource<'a>,
-    }
-
-    impl<'a> Outcome<'a> {
-        /// Produce an instance of an interner which `git` would use to perform diffs.
-        ///
-        /// Note that newline separators will be removed to improve diff quality
-        /// at the end of files that didn't have a newline, but had lines added
-        /// past the end.
-        pub fn interned_input(&self) -> crate::blob::InternedInput<&'a [u8]> {
-            crate::blob::InternedInput::new(
-                self.old.intern_source_strip_newline_separators(),
-                self.new.intern_source_strip_newline_separators(),
-            )
-        }
     }
 }
 
@@ -631,57 +723,62 @@ impl Platform {
     /// Prepare a diff operation on the [previously set](Self::set_resource()) [old](ResourceKind::OldOrSource) and
     /// [new](ResourceKind::NewOrDestination) resources.
     ///
-    /// The returned outcome allows to easily perform diff operations, based on the [`prepare_diff::Outcome::operation`] field,
-    /// which hints at what should be done.
+    /// Match [`prepare_diff::Outcome::operation`] to obtain validated text for patch generation or similarity checking.
+    /// Missing sides are represented as additions or deletions, not as empty resources. If both sides are missing,
+    /// [`prepare_diff::Operation::NeitherExists`] is returned. A side that was never set successfully remains an error.
     pub fn prepare_diff(&mut self) -> ExnResult<prepare_diff::Outcome<'_>, prepare_diff::Error> {
-        let old_key = &self.old.as_ref().ok_or(prepare_diff::Error::SourceOrDestinationUnset)?;
-        let old = self
-            .diff_cache
-            .get(old_key)
-            .ok_or(prepare_diff::Error::SourceOrDestinationUnset)?;
-        let new_key = &self.new.as_ref().ok_or(prepare_diff::Error::SourceOrDestinationUnset)?;
-        let new = self
-            .diff_cache
-            .get(new_key)
-            .ok_or(prepare_diff::Error::SourceOrDestinationUnset)?;
-        let mut out = {
-            let old = Resource::new(old_key, old);
-            let new = Resource::new(new_key, new);
-            prepare_diff::Outcome {
-                operation: prepare_diff::Operation::SourceOrDestinationIsBinary,
-                old_or_new_is_derived: old.data.is_derived() || new.data.is_derived(),
-                old,
-                new,
-            }
+        use prepare_diff::{Operation, TextChange, TextPair, TextResource};
+        use resource::Data;
+
+        let (old, new) = self.resources().ok_or(prepare_diff::Error::SourceOrDestinationUnset)?;
+        let mut out = prepare_diff::Outcome {
+            operation: Operation::SourceOrDestinationIsBinary,
+            old_or_new_is_derived: old.data.is_derived() || new.data.is_derived(),
+            old,
+            new,
         };
-
-        match (old.conversion.data, new.conversion.data) {
-            (None, None) => {
-                bail!(prepare_diff::Error::SourceAndDestinationRemoved);
+        let change = match (old.data, new.data) {
+            (Data::Missing, Data::Missing) => {
+                out.operation = Operation::NeitherExists;
+                return Ok(out);
             }
-            (Some(pipeline::Data::Binary { .. }), _) | (_, Some(pipeline::Data::Binary { .. })) => return Ok(out),
-            _either_missing_or_non_binary => {
-                if let Some(command) = old
-                    .conversion
-                    .driver_index
-                    .and_then(|idx| self.filter.drivers[idx].command.as_deref())
-                    .filter(|_| self.options.skip_internal_diff_if_external_is_configured)
-                {
-                    out.operation = prepare_diff::Operation::ExternalCommand {
-                        command: command.as_bstr(),
-                    };
-                    return Ok(out);
-                }
-            }
-        }
-
-        out.operation = prepare_diff::Operation::InternalDiff {
-            algorithm: old
-                .conversion
-                .driver_index
-                .and_then(|idx| self.filter.drivers[idx].algorithm)
-                .or(self.options.algorithm)
-                .unwrap_or_default(),
+            (Data::Binary { .. }, _) | (_, Data::Binary { .. }) => return Ok(out),
+            (Data::Missing, Data::Buffer { buf, is_derived }) => TextChange::Addition {
+                new: TextResource::new(buf, is_derived),
+            },
+            (Data::Buffer { buf, is_derived }, Data::Missing) => TextChange::Deletion {
+                old: TextResource::new(buf, is_derived),
+            },
+            (
+                Data::Buffer {
+                    buf: old,
+                    is_derived: old_is_derived,
+                },
+                Data::Buffer {
+                    buf: new,
+                    is_derived: new_is_derived,
+                },
+            ) => TextChange::Modification(TextPair::from_text(
+                TextResource::new(old, old_is_derived),
+                TextResource::new(new, new_is_derived),
+            )),
+        };
+        let driver = old.driver_index.and_then(|idx| self.filter.drivers.get(idx));
+        out.operation = match driver
+            .and_then(|driver| driver.command.as_deref())
+            .filter(|_| self.options.skip_internal_diff_if_external_is_configured)
+        {
+            Some(command) => Operation::ExternalCommand {
+                command: command.as_bstr(),
+                change,
+            },
+            None => Operation::InternalDiff {
+                algorithm: driver
+                    .and_then(|driver| driver.algorithm)
+                    .or(self.options.algorithm)
+                    .unwrap_or_default(),
+                change,
+            },
         };
         Ok(out)
     }

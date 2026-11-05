@@ -39,12 +39,14 @@ impl gix_diff::rewrites::tracker::Change for Change {
     }
 }
 
-static NULL_ID: LazyLock<gix_hash::ObjectId> = LazyLock::new(|| crate::fixture_hash_kind().null());
+static ID: LazyLock<gix_hash::ObjectId> = LazyLock::new(|| {
+    gix_object::compute_hash(crate::fixture_hash_kind(), gix_object::Kind::Blob, b"identity").expect("valid blob")
+});
 
 impl Change {
     fn modification() -> Self {
         Change {
-            id: *NULL_ID,
+            id: *ID,
             kind: ChangeKind::Modification,
             mode: EntryKind::Blob.into(),
             relation: None,
@@ -52,7 +54,7 @@ impl Change {
     }
     fn deletion() -> Self {
         Change {
-            id: *NULL_ID,
+            id: *ID,
             kind: ChangeKind::Deletion,
             mode: EntryKind::Blob.into(),
             relation: None,
@@ -60,7 +62,7 @@ impl Change {
     }
     fn addition() -> Self {
         Change {
-            id: *NULL_ID,
+            id: *ID,
             kind: ChangeKind::Addition,
             mode: EntryKind::Blob.into(),
             relation: None,
@@ -69,7 +71,7 @@ impl Change {
 
     fn addition_in_tree(id: ChangeId) -> Self {
         Change {
-            id: *NULL_ID,
+            id: *ID,
             kind: ChangeKind::Addition,
             mode: EntryKind::Blob.into(),
             relation: Some(Relation::ChildOfParent(id)),
@@ -78,7 +80,7 @@ impl Change {
 
     fn deletion_in_tree(id: ChangeId) -> Self {
         Change {
-            id: *NULL_ID,
+            id: *ID,
             kind: ChangeKind::Deletion,
             mode: EntryKind::Blob.into(),
             relation: Some(Relation::ChildOfParent(id)),
@@ -87,7 +89,7 @@ impl Change {
 
     fn tree_addition(id: ChangeId) -> Self {
         Change {
-            id: *NULL_ID,
+            id: *ID,
             kind: ChangeKind::Addition,
             mode: EntryKind::Tree.into(),
             relation: Some(Relation::Parent(id)),
@@ -96,7 +98,7 @@ impl Change {
 
     fn tree_deletion(id: ChangeId) -> Self {
         Change {
-            id: *NULL_ID,
+            id: *ID,
             kind: ChangeKind::Deletion,
             mode: EntryKind::Tree.into(),
             relation: Some(Relation::Parent(id)),

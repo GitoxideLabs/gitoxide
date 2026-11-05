@@ -1,7 +1,11 @@
 use crate::Result;
 use std::path::Path;
 
-use gix_diff::blob::{self, ResourceKind, pipeline::WorktreeRoots};
+use gix_diff::blob::{
+    self, ResourceKind,
+    pipeline::WorktreeRoots,
+    platform::prepare_diff::{Operation, TextChange},
+};
 
 use imara_diff::{Algorithm::Histogram, Diff};
 
@@ -52,7 +56,20 @@ fn binary_diff_with_textconv() -> gix_testtools::TestResult {
     )?;
 
     let out = resource_cache.prepare_diff()?;
-    let input = out.interned_input();
+    let Operation::InternalDiff { change, .. } = out.operation else {
+        panic!(
+            "textconv produces validated text for an internal diff: {:?}",
+            out.operation
+        );
+    };
+    let TextChange::Modification(pair) = change else {
+        panic!("both text-converted blobs are present: {change:?}");
+    };
+    assert!(
+        pair.before().is_derived() && pair.after().is_derived(),
+        "validated text resources retain their textconv provenance"
+    );
+    let input = change.patch_input();
     let diff = Diff::compute(Histogram, &input);
 
     let actual = blob::UnifiedDiff::new(

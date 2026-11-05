@@ -265,9 +265,12 @@ pub fn update(
                                                                     false;
                                                                 if let Ok(prep) = cache.prepare_diff() {
                                                                     let mut nl = 0;
-                                                                    let tokens = prep.interned_input();
                                                                     match prep.operation {
-                                                                        Operation::InternalDiff { algorithm } => {
+                                                                        Operation::InternalDiff {
+                                                                            algorithm,
+                                                                            change,
+                                                                        } => {
+                                                                            let tokens = change.patch_input();
                                                                             let diff = gix::diff::blob::Diff::compute(
                                                                                 algorithm, &tokens,
                                                                             );
@@ -293,7 +296,8 @@ pub fn update(
                                                                         Operation::ExternalCommand { .. } => {
                                                                             unreachable!("disabled above")
                                                                         }
-                                                                        Operation::SourceOrDestinationIsBinary => {}
+                                                                        Operation::SourceOrDestinationIsBinary
+                                                                        | Operation::NeitherExists => {}
                                                                     }
                                                                 }
                                                             }
