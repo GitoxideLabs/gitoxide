@@ -16,7 +16,7 @@ fn agrees_with_git(group: &str, expected_cases: usize) -> TestResult {
         let parsed = gix_refspec::parse(spec.trim().as_bstr(), Operation::Fetch)?;
         let outcome = MatchGroup::from_fetch_specs([parsed]).match_rhs(std::iter::once(Item {
             full_ref_name: tracking_ref.trim().as_bstr(),
-            target: &commit_id,
+            target: Some(&commit_id),
             object: Some(&commit_id),
         }));
         let sources: Vec<_> = outcome

@@ -1130,9 +1130,8 @@ mod update {
         let references = remote_repo.references().unwrap();
         let mut references: Vec<_> = references.all().unwrap().map(|r| into_remote_ref(r.unwrap())).collect();
         references.push(into_remote_ref(remote_repo.find_reference("HEAD").unwrap()));
-        let null = remote_repo.object_hash().null();
         let mappings = group
-            .match_lhs(references.iter().map(|r| remote_ref_to_item(r, &null)))
+            .match_lhs(references.iter().map(remote_ref_to_item))
             .mappings
             .into_iter()
             .map(|m| fetch::refmap::Mapping {
@@ -1172,14 +1171,11 @@ mod update {
         }
     }
 
-    fn remote_ref_to_item<'a>(
-        r: &'a gix_protocol::handshake::Ref,
-        null: &'a gix_hash::oid,
-    ) -> gix_refspec::match_group::Item<'a> {
+    fn remote_ref_to_item(r: &gix_protocol::handshake::Ref) -> gix_refspec::match_group::Item<'_> {
         let (full_ref_name, target, object) = r.unpack();
         gix_refspec::match_group::Item {
             full_ref_name,
-            target: target.unwrap_or(null),
+            target,
             object,
         }
     }

@@ -38,7 +38,7 @@ impl<'spec> MatchGroup<'spec> {
     // TODO: figure out how to deal with push-specs, probably when push is being implemented.
     pub fn match_lhs<'item>(
         self,
-        mut items: impl Iterator<Item = Item<'item>> + Clone,
+        items: impl Iterator<Item = Item<'item>> + Clone,
     ) -> match_lhs::Outcome<'spec, 'item> {
         let mut out = Vec::new();
         let mut seen = BTreeSet::default();
@@ -87,8 +87,7 @@ impl<'spec> MatchGroup<'spec> {
             }
         }
 
-        if let Some(hash_kind) = has_negation.then(|| items.next().map(|i| i.target.kind())).flatten() {
-            let null_id = hash_kind.null();
+        if has_negation {
             for matcher in matchers
                 .into_iter()
                 .zip(self.specs.iter())
@@ -100,7 +99,7 @@ impl<'spec> MatchGroup<'spec> {
                         !matcher
                             .matches_lhs(Item {
                                 full_ref_name: name.as_ref(),
-                                target: &null_id,
+                                target: None,
                                 object: None,
                             })
                             .0
@@ -132,7 +131,7 @@ impl<'spec> MatchGroup<'spec> {
     // Reverse-mapping is implemented here: https://github.com/git/git/blob/76cf4f61c87855ebf0784b88aaf737d6b09f504b/branch.c#L252
     pub fn match_rhs<'item>(
         self,
-        mut items: impl Iterator<Item = Item<'item>> + Clone,
+        items: impl Iterator<Item = Item<'item>> + Clone,
     ) -> match_rhs::Outcome<'spec, 'item> {
         let mut out = Vec::<Mapping<'spec, 'item>>::new();
         let mut seen = BTreeSet::default();
@@ -162,8 +161,7 @@ impl<'spec> MatchGroup<'spec> {
             }
         }
 
-        if let Some(hash_kind) = has_negation.then(|| items.next().map(|i| i.target.kind())).flatten() {
-            let null_id = hash_kind.null();
+        if has_negation {
             for matcher in matchers
                 .into_iter()
                 .zip(self.specs.iter())
@@ -175,7 +173,7 @@ impl<'spec> MatchGroup<'spec> {
                         !matcher
                             .matches_lhs(Item {
                                 full_ref_name: name.as_ref(),
-                                target: &null_id,
+                                target: None,
                                 object: None,
                             })
                             .0

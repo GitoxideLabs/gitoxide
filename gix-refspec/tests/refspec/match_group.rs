@@ -98,52 +98,54 @@ mod multiple {
     #[test]
     fn negative_sources_are_matched_literally_in_both_directions() {
         let target = ObjectId::from_hex(b"1111111111111111111111111111111111111111").expect("valid object id");
-        let remote_item = Item {
-            full_ref_name: "refs/heads/main".into(),
-            target: &target,
-            object: None,
-        };
-        let local_item = Item {
-            full_ref_name: "refs/remotes/origin/main".into(),
-            target: &target,
-            object: None,
-        };
-        let positive = "refs/heads/*:refs/remotes/origin/*";
-
-        for (negative, should_exclude) in [
-            ("^main", false),
-            ("^heads/*", false),
-            ("^refs/heads/main", true),
-            ("^refs/heads/*", true),
-        ] {
-            let specs = || {
-                [positive, negative]
-                    .into_iter()
-                    .map(|spec| gix_refspec::parse(spec.into(), Operation::Fetch).expect("valid refspec"))
+        let null = gix_testtools::object_hash().null();
+        for target in [None, Some(null.as_ref()), Some(target.as_ref())] {
+            let remote_item = Item {
+                full_ref_name: "refs/heads/main".into(),
+                target,
+                object: None,
             };
+            let local_item = Item {
+                full_ref_name: "refs/remotes/origin/main".into(),
+                target,
+                object: None,
+            };
+            let positive = "refs/heads/*:refs/remotes/origin/*";
 
-            let outcome = MatchGroup::from_fetch_specs(specs()).match_lhs([remote_item].into_iter());
-            assert_eq!(
-                outcome.mappings.is_empty(),
-                should_exclude,
-                "{negative} applies literally when matching sources"
-            );
+            for (negative, should_exclude) in [
+                ("^main", false),
+                ("^heads/*", false),
+                ("^refs/heads/main", true),
+                ("^refs/heads/*", true),
+            ] {
+                let specs = || {
+                    [positive, negative]
+                        .into_iter()
+                        .map(|spec| gix_refspec::parse(spec.into(), Operation::Fetch).expect("valid refspec"))
+                };
 
-            let outcome = MatchGroup::from_fetch_specs(specs()).match_rhs([local_item].into_iter());
-            assert_eq!(
-                outcome.mappings.is_empty(),
-                should_exclude,
-                "{negative} applies literally after reverse mapping destinations"
-            );
+                let outcome = MatchGroup::from_fetch_specs(specs()).match_lhs([remote_item].into_iter());
+                assert_eq!(
+                    outcome.mappings.is_empty(),
+                    should_exclude,
+                    "{negative} applies literally when matching sources"
+                );
+
+                let outcome = MatchGroup::from_fetch_specs(specs()).match_rhs([local_item].into_iter());
+                assert_eq!(
+                    outcome.mappings.is_empty(),
+                    should_exclude,
+                    "{negative} applies literally after reverse mapping destinations"
+                );
+            }
         }
     }
 
     #[test]
     fn reverse_fetch_mapping_preserves_sources_for_negation_and_deduplication() -> gix_testtools::TestResult {
-        let target = gix_testtools::object_hash().null();
         let item = Item {
             full_ref_name: "refs/remotes/origin/main".into(),
-            target: &target,
+            target: None,
             object: None,
         };
         for (negative, expected) in [
@@ -172,10 +174,9 @@ mod multiple {
 
     #[test]
     fn glob_prefix_and_suffix_cannot_overlap_in_either_direction() -> gix_testtools::TestResult {
-        let target = gix_testtools::object_hash().null();
         let item = Item {
             full_ref_name: "refs/heads/main".into(),
-            target: &target,
+            target: None,
             object: None,
         };
         let spec = gix_refspec::parse("refs/heads/*heads/main:refs/heads/*heads/main".into(), Operation::Fetch)?;
@@ -196,7 +197,6 @@ mod multiple {
         let specs = ["refs/heads/*:refs/remotes/origin/*", "^refs/heads/*-deploy"]
             .into_iter()
             .map(|spec| gix_refspec::parse(spec.into(), Operation::Fetch).expect("valid refspec"));
-        let target = ObjectId::from_hex(b"1111111111111111111111111111111111111111").expect("valid object id");
         let refs = [
             BString::from("refs/remotes/origin/main"),
             BString::from("refs/remotes/origin/foo-deploy"),
@@ -205,7 +205,7 @@ mod multiple {
             .iter()
             .map(|name| Item {
                 full_ref_name: name.as_ref(),
-                target: &target,
+                target: None,
                 object: None,
             })
             .collect();
@@ -321,4 +321,14 @@ mod multiple {
             ["refs/heads/f1:refs/heads/f1"],
         );
     }
+}
+
+#[test]
+fn optional_target_preserves_item_size() {
+    use std::mem::size_of;
+    assert_eq!(
+        size_of::<gix_refspec::match_group::Item<'_>>(),
+        size_of::<(&bstr::BStr, &gix_hash::oid, Option<&gix_hash::oid>)>(),
+        "optional targets must not enlarge retained reference lists"
+    );
 }

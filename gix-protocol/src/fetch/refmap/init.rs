@@ -43,13 +43,12 @@ impl RefMap {
         let num_explicit_specs = fetch_refspecs.len();
         let group = gix_refspec::MatchGroup::from_fetch_specs(all_refspecs.iter().map(gix_refspec::RefSpec::to_ref));
         let object_hash = extract_object_hash(capabilities)?;
-        let null = object_hash.null();
         let (res, fixes) = group
             .match_lhs(remote_refs.iter().map(|r| {
                 let (full_ref_name, target, object) = r.unpack();
                 gix_refspec::match_group::Item {
                     full_ref_name,
-                    target: target.unwrap_or(&null),
+                    target,
                     object,
                 }
             }))
