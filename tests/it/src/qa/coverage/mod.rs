@@ -1,4 +1,4 @@
-//! Optional, experimental historical test selection. Ordinary QA never depends on this data.
+//! Per-test selection from LLVM coverage, with ordinary execution when coverage is unavailable.
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::{OsStr, OsString},
@@ -6,7 +6,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use gix_error::{OptionExt, Result, ResultExt, bail, message};
@@ -30,8 +30,42 @@ pub(super) enum Mode {
     Collect,
     /// Report the historical selection, but run all selected tests.
     Shadow,
-    /// Experimentally omit tests using historical coverage; not a complete dependency analysis.
+    /// Select tests using saved coverage without collecting missing configurations.
     Prune,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct Summary {
+    pub mode: Mode,
+    pub cases: usize,
+    pub measured_cases: usize,
+    /// Counts test executions across configurations, not unique test names.
+    pub executed: usize,
+    pub omitted: usize,
+    pub reused: usize,
+    pub collected: usize,
+    pub fallback: usize,
+    pub inventory_time: Duration,
+    pub selection_time: Duration,
+    pub analysis_time: Duration,
+}
+
+impl Summary {
+    pub fn new(mode: Mode) -> Self {
+        Self {
+            mode,
+            cases: 0,
+            measured_cases: 0,
+            executed: 0,
+            omitted: 0,
+            reused: 0,
+            collected: 0,
+            fallback: 0,
+            inventory_time: Duration::ZERO,
+            selection_time: Duration::ZERO,
+            analysis_time: Duration::ZERO,
+        }
+    }
 }
 
 pub(super) struct Run {
@@ -47,7 +81,7 @@ pub(super) struct Run {
     dirty: BTreeSet<String>,
     source: Option<ops::SourceState>,
     cases: usize,
-    pub omitted: usize,
+    pub summary: Summary,
 }
 
 impl Drop for Run {
@@ -161,7 +195,7 @@ impl Run {
             dirty,
             source,
             cases: 0,
-            omitted: 0,
+            summary: Summary::new(mode),
         })
     }
 
@@ -196,29 +230,31 @@ impl Run {
         self.cases += 1;
         let raw = self.work.join(format!("case-{}", self.cases));
         let mut collect = self.mode == Mode::Collect;
+        let mut total = None;
+        let mut omitted = 0;
+        let mut reused = false;
         if instrumented {
             // Listing and unwrapped subprocesses must not leave profiles in the source snapshot.
             command.env("LLVM_PROFILE_FILE", PROFILE_SINK);
         }
         let preparation = (|| {
             supported_compiler(&configuration["build"])?;
-            let started = Instant::now();
-            let inventory = current_inventory(command, log)?;
-            eprintln!("Coverage: list tests {:.3}s", started.elapsed().as_secs_f64());
+            let inventory = self.inventory(command, log)?;
+            total = inventory_count(&inventory, command);
             if matches!(self.mode, Mode::Auto | Mode::Prune | Mode::Shadow) {
                 let started = Instant::now();
-                let cached = (|| {
-                    let data = self.load(&configuration)?;
-                    let baseline = data["baseline"]
-                        .as_str()
-                        .ok_or_raise(|| message("Missing coverage baseline"))?;
-                    let paths = affected_paths(&data, changed_paths(root, baseline)?, &self.changed)?;
-                    Ok((data, paths))
-                })();
-                match cached {
-                    Ok((data, paths)) => {
-                        let selection = match index::select(&data, &inventory, &paths) {
-                            Ok(selection) => Some(selection),
+                let selection = {
+                    let cached = (|| {
+                        let data = self.load(&configuration)?;
+                        let baseline = data["baseline"]
+                            .as_str()
+                            .ok_or_raise(|| message("Missing coverage baseline"))?;
+                        let paths = affected_paths(&data, changed_paths(root, baseline)?, &self.changed)?;
+                        Ok((data, paths))
+                    })();
+                    match cached {
+                        Ok((data, paths)) => match index::select(&data, &inventory, &paths) {
+                            Ok(selection) => Ok(Some(selection)),
                             Err(error)
                                 if self.mode == Mode::Auto
                                     && needs_refresh(
@@ -231,33 +267,37 @@ impl Run {
                             {
                                 eprintln!("Coverage: refreshing an unusable index for changed source inputs: {error}");
                                 collect = true;
-                                None
+                                Ok(None)
                             }
-                            Err(error) => return Err(error),
-                        };
-                        if let Some(selection) = selection {
-                            eprintln!(
-                                "Coverage: {:?} selects {}/{} tests ({:.3}s)",
-                                self.mode,
-                                selection.selected,
-                                selection.total,
-                                started.elapsed().as_secs_f64()
-                            );
-                            if matches!(self.mode, Mode::Auto | Mode::Prune) && selection.selected < selection.total {
-                                let candidate = filtered_with_file(root, &raw, command, &selection.filter)?;
-                                if selection.filter.len() > INLINE_FILTER_LIMIT {
-                                    current_inventory(&candidate, log)?;
-                                }
-                                *command = candidate;
-                                self.omitted += selection.total - selection.selected;
-                            }
+                            Err(error) => Err(error),
+                        },
+                        Err(error) if self.mode == Mode::Auto => {
+                            eprintln!("Coverage: collecting this complete configuration for reuse: {error}");
+                            collect = true;
+                            Ok(None)
                         }
+                        Err(error) => Err(error),
                     }
-                    Err(error) if self.mode == Mode::Auto => {
-                        eprintln!("Coverage: collecting this complete configuration for reuse: {error}");
-                        collect = true;
+                };
+                let elapsed = started.elapsed();
+                self.summary.selection_time += elapsed;
+                if let Some(selection) = selection? {
+                    eprintln!(
+                        "Coverage: {:?} selects {}/{} tests ({:.3}s)",
+                        self.mode,
+                        selection.selected,
+                        selection.total,
+                        elapsed.as_secs_f64()
+                    );
+                    if matches!(self.mode, Mode::Auto | Mode::Prune) && selection.selected < selection.total {
+                        let candidate = filtered_with_file(root, &raw, command, &selection.filter)?;
+                        if selection.filter.len() > INLINE_FILTER_LIMIT {
+                            self.inventory(&candidate, log)?;
+                        }
+                        *command = candidate;
+                        omitted = selection.total - selection.selected;
                     }
-                    Err(error) => return Err(error),
+                    reused = true;
                 }
             }
             if collect {
@@ -276,7 +316,7 @@ impl Run {
                 let mut candidate = copy_command(command);
                 candidate.arg("--config-file").arg(config);
                 // Configuration/tool-version errors are optional preparation failures, not test failures.
-                current_inventory(&candidate, log)?;
+                self.inventory(&candidate, log)?;
                 *command = candidate;
             }
             Ok(inventory)
@@ -293,6 +333,13 @@ impl Run {
         // Once tests start, their failure remains a QA failure, even when recording fails separately.
         ops::checked(command)?;
         eprintln!("Coverage: test execution {:.3}s", started.elapsed().as_secs_f64());
+        self.summary.cases += 1;
+        if let Some(total) = total {
+            self.summary.measured_cases += 1;
+            self.summary.executed += total - omitted;
+        }
+        self.summary.omitted += omitted;
+        let mut collected = false;
         if collect && let Some(inventory) = inventory {
             let started = Instant::now();
             let result = self
@@ -300,6 +347,7 @@ impl Run {
                 .as_ref()
                 .expect("collection discovers LLVM tools")
                 .index(root, &inventory, &raw);
+            self.summary.analysis_time += started.elapsed();
             match result {
                 Ok(mut data) => {
                     data["version"] = 2.into();
@@ -317,6 +365,7 @@ impl Run {
                         started.elapsed().as_secs_f64()
                     );
                     self.pending.insert(key(&configuration), data);
+                    collected = true;
                 }
                 Err(error) => unavailable(&error),
             }
@@ -324,7 +373,23 @@ impl Run {
                 eprintln!("Could not remove processed coverage profiles: {error}");
             }
         }
+        if reused {
+            self.summary.reused += 1;
+        } else if collected {
+            self.summary.collected += 1;
+        } else {
+            self.summary.fallback += 1;
+        }
         Ok(())
+    }
+
+    fn inventory(&mut self, command: &Command, log: Option<&File>) -> Result<Value> {
+        let started = Instant::now();
+        let inventory = current_inventory(command, log);
+        let elapsed = started.elapsed();
+        self.summary.inventory_time += elapsed;
+        eprintln!("Coverage: list tests {:.3}s", elapsed.as_secs_f64());
+        inventory
     }
 
     pub fn finish(&mut self, root: &Path) {
@@ -551,6 +616,36 @@ fn current_inventory(command: &Command, log: Option<&File>) -> Result<Value> {
     let mut list = with_args(command, replay_args(command, true, None)?);
     run::redirect(&mut list, log, false)?;
     serde_json::from_slice(&ops::output(&mut list)?).or_raise(|| message("Read current Nextest inventory"))
+}
+
+fn inventory_count(inventory: &Value, command: &Command) -> Option<usize> {
+    if command.get_args().any(|arg| {
+        arg.to_str()
+            .is_some_and(|arg| arg == "--run-ignored" || arg.starts_with("--run-ignored="))
+    }) {
+        return None;
+    }
+    let mut count = 0;
+    for suite in inventory["rust-suites"].as_object()?.values() {
+        let tests = suite["testcases"].as_object()?;
+        match suite["status"].as_str()? {
+            "listed" => {}
+            "skipped" | "skipped-default-filter" if tests.is_empty() => continue,
+            _ => return None,
+        }
+        for test in tests.values() {
+            let ignored = test["ignored"].as_bool()?;
+            if test["kind"] != "test" {
+                return None;
+            }
+            match test["filter-match"]["status"].as_str()? {
+                "matches" => count += usize::from(!ignored),
+                "mismatch" => {}
+                _ => return None,
+            }
+        }
+    }
+    Some(count)
 }
 
 fn filtered(command: &Command, filter: &str) -> Result<Command> {
@@ -840,6 +935,114 @@ fn wrapper_config(root: &Path, raw: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn summary_tracks_execution_after_selection_and_fallback() -> gix_error::TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let fixture = gix_testtools::scripted_fixture_read_only("make_qa_recording_repositories.sh")?;
+        let root = fixture.join("clean");
+        let temporary = gix_testtools::tempfile::tempdir()?;
+        let directory = temporary.path();
+        let test = json!({"kind":"test", "ignored":false, "filter-match":{"status":"matches"}});
+        let mut inventory = json!({"rust-suites":{"suite":{
+            "binary-id":"suite", "status":"listed", "testcases":{"a":test, "b":test, "ignored":test}
+        }}});
+        inventory["rust-suites"]["suite"]["testcases"]["ignored"]["ignored"] = true.into();
+        fs::write(directory.join("inventory.json"), serde_json::to_vec(&inventory)?)?;
+        fs::write(
+            directory.join("nextest"),
+            "case $1 in
+list) cat inventory.json ;;
+run) test ! -e fail ;;
+esac
+",
+        )?;
+        let mut command = Command::new("sh");
+        command.current_dir(directory).args(["nextest", "run"]);
+        let configuration = json!({"build":{"env":{"RUSTUP_TOOLCHAIN":"stable"}}});
+        let index = json!({"version":1, "configuration":configuration, "baseline":head(&root)?,
+        "files":["a.rs", "b.rs"], "tests":[
+            {"binary":"suite", "name":"a", "files":[0]},
+            {"binary":"suite", "name":"b", "files":[1]}
+        ]});
+        fs::create_dir(directory.join("indexes"))?;
+        fs::create_dir(directory.join("work"))?;
+        let index_path = directory.join("indexes").join(format!("{}.json", key(&configuration)));
+        fs::write(&index_path, serde_json::to_vec(&index)?)?;
+        let mut coverage = Run {
+            mode: Mode::Prune,
+            directory: directory.into(),
+            work: directory.join("work"),
+            compiler: String::new(),
+            cargo_config: Value::Null,
+            tools: None,
+            baseline: None,
+            pending: BTreeMap::new(),
+            changed: BTreeSet::from(["a.rs".into()]),
+            dirty: BTreeSet::new(),
+            source: None,
+            cases: 0,
+            summary: Summary::new(Mode::Prune),
+        };
+        for (mode, expected_executed, expected_omitted) in [(Mode::Prune, 1, 1), (Mode::Shadow, 2, 0)] {
+            coverage.mode = mode;
+            coverage.summary = Summary::new(mode);
+            coverage.execute(&root, configuration.clone(), &mut copy_command(&command), false, None)?;
+            let summary = &coverage.summary;
+            assert_eq!((summary.cases, summary.measured_cases, summary.reused), (1, 1, 1));
+            assert_eq!(
+                (summary.executed, summary.omitted),
+                (expected_executed, expected_omitted),
+                "shadow reports actual execution, while prune records only applied omissions"
+            );
+            assert!(summary.inventory_time > Duration::ZERO && summary.selection_time > Duration::ZERO);
+        }
+        fs::remove_file(index_path)?;
+        coverage.mode = Mode::Prune;
+        coverage.summary = Summary::new(Mode::Prune);
+        coverage.execute(&root, configuration.clone(), &mut copy_command(&command), false, None)?;
+        assert_eq!(
+            (
+                coverage.summary.executed,
+                coverage.summary.omitted,
+                coverage.summary.fallback
+            ),
+            (2, 0, 1),
+            "a missing index runs and counts the complete active inventory"
+        );
+        fs::write(directory.join("inventory.json"), b"{}")?;
+        coverage.execute(&root, configuration.clone(), &mut copy_command(&command), false, None)?;
+        assert_eq!(
+            (
+                coverage.summary.cases,
+                coverage.summary.measured_cases,
+                coverage.summary.executed
+            ),
+            (2, 1, 2),
+            "unavailable inventories do not invent a test count for successful fallback cases"
+        );
+        fs::write(directory.join("fail"), b"")?;
+        assert!(
+            coverage
+                .execute(&root, configuration, &mut copy_command(&command), false, None)
+                .is_err(),
+            "fallback never hides test failures"
+        );
+        assert_eq!(
+            coverage.summary.cases, 2,
+            "failed executions do not count as completed cases"
+        );
+        command.arg("--run-ignored=all");
+        assert_eq!(
+            inventory_count(&inventory, &command),
+            None,
+            "custom ignored selection has no guessed total"
+        );
+        Ok(())
+    }
 
     #[test]
     fn reverted_capture_edits_and_the_requested_base_remain_affected() -> gix_error::TestResult {

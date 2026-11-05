@@ -204,11 +204,10 @@ retained under ignored `target/qa-lsp` in the investigation worktree. The probe
 is deliberately not a shipped QA component. Its protocol/containment tests and
 Clippy passed; those checks validate the client, not the soundness of selection.
 
-## LLVM coverage prototype
+## LLVM coverage selection
 
-The follow-up experiment implements an optional owned collector and selector in
-`tests/it/src/qa/coverage`. It uses current Nextest inventory and isolated source
-snapshots. One LLVM coverage export per test binary supplies function-to-file
+The LLVM coverage implementation in `tests/it/src/qa/coverage` uses current Nextest
+inventory and isolated source snapshots. One LLVM coverage export per test binary supplies function-to-file
 mapping; each test's `llvm-profdata show --covered` output supplies the functions
 observed at runtime. Duplicate function-name mappings and macro source files are
 unioned conservatively. The shared file dictionary includes zero-execution
@@ -246,9 +245,9 @@ the macro-generated, renamed-export, generic-trait, static-function-pointer,
 implicit-drop and overloaded-add paths missed by the LSP experiment.
 
 Capture was inexpensive, but redoing analysis exceeded the complete warm test
-runtime for diff. The prototype therefore used explicit collection and reused indexes;
+runtime for diff. The initial implementation therefore used explicit collection and reused indexes;
 fresh runtime collection cannot accelerate the same execution being measured.
-The prototype offers `collect`, `shadow`, and explicitly experimental `prune`
+The runner offers `collect`, `shadow`, and `prune`
 modes. Missing data/tools retain existing selection, and new tests are included
 from a freshly compiled inventory. Constants/types and other compile-time
 dependencies remain outside historical execution evidence, as acknowledged by
@@ -268,7 +267,7 @@ omit whole test binaries. In a local comparison, it omitted 1,274 tests but took
 and analysis exceeded the saved execution time. These are exploratory single-run
 observations. Fresh binary mapping was discarded as the automatic approach.
 
-The runner instead automates the per-test runtime coverage experiment. When the
+The runner instead automates per-test runtime coverage. When the
 matching LLVM tools and a compatible index are available, fast QA applies the
 historical selection. Without a usable index, it runs the complete selected case
 with coverage collection and saves a local index for later invocations. Both
@@ -301,11 +300,11 @@ cache misses. This is the default with no repository variable required;
 LLVM installation and artifact transfer are optional steps; their failure does
 not fail QA.
 
-Automatic runtime selection remains experimental because execution evidence
-does not describe every compile-time dependency. Actual test omissions do not
-certify ordinary Tix checks-pass. Use `--coverage off` to retain only
+Successful complete local runs record Tix checks-pass for the selected QA profile,
+including the coverage scope, test omissions and selection timings in the message.
+Use `--coverage off` to retain only
 package/configuration selection; `collect`, `shadow` and `prune` remain available
-for explicitly controlled experiments.
+for explicit control of collection and selection.
 
 ### Automatic coverage selection: local measurements
 

@@ -134,6 +134,7 @@ fn main() -> Result<()> {
     } else {
         None
     };
+    let planning_started = Instant::now();
     let metadata = plan::metadata(&current_dir)?;
     let root = PathBuf::from(
         metadata["workspace_root"]
@@ -243,6 +244,7 @@ fn main() -> Result<()> {
                     Some(selection),
                 )
             };
+            let planning = planning_started.elapsed();
             eprintln!("{} tasks selected for {}", tasks.len(), catalog::host());
             let logs = if agent && !dry_run {
                 let logs = run::log_directory()?;
@@ -271,16 +273,23 @@ fn main() -> Result<()> {
             let timings = catalog::execute(&root, tasks, dry_run, ci_job, logs.as_deref(), &mut coverage)?;
             if let Some(coverage) = &mut coverage {
                 coverage.finish(&root);
-                if coverage.omitted > 0 {
-                    eprintln!(
-                        "QA passed with {} tests omitted by experimental coverage selection; ordinary checks-pass was not recorded.",
-                        coverage.omitted
-                    );
-                    return Ok(());
+                if coverage.summary.omitted > 0 {
+                    eprintln!("Coverage: {} test executions omitted.", coverage.summary.omitted);
                 }
             }
             if let (Some(checkout), Some(selected)) = (checkout, selected) {
-                record::finish(&root, checkout, &selected, &selection.base, &timings, started.elapsed())?;
+                record::finish(
+                    &root,
+                    checkout,
+                    &selected,
+                    &selection.base,
+                    &record::Timings {
+                        elapsed: started.elapsed(),
+                        planning,
+                        tasks: timings,
+                    },
+                    coverage.as_ref().map(|coverage| &coverage.summary),
+                )?;
             }
         }
         Action::Exec { .. } => unreachable!("exec was handled before workspace discovery"),

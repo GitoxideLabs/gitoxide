@@ -3,7 +3,7 @@ use std::{fmt::Write, io, path::Path, process::Command, time::Duration};
 use gix_error::{Result, ResultExt, bail, message};
 use serde_json::Value;
 
-use super::{Action, catalog::TaskTiming, ops};
+use super::{Action, catalog::TaskTiming, coverage, ops};
 
 pub fn eligible(action: &Action) -> bool {
     matches!(action, Action::Run { plan: None, from_env: false, job: None, stage, dry_run: false, .. }
@@ -13,6 +13,12 @@ pub fn eligible(action: &Action) -> bool {
 pub struct Checkout {
     commit_id: String,
     clean: bool,
+}
+
+pub struct Timings {
+    pub elapsed: Duration,
+    pub planning: Duration,
+    pub tasks: Vec<TaskTiming>,
 }
 
 impl Checkout {
@@ -39,10 +45,10 @@ pub fn finish(
     before: Checkout,
     selection: &Value,
     requested_base: &str,
-    timings: &[TaskTiming],
-    elapsed: Duration,
+    timings: &Timings,
+    coverage: Option<&coverage::Summary>,
 ) -> Result<()> {
-    if timings.iter().any(|task| !task.passed) {
+    if timings.tasks.iter().any(|task| !task.passed) {
         eprintln!("QA checks-pass was not recorded: nonblocking tasks failed.");
         return Ok(());
     }
@@ -50,7 +56,7 @@ pub fn finish(
         eprintln!("QA checks-pass was not recorded: the checkout was dirty or HEAD changed during the run.");
         return Ok(());
     }
-    let description = report(selection, requested_base, &super::catalog::host(), timings, elapsed);
+    let description = report(selection, requested_base, &super::catalog::host(), timings, coverage);
     let result = command(root, &before.commit_id, &description).status();
     let status = match result {
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -83,15 +89,23 @@ fn command(root: &Path, commit_id: &str, message: &str) -> Command {
     command
 }
 
-fn report(selection: &Value, requested_base: &str, host: &str, timings: &[TaskTiming], elapsed: Duration) -> String {
+fn report(
+    selection: &Value,
+    requested_base: &str,
+    host: &str,
+    timings: &Timings,
+    coverage: Option<&coverage::Summary>,
+) -> String {
     let title = if selection["mode"] == "exhaustive" {
         "🔬 Thorough QA"
+    } else if coverage.is_some_and(|coverage| coverage.omitted > 0) {
+        "⚡ Fast QA (coverage selection)"
     } else {
         "⚡ Fast QA"
     };
     let mut message = format!(
         "{title} passed in {}\n\nHost: {host}\nMode: {}\nRequested base: {requested_base}\nComparison base: {}\nPackages: {}\n",
-        duration(elapsed),
+        duration(timings.elapsed),
         selection["mode"].as_str().unwrap_or_default(),
         selection["base"].as_str().unwrap_or("not used (exhaustive selection)"),
         selection["packages"].as_array().map_or(0, Vec::len),
@@ -101,8 +115,31 @@ fn report(selection: &Value, requested_base: &str, host: &str, timings: &[TaskTi
             writeln!(message, "Selection: {reason}").expect("writing to a string cannot fail");
         }
     }
+    if let Some(coverage) = coverage {
+        writeln!(
+            message,
+            "Coverage: {:?}\nTest executions ({}/{} configurations counted): {} run, {} omitted\nCoverage configurations: {} reused, {} collected, {} fallback",
+            coverage.mode,
+            coverage.measured_cases,
+            coverage.cases,
+            coverage.executed,
+            coverage.omitted,
+            coverage.reused,
+            coverage.collected,
+            coverage.fallback,
+        )
+        .expect("writing to a string cannot fail");
+    } else {
+        message.push_str("Coverage: inactive (no tests omitted by coverage)\n");
+    }
+    writeln!(
+        message,
+        "\nPackage/configuration planning: {:.3}s (before tasks)",
+        timings.planning.as_secs_f64(),
+    )
+    .expect("writing to a string cannot fail");
     message.push_str("\nTask timings (including setup):\n");
-    for task in timings {
+    for task in &timings.tasks {
         writeln!(
             message,
             "- {}: {} — {}{}",
@@ -110,6 +147,16 @@ fn report(selection: &Value, requested_base: &str, host: &str, timings: &[TaskTi
             duration(task.elapsed),
             if task.passed { "passed" } else { "failed" },
             if task.blocking { "" } else { " (nonblocking)" },
+        )
+        .expect("writing to a string cannot fail");
+    }
+    if let Some(coverage) = coverage {
+        writeln!(
+            message,
+            "\nCoverage timing breakdown (included in task timings):\n- Test inventory: {:.3}s\n- Per-test selection: {:.3}s\n- Index analysis: {:.3}s",
+            coverage.inventory_time.as_secs_f64(),
+            coverage.selection_time.as_secs_f64(),
+            coverage.analysis_time.as_secs_f64(),
         )
         .expect("writing to a string cannot fail");
     }
@@ -181,17 +228,21 @@ mod tests {
 
     #[test]
     fn reports_actual_coverage_and_preserves_message_as_one_argument() {
-        let timings = [TaskTiming {
-            id: "advisories",
-            elapsed: Duration::from_millis(1250),
-            blocking: false,
-            passed: true,
-        }];
+        let timings = Timings {
+            elapsed: Duration::from_secs(3672),
+            planning: Duration::from_millis(12),
+            tasks: vec![TaskTiming {
+                id: "advisories",
+                elapsed: Duration::from_millis(1250),
+                blocking: false,
+                passed: true,
+            }],
+        };
         let selection = json!({
             "mode": "exhaustive", "packages": ["gix"],
             "reasons": ["Cannot compare with HEAD^; fetch the base ref to enable fast selection"]
         });
-        let message = report(&selection, "HEAD^", "test-host", &timings, Duration::from_secs(3672));
+        let message = report(&selection, "HEAD^", "test-host", &timings, None);
         assert_eq!(
             message,
             "🔬 Thorough QA passed in 1h 1m 12s
@@ -202,6 +253,9 @@ Requested base: HEAD^
 Comparison base: not used (exhaustive selection)
 Packages: 1
 Selection: Cannot compare with HEAD^; fetch the base ref to enable fast selection
+Coverage: inactive (no tests omitted by coverage)
+
+Package/configuration planning: 0.012s (before tasks)
 
 Task timings (including setup):
 - advisories: 1.2s — passed (nonblocking)
@@ -226,10 +280,64 @@ Task timings (including setup):
             &json!({"mode": "fast", "base": "resolved-base", "packages": []}),
             "HEAD^",
             "test-host",
-            &[],
-            Duration::from_secs(72),
+            &Timings {
+                elapsed: Duration::from_secs(72),
+                planning: Duration::ZERO,
+                tasks: Vec::new(),
+            },
+            None,
         );
         assert!(fast.starts_with("⚡ Fast QA passed in 1m 12s\n\n"));
         assert!(fast.contains("Comparison base: resolved-base"));
+    }
+
+    #[test]
+    fn coverage_results_report_actual_omissions_and_selection_cost() {
+        let mut coverage = coverage::Summary::new(coverage::Mode::Auto);
+        coverage.cases = 4;
+        coverage.measured_cases = 3;
+        coverage.executed = 10;
+        coverage.omitted = 20;
+        coverage.reused = 2;
+        coverage.collected = 1;
+        coverage.fallback = 1;
+        coverage.inventory_time = Duration::from_millis(5);
+        coverage.selection_time = Duration::from_millis(3);
+        coverage.analysis_time = Duration::from_millis(7);
+        let timings = Timings {
+            elapsed: Duration::from_secs(72),
+            planning: Duration::from_millis(12),
+            tasks: Vec::new(),
+        };
+        let selection = json!({"mode": "fast", "base": "resolved-base", "packages": []});
+        let message = report(&selection, "HEAD^", "test-host", &timings, Some(&coverage));
+        assert!(
+            message.starts_with("⚡ Fast QA (coverage selection) passed in 1m 12s"),
+            "actual test omissions identify the coverage selection profile"
+        );
+        assert!(
+            message.contains("10 run, 20 omitted"),
+            "counts describe the actual test executions"
+        );
+        assert!(
+            message.contains("3/4 configurations counted"),
+            "unknown inventories do not invent test totals"
+        );
+        assert!(message.contains("2 reused, 1 collected, 1 fallback"));
+        assert!(message.contains("Package/configuration planning: 0.012s (before tasks)"));
+        assert!(message.contains("Coverage timing breakdown (included in task timings):"));
+        assert!(message.contains("Test inventory: 0.005s"));
+        assert!(message.contains("Per-test selection: 0.003s"));
+        assert!(message.contains("Index analysis: 0.007s"));
+
+        coverage.omitted = 0;
+        for mode in [coverage::Mode::Auto, coverage::Mode::Shadow, coverage::Mode::Collect] {
+            coverage.mode = mode;
+            let message = report(&selection, "HEAD^", "test-host", &timings, Some(&coverage));
+            assert!(
+                message.starts_with("⚡ Fast QA passed"),
+                "the title identifies selection only when tests were omitted"
+            );
+        }
     }
 }
