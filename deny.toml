@@ -12,6 +12,7 @@
 unsound = "all"
 ignore = [
     { id = "RUSTSEC-2025-0052", reason = "`async-std` - unmaintained without replacement - needs some time to replace, but async version isn't too important right now" },
+    { id = "RUSTSEC-2026-0441", reason = "`pin-utils` is transitive through `async-std` and test-only `nix`, with no maintained release; remove this exception when those dependencies stop using it" },
 ]
 
 
