@@ -87,6 +87,47 @@ fn with_index_file_snapshot_filters(has_stable_mtimes: bool, run: impl FnOnce())
 }
 
 #[test]
+fn invalid_cache_trees_do_not_lookup_their_placeholder_ids() -> gix_error::TestResult {
+    let file = file("v2_deeper_tree");
+    let objects = crate::odb_at(file.path().parent().expect("index has a parent").join("objects"))?;
+    let original = file.tree().expect("committed fixture has a cache tree");
+    original.verify(true, &objects)?;
+    for invalid_id in [
+        gix_testtools::object_hash().null(),
+        gix_testtools::object_hash().empty_blob(),
+    ] {
+        for invalidate_root in [true, false] {
+            let mut tree = original.clone();
+            let invalid = if invalidate_root {
+                &mut tree
+            } else {
+                tree.children
+                    .iter_mut()
+                    .find(|child| !child.children.is_empty())
+                    .expect("fixture has nested trees")
+            };
+            invalid.num_entries = None;
+            invalid.id = invalid_id;
+            tree.verify(true, &objects)?;
+        }
+    }
+
+    let mut tree = original.clone();
+    tree.num_entries = None;
+    tree.id = gix_testtools::object_hash().null();
+    tree.children
+        .iter_mut()
+        .find(|child| !child.children.is_empty())
+        .expect("fixture has nested trees")
+        .id = tree.id;
+    assert!(
+        tree.verify(true, &objects).is_err(),
+        "valid descendants must still have their objects verified beneath invalid parents"
+    );
+    Ok(())
+}
+
+#[test]
 fn v2_with_single_entry_tree_and_eoie_ext() {
     let file_disallow_threaded_loading = file_opt(
         "v2",
