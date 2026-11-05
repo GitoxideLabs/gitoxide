@@ -6,7 +6,7 @@ impl Ref {
     /// Provide shared fields referring to the ref itself, namely `(name, target, [peeled])`.
     /// In case of peeled refs, the tag object itself is returned as it is what the ref directly refers to, and target of the tag is returned
     /// as `peeled`.
-    /// If `unborn`, the first object id will be the null oid.
+    /// For unborn refs, both `target` and `peeled` are `None`.
     pub fn unpack(&self) -> (&BStr, Option<&gix_hash::oid>, Option<&gix_hash::oid>) {
         match self {
             Ref::Direct { full_ref_name, object } => (full_ref_name.as_ref(), Some(object), None),
