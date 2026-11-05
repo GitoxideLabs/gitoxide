@@ -37,6 +37,55 @@ mod window_size {
 mod baseline;
 
 #[test]
+fn missing_parents_are_skipped_like_shallow_boundaries() -> TestResult {
+    use gix_object::FindExt;
+    struct MissingParent<'a> {
+        odb: &'a gix_odb::Handle,
+        missing_commit_id: gix_hash::ObjectId,
+    }
+    impl gix_object::Find for MissingParent<'_> {
+        fn try_find<'a>(
+            &self,
+            commit_id: &gix_hash::oid,
+            buf: &'a mut Vec<u8>,
+        ) -> gix_error::Result<Option<gix_object::Data<'a>>> {
+            if commit_id == self.missing_commit_id {
+                Ok(None)
+            } else {
+                gix_object::Find::try_find(self.odb, commit_id, buf)
+            }
+        }
+    }
+
+    let git_dir = gix_testtools::scripted_fixture_read_only("make_repos.sh")?.join("no_parents/client/.git");
+    let object_hash = gix_testtools::object_hash();
+    let odb = gix_odb::at(git_dir.join("objects"), object_hash)?;
+    let refs = gix_ref::file::Store::at_opts(git_dir, object_hash, Default::default());
+    let tip_commit_id = refs.find("c7")?.target.into_id();
+    let missing_commit_id = odb
+        .find_commit(&tip_commit_id, &mut Vec::new())?
+        .parents()
+        .next()
+        .expect("c7 has a parent");
+    let mut graph = gix_revwalk::Graph::new(
+        MissingParent {
+            odb: &odb,
+            missing_commit_id,
+        },
+        None,
+    );
+    let mut negotiator = gix_negotiate::Algorithm::Skipping.into_negotiator();
+    negotiator.add_tip(tip_commit_id, &mut graph)?;
+    let haves = std::iter::from_fn(|| negotiator.next_have(&mut graph)).collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(
+        haves,
+        [tip_commit_id],
+        "a parent missing beyond a shallow boundary is skipped, not traversed"
+    );
+    Ok(())
+}
+
+#[test]
 fn size_of_entry() {
     let actual = std::mem::size_of::<gix_revwalk::graph::Commit<gix_negotiate::Metadata>>();
     let sha1 = 56;

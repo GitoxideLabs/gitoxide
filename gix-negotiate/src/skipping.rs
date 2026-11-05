@@ -87,6 +87,10 @@ impl Algorithm {
             }
         } else {
             self.add_to_queue(parent_id, Flags::default(), graph)?;
+            // Like `git`, ignore parents beyond a shallow boundary.
+            if !graph.contains(&parent_id) {
+                return Ok(false);
+            }
         }
         if entry.flags.intersects(Flags::COMMON | Flags::ADVERTISED) {
             self.mark_common(parent_id, graph)?;
