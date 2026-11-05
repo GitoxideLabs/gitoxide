@@ -108,7 +108,7 @@ impl crate::Repository {
     /// push URLs are reported as errors. Use [`try_find_remote_without_url_rewrite()`](Self::try_find_remote_without_url_rewrite)
     /// with [`Remote::rewrite_urls()`] to defer rewriting and handle such errors after constructing the remote.
     ///
-    /// Note that ref-specs are de-duplicated right away, keeping their configured order as the first matching spec may win.
+    /// Note that ref-specs are de-duplicated right away, keeping their configured order as the first configured matching spec should win.
     ///
     /// We will only include information if we deem it [trustworthy][crate::open::Options::filter_config_section()].
     pub fn try_find_remote<'a>(&self, name_or_url: impl Into<&'a BStr>) -> Option<Result<Remote<'_>>> {
@@ -186,13 +186,14 @@ impl crate::Repository {
         ) -> Result<Vec<gix_refspec::RefSpec>> {
             let kind = key.name;
             // Like `git`, keep the configured order, as the first matching spec may win.
-            let mut unique = Vec::<gix_refspec::RefSpec>::with_capacity(specs.len());
+            let mut unique = Vec::with_capacity(specs.len());
+            let mut seen = std::collections::HashSet::with_capacity(specs.len());
             for spec in specs {
                 let spec = key.try_into_refspec(spec, op).or_raise(|| {
                     crate::error::validation(format!("{kind} ref-spec under `remote.{name_or_url}` was invalid"))
                         .with_input(name_or_url.to_owned())
                 })?;
-                if !unique.contains(&spec) {
+                if seen.insert(spec.clone()) {
                     unique.push(spec);
                 }
             }
