@@ -108,8 +108,7 @@ impl crate::Repository {
     /// push URLs are reported as errors. Use [`try_find_remote_without_url_rewrite()`](Self::try_find_remote_without_url_rewrite)
     /// with [`Remote::rewrite_urls()`] to defer rewriting and handle such errors after constructing the remote.
     ///
-    /// Note that ref-specs are de-duplicated right away which may change their order. This doesn't affect matching in any way
-    /// as negations/excludes are applied after includes.
+    /// Note that ref-specs are de-duplicated right away, keeping their configured order as the first configured matching spec should win.
     ///
     /// We will only include information if we deem it [trustworthy][crate::open::Options::filter_config_section()].
     pub fn try_find_remote<'a>(&self, name_or_url: impl Into<&'a BStr>) -> Option<Result<Remote<'_>>> {
@@ -186,20 +185,19 @@ impl crate::Repository {
             op: gix_refspec::parse::Operation,
         ) -> Result<Vec<gix_refspec::RefSpec>> {
             let kind = key.name;
-            specs
-                .into_iter()
-                .map(|spec| {
-                    key.try_into_refspec(spec, op).or_raise(|| {
-                        crate::error::validation(format!("{kind} ref-spec under `remote.{name_or_url}` was invalid"))
-                            .with_input(name_or_url.to_owned())
-                    })
-                })
-                .collect::<std::result::Result<Vec<_>, _>>()
-                .map(|mut specs| {
-                    specs.sort();
-                    specs.dedup();
-                    specs
-                })
+            // Like `git`, keep the configured order, as the first matching spec may win.
+            let mut unique = Vec::with_capacity(specs.len());
+            let mut seen = std::collections::HashSet::with_capacity(specs.len());
+            for spec in specs {
+                let spec = key.try_into_refspec(spec, op).or_raise(|| {
+                    crate::error::validation(format!("{kind} ref-spec under `remote.{name_or_url}` was invalid"))
+                        .with_input(name_or_url.to_owned())
+                })?;
+                if seen.insert(spec.clone()) {
+                    unique.push(spec);
+                }
+            }
+            Ok(unique)
         }
 
         let mut filter = self.filter_config_section();

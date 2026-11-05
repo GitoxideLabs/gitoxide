@@ -317,10 +317,11 @@ mod find_remote {
         assert_eq!(
             remote.refspecs(Direction::Fetch),
             &[
-                fetchspec("HEAD"),
                 fetchspec("+refs/heads/*:refs/remotes/origin/*"),
+                fetchspec("HEAD"),
                 fetchspec("refs/tags/*:refs/tags/*")
-            ]
+            ],
+            "specs keep their configured order, and `HEAD` is a duplicate of `@`"
         );
     }
 
