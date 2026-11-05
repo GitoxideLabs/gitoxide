@@ -77,7 +77,7 @@ impl crate::Repository {
                         },
                     }
                 } else {
-                    matching_remote(name, remote.push_specs.iter(), self.object_hash()).map(|res| res.or_error())
+                    matching_remote(name, remote.push_specs.iter()).map(|res| res.or_error())
                 }
             }
         }
@@ -135,7 +135,7 @@ impl crate::Repository {
         if push_default == Some(push::Default::Upstream) {
             return self.branch_remote_tracking_ref_name(name, remote::Direction::Fetch);
         }
-        let tracking = match matching_remote(remote_ref.as_ref(), remote.fetch_specs.iter(), self.object_hash())? {
+        let tracking = match matching_remote(remote_ref.as_ref(), remote.fetch_specs.iter())? {
             Ok(name) => name,
             Err(err) => {
                 return Some(Err(
@@ -291,7 +291,6 @@ fn source_ref_to_full_name(source: gix_refspec::match_group::SourceRef<'_>) -> R
 fn matching_remote<'a>(
     lhs: &FullNameRef,
     specs: impl IntoIterator<Item = &'a gix_refspec::RefSpec>,
-    object_hash: gix_hash::Kind,
 ) -> Option<std::result::Result<FullName, gix_validate::reference::name::Error>> {
     let search = gix_refspec::MatchGroup {
         specs: specs
@@ -300,11 +299,10 @@ fn matching_remote<'a>(
             .filter(|spec| spec.source().is_some() && spec.destination().is_some())
             .collect(),
     };
-    let null_id = object_hash.null();
     let out = search.match_lhs(
         Some(gix_refspec::match_group::Item {
             full_ref_name: lhs.as_bstr(),
-            target: &null_id,
+            target: None,
             object: None,
         })
         .into_iter(),
