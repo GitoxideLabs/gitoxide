@@ -343,7 +343,9 @@ pub(super) mod inner {
                         let ours_matches_theirs = match (self.current.data, self.other.data) {
                             (Data::Missing, Data::Missing) => true,
                             (Data::Missing, _) | (_, Data::Missing) => false,
-                            _ if !self.current.id.is_null() && !self.other.id.is_null() => {
+                            _ if self.current.id.is_some_and(|id| !id.is_null())
+                                && self.other.id.is_some_and(|id| !id.is_null()) =>
+                            {
                                 self.current.id == self.other.id
                             }
                             (Data::Buffer(ours), Data::Buffer(theirs)) => ours == theirs,
@@ -488,10 +490,12 @@ impl PlatformRef<'_> {
         };
         use crate::blob::platform::resource::Data;
         match field.data {
-            Data::TooLarge { .. } if !field.id.is_null() => Ok(Some(field.id.to_owned())),
-            Data::TooLarge { .. } | Data::Missing => Ok(None),
-            Data::Buffer(buf) if field.id.is_null() => write_blob(buf).map(Some),
-            Data::Buffer(_) => Ok(Some(field.id.to_owned())),
+            Data::Missing => Ok(None),
+            Data::TooLarge { .. } => Ok(field.id.filter(|id| !id.is_null()).map(ToOwned::to_owned)),
+            Data::Buffer(buf) => match field.id.filter(|id| !id.is_null()) {
+                Some(id) => Ok(Some(id.to_owned())),
+                None => write_blob(buf).map(Some),
+            },
         }
     }
 }

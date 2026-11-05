@@ -41,9 +41,10 @@ pub trait Change: Clone {
     /// Return the hash of the object behind this change for identification.
     ///
     /// Note that this is the id of the object as stored in `git`, i.e. it must have gone through workspace
-    /// conversions. A null ID means the hash is unavailable, and never establishes identity.
+    /// conversions. `None` means the hash is unavailable, and never establishes identity.
     /// Such blobs can still match by similarity if their worktree content is available through the diff platform.
-    fn id(&self) -> &gix_hash::oid;
+    /// Implementations should return `None` for null IDs; the tracker also guards against `Some(null)`.
+    fn id(&self) -> Option<&gix_hash::oid>;
     /// Return the relation that this change may have with other changes.
     ///
     /// It allows to associate a directory with its children that are added or removed at the same moment.
@@ -60,7 +61,7 @@ pub trait Change: Clone {
     /// Return more information about the kind of entry affected by this change.
     fn entry_mode(&self) -> EntryMode;
     /// Return the id of the change along with its mode.
-    fn id_and_entry_mode(&self) -> (&gix_hash::oid, EntryMode);
+    fn id_and_entry_mode(&self) -> (Option<&gix_hash::oid>, EntryMode);
 }
 
 /// A set of tracked items allows to figure out their relations by figuring out their similarity.
@@ -109,8 +110,8 @@ pub mod visit {
     pub struct Source<'a, T> {
         /// The kind of entry.
         pub entry_mode: EntryMode,
-        /// The hash of the state of the source as seen in the object database.
-        pub id: gix_hash::ObjectId,
+        /// The hash of the source as it would appear in the object database, or `None` if unavailable.
+        pub id: Option<gix_hash::ObjectId>,
         /// Further specify what kind of source this is.
         pub kind: SourceKind,
         /// The repository-relative location of this entry.
@@ -351,7 +352,7 @@ impl<T: Change> Tracker<T> {
         self.items.sort_by(|a, b| {
             a.change
                 .id()
-                .cmp(b.change.id())
+                .cmp(&b.change.id())
                 .then_with(|| a.location(&self.path_backing).cmp(b.location(&self.path_backing)))
                 .then_with(|| a.change.kind().cmp(&b.change.kind()))
                 .then_with(|| a.change.relation().cmp(&b.change.relation()))
@@ -454,7 +455,7 @@ impl<T: Change> Tracker<T> {
                             || matches!(item.change.relation(), Some(Relation::ChildOfParent(_)))
                             || {
                                 let id = item.change.id();
-                                id != gix_hash::ObjectId::empty_blob(id.kind())
+                                id.is_none_or(|id| id != gix_hash::ObjectId::empty_blob(id.kind()))
                             }
                     },
                     |f| f(&item.change),
@@ -480,7 +481,7 @@ impl<T: Change> Tracker<T> {
             )?
             .map(|(src_idx, src, diff)| {
                 let (id, entry_mode) = src.change.id_and_entry_mode();
-                let id = id.to_owned();
+                let id = id.filter(|id| !id.is_null()).map(ToOwned::to_owned);
                 let location = src.location(&self.path_backing);
                 (
                     visit::Source {
@@ -557,10 +558,10 @@ impl<T: Change> Tracker<T> {
         for item in self.items.iter_mut().filter(|item| !item.emitted) {
             match item.change.relation() {
                 Some(Relation::ChildOfParent(id)) if id == src_parent_id => {
-                    src_items.push((item.change.id().to_owned(), item));
+                    src_items.push((item.change.id().filter(|id| !id.is_null()).map(ToOwned::to_owned), item));
                 }
                 Some(Relation::ChildOfParent(id)) if id == dst_parent_id => {
-                    dst_items.push((item.change.id().to_owned(), item));
+                    dst_items.push((item.change.id().filter(|id| !id.is_null()).map(ToOwned::to_owned), item));
                 }
                 _ => continue,
             }
@@ -569,7 +570,7 @@ impl<T: Change> Tracker<T> {
         for ((src_id, src_item), (dst_id, dst_item)) in src_items.into_iter().zip(dst_items) {
             // Since the parent items are already identical by ID, we know that the children will also match, we just
             // double-check to still have a chance to be correct in case some of that goes wrong.
-            if !src_id.is_null()
+            if src_id.is_some()
                 && src_id == dst_id
                 && filename(src_item.location(&self.path_backing)) == filename(dst_item.location(&self.path_backing))
             {
@@ -655,7 +656,7 @@ impl<T: Change> Tracker<T> {
             let location = src_item.location(&self.path_backing);
             let src = visit::Source {
                 entry_mode,
-                id: src_item.change.id().to_owned(),
+                id: src_item.change.id().filter(|id| !id.is_null()).map(ToOwned::to_owned),
                 kind: SourceKind::Rename,
                 location,
                 change: &src_item.change,
@@ -752,7 +753,7 @@ fn find_match<'a, T: Change>(
     let (item_id, item_mode) = item.change.id_and_entry_mode();
     // Symlinks and gitlinks only participate in exact-ID matching; neither has meaningful blob similarity here.
     if needs_exact_match(percentage) || item_mode.is_link() || item_mode.is_commit() {
-        if item_id.is_null() {
+        if item_id.is_none_or(gix_hash::oid::is_null) {
             return Ok(None);
         }
         // Items are sorted by id, so the candidates with the same id are a contiguous range of `source_candidates`.
@@ -795,7 +796,7 @@ fn find_match<'a, T: Change>(
             if !has_new {
                 diff_cache
                     .set_resource(
-                        item_id.to_owned(),
+                        item_id.map(ToOwned::to_owned),
                         item_mode.kind(),
                         item.location(path_backing),
                         ResourceKind::NewOrDestination,
@@ -807,7 +808,7 @@ fn find_match<'a, T: Change>(
             let (src_id, src_mode) = src.change.id_and_entry_mode();
             diff_cache
                 .set_resource(
-                    src_id.to_owned(),
+                    src_id.map(ToOwned::to_owned),
                     src_mode.kind(),
                     src.location(path_backing),
                     ResourceKind::OldOrSource,

@@ -55,9 +55,9 @@ pub enum RewriteSource<'index, ContentChange, SubmoduleStatus> {
         /// [CollapsedEntriesEmissionMode::OnStatusMismatch](gix_dir::walk::CollapsedEntriesEmissionMode::OnStatusMismatch).
         /// It will also be `Some(dir_status)` if that option was [CollapsedEntriesEmissionMode::All](gix_dir::walk::CollapsedEntriesEmissionMode::All).
         source_dirwalk_entry_collapsed_directory_status: Option<gix_dir::entry::Status>,
-        /// The object id as it would appear if the entry was written to the object database.
-        /// It's the same as `dirwalk_entry_id`, or `diff` is `Some(_)` to indicate that the copy was determined by similarity.
-        source_dirwalk_entry_id: gix_hash::ObjectId,
+        /// The object ID as it would appear in the object database, or `None` if its hash is unavailable.
+        /// It's the same available ID as `dirwalk_entry_id`, or `diff` is `Some(_)` to indicate that the copy was determined by similarity.
+        source_dirwalk_entry_id: Option<gix_hash::ObjectId>,
     },
 }
 
@@ -108,10 +108,10 @@ pub enum Entry<'index, ContentChange, SubmoduleStatus> {
         /// It will also be `Some(dir_status)` if that option was [CollapsedEntriesEmissionMode::All](gix_dir::walk::CollapsedEntriesEmissionMode::All).
         dirwalk_entry_collapsed_directory_status: Option<gix_dir::entry::Status>,
         /// The object id as it would appear if the entry was written to the object database, specifically hashed in order to determine equality.
-        /// Note that it doesn't (necessarily) exist in the object database, and may be [null](gix_hash::ObjectId::null) if no hashing
-        /// was performed.
-        dirwalk_entry_id: gix_hash::ObjectId,
-        /// It's `None` if the 'source.id' is equal to `dirwalk_entry_id`, as identity made an actual diff computation unnecessary.
+        /// Note that it doesn't (necessarily) exist in the object database, and is `None` if hashing was not performed or the file could not be read.
+        /// Unavailable IDs do not establish identity.
+        dirwalk_entry_id: Option<gix_hash::ObjectId>,
+        /// It's `None` if the available source and destination IDs are equal, so no diff computation was necessary.
         /// Otherwise, and if enabled, it's `Some(stats)` to indicate how similar both entries were.
         diff: Option<gix_diff::blob::DiffLineStats>,
         /// If true, this rewrite is created by copy, and 'source.id' is pointing to its source.

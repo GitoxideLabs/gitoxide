@@ -629,7 +629,7 @@ fn set_worktree_resources(
     let old_resource = old.unwrap_or(fallback);
     cache
         .set_resource(
-            old.map_or_else(|| repository.object_hash().null(), |resource| resource.id),
+            old.map(|resource| resource.id),
             old_resource.mode.kind(),
             old_resource.path.as_bstr(),
             gix::diff::blob::ResourceKind::OldOrSource,
@@ -639,7 +639,7 @@ fn set_worktree_resources(
     let new_resource = new.unwrap_or(fallback);
     cache
         .set_resource(
-            new.map_or_else(|| repository.object_hash().null(), |resource| resource.id),
+            new.map(|resource| resource.id),
             new_resource.mode.kind(),
             new_resource.path.as_bstr(),
             gix::diff::blob::ResourceKind::NewOrDestination,

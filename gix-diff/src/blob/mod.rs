@@ -134,6 +134,9 @@ pub struct Platform {
     /// The new version of a diff-able blob, if set.
     new: Option<platform::CacheKey>,
 
+    /// Drivers for the two missing object-backed resources, without a cache entry per absent path.
+    missing_driver_index: [Option<usize>; 2],
+
     /// Options to alter how diffs should be performed.
     pub options: platform::Options,
     /// A way to convert objects into a diff-able format.

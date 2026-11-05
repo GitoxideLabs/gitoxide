@@ -52,7 +52,7 @@ fn byte_lines_without_terminator() -> TestResult {
 
         let blob_id = db.write_buf(gix_object::Kind::Blob, input)?;
         for kind in [ResourceKind::OldOrSource, ResourceKind::NewOrDestination] {
-            platform.set_resource(blob_id, EntryKind::Blob, "a".into(), kind, &db)?;
+            platform.set_resource(Some(blob_id), EntryKind::Blob, "a".into(), kind, &db)?;
         }
         let out = platform.prepare_diff()?;
         let Operation::InternalDiff { change, .. } = out.operation else {
@@ -76,6 +76,129 @@ fn byte_lines_without_terminator() -> TestResult {
 }
 
 #[test]
+fn missing_resources_keep_their_own_attributes() -> TestResult {
+    let mut platform = new_platform(
+        [gix_diff::blob::Driver {
+            name: "a".into(),
+            ..Default::default()
+        }],
+        pipeline::Mode::default(),
+    );
+    platform.filter.roots.old_root = None;
+    for (path, kind) in [("a", ResourceKind::OldOrSource), ("b", ResourceKind::NewOrDestination)] {
+        platform.set_resource(None, EntryKind::Blob, path.into(), kind, &gix_object::find::Never)?;
+    }
+    let (old, new) = platform.resources().expect("both resources were set");
+    assert_eq!(old.data, platform::resource::Data::Missing);
+    assert_eq!(new.data, platform::resource::Data::Missing);
+    assert_eq!(
+        old.driver_index,
+        Some(0),
+        "attributes belong to the missing resource's path"
+    );
+    assert_eq!(
+        new.driver_index, None,
+        "null IDs do not identify a shared attribute cache entry"
+    );
+    for path in ["c", "d", "e"] {
+        platform.set_resource(
+            None,
+            EntryKind::Blob,
+            path.into(),
+            ResourceKind::NewOrDestination,
+            &gix_object::find::Never,
+        )?;
+    }
+    assert_eq!(
+        platform.clear_resource_cache_keep_allocation(),
+        1,
+        "absent paths reuse one scratch buffer instead of accumulating cache entries"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn cached_resources_preserve_the_supplied_mode() -> TestResult {
+    let mut platform = new_platform(None, pipeline::Mode::default());
+    platform.filter.roots.old_root = None;
+    let objects = object_db();
+    let blob_id = insert(&objects, "content")?;
+    for blob_id in [None, Some(gix_testtools::object_hash().null()), Some(blob_id)] {
+        for (mode, kind) in [
+            (EntryKind::Blob, ResourceKind::OldOrSource),
+            (EntryKind::BlobExecutable, ResourceKind::NewOrDestination),
+        ] {
+            platform.set_resource(blob_id, mode, "a".into(), kind, &objects)?;
+        }
+        let (old, new) = platform.resources().expect("both resources were set");
+        assert_eq!(old.id, blob_id.as_deref().filter(|id| !id.is_null()));
+        assert_eq!(new.id, old.id);
+        assert_eq!(old.mode, EntryKind::Blob);
+        assert_eq!(
+            new.mode,
+            EntryKind::BlobExecutable,
+            "a shared content cache must not replace the supplied mode"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn worktree_resources_at_the_same_path_have_distinct_roots() -> TestResult {
+    let mut platform = new_platform(None, pipeline::Mode::default());
+    platform.filter.roots.new_root = platform.filter.roots.old_root.as_ref().map(|root| root.join(".git"));
+    for (blob_id, kind) in [
+        (None, ResourceKind::OldOrSource),
+        (
+            Some(gix_testtools::object_hash().null()),
+            ResourceKind::NewOrDestination,
+        ),
+    ] {
+        platform.set_resource(
+            blob_id,
+            EntryKind::Blob,
+            "config".into(),
+            kind,
+            &gix_object::find::Never,
+        )?;
+    }
+    let (old, new) = platform.resources().expect("both resources were set");
+    assert_eq!(
+        (old.id, new.id),
+        (None, None),
+        "unknown IDs are normalized independently of content presence"
+    );
+    assert_eq!(
+        old.data,
+        platform::resource::Data::Missing,
+        "config is absent from the worktree root"
+    );
+    assert!(
+        new.data.as_slice().is_some_and(|data| !data.is_empty()),
+        "the fixture's .git directory contains config"
+    );
+    platform.clear_resource_cache();
+    platform.filter.roots.new_root = platform.filter.roots.old_root.clone();
+    for (blob_id, kind) in [
+        (None, ResourceKind::OldOrSource),
+        (
+            Some(gix_testtools::object_hash().null()),
+            ResourceKind::NewOrDestination,
+        ),
+    ] {
+        platform.set_resource(blob_id, EntryKind::Blob, "a".into(), kind, &gix_object::find::Never)?;
+    }
+    assert_eq!(
+        platform.clear_resource_cache_keep_allocation(),
+        1,
+        "equal worktree roots still share their cached content"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn resources_of_worktree_and_odb_and_check_link() -> TestResult {
     let mut platform = new_platform(
         Some(gix_diff::blob::Driver {
@@ -85,7 +208,7 @@ fn resources_of_worktree_and_odb_and_check_link() -> TestResult {
         gix_diff::blob::pipeline::Mode::default(),
     );
     platform.set_resource(
-        gix_hash::Kind::Sha1.null(),
+        None,
         EntryKind::Blob,
         "a".into(),
         ResourceKind::OldOrSource,
@@ -96,7 +219,7 @@ fn resources_of_worktree_and_odb_and_check_link() -> TestResult {
     let a_content = "a-content";
     let id = insert(&db, a_content)?;
     platform.set_resource(
-        id,
+        Some(id),
         EntryKind::BlobExecutable,
         "a".into(),
         ResourceKind::NewOrDestination,
@@ -107,7 +230,7 @@ fn resources_of_worktree_and_odb_and_check_link() -> TestResult {
     assert_eq!(old.data.as_slice().expect("present").as_bstr(), "a\n");
     assert_eq!(old.driver_index, Some(0));
     assert_eq!(old.mode, EntryKind::Blob);
-    assert!(old.id.is_null(), "id is used verbatim");
+    assert!(old.id.is_none(), "an unavailable ID is exposed as None");
     assert_eq!(old.rela_path, "a", "location is kept directly as provided");
     assert_eq!(new.data.as_slice().expect("present").as_bstr(), a_content);
     assert_eq!(new.driver_index, Some(0));
@@ -116,7 +239,7 @@ fn resources_of_worktree_and_odb_and_check_link() -> TestResult {
         "4c469b6c8c4486fdc9ded9d597d8f6816a455707",
         "061557fb6e67e1be5d41f8e83962699fce2a7d168ccfb2b5743d27ab06038da8",
     );
-    assert_eq!(new.id, new_id);
+    assert_eq!(new.id, Some(new_id.as_ref()));
     assert_eq!(new.rela_path, "a", "location is kept directly as provided");
 
     let out = platform.prepare_diff()?;
@@ -131,6 +254,7 @@ fn resources_of_worktree_and_odb_and_check_link() -> TestResult {
         "it ends up with the default, as it's not overridden anywhere"
     );
 
+    let null_id = gix_testtools::object_hash().null();
     let program = Command::try_from(gix_diff::command::prepare("test"))?;
     let program = program.get_program().to_string_lossy();
     assert_eq!(
@@ -144,7 +268,7 @@ fn resources_of_worktree_and_odb_and_check_link() -> TestResult {
             3
         )),
         format!(
-            "{}{program} a <tmp-path> 0000000000000000000000000000000000000000 100644 <tmp-path> {new_id} 100755",
+            "{}{program} a <tmp-path> {null_id} 100644 <tmp-path> {new_id} 100755",
             if !cfg!(windows) {
                 "GIT_DIFF_PATH_COUNTER=3 GIT_DIFF_PATH_TOTAL=3 GIT_DIR=. "
             } else {
@@ -162,10 +286,22 @@ fn resources_of_worktree_and_odb_and_check_link() -> TestResult {
         "configured command lines with arguments are interpreted by a shell"
     );
 
-    platform.set_resource(id, EntryKind::Link, "a".into(), ResourceKind::NewOrDestination, &db)?;
+    platform.set_resource(
+        Some(id),
+        EntryKind::Link,
+        "a".into(),
+        ResourceKind::NewOrDestination,
+        &db,
+    )?;
 
     // Double-inserts are fine.
-    platform.set_resource(id, EntryKind::Link, "a".into(), ResourceKind::NewOrDestination, &db)?;
+    platform.set_resource(
+        Some(id),
+        EntryKind::Link,
+        "a".into(),
+        ResourceKind::NewOrDestination,
+        &db,
+    )?;
     let (old, new) = platform.resources().expect("previously set source and destination");
     assert_eq!(
         old.data.as_slice().expect("present").as_bstr(),
@@ -183,7 +319,7 @@ fn resources_of_worktree_and_odb_and_check_link() -> TestResult {
         a_content,
         "despite the same content"
     );
-    assert_eq!(new.id, new_id);
+    assert_eq!(new.id, Some(new_id.as_ref()));
     assert_eq!(new.rela_path, "a");
 
     let out = platform.prepare_diff()?;
@@ -209,7 +345,7 @@ fn resources_of_worktree_and_odb_and_check_link() -> TestResult {
             1
         )),
         format!(
-            "{}{program} a <tmp-path> 0000000000000000000000000000000000000000 100644 <tmp-path> {new_id} 120000",
+            "{}{program} a <tmp-path> {null_id} 100644 <tmp-path> {new_id} 120000",
             if !cfg!(windows) {
                 r#"GIT_DIFF_PATH_COUNTER=1 GIT_DIFF_PATH_TOTAL=1 GIT_DIR=. "#
             } else {
@@ -291,7 +427,7 @@ fn diff_binary() -> TestResult {
         gix_diff::blob::pipeline::Mode::default(),
     );
     platform.set_resource(
-        gix_hash::Kind::Sha1.null(),
+        None,
         EntryKind::Blob,
         "a".into(),
         ResourceKind::OldOrSource,
@@ -301,7 +437,13 @@ fn diff_binary() -> TestResult {
     let db = object_db();
     let a_content = "b";
     let id = insert(&db, a_content)?;
-    platform.set_resource(id, EntryKind::Blob, "b".into(), ResourceKind::NewOrDestination, &db)?;
+    platform.set_resource(
+        Some(id),
+        EntryKind::Blob,
+        "b".into(),
+        ResourceKind::NewOrDestination,
+        &db,
+    )?;
 
     let out = platform.prepare_diff()?;
     assert!(
@@ -335,7 +477,7 @@ fn diff_performed_despite_external_command() -> TestResult {
         gix_diff::blob::pipeline::Mode::default(),
     );
     platform.set_resource(
-        gix_hash::Kind::Sha1.null(),
+        None,
         EntryKind::Blob,
         "a".into(),
         ResourceKind::OldOrSource,
@@ -345,7 +487,13 @@ fn diff_performed_despite_external_command() -> TestResult {
     let db = object_db();
     let a_content = "b";
     let id = insert(&db, a_content)?;
-    platform.set_resource(id, EntryKind::Blob, "b".into(), ResourceKind::NewOrDestination, &db)?;
+    platform.set_resource(
+        Some(id),
+        EntryKind::Blob,
+        "b".into(),
+        ResourceKind::NewOrDestination,
+        &db,
+    )?;
 
     let out = platform.prepare_diff()?;
     assert!(
@@ -378,7 +526,7 @@ fn diff_skipped_due_to_external_command_and_enabled_option() -> TestResult {
     platform.options.skip_internal_diff_if_external_is_configured = true;
 
     platform.set_resource(
-        gix_hash::Kind::Sha1.null(),
+        None,
         EntryKind::Blob,
         "a".into(),
         ResourceKind::OldOrSource,
@@ -388,7 +536,13 @@ fn diff_skipped_due_to_external_command_and_enabled_option() -> TestResult {
     let db = object_db();
     let a_content = "b";
     let id = insert(&db, a_content)?;
-    platform.set_resource(id, EntryKind::Blob, "b".into(), ResourceKind::NewOrDestination, &db)?;
+    platform.set_resource(
+        Some(id),
+        EntryKind::Blob,
+        "b".into(),
+        ResourceKind::NewOrDestination,
+        &db,
+    )?;
 
     let out = platform.prepare_diff()?;
     let Operation::ExternalCommand {
@@ -435,7 +589,7 @@ fn source_and_destination_do_not_exist() -> TestResult {
         "the constant marker classifies the preparation error"
     );
     platform.set_resource(
-        gix_hash::Kind::Sha1.null(),
+        None,
         EntryKind::Blob,
         "missing".into(),
         ResourceKind::OldOrSource,
@@ -443,7 +597,7 @@ fn source_and_destination_do_not_exist() -> TestResult {
     )?;
 
     platform.set_resource(
-        gix_hash::Kind::Sha1.null(),
+        None,
         EntryKind::BlobExecutable,
         "a".into(),
         ResourceKind::NewOrDestination,
@@ -496,10 +650,16 @@ fn validated_text_changes_cover_resource_states() -> TestResult {
 
     let db = object_db();
     let states = [
-        ("missing", gix_testtools::object_hash().null(), "a", Data::Missing),
+        ("missing", None, "a", Data::Missing),
+        (
+            "missing with null ID",
+            Some(gix_testtools::object_hash().null()),
+            "a",
+            Data::Missing,
+        ),
         (
             "empty",
-            insert(&db, "")?,
+            Some(insert(&db, "")?),
             "a",
             Data::Buffer {
                 buf: b"",
@@ -508,17 +668,17 @@ fn validated_text_changes_cover_resource_states() -> TestResult {
         ),
         (
             "text",
-            insert(&db, "text\n")?,
+            Some(insert(&db, "text\n")?),
             "a",
             Data::Buffer {
                 buf: b"text\n",
                 is_derived: false,
             },
         ),
-        ("binary", insert(&db, "binary\0")?, "a", Data::Binary { size: 7 }),
+        ("binary", Some(insert(&db, "binary\0")?), "a", Data::Binary { size: 7 }),
         (
             "derived text",
-            insert(&db, "text\0\n")?,
+            Some(insert(&db, "text\0\n")?),
             "b",
             Data::Buffer {
                 buf: b"text\n",
@@ -527,7 +687,7 @@ fn validated_text_changes_cover_resource_states() -> TestResult {
         ),
         (
             "derived empty",
-            insert(&db, "\0")?,
+            Some(insert(&db, "\0")?),
             "b",
             Data::Buffer {
                 buf: b"",
@@ -666,10 +826,11 @@ fn one_unset_resource_is_not_a_missing_resource() -> TestResult {
     platform.filter.roots.old_root = None;
     for kind in [ResourceKind::OldOrSource, ResourceKind::NewOrDestination] {
         for blob_id in [
-            gix_testtools::object_hash().null(),
-            insert(&db, "")?,
-            insert(&db, "text\n")?,
-            insert(&db, "binary\0")?,
+            None,
+            Some(gix_testtools::object_hash().null()),
+            Some(insert(&db, "")?),
+            Some(insert(&db, "text\n")?),
+            Some(insert(&db, "binary\0")?),
         ] {
             platform.clear_resource_cache();
             platform.set_resource(blob_id, EntryKind::Blob, "a".into(), kind, &db)?;
@@ -711,9 +872,15 @@ c
     for (old, new, (removals, insertions, before, after, similarity)) in cases {
         let old_blob_id = insert(&db, old)?;
         let new_blob_id = insert(&db, new)?;
-        platform.set_resource(old_blob_id, EntryKind::Blob, "a".into(), ResourceKind::OldOrSource, &db)?;
         platform.set_resource(
-            new_blob_id,
+            Some(old_blob_id),
+            EntryKind::Blob,
+            "a".into(),
+            ResourceKind::OldOrSource,
+            &db,
+        )?;
+        platform.set_resource(
+            Some(new_blob_id),
             EntryKind::Blob,
             "b".into(),
             ResourceKind::NewOrDestination,
@@ -768,7 +935,7 @@ fn invalid_resource_types() -> TestResult {
     let mut platform = new_platform(None, pipeline::Mode::default());
     for mode in [EntryKind::Commit, EntryKind::Tree] {
         platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
+            None,
             EntryKind::Blob,
             "a".into(),
             ResourceKind::NewOrDestination,
@@ -776,7 +943,7 @@ fn invalid_resource_types() -> TestResult {
         )?;
         let err = platform
             .set_resource(
-                gix_hash::Kind::Sha1.null(),
+                None,
                 mode,
                 "a".into(),
                 ResourceKind::NewOrDestination,
@@ -838,17 +1005,11 @@ fn resource_setup_errors_retain_paths_causes_and_clear_the_failed_side() -> Test
             b"missing-\xff".as_bstr(),
         ] {
             for side in [ResourceKind::OldOrSource, ResourceKind::NewOrDestination] {
-                platform.set_resource(
-                    gix_testtools::object_hash().null(),
-                    EntryKind::Blob,
-                    "a".into(),
-                    side,
-                    &gix_object::find::Never,
-                )?;
+                platform.set_resource(None, EntryKind::Blob, "a".into(), side, &gix_object::find::Never)?;
             }
             let err = platform
                 .set_resource(
-                    missing_blob_id,
+                    Some(missing_blob_id),
                     EntryKind::Blob,
                     rela_path,
                     kind,

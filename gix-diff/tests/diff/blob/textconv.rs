@@ -41,14 +41,14 @@ fn binary_diff_with_textconv() -> gix_testtools::TestResult {
     );
 
     resource_cache.set_resource(
-        new_file_id,
+        Some(new_file_id),
         gix_object::tree::EntryKind::Blob,
         "sample.bin".into(),
         ResourceKind::OldOrSource,
         &odb,
     )?;
     resource_cache.set_resource(
-        changed_file_id,
+        Some(changed_file_id),
         gix_object::tree::EntryKind::Blob,
         "sample.bin".into(),
         ResourceKind::NewOrDestination,

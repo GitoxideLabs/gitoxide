@@ -26,7 +26,7 @@ mod merge {
     fn builtin_text_uses_binary_if_needed() -> TestResult {
         let mut platform = new_platform(None, pipeline::Mode::ToGit);
         platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
+            None,
             EntryKind::Blob,
             "a".into(),
             ResourceKind::CommonAncestorOrBase,
@@ -40,7 +40,7 @@ mod merge {
         ] {
             let id = insert(&db, content)?;
             platform.set_resource(
-                id,
+                Some(id),
                 EntryKind::Blob,
                 "path matters only for attribute lookup".into(),
                 kind,
@@ -76,7 +76,7 @@ mod merge {
     fn same_binaries_do_not_count_as_conflicted() -> TestResult {
         let mut platform = new_platform(None, pipeline::Mode::ToGit);
         platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
+            None,
             EntryKind::Blob,
             "a".into(),
             ResourceKind::CommonAncestorOrBase,
@@ -90,7 +90,7 @@ mod merge {
         ] {
             let id = insert(&db, content)?;
             platform.set_resource(
-                id,
+                Some(id),
                 EntryKind::Blob,
                 "path matters only for attribute lookup".into(),
                 kind,
@@ -126,7 +126,7 @@ mod merge {
         let mut platform = new_platform(None, pipeline::Mode::ToGit);
         let non_existing_ancestor_id = hex_to_id("ffffffffffffffffffffffffffffffffffffffff");
         platform.set_resource(
-            non_existing_ancestor_id,
+            Some(non_existing_ancestor_id),
             EntryKind::Blob,
             "b".into(),
             ResourceKind::CommonAncestorOrBase,
@@ -139,7 +139,7 @@ mod merge {
             ("theirs", ResourceKind::OtherOrTheirs),
         ] {
             let id = insert(&db, content)?;
-            platform.set_resource(id, EntryKind::Blob, "b".into(), kind, &db)?;
+            platform.set_resource(Some(id), EntryKind::Blob, "b".into(), kind, &db)?;
         }
 
         let mut platform_ref = platform.prepare_merge(&db, Default::default())?;
@@ -288,7 +288,7 @@ theirs
                 ("theirs", ResourceKind::OtherOrTheirs),
             ] {
                 let blob_id = insert(&db, content)?;
-                platform.set_resource(blob_id, EntryKind::Blob, "b".into(), kind, &db)?;
+                platform.set_resource(Some(blob_id), EntryKind::Blob, "b".into(), kind, &db)?;
             }
             let platform_ref = platform.prepare_merge(&db, Default::default())?;
             let mut buf = Vec::new();
@@ -395,7 +395,7 @@ field: theirs
                 ResourceKind::OtherOrTheirs,
             ]) {
                 let blob_id = insert(&db, content)?;
-                platform.set_resource(blob_id, EntryKind::Blob, "b".into(), kind, &db)?;
+                platform.set_resource(Some(blob_id), EntryKind::Blob, "b".into(), kind, &db)?;
             }
             let mut platform_ref = platform.prepare_merge(&db, Default::default())?;
             platform_ref.options.text.conflict = conflict;
@@ -433,7 +433,7 @@ field: theirs
                 ("theirs", ResourceKind::OtherOrTheirs),
             ] {
                 let blob_id = insert(&db, content)?;
-                platform.set_resource(blob_id, EntryKind::Blob, "b".into(), kind, &db)?;
+                platform.set_resource(Some(blob_id), EntryKind::Blob, "b".into(), kind, &db)?;
             }
             let platform_ref = platform.prepare_merge(&db, Default::default())?;
             let err = platform_ref
@@ -480,7 +480,7 @@ field: theirs
             pipeline::Mode::ToGit,
         );
         platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
+            None,
             EntryKind::Blob,
             "b".into(),
             ResourceKind::CommonAncestorOrBase,
@@ -493,7 +493,7 @@ field: theirs
             ("theirs", ResourceKind::OtherOrTheirs),
         ] {
             let id = insert(&db, content)?;
-            platform.set_resource(id, EntryKind::Blob, "b".into(), kind, &db)?;
+            platform.set_resource(Some(id), EntryKind::Blob, "b".into(), kind, &db)?;
         }
 
         let platform_ref = platform.prepare_merge(&db, Default::default())?;
@@ -522,7 +522,7 @@ field: theirs
         );
 
         let id = insert(&db, "binary\0")?;
-        platform.set_resource(id, EntryKind::Blob, "b".into(), ResourceKind::OtherOrTheirs, &db)?;
+        platform.set_resource(Some(id), EntryKind::Blob, "b".into(), ResourceKind::OtherOrTheirs, &db)?;
         let platform_ref = platform.prepare_merge(&db, Default::default())?;
         let res = platform_ref.merge(&mut buf, default_labels(), &Default::default())?;
         assert_eq!(
@@ -601,7 +601,7 @@ cat "%B" >> "%A""#
             ("theirs", ResourceKind::OtherOrTheirs),
         ] {
             let id = insert(&db, content)?;
-            platform.set_resource(id, EntryKind::Blob, "b".into(), kind, &db)?;
+            platform.set_resource(Some(id), EntryKind::Blob, "b".into(), kind, &db)?;
         }
 
         let platform_ref = platform.prepare_merge(&db, Default::default())?;
@@ -664,14 +664,18 @@ cat "%B" >> "%A""#
         platform.filter.options.large_file_threshold_bytes = 9;
         let db = object_db();
         let cases = [
-            (gix_hash::Kind::Sha1.null(), Data::Missing, None),
-            (insert(&db, "")?, Data::Buffer(b""), Some(b"".as_slice())),
+            (None, Data::Missing, None),
+            (Some(insert(&db, "")?), Data::Buffer(b""), Some(b"".as_slice())),
             (
-                insert(&db, "content")?,
+                Some(insert(&db, "content")?),
                 Data::Buffer(b"content"),
                 Some(b"content".as_slice()),
             ),
-            (insert(&db, "too large to load")?, Data::TooLarge { size: 17 }, None),
+            (
+                Some(insert(&db, "too large to load")?),
+                Data::TooLarge { size: 17 },
+                None,
+            ),
         ];
         let picks = [
             (Pick::Ancestor, ResourceKind::CommonAncestorOrBase),
@@ -698,7 +702,7 @@ cat "%B" >> "%A""#
                         prepared.id_by_pick(*pick, merged, |_| -> Result<_, Infallible> {
                             panic!("missing resources have no ID, and stored blobs already have one")
                         })?,
-                        if expected == Data::Missing { None } else { Some(blob_id) },
+                        blob_id,
                         "{pick:?}: a missing input stays absent instead of writing the merged buffer"
                     );
                 }
@@ -727,7 +731,7 @@ cat "%B" >> "%A""#
         {
             let mut platform = new_platform(None, pipeline::Mode::ToGit);
             platform.set_resource(
-                gix_hash::Kind::Sha1.null(),
+                None,
                 EntryKind::Blob,
                 ancestor_path.into(),
                 ResourceKind::CommonAncestorOrBase,
@@ -736,7 +740,7 @@ cat "%B" >> "%A""#
 
             for kind in [ResourceKind::CurrentOrOurs, ResourceKind::OtherOrTheirs] {
                 platform.set_resource(
-                    gix_hash::Kind::Sha1.null(),
+                    None,
                     EntryKind::Blob,
                     "does not matter for driver".into(),
                     kind,
@@ -845,7 +849,6 @@ cat "%B" >> "%A""#
 
         let db = object_db();
         let empty_blob_id = insert(&db, "")?;
-        let null_blob_id = gix_hash::Kind::Sha1.null();
         for from_worktree in [false, true] {
             let mut platform = new_platform(None, pipeline::Mode::ToGit);
             if from_worktree {
@@ -853,7 +856,7 @@ cat "%B" >> "%A""#
                 platform.filter.roots.other_root = platform.filter.roots.common_ancestor_root.clone();
             }
             platform.set_resource(
-                null_blob_id,
+                None,
                 EntryKind::Blob,
                 "absent".into(),
                 ResourceKind::CommonAncestorOrBase,
@@ -866,11 +869,7 @@ cat "%B" >> "%A""#
                     (theirs_present, ResourceKind::OtherOrTheirs),
                 ] {
                     platform.set_resource(
-                        if present && !from_worktree {
-                            empty_blob_id
-                        } else {
-                            null_blob_id
-                        },
+                        (present && !from_worktree).then_some(empty_blob_id),
                         EntryKind::Blob,
                         if present { "empty" } else { "absent" }.into(),
                         kind,
@@ -957,7 +956,7 @@ cat "%B" >> "%A""#
         let null_id = gix_testtools::object_hash().null();
         let known_id = gix_object::compute_hash(gix_testtools::object_hash(), gix_object::Kind::Blob, b"b\n")?;
         platform.set_resource(
-            null_id,
+            Some(null_id),
             EntryKind::Blob,
             "just-set".into(),
             ResourceKind::CommonAncestorOrBase,
@@ -965,13 +964,13 @@ cat "%B" >> "%A""#
         )?;
 
         for (ours, theirs, current_id, other_id, expected) in [
-            ("unspecified", "unspecified", null_id, null_id, Resolution::Conflict),
-            ("absent", "unspecified", null_id, null_id, Resolution::Conflict),
-            ("unspecified", "absent", null_id, null_id, Resolution::Conflict),
-            ("b", "b", null_id, null_id, Resolution::Complete),
-            ("b", "union", null_id, null_id, Resolution::Conflict),
-            ("absent", "b", known_id, known_id, Resolution::Conflict),
-            ("absent", "absent", known_id, null_id, Resolution::Complete),
+            ("unspecified", "unspecified", None, Some(null_id), Resolution::Conflict),
+            ("absent", "unspecified", None, Some(null_id), Resolution::Conflict),
+            ("unspecified", "absent", None, Some(null_id), Resolution::Conflict),
+            ("b", "b", Some(null_id), None, Resolution::Complete),
+            ("b", "union", None, Some(null_id), Resolution::Conflict),
+            ("absent", "b", Some(known_id), Some(known_id), Resolution::Conflict),
+            ("absent", "absent", Some(known_id), None, Resolution::Complete),
         ] {
             for (path, blob_id, kind) in [
                 (ours, current_id, ResourceKind::CurrentOrOurs),
@@ -1005,7 +1004,7 @@ cat "%B" >> "%A""#
         let mut platform = new_platform(None, pipeline::Mode::ToGit);
         platform.filter.options.large_file_threshold_bytes = 9;
         platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
+            None,
             EntryKind::Blob,
             "just-set".into(),
             ResourceKind::CommonAncestorOrBase,
@@ -1015,14 +1014,14 @@ cat "%B" >> "%A""#
         platform.filter.roots.current_root = platform.filter.roots.common_ancestor_root.clone();
 
         platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
+            None,
             EntryKind::Blob,
             "b".into(),
             ResourceKind::CurrentOrOurs,
             &gix_object::find::Never,
         )?;
         platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
+            None,
             EntryKind::Blob,
             "unspecified".into(),
             ResourceKind::OtherOrTheirs,
@@ -1095,7 +1094,7 @@ mod prepare_merge {
     fn ancestor_and_current_and_other_do_not_exist() -> TestResult {
         let mut platform = new_platform(None, pipeline::Mode::ToGit);
         platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
+            None,
             EntryKind::Blob,
             "also-missing".into(),
             ResourceKind::CommonAncestorOrBase,
@@ -1103,14 +1102,14 @@ mod prepare_merge {
         )?;
 
         platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
+            None,
             EntryKind::Blob,
             "can't-be-found-in-odb".into(),
             ResourceKind::CurrentOrOurs,
             &gix_object::find::Never,
         )?;
         platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
+            None,
             EntryKind::BlobExecutable,
             "can't-be-found-in-odb".into(),
             ResourceKind::OtherOrTheirs,
@@ -1150,7 +1149,7 @@ mod prepare_merge {
             pipeline::Mode::ToGit,
         );
         platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
+            None,
             EntryKind::Blob,
             "ancestor does not matter for attributes".into(),
             ResourceKind::CommonAncestorOrBase,
@@ -1158,14 +1157,14 @@ mod prepare_merge {
         )?;
 
         platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
+            None,
             EntryKind::Blob,
             "just-set".into(),
             ResourceKind::CurrentOrOurs,
             &gix_object::find::Never,
         )?;
         platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
+            None,
             EntryKind::BlobExecutable,
             "also does not matter for driver".into(),
             ResourceKind::OtherOrTheirs,
@@ -1185,7 +1184,7 @@ mod prepare_merge {
         );
 
         platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
+            None,
             EntryKind::Blob,
             "unset".into(),
             ResourceKind::CommonAncestorOrBase,
@@ -1199,7 +1198,7 @@ mod prepare_merge {
         );
 
         platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
+            None,
             EntryKind::Blob,
             "unset".into(),
             ResourceKind::CurrentOrOurs,
@@ -1213,7 +1212,7 @@ mod prepare_merge {
         );
 
         platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
+            None,
             EntryKind::Blob,
             "unspecified".into(),
             ResourceKind::CurrentOrOurs,
@@ -1254,7 +1253,7 @@ mod prepare_merge {
         );
 
         platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
+            None,
             EntryKind::Blob,
             "b".into(),
             ResourceKind::CurrentOrOurs,
@@ -1306,7 +1305,7 @@ mod set_resource {
         for mode in [EntryKind::Commit, EntryKind::Tree, EntryKind::Link] {
             let err = platform
                 .set_resource(
-                    gix_hash::Kind::Sha1.null(),
+                    None,
                     mode,
                     "a".into(),
                     ResourceKind::OtherOrTheirs,

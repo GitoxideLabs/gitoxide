@@ -169,14 +169,14 @@ pub fn file(
     )?;
 
     resource_cache.set_resource(
-        old_blob_id,
+        Some(old_blob_id),
         gix::object::tree::EntryKind::Blob,
         old_path.as_ref(),
         gix::diff::blob::ResourceKind::OldOrSource,
         &repo.objects,
     )?;
     resource_cache.set_resource(
-        new_blob_id,
+        Some(new_blob_id),
         gix::object::tree::EntryKind::Blob,
         new_path.as_ref(),
         gix::diff::blob::ResourceKind::NewOrDestination,

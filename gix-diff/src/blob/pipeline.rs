@@ -172,7 +172,8 @@ impl Pipeline {
     ///
     /// If a [worktree root](WorktreeRoots) is present, read the file from there. A non-null `id` is used to look up
     /// its index version for line-ending conversion. Null IDs are never looked up in `objects`.
-    /// If the worktree file doesn't exist, or no root is present and `id` [is null](gix_hash::ObjectId::is_null()),
+    /// Null IDs supplied in `Some` are treated as `None`.
+    /// If the worktree file doesn't exist, or no root is present and `id` is `None`,
     /// then `out` will be left cleared and [Outcome::data] will be `None`.
     ///
     /// Note that `mode` is trusted, and we will not re-validate that the entry in the worktree actually is of that mode.
@@ -194,7 +195,7 @@ impl Pipeline {
     #[expect(clippy::too_many_arguments)]
     pub fn convert_to_diffable(
         &mut self,
-        id: &gix_hash::oid,
+        id: Option<&gix_hash::oid>,
         mode: EntryKind,
         rela_path: &BStr,
         kind: ResourceKind,
@@ -211,6 +212,7 @@ impl Pipeline {
             }
         };
 
+        let id = id.filter(|id| !id.is_null());
         out.clear();
         attributes(rela_path, &mut self.attrs);
         let attr = self.attrs.iter_selected().next().expect("pre-initialized with 'diff'");
@@ -301,9 +303,7 @@ impl Pipeline {
                                                         gix_path::from_bstr(rela_path)?.as_ref(),
                                                         attributes,
                                                         &mut |buf| {
-                                                            if id.is_null() {
-                                                                return Ok(None);
-                                                            }
+                                                            let Some(id) = id else { return Ok(None) };
                                                             objects.try_find(id, buf).map(|obj| obj.map(|_| ()))
                                                         },
                                                     )
@@ -361,9 +361,7 @@ impl Pipeline {
                 Ok(Outcome { driver_index, data })
             }
             None => {
-                let data = if id.is_null() {
-                    None
-                } else {
+                let data = if let Some(id) = id {
                     let header = objects
                         .try_header(id)
                         .or_raise(|| message!("Could not find object {id}"))?
@@ -490,6 +488,8 @@ impl Pipeline {
                         }
                     };
                     Some(data)
+                } else {
+                    None
                 };
                 Ok(Outcome { driver_index, data })
             }

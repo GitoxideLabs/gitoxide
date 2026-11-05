@@ -780,7 +780,7 @@ fn blob_changes(
     use gix_diff::blob::platform::prepare_diff::{Operation, TextChange};
 
     resource_cache.set_resource(
-        previous_oid,
+        Some(previous_oid),
         // TODO(blame): add a test to show of symlink blaming works.
         gix_object::tree::EntryKind::Blob,
         previous_file_path,
@@ -788,7 +788,7 @@ fn blob_changes(
         &odb,
     )?;
     resource_cache.set_resource(
-        oid,
+        Some(oid),
         gix_object::tree::EntryKind::Blob,
         file_path,
         gix_diff::blob::ResourceKind::NewOrDestination,

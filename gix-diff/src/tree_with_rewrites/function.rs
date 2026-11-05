@@ -144,7 +144,7 @@ where
                     let change = ChangeRef::Rewrite {
                         source_location: source.location,
                         source_entry_mode: source.entry_mode,
-                        source_id: source.id,
+                        source_id: source.change.oid_and_entry_mode().0.to_owned(),
                         source_relation: source.change.relation(),
                         entry_mode: mode,
                         id: oid.to_owned(),

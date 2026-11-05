@@ -350,14 +350,14 @@ impl crate::blob::Platform {
                 entry_mode,
                 id,
             } => {
+                self.set_resource(None, entry_mode.kind(), location, ResourceKind::OldOrSource, objects)?;
                 self.set_resource(
-                    id.kind().null(),
+                    Some(id),
                     entry_mode.kind(),
                     location,
-                    ResourceKind::OldOrSource,
+                    ResourceKind::NewOrDestination,
                     objects,
                 )?;
-                self.set_resource(id, entry_mode.kind(), location, ResourceKind::NewOrDestination, objects)?;
             }
             ChangeRef::Deletion {
                 location,
@@ -365,9 +365,15 @@ impl crate::blob::Platform {
                 entry_mode,
                 id,
             } => {
-                self.set_resource(id, entry_mode.kind(), location, ResourceKind::OldOrSource, objects)?;
                 self.set_resource(
-                    id.kind().null(),
+                    Some(id),
+                    entry_mode.kind(),
+                    location,
+                    ResourceKind::OldOrSource,
+                    objects,
+                )?;
+                self.set_resource(
+                    None,
                     entry_mode.kind(),
                     location,
                     ResourceKind::NewOrDestination,
@@ -382,13 +388,19 @@ impl crate::blob::Platform {
                 id,
             } => {
                 self.set_resource(
-                    previous_id,
+                    Some(previous_id),
                     previous_entry_mode.kind(),
                     location,
                     ResourceKind::OldOrSource,
                     objects,
                 )?;
-                self.set_resource(id, entry_mode.kind(), location, ResourceKind::NewOrDestination, objects)?;
+                self.set_resource(
+                    Some(id),
+                    entry_mode.kind(),
+                    location,
+                    ResourceKind::NewOrDestination,
+                    objects,
+                )?;
             }
             ChangeRef::Rewrite {
                 source_location,
@@ -403,13 +415,19 @@ impl crate::blob::Platform {
                 copy: _,
             } => {
                 self.set_resource(
-                    source_id,
+                    Some(source_id),
                     source_entry_mode.kind(),
                     source_location,
                     ResourceKind::OldOrSource,
                     objects,
                 )?;
-                self.set_resource(id, entry_mode.kind(), location, ResourceKind::NewOrDestination, objects)?;
+                self.set_resource(
+                    Some(id),
+                    entry_mode.kind(),
+                    location,
+                    ResourceKind::NewOrDestination,
+                    objects,
+                )?;
             }
         }
         Ok(self)

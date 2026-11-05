@@ -18,8 +18,8 @@ pub struct Change {
 }
 
 impl gix_diff::rewrites::tracker::Change for Change {
-    fn id(&self) -> &oid {
-        &self.id
+    fn id(&self) -> Option<&oid> {
+        (!self.id.is_null()).then_some(self.id.as_ref())
     }
 
     fn relation(&self) -> Option<Relation> {
@@ -34,8 +34,8 @@ impl gix_diff::rewrites::tracker::Change for Change {
         self.mode
     }
 
-    fn id_and_entry_mode(&self) -> (&oid, EntryMode) {
-        (&self.id, self.mode)
+    fn id_and_entry_mode(&self) -> (Option<&oid>, EntryMode) {
+        (self.id(), self.mode)
     }
 }
 

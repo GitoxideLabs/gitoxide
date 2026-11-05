@@ -21,6 +21,71 @@ use crate::{
 };
 
 #[test]
+fn optional_ids_require_content_to_match() -> TestResult {
+    #[derive(Clone)]
+    struct OptionalId(Option<gix_hash::ObjectId>, ChangeKind);
+    impl rewrites::tracker::Change for OptionalId {
+        fn id(&self) -> Option<&gix_hash::oid> {
+            self.0.as_deref()
+        }
+        fn relation(&self) -> Option<Relation> {
+            None
+        }
+        fn kind(&self) -> ChangeKind {
+            self.1
+        }
+        fn entry_mode(&self) -> gix_object::tree::EntryMode {
+            EntryKind::Blob.into()
+        }
+        fn id_and_entry_mode(&self) -> (Option<&gix_hash::oid>, gix_object::tree::EntryMode) {
+            (self.id(), self.entry_mode())
+        }
+    }
+    for old_id in [None, Some(crate::fixture_hash_kind().null())] {
+        for new_id in [None, Some(crate::fixture_hash_kind().null())] {
+            for worktree in [false, true] {
+                for percentage in [None, Some(0.0)] {
+                    let mut tracker = rewrites::Tracker::new(Rewrites {
+                        percentage,
+                        ..Default::default()
+                    });
+                    tracker.try_push_change(OptionalId(old_id, ChangeKind::Deletion), "a".into());
+                    tracker.try_push_change(OptionalId(new_id, ChangeKind::Addition), "b".into());
+                    let mut platform = util::new_platform_no_worktree();
+                    if worktree {
+                        let root = crate::scripted_fixture_read_only("make_blob_repo.sh")?;
+                        platform.filter.roots.old_root = Some(root.clone());
+                        platform.filter.roots.new_root = Some(root);
+                    }
+                    let expect_match = worktree && percentage.is_some();
+                    let mut emitted = 0;
+                    tracker.emit(
+                        |_, source| {
+                            assert_eq!(
+                                source.is_some(),
+                                expect_match,
+                                "unavailable IDs require a content comparison"
+                            );
+                            if let Some(source) = source {
+                                assert_eq!(source.id, None, "even Some(null) is exposed as unavailable");
+                                assert!(source.diff.is_some(), "None == None never establishes identity");
+                            }
+                            emitted += 1;
+                            std::ops::ControlFlow::Continue(())
+                        },
+                        &mut platform,
+                        &gix_object::find::Never,
+                        |_| Ok::<_, std::io::Error>(()),
+                    )?;
+                    assert_eq!(emitted, if expect_match { 1 } else { 2 });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn unavailable_ids_do_not_match() {
     for mode in [EntryKind::Blob, EntryKind::Link, EntryKind::Commit, EntryKind::Tree] {
         for percentage in [None, Some(0.0), Some(0.5)] {
@@ -224,7 +289,7 @@ fn rename_by_id() -> TestResult {
                 src.unwrap(),
                 Source {
                     entry_mode: EntryKind::Blob.into(),
-                    id: *ID,
+                    id: Some(*ID),
                     kind: SourceKind::Rename,
                     location: "b".into(),
                     change: &Change::deletion(),
@@ -388,7 +453,7 @@ fn copy_by_id() -> TestResult {
                 );
                 let source_a = Source {
                     entry_mode: EntryKind::Blob.into(),
-                    id,
+                    id: Some(id),
                     kind: SourceKind::Copy,
                     location: "a".into(),
                     change: &Change {
@@ -465,7 +530,7 @@ fn copy_by_id_search_in_all_sources() -> TestResult {
             |dst, src| {
                 let source_a = Source {
                     entry_mode: EntryKind::Blob.into(),
-                    id: content_id,
+                    id: Some(content_id),
                     kind: SourceKind::Copy,
                     location: "a-src".into(),
                     change: &Change {
@@ -549,7 +614,7 @@ fn copy_by_50_percent_similarity() -> TestResult {
             );
             let source_a = Source {
                 entry_mode: EntryKind::Blob.into(),
-                id,
+                id: Some(id),
                 kind: SourceKind::Copy,
                 location: "a".into(),
                 change: &Change {
@@ -813,7 +878,7 @@ fn rename_by_50_percent_similarity() -> TestResult {
                         src.unwrap(),
                         Source {
                             entry_mode: EntryKind::Blob.into(),
-                            id,
+                            id: Some(id),
                             kind: SourceKind::Rename,
                             location: "a".into(),
                             change: &Change {

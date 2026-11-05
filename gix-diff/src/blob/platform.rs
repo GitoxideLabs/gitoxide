@@ -10,13 +10,21 @@ use crate::blob::{Pipeline, Platform, ResourceKind, pipeline};
 /// A key to uniquely identify either a location in the worktree, or in the object database.
 #[derive(Clone)]
 pub(crate) struct CacheKey {
-    id: gix_hash::ObjectId,
+    id: Option<gix_hash::ObjectId>,
     location: BString,
-    /// If `true`, this is an `id` based key, otherwise it's location based.
-    use_id: bool,
-    /// Only relevant when `id` is not null, to further differentiate content and allow us to
-    /// keep track of both links and blobs with the same content (rare, but possible).
-    is_link: bool,
+    kind: CacheKeyKind,
+    /// Retained per resource even when its converted content is shared.
+    mode: gix_object::tree::EntryKind,
+}
+
+/// Distinguish locations without an identity from object IDs without enlarging each cache key.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+enum CacheKeyKind {
+    Object,
+    Missing,
+    OldWorktree,
+    NewWorktree,
 }
 
 /// A stored value representing a diffable resource.
@@ -24,17 +32,16 @@ pub(crate) struct CacheKey {
 pub(crate) struct CacheValue {
     /// The outcome of converting a resource into a diffable format using [Pipeline::convert_to_diffable()].
     conversion: pipeline::Outcome,
-    /// The kind of the resource we are looking at. Only possible values are `Blob`, `BlobExecutable` and `Link`.
-    mode: gix_object::tree::EntryKind,
     /// A possibly empty buffer, depending on `conversion.data` which may indicate the data is considered binary.
     buffer: Vec<u8>,
 }
 
 impl std::hash::Hash for CacheKey {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        if self.use_id {
+        self.kind.hash(state);
+        if self.kind == CacheKeyKind::Object {
             self.id.hash(state);
-            self.is_link.hash(state);
+            (self.mode == gix_object::tree::EntryKind::Link).hash(state);
         } else {
             self.location.hash(state);
         }
@@ -43,11 +50,14 @@ impl std::hash::Hash for CacheKey {
 
 impl PartialEq for CacheKey {
     fn eq(&self, other: &Self) -> bool {
-        match (self.use_id, other.use_id) {
-            (false, false) => self.location.eq(&other.location),
-            (true, true) => self.id.eq(&other.id) && self.is_link.eq(&other.is_link),
-            _ => false,
-        }
+        self.kind == other.kind
+            && if self.kind == CacheKeyKind::Object {
+                self.id == other.id
+                    && (self.mode == gix_object::tree::EntryKind::Link)
+                        == (other.mode == gix_object::tree::EntryKind::Link)
+            } else {
+                self.location == other.location
+            }
     }
 }
 
@@ -56,9 +66,9 @@ impl Eq for CacheKey {}
 impl Default for CacheKey {
     fn default() -> Self {
         CacheKey {
-            id: gix_hash::Kind::shortest().null(),
-            use_id: false,
-            is_link: false,
+            id: None,
+            kind: CacheKeyKind::Missing,
+            mode: gix_object::tree::EntryKind::Blob,
             location: BString::default(),
         }
     }
@@ -85,10 +95,11 @@ pub struct Resource<'a> {
     pub mode: gix_object::tree::EntryKind,
     /// The location of the resource, relative to the working tree.
     pub rela_path: &'a BStr,
-    /// The id of the content as it would be stored in `git`, or `null` if the content doesn't exist anymore at
-    /// `rela_path` or if it was never computed. This can happen with content read from the worktree, which has to
-    /// go through a filter to be converted back to what `git` would store.
-    pub id: &'a gix_hash::oid,
+    /// The supplied Git object ID, or `None` if unavailable. Two unavailable IDs do not establish identity.
+    /// Use [`data`](Self::data) to distinguish missing content from existing content without a hash.
+    /// A supplied ID does not guarantee that the worktree resource still exists.
+    /// Converted diff data can differ from the identified Git object.
+    pub id: Option<&'a gix_hash::oid>,
 }
 
 ///
@@ -166,9 +177,9 @@ pub mod resource {
                     },
                     pipeline::Data::Binary { size } => Data::Binary { size },
                 }),
-                mode: value.mode,
+                mode: key.mode,
                 rela_path: key.location.as_ref(),
-                id: &key.id,
+                id: key.id.as_deref(),
             }
         }
     }
@@ -176,7 +187,7 @@ pub mod resource {
     /// The data of a diffable resource, as it could be determined and computed previously.
     #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
     pub enum Data<'a> {
-        /// The object is missing, either because it didn't exist in the working tree or because its `id` was null.
+        /// The object is missing, either because it didn't exist in the working tree or because its `id` was `None` and no worktree root was configured.
         Missing,
         /// The textual data as processed to be in a diffable state.
         Buffer {
@@ -541,6 +552,7 @@ impl Platform {
         Platform {
             old: None,
             new: None,
+            missing_driver_index: [None; 2],
             diff_cache: Default::default(),
             free_list: Vec::with_capacity(2),
             options,
@@ -555,19 +567,23 @@ impl Platform {
 impl Platform {
     /// Store enough information about a resource to eventually diff it, where…
     ///
-    /// * `id` is the hash of the resource. If it [is null](gix_hash::ObjectId::is_null()), it should either
+    /// * `id` is the hash of the resource. If it is `None`, it should either
     ///   be a resource in the worktree, or it's considered a non-existing, deleted object.
     ///   If an `id` is known, as the hash of the object as (would) be stored in `git`, then it should be provided
     ///   for completeness.
+    ///   Null IDs in `Some` are treated as `None`.
     /// * `mode` is the kind of object (only blobs and links are allowed)
     /// * `rela_path` is the relative path as seen from the (work)tree root.
     /// * `kind` identifies the side of the diff this resource will be used for.
     ///   A diff needs both `OldOrSource` *and* `NewOrDestination`.
     /// * `objects` provides access to the object database in case the resource can't be read from a worktree.
     ///
-    /// Note that it's assumed that either `id + mode (` or `rela_path` can serve as unique identifier for the resource,
-    /// depending on whether or not a [worktree root](pipeline::WorktreeRoots) is set for the resource of `kind`,
-    /// with resources with worktree roots using the `rela_path` as unique identifier.
+    /// Object-backed resources are cached by non-null ID and whether they are links. Worktree resources
+    /// are cached by root and relative path. Missing object-backed resources get their own attribute lookup
+    /// but are not cached, keeping memory bounded when many paths are absent.
+    /// Null IDs never identify shared content. Clear the cache when changing roots, filters, or worktree content.
+    /// Reusing an object ID across paths currently assumes equivalent path-dependent conversions and drivers;
+    /// clear the cache between comparisons with different conversion contexts.
     ///
     /// ### Important
     ///
@@ -575,7 +591,7 @@ impl Platform {
     /// unless another attempt succeeds.
     pub fn set_resource(
         &mut self,
-        id: gix_hash::ObjectId,
+        id: Option<gix_hash::ObjectId>,
         mode: gix_object::tree::EntryKind,
         rela_path: &BStr,
         kind: ResourceKind,
@@ -615,6 +631,7 @@ impl Platform {
         fn add_resource(
             cmd: &mut std::process::Command,
             res: Resource<'_>,
+            object_hash: gix_hash::Kind,
         ) -> Result<Option<gix_tempfile::Handle<gix_tempfile::handle::Closed>>> {
             let tmpfile = match res.data {
                 resource::Data::Missing => {
@@ -648,7 +665,8 @@ impl Platform {
                             res.rela_path
                         )
                     })?;
-                    cmd.arg(res.id.to_string()).arg(res.mode.as_octal_str().to_string());
+                    cmd.arg(res.id.unwrap_or(object_hash.null_ref()).to_string())
+                        .arg(res.mode.as_octal_str().to_string());
                     let tmp = tmp.close().or_raise(|| {
                         message!(
                             "Could not close tempfile for \"{}\" while preparing external diff command",
@@ -686,8 +704,8 @@ impl Platform {
             new: None,
         };
 
-        out.old = add_resource(&mut out.cmd, old)?;
-        out.new = add_resource(&mut out.cmd, new)?;
+        out.old = add_resource(&mut out.cmd, old, self.filter.worktree_filter.object_hash())?;
+        out.new = add_resource(&mut out.cmd, new, self.filter.worktree_filter.object_hash())?;
 
         if old.rela_path != new.rela_path {
             out.cmd.arg(gix_path::from_bstr(new.rela_path)?.into_owned());
@@ -702,7 +720,17 @@ impl Platform {
             ResourceKind::OldOrSource => self.old.as_ref(),
             ResourceKind::NewOrDestination => self.new.as_ref(),
         }?;
-        Resource::new(key, self.diff_cache.get(key)?).into()
+        Some(if key.kind == CacheKeyKind::Missing {
+            Resource {
+                driver_index: self.missing_driver_index[kind as usize],
+                data: resource::Data::Missing,
+                mode: key.mode,
+                rela_path: key.location.as_ref(),
+                id: key.id.as_deref(),
+            }
+        } else {
+            Resource::new(key, self.diff_cache.get(key)?)
+        })
     }
 
     /// Obtain the two resources that were previously set as `(OldOrSource, NewOrDestination)`, if both are set and available.
@@ -710,14 +738,10 @@ impl Platform {
     /// This is useful if one wishes to manually prepare the diff, maybe for invoking external programs, instead of relying on
     /// [`Self::prepare_diff()`].
     pub fn resources(&self) -> Option<(Resource<'_>, Resource<'_>)> {
-        let key = &self.old.as_ref()?;
-        let value = self.diff_cache.get(key)?;
-        let old = Resource::new(key, value);
-
-        let key = &self.new.as_ref()?;
-        let value = self.diff_cache.get(key)?;
-        let new = Resource::new(key, value);
-        Some((old, new))
+        Some((
+            self.resource(ResourceKind::OldOrSource)?,
+            self.resource(ResourceKind::NewOrDestination)?,
+        ))
     }
 
     /// Prepare a diff operation on the [previously set](Self::set_resource()) [old](ResourceKind::OldOrSource) and
@@ -831,7 +855,7 @@ impl Platform {
 impl Platform {
     fn set_resource_inner(
         &mut self,
-        id: gix_hash::ObjectId,
+        id: Option<gix_hash::ObjectId>,
         mode: gix_object::tree::EntryKind,
         rela_path: &BStr,
         kind: ResourceKind,
@@ -849,10 +873,21 @@ impl Platform {
         }
         .get_or_insert_with(Default::default);
 
+        let id = id.filter(|id| !id.is_null());
         storage.id = id;
         storage.set_location(rela_path);
-        storage.is_link = matches!(mode, gix_object::tree::EntryKind::Link);
-        storage.use_id = self.filter.roots.by_kind(kind).is_none();
+        storage.mode = mode;
+        storage.kind = match self.filter.roots.by_kind(kind) {
+            None if id.is_none() => CacheKeyKind::Missing,
+            None => CacheKeyKind::Object,
+            Some(_) => match kind {
+                ResourceKind::OldOrSource => CacheKeyKind::OldWorktree,
+                ResourceKind::NewOrDestination if self.filter.roots.old_root == self.filter.roots.new_root => {
+                    CacheKeyKind::OldWorktree
+                }
+                ResourceKind::NewOrDestination => CacheKeyKind::NewWorktree,
+            },
+        };
 
         if self.diff_cache.contains_key(storage) {
             return Ok(());
@@ -868,7 +903,7 @@ impl Platform {
         let out = self
             .filter
             .convert_to_diffable(
-                &id,
+                id.as_deref(),
                 mode,
                 rela_path,
                 kind,
@@ -883,6 +918,11 @@ impl Platform {
                 kind,
                 rela_path: rela_path.into(),
             })?;
+        if storage.kind == CacheKeyKind::Missing {
+            self.missing_driver_index[kind as usize] = out.driver_index;
+            self.free_list.push(buf);
+            return Ok(());
+        }
         let key = storage.clone();
         assert!(
             self.diff_cache
@@ -890,7 +930,6 @@ impl Platform {
                     key,
                     CacheValue {
                         conversion: out,
-                        mode,
                         buffer: buf,
                     },
                 )
