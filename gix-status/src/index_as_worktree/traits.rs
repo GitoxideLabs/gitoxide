@@ -1,5 +1,4 @@
 use gix_error::{Result, bail, message};
-use std::{io::Read, sync::atomic::AtomicBool};
 
 use bstr::BStr;
 use gix_hash::ObjectId;
@@ -48,16 +47,24 @@ pub trait ReadData<'a> {
 
 ///
 pub mod read_data {
-    use std::sync::atomic::Ordering;
+    use std::{
+        io::Read,
+        sync::atomic::{AtomicBool, Ordering},
+    };
 
+    use gix_error::Result;
     use gix_filter::pipeline::convert::ToGitOutcome;
+    use gix_hash::ObjectId;
 
     use crate::AtomicU64;
 
     /// A stream with worktree file data.
     pub struct Stream<'a> {
         pub(crate) inner: ToGitOutcome<'a, std::fs::File>,
+        /// Counter of consumed worktree bytes, including bytes read again during retries.
         pub(crate) bytes: Option<&'a AtomicU64>,
+        /// Expected length of an unconverted file, from metadata that may already be stale.
+        /// Refreshed on retries; `None` for filtered streams or buffered content.
         pub(crate) len: Option<u64>,
     }
 
@@ -77,6 +84,35 @@ pub mod read_data {
         /// Return the size of the stream in bytes if it is known in advance.
         pub fn size(&self) -> Option<u64> {
             self.len
+        }
+
+        /// Hash this stream as a blob, or return `None` if it yielded fewer bytes than its size announced,
+        /// which means the file shrank while it was read.
+        pub(crate) fn hash(&mut self, kind: gix_hash::Kind, buf: &mut Vec<u8>) -> Result<Option<ObjectId>> {
+            fn is_premature_eof(err: &gix_error::Error) -> bool {
+                err.downcast_any_ref::<std::io::Error>()
+                    .is_some_and(|err| err.kind() == std::io::ErrorKind::UnexpectedEof)
+            }
+            if let Some(buffer) = self.as_bytes() {
+                return gix_object::compute_hash(kind, gix_object::Kind::Blob, buffer).map(Some);
+            }
+            match self.size() {
+                None => {
+                    self.read_to_end(buf).map_err(gix_hash::io::from_std_io)?;
+                    gix_object::compute_hash(kind, gix_object::Kind::Blob, buf).map(Some)
+                }
+                Some(len) => match gix_object::compute_stream_hash(
+                    kind,
+                    gix_object::Kind::Blob,
+                    self,
+                    len,
+                    &mut gix_utils::progress::Discard,
+                    &AtomicBool::default(),
+                ) {
+                    Err(err) if is_premature_eof(&err) => Ok(None),
+                    file_hash => file_hash.map(Some),
+                },
+            }
         }
 
         /// Prepare to read an unconverted worktree file again from its start, with the size it has now.
@@ -126,8 +162,7 @@ impl CompareBlobs for FastEq {
             return Ok(Some(()));
         }
         let mut stream = data.stream_worktree_file()?;
-        // Like Git, a file that shrank while it was read changed, so there is no need to read it again.
-        Ok(match hash_worktree_stream(entry.id.kind(), &mut stream, buf)? {
+        Ok(match stream.hash(entry.id.kind(), buf)? {
             Some(file_hash) => (entry.id != file_hash).then_some(()),
             None => Some(()),
         })
@@ -138,6 +173,11 @@ impl CompareBlobs for FastEq {
 ///
 /// Same as [`FastEq`] but does not contain a fast path for files with mismatched files and
 /// therefore always returns an OID that can be reused later.
+/// A file that shrinks while being read is reported as changed even if its retry hash matches the index,
+/// as the original metadata is stale.
+/// Like [`FastEq`] and Git, growth of unconverted files is not detected, as checking their size again would
+/// require additional I/O. Appends beyond the announced size while streaming can therefore result in a
+/// false-equal comparison.
 #[derive(Clone)]
 pub struct HashEq;
 
@@ -151,11 +191,14 @@ impl CompareBlobs for HashEq {
         data: impl ReadData<'a>,
         buf: &mut Vec<u8>,
     ) -> Result<Option<Self::Output>> {
+        /// How often to a file that keeps shrinking while it is read before giving up.
+        const HASH_ATTEMPTS_OF_SHRINKING_FILE: usize = 3;
         let mut stream = data.stream_worktree_file()?;
         let mut attempts_left = HASH_ATTEMPTS_OF_SHRINKING_FILE;
         loop {
-            if let Some(file_hash) = hash_worktree_stream(entry.id.kind(), &mut stream, buf)? {
-                return Ok((entry.id != file_hash).then_some(file_hash));
+            if let Some(file_hash) = stream.hash(entry.id.kind(), buf)? {
+                let had_short_read = attempts_left < HASH_ATTEMPTS_OF_SHRINKING_FILE;
+                return Ok((had_short_read || entry.id != file_hash).then_some(file_hash));
             }
             attempts_left -= 1;
             if attempts_left == 0 {
@@ -165,41 +208,4 @@ impl CompareBlobs for HashEq {
             stream.restart_with_current_size().map_err(gix_hash::io::from_std_io)?;
         }
     }
-}
-
-/// How often [`HashEq`] hashes a file that keeps shrinking while it is read before giving up.
-const HASH_ATTEMPTS_OF_SHRINKING_FILE: usize = 3;
-
-/// Hash `stream` as a blob, or return `None` if it yielded fewer bytes than its size announced,
-/// which means the file shrank while it was read.
-fn hash_worktree_stream(
-    kind: gix_hash::Kind,
-    stream: &mut read_data::Stream<'_>,
-    buf: &mut Vec<u8>,
-) -> Result<Option<ObjectId>> {
-    if let Some(buffer) = stream.as_bytes() {
-        return gix_object::compute_hash(kind, gix_object::Kind::Blob, buffer).map(Some);
-    }
-    match stream.size() {
-        None => {
-            stream.read_to_end(buf).map_err(gix_hash::io::from_std_io)?;
-            gix_object::compute_hash(kind, gix_object::Kind::Blob, buf).map(Some)
-        }
-        Some(len) => match gix_object::compute_stream_hash(
-            kind,
-            gix_object::Kind::Blob,
-            stream,
-            len,
-            &mut gix_utils::progress::Discard,
-            &AtomicBool::default(),
-        ) {
-            Err(err) if is_premature_eof(&err) => Ok(None),
-            file_hash => file_hash.map(Some),
-        },
-    }
-}
-
-fn is_premature_eof(err: &gix_error::Error) -> bool {
-    err.downcast_any_ref::<std::io::Error>()
-        .is_some_and(|err| err.kind() == std::io::ErrorKind::UnexpectedEof)
 }
