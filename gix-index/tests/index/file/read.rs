@@ -87,6 +87,71 @@ fn with_index_file_snapshot_filters(has_stable_mtimes: bool, run: impl FnOnce())
 }
 
 #[test]
+fn invalid_cache_trees_do_not_lookup_their_placeholder_ids() -> gix_error::TestResult {
+    use gix_object::Exists;
+
+    let file = file("v2_deeper_tree");
+    let objects = crate::odb_at(file.path().parent().expect("index has a parent").join("objects"))?;
+    let original = file.tree().expect("committed fixture has a cache tree");
+    original.verify(true, &objects)?;
+    for invalid_id in [
+        gix_testtools::object_hash().null(),
+        gix_testtools::object_hash().empty_blob(),
+    ] {
+        for invalidate_root in [true, false] {
+            let mut tree = original.clone();
+            let invalid = if invalidate_root {
+                &mut tree
+            } else {
+                tree.children
+                    .iter_mut()
+                    .find(|child| !child.children.is_empty())
+                    .expect("fixture has nested trees")
+            };
+            invalid.num_entries = None;
+            invalid.id = invalid_id;
+            tree.verify(true, &objects)?;
+        }
+    }
+
+    let mut missing_tree_id = gix_testtools::object_hash().null();
+    missing_tree_id.as_mut_slice()[0] = 1;
+    assert!(
+        !objects.exists(&missing_tree_id),
+        "the missing ID is absent from the fixture"
+    );
+    let blob_id = gix_testtools::object_hash().empty_blob();
+    assert!(objects.exists(&blob_id), "the fixture contains empty blobs");
+    for invalid_tree_id in [gix_testtools::object_hash().null(), missing_tree_id, blob_id] {
+        for leaf in [true, false] {
+            let mut tree = original.clone();
+            tree.num_entries = None;
+            tree.id = gix_testtools::object_hash().null();
+            let child = tree
+                .children
+                .iter_mut()
+                .find(|child| !child.children.is_empty())
+                .expect("fixture has nested trees");
+            let child = if leaf {
+                child
+                    .children
+                    .iter_mut()
+                    .find(|child| child.children.is_empty())
+                    .expect("fixture has leaf grandchildren")
+            } else {
+                child
+            };
+            child.id = invalid_tree_id;
+            assert!(
+                tree.verify(true, &objects).is_err(),
+                "valid descendants must verify their objects beneath invalid parents (leaf={leaf}, tree_id={invalid_tree_id})"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn v2_with_single_entry_tree_and_eoie_ext() {
     let file_disallow_threaded_loading = file_opt(
         "v2",
