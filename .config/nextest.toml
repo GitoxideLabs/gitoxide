@@ -1,17 +1,76 @@
+# Keep shared-fixture waiters from filling the global test slots.
+# Groups serialize whole tests, so use them only on Windows where setup is costly.
+[test-groups]
+gix-diff-fixture = { max-threads = 1 }
+diff-rewrites-fixture = { max-threads = 1 }
+merge-tree-fixture = { max-threads = 1 }
+merge-cartesian-fixture = { max-threads = 1 }
+pack-fixtures = { max-threads = 1 }
+
 [profile.default]
-# it doesn't scale for me on macOS at least :/
+# Higher concurrency scaled poorly on macOS.
 test-threads = 6
+# Report all failures in one run.
 fail-fast = false
 
 [[profile.default.overrides]]
-# Start one test per expensive fixture early, so independent fixture generation can overlap.
-platform = 'cfg(windows)'
+# Start independent expensive fixtures early on all platforms to overlap their setup.
+# Priority affects start order; the Windows groups below limit concurrency.
 filter = '''
 (package(=gix-url) & test(=baseline::parse_and_compare_baseline_urls))
 | (package(=gix-merge) & test(=tree::run_baseline))
 | (package(=gix-negotiate) & test(=baseline::run))
+| (package(=gix) & test(=diff::resource_cache))
+| (package(=gix-diff) & test(=index::changes_against_modified_tree_with_filename_tracking))
+| (package(=gix-merge) & test(=tree::cartesian::records_status_quo_sha1))
+| (package(=gix-merge) & test(=blob::builtin_driver::text::run_baseline))
+| (package(=gix-pack) & test(=data::output::count_and_entries::traversals))
+| (package(=gix-pathspec) & test(=search::directories))
 '''
 priority = 100
 
+[[profile.default.overrides]]
+# These two gix tests share make_diff_repo.sh.
+platform = 'cfg(windows)'
+filter = 'package(=gix) & (test(=diff::resource_cache) | test(=object::tree::diff::changes_against_tree_modified))'
+test-group = 'gix-diff-fixture'
+
+[[profile.default.overrides]]
+# Index and tree rewrite tests share make_diff_for_rewrites_repo.sh.
+platform = 'cfg(windows)'
+filter = 'package(=gix-diff) & test(/^(index|tree_with_rewrites)::/)'
+test-group = 'diff-rewrites-fixture'
+
+[[profile.default.overrides]]
+# Tree merge cases share tree-baseline.sh and its Git reference results.
+platform = 'cfg(windows)'
+filter = '''
+package(=gix-merge) & (
+    test(=tree::run_baseline)
+    | test(=tree::directory_rename_controls)
+    | test(=tree::directory_renames_are_disabled_in_virtual_merge_bases)
+)
+'''
+test-group = 'merge-tree-fixture'
+
+[[profile.default.overrides]]
+# Cartesian merge cases share tree-cartesian-baseline.sh.
+platform = 'cfg(windows)'
+filter = 'package(=gix-merge) & test(/^tree::cartesian::/)'
+test-group = 'merge-cartesian-fixture'
+
+[[profile.default.overrides]]
+# Traversals uses both pack fixtures, so their users share one group.
+platform = 'cfg(windows)'
+filter = '''
+package(=gix-pack) & (
+    test(/^multi_index::(access|verify)::/)
+    | test(=multi_index::write::from_a_hash_parameterized_pack)
+    | test(/^data::output::count_and_entries::(traversals|empty_pack_is_allowed)$/)
+)
+'''
+test-group = 'pack-fixtures'
+
+# `cargo nextest run --profile with-xml` inherits defaults and adds a JUnit report.
 [profile.with-xml.junit]
 path = "junit.xml"
