@@ -1,8 +1,14 @@
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 #[forbid(unsafe_code)]
 mod compat;
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub(crate) use compat::Backend;
+
+#[cfg(target_os = "linux")]
+#[forbid(unsafe_code)]
+mod inotify;
+#[cfg(target_os = "linux")]
+pub(crate) use inotify::Backend;
 
 #[cfg(target_os = "macos")]
 mod fsevents;
