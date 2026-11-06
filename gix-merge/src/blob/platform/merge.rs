@@ -388,6 +388,8 @@ impl<'parent> PlatformRef<'parent> {
     ///
     /// Like Git, an external merge driver exiting with a status from 1 to 128 has left conflicts in its result,
     /// which is then returned with [`Resolution::Conflict`].
+    /// Builtin conflict-resolution options do not override the external driver's output or conflict status,
+    /// as retrying with a builtin driver could discard edits already merged by the external driver.
     ///
     /// External merge driver launch errors provide [metadata](gix_error::Error::metadata) with `program` (Path),
     /// the invoked program name or path, and `command` (String), the prepared command's debug representation,
