@@ -5,7 +5,7 @@ use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, 
 use gix_diff::{
     Rewrites,
     rewrites::{Copies, CopySource, Outcome, Tracker, tracker::ChangeKind},
-    tree::visit::{Action, Relation},
+    tree::visit::{Action, ChangeId, Relation},
 };
 use gix_hash::{ObjectId, oid};
 use gix_object::{
@@ -17,6 +17,9 @@ const EXACT_RENAME_COUNTS: &[usize] = &[128, 1_024, 4_096];
 const AMBIGUOUS_IDENTICAL_COUNTS: &[usize] = &[16, 128, 512];
 const SIMILARITY_RENAME_COUNTS: &[usize] = &[16, 64, 128];
 const EXHAUSTIVE_COPY_COUNTS: &[usize] = &[16, 128, 512];
+const RENAMED_DIRECTORY_COUNTS: &[usize] = &[128, 1_024, 4_096];
+/// The files of each renamed directory that keep their content, so their renames can be matched by id.
+const UNCHANGED_FILES_PER_DIRECTORY: usize = 4;
 
 #[derive(Clone, Copy)]
 struct Change {
@@ -132,6 +135,22 @@ fn bench_exhaustive_copy_sources(c: &mut Criterion) {
     let mut group = c.benchmark_group("rewrite-tracker/exhaustive-copy-sources");
     for &count in EXHAUSTIVE_COPY_COUNTS {
         let scenario = exhaustive_copy_sources(count);
+        group.throughput(Throughput::Elements(count as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(count), &scenario, |b, scenario| {
+            b.iter_batched(
+                || scenario,
+                |scenario| black_box(run_tracker(scenario)),
+                BatchSize::SmallInput,
+            );
+        });
+    }
+    group.finish();
+}
+
+fn bench_renamed_directories(c: &mut Criterion) {
+    let mut group = c.benchmark_group("rewrite-tracker/renamed-directories");
+    for &count in RENAMED_DIRECTORY_COUNTS {
+        let scenario = renamed_directories(count);
         group.throughput(Throughput::Elements(count as u64));
         group.bench_with_input(BenchmarkId::from_parameter(count), &scenario, |b, scenario| {
             b.iter_batched(
@@ -266,6 +285,70 @@ fn exhaustive_copy_sources(count: usize) -> Scenario {
     }
 }
 
+/// `count` directories that are renamed while one of their files changes, so the directories differ by id
+/// and can only be matched through the renames of their unchanged files.
+fn renamed_directories(count: usize) -> Scenario {
+    let objects = object_db();
+    let mut changes = Vec::with_capacity(count * 2 * (UNCHANGED_FILES_PER_DIRECTORY + 2));
+    for idx in 0..count {
+        let (old_dir, new_dir) = (format!("old/dir-{idx:05}"), format!("new/dir-{idx:05}"));
+        let (old_dir_id, new_dir_id) = (2 * idx as ChangeId, 2 * idx as ChangeId + 1);
+        for (dir, dir_id, kind) in [
+            (&old_dir, old_dir_id, ChangeKind::Deletion),
+            (&new_dir, new_dir_id, ChangeKind::Addition),
+        ] {
+            let tree_id = gix_object::compute_hash(gix_hash::Kind::Sha1, Kind::Tree, dir.as_bytes())
+                .expect("hashing in memory succeeds");
+            changes.push((
+                Change {
+                    mode: EntryKind::Tree.into(),
+                    relation: Some(Relation::Parent(dir_id)),
+                    ..Change::new(tree_id, kind)
+                },
+                dir.as_str().into(),
+            ));
+        }
+        let child = |blob_id, kind, dir_id| Change {
+            relation: Some(Relation::ChildOfParent(dir_id)),
+            ..Change::new(blob_id, kind)
+        };
+        for file in 0..UNCHANGED_FILES_PER_DIRECTORY {
+            let blob_id = insert_blob(&objects, &format!("unchanged file {file} in directory {idx}\n"));
+            changes.push((
+                child(blob_id, ChangeKind::Deletion, old_dir_id),
+                format!("{old_dir}/file-{file}.txt").into(),
+            ));
+            changes.push((
+                child(blob_id, ChangeKind::Addition, new_dir_id),
+                format!("{new_dir}/file-{file}.txt").into(),
+            ));
+        }
+        let before_blob_id = insert_blob(&objects, &format!("changed file in directory {idx}\n"));
+        let after_blob_id = insert_blob(&objects, &format!("changed file in directory {idx}, now edited\n"));
+        changes.push((
+            child(before_blob_id, ChangeKind::Deletion, old_dir_id),
+            format!("{old_dir}/changed.txt").into(),
+        ));
+        changes.push((
+            child(after_blob_id, ChangeKind::Addition, new_dir_id),
+            format!("{new_dir}/changed.txt").into(),
+        ));
+    }
+    Scenario {
+        rewrites: Rewrites {
+            percentage: None,
+            limit: 0,
+            ..Default::default()
+        },
+        changes,
+        source_tree_changes: Vec::new(),
+        objects,
+        // The unchanged files and their directory are renames; the changed file is an addition and a deletion.
+        expected_matches: count * (UNCHANGED_FILES_PER_DIRECTORY + 1),
+        expected_similarity_checks: Some(0),
+    }
+}
+
 fn text_blob(idx: usize, with_edit: bool) -> String {
     let mut out = String::new();
     for line in 0..48 {
@@ -353,6 +436,7 @@ criterion_group!(
     bench_exact_renames,
     bench_ambiguous_identical_content,
     bench_similarity_renames,
-    bench_exhaustive_copy_sources
+    bench_exhaustive_copy_sources,
+    bench_renamed_directories
 );
 criterion_main!(benches);

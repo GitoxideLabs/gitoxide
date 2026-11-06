@@ -607,16 +607,53 @@ impl<T: Change> Tracker<T> {
         &mut self,
         cb: &mut impl FnMut(visit::Destination<'_, T>, Option<visit::Source<'_, T>>) -> Action,
     ) -> Result {
-        fn unemitted_directory_matching_relation_id<T: Change>(items: &[Item<T>], child_id: ChangeId) -> Option<usize> {
-            items.iter().position(|i| {
-                !i.emitted && matches!(i.change.relation(), Some(Relation::Parent(pid)) if pid == child_id)
-            })
+        /// Per looked-up relation id, a cursor past the emitted directories and the indices of all its directories,
+        /// in item order.
+        type DirectoriesByRelationId = std::collections::HashMap<ChangeId, (usize, Vec<usize>)>;
+        fn unemitted_directory_matching_relation_id<T: Change>(
+            items: &[Item<T>],
+            directories: &mut DirectoriesByRelationId,
+            child_id: ChangeId,
+        ) -> Option<usize> {
+            let (cursor, indices) = directories.get_mut(&child_id)?;
+            while let Some(&idx) = indices.get(*cursor) {
+                if !items[idx].emitted {
+                    return Some(idx);
+                }
+                *cursor += 1;
+            }
+            None
+        }
+
+        if self.child_renames.is_empty() {
+            return Ok(());
+        }
+        // Scanning all items for each lookup would take time proportional to the number of child renames
+        // times the number of items, so index the directories once instead, but only those that are looked up.
+        // Items are only ever marked as emitted, never unmarked, so a cursor that skips emitted directories
+        // for good still finds the first unemitted one in item order, which is what a scan finds.
+        let mut directories: DirectoriesByRelationId = self
+            .child_renames
+            .keys()
+            .flat_map(|&(deleted_child_id, added_child_id)| [deleted_child_id, added_child_id])
+            .map(|id| (id, Default::default()))
+            .collect();
+        for (idx, item) in self.items.iter().enumerate() {
+            if let Some(Relation::Parent(id)) = item.change.relation()
+                && let Some((_, indices)) = directories.get_mut(&id)
+            {
+                indices.push(idx);
+            }
         }
         for ((deleted_child_id, added_child_id), children) in &self.child_renames {
-            let Some(src_idx) = unemitted_directory_matching_relation_id(&self.items, *deleted_child_id) else {
+            let Some(src_idx) =
+                unemitted_directory_matching_relation_id(&self.items, &mut directories, *deleted_child_id)
+            else {
                 continue;
             };
-            let Some(dst_idx) = unemitted_directory_matching_relation_id(&self.items, *added_child_id) else {
+            let Some(dst_idx) =
+                unemitted_directory_matching_relation_id(&self.items, &mut directories, *added_child_id)
+            else {
                 // This could go wrong in case there are mismatches, so be defensive here.
                 // But generally, we'd expect the destination item to exist.
                 continue;
@@ -956,5 +993,269 @@ mod estimate_involved_items {
             (2, 1),
             "any modifications is a valid source, emitted or not"
         );
+    }
+}
+
+#[cfg(test)]
+mod match_renamed_directories {
+    use bstr::{BString, ByteSlice};
+    use gix_error::TestResult;
+    use gix_hash::ObjectId;
+    use gix_object::tree::{EntryKind, EntryMode};
+
+    use super::{Change as _, Item, visit};
+    use crate::{
+        Rewrites,
+        rewrites::Tracker,
+        tree::visit::{Action, Change, ChangeId, Relation},
+    };
+
+    /// A deterministic xorshift64* sequence, so the cases are reproducible without a dependency.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 >> 12;
+            self.0 ^= self.0 << 25;
+            self.0 ^= self.0 >> 27;
+            self.0.wrapping_mul(0x2545_f491_4f6c_dd1d)
+        }
+
+        fn below(&mut self, n: u64) -> u64 {
+            self.next() % n.max(1)
+        }
+    }
+
+    /// The lookup as it was before directories were indexed: a scan of all items per child rename.
+    /// The rest is the same as in [`Tracker::match_renamed_directories()`], but directory pairs whose
+    /// children don't agree on their relative directory are counted in `rejected`.
+    fn scan_all_items(
+        tracker: &mut Tracker<Change>,
+        cb: &mut impl FnMut(visit::Destination<'_, Change>, Option<visit::Source<'_, Change>>) -> Action,
+        rejected: &mut usize,
+    ) {
+        fn unemitted_directory_matching_relation_id(items: &[Item<Change>], child_id: ChangeId) -> Option<usize> {
+            items.iter().position(|i| {
+                !i.emitted && matches!(i.change.relation(), Some(Relation::Parent(pid)) if pid == child_id)
+            })
+        }
+        for ((deleted_child_id, added_child_id), children) in &tracker.child_renames {
+            let Some(src_idx) = unemitted_directory_matching_relation_id(&tracker.items, *deleted_child_id) else {
+                continue;
+            };
+            let Some(dst_idx) = unemitted_directory_matching_relation_id(&tracker.items, *added_child_id) else {
+                continue;
+            };
+
+            let (src_item, dst_item) = (&tracker.items[src_idx], &tracker.items[dst_idx]);
+            if !children.iter().any(|&(src_child_idx, dst_child_idx)| {
+                let relative_directory = |child_idx: usize, parent: &Item<Change>| {
+                    let child = &tracker.items[child_idx];
+                    child
+                        .location(&tracker.path_backing)
+                        .strip_prefix(parent.location(&tracker.path_backing).as_bytes())
+                        .and_then(|path| path.strip_prefix(b"/"))
+                        .map(|path| {
+                            if child.change.entry_mode().is_tree() {
+                                path
+                            } else {
+                                &path[..path.rfind_byte(b'/').unwrap_or(0)]
+                            }
+                        })
+                };
+                let src_relative = relative_directory(src_child_idx, src_item);
+                let dst_relative = relative_directory(dst_child_idx, dst_item);
+                src_relative.is_some() && src_relative == dst_relative
+            }) {
+                *rejected += 1;
+                continue;
+            }
+            let src = visit::Source {
+                entry_mode: src_item.change.entry_mode(),
+                id: src_item.change.id().to_owned(),
+                kind: visit::SourceKind::Rename,
+                location: src_item.location(&tracker.path_backing),
+                change: &src_item.change,
+                diff: None,
+            };
+            let dst = visit::Destination {
+                change: dst_item.change.clone(),
+                location: dst_item.location(&tracker.path_backing),
+            };
+            let res = cb(dst, Some(src));
+
+            tracker.items[src_idx].emitted = true;
+            tracker.items[dst_idx].emitted = true;
+
+            if res.is_break() {
+                return;
+            }
+        }
+    }
+
+    /// Path components are drawn from a small set, so that paths repeat, and children
+    /// sometimes do and sometimes don't agree on their directory relative to their parent.
+    const NAMES: &[&str] = &["a", "b"];
+
+    /// Create `num_items` items whose relations use `num_ids` ids, so several directories can share one,
+    /// with about `emitted_per_mille` of them emitted already.
+    /// Then record up to `num_pairs` child renames, with random child pairs, whose ids may also name no directory
+    /// or the same id for source and destination.
+    fn random_tracker(
+        rng: &mut Rng,
+        num_items: usize,
+        num_ids: u64,
+        num_pairs: usize,
+        emitted_per_mille: u64,
+    ) -> Tracker<Change> {
+        let mut tracker = Tracker::new(Rewrites::default());
+        for _ in 0..num_items {
+            let relation = match rng.below(3) {
+                0 => Some(Relation::Parent(rng.below(num_ids) as ChangeId)),
+                1 => Some(Relation::ChildOfParent(rng.below(num_ids) as ChangeId)),
+                _ => None,
+            };
+            let is_tree = matches!(relation, Some(Relation::Parent(_))) || rng.below(4) == 0;
+            let entry_mode: EntryMode = if is_tree { EntryKind::Tree } else { EntryKind::Blob }.into();
+            let mut oid = [0u8; 20];
+            oid[..8].copy_from_slice(&rng.next().to_be_bytes());
+            let oid = ObjectId::from_bytes_or_panic(&oid);
+            let change = if rng.below(2) == 0 {
+                Change::Addition {
+                    entry_mode,
+                    oid,
+                    relation,
+                }
+            } else {
+                Change::Deletion {
+                    entry_mode,
+                    oid,
+                    relation,
+                }
+            };
+            // Directories are top-level, so other items are below them more often.
+            let depth = if matches!(relation, Some(Relation::Parent(_))) {
+                1
+            } else {
+                [1, 2, 2, 3][rng.below(4) as usize]
+            };
+            let path = (0..depth)
+                .map(|_| NAMES[rng.below(NAMES.len() as u64) as usize])
+                .collect::<Vec<_>>()
+                .join("/");
+            let start = tracker.path_backing.len();
+            tracker.path_backing.extend_from_slice(path.as_bytes());
+            tracker.items.push(Item {
+                change,
+                path: start..tracker.path_backing.len(),
+                emitted: rng.below(1000) < emitted_per_mille,
+            });
+        }
+        let id_range = num_ids + num_ids / 4 + 1;
+        for _ in 0..num_pairs {
+            let deleted = rng.below(id_range) as ChangeId;
+            let added = if rng.below(20) == 0 {
+                deleted
+            } else {
+                rng.below(id_range) as ChangeId
+            };
+            let num_children = 1 + rng.below(6);
+            let children = tracker.child_renames.entry((deleted, added)).or_default();
+            for _ in 0..num_children {
+                children.push((
+                    rng.below(num_items as u64) as usize,
+                    rng.below(num_items as u64) as usize,
+                ));
+            }
+        }
+        tracker
+    }
+
+    fn clone_tracker(tracker: &Tracker<Change>) -> Tracker<Change> {
+        Tracker {
+            items: tracker
+                .items
+                .iter()
+                .map(|item| Item {
+                    change: item.change.clone(),
+                    path: item.path.clone(),
+                    emitted: item.emitted,
+                })
+                .collect(),
+            path_backing: tracker.path_backing.clone(),
+            rewrites: tracker.rewrites,
+            child_renames: tracker.child_renames.clone(),
+        }
+    }
+
+    type Emitted = Vec<(BString, ObjectId, EntryMode, Change, BString, Change)>;
+
+    /// Emit renamed directories with the indexed lookup if `indexed` is `true`, or by scanning all items otherwise,
+    /// and stop after `stop_after` emissions if set.
+    /// Return all emitted pairs and the amount of directory pairs rejected by the scan.
+    fn emit(tracker: &mut Tracker<Change>, indexed: bool, stop_after: Option<usize>) -> TestResult<(Emitted, usize)> {
+        let mut out = Emitted::new();
+        let mut cb = |dst: visit::Destination<'_, Change>, src: Option<visit::Source<'_, Change>>| {
+            let src = src.expect("renamed directories always have a source");
+            out.push((
+                src.location.to_owned(),
+                src.id,
+                src.entry_mode,
+                src.change.clone(),
+                dst.location.to_owned(),
+                dst.change,
+            ));
+            if stop_after.is_some_and(|n| out.len() >= n) {
+                Action::Break(())
+            } else {
+                Action::Continue(())
+            }
+        };
+        let mut rejected = 0;
+        if indexed {
+            tracker.match_renamed_directories(&mut cb)?;
+        } else {
+            scan_all_items(tracker, &mut cb, &mut rejected);
+        }
+        Ok((out, rejected))
+    }
+
+    #[test]
+    fn indexed_lookups_emit_the_same_as_scanning_all_items() -> TestResult {
+        let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+        let (mut cases_with_renames, mut rejected_pairs) = (0, 0);
+        for case in 0..3000 {
+            let num_items = 1 + rng.below(if case % 10 == 0 { 2000 } else { 60 }) as usize;
+            let num_ids = 1 + rng.below((num_items as u64 / 3).clamp(1, 40));
+            let num_pairs = rng.below(80) as usize;
+            let emitted_per_mille = [0, 100, 500, 1000][rng.below(4) as usize];
+            let tracker = random_tracker(&mut rng, num_items, num_ids, num_pairs, emitted_per_mille);
+            let stop_after = (rng.below(4) == 0).then(|| 1 + rng.below(5) as usize);
+
+            let (mut scanned, mut indexed) = (clone_tracker(&tracker), clone_tracker(&tracker));
+            let (expected, rejected) = emit(&mut scanned, false, stop_after)?;
+            let (actual, _) = emit(&mut indexed, true, stop_after)?;
+            assert_eq!(
+                actual, expected,
+                "case {case}: the same directory pairs are emitted in the same order"
+            );
+            let emitted = |t: &Tracker<Change>| t.items.iter().map(|item| item.emitted).collect::<Vec<_>>();
+            assert_eq!(
+                emitted(&indexed),
+                emitted(&scanned),
+                "case {case}: the same items are marked as emitted"
+            );
+            cases_with_renames += usize::from(!expected.is_empty());
+            rejected_pairs += rejected;
+        }
+        assert!(
+            cases_with_renames > 1000,
+            "many cases emit renamed directories, got {cases_with_renames}"
+        );
+        assert!(
+            rejected_pairs > 1000,
+            "many directory pairs are rejected by their children and stay unemitted, got {rejected_pairs}"
+        );
+        Ok(())
     }
 }
