@@ -1158,46 +1158,34 @@ mod core {
     #[cfg(feature = "attributes")]
     fn check_round_trip_encoding() -> TestResult {
         for (value, expected) in [
-            (
-                Some("UTF-8 utf-16BE"),
-                &[gix_filter::encoding::UTF_8, gix_filter::encoding::UTF_16BE][..],
-            ),
-            (
-                Some("SHIFT-JIS,UTF-8"),
-                &[gix_filter::encoding::SHIFT_JIS, gix_filter::encoding::UTF_8],
-            ),
-            (
-                Some("UTF-16LE, SHIFT-JIS"),
-                &[gix_filter::encoding::UTF_16LE, gix_filter::encoding::SHIFT_JIS],
-            ),
-            (
-                Some("UTF-16LE\tSHIFT-JIS"),
-                &[gix_filter::encoding::UTF_16LE, gix_filter::encoding::SHIFT_JIS],
-            ),
-            (
-                Some("UTF-16LE\r\nSHIFT-JIS"),
-                &[gix_filter::encoding::UTF_16LE, gix_filter::encoding::SHIFT_JIS],
-            ),
-            (None, &[gix_filter::encoding::SHIFT_JIS]),
+            (Some("UTF-8 utf-16BE"), &["UTF-8", "utf-16BE"][..]),
+            (Some("SHIFT-JIS,UTF-8"), &["SHIFT-JIS", "UTF-8"]),
+            (Some("UTF-16LE, SHIFT-JIS"), &["UTF-16LE", "SHIFT-JIS"]),
+            (Some("UTF-16LE\tSHIFT-JIS"), &["UTF-16LE", "SHIFT-JIS"]),
+            (Some("UTF-16LE\r\nSHIFT-JIS"), &["UTF-16LE", "SHIFT-JIS"]),
+            (Some("UTF-16LE\u{b}SHIFT-JIS"), &["UTF-16LE\u{b}SHIFT-JIS"]),
+            (Some("UTF-16LE\u{c}SHIFT-JIS"), &["UTF-16LE\u{c}SHIFT-JIS"]),
+            (Some("SOMETHING ELSE"), &["SOMETHING", "ELSE"]),
+            (Some("UTF16LE"), &["UTF16LE"]),
+            (Some(" , \t\r\n,"), &[]),
+            (None, &["SHIFT-JIS"]),
         ] {
             assert_eq!(
                 Core::CHECK_ROUND_TRIP_ENCODING.try_into_encodings(value)?,
-                expected,
-                "Git accepts commas and its whitespace characters between encodings"
+                expected
+                    .iter()
+                    .copied()
+                    .map(gix::bstr::BString::from)
+                    .collect::<Vec<_>>(),
+                "Git preserves labels and accepts comma, space, tab, CR and LF separators, excluding VT and FF"
             );
             if let Some(value) = value {
-                assert!(Core::CHECK_ROUND_TRIP_ENCODING.validate(value.into()).is_ok());
+                assert!(
+                    Core::CHECK_ROUND_TRIP_ENCODING.validate(value.into()).is_ok(),
+                    "round-trip selection accepts unknown names without activating an encoding"
+                );
             }
         }
-        for value in ["UTF-16LE\u{b}SHIFT-JIS", "UTF-16LE\u{c}SHIFT-JIS"] {
-            assert!(
-                Core::CHECK_ROUND_TRIP_ENCODING.try_into_encodings(Some(value)).is_err(),
-                "vertical tab and form feed are not separators in Git's whitespace table"
-            );
-        }
-        insta::assert_debug_snapshot!(Core::CHECK_ROUND_TRIP_ENCODING
-                .try_into_encodings(Some("SOMETHING ELSE"))
-                .expect_err("check round trip encoding"), "check round trip encoding", @"The encoding named 'SOMETHING' seen in key 'core.checkRoundTripEncoding=SOMETHING ELSE' is unsupported");
         Ok(())
     }
 }

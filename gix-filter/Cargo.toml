@@ -42,6 +42,18 @@ sha256 = ["gix-hash/sha256"]
 ## Internal feature for building binaries referenced by integration tests through CARGO_BIN_EXE_*.
 test-helper = ["gix-error/error-print-location"]
 
+#! Optional encoding groups are selected by the application, not enabled by default in this plumbing crate.
+#! UTF-8/16/32, ASCII and ISO-8859-1 are always available.
+
+## Add Windows-1252 and ISO-8859-15 (Latin-9).
+encoding-western = ["gix-encoding/western"]
+## Add the remaining single-byte legacy encodings, including the Western group.
+encoding-legacy = ["encoding-western", "gix-encoding/legacy"]
+## Add Japanese (Shift-JIS, CP932, EUC-JP, ISO-2022-JP), Korean (EUC-KR, CP949)
+## and Chinese (GB2312, GBK, GB18030, Big5, Big5-HKSCS) encodings.
+## Combine with `encoding-legacy` for the complete supported repertoire.
+encoding-asian = ["gix-encoding/asian"]
+
 [dependencies]
 gix-hash = { version = "^0.28.1", path = "../gix-hash" }
 gix-trace = { version = "^0.3.1", path = "../gix-trace" }
@@ -53,7 +65,7 @@ gix-path = { version = "^0.14.1", path = "../gix-path" }
 gix-packetline = { version = "^0.24.1", path = "../gix-packetline", features = ["blocking-io"] }
 gix-attributes = { version = "^0.37.1", path = "../gix-attributes" }
 
-encoding_rs = "0.8.44"
+gix-encoding = { version = "^0.1.0", path = "../gix-encoding", default-features = false }
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
 gix-error = { version = "^0.5.2", path = "../gix-error" }
 smallvec = "1.15.1"
@@ -61,7 +73,12 @@ smallvec = "1.15.1"
 
 [dev-dependencies]
 insta = "1.46.3"
-gix-filter = { path = ".", features = ["test-helper"] }
+# Exercise the complete repertoire without enabling it for downstream consumers.
+gix-filter = { path = ".", features = [
+    "test-helper",
+    "encoding-legacy",
+    "encoding-asian",
+] }
 gix-hash = { path = "../gix-hash", features = ["sha1", "sha256"] }
 gix-quote = { path = "../gix-quote" }
 gix-parallel = { path = "../gix-parallel" }
@@ -72,6 +89,20 @@ gix-worktree = { path = "../gix-worktree", default-features = false, features = 
 features = ["sha1"]
 
 [package.metadata.qa]
+checks = [
+    { args = [
+        "--no-default-features",
+        "--features",
+        "sha1",
+        "--lib",
+    ] },
+    { args = [
+        "--no-default-features",
+        "--features",
+        "sha1,encoding-legacy,encoding-asian",
+        "--lib",
+    ] },
+]
 tests = [
     { args = [], env = { GIX_TEST_FIXTURE_HASH = "sha1" } },
     { args = [], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },

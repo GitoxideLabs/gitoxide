@@ -34,6 +34,10 @@ default = [
     "extras",
     "auto-chain-error",
     "sha1",
+    # These three add 1.4MB in compressed transcoding tables, but match Git.
+    "encoding-western",
+    "encoding-legacy",
+    "encoding-asian",
 ]
 
 #! There are various categories of features which help to optimize performance and build times. `gix` comes with 'batteries included' and everything is
@@ -113,6 +117,24 @@ sha256 = [
     "gix-note?/sha256",
     "gix-worktree-stream?/sha256",
 ]
+
+#! #### Encodings
+#!
+#! These additive features select the encodings available to `working-tree-encoding` filters.
+#! They do not enable filtering themselves; enable `attributes` or a component that includes it.
+#! UTF-8/16/32 (including Git's BOM variants), ASCII and ISO-8859-1 are always available when filtering is enabled.
+#! With `default-features = false`, no optional encoding groups are selected. Other dependencies can
+#! still enable groups through Cargo feature unification. Disabled encoding labels are rejected.
+
+## Add Windows-1252 and ISO-8859-15 (Latin-9). Enabled by default.
+encoding-western = ["gix-filter?/encoding-western"]
+## Add the remaining single-byte ISO-8859 and Windows code pages, Thai, KOI8, Macintosh, IBM and CP1125 encodings.
+## Also enables `encoding-western`.
+encoding-legacy = ["encoding-western", "gix-filter?/encoding-legacy"]
+## Add Japanese (Shift-JIS, CP932, EUC-JP, ISO-2022-JP), Korean (EUC-KR, CP949)
+## and Chinese (GB2312, GBK, GB18030, Big5, Big5-HKSCS) encodings.
+## Combine with `encoding-legacy` for the complete supported repertoire.
+encoding-asian = ["gix-filter?/encoding-asian"]
 
 #! #### Components
 #!
@@ -445,7 +467,9 @@ document-features = { version = "0.2.0", optional = true }
 [dev-dependencies]
 gix-fs = { path = "../gix-fs", features = ["unstable"] }
 gix-lock = { path = "../gix-lock", features = ["unstable"] }
-gix-tempfile = { path = "../gix-tempfile", default-features = false, features = ["unstable"] }
+gix-tempfile = { path = "../gix-tempfile", default-features = false, features = [
+    "unstable",
+] }
 gix = { path = ".", default-features = false, features = [
     "merge",
     "tree-error",
@@ -509,11 +533,20 @@ ignored = [
 # Major external consumers with advisory compatibility checks.
 # CI checks each repository's default branch; see DEVELOPMENT.md for the selection.
 downstream = [
-    { name = "built", repository = "lukaslueg/built", package = "built", features = ["gix"], default-features = false },
-    { name = "rustsec", repository = "rustsec/rustsec", package = "rustsec", features = ["gix-reqwest", "osv-export"], default-features = false },
-    { name = "crates-index", repository = "frewsxcv/rust-crates-index", package = "crates-index", features = ["git"], default-features = false },
+    { name = "built", repository = "lukaslueg/built", package = "built", features = [
+        "gix",
+    ], default-features = false },
+    { name = "rustsec", repository = "rustsec/rustsec", package = "rustsec", features = [
+        "gix-reqwest",
+        "osv-export",
+    ], default-features = false },
+    { name = "crates-index", repository = "frewsxcv/rust-crates-index", package = "crates-index", features = [
+        "git",
+    ], default-features = false },
     { name = "cargo", repository = "rust-lang/cargo", package = "cargo" },
-    { name = "cargo-generate", repository = "cargo-generate/cargo-generate", package = "cargo-generate", features = ["git"], default-features = false },
+    { name = "cargo-generate", repository = "cargo-generate/cargo-generate", package = "cargo-generate", features = [
+        "git",
+    ], default-features = false },
     { name = "jj", repository = "jj-vcs/jj", package = "jj-cli" },
     { name = "jj-testutils", repository = "jj-vcs/jj", package = "testutils" },
     { name = "gitbutler", repository = "gitbutlerapp/gitbutler", package = "but" },
@@ -522,32 +555,134 @@ downstream = [
     { name = "vergen-gix", repository = "rustyhorde/vergen", package = "vergen-gix" },
     { name = "onefetch", repository = "o2sh/onefetch", package = "onefetch" },
 ]
-msrv = { checks = [{ args = [] }, { args = ["--no-default-features", "--features", "async-network-client,max-performance,sha1"] }] }
+msrv = { checks = [
+    { args = [
+    ] },
+    { args = [
+        "--no-default-features",
+        "--features",
+        "async-network-client,max-performance,sha1",
+    ] },
+] }
 checks = [
-    { args = ["--no-default-features", "--features", "sha1,async-network-client"] },
-    { args = ["--no-default-features", "--features", "sha1,async-network-client-async-std"] },
-    { args = ["--no-default-features", "--features", "sha1,blocking-network-client"] },
-    { args = ["--no-default-features", "--features", "sha1,blocking-http-transport-curl"] },
-    { args = ["--no-default-features", "--features", "sha1,blocking-http-transport-reqwest"] },
-    { args = ["--no-default-features", "--features", "max-performance,sha1,sha256", "--tests"] },
-    { args = ["--no-default-features", "--features", "sha1"] },
-    { args = ["--no-default-features", "--features", "sha1,sha256"] },
-    { args = ["--no-default-features", "--features", "sha256"] },
+    { args = [
+        "--no-default-features",
+        "--features",
+        "sha1,async-network-client",
+    ] },
+    { args = [
+        "--no-default-features",
+        "--features",
+        "sha1,async-network-client-async-std",
+    ] },
+    { args = [
+        "--no-default-features",
+        "--features",
+        "sha1,blocking-network-client",
+    ] },
+    { args = [
+        "--no-default-features",
+        "--features",
+        "sha1,blocking-http-transport-curl",
+    ] },
+    { args = [
+        "--no-default-features",
+        "--features",
+        "sha1,blocking-http-transport-reqwest",
+    ] },
+    { args = [
+        "--no-default-features",
+        "--features",
+        "max-performance,sha1,sha256",
+        "--tests",
+    ] },
+    { args = [
+        "--no-default-features",
+        "--features",
+        "sha1",
+    ] },
+    { args = [
+        "--no-default-features",
+        "--features",
+        "sha1,sha256",
+    ] },
+    { args = [
+        "--no-default-features",
+        "--features",
+        "sha256",
+    ] },
 ]
 tests = [
-    { args = ["--no-default-features", "--features", "basic,comfort,max-performance,sha1,sha256"] },
-    { args = ["--no-default-features", "--features", "basic,extras,comfort,sha1,sha256"] },
-    { args = ["--features", "async-network-client,sha256"] },
-    { args = ["--features", "async-network-client,sha256"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
-    { args = ["--features", "blocking-network-client,sha256"] },
-    { args = ["--features", "blocking-network-client,sha256"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
-    { args = ["--features", "sha256"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
-    { args = ["--no-default-features", "--features", "sha256", "--lib"] },
+    { args = [
+        "--no-default-features",
+        "--features",
+        "sha1,attributes",
+        "--test",
+        "gix",
+        "-E",
+        "test(=repository::filter::encoding_feature_groups)",
+    ] },
+    { args = [
+        "--no-default-features",
+        "--features",
+        "sha1,attributes,encoding-legacy,encoding-asian",
+        "--test",
+        "gix",
+        "-E",
+        "test(=repository::filter::encoding_feature_groups)",
+    ] },
+    { args = [
+        "--no-default-features",
+        "--features",
+        "basic,comfort,max-performance,sha1,sha256",
+    ] },
+    { args = [
+        "--no-default-features",
+        "--features",
+        "basic,extras,comfort,sha1,sha256",
+    ] },
+    { args = [
+        "--features",
+        "async-network-client,sha256",
+    ] },
+    { args = [
+        "--features",
+        "async-network-client,sha256",
+    ], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+    { args = [
+        "--features",
+        "blocking-network-client,sha256",
+    ] },
+    { args = [
+        "--features",
+        "blocking-network-client,sha256",
+    ], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+    { args = [
+        "--features",
+        "sha256",
+    ], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+    { args = [
+        "--no-default-features",
+        "--features",
+        "sha256",
+        "--lib",
+    ] },
 ]
 doctests = [
-    { args = ["--no-default-features", "--features", "sha1,sha256"] },
-    { args = ["--no-default-features", "--features", "revision,sha1,sha256"] },
-    { args = ["--features", "sha256"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
+    { args = [
+        "--no-default-features",
+        "--features",
+        "sha1,sha256",
+    ] },
+    { args = [
+        "--no-default-features",
+        "--features",
+        "revision,sha1,sha256",
+    ] },
+    { args = [
+        "--features",
+        "sha256",
+    ], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
 ]
 
 [package.metadata.qa.each-feature]
@@ -556,14 +691,37 @@ args = ["--no-default-features", "--tests"]
 base = ["sha1", "sha256"]
 exclude = [
     # Bundles and backend choices retain their explicit build/test configurations.
-    "default", "basic", "extras", "comfort", "max-control", "max-performance",
-    "async-network-client", "async-network-client-async-std", "blocking-network-client",
-    "blocking-http-transport-curl", "blocking-http-transport-curl-rustls", "blocking-http-transport-curl-openssl",
-    "blocking-http-transport-reqwest", "blocking-http-transport-reqwest-rust-tls",
-    "blocking-http-transport-reqwest-rust-tls-trust-dns", "blocking-http-transport-reqwest-native-tls",
-    "document-features", "zlib-sirocco",
+    "default",
+    "basic",
+    "extras",
+    "comfort",
+    "max-control",
+    "max-performance",
+    "async-network-client",
+    "async-network-client-async-std",
+    "blocking-network-client",
+    "blocking-http-transport-curl",
+    "blocking-http-transport-curl-rustls",
+    "blocking-http-transport-curl-openssl",
+    "blocking-http-transport-reqwest",
+    "blocking-http-transport-reqwest-rust-tls",
+    "blocking-http-transport-reqwest-rust-tls-trust-dns",
+    "blocking-http-transport-reqwest-native-tls",
+    "document-features",
+    "zlib-sirocco",
     # Direct dependency switches are exercised through their component features.
-    "async-std", "gix-archive", "gix-status", "gix-worktree-stream", "prodash", "regex",
+    "async-std",
+    "gix-archive",
+    "gix-status",
+    "gix-worktree-stream",
+    "prodash",
+    "regex",
     # The dev self-dependency already enables these in every --tests build.
-    "attributes", "blob-diff", "command", "excludes", "index", "merge", "tree-error",
+    "attributes",
+    "blob-diff",
+    "command",
+    "excludes",
+    "index",
+    "merge",
+    "tree-error",
 ]

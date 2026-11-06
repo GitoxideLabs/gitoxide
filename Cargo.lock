@@ -1938,9 +1938,9 @@ name = "gix-filter"
 version = "0.36.1"
 dependencies = [
  "bstr",
- "encoding_rs",
  "gix-attributes",
  "gix-command",
+ "gix-encoding",
  "gix-error",
  "gix-filter",
  "gix-hash",

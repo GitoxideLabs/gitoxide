@@ -8,14 +8,23 @@
 //!
 //! This crate implements the building blocks in terms of applying and undoing filters, along with logic to decide whether
 //! or not to apply such a filter.
+//!
+//! # Encodings
+//!
+//! UTF-8/16/32 (including Git's BOM variants), ASCII and ISO-8859-1 are always available.
+//! Optional encoding groups must be selected by the application with `encoding-western`,
+//! `encoding-legacy` or `encoding-asian`. Combine `encoding-legacy` and `encoding-asian` for the complete repertoire.
+//! This crate disables `gix-encoding`'s defaults so transitive dependencies do not force optional
+//! mapping tables into a build. Standalone plumbing users that need Windows-1252 or ISO-8859-15
+//! must enable `encoding-western`; users of `gix` select groups through its corresponding features.
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
 use bstr::BString;
-/// A forwarding of the `encoding_rs` crate for its types and convenience.
-pub use encoding_rs as encoding;
 /// The `gix-attributes` crate whose types are mentioned in the public API of [Pipeline::convert_to_worktree()].
 pub use gix_attributes as attributes;
+/// A forwarding of the `gix_encoding` crate for its types and convenience.
+pub use gix_encoding as encoding;
 
 /// a filter to replace `$Id$` with a git-hash of the buffer.
 pub mod ident;

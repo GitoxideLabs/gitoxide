@@ -1,50 +1,21 @@
 pub(crate) mod function {
-    use encoding_rs::EncoderResult;
+    use gix_encoding::Encoding;
+    use gix_error::{Result, ResultExt, validation};
 
-    use gix_error::{Result, bail, validation};
-
-    /// Encode `src_utf8`, which is assumed to be UTF-8 encoded, according to `worktree_encoding` for placement in the working directory,
-    /// and write it to `buf`, possibly resizing it.
-    /// Note that the encoding is always applied, there is no conditional even if `worktree_encoding` and the `src` encoding are the same.
-    pub fn encode_to_worktree(
-        src_utf8: &[u8],
-        worktree_encoding: &'static encoding_rs::Encoding,
-        buf: &mut Vec<u8>,
-    ) -> Result {
-        use gix_error::{OptionExt, ResultExt};
-
-        let mut encoder = worktree_encoding.new_encoder();
-        let buf_len = encoder
-            .max_buffer_length_from_utf8_if_no_unmappables(src_utf8.len())
-            .ok_or_raise(|| {
-                validation(format!(
-                    "Cannot convert input of {} UTF-8 bytes to target encoding without overflowing",
-                    src_utf8.len()
-                ))
-            })?;
+    /// Encode UTF-8 `src_utf8` for the working tree, replacing `buf` while retaining its allocation.
+    ///
+    /// Empty input stays empty, including for encodings which normally produce a BOM.
+    /// Encoding errors leave `buf` empty, and no replacement characters are inserted.
+    pub fn encode_to_worktree(src_utf8: &[u8], worktree_encoding: Encoding, buf: &mut Vec<u8>) -> Result {
         buf.clear();
-        buf.resize(buf_len, 0);
-        let src = std::str::from_utf8(src_utf8).or_raise(|| validation("Input was not UTF-8 encoded"))?;
-        let (res, read, written) = encoder.encode_from_utf8_without_replacement(src, buf, true);
-        match res {
-            EncoderResult::InputEmpty => {
-                assert!(
-                    buf_len >= written,
-                    "encoding_rs estimates the maximum amount of bytes written correctly"
-                );
-                assert_eq!(read, src_utf8.len(), "input buffer should be fully consumed");
-                buf.truncate(written);
-            }
-            EncoderResult::OutputFull => {
-                unreachable!("we assure that the output buffer is big enough as per the encoder's estimate")
-            }
-            EncoderResult::Unmappable(c) => {
-                bail!(validation(format!(
-                    "The character '{c}' could not be mapped to the {}",
-                    worktree_encoding.name()
-                )));
-            }
+        if src_utf8.is_empty() {
+            return Ok(());
         }
-        Ok(())
+        gix_encoding::convert_to(src_utf8, Encoding::Utf8, worktree_encoding, buf).or_raise(|| {
+            validation(format!(
+                "Could not encode UTF-8 input as '{}'",
+                worktree_encoding.name()
+            ))
+        })
     }
 }

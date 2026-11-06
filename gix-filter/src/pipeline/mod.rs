@@ -25,8 +25,11 @@ pub struct Options {
     pub eol_config: eol::Configuration,
     /// How to perform round-trip checks during end-of-line conversions to git.
     pub crlf_roundtrip_check: CrlfRoundTripCheck,
-    /// All worktree encodings for round-trip checks should be performed.
-    pub encodings_with_roundtrip_check: Vec<&'static encoding_rs::Encoding>,
+    /// Worktree encoding names for which round-trip checks should be performed.
+    ///
+    /// As in Git, names match the original attribute value ignoring ASCII case, without
+    /// resolving aliases. Unknown names are harmless and match no supported encoding.
+    pub encodings_with_roundtrip_check: Vec<BString>,
 }
 
 /// Context that typically doesn't change throughout the lifetime of a pipeline, for use with `process` filters.

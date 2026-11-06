@@ -61,6 +61,7 @@ impl Pipeline {
             digest,
             _attr_digest: _,
             encoding,
+            check_roundtrip_encoding,
             apply_ident_filter,
         } = Configuration::at_path(
             bstr_rela_path.as_ref(),
@@ -69,6 +70,7 @@ impl Pipeline {
             attributes,
             self.options.eol_config,
             false,
+            &self.options.encodings_with_roundtrip_check,
         )?;
 
         let mut in_src_buffer = false;
@@ -115,7 +117,7 @@ impl Pipeline {
                 &self.bufs.src,
                 encoding,
                 &mut self.bufs.dest,
-                if self.options.encodings_with_roundtrip_check.contains(&encoding) {
+                if check_roundtrip_encoding {
                     worktree::encode_to_git::RoundTripCheck::Fail
                 } else {
                     worktree::encode_to_git::RoundTripCheck::Skip
@@ -171,6 +173,7 @@ impl Pipeline {
             digest,
             _attr_digest: _,
             encoding,
+            check_roundtrip_encoding: _,
             apply_ident_filter,
         } = Configuration::at_path(
             rela_path,
@@ -179,6 +182,7 @@ impl Pipeline {
             attributes,
             self.options.eol_config,
             unknown_encoding == to_worktree::UnknownEncoding::Ignore,
+            &[],
         )?;
 
         let mut bufs = self.bufs.use_foreign_src(src);

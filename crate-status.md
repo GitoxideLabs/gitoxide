@@ -675,6 +675,16 @@ Provide discovery and execution of Git hooks for client and receive-side workflo
 * [ ] receive-side hooks and [`reference-transaction`](https://git-scm.com/docs/githooks#_reference_transaction)
 * [ ] [quarantine](https://git-scm.com/docs/git-receive-pack#_quarantine_environment)-aware hook execution
 
+### gix-encoding
+
+Strict character conversion using Git's encoding names and `iconv` mappings, implemented in Rust.
+
+* [x] a supported-encoding enum with parsing, canonical names, and distinct ASCII, Latin-1 and Windows mappings
+* [x] UTF-8, UTF-16, UTF-32, single-byte legacy encodings, and common East Asian encodings
+* [x] incremental conversion and bounded-buffer `Read` and `Write` adapters
+* [x] errors for malformed input and unrepresentable characters, without replacement characters
+* [x] Git baselines and in-process `iconv` benchmarks
+
 ### gix-filter
 
 Provide base-implementations for dealing with smudge and clean filters as well as filter processes, facilitating their development.

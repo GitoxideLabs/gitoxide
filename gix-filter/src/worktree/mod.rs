@@ -1,8 +1,6 @@
-//! Worktree encodings are powered by the `encoding_rs` crate, which has a narrower focus than the `iconv` library. Thus this implementation
-//! is inherently more limited but will handle the common cases.
-//!  
-//! Note that for encoding to legacy formats, [additional normalization steps](https://docs.rs/encoding_rs/0.8.32/encoding_rs/#preparing-text-for-the-encoders)
-//! can be taken, which we do not yet take unless there is specific examples or problems to solve.
+//! Convert worktree encodings using [`gix_encoding`], with Git's byte-order mark validation and optional round-trip checks.
+//!
+//! The buffer helpers retain allocations across calls. Streaming conversions are available through [`gix_encoding`].
 
 ///
 pub mod encoding;
