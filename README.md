@@ -131,6 +131,7 @@ exposing their APIs through public crates, may remain _major-zero crates_ indefi
   * [gix-bitmap](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-bitmap)
   * [gix-negotiate](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-negotiate)
   * [gix-filter](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-filter)
+  * [gix-encoding](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-encoding)
   * [gix-worktree-stream](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-worktree-stream)
   * [gix-archive](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-archive)
   * [gix-submodule](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-submodule)

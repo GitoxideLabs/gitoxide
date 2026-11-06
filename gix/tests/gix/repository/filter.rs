@@ -2,6 +2,41 @@ use gix_testtools::{Result, TestResult};
 use std::path::Path;
 
 #[test]
+fn encoding_feature_groups() -> TestResult {
+    use gix::filter::plumbing::worktree::{self, encode_to_git::RoundTripCheck};
+
+    for (label, text, expected) in [
+        ("ASCII", "A", b"A".as_slice()),
+        ("UTF-8", "é", b"\xc3\xa9".as_slice()),
+        ("UTF-16BE", "é", b"\0\xe9".as_slice()),
+        ("UTF-32BE", "é", b"\0\0\0\xe9".as_slice()),
+        ("ISO-8859-1", "é", b"\xe9".as_slice()),
+        #[cfg(feature = "encoding-western")]
+        ("WINDOWS-1252", "€", b"\x80".as_slice()),
+        #[cfg(feature = "encoding-western")]
+        ("ISO-8859-15", "€", b"\xa4".as_slice()),
+        #[cfg(feature = "encoding-legacy")]
+        ("WINDOWS-1251", "Ж", b"\xc6".as_slice()),
+        #[cfg(feature = "encoding-asian")]
+        ("SHIFT-JIS", "あ", b"\x82\xa0".as_slice()),
+        #[cfg(feature = "encoding-asian")]
+        ("EUC-KR", "가", b"\xb0\xa1".as_slice()),
+        #[cfg(feature = "encoding-asian")]
+        ("GBK", "中", b"\xd6\xd0".as_slice()),
+    ] {
+        let encoding = worktree::encoding::for_label(label)?;
+        let mut encoded = Vec::new();
+        worktree::encode_to_worktree(text.as_bytes(), encoding, &mut encoded)?;
+        assert_eq!(encoded, expected, "{label} produces the expected worktree bytes");
+
+        let mut decoded = Vec::new();
+        worktree::encode_to_git(&encoded, encoding, &mut decoded, RoundTripCheck::Fail)?;
+        assert_eq!(decoded, text.as_bytes(), "{label} round-trips through UTF-8");
+    }
+    Ok(())
+}
+
+#[test]
 fn pipeline_in_nonbare_repo_without_index() -> TestResult {
     let repo = named_subrepo_opts("make_basic_repo.sh", "all-untracked", Default::default())?;
     let _ = repo.filter_pipeline(None)?;

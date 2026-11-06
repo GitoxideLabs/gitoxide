@@ -1,0 +1,89 @@
+lints.workspace = true
+
+[package]
+name = "gix-encoding"
+version = "0.1.0"
+repository = "https://github.com/GitoxideLabs/gitoxide"
+license = "MIT OR Apache-2.0"
+description = "Strict, streaming character encodings for Git"
+authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
+edition = "2024"
+rust-version = "1.88"
+include = [
+    "/src/**/*",
+    "/build.rs",
+    "/examples/**/*",
+    "/LICENSE-*",
+    "/README.md",
+]
+
+[features]
+#! UTF-8/16/32 (including Git's BOM variants), ASCII and ISO-8859-1 are always available,
+#! even with `default-features = false`. Features are additive: disabled encodings are absent
+#! from [`Encoding`] and [`Encoding::ALL`], their labels are rejected, and detection only considers
+#! enabled encodings. Only enabled mapping tables are embedded, compressed and initialized lazily.
+
+## Enable the small Western repertoire in addition to the always-available encodings.
+default = ["western"]
+
+#! ### Encoding groups
+
+## Add `WINDOWS-1252` and `ISO-8859-15` (Latin-9).
+western = []
+## Add the remaining single-byte ISO-8859 and Windows code pages, Thai (`TIS-620`),
+## KOI8, Macintosh, IBM and `CP1125` encodings. Also enables `western`.
+legacy = ["western"]
+## Add Japanese (`SHIFT-JIS`, `CP932`, `EUC-JP`, `ISO-2022-JP`), Korean (`EUC-KR`, `CP949`)
+## and Chinese (`GB2312`, `GBK`, `GB18030`, `BIG5`, `BIG5-HKSCS`) encodings.
+## Combine with `legacy` for the complete supported repertoire.
+asian = []
+
+[dependencies]
+gix-error = { version = "^0.5.2", path = "../gix-error" }
+
+gix-zlib = { version = "^0.4.0", path = "../gix-zlib" }
+document-features = { version = "0.2.0", optional = true }
+
+[build-dependencies]
+gix-error = { version = "^0.5.2", path = "../gix-error" }
+gix-zlib = { version = "^0.4.0", path = "../gix-zlib" }
+
+[dev-dependencies]
+gix-testtools = { path = "../tests/tools", default-features = false, features = [
+    "sha1",
+] }
+
+[[bench]]
+name = "convert"
+harness = false
+required-features = ["legacy", "asian"]
+
+[[example]]
+name = "transcode"
+required-features = ["legacy", "asian"]
+
+[package.metadata.docs.rs]
+all-features = true
+features = ["document-features"]
+
+[package.metadata.qa]
+tests = [
+    { args = [
+    ] },
+    { args = [
+        "--no-default-features",
+    ] },
+    { args = [
+        "--no-default-features",
+        "--features",
+        "legacy",
+    ] },
+    { args = [
+        "--no-default-features",
+        "--features",
+        "asian",
+    ] },
+    { args = [
+        "--all-features",
+    ] },
+]

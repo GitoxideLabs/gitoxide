@@ -214,42 +214,22 @@ mod filter {
     pub type CheckRoundTripEncoding = keys::Any<validate::CheckRoundTripEncoding>;
 
     mod check_round_trip_encoding {
-        use crate::{
-            Result,
-            bstr::ByteSlice,
-            config::tree::{Key, core::CheckRoundTripEncoding},
-        };
+        use crate::{Result, bstr::BString, config::tree::core::CheckRoundTripEncoding};
 
         impl CheckRoundTripEncoding {
-            /// Convert `value` into a list of encodings, which are either space or coma separated. Fail if an encoding is unknown.
-            /// If `None`, the default is returned.
-            pub fn try_into_encodings(
-                &'static self,
-                value: Option<impl gix_utils::AsBStr>,
-            ) -> Result<Vec<&'static gix_filter::encoding::Encoding>> {
+            /// Split `value` on commas or Git whitespace, preserving the original encoding names.
+            ///
+            /// If `None`, return Git's `SHIFT-JIS` default. Unknown names are accepted like in Git:
+            /// they do not enable conversion, but merely select matching attributes for round-trip checks.
+            pub fn try_into_encodings(&'static self, value: Option<impl gix_utils::AsBStr>) -> Result<Vec<BString>> {
                 Ok(match value {
-                    None => vec![gix_filter::encoding::SHIFT_JIS],
-                    Some(value) => {
-                        let value = value.as_bstr();
-                        let mut out = Vec::new();
-                        for encoding in value
-                            .as_bstr()
-                            .split(|b| *b == b',' || *b == b' ')
-                            .filter(|e| !e.trim().is_empty())
-                        {
-                            out.push(
-                                gix_filter::encoding::Encoding::for_label(encoding.trim()).ok_or_else(|| {
-                                    gix_error::message!(
-                                        "The encoding named '{}' seen in key '{}={value}' is unsupported",
-                                        encoding.as_bstr(),
-                                        self.logical_name()
-                                    )
-                                    .validation_error()
-                                })?,
-                            );
-                        }
-                        out
-                    }
+                    None => vec!["SHIFT-JIS".into()],
+                    Some(value) => value
+                        .as_bstr()
+                        .split(|b| *b == b',' || gix_utils::git_is_space(*b))
+                        .filter(|label| !label.is_empty())
+                        .map(BString::from)
+                        .collect(),
                 })
             }
         }

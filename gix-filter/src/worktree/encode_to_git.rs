@@ -8,62 +8,42 @@ pub enum RoundTripCheck {
 }
 
 pub(crate) mod function {
-    use encoding_rs::DecoderResult;
-
-    use gix_error::{OptionExt, Result, ResultExt, bail, message, validation};
+    use gix_encoding::Encoding;
+    use gix_error::{Result, ResultExt, bail, validation};
 
     use super::RoundTripCheck;
 
-    /// Decode `src` according to `src_encoding` to `UTF-8` for storage in git and place it in `buf`.
-    /// Note that the encoding is always applied, there is no conditional even if `src_encoding` already is `UTF-8`.
-    pub fn encode_to_git(
-        src: &[u8],
-        src_encoding: &'static encoding_rs::Encoding,
-        buf: &mut Vec<u8>,
-        round_trip: RoundTripCheck,
-    ) -> Result {
-        let mut decoder = src_encoding.new_decoder_with_bom_removal();
-        let buf_len = decoder
-            .max_utf8_buffer_length_without_replacement(src.len())
-            .ok_or_raise(|| {
-                validation(format!(
-                    "Cannot convert input of {} bytes to UTF-8 without overflowing",
-                    src.len()
-                ))
-            })?;
+    /// Decode `src` according to `src_encoding` to UTF-8 for storage in Git, replacing `buf`.
+    ///
+    /// Git's worktree rules require BOMs for UTF-16/32 and prohibit them for explicit endian variants.
+    /// Empty input stays empty, including for encodings which normally require or produce a BOM.
+    /// Unlike the filter pipeline, this function validates UTF-8 even if `src_encoding` is UTF-8.
+    pub fn encode_to_git(src: &[u8], src_encoding: Encoding, buf: &mut Vec<u8>, round_trip: RoundTripCheck) -> Result {
         buf.clear();
-        // Bound decoding to the current estimate: the `String` decoder initializes all spare capacity,
-        // which may be much larger after a previous conversion.
-        buf.resize(buf_len, 0);
-        let (res, read, written) = decoder.decode_to_utf8_without_replacement(src, buf, true);
-        match res {
-            DecoderResult::InputEmpty => {
-                assert_eq!(read, src.len(), "input buffer should be fully consumed");
-            }
-            DecoderResult::OutputFull => {
-                unreachable!("we assure that the output buffer is big enough as per the encoder's estimate")
-            }
-            DecoderResult::Malformed(_, _) => {
+        if src.is_empty() {
+            return Ok(());
+        }
+        let utf16_bom = src.starts_with(b"\xff\xfe") || src.starts_with(b"\xfe\xff");
+        let utf32_bom = src.starts_with(b"\xff\xfe\0\0") || src.starts_with(b"\0\0\xfe\xff");
+        if matches!(src_encoding, Encoding::Utf16Le | Encoding::Utf16Be) && utf16_bom
+            || matches!(src_encoding, Encoding::Utf32Le | Encoding::Utf32Be) && utf32_bom
+        {
+            bail!(validation(format!("BOM is prohibited for '{}'", src_encoding.name())));
+        }
+        if src_encoding == Encoding::Utf16 && !utf16_bom || src_encoding == Encoding::Utf32 && !utf32_bom {
+            bail!(validation(format!("BOM is required for '{}'", src_encoding.name())));
+        }
+        gix_encoding::convert_to(src, src_encoding, Encoding::Utf8, buf)
+            .or_raise(|| validation(format!("Could not decode input as '{}'", src_encoding.name())))?;
+        if matches!(round_trip, RoundTripCheck::Fail) {
+            let original = gix_encoding::convert(buf, Encoding::Utf8, src_encoding)
+                .or_raise(|| validation(format!("Could not re-encode input as '{}'", src_encoding.name())))?;
+            if original != src {
                 bail!(validation(format!(
-                    "The input was malformed and could not be decoded as '{}'",
+                    "Encoding from '{}' to 'UTF-8' and back is not the same",
                     src_encoding.name()
                 )));
             }
-        }
-
-        buf.truncate(written);
-        match round_trip {
-            RoundTripCheck::Fail => {
-                let decoded = std::str::from_utf8(buf).or_raise(|| message("encoding-rs produced invalid UTF-8"))?;
-                let (should_equal_src, _actual_encoding, _had_errors) = src_encoding.encode(decoded);
-                if should_equal_src != src {
-                    bail!(validation(format!(
-                        "Encoding from '{}' to 'UTF-8' and back is not the same",
-                        src_encoding.name()
-                    )));
-                }
-            }
-            RoundTripCheck::Skip => {}
         }
         Ok(())
     }

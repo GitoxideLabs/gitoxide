@@ -6,6 +6,7 @@ diff-rewrites-fixture = { max-threads = 1 }
 merge-tree-fixture = { max-threads = 1 }
 merge-cartesian-fixture = { max-threads = 1 }
 pack-fixtures = { max-threads = 1 }
+macros-trybuild = { max-threads = 1 }
 
 [profile.default]
 # Higher concurrency scaled poorly on macOS.
@@ -28,6 +29,12 @@ filter = '''
 | (package(=gix-pathspec) & test(=search::directories))
 '''
 priority = 100
+
+[[profile.default.overrides]]
+# Trybuild's best-effort lock can let these tests overwrite their shared Cargo project.
+platform = 'cfg(windows)'
+filter = 'package(=gix-macros) & (test(=momo::ux) | test(=unstable::annotation_diagnostics))'
+test-group = 'macros-trybuild'
 
 [[profile.default.overrides]]
 # These two gix tests share make_diff_repo.sh.
