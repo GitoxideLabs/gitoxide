@@ -88,13 +88,24 @@ pub(super) fn resources(
     name: gix::refs::FullName,
 ) -> Result<Vec<(gix::refs::FullName, gix::refs::Target)>> {
     let stash = stash_reference(name.as_bstr())?;
+    let root = root_reference(name.as_bstr())?;
     let mut out = Vec::new();
-    for name in [name, stash] {
+    for name in [name, stash, root] {
         if let Some(reference) = repo.try_find_reference(name.as_ref())? {
             out.push((name, reference.target().into_owned()));
         }
     }
     Ok(out)
+}
+
+pub(super) fn root_reference(review: &BStr) -> Result<gix::refs::FullName> {
+    let number = history::review_number(review).ok_or_raise(|| message("review reference has no numeric identity"))?;
+    gix::refs::FullName::try_from(format!(
+        "{}{}",
+        String::from_utf8_lossy(history::REVIEW_ROOT_PREFIX),
+        number.to_str_lossy()
+    ))
+    .or_raise(|| message("generated an invalid review root reference"))
 }
 
 pub(super) fn stash_reference(review: &BStr) -> Result<gix::refs::FullName> {
@@ -228,13 +239,24 @@ pub(crate) fn start(
         .write_object(&commit)
         .or_raise(|| message("could not write review commit"))?
         .detach();
+    let create_ref = repo.edit_references([
+        gix::refs::transaction::RefEdit::update(
+            name.clone(),
+            tip,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "tix review",
+        ),
+        gix::refs::transaction::RefEdit::update(
+            root_reference(name.as_bstr())?,
+            id,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "tix review root",
+        ),
+    ]);
     drop(repo);
-
-    let review_name = name.as_bstr().to_str_lossy();
-    let create_ref = git(&workdir, ["update-ref", review_name.as_ref(), &tip.to_string()]);
     if let Err(err) = create_ref {
         remove_new_departure_pin(repository_path, bare, departure_pin.as_ref())?;
-        return Err(err.and_raise(message("could not create review reference")));
+        return Err(err.and_raise(message("could not create review references")));
     }
 
     let checkout_error = (|| {
@@ -403,7 +425,11 @@ fn next_reference(repo: &gix::Repository) -> Result<gix::refs::FullName> {
             gix::refs::FullName::try_from(format!("{}{number}", String::from_utf8_lossy(history::REVIEW_PREFIX)))
                 .or_raise(|| message("generated an invalid review reference"))?;
         let return_pin = return_pin_reference(name.as_bstr())?;
-        if repo.try_find_reference(name.as_ref())?.is_none() && repo.try_find_reference(return_pin.as_ref())?.is_none()
+        if repo.try_find_reference(name.as_ref())?.is_none()
+            && repo.try_find_reference(return_pin.as_ref())?.is_none()
+            && repo
+                .try_find_reference(root_reference(name.as_bstr())?.as_ref())?
+                .is_none()
         {
             return Ok(name);
         }
@@ -508,6 +534,12 @@ mod tests {
         crate::change_id::inherit(&repo, &mut review, started.commit)?;
         crate::patch_id::refresh(&repo, &mut review)?;
         started.commit = repo.write_object(&review)?.detach();
+        repo.reference(
+            root_reference(started.reference.as_bstr())?,
+            started.commit,
+            gix::refs::transaction::PreviousValue::Any,
+            "update fixture review root",
+        )?;
         run(
             fixture.path(),
             &["checkout", "-q", "--detach", "--force", &started.commit.to_string()],
@@ -769,6 +801,12 @@ mod tests {
             let mut review = repo.find_commit(started.commit)?.decode()?.into_owned()?;
             review.parents = [prefix[1]].into_iter().collect();
             started.commit = repo.write_object(&review)?.detach();
+            repo.reference(
+                root_reference(started.reference.as_bstr())?,
+                started.commit,
+                gix::refs::transaction::PreviousValue::Any,
+                "update fixture review root",
+            )?;
             for (number, commit_id) in prefix.iter().enumerate() {
                 repo.reference(
                     format!("refs/heads/extra-{number}"),
@@ -960,6 +998,191 @@ mod tests {
     }
 
     #[test]
+    fn unpinning_after_leaving_inserted_review_ancestry_is_undoable_and_keeps_review_available() -> gix_testtools::Result
+    {
+        use super::super::{delete, time_travel, undo};
+
+        for cancel in [false, true] {
+            let (fixture, started, prefix) = review_with_prefix(1)?;
+            let repo = crate::test_repository::open(fixture.path())?;
+            let graph = super::super::loaded_view_graph(&repo)?;
+            time_travel::perform(
+                fixture.path(),
+                false,
+                prefix[0],
+                &graph,
+                &[started.commit],
+                &[],
+                time_travel::Options::default(),
+            )?;
+
+            assert!(
+                history::removable_pins(&repo)?
+                    .iter()
+                    .all(|pin| pin.id != started.commit),
+                "the protected root makes a time-travel pin at the review redundant"
+            );
+            time_travel::toggle_pin_reporting(fixture.path(), false, started.commit)?;
+            let before = state_without_undo(fixture.path())?;
+            let (toggle, changes) = time_travel::toggle_pin_reporting(fixture.path(), false, started.commit)?;
+            assert!(
+                matches!(toggle, time_travel::PinToggle::Removed(_)),
+                "the review pin is removed"
+            );
+            undo::record(&repo, "unpin", &changes)?.ok_or_raise(|| message("review pin removal is journalled"))?;
+            let after = state_without_undo(fixture.path())?;
+            for revisions in [Vec::new(), vec![prefix[0].to_string().into()]] {
+                let graph = super::super::loaded_explicit_view_graph(&repo, &revisions, &[])?;
+                assert!(
+                    graph.is_in_edit_scope(started.commit),
+                    "the unpinned review remains visible"
+                );
+            }
+            drop(repo);
+
+            let repo = crate::test_repository::open(fixture.path())?;
+            undo::plan_undo(&repo)?
+                .ok_or_raise(|| message("unpin is undoable after reopening"))?
+                .apply(&repo)?;
+            assert_eq!(
+                state_without_undo(fixture.path())?,
+                before,
+                "undo restores the pin and exact checkout"
+            );
+            undo::plan_redo(&repo)?
+                .ok_or_raise(|| message("unpin can be redone"))?
+                .apply(&repo)?;
+            assert_eq!(state_without_undo(fixture.path())?, after, "redo removes only the pin");
+            let graph = super::super::loaded_view_graph(&repo)?;
+            time_travel::perform(
+                fixture.path(),
+                false,
+                started.commit,
+                &graph,
+                &[started.commit],
+                &[],
+                time_travel::Options::default(),
+            )?;
+            let graph = super::super::loaded_view_graph(&repo)?;
+            if cancel {
+                let deleted = delete::perform(repo.clone(), &graph, started.commit)?;
+                time_travel::checkout_review_return_reporting(
+                    fixture.path(),
+                    false,
+                    deleted
+                        .review_return
+                        .as_ref()
+                        .ok_or_raise(|| message("cancellation retains the return path"))?,
+                    &[],
+                    false,
+                )?;
+            } else {
+                assert!(
+                    matches!(finish(repo.clone(), &graph, started.commit, None)?, Finish::Complete(_)),
+                    "the unpinned review can still finish"
+                );
+            }
+            assert!(
+                history::all_reviews(&repo)?.is_empty(),
+                "ending the review releases its identity"
+            );
+            assert!(
+                resources(&repo, started.reference)?.is_empty(),
+                "ending the review releases every anchor"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn pin_undo_preserves_staged_and_unstaged_review_changes() -> gix_testtools::Result {
+        use super::super::{time_travel, undo};
+
+        let (fixture, started, _) = review_with_prefix(1)?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        std::fs::write(fixture.path().join("review-fix"), "staged review fix\n")?;
+        run(fixture.path(), &["add", "review-fix"])?;
+        std::fs::write(fixture.path().join("review-fix"), "unstaged review fix\n")?;
+        let before = state_without_undo(fixture.path())?;
+        let (_, changes) = time_travel::toggle_pin_reporting(fixture.path(), false, started.commit)?;
+        undo::record(&repo, "pin", &changes)?.ok_or_raise(|| message("pin creation is journalled during review"))?;
+        let pinned = state_without_undo(fixture.path())?;
+        undo::plan_undo(&repo)?
+            .ok_or_raise(|| message("pin creation can be undone"))?
+            .apply(&repo)?;
+        assert_eq!(
+            state_without_undo(fixture.path())?,
+            before,
+            "undo leaves staged and unstaged review data intact"
+        );
+        undo::plan_redo(&repo)?
+            .ok_or_raise(|| message("pin creation can be redone"))?
+            .apply(&repo)?;
+        assert_eq!(state_without_undo(fixture.path())?, pinned, "redo changes only the pin");
+
+        let (_, changes) = time_travel::toggle_pin_reporting(fixture.path(), false, started.commit)?;
+        undo::record(&repo, "unpin", &changes)?.ok_or_raise(|| message("pin removal is journalled during review"))?;
+        undo::plan_undo(&repo)?
+            .ok_or_raise(|| message("pin removal can be undone"))?
+            .apply(&repo)?;
+        assert_eq!(
+            state_without_undo(fixture.path())?,
+            pinned,
+            "undoing unpin preserves the dirty review checkout"
+        );
+        undo::plan_redo(&repo)?
+            .ok_or_raise(|| message("pin removal can be redone"))?
+            .apply(&repo)?;
+        assert_eq!(
+            state_without_undo(fixture.path())?,
+            before,
+            "redoing unpin preserves all review data"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn deleting_the_last_review_successor_keeps_the_review_root_available() -> gix_testtools::Result {
+        use super::super::{create, delete, time_travel};
+
+        let (fixture, started, prefix) = review_with_prefix(1)?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let graph = super::super::loaded_view_graph(&repo)?;
+        let prepared = create::prepare_empty(repo.clone(), Some(started.commit))?;
+        let leaf_commit_id = create::apply_message_reporting(repo.clone(), &graph, prepared, b"review successor\n")?
+            .selected
+            .ok_or_raise(|| message("creating a review successor selects it"))?;
+        let graph = super::super::loaded_view_graph(&repo)?;
+        delete::perform(repo.clone(), &graph, leaf_commit_id)?;
+        assert_eq!(
+            repo.head_id()?,
+            started.commit,
+            "deleting the last successor returns to the review root"
+        );
+        let graph = super::super::loaded_view_graph(&repo)?;
+        time_travel::perform(
+            fixture.path(),
+            false,
+            prefix[0],
+            &graph,
+            &[started.commit],
+            &[],
+            time_travel::Options::default(),
+        )?;
+        if history::removable_pins(&repo)?
+            .iter()
+            .any(|pin| pin.id == started.commit)
+        {
+            time_travel::toggle_pin_reporting(fixture.path(), false, started.commit)?;
+        }
+        assert!(
+            super::super::loaded_view_graph(&repo)?.is_in_edit_scope(started.commit),
+            "deleting the last successor and removing its pin cannot strand the review"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn editing_an_undone_review_discards_redo_and_finishing_can_be_retried() -> gix_testtools::Result {
         use super::super::{head, undo};
 
@@ -1107,6 +1330,12 @@ mod tests {
         )?;
         let amended_commit = repo.find_commit(amended)?.decode()?.into_owned()?;
         assert!(is_review(&amended_commit));
+        assert_eq!(
+            repo.find_reference(root_reference(started.reference.as_bstr())?.as_ref())?
+                .id(),
+            amended,
+            "the protected root follows review amendments"
+        );
         assert_eq!(
             return_to(&amended_commit)?.expect("the review records a return"),
             pins[0].name,
@@ -1266,6 +1495,10 @@ mod tests {
         let repo = crate::test_repository::open(fixture.path())?;
         assert_eq!(repo.head_id()?, departure, "the failed checkout leaves HEAD untouched");
         assert_eq!(repo.find_reference(started.reference.as_ref())?.id(), tip);
+        assert!(
+            super::super::loaded_view_graph(&repo)?.is_in_edit_scope(started.commit),
+            "the prepared review remains reachable even when checkout is blocked"
+        );
         let commit = repo.find_commit(started.commit)?.decode()?.into_owned()?;
         let return_name = return_to(&commit)?.expect("the prepared review records its return pin");
         let mut return_ref = repo.find_reference(return_name.as_ref())?;
@@ -1452,6 +1685,12 @@ mod tests {
             .extra_headers
             .push(("tix-rebase-parent".into(), base.to_string().into()));
         started.commit = repo.write_object(&review)?.detach();
+        repo.reference(
+            root_reference(started.reference.as_bstr())?,
+            started.commit,
+            gix::refs::transaction::PreviousValue::Any,
+            "update fixture review root",
+        )?;
         run(
             fixture.path(),
             &["update-ref", "--no-deref", "HEAD", &started.commit.to_string()],
