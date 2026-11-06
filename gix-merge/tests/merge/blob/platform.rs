@@ -304,6 +304,114 @@ theirs
     }
 
     #[test]
+    fn external_driver_preserves_clean_edits_and_conflicts_with_builtin_resolution_configured() -> TestResult {
+        let conflicting = [
+            "items:
+  - base
+field: base
+",
+            "items:
+  - base
+  - ours
+field: ours
+",
+            "items:
+  - base
+  - theirs
+field: theirs
+",
+        ];
+        // A semantic driver can combine same-position list additions while leaving a separate field conflicted.
+        let driver_conflict = "items:
+  - base
+  - ours
+  - theirs
+<<< ours
+field: ours
+===
+field: theirs
+>>> theirs
+";
+        for (inputs, exit_code, conflict, expected, expected_resolution) in [
+            (
+                conflicting,
+                1,
+                builtin_driver::text::Conflict::ResolveWithOurs,
+                driver_conflict,
+                Resolution::Conflict,
+            ),
+            (
+                conflicting,
+                1,
+                builtin_driver::text::Conflict::ResolveWithTheirs,
+                driver_conflict,
+                Resolution::Conflict,
+            ),
+            (
+                conflicting,
+                1,
+                builtin_driver::text::Conflict::ResolveWithUnion,
+                driver_conflict,
+                Resolution::Conflict,
+            ),
+            (
+                conflicting,
+                0,
+                builtin_driver::text::Conflict::ResolveWithOurs,
+                "from driver\n",
+                Resolution::Complete,
+            ),
+            (
+                ["b\n", "ours\n", "b\n"],
+                1,
+                builtin_driver::text::Conflict::ResolveWithOurs,
+                "from driver\n",
+                Resolution::Conflict,
+            ),
+            (
+                ["base\0", "ours\0", "theirs\0"],
+                1,
+                builtin_driver::text::Conflict::ResolveWithUnion,
+                "from driver\n",
+                Resolution::Conflict,
+            ),
+        ] {
+            let mut platform = new_platform(
+                [gix_merge::blob::Driver {
+                    name: "b".into(),
+                    command: format!("printf '%s' '{expected}' >\"%A\"; exit {exit_code}").into(),
+                    ..Default::default()
+                }],
+                pipeline::Mode::ToGit,
+            );
+            let db = object_db();
+            for (content, kind) in inputs.into_iter().zip([
+                ResourceKind::CommonAncestorOrBase,
+                ResourceKind::CurrentOrOurs,
+                ResourceKind::OtherOrTheirs,
+            ]) {
+                let blob_id = insert(&db, content)?;
+                platform.set_resource(blob_id, EntryKind::Blob, "b".into(), kind, &db)?;
+            }
+            let mut platform_ref = platform.prepare_merge(&db, Default::default())?;
+            platform_ref.options.text.conflict = conflict;
+            let mut buf = Vec::new();
+            let res = platform_ref.merge(&mut buf, default_labels(), &Default::default())?;
+            assert_eq!(
+                buf.as_bstr(),
+                expected,
+                "{conflict:?} with driver exit code {exit_code}: preserve the driver's clean edits and remaining conflicts"
+            );
+            assert_eq!(
+                res,
+                (Pick::Buffer, expected_resolution),
+                "{conflict:?}: builtin resolution options must not override the external driver's conflict status"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn external_driver_failure_is_unclassified() -> TestResult {
         for exit_code in [129, 255] {
             let mut platform = new_platform(
