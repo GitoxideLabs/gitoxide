@@ -1908,6 +1908,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gix-encoding"
+version = "0.1.0"
+dependencies = [
+ "document-features",
+ "gix-error",
+ "gix-testtools",
+ "gix-zlib",
+]
+
+[[package]]
 name = "gix-error"
 version = "0.5.2"
 dependencies = [

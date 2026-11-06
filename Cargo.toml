@@ -334,6 +334,7 @@ members = [
     "gix-commitgraph",
     "gix-chunk",
     "gix-error",
+    "gix-encoding",
     "gix-quote",
     "gix-object",
     "gix-glob",
