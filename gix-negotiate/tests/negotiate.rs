@@ -38,6 +38,7 @@ mod baseline;
 
 #[test]
 fn missing_parents_are_skipped_like_shallow_boundaries() -> TestResult {
+    use gix_negotiate::Algorithm;
     use gix_object::FindExt;
     struct MissingParent<'a> {
         odb: &'a gix_odb::Handle,
@@ -67,21 +68,26 @@ fn missing_parents_are_skipped_like_shallow_boundaries() -> TestResult {
         .parents()
         .next()
         .expect("c7 has a parent");
-    let mut graph = gix_revwalk::Graph::new(
-        MissingParent {
-            odb: &odb,
-            missing_commit_id,
-        },
-        None,
-    );
-    let mut negotiator = gix_negotiate::Algorithm::Skipping.into_negotiator();
-    negotiator.add_tip(tip_commit_id, &mut graph)?;
-    let haves = std::iter::from_fn(|| negotiator.next_have(&mut graph)).collect::<Result<Vec<_>, _>>()?;
-    assert_eq!(
-        haves,
-        [tip_commit_id],
-        "a parent missing beyond a shallow boundary is skipped, not traversed"
-    );
+    for algorithm in [Algorithm::Consecutive, Algorithm::Skipping, Algorithm::Noop] {
+        let mut graph = gix_revwalk::Graph::new(
+            MissingParent {
+                odb: &odb,
+                missing_commit_id,
+            },
+            None,
+        );
+        let mut negotiator = algorithm.into_negotiator();
+        negotiator.add_tip(tip_commit_id, &mut graph)?;
+        let haves = std::iter::from_fn(|| negotiator.next_have(&mut graph)).collect::<Result<Vec<_>, _>>()?;
+        let expected: &[_] = match algorithm {
+            Algorithm::Consecutive | Algorithm::Skipping => &[tip_commit_id],
+            Algorithm::Noop => &[],
+        };
+        assert_eq!(
+            haves, expected,
+            "{algorithm}: a missing parent is not traversed; only walking negotiators send the tip"
+        );
+    }
     Ok(())
 }
 

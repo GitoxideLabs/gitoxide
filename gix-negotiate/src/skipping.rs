@@ -19,8 +19,10 @@ impl Default for Algorithm {
 }
 
 impl Algorithm {
-    /// Add `id` to our priority queue and *add* `flags` to it.
-    fn add_to_queue(&mut self, id: ObjectId, mark: Flags, graph: &mut crate::Graph<'_, '_>) -> Result {
+    /// Add `id` to our priority queue and *add* `mark` to it, returning whether the commit was queued.
+    ///
+    /// Returns `false` if the commit is missing, as can happen for parents beyond a shallow boundary.
+    fn add_to_queue(&mut self, id: ObjectId, mark: Flags, graph: &mut crate::Graph<'_, '_>) -> Result<bool> {
         let commit = graph.get_or_insert_commit(id, |entry| {
             entry.flags |= mark | Flags::SEEN;
         })?;
@@ -29,8 +31,10 @@ impl Algorithm {
             if !mark.contains(Flags::COMMON) {
                 self.non_common_revs += 1;
             }
+            Ok(true)
+        } else {
+            Ok(false)
         }
-        Ok(())
     }
 
     fn mark_common(&mut self, id: ObjectId, graph: &mut crate::Graph<'_, '_>) -> Result {
@@ -85,12 +89,8 @@ impl Algorithm {
             if parent.data.flags.contains(Flags::POPPED) {
                 return Ok(false);
             }
-        } else {
-            self.add_to_queue(parent_id, Flags::default(), graph)?;
-            // Like `git`, ignore parents beyond a shallow boundary.
-            if !graph.contains(&parent_id) {
-                return Ok(false);
-            }
+        } else if !self.add_to_queue(parent_id, Flags::default(), graph)? {
+            return Ok(false);
         }
         if entry.flags.intersects(Flags::COMMON | Flags::ADVERTISED) {
             self.mark_common(parent_id, graph)?;
@@ -119,7 +119,7 @@ impl Negotiator for Algorithm {
         {
             return Ok(());
         }
-        self.add_to_queue(id, Flags::ADVERTISED, graph)
+        self.add_to_queue(id, Flags::ADVERTISED, graph).map(|_| ())
     }
 
     fn add_tip(&mut self, id: ObjectId, graph: &mut crate::Graph<'_, '_>) -> Result<()> {
@@ -129,7 +129,7 @@ impl Negotiator for Algorithm {
         {
             return Ok(());
         }
-        self.add_to_queue(id, Flags::default(), graph)
+        self.add_to_queue(id, Flags::default(), graph).map(|_| ())
     }
 
     fn next_have(&mut self, graph: &mut crate::Graph<'_, '_>) -> Option<Result<ObjectId>> {
