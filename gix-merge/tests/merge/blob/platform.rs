@@ -304,6 +304,81 @@ theirs
     }
 
     #[test]
+    fn external_driver_conflicts_are_resolved_by_builtin_text_driver_if_configured() -> TestResult {
+        let conflicting = ["base\n", "ours\n", "theirs\n"];
+        for (inputs, exit_code, conflict, expected, expected_resolution) in [
+            (
+                conflicting,
+                1,
+                builtin_driver::text::Conflict::ResolveWithOurs,
+                "ours\n",
+                Resolution::CompleteWithAutoResolvedConflict,
+            ),
+            (
+                conflicting,
+                1,
+                builtin_driver::text::Conflict::ResolveWithTheirs,
+                "theirs\n",
+                Resolution::CompleteWithAutoResolvedConflict,
+            ),
+            (
+                conflicting,
+                0,
+                builtin_driver::text::Conflict::ResolveWithOurs,
+                "from driver\n",
+                Resolution::Complete,
+            ),
+            (
+                ["b\n", "ours\n", "b\n"],
+                1,
+                builtin_driver::text::Conflict::ResolveWithOurs,
+                "ours\n",
+                Resolution::CompleteWithAutoResolvedConflict,
+            ),
+            (
+                ["base\0", "ours\0", "theirs\0"],
+                1,
+                builtin_driver::text::Conflict::ResolveWithUnion,
+                "from driver\n",
+                Resolution::Conflict,
+            ),
+        ] {
+            let mut platform = new_platform(
+                [gix_merge::blob::Driver {
+                    name: "b".into(),
+                    command: format!("printf 'from driver\\n' >\"%A\"; exit {exit_code}").into(),
+                    ..Default::default()
+                }],
+                pipeline::Mode::ToGit,
+            );
+            let db = object_db();
+            for (content, kind) in inputs.into_iter().zip([
+                ResourceKind::CommonAncestorOrBase,
+                ResourceKind::CurrentOrOurs,
+                ResourceKind::OtherOrTheirs,
+            ]) {
+                let blob_id = insert(&db, content)?;
+                platform.set_resource(blob_id, EntryKind::Blob, "b".into(), kind, &db)?;
+            }
+            let mut platform_ref = platform.prepare_merge(&db, Default::default())?;
+            platform_ref.options.text.conflict = conflict;
+            let mut buf = Vec::new();
+            let res = platform_ref.merge(&mut buf, default_labels(), &Default::default())?;
+            assert_eq!(
+                res,
+                (Pick::Buffer, expected_resolution),
+                "{conflict:?}: a driver conflict is resolved like the builtin text driver would, a clean merge is kept"
+            );
+            assert_eq!(
+                buf.as_bstr(),
+                expected,
+                "{conflict:?} with driver exit code {exit_code}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn external_driver_failure_is_unclassified() -> TestResult {
         for exit_code in [129, 255] {
             let mut platform = new_platform(

@@ -1,7 +1,7 @@
 use gix_error::{Result, bail};
 use std::{io::Read, path::PathBuf};
 
-use crate::blob::{PlatformRef, Resolution, builtin_driver};
+use crate::blob::{BuiltinDriver, PlatformRef, Resolution, builtin_driver};
 
 /// Options for the use in the [`PlatformRef::merge()`] call.
 #[derive(Default, Copy, Clone, Debug, Eq, PartialEq)]
@@ -388,6 +388,8 @@ impl<'parent> PlatformRef<'parent> {
     ///
     /// Like Git, an external merge driver exiting with a status from 1 to 128 has left conflicts in its result,
     /// which is then returned with [`Resolution::Conflict`].
+    /// If the [text options](Options::text) resolve conflicts, the builtin text driver resolves them instead,
+    /// unless it can't either.
     ///
     /// External merge driver launch errors provide [metadata](gix_error::Error::metadata) with `program` (Path),
     /// the invoked program name or path, and `command` (String), the prepared command's debug representation,
@@ -423,6 +425,18 @@ impl<'parent> PlatformRef<'parent> {
                         bail!(failure);
                     }
                 };
+                if resolution == Resolution::Conflict
+                    && !matches!(self.options.text.conflict, builtin_driver::text::Conflict::Keep { .. })
+                {
+                    let mut input = imara_diff::InternedInput::new(&[][..], &[]);
+                    out.clear();
+                    match self.builtin_merge(BuiltinDriver::Text, out, &mut input, labels) {
+                        (_, Resolution::Conflict) => {}
+                        (pick, Resolution::Complete | Resolution::CompleteWithAutoResolvedConflict) => {
+                            return Ok((pick, Resolution::CompleteWithAutoResolvedConflict));
+                        }
+                    }
+                }
                 out.clear();
                 cmd.open_result_file()
                     .or_raise(|| message("IO failed when dealing with merge-driver output"))?
