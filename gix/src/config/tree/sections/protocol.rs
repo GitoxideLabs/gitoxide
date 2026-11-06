@@ -111,10 +111,12 @@ mod key_impls {
     }
 }
 
-mod validate {
+/// Validation for `protocol` configuration keys.
+pub mod validate {
     use crate::{Result, bstr::BStr, config::tree::keys};
     use gix_error::message;
 
+    /// Validate values for [`super::Allow`].
     #[derive(Clone, Copy)]
     pub struct Allow;
     impl keys::Validate for Allow {
@@ -125,6 +127,7 @@ mod validate {
         }
     }
 
+    /// Validate values for [`super::Version`].
     #[derive(Clone, Copy)]
     pub struct Version;
     impl keys::Validate for Version {

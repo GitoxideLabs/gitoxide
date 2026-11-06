@@ -55,9 +55,11 @@ impl Section for Pack {
     }
 }
 
-mod validate {
+/// Validation for `pack` configuration keys.
+pub mod validate {
     use crate::{Result, bstr::BStr, config::tree::keys};
 
+    /// Validate values for [`super::IndexVersion`].
     #[derive(Clone, Copy)]
     pub struct IndexVersion;
     impl keys::Validate for IndexVersion {

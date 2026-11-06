@@ -57,7 +57,10 @@ pub use in_parallel::{
 
 mod serial;
 #[cfg(not(feature = "parallel"))]
-pub use serial::{Scope, build_thread, in_parallel, in_parallel_with_finalize, in_parallel_with_slice, join, threads};
+pub use serial::{
+    Scope, ScopedJoinHandle, ThreadBuilder, build_thread, in_parallel, in_parallel_with_finalize,
+    in_parallel_with_slice, join, threads,
+};
 
 mod in_order;
 pub use in_order::{InOrderIter, SequenceId};

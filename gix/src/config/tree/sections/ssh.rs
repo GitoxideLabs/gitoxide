@@ -56,9 +56,12 @@ impl Section for Ssh {
     }
 }
 
-mod validate {
+/// Validation for `ssh` configuration keys.
+pub mod validate {
     use crate::{Result, bstr::BStr, config::tree::keys};
 
+    /// Validate values for [`super::Variant`].
+    #[derive(Clone, Copy)]
     pub struct Variant;
     impl keys::Validate for Variant {
         fn validate(&self, _value: &BStr) -> Result {

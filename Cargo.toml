@@ -410,6 +410,7 @@ pkg-url = "{ repo }/releases/download/v{ version }/gitoxide-max-pure-v{ version 
 bin-dir = "gitoxide-max-pure-v{ version }-{ target }/{ bin }{ binary-ext }"
 
 [workspace.lints.rust]
+unnameable_types = "warn"
 # TODO: enable this
 # unused_qualifications = "warn"
 

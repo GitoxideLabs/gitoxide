@@ -89,7 +89,7 @@ mod mailmap;
 
 #[derive(Copy, Clone, Default)]
 pub struct Merge;
-mod merge;
+pub mod merge;
 
 /// The `notes` top-level section.
 #[derive(Copy, Clone, Default)]

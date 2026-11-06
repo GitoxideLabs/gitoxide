@@ -126,8 +126,11 @@ pub mod symlink {
     include!("symlink.rs");
 }
 
-#[cfg_attr(not(feature = "unstable"), allow(dead_code))]
-mod precompose;
+/// Generic directory-entry and traversal wrappers with optional Unicode precomposition.
+#[gix_macros::unstable(since = "2026-09-30")]
+pub mod precompose {
+    include!("precompose.rs");
+}
 
 /// Directory entries with optional Unicode precomposition.
 #[gix_macros::unstable(since = "2024-01-17")]

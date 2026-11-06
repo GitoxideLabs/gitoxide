@@ -54,11 +54,13 @@ impl Section for Extensions {
     }
 }
 
-mod validate {
+/// Validation for `extensions` configuration keys.
+pub mod validate {
     use gix_error::message;
 
     use crate::{Result, bstr::BStr, config::tree::keys};
 
+    /// Validate values for [`super::ObjectFormat`].
     #[derive(Clone, Copy)]
     pub struct ObjectFormat;
 

@@ -79,7 +79,7 @@ macro_rules! impl_partial_eq_str {
 
 #[path = "oid.rs"]
 mod borrowed;
-pub use borrowed::oid;
+pub use borrowed::{HexDisplay, oid};
 
 /// Hash functions and hash utilities
 pub mod hasher;

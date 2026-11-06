@@ -193,13 +193,15 @@ mod renames {
     }
 }
 
-pub(super) mod validate {
+/// Validation for `diff` configuration keys.
+pub mod validate {
     use crate::{
         Result,
         bstr::BStr,
         config::tree::{Diff, keys},
     };
 
+    /// Validate values for [`super::Ignore`].
     #[derive(Copy, Clone)]
     pub struct Ignore;
     impl keys::Validate for Ignore {
@@ -211,6 +213,7 @@ pub(super) mod validate {
         }
     }
 
+    /// Validate values for [`super::Algorithm`].
     #[derive(Copy, Clone)]
     pub struct Algorithm;
     impl keys::Validate for Algorithm {
@@ -220,6 +223,7 @@ pub(super) mod validate {
         }
     }
 
+    /// Validate values for [`super::Renames`].
     #[derive(Copy, Clone)]
     pub struct Renames;
     impl keys::Validate for Renames {
@@ -230,6 +234,7 @@ pub(super) mod validate {
         }
     }
 
+    /// Validate values for [`super::Binary`].
     #[derive(Copy, Clone)]
     pub struct Binary;
     impl keys::Validate for Binary {

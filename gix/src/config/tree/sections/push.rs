@@ -48,7 +48,9 @@ mod default {
     }
 }
 
-mod validate {
+/// Validation for `push` configuration keys.
+pub mod validate {
+    /// Validate values for [`super::Default`].
     #[derive(Clone, Copy)]
     pub struct Default;
 

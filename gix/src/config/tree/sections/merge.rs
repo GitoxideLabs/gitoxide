@@ -143,7 +143,8 @@ mod conflict_style {
 }
 
 #[cfg(feature = "merge")]
-mod validate {
+/// Validation for `merge` configuration keys.
+pub mod validate {
 
     use crate::{
         Result,
@@ -151,6 +152,7 @@ mod validate {
         config::tree::{Merge, keys},
     };
 
+    /// Validate values for [`super::DirectoryRenames`].
     #[derive(Clone, Copy)]
     pub struct DirectoryRenames;
     impl keys::Validate for DirectoryRenames {
@@ -161,6 +163,7 @@ mod validate {
         }
     }
 
+    /// Validate values for [`super::ConflictStyle`].
     #[derive(Clone, Copy)]
     pub struct ConflictStyle;
     impl keys::Validate for ConflictStyle {

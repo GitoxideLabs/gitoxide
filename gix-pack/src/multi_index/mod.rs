@@ -17,6 +17,19 @@ pub type PackIndex = u32;
 /// The type for referring to indices of an entry within the index file.
 pub type EntryIndex = u32;
 
+/// Represents an entry within a multi index file, effectively mapping object [`IDs`][gix_hash::ObjectId] to pack data
+/// files and the offset within.
+#[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Entry {
+    /// The ID of the object.
+    pub oid: gix_hash::ObjectId,
+    /// The offset to the object's header in the pack data file.
+    pub pack_offset: crate::data::Offset,
+    /// The index of the pack matching our [`File::index_names()`] slice.
+    pub pack_index: PackIndex,
+}
+
 /// A representation of an index file for multiple packs at the same time, typically stored in a file
 /// named 'multi-pack-index'.
 pub struct File<T = MMap> {

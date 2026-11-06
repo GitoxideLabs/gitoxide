@@ -68,9 +68,11 @@ impl Section for Status {
     }
 }
 
-mod validate {
+/// Validation for `status` configuration keys.
+pub mod validate {
     use crate::{Result, bstr::BStr, config::tree::keys};
 
+    /// Validate values for [`super::ShowUntrackedFiles`].
     #[derive(Clone, Copy)]
     pub struct ShowUntrackedFiles;
     impl keys::Validate for ShowUntrackedFiles {

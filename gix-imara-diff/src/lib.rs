@@ -155,7 +155,7 @@ use crate::{
 pub use crate::slider_heuristic::{IndentHeuristic, IndentLevel, NoSliderHeuristic, SliderHeuristic};
 pub use intern::{InternedInput, Interner, Token, TokenSource};
 #[cfg(feature = "unified_diff")]
-pub use unified_diff::{BasicLineDiffPrinter, UnifiedDiff, UnifiedDiffConfig, UnifiedDiffPrinter};
+pub use unified_diff::{BasicLineDiffPrinter, EndsWithNewline, UnifiedDiff, UnifiedDiffConfig, UnifiedDiffPrinter};
 
 mod histogram;
 mod intern;

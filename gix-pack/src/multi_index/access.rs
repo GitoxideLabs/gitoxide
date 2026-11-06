@@ -8,21 +8,8 @@ use gix_error::{Result, bail, corruption, validation};
 use crate::{
     data,
     index::PrefixLookupResult,
-    multi_index::{EntryIndex, File, PackIndex, Version},
+    multi_index::{Entry, EntryIndex, File, PackIndex, Version},
 };
-
-/// Represents an entry within a multi index file, effectively mapping object [`IDs`][gix_hash::ObjectId] to pack data
-/// files and the offset within.
-#[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Entry {
-    /// The ID of the object.
-    pub oid: gix_hash::ObjectId,
-    /// The offset to the object's header in the pack data file.
-    pub pack_offset: data::Offset,
-    /// The index of the pack matching our [`File::index_names()`] slice.
-    pub pack_index: PackIndex,
-}
 
 /// Access methods
 impl<T> File<T>
