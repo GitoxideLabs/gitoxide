@@ -5,9 +5,14 @@
 //! requires a fresh scan of every watched path. Install watches **before** taking that baseline,
 //! and keep processing notifications received while scanning.
 //!
-//! macOS uses an owned FSEvents backend; other platforms currently use `notify`. Only the owned
-//! backend currently supports a delivery fence, using [`Watcher::synchronize_at()`] with a
-//! caller-provided marker directory. Applications should also periodically verify their state.
+//! macOS uses an owned FSEvents backend and Linux uses an owned inotify backend; other platforms
+//! use `notify`. The owned backends support delivery fences using [`Watcher::synchronize_at()`]
+//! with a caller-provided marker directory. Applications should also periodically verify their state.
+//!
+//! Linux installs one watch per directory without following descendant symlinks. Directory moves,
+//! removals, and native queue overflow can require re-registering the desired watches before a new
+//! baseline scan. Like inotify itself, notifications and fences cannot cover memory-mapped writes
+//! or changes made through unobserved hard links or directly to an overlay's underlying layers.
 //! No Git knowledge, ignore matching, or repository dependencies are required.
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -295,7 +300,10 @@ impl Watcher {
     /// The caller supplies an existing writable, caller-owned administrative or temporary directory
     /// covered by this same watcher's single native stream. This creates and deletes a uniquely named file there; it
     /// never adds watches or chooses a directory inside the application's data. macOS supports
-    /// this on local filesystems; other current backends return [`SynchronizeError::Unsupported`].
+    /// this on local filesystems. Linux supports known local filesystems, including ext4, XFS,
+    /// Btrfs, tmpfs, and overlayfs, and rejects network, FUSE, and unknown filesystems. Linux also
+    /// verifies that mounts intersecting coverage have not changed. Other backends return
+    /// [`SynchronizeError::Unsupported`].
     ///
     /// A successful fence follows publication of the complete native batch containing the marker.
     /// Drain through its sequence in the same generation; any intervening loss requires a full

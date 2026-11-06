@@ -2213,8 +2213,10 @@ dependencies = [
  "fsevent-sys",
  "gix-error",
  "gix-parallel",
+ "inotify",
  "libc",
  "notify",
+ "rustix",
  "tempfile",
 ]
 

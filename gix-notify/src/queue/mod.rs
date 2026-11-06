@@ -138,7 +138,7 @@ impl Sender {
         Self { state, registration }
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(crate) fn fence(&self, generation: u64) -> Result<crate::Fence, crate::SynchronizeError> {
         let state = lock(&self.state);
         if state.registration != self.registration || state.generation != generation {
