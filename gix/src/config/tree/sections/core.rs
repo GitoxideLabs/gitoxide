@@ -221,7 +221,7 @@ mod filter {
         };
 
         impl CheckRoundTripEncoding {
-            /// Convert `value` into a list of encodings, which are either space or coma separated. Fail if an encoding is unknown.
+            /// Convert `value` into a list of encodings separated by commas or Git whitespace. Fail if an encoding is unknown.
             /// If `None`, the default is returned.
             pub fn try_into_encodings(
                 &'static self,
@@ -234,7 +234,7 @@ mod filter {
                         let mut out = Vec::new();
                         for encoding in value
                             .as_bstr()
-                            .split(|b| *b == b',' || *b == b' ')
+                            .split(|b| *b == b',' || gix_utils::git_is_space(*b))
                             .filter(|e| !e.trim().is_empty())
                         {
                             out.push(

@@ -1170,15 +1170,30 @@ mod core {
                 Some("UTF-16LE, SHIFT-JIS"),
                 &[gix_filter::encoding::UTF_16LE, gix_filter::encoding::SHIFT_JIS],
             ),
+            (
+                Some("UTF-16LE\tSHIFT-JIS"),
+                &[gix_filter::encoding::UTF_16LE, gix_filter::encoding::SHIFT_JIS],
+            ),
+            (
+                Some("UTF-16LE\r\nSHIFT-JIS"),
+                &[gix_filter::encoding::UTF_16LE, gix_filter::encoding::SHIFT_JIS],
+            ),
             (None, &[gix_filter::encoding::SHIFT_JIS]),
         ] {
             assert_eq!(
-                Core::CHECK_ROUND_TRIP_ENCODING.try_into_encodings(value).unwrap(),
-                expected
+                Core::CHECK_ROUND_TRIP_ENCODING.try_into_encodings(value)?,
+                expected,
+                "Git accepts commas and its whitespace characters between encodings"
             );
             if let Some(value) = value {
                 assert!(Core::CHECK_ROUND_TRIP_ENCODING.validate(value.into()).is_ok());
             }
+        }
+        for value in ["UTF-16LE\u{b}SHIFT-JIS", "UTF-16LE\u{c}SHIFT-JIS"] {
+            assert!(
+                Core::CHECK_ROUND_TRIP_ENCODING.try_into_encodings(Some(value)).is_err(),
+                "vertical tab and form feed are not separators in Git's whitespace table"
+            );
         }
         insta::assert_debug_snapshot!(Core::CHECK_ROUND_TRIP_ENCODING
                 .try_into_encodings(Some("SOMETHING ELSE"))
