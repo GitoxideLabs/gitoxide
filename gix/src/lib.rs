@@ -140,7 +140,7 @@ pub use gix_date as date;
 pub use gix_dir as dir;
 pub use gix_error as error;
 pub use gix_fs as fs;
-#[cfg(feature = "status")]
+#[cfg(any(feature = "status", feature = "fsmonitor-server"))]
 pub use gix_fsmonitor as fsmonitor;
 pub use gix_glob as glob;
 pub use gix_hash as hash;
