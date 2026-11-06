@@ -147,6 +147,9 @@ command = ["dep:gix-command", "gix-object/signature"]
 ## Obtain information similar to `git status`.
 status = ["gix-status", "dirwalk", "index", "blob-diff", "gix-diff/index", "command", "dep:gix-fsmonitor"]
 
+## Host a filesystem monitor server whose lifetime is owned by the application.
+fsmonitor-server = ["dep:gix-fsmonitor", "gix-fsmonitor/server"]
+
 ## Utilities for interrupting computations and cleaning up tempfiles.
 interrupt = ["dep:signal-hook", "gix-tempfile/signals", "dep:parking_lot"]
 
@@ -618,6 +621,7 @@ checks = [
     ] },
 ]
 tests = [
+    { args = ["--features", "fsmonitor-server", "--test", "gix", "-E", "test(repository::fsmonitor)"] },
     { args = [
         "--no-default-features",
         "--features",
