@@ -27,6 +27,8 @@ pub mod to_worktree {
     }
 
     /// How to handle a configured worktree encoding that isn't available or cannot encode the input.
+    ///
+    /// Invalid attribute values and UTF-16 labels with unsupported BOM semantics are always rejected.
     #[derive(Default, Debug, Copy, Clone, Eq, PartialEq)]
     pub enum UnknownEncoding {
         /// Emit a warning as trace, ignore the encoding, and leave prior conversions intact.

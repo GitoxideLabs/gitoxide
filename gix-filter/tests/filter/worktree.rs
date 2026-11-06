@@ -36,10 +36,46 @@ mod encoding {
         }
 
         #[test]
-        fn various_utf_16_without_bom_suffix_are_supported() {
-            for label in ["UTF-16BE", "UTF-16LE"] {
-                let enc = worktree::encoding::for_label(label).unwrap();
-                assert_eq!(enc.name(), label);
+        fn explicit_utf_16_endianness_is_supported() -> gix_testtools::TestResult {
+            for (label, expected) in [
+                ("UTF-16BE", encoding_rs::UTF_16BE),
+                ("UTF-16LE", encoding_rs::UTF_16LE),
+                ("utf-16be", encoding_rs::UTF_16BE),
+                (" \tUtf-16Le\r\n", encoding_rs::UTF_16LE),
+            ] {
+                assert_eq!(
+                    worktree::encoding::for_label(label)?,
+                    expected,
+                    "explicit endianness is preserved despite case and surrounding whitespace"
+                );
+            }
+            Ok(())
+        }
+
+        #[test]
+        fn utf_16_labels_without_explicit_endianness_are_rejected() {
+            for label in [
+                "UTF-16",
+                "utf-16",
+                " \tUtf-16\r\n",
+                "csunicode",
+                "iso-10646-ucs-2",
+                "ucs-2",
+                "unicode",
+                "unicodefeff",
+                "unicodefffe",
+            ] {
+                let err = worktree::encoding::for_label(label)
+                    .expect_err("UTF-16 aliases must not lose their BOM semantics when resolved");
+                assert!(
+                    err.is_validation(),
+                    "{label:?}: unsupported labels are validation errors"
+                );
+                assert_eq!(
+                    err.error().to_string(),
+                    format!("The UTF-16 encoding '{label}' is not supported; use UTF-16LE or UTF-16BE without a BOM"),
+                    "the error identifies the unsupported label and the supported alternatives"
+                );
             }
         }
 
@@ -113,6 +149,29 @@ mod encode_to_git {
             }
         }
         Ok(())
+    }
+
+    #[test]
+    fn utf16_rejects_either_bom_before_decoding() {
+        for encoding in [encoding_rs::UTF_16LE, encoding_rs::UTF_16BE] {
+            for input in [b"\xff\xfeA\0", b"\xfe\xff\0A"] {
+                for round_trip in [RoundTripCheck::Skip, RoundTripCheck::Fail] {
+                    let mut buf = b"previous content".to_vec();
+                    let err = worktree::encode_to_git(input, encoding, &mut buf, round_trip)
+                        .expect_err("Git prohibits either BOM for both explicit-endian UTF-16 encodings");
+                    assert!(err.is_validation(), "a prohibited BOM is a validation error");
+                    assert_eq!(
+                        err.error().to_string(),
+                        format!("A BOM is prohibited for '{}'", encoding.name()),
+                        "BOM validation is independent of decoding and round-trip checking"
+                    );
+                    assert_eq!(
+                        buf, b"previous content",
+                        "BOMs are rejected before decoding into the buffer"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

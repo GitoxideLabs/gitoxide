@@ -45,10 +45,11 @@ impl<'driver> Configuration<'driver> {
         ) -> Result<Option<&'static encoding_rs::Encoding>> {
             match attr.assignment.state {
                 StateRef::Set | StateRef::Unset => {
-                    Err(gix_error::validation("Encodings must be names, like UTF-16, and cannot be booleans.").raise())
+                    Err(gix_error::validation("Encodings must be names, like UTF-8, and cannot be booleans.").raise())
                 }
                 StateRef::Value(name) => match encoding_rs::Encoding::for_label(name.as_bstr()) {
                     Some(encoding) => Ok({
+                        crate::worktree::encoding::validate_utf16_label(name.as_bstr(), encoding)?;
                         // The working-tree-encoding is the encoding we have to expect in the working tree.
                         // If the specified one is the default encoding, there is nothing to do.
                         if encoding == encoding_rs::UTF_8 {

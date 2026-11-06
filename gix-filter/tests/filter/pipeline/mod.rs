@@ -26,8 +26,12 @@ fn default_options() -> TestResult {
     Ok(())
 }
 
+fn fixture(name: &str) -> gix_testtools::Result<std::path::PathBuf> {
+    Ok(gix_testtools::scripted_fixture_read_only("pipeline_repos.sh")?.join(name))
+}
+
 fn attribute_cache(name: &str) -> gix_testtools::Result<gix_worktree::Stack> {
-    let dir = gix_testtools::scripted_fixture_read_only("pipeline_repos.sh")?.join(name);
+    let dir = fixture(name)?;
     Ok(gix_worktree::Stack::new(
         dir,
         gix_worktree::stack::State::for_add(

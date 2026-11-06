@@ -16,12 +16,18 @@ pub(crate) mod function {
 
     /// Decode `src` according to `src_encoding` to `UTF-8` for storage in git and place it in `buf`.
     /// Note that the encoding is always applied, there is no conditional even if `src_encoding` already is `UTF-8`.
+    /// For `UTF-16LE` and `UTF-16BE`, either UTF-16 BOM is rejected, as in Git, regardless of `round_trip`.
     pub fn encode_to_git(
         src: &[u8],
         src_encoding: &'static encoding_rs::Encoding,
         buf: &mut Vec<u8>,
         round_trip: RoundTripCheck,
     ) -> Result {
+        if (src_encoding == encoding_rs::UTF_16LE || src_encoding == encoding_rs::UTF_16BE)
+            && (src.starts_with(b"\xff\xfe") || src.starts_with(b"\xfe\xff"))
+        {
+            bail!(validation(format!("A BOM is prohibited for '{}'", src_encoding.name())));
+        }
         let mut decoder = src_encoding.new_decoder_with_bom_removal();
         let buf_len = decoder
             .max_utf8_buffer_length_without_replacement(src.len())

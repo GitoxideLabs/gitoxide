@@ -3,7 +3,10 @@ use std::io::Read;
 use bstr::ByteSlice;
 use gix_filter::pipeline::{CrlfRoundTripCheck, convert::to_worktree};
 
-use crate::{driver::apply::driver_with_process, pipeline::pipeline};
+use crate::{
+    driver::apply::driver_with_process,
+    pipeline::{fixture, pipeline},
+};
 
 #[test]
 fn all_stages() -> gix_testtools::TestResult {
@@ -115,6 +118,40 @@ fn no_filter() -> gix_testtools::TestResult {
     let actual = out.as_bytes().expect("input is unchanged");
     assert_eq!(actual, input, "so the input is unchanged…");
     assert_eq!(actual.as_ptr(), input.as_ptr(), "…which means it's exactly the same");
+    Ok(())
+}
+
+#[test]
+fn plain_utf16_is_rejected_even_when_unknown_encodings_are_ignored() -> gix_testtools::TestResult {
+    let input = std::fs::read(fixture("utf16")?.join("le-bom.UTF-16.git"))?;
+    for unknown_encoding in [to_worktree::UnknownEncoding::Fail, to_worktree::UnknownEncoding::Ignore] {
+        let (mut cache, mut pipe) = pipeline("utf16", || {
+            (vec![], Vec::new(), CrlfRoundTripCheck::Skip, Default::default())
+        })?;
+        let err = pipe
+            .convert_to_worktree(
+                &input,
+                "le-bom.UTF-16".into(),
+                &mut |path, attrs| {
+                    cache
+                        .at_entry(path, None, &gix_object::find::Never)
+                        .expect("fixture attributes are readable")
+                        .matching_attributes(attrs);
+                },
+                to_worktree::Options {
+                    can_delay: gix_filter::driver::apply::Delay::Forbid,
+                    unknown_encoding,
+                },
+            )
+            .err()
+            .expect("plain UTF-16 cannot preserve Git's BOM-required semantics");
+        assert!(err.is_validation(), "unsupported UTF-16 is a validation error");
+        assert_eq!(
+            err.error().to_string(),
+            "The UTF-16 encoding 'UTF-16' is not supported; use UTF-16LE or UTF-16BE without a BOM",
+            "{unknown_encoding:?}: a known but unsupported UTF-16 label must not be ignored"
+        );
+    }
     Ok(())
 }
 

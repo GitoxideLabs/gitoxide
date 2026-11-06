@@ -3,7 +3,10 @@ use std::{io::Read, path::Path};
 use bstr::ByteSlice;
 use gix_filter::{eol, pipeline::CrlfRoundTripCheck};
 
-use crate::{driver::apply::driver_with_process, pipeline::pipeline};
+use crate::{
+    driver::apply::driver_with_process,
+    pipeline::{fixture, pipeline},
+};
 
 #[test]
 fn no_driver_but_filter_with_autocrlf() -> gix_testtools::TestResult {
@@ -142,6 +145,85 @@ fn no_filter_means_reader_is_returned_unchanged() -> gix_testtools::TestResult {
     let mut buf = Vec::new();
     actual.read_to_end(&mut buf)?;
     assert_eq!(buf.as_bstr(), input, "input is unchanged");
+    Ok(())
+}
+
+#[test]
+fn plain_utf16_is_rejected() -> gix_testtools::TestResult {
+    let dir = fixture("utf16")?;
+    let (mut cache, mut pipe) = pipeline("utf16", || {
+        (vec![], Vec::new(), CrlfRoundTripCheck::Skip, Default::default())
+    })?;
+    for file in ["bomless.UTF-16", "le-bom.UTF-16", "be-bom.UTF-16"] {
+        let input = std::fs::read(dir.join(file))?;
+        let err = pipe
+            .convert_to_git(
+                input.as_slice(),
+                Path::new(file),
+                &mut |path, attrs| {
+                    cache
+                        .at_entry(path, None, &gix_object::find::Never)
+                        .expect("fixture attributes are readable")
+                        .matching_attributes(attrs);
+                },
+                &mut no_call,
+            )
+            .err()
+            .expect("plain UTF-16 cannot preserve Git's BOM-required semantics");
+        assert!(err.is_validation(), "{file}: unsupported UTF-16 is a validation error");
+        assert_eq!(
+            err.error().to_string(),
+            "The UTF-16 encoding 'UTF-16' is not supported; use UTF-16LE or UTF-16BE without a BOM",
+            "{file}: reject the label instead of silently treating it as UTF-16LE"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn explicit_utf16_rejects_both_boms_regardless_of_roundtrip_check() -> gix_testtools::TestResult {
+    let dir = fixture("utf16")?;
+    for encoding in [encoding_rs::UTF_16LE, encoding_rs::UTF_16BE] {
+        for check_roundtrip in [false, true] {
+            let (mut cache, mut pipe) = pipeline("utf16", || {
+                (
+                    vec![],
+                    if check_roundtrip { vec![encoding] } else { Vec::new() },
+                    CrlfRoundTripCheck::Skip,
+                    Default::default(),
+                )
+            })?;
+            for prefix in ["bomless", "le-bom", "be-bom"] {
+                let file = format!("{prefix}.{}", encoding.name());
+                let input = std::fs::read(dir.join(&file))?;
+                let result = pipe.convert_to_git(
+                    input.as_slice(),
+                    Path::new(&file),
+                    &mut |path, attrs| {
+                        cache
+                            .at_entry(path, None, &gix_object::find::Never)
+                            .expect("fixture attributes are readable")
+                            .matching_attributes(attrs);
+                    },
+                    &mut no_call,
+                );
+                if prefix == "bomless" {
+                    assert_eq!(
+                        result?.as_bytes().expect("encoding converts in memory"),
+                        std::fs::read(dir.join(format!("{file}.git")))?,
+                        "{file}, roundtrip={check_roundtrip}: BOMless input agrees with Git"
+                    );
+                } else {
+                    let err = result.err().expect("either BOM is forbidden with explicit endianness");
+                    assert!(err.is_validation(), "{file}: BOM rejection is a validation error");
+                    assert!(
+                        err.error().to_string().contains("BOM"),
+                        "{file}, roundtrip={check_roundtrip}: reject the BOM before decoding or round-trip checking: {err:#}"
+                    );
+                }
+            }
+        }
+    }
     Ok(())
 }
 

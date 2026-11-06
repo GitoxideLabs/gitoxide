@@ -1,13 +1,13 @@
 use bstr::BStr;
 use encoding_rs::Encoding;
-use gix_error::{OptionExt, Result};
+use gix_error::{OptionExt, Result, bail, validation};
 
-/// Try to produce a new `Encoding` for `label` or report an error if it is not known.
+/// Try to produce a new `Encoding` for `label` or report an error if it is unknown or unsupported.
 ///
 /// ### Deviation
 ///
-/// * There is no special handling of UTF-16LE/BE with checks if data contains a BOM or not, like `git` as we don't expect to have
-///   data available here.
+/// * Only explicit `UTF-16LE` and `UTF-16BE` labels are supported for UTF-16. Plain `UTF-16` and aliases are rejected:
+///   Git requires a BOM for `UTF-16`, but `Encoding` cannot distinguish it from BOM-less `UTF-16LE`.
 /// * Special `-BOM` suffixed versions of `UTF-16` encodings are not supported.
 pub fn for_label<'a>(label: impl Into<&'a BStr>) -> Result<&'static Encoding> {
     let mut label = label.into();
@@ -16,7 +16,20 @@ pub fn for_label<'a>(label: impl Into<&'a BStr>) -> Result<&'static Encoding> {
     }
     let enc = Encoding::for_label(label.as_ref())
         .ok_or_raise(|| gix_error::message!("An encoding named '{label}' is not known").validation())?;
+    validate_utf16_label(label, enc)?;
     Ok(enc)
+}
+
+/// Reject UTF-16 aliases before their BOM semantics are lost by retaining only `Encoding`.
+pub(crate) fn validate_utf16_label(label: &BStr, encoding: &'static Encoding) -> Result {
+    if (encoding == encoding_rs::UTF_16LE || encoding == encoding_rs::UTF_16BE)
+        && !label.trim_ascii().eq_ignore_ascii_case(encoding.name().as_bytes())
+    {
+        bail!(validation(format!(
+            "The UTF-16 encoding '{label}' is not supported; use UTF-16LE or UTF-16BE without a BOM"
+        )));
+    }
+    Ok(())
 }
 
 /// Write `text` as UTF-16 to `out` and return `true` if `encoding` is `UTF-16LE` or `UTF-16BE`, or return `false`
