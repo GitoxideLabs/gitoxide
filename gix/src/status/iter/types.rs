@@ -105,6 +105,7 @@ impl Outcome {
             IndexPersistedOrInMemory::InMemory(index) => index.clone(),
         };
 
+        let tree = index.remove_tree();
         let untracked = index.set_untracked(None);
         let entries = index.entries_mut();
         for (entry_index, change) in changes {
@@ -125,6 +126,8 @@ impl Outcome {
             index.set_untracked(untracked);
         }
 
+        // Status only updates stat data and monitor flags, leaving cached tree contents unchanged.
+        index.set_tree(tree);
         Some(index.write(crate::index::write::Options {
             extensions: Default::default(),
             skip_hash: self.skip_hash,

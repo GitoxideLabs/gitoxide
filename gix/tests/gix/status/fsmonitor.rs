@@ -152,6 +152,7 @@ fn persisted_tokens_and_partial_status_keep_unvisited_dirty_entries() -> TestRes
     let fixture = gix_testtools::scripted_fixture_writable("make_status_fsmonitor.sh")?;
     let root = fixture.path();
     let repo = gix::open_opts(root, gix::open::Options::isolated())?;
+    let tree = repo.index()?.tree().cloned().expect("the fixture has a cache-tree");
     set_hook_token(root, "after-partial-status")?;
     std::fs::write(root.join(".git/fsmonitor-paths"), b"reported\0dir\0unreported\0")?;
     let mut iter = repo
@@ -164,6 +165,11 @@ fn persisted_tokens_and_partial_status_keep_unvisited_dirty_entries() -> TestRes
     assert!(!outcome.has_changes(), "writeback consumes all pending state");
     assert!(outcome.write_changes().is_none(), "writeback happens once");
     let index = gix::index::File::at(root.join(".git/index"), repo.object_hash(), false, Default::default())?;
+    assert_eq!(
+        index.tree(),
+        Some(&tree),
+        "stat and monitor updates preserve the cache-tree"
+    );
     let monitor = index.fs_monitor().expect("writeback retains FSMN");
     assert_eq!(
         monitor.token(),

@@ -7,9 +7,8 @@ impl File {
     /// Also returns the checksum written to the trailer, which is null if [`write::Options::skip_hash`] is set.
     /// Unlike [`File::checksum()`], this preserves the on-disk representation of an omitted checksum.
     ///
-    /// Note that the `tree` (tree-cache) extension is written as-is and is **not** recomputed or
-    /// invalidated to match the current entries; see [`File::write()`] for the implications and the
-    /// recommended workaround.
+    /// The `tree` (tree-cache) extension is written as-is. Mutable entry or path access removes it;
+    /// callers restoring it with [`State::set_tree()`](crate::State::set_tree()) must ensure it is current.
     pub fn write_to(
         &self,
         mut out: impl std::io::Write,
@@ -34,27 +33,9 @@ impl File {
     ///
     /// The checksum is updated after a successful write, or cleared if [`write::Options::skip_hash`] is set.
     ///
-    /// ### The `tree` (tree-cache) extension is written as-is
-    ///
-    /// The `tree` extension (tree-cache) is serialized from its current in-memory state; it is
-    /// **not** recomputed or invalidated to match the entries. So if entries were modified since the
-    /// index was read, the tree-cache is written back still marked valid even though it is now stale.
-    ///
-    /// Git uses the tree-cache to skip unchanged directories when building a tree (on `git commit` /
-    /// `git write-tree`), so a stale-but-valid tree-cache can make a later commit capture outdated
-    /// subtree content; more generally, `git status` and later commits can disagree about what is
-    /// staged.
-    ///
-    /// Until the tree-cache is updated on write (see [issue #2421]), remove it with
-    /// [`State::remove_tree()`](crate::State::remove_tree()) before writing whenever entries were
-    /// changed:
-    ///
-    /// ```ignore
-    /// index.remove_tree();
-    /// index.write(gix_index::write::Options::default())?;
-    /// ```
-    ///
-    /// [issue #2421]: https://github.com/GitoxideLabs/gitoxide/issues/2421
+    /// The `tree` (tree-cache) extension is written as-is, without recomputing it. Mutable entry or
+    /// path access removes the cache so staged changes cannot retain outdated tree IDs. Callers
+    /// restoring it with [`State::set_tree()`](crate::State::set_tree()) must ensure it is current.
     pub fn write(&mut self, options: write::Options) -> Result {
         use gix_error::{ErrorExt, ResultExt, bail, message};
 

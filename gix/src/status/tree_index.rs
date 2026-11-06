@@ -1,4 +1,8 @@
-use crate::{Repository, Result, config::tree};
+use crate::{
+    Repository, Result,
+    config::tree,
+    error::{ResultExt, message},
+};
 
 /// Specify how to perform rewrite tracking [Repository::tree_index_status()].
 #[derive(Default, Debug, Copy, Clone)]
@@ -31,7 +35,8 @@ impl Repository {
     /// (typically the current `.git/index`), and pass all changes to `cb(change, tree_index, worktree_index)` with
     /// full access to both indices that contributed to the change.
     ///
-    /// *(It's notable that internally, the `tree_id` is converted into an index before diffing these)*.
+    /// The tree is converted into a complete index before diffing. Matching valid cache-tree nodes
+    /// reuse entries from `worktree_index`, avoiding reads of those tree objects.
     /// Set `pathspec` to `Some(_)` to further reduce the set of files to check.
     ///
     /// ### Notes
@@ -51,7 +56,9 @@ impl Repository {
         ) -> Result<gix_diff::index::Action>,
     ) -> Result<Outcome> {
         let _span = gix_trace::coarse!("gix::tree_index_status");
-        let tree_index: gix_index::State = self.index_from_tree(tree_id)?.into();
+        let tree_index =
+            gix_index::State::from_tree_with_cache(tree_id, self, self.config.protect_options()?, worktree_index)
+                .or_raise(|| message!("Could not create index from tree at {tree_id}"))?;
         let rewrites = match renames {
             TrackRenames::AsConfigured => {
                 let (mut rewrites, is_configured) = crate::diff::utils::new_rewrites_inner(

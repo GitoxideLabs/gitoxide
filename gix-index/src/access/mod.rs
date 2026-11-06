@@ -65,6 +65,7 @@ impl State {
         &'state mut self,
         backing: &'backing PathStorageRef,
     ) -> impl Iterator<Item = (&'state mut Entry, &'backing BStr)> {
+        self.tree = None;
         self.fs_monitor = None;
         self.untracked = None;
         self.entries.iter_mut().map(move |e| {
@@ -497,6 +498,7 @@ impl State {
             self.path_backing.is_empty(),
             "BUG: return path backing only after taking it, once"
         );
+        self.tree = None;
         self.fs_monitor = None;
         self.untracked = None;
         self.path_backing = backing;
@@ -504,6 +506,7 @@ impl State {
 
     /// Return mutable entries in a slice.
     pub fn entries_mut(&mut self) -> &mut [Entry] {
+        self.tree = None;
         self.fs_monitor = None;
         self.untracked = None;
         &mut self.entries
@@ -511,6 +514,7 @@ impl State {
 
     /// Return a writable slice to entries and read-access to their path storage at the same time.
     pub fn entries_mut_and_pathbacking(&mut self) -> (&mut [Entry], &PathStorageRef) {
+        self.tree = None;
         self.fs_monitor = None;
         self.untracked = None;
         (&mut self.entries, &self.path_backing)
@@ -518,6 +522,7 @@ impl State {
 
     /// Return mutable entries along with their paths in an iterator.
     pub fn entries_mut_with_paths(&mut self) -> impl Iterator<Item = (&mut Entry, &BStr)> {
+        self.tree = None;
         self.fs_monitor = None;
         self.untracked = None;
         let paths = &self.path_backing;
@@ -542,6 +547,7 @@ impl State {
             self.path_backing.is_empty(),
             "BUG: cannot take out backing multiple times"
         );
+        self.tree = None;
         self.fs_monitor = None;
         self.untracked = None;
         std::mem::take(&mut self.path_backing)
@@ -552,6 +558,7 @@ impl State {
     ///
     /// The `path` must use the repository-relative, slash-separated [`State`] path format.
     pub fn entry_mut_by_path_and_stage(&mut self, path: &BStr, stage: entry::Stage) -> Option<&mut Entry> {
+        self.tree = None;
         self.fs_monitor = None;
         self.untracked = None;
         self.entry_index_by_path_and_stage(path, stage)
@@ -578,6 +585,7 @@ impl State {
         mode: entry::Mode,
         path: &BStr,
     ) {
+        self.tree = None;
         self.fs_monitor = None;
         self.untracked = None;
         let path = {
@@ -597,6 +605,7 @@ impl State {
 
     /// Unconditionally sort entries as needed to perform lookups quickly.
     pub fn sort_entries(&mut self) {
+        self.tree = None;
         self.fs_monitor = None;
         self.untracked = None;
         let path_backing = &self.path_backing;
@@ -609,6 +618,7 @@ impl State {
     /// Similar to [`sort_entries()`][State::sort_entries()], but applies `compare` after comparing
     /// by path and stage as a third criteria.
     pub fn sort_entries_by(&mut self, mut compare: impl FnMut(&Entry, &Entry) -> Ordering) {
+        self.tree = None;
         self.fs_monitor = None;
         self.untracked = None;
         let path_backing = &self.path_backing;
@@ -629,6 +639,7 @@ impl State {
     /// To implement this operation typically, one would rather add [entry::Flags::REMOVE] to each entry to remove
     /// them when [writing the index](Self::write_to()).
     pub fn remove_entries(&mut self, mut should_remove: impl FnMut(usize, &BStr, &mut Entry) -> bool) {
+        self.tree = None;
         self.fs_monitor = None;
         self.untracked = None;
         let mut index = 0;
@@ -648,6 +659,7 @@ impl State {
     /// Note that the memory used for the removed entries paths is not freed, as it's append-only, and
     /// that some extensions might refer to paths which are now deleted.
     pub fn remove_entry_at_index(&mut self, index: usize) -> Entry {
+        self.tree = None;
         self.fs_monitor = None;
         self.untracked = None;
         self.entries.remove(index)
@@ -656,17 +668,25 @@ impl State {
 
 /// Extensions
 impl State {
-    /// Access the `tree` extension.
+    /// Access the `tree` extension, which is removed by mutable entry or path access.
     pub fn tree(&self) -> Option<&extension::Tree> {
         self.tree.as_ref()
     }
-    /// Mutably access the `tree` extension.
+    /// Mutably access the `tree` extension. Cached tree IDs and counts must continue to describe the entries.
     pub fn tree_mut(&mut self) -> Option<&mut extension::Tree> {
         self.tree.as_mut()
     }
     /// Remove the `tree` extension.
     pub fn remove_tree(&mut self) -> Option<extension::Tree> {
         self.tree.take()
+    }
+    /// Replace the tree cache and return the previous one.
+    ///
+    /// Callers must ensure cached tree IDs and entry counts describe the current entries.
+    /// Mutable entry or path access discards this cache; restoring it is safe after changes
+    /// limited to stat information or flags that do not affect staged content.
+    pub fn set_tree(&mut self, tree: Option<extension::Tree>) -> Option<extension::Tree> {
+        std::mem::replace(&mut self.tree, tree)
     }
     /// Access the `link` extension.
     pub fn link(&self) -> Option<&extension::Link> {

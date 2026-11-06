@@ -29,7 +29,142 @@ fn from_tree() -> gix_testtools::TestResult {
         let actual_state = State::from_tree(&tree_id, &odb, Default::default())?;
 
         compare_states(&actual_state, &expected_state, fixture);
+        let cached_state =
+            State::from_tree_with_cache(&tree_id, gix_object::find::Never, Default::default(), &expected_state)?;
+        compare_states(&cached_state, &actual_state, fixture);
+        assert!(
+            cached_state.tree().is_none(),
+            "tree construction doesn't copy extensions"
+        );
+        assert!(
+            cached_state
+                .entries()
+                .iter()
+                .all(|entry| entry.stat == Default::default()),
+            "cached entries receive the same empty stat information as traversed entries"
+        );
     }
+    Ok(())
+}
+
+#[test]
+fn cached_trees_fall_back_for_ineligible_entries_and_counts() -> TestResult {
+    use gix_index::entry::{Flags, Mode};
+
+    let root = scripted_fixture_read_only("make_index/v2.sh")?;
+    let tree_id = tree_id(&root);
+    let index = gix_index::File::at(
+        root.join(".git/index"),
+        gix_testtools::object_hash(),
+        false,
+        Default::default(),
+    )?;
+    let tree = index.tree().cloned();
+    let odb = odb_at(root.join(".git/objects"))?;
+    let expected = State::from_tree(&tree_id, &odb, Default::default())?;
+    let assert_fallback = |index: &State| -> TestResult {
+        assert!(
+            State::from_tree_with_cache(&tree_id, gix_object::find::Never, Default::default(), index).is_err(),
+            "an unusable cache must read the tree"
+        );
+        let actual = State::from_tree_with_cache(&tree_id, &odb, Default::default(), index)?;
+        compare_states(&actual, &expected, "fallback");
+        Ok(())
+    };
+
+    for flags in [Flags::STAGE_MASK, Flags::INTENT_TO_ADD, Flags::REMOVE] {
+        let mut index = index.clone();
+        index.entries_mut()[0].flags = flags;
+        index.set_tree(tree.clone());
+        assert_fallback(&index)?;
+    }
+    for mode in [Mode::DIR, Mode::empty()] {
+        let mut index = index.clone();
+        index.entries_mut()[0].mode = mode;
+        index.set_tree(tree.clone());
+        assert_fallback(&index)?;
+    }
+    for count in [None, Some(0), Some(2)] {
+        let mut index = index.clone();
+        index.tree_mut().expect("Git wrote a cache-tree").num_entries = count;
+        assert_fallback(&index)?;
+    }
+    for path in ["/a", "a//b", "a/"] {
+        let mut index = index.clone();
+        let entry = index.remove_entry_at_index(0);
+        index.dangerously_push_entry(entry.stat, entry.id, entry.flags, entry.mode, path.into());
+        index.set_tree(tree.clone());
+        assert_fallback(&index)?;
+    }
+    let mut index = index.clone();
+    index.remove_tree();
+    assert_fallback(&index)?;
+    Ok(())
+}
+
+#[test]
+fn cached_entries_discard_worktree_flags_and_validate_paths() -> TestResult {
+    use gix_index::{
+        entry::{Flags, Mode},
+        validate::path::component::Error,
+    };
+
+    let root = scripted_fixture_read_only("make_index/v2.sh")?;
+    let tree_id = tree_id(&root);
+    let mut index = gix_index::File::at(
+        root.join(".git/index"),
+        gix_testtools::object_hash(),
+        false,
+        Default::default(),
+    )?;
+    let tree = index.tree().cloned();
+    index.entries_mut()[0].flags = Flags::ASSUME_VALID | Flags::FSMONITOR_VALID | Flags::SKIP_WORKTREE;
+    index.set_tree(tree.clone());
+    let actual = State::from_tree_with_cache(&tree_id, gix_object::find::Never, Default::default(), &index)?;
+    assert!(
+        actual.entries()[0].flags.is_empty(),
+        "tree entries have no worktree validity flags"
+    );
+
+    for (path, mode, symlink) in [(".gitmodules", Mode::SYMLINK, true), (".git/a", Mode::FILE, false)] {
+        let mut index = index.clone();
+        let entry = index.remove_entry_at_index(0);
+        index.dangerously_push_entry(entry.stat, entry.id, Flags::empty(), mode, path.into());
+        index.set_tree(tree.clone());
+        let err = State::from_tree_with_cache(&tree_id, gix_object::find::Never, Default::default(), &index)
+            .expect_err("cached paths must receive mode-specific component validation");
+        assert!(err.is_validation(), "invalid cached paths remain validation errors");
+        assert!(
+            matches!(err.downcast_any_ref::<Error>(), Some(Error::SymlinkedGitModules)) == symlink,
+            "symlink leaves receive their additional protection"
+        );
+        assert!(
+            matches!(err.downcast_any_ref::<Error>(), Some(Error::DotGitDir)) != symlink,
+            "directory components receive ordinary path protection"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn sparse_cached_trees_fall_back_to_traversal() -> TestResult {
+    let root = scripted_fixture_read_only("make_index/v3_sparse_index.sh")?;
+    let index = gix_index::File::at(
+        root.join(".git/index"),
+        gix_testtools::object_hash(),
+        false,
+        Default::default(),
+    )?;
+    assert!(index.is_sparse(), "the fixture contains collapsed directory entries");
+    let tree_id = index.tree().expect("Git retained the full tree identity").id;
+    assert!(
+        State::from_tree_with_cache(&tree_id, gix_object::find::Never, Default::default(), &index).is_err(),
+        "sparse entries cannot substitute the full tree"
+    );
+    let odb = odb_at(root.join(".git/objects"))?;
+    let expected = State::from_tree(&tree_id, &odb, Default::default())?;
+    let actual = State::from_tree_with_cache(&tree_id, &odb, Default::default(), &index)?;
+    compare_states(&actual, &expected, "sparse fallback");
     Ok(())
 }
 
