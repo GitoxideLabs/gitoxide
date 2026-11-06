@@ -45,7 +45,7 @@ fn all_stages() -> gix_testtools::TestResult {
     };
     assert_eq!(
         buf.as_bstr(),
-        format!("➡a\r\n➡b\r\n➡$Id: {expected_hash}$"),
+        format!("➡a\r\n➡b\r\n➡$Id: {expected_hash} $"),
         "the buffer shows that a lot of transformations were applied"
     );
     Ok(())
@@ -84,7 +84,7 @@ fn all_stages_no_filter() -> gix_testtools::TestResult {
     };
     assert_eq!(
         buf.as_bstr(),
-        format!("$Id: {expected_hash}$a\r\nb\r\n"),
+        format!("$Id: {expected_hash} $a\r\nb\r\n"),
         "the buffer shows that a lot of transformations were applied"
     );
     Ok(())

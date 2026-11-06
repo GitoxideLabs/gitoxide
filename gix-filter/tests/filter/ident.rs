@@ -43,8 +43,14 @@ mod undo {
     #[test]
     fn anything_between_dollar_id_dollar() -> TestResult {
         let mut buf = Vec::new();
-        assert!(gix_filter::ident::undo(B(" $Id: something$\nhello"), &mut buf)?);
-        assert_eq!(buf.as_bstr(), " $Id$\nhello");
+        for input in [" $Id: something$\nhello", " $Id: something $\nhello"] {
+            assert!(gix_filter::ident::undo(B(input), &mut buf)?);
+            assert_eq!(
+                buf.as_bstr(),
+                " $Id$\nhello",
+                "both legacy and Git-style expansions are collapsed"
+            );
+        }
         Ok(())
     }
 
@@ -99,7 +105,11 @@ mod apply {
             gix_hash::Kind::Sha256 => "63cdf77e7872965e2af1bee42e925f9b4bd6a3ab9f5ef6c06c4312f7d90d8021",
             _ => unimplemented!(),
         };
-        assert_eq!(buf.as_bstr(), format!("$Id: {expected_hash}$"));
+        assert_eq!(
+            buf.as_bstr(),
+            format!("$Id: {expected_hash} $"),
+            "Git places a space before the closing dollar"
+        );
 
         assert!(ident::apply(
             B("$Id$ $Id$ foo"),
@@ -113,7 +123,8 @@ mod apply {
         };
         assert_eq!(
             buf.as_bstr(),
-            format!("$Id: {expected_hash}$ $Id: {expected_hash}$ foo")
+            format!("$Id: {expected_hash} $ $Id: {expected_hash} $ foo"),
+            "every expansion uses Git's spelling and the hash of the original input"
         );
         Ok(())
     }
