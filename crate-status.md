@@ -891,6 +891,9 @@ A git directory walk.
 
 The git staging area.
 
+* [x] construct indexes from trees while reusing matching cache-tree nodes
+* [x] invalidate cache-trees on entry or path mutation
+
 * read
   * [x] V2 - the default, including long-paths support
   * [x] V3 - extended flags
