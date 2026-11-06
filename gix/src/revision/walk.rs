@@ -344,10 +344,10 @@ impl<'repo> Platform<'repo> {
     }
 }
 
-// Make shallow commits roots for both visible traversal and hidden-ancestor painting.
-struct Objects<'repo> {
-    repo: &'repo Repository,
-    shallow: Option<crate::shallow::Commits>,
+// Make shallow commits roots whenever a traversal reads them.
+pub(crate) struct Objects<'repo> {
+    pub(crate) repo: &'repo Repository,
+    pub(crate) shallow: Option<crate::shallow::Commits>,
 }
 
 impl Find for Objects<'_> {
