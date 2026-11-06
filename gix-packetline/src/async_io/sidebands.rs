@@ -207,6 +207,7 @@ where
     }
 }
 
+/// The future returned by [`WithSidebands::read_line_to_string()`].
 pub struct ReadLineFuture<'a, 'b, T: AsyncRead, F> {
     parent: &'b mut WithSidebands<'a, T, F>,
     buf: &'b mut String,

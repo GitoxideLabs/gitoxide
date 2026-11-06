@@ -91,7 +91,8 @@ pub(crate) mod index_entry_offset_table;
 ///
 pub mod link;
 
-pub(crate) mod resolve_undo;
+/// The resolve-undo extension for recording merge stages of resolved conflicts.
+pub mod resolve_undo;
 
 ///
 pub mod untracked_cache;

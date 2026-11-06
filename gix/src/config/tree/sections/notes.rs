@@ -55,10 +55,12 @@ impl DisplayRef {
     }
 }
 
-mod validate {
+/// Validation for `notes` configuration keys.
+pub mod validate {
 
     use crate::{Result, bstr::BStr, config::tree::keys::Validate};
 
+    /// Validate values for [`super::DisplayRef`].
     #[derive(Clone, Copy)]
     pub struct DisplayRef;
 

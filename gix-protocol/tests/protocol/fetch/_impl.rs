@@ -1,6 +1,6 @@
 /// What to do after preparing ls-refs.
 #[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone)]
-pub enum RefsAction {
+pub(crate) enum RefsAction {
     /// Continue by sending a 'ls-refs' command.
     Continue,
     /// Skip 'ls-refs' entirely.
@@ -68,7 +68,7 @@ mod fetch_fn {
     #[bisync]
     // TODO: remove this without losing test coverage - we have the same but better in `gix` and it's
     //       not really worth it to maintain the delegates here.
-    pub async fn legacy_fetch<F, D, T, P>(
+    pub(crate) async fn legacy_fetch<F, D, T, P>(
         mut transport: T,
         mut delegate: D,
         authenticate: F,
@@ -225,7 +225,7 @@ mod fetch_fn {
         }) as HandleProgress<'a>));
     }
 }
-pub use fetch_fn::{FetchConnection, legacy_fetch as fetch};
+pub(crate) use fetch_fn::{FetchConnection, legacy_fetch as fetch};
 
 mod delegate {
     use std::{
@@ -244,7 +244,7 @@ mod delegate {
 
     /// Defines what to do next after certain [`Delegate`] operations.
     #[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone, Copy)]
-    pub enum Action {
+    pub(crate) enum Action {
         /// Continue the typical flow of operations in this flow.
         Continue,
         /// Return at the next possible opportunity without making further requests, possibly after closing the connection.
@@ -256,7 +256,7 @@ mod delegate {
     /// Async implementations must treat it as blocking and unblock it by evaluating it elsewhere.
     ///
     /// See [Delegate] for the complete trait.
-    pub trait DelegateBlocking {
+    pub(crate) trait DelegateBlocking {
         /// Return extra parameters to be provided during the handshake.
         ///
         /// Note that this method is only called once and the result is reused during subsequent handshakes which may happen
@@ -410,7 +410,7 @@ mod delegate {
         /// Everything is tucked away behind type-safety so 'nothing can go wrong'©. Runtime assertions assure invalid
         /// features or arguments don't make it to the server in the first place.
         /// Please note that this trait mostly corresponds to what V2 would look like, even though V1 is supported as well.
-        pub trait Delegate: DelegateBlocking {
+        pub(crate) trait Delegate: DelegateBlocking {
             /// Receive a pack provided from the given `input`.
             ///
             /// Use `progress` to emit your own progress messages when decoding the pack.
@@ -451,7 +451,7 @@ mod delegate {
         }
     }
     #[cfg(feature = "blocking-client")]
-    pub use blocking_io::Delegate;
+    pub(crate) use blocking_io::Delegate;
 
     #[cfg(all(feature = "async-client", not(feature = "blocking-client")))]
     mod async_io {
@@ -473,7 +473,7 @@ mod delegate {
         /// Please note that this trait mostly corresponds to what V2 would look like, even though V1 is supported as well.
         #[allow(clippy::double_must_use)] // `async_trait` generates `#[must_use]` on boxed futures.
         #[async_trait(?Send)]
-        pub trait Delegate: DelegateBlocking {
+        pub(crate) trait Delegate: DelegateBlocking {
             /// Receive a pack provided from the given `input`, and the caller should consider it to be blocking as
             /// most operations on the received pack are implemented in a blocking fashion.
             ///
@@ -520,8 +520,8 @@ mod delegate {
         }
     }
     #[cfg(all(feature = "async-client", not(feature = "blocking-client")))]
-    pub use async_io::Delegate;
+    pub(crate) use async_io::Delegate;
 }
 #[cfg(any(feature = "async-client", feature = "blocking-client"))]
-pub use delegate::Delegate;
-pub use delegate::{Action, DelegateBlocking};
+pub(crate) use delegate::Delegate;
+pub(crate) use delegate::{Action, DelegateBlocking};

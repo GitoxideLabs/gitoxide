@@ -10,6 +10,7 @@ use crate::{
     store_impl::{file, file::log},
 };
 
+#[expect(unnameable_types, reason = "sealed traits must remain unnameable")]
 pub trait Sealed {}
 impl Sealed for crate::Reference {}
 

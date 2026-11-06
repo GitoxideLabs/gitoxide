@@ -120,7 +120,8 @@ mod sections;
 pub use sections::{
     Author, Branch, Checkout, Clone, Commit, Committer, Core, Credential, Extensions, Fetch, Gitoxide, Gpg, Http,
     Index, Init, Mailmap, Merge, Notes, Pack, Protocol, Push, Remote, Safe, Ssh, Url, User, Worktree, branch, checkout,
-    commit, core, credential, extensions, fetch, gitoxide, gpg, http, index, notes, protocol, push, remote, ssh,
+    commit, core, credential, extensions, fetch, gitoxide, gpg, http, index, merge, notes, pack, protocol, push,
+    remote, ssh,
 };
 #[cfg(feature = "blob-diff")]
 pub use sections::{Diff, diff};

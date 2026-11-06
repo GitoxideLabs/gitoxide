@@ -24,6 +24,7 @@ mod init {
     pub struct Deregister {
         do_reset: bool,
     }
+    /// Deregister installed signal handlers when dropped.
     pub struct AutoDeregister(Deregister);
 
     impl Deregister {
@@ -170,7 +171,10 @@ use std::{
 };
 
 #[cfg(feature = "interrupt")]
-pub use init::{Deregister, init_handler, init_handler_default};
+pub use init::{AutoDeregister, Deregister, init_handler, init_handler_default};
+
+#[cfg(any(feature = "dirwalk", feature = "status"))]
+pub use crate::util::OwnedOrStaticAtomicBool;
 
 /// A wrapper for an inner iterator which will check for interruptions on each iteration.
 pub struct Iter<I, EFN> {

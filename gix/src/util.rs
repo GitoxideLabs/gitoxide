@@ -4,12 +4,17 @@ use std::{
 };
 
 #[derive(Clone)]
+/// An interrupt flag owned by the caller or shared with a process-global flag.
 pub enum OwnedOrStaticAtomicBool {
+    /// An owned flag which can be shared across threads.
     Owned {
+        /// The interrupt flag.
         flag: Arc<AtomicBool>,
+        /// Whether the flag belongs only to this operation, allowing its worker to stop in the background on drop.
         #[cfg_attr(not(feature = "parallel"), allow(dead_code))]
         private: bool,
     },
+    /// A process-global interrupt flag.
     Shared(&'static AtomicBool),
 }
 

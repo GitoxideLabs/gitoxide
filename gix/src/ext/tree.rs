@@ -5,6 +5,7 @@ use gix_traverse::tree::breadthfirst;
 
 use crate::Result;
 
+#[expect(unnameable_types, reason = "sealed traits must remain unnameable")]
 pub trait Sealed {}
 
 /// An extension trait for tree iterators

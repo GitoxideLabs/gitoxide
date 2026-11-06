@@ -288,7 +288,8 @@ mod util {
     }
 }
 
-mod reduce {
+/// Reduction of chunks produced by [`iter_from_counts()`][crate::data::output::entry::iter_from_counts()].
+pub mod reduce {
     use std::marker::PhantomData;
 
     use gix_parallel as parallel;
@@ -297,6 +298,7 @@ mod reduce {
     use super::Outcome;
     use crate::data::output;
 
+    /// Accumulate statistics while reducing chunks produced by [`iter_from_counts()`][crate::data::output::entry::iter_from_counts()].
     pub struct Statistics<E> {
         total: Outcome,
         _err: PhantomData<E>,

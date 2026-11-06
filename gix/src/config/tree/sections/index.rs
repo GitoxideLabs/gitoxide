@@ -46,9 +46,11 @@ impl Section for Index {
     }
 }
 
-mod validate {
+/// Validation for `index` configuration keys.
+pub mod validate {
     use crate::{Result, bstr::BStr, config::tree::keys};
 
+    /// Validate values for [`super::IndexThreads`].
     #[derive(Clone, Copy)]
     pub struct IndexThreads;
     impl keys::Validate for IndexThreads {

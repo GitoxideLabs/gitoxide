@@ -154,13 +154,15 @@ impl Section for Ssh {
     }
 }
 
-mod validate {
+/// Validation for `gpg` configuration keys.
+pub mod validate {
     use crate::{
         Result,
         bstr::BStr,
         config::tree::{Gpg, keys},
     };
 
+    /// Validate values for [`super::Format`].
     #[derive(Copy, Clone)]
     pub struct Format;
 
@@ -171,6 +173,7 @@ mod validate {
         }
     }
 
+    /// Validate values for [`super::MinTrustLevel`].
     #[derive(Copy, Clone)]
     pub struct MinTrustLevel;
 

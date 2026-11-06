@@ -543,9 +543,11 @@ mod abbrev {
     }
 }
 
-mod validate {
+/// Validation for `core` configuration keys.
+pub mod validate {
     use crate::{Result, bstr::BStr, config::tree::keys};
 
+    /// Validate values for [`super::RepositoryFormatVersion`].
     #[derive(Clone, Copy)]
     pub struct RepositoryFormatVersion;
     impl keys::Validate for RepositoryFormatVersion {
@@ -556,6 +558,7 @@ mod validate {
         }
     }
 
+    /// Validate values for [`super::Disambiguate`].
     #[derive(Clone, Copy)]
     pub struct Disambiguate;
     impl keys::Validate for Disambiguate {
@@ -566,6 +569,7 @@ mod validate {
         }
     }
 
+    /// Validate values for [`super::LogAllRefUpdates`].
     #[derive(Clone, Copy)]
     pub struct LogAllRefUpdates;
     impl keys::Validate for LogAllRefUpdates {
@@ -576,6 +580,7 @@ mod validate {
         }
     }
 
+    /// Validate values for [`super::CheckStat`].
     #[derive(Clone, Copy)]
     pub struct CheckStat;
     impl keys::Validate for CheckStat {
@@ -585,6 +590,7 @@ mod validate {
         }
     }
 
+    /// Validate values for [`super::Abbrev`].
     #[derive(Clone, Copy)]
     pub struct Abbrev;
     impl keys::Validate for Abbrev {
@@ -598,6 +604,7 @@ mod validate {
         }
     }
 
+    /// Validate values for [`super::SharedRepository`].
     #[derive(Clone, Copy)]
     pub struct SharedRepository;
     impl keys::Validate for SharedRepository {
@@ -607,6 +614,7 @@ mod validate {
         }
     }
 
+    /// Validate values for [`super::SafeCrlf`].
     #[cfg(feature = "attributes")]
     #[derive(Clone, Copy)]
     pub struct SafeCrlf;
@@ -618,6 +626,7 @@ mod validate {
         }
     }
 
+    /// Validate values for [`super::AutoCrlf`].
     #[cfg(feature = "attributes")]
     #[derive(Clone, Copy)]
     pub struct AutoCrlf;
@@ -629,6 +638,7 @@ mod validate {
         }
     }
 
+    /// Validate values for [`super::Eol`].
     #[cfg(feature = "attributes")]
     #[derive(Clone, Copy)]
     pub struct Eol;
@@ -640,6 +650,7 @@ mod validate {
         }
     }
 
+    /// Validate values for [`super::CheckRoundTripEncoding`].
     #[cfg(feature = "attributes")]
     #[derive(Clone, Copy)]
     pub struct CheckRoundTripEncoding;

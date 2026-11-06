@@ -56,7 +56,7 @@ pub mod async_io {
     mod read;
     pub use read::StreamingPeekableIter;
     mod sidebands;
-    pub use sidebands::WithSidebands;
+    pub use sidebands::{ReadLineFuture, WithSidebands};
     mod write;
     pub use write::Writer;
 }

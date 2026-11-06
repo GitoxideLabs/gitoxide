@@ -479,7 +479,7 @@ pub mod merge {
     use gix::bstr::BString;
 
     #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
-    pub enum ResolveWith {
+    pub(crate) enum ResolveWith {
         /// Use ours then theirs in case of conflict.
         Union,
         /// Use only ours in case of conflict.
@@ -499,7 +499,7 @@ pub mod merge {
     }
 
     #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
-    pub enum FileFavor {
+    pub(crate) enum FileFavor {
         /// Use only ours in case of conflict.
         Ours,
         /// Use only theirs in case of conflict.
@@ -507,7 +507,7 @@ pub mod merge {
     }
 
     #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
-    pub enum TreeFavor {
+    pub(crate) enum TreeFavor {
         /// Use only the previous tree entry in case of conflict.
         Ancestor,
         /// Use only ours tree entry in case of conflict.
@@ -650,7 +650,7 @@ pub mod log {
     use gix::bstr::BString;
 
     #[derive(Debug, Copy, Clone, clap::ValueEnum)]
-    pub enum Sorting {
+    pub(crate) enum Sorting {
         /// Visit commits breadth-first, without guaranteeing children precede parents.
         BreadthFirst,
         /// Prioritize the newest queued commits, without guaranteeing children precede parents.
@@ -778,7 +778,7 @@ pub mod fetch {
     }
 
     #[derive(Debug, clap::Parser)]
-    pub struct ShallowOptions {
+    pub(crate) struct ShallowOptions {
         /// Fetch with the history truncated to the given number of commits as seen from the remote.
         #[clap(long, help_heading = Some("SHALLOW"), conflicts_with_all = ["shallow_since", "shallow_exclude", "deepen", "unshallow"])]
         pub depth: Option<NonZeroU32>,
@@ -866,7 +866,7 @@ pub mod clone {
     }
 
     #[derive(Debug, clap::Parser)]
-    pub struct ShallowOptions {
+    pub(crate) struct ShallowOptions {
         /// Create a shallow clone with the history truncated to the given number of commits.
         #[clap(long, help_heading = Some("SHALLOW"), conflicts_with_all = ["shallow_since", "shallow_exclude"])]
         pub depth: Option<NonZeroU32>,
@@ -965,7 +965,7 @@ pub mod clean {
     use crate::shared::CheckPathSpec;
 
     #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
-    pub enum FindRepository {
+    pub(crate) enum FindRepository {
         All,
         #[default]
         NonBare,

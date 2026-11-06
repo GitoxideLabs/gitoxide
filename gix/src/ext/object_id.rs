@@ -1,5 +1,6 @@
 use gix_hash::ObjectId;
 
+#[expect(unnameable_types, reason = "sealed traits must remain unnameable")]
 pub trait Sealed {}
 
 pub type AncestorsIter<Find> = gix_traverse::commit::Simple<Find, fn(&gix_hash::oid) -> bool>;

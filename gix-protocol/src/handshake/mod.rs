@@ -1,5 +1,8 @@
 use bstr::BString;
 
+#[cfg(all(feature = "handshake", feature = "fetch"))]
+pub use hero::ObtainRefMap;
+
 ///
 pub mod refs;
 
@@ -68,6 +71,9 @@ pub(crate) mod hero {
         /// The server capabilities.
         pub capabilities: gix_transport::client::Capabilities,
     }
+
+    #[cfg(feature = "fetch")]
+    pub use fetch::ObtainRefMap;
 
     #[cfg(feature = "fetch")]
     mod fetch {

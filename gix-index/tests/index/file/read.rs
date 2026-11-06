@@ -266,7 +266,8 @@ fn reuc_extension() {
     let file = loose_file("REUC");
     assert_eq!(file.version(), Version::V2);
 
-    assert!(file.resolve_undo().is_some());
+    let paths: Option<&Vec<gix_index::extension::resolve_undo::ResolvePath>> = file.resolve_undo();
+    assert!(paths.is_some(), "the fixture contains a resolve-undo extension");
 }
 
 #[test]

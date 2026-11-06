@@ -225,7 +225,12 @@ mod dirwalk {
             expected,
             "note how bare repos are just directories by default"
         );
-        let mut iter = repo.dirwalk_iter(index, None::<&str>, Default::default(), untracked_only)?;
+        let mut iter = repo.dirwalk_iter(
+            index,
+            None::<&str>,
+            gix::interrupt::OwnedOrStaticAtomicBool::default(),
+            untracked_only,
+        )?;
         let mut actual: Vec<_> = iter
             .by_ref()
             .map(std::result::Result::unwrap)

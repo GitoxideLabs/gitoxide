@@ -15,6 +15,7 @@ mod not_parallel {
         _env: std::marker::PhantomData<&'env mut &'env ()>,
     }
 
+    /// A thread builder which runs its closure immediately when `parallel` is disabled.
     pub struct ThreadBuilder;
 
     /// Create a builder for threads which allows them to be spawned into a scope and configured prior to spawning.
@@ -26,9 +27,11 @@ mod not_parallel {
     unsafe impl Sync for Scope<'_, '_> {}
 
     impl ThreadBuilder {
+        /// Accept a thread name without effect during serial execution.
         pub fn name(self, _new: String) -> Self {
             self
         }
+        /// Run `f` immediately within `scope` and return its completed handle.
         pub fn spawn_scoped<'scope, 'env, F, T>(
             &self,
             scope: &'scope Scope<'scope, 'env>,
@@ -71,7 +74,7 @@ mod not_parallel {
     /// A handle that can be used to join its scoped thread.
     ///
     /// This struct is created by the [`Scope::spawn`] method and the
-    /// [`ScopedThreadBuilder::spawn`] method.
+    /// [`ThreadBuilder::spawn_scoped`] method.
     pub struct ScopedJoinHandle<'scope, T> {
         /// Holds the result of the inner closure.
         result: T,
@@ -79,9 +82,11 @@ mod not_parallel {
     }
 
     impl<T> ScopedJoinHandle<'_, T> {
+        /// Return the completed closure's result.
         pub fn join(self) -> std::thread::Result<T> {
             Ok(self.result)
         }
+        /// Always return `true`, as serial execution completes before returning the handle.
         pub fn is_finished(&self) -> bool {
             true
         }
@@ -115,7 +120,7 @@ mod not_parallel {
 }
 
 #[cfg(not(feature = "parallel"))]
-pub use not_parallel::{Scope, build_thread, in_parallel_with_slice, join, threads};
+pub use not_parallel::{Scope, ScopedJoinHandle, ThreadBuilder, build_thread, in_parallel_with_slice, join, threads};
 
 /// Read items from `input` and `consume` them in a single thread, producing an output to be collected by a `reducer`,
 /// whose task it is to aggregate these outputs into the final result returned by this function.

@@ -1,5 +1,6 @@
 use std::{borrow::Cow, ffi::OsStr, path::Path};
 
+/// A directory entry with optional Unicode precomposition.
 #[derive(Debug)]
 pub struct DirEntry<T: std::fmt::Debug> {
     inner: T,
@@ -16,9 +17,13 @@ impl<T: std::fmt::Debug> DirEntry<T> {
     }
 }
 
+/// File-system information used by [`DirEntry`].
 pub trait DirEntryApi {
+    /// Return the entry's full path.
     fn path(&self) -> Cow<'_, Path>;
+    /// Return the entry's file name.
     fn file_name(&self) -> Cow<'_, OsStr>;
+    /// Return the entry's file type.
     fn file_type(&self) -> std::io::Result<std::fs::FileType>;
 }
 
@@ -63,6 +68,7 @@ pub struct WalkDir<T> {
 }
 
 #[cfg(feature = "walkdir")]
+/// An iterator over directory entries with optional Unicode precomposition.
 pub struct WalkDirIter<T, I, E>
 where
     T: Iterator<Item = Result<I, E>>,

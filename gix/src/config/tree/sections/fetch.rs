@@ -82,9 +82,11 @@ mod algorithm {
     }
 }
 
-mod validate {
+/// Validation for `fetch` configuration keys.
+pub mod validate {
     use crate::{Result, bstr::BStr, config::tree::keys};
 
+    /// Validate values for [`super::NegotiationAlgorithm`].
     #[derive(Clone, Copy)]
     pub struct NegotiationAlgorithm;
     impl keys::Validate for NegotiationAlgorithm {
@@ -96,6 +98,7 @@ mod validate {
         }
     }
 
+    /// Validate values for [`super::RecurseSubmodules`].
     #[cfg(feature = "attributes")]
     #[derive(Clone, Copy)]
     pub struct RecurseSubmodules;
