@@ -253,7 +253,8 @@ The top-level crate that acts as hub to all functionality provided by the `gix-*
 * [x] Git-independent filesystem notifications with upstream `notify` compatibility backends
 * [x] Bounded event intake, explicit coverage loss, replaceable watches, and event-loop wakeups
 * [x] Owned macOS FSEvents backend with administrative-marker delivery fences
-* [ ] Owned Linux and Windows backends with delivery synchronization
+* [x] Owned Windows `ReadDirectoryChangesW` backend with cancellable, bounded native reads
+* [ ] Owned Linux backend and Linux/Windows delivery synchronization
 
 ### gix-fsmonitor
 * [x] Standalone daemon serving Git hook v2 and native Simple IPC clients

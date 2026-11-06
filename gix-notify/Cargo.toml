@@ -18,8 +18,11 @@ gix-parallel = { version = "^0.50.0", path = "../gix-parallel", features = ["par
 [dev-dependencies]
 tempfile = "3.26.0"
 
-[target.'cfg(not(target_os = "macos"))'.dependencies]
+[target.'cfg(not(any(target_os = "macos", windows)))'.dependencies]
 notify = "8.2.0"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 fsevent-sys = "4.1.0"

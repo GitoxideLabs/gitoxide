@@ -5,10 +5,16 @@
 //! requires a fresh scan of every watched path. Install watches **before** taking that baseline,
 //! and keep processing notifications received while scanning.
 //!
-//! macOS uses an owned FSEvents backend; other platforms currently use `notify`. Only the owned
-//! backend currently supports a delivery fence, using [`Watcher::synchronize_at()`] with a
-//! caller-provided marker directory. Applications should also periodically verify their state.
+//! macOS uses an owned FSEvents backend and Windows uses an owned `ReadDirectoryChangesW` backend;
+//! other platforms currently use `notify`. Only macOS currently supports a delivery fence, using
+//! [`Watcher::synchronize_at()`] with a caller-provided marker directory. Applications should also
+//! periodically verify their state.
 //! No Git knowledge, ignore matching, or repository dependencies are required.
+//!
+//! Windows retains a 64 KiB read buffer per native directory registration, in addition to the
+//! bounded application queue. File watches share their parent's registration and filter sibling
+//! events. Root identity checks detect moved or replaced directories before publishing their
+//! notifications and periodically while idle; losing a root requires registration to be retried.
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
