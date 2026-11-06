@@ -5,15 +5,21 @@
 //! requires a fresh scan of every watched path. Install watches **before** taking that baseline,
 //! and keep processing notifications received while scanning.
 //!
-//! macOS uses an owned FSEvents backend and Linux uses an owned inotify backend; other platforms
-//! use `notify`. The owned backends support delivery fences using [`Watcher::synchronize_at()`]
-//! with a caller-provided marker directory. Applications should also periodically verify their state.
+//! macOS uses an owned FSEvents backend, Linux uses an owned inotify backend, and Windows uses an
+//! owned `ReadDirectoryChangesW` backend; other platforms use `notify`. macOS and Linux support
+//! delivery fences using [`Watcher::synchronize_at()`] with a caller-provided marker directory.
+//! Applications should also periodically verify their state.
 //!
 //! Linux installs one watch per directory without following descendant symlinks. Directory moves,
 //! removals, and native queue overflow can require re-registering the desired watches before a new
 //! baseline scan. Like inotify itself, notifications and fences cannot cover memory-mapped writes
 //! or changes made through unobserved hard links or directly to an overlay's underlying layers.
 //! No Git knowledge, ignore matching, or repository dependencies are required.
+//!
+//! Windows retains a 64 KiB read buffer per native directory registration, in addition to the
+//! bounded application queue. File watches share their parent's registration and filter sibling
+//! events. Root identity checks detect moved or replaced directories before publishing their
+//! notifications and periodically while idle; losing a root requires registration to be retried.
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
