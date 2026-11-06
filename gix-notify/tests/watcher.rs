@@ -3,9 +3,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use gix_error::TestResult;
 use gix_notify::{Budget, Loss, Options, SynchronizeError, Watch, Watcher};
-
-type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
 #[test]
 fn empty_watch_set_and_synchronization_contract() -> TestResult {
