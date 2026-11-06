@@ -195,6 +195,7 @@ jobs:
           gh run download "$coverage_run" --repo "$GITHUB_REPOSITORY" --name "$COVERAGE_ARTIFACT" \
             --dir target/qa-coverage/indexes
       - name: Run the selected checks
+        timeout-minutes: ${{ contains(matrix.tasks, 'odb-threaded-scenarios') && 5 || 360 }}
         # Keep Windows' native shell; the shared runner configures every task's environment.
         run: cargo run --profile qa --locked -p internal-tools --no-default-features --bin qa -- run --from-env
       - name: Publish optional coverage indexes

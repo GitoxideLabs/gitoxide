@@ -202,6 +202,7 @@ where
                         write_pack_options,
                     )
                     .or_raise(|| message("Failed to write the received pack"))?;
+                    repo.objects.store_ref().mark_disk_state_stale();
                     may_read_to_end = true;
                     Some(res)
                 } else {
