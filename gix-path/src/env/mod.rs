@@ -126,6 +126,8 @@ pub fn shell_command() -> std::process::Command {
 /// roots, preferring current-user registrations to machine registrations.
 /// Fallback sources are inspected only when earlier locations do not contain Git, and the
 /// selected executable is cached for the lifetime of the process.
+/// File symlinks, including WinGet's portable links, are resolved for layout discovery while
+/// retaining the selected invocation.
 pub fn exe_invocation() -> &'static Path {
     #[cfg(windows)]
     {

@@ -132,3 +132,28 @@ fn unrecognized_core(bin: &str) -> gix_error::TestResult {
     );
     Ok(())
 }
+
+#[test]
+fn winget_user_link() -> gix_error::TestResult {
+    linked_installation("winget/Microsoft/WinGet/Links")
+}
+
+#[test]
+fn winget_machine_link_chain() -> gix_error::TestResult {
+    linked_installation("winget-machine/WinGet/Links")
+}
+
+fn linked_installation(bin: &str) -> gix_error::TestResult {
+    let fixture = fixture()?;
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _env = select(&fixture.join(bin));
+    assert_native_paths(&fixture.join("conda/Library"), "ucrt64");
+    Ok(())
+}
+
+#[test]
+fn symlink_location_does_not_override_unknown_target_layout() -> gix_error::TestResult {
+    unrecognized_core("symlinked/ucrt64/bin")
+}

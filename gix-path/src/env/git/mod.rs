@@ -231,10 +231,20 @@ fn executable() -> Option<&'static Executable> {
     EXECUTABLE.as_ref()
 }
 
-/// Keep the selected path and its origin without reverse lookup through unused fallbacks.
+/// Resolve the selected executable for layout detection, preserving its original invocation.
 #[cfg(windows)]
 pub(super) fn exe_path() -> Option<&'static Path> {
-    executable().map(|exe| exe.path.as_path())
+    static PATH: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
+        let path = &executable()?.path;
+        if std::fs::symlink_metadata(path).ok()?.file_type().is_symlink() {
+            // WinGet's Links directory points into the selected portable package, potentially
+            // at a custom installation root. Follow links rather than searching other packages.
+            crate::realpath(path).ok()
+        } else {
+            Some(path.clone())
+        }
+    });
+    PATH.as_deref()
 }
 
 #[cfg(windows)]
