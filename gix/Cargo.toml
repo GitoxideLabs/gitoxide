@@ -145,7 +145,10 @@ encoding-asian = ["gix-filter?/encoding-asian"]
 command = ["dep:gix-command", "gix-object/signature"]
 
 ## Obtain information similar to `git status`.
-status = ["gix-status", "dirwalk", "index", "blob-diff", "gix-diff/index"]
+status = ["gix-status", "dirwalk", "index", "blob-diff", "gix-diff/index", "command", "dep:gix-fsmonitor"]
+
+## Host a filesystem monitor server whose lifetime is owned by the application.
+fsmonitor-server = ["dep:gix-fsmonitor", "gix-fsmonitor/server"]
 
 ## Utilities for interrupting computations and cleaning up tempfiles.
 interrupt = ["dep:signal-hook", "gix-tempfile/signals", "dep:parking_lot"]
@@ -155,6 +158,9 @@ index = ["dep:gix-index"]
 
 ## Support directory walks with Git-style annoations.
 dirwalk = ["dep:gix-dir", "attributes", "excludes"]
+
+## Observe repository and worktree changes without retaining a repository handle.
+notify = ["dep:gix-notify", "dirwalk"]
 
 ## Access to credential helpers, which provide credentials for URLs.
 # Note that `gix-negotiate` just piggibacks here, as 'credentials' is equivalent to 'fetch & push' right now.
@@ -391,6 +397,7 @@ gix-date = { version = "^0.19.0", path = "../gix-date" }
 gix-refspec = { version = "^0.47.1", path = "../gix-refspec" }
 gix-filter = { version = "^0.36.1", path = "../gix-filter", optional = true }
 gix-dir = { version = "^0.32.0", path = "../gix-dir", optional = true }
+gix-notify = { version = "^0.1.0", path = "../gix-notify", optional = true }
 
 gix-config = { version = "^0.62.2", path = "../gix-config" }
 gix-odb = { version = "^0.87.0", path = "../gix-odb" }
@@ -431,6 +438,7 @@ gix-submodule = { version = "^0.36.1", path = "../gix-submodule", optional = tru
 gix-status = { version = "^0.37.0", path = "../gix-status", optional = true, features = [
     "worktree-rewrites",
 ] }
+gix-fsmonitor = { version = "^0.1.0", path = "../gix-fsmonitor", optional = true }
 gix-command = { version = "^0.12.1", path = "../gix-command", optional = true }
 
 gix-worktree-stream = { version = "^0.39.0", path = "../gix-worktree-stream", optional = true }
@@ -613,6 +621,7 @@ checks = [
     ] },
 ]
 tests = [
+    { args = ["--features", "fsmonitor-server", "--test", "gix", "-E", "test(repository::fsmonitor)"] },
     { args = [
         "--no-default-features",
         "--features",

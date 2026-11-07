@@ -6,11 +6,14 @@ use gix_testtools::size_ok;
 pub use gix_testtools::Result;
 
 mod access;
+mod carry_over;
 mod entry;
 mod file;
 mod fs;
+mod fs_monitor;
 mod fuzzed;
 mod init;
+mod untracked_cache;
 
 static SHA1_TO_SHA256_HASHES: std::sync::LazyLock<std::collections::HashMap<&str, &str>> =
     std::sync::LazyLock::new(|| {

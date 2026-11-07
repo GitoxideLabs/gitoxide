@@ -1,4 +1,7 @@
-use std::{collections::BTreeSet, sync::atomic::AtomicBool};
+use std::{
+    collections::{BTreeSet, HashMap},
+    sync::atomic::AtomicBool,
+};
 
 use bstr::{BStr, BString};
 
@@ -34,6 +37,10 @@ pub mod delegate {
     }
 
     impl walk::Delegate for Collect {
+        fn can_omit_ignored_directories(&self) -> bool {
+            true
+        }
+
         fn emit(&mut self, entry: EntryRef<'_>, dir_status: Option<entry::Status>) -> Action {
             self.unorded_entries.push((entry.to_owned(), dir_status));
             std::ops::ControlFlow::Continue(())
@@ -60,6 +67,15 @@ pub trait Delegate {
     /// was [CollapsedEntriesEmissionMode::All].
     fn emit(&mut self, entry: EntryRef<'_>, collapsed_directory_status: Option<entry::Status>) -> Action;
 
+    /// Return `true` to allow partial [`CachedListing`] data to omit ignored or pruned directories.
+    ///
+    /// Their [`can_recurse`](Self::can_recurse) callbacks may be skipped. Only opt in when these
+    /// directories would neither be traversed nor observed by this delegate. Complete listings do
+    /// not require this permission, and incompatible walk options still disable partial listings.
+    fn can_omit_ignored_directories(&self) -> bool {
+        false
+    }
+
     /// Return `true` if the given entry can be recursed into. Will only be called if the entry is a physical directory.
     /// The base implementation will act like Git does by default in `git status` or `git clean`.
     ///
@@ -70,7 +86,8 @@ pub trait Delegate {
     /// worktree root is a repository itself. This typically happens for submodules. In this case, recursion rules are relaxed
     /// to allow traversing submodule worktrees.
     ///
-    /// Note that this method will see all directories, even though not all of them may end up being [emitted](Self::emit()).
+    /// This method sees all directories unless [`can_omit_ignored_directories`](Self::can_omit_ignored_directories)
+    /// permits omissions from partial listings. Not all directories will end up being [emitted](Self::emit()).
     /// If this method returns `false`, the `entry` will always be emitted.
     fn can_recurse(
         &mut self,
@@ -197,6 +214,30 @@ pub struct Options<'a> {
     pub worktree_relative_worktree_dirs: Option<&'a BTreeSet<BString>>,
 }
 
+/// Directory listings whose names and file types are known to be unchanged.
+///
+/// Callers must include every immediate tracked and untracked entry, even entries they don't intend
+/// to emit: tracked siblings prevent an untracked directory from collapsing. Names must be single
+/// path components and use the Unicode composition selected by [`Options::precompose_unicode`].
+/// The caller is responsible for invalidating listings after filesystem, index, or ignore-rule changes,
+/// including configuration changes that alter which ignored entries may be omitted.
+#[derive(Debug, Default, Clone)]
+pub struct CachedListing {
+    /// Maps worktree-relative directory paths (empty for the root, `/` separated) to their entries.
+    pub directories: HashMap<BString, Vec<(BString, entry::Kind)>>,
+    /// Whether the listings also include ignored and otherwise pruned entries, making them complete.
+    ///
+    /// If `false`, ignored and pruned entries may be omitted. Such listings require the delegate's
+    /// [`can_omit_ignored_directories`](Delegate::can_omit_ignored_directories) permission and are only used with an
+    /// excludes stack, without pathspecs, and with options that cannot expose or depend on omissions:
+    /// no ignored, pruned, empty-directory, or collapsed-child output, and no deletion mode.
+    /// Empty partial listings are read from disk so omitted names cannot make a repository appear empty.
+    /// When collapsing untracked directories, partial listings containing subdirectories are also read
+    /// from disk, except at the worktree root which cannot collapse. This preserves the distinction
+    /// between empty descendants and descendants accompanied by omitted ignored files.
+    pub includes_ignored: bool,
+}
+
 /// All information that is required to perform a dirwalk, and classify paths properly.
 pub struct Context<'a> {
     /// If not `None`, it will be checked before entering any directory to trigger early interruption.
@@ -260,6 +301,8 @@ pub struct Context<'a> {
     ///
     /// If the `traversal_root` is not in the `worktree_root` passed to [walk()](crate::walk()).
     pub explicit_traversal_root: Option<&'a std::path::Path>,
+    /// Directory listings known to be unchanged, used instead of reading those directories.
+    pub cached_listing: Option<&'a CachedListing>,
 }
 
 /// Additional information collected as outcome of [`walk()`](function::walk()).
@@ -267,6 +310,8 @@ pub struct Context<'a> {
 pub struct Outcome {
     /// The amount of calls to read the directory contents.
     pub read_dir_calls: u32,
+    /// The number of directories read from [`CachedListing`] instead of the filesystem.
+    pub cached_dir_listings: u32,
     /// The amount of returned entries provided to the callback. This number can be lower than `seen_entries`.
     pub returned_entries: usize,
     /// The amount of entries, prior to pathspecs filtering them out or otherwise excluding them.

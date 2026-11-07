@@ -1,4 +1,8 @@
 use crate::Result;
+mod fsmonitor;
+mod fsmonitor_daemon;
+mod tree_index;
+mod untracked_cache;
 pub fn submodule_repo(name: &str) -> Result<gix::Repository> {
     use crate::util::named_subrepo_opts;
     Ok(named_subrepo_opts(

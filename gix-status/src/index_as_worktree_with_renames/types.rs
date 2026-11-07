@@ -319,6 +319,9 @@ pub struct Context<'a> {
     pub resource_cache: gix_diff::blob::Platform,
     /// A flag to query to learn if cancellation is requested.
     pub should_interrupt: &'a AtomicBool,
+    /// Filesystem-monitor validity for tracked entries, forwarded to
+    /// [`index_as_worktree::Context::fsmonitor`](crate::index_as_worktree::Context::fsmonitor).
+    pub fsmonitor: Option<crate::index_as_worktree::FsMonitor<'a>>,
     /// The context for the directory walk.
     pub dirwalk: DirwalkContext<'a>,
 }
@@ -339,6 +342,8 @@ pub struct DirwalkContext<'a> {
     ///
     /// [Read more in `gix-dir`](gix_dir::walk::Context::ignore_case_index_lookup).
     pub ignore_case_index_lookup: Option<&'a gix_index::AccelerateLookup<'a>>,
+    /// Directory listings known to be unchanged, subject to [`gix_dir::walk::CachedListing`]'s contract.
+    pub cached_listing: Option<&'a gix_dir::walk::CachedListing>,
 }
 
 /// Observe the status of an entry by comparing an index entry to the worktree, along

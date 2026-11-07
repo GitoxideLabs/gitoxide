@@ -1,4 +1,4 @@
-use bstr::BString;
+use bstr::{BStr, BString};
 use gix_hash::ObjectId;
 
 use crate::{
@@ -37,6 +37,162 @@ impl UntrackedCache {
     pub fn directories(&self) -> &[Directory] {
         &self.directories
     }
+
+    /// Invalidate all cached directory listings while retaining their structure and exclusion metadata.
+    /// Return whether any cached data changed.
+    pub fn invalidate_all(&mut self) -> bool {
+        let mut changed = false;
+        for directory in &mut self.directories {
+            changed |= directory.invalidate();
+        }
+        changed
+    }
+
+    /// Invalidate the listing containing the repository-relative `path`, its ancestors, and any cached subtree at `path`.
+    ///
+    /// A trailing slash is optional. Invalid relative paths conservatively invalidate the entire cache.
+    /// Changes to inherited ignore rules require invalidating every affected descendant as well.
+    /// Return whether any cached data changed.
+    pub fn invalidate_path(&mut self, path: &BStr) -> bool {
+        let path = path.strip_suffix(b"/").unwrap_or(path);
+        if path.is_empty()
+            || path
+                .split(|byte| *byte == b'/')
+                .any(|part| part.is_empty() || part == b"." || part == b"..")
+        {
+            return self.invalidate_all();
+        }
+        let mut changed = false;
+        let mut directory_index = 0;
+        for component in path.split(|byte| *byte == b'/') {
+            let Some(directory) = self.directories.get_mut(directory_index) else {
+                return changed;
+            };
+            changed |= directory.invalidate();
+            let Ok(next) = self.directories[directory_index]
+                .sub_directories
+                .binary_search_by(|&index| self.directories[index].name.as_slice().cmp(component))
+            else {
+                return changed;
+            };
+            directory_index = self.directories[directory_index].sub_directories[next];
+        }
+        let mut pending = vec![directory_index];
+        while let Some(index) = pending.pop() {
+            if let Some(directory) = self.directories.get_mut(index) {
+                pending.extend_from_slice(&directory.sub_directories);
+                changed |= directory.invalidate();
+            }
+        }
+        changed
+    }
+
+    /// Serialize this extension, including its header, using `object_hash` for every stored object id.
+    ///
+    /// Only restore a cache to an index after invalidating listings affected by index or monitor changes.
+    pub fn write_to(&self, mut out: impl std::io::Write, object_hash: gix_hash::Kind) -> std::io::Result<()> {
+        let mut body = Vec::new();
+        write_varint(&mut body, self.identifier.len());
+        body.extend_from_slice(&self.identifier);
+        write_stat(&mut body, self.info_exclude.as_ref().map(|value| value.stat));
+        write_stat(&mut body, self.excludes_file.as_ref().map(|value| value.stat));
+        body.extend_from_slice(&self.dir_flags.to_be_bytes());
+        write_oid(&mut body, self.info_exclude.as_ref().map(|value| value.id), object_hash)?;
+        write_oid(
+            &mut body,
+            self.excludes_file.as_ref().map(|value| value.id),
+            object_hash,
+        )?;
+        body.extend_from_slice(&self.exclude_filename_per_dir);
+        body.push(0);
+        write_varint(&mut body, self.directories.len());
+        if !self.directories.is_empty() {
+            // Decoding stores directories in depth-first order; invalidation preserves that order.
+            for directory in &self.directories {
+                write_varint(&mut body, directory.untracked_entries.len());
+                write_varint(&mut body, directory.sub_directories.len());
+                body.extend_from_slice(&directory.name);
+                body.push(0);
+                for name in &directory.untracked_entries {
+                    body.extend_from_slice(name);
+                    body.push(0);
+                }
+            }
+            for predicate in [
+                |directory: &Directory| directory.stat.is_some(),
+                |directory: &Directory| directory.check_only,
+                |directory: &Directory| directory.exclude_file_oid.is_some(),
+            ] {
+                let bits: Vec<_> = self.directories.iter().map(predicate).collect();
+                gix_bitmap::ewah::Vec::from_bits(&bits)
+                    .ok_or_else(|| {
+                        std::io::Error::new(std::io::ErrorKind::InvalidInput, "too many cached directories")
+                    })?
+                    .write_to(&mut body)?;
+            }
+            for directory in &self.directories {
+                if let Some(stat) = directory.stat {
+                    write_stat(&mut body, Some(stat));
+                }
+            }
+            for directory in &self.directories {
+                if let Some(id) = directory.exclude_file_oid {
+                    write_oid(&mut body, Some(id), object_hash)?;
+                }
+            }
+            body.push(0);
+        }
+        let size = u32::try_from(body.len()).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "untracked cache extension exceeds u32::MAX",
+            )
+        })?;
+        out.write_all(&SIGNATURE)?;
+        out.write_all(&size.to_be_bytes())?;
+        out.write_all(&body)
+    }
+}
+
+fn write_varint(out: &mut Vec<u8>, mut value: usize) {
+    let mut bytes = [0; 10];
+    let mut start = bytes.len() - 1;
+    bytes[start] = (value & 0x7f) as u8;
+    while value >= 0x80 {
+        value = (value >> 7) - 1;
+        start -= 1;
+        bytes[start] = (value & 0x7f) as u8 | 0x80;
+    }
+    out.extend_from_slice(&bytes[start..]);
+}
+
+fn write_stat(out: &mut Vec<u8>, stat: Option<entry::Stat>) {
+    let stat = stat.unwrap_or_default();
+    for value in [
+        stat.ctime.secs,
+        stat.ctime.nsecs,
+        stat.mtime.secs,
+        stat.mtime.nsecs,
+        stat.dev,
+        stat.ino,
+        stat.uid,
+        stat.gid,
+        stat.size,
+    ] {
+        out.extend_from_slice(&value.to_be_bytes());
+    }
+}
+
+fn write_oid(out: &mut Vec<u8>, id: Option<ObjectId>, object_hash: gix_hash::Kind) -> std::io::Result<()> {
+    let id = id.unwrap_or_else(|| object_hash.null());
+    if id.kind() != object_hash {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "untracked cache object hash mismatch",
+        ));
+    }
+    out.extend_from_slice(id.as_bytes());
+    Ok(())
 }
 
 /// A structure to track filesystem stat information along with an object id, linking a worktree file with what's in our ODB.
@@ -67,7 +223,7 @@ pub struct Directory {
     pub name: BString,
     /// Untracked files and directory names
     pub untracked_entries: Vec<BString>,
-    /// indices for sub-directories similar to this one.
+    /// Indices for sub-directories, ordered strictly by their names.
     pub sub_directories: Vec<usize>,
 
     /// The directories stat data, if available or valid // TODO: or is it the exclude file?
@@ -79,6 +235,12 @@ pub struct Directory {
 }
 
 impl Directory {
+    fn invalidate(&mut self) -> bool {
+        let changed = self.stat.take().is_some() || !self.untracked_entries.is_empty();
+        self.untracked_entries.clear();
+        changed
+    }
+
     /// The directory name, or an empty string if this is the root directory.
     /// `/` is always used as path-separator.
     pub fn name(&self) -> &bstr::BStr {
@@ -90,7 +252,7 @@ impl Directory {
         &self.untracked_entries
     }
 
-    /// Indices for sub-directories similar to this one.
+    /// Indices for sub-directories, ordered strictly by their names.
     pub fn sub_directories(&self) -> &[usize] {
         &self.sub_directories
     }
@@ -264,8 +426,31 @@ fn decode_directory_block<'a>(
         let subdir_index = directories.len();
         let rest = decode_directory_block(data, directories, alloc_limit_bytes)?;
         data = rest;
+        if directories[index]
+            .sub_directories
+            .last()
+            .is_some_and(|&previous| directories[previous].name >= directories[subdir_index].name)
+        {
+            return None;
+        }
         directories[index].sub_directories.push(subdir_index);
     }
 
     data.into()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn variable_width_counts_roundtrip() {
+        for value in [0, 127, 128, 16_383, 16_384, usize::MAX] {
+            let mut encoded = Vec::new();
+            super::write_varint(&mut encoded, value);
+            assert_eq!(
+                crate::util::var_int(&encoded),
+                Some((value as u64, [].as_slice())),
+                "counts retain every bit across variable-width boundaries"
+            );
+        }
+    }
 }

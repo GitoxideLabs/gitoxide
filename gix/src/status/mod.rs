@@ -1,5 +1,7 @@
 pub use gix_status as plumbing;
 
+mod fsmonitor;
+
 use crate::{Repository, Result, config, config::cache::util::ApplyLeniencyDefault, util::OwnedOrStaticAtomicBool};
 
 /// A structure to hold options configuring the status request, which can then be turned into an iterator.
@@ -66,6 +68,22 @@ impl Default for Submodule {
 /// Status
 impl Repository {
     /// Obtain a platform for configuring iterators for traversing git repository status information.
+    ///
+    /// Trusted `core.fsmonitor` hook commands accelerate tracked-file checks using protocol 1 or 2.
+    /// Setting it to `true` queries Git's built-in daemon and starts it on demand when supported.
+    /// Failed or malformed queries fall back to ordinary checks. Compatible whole-worktree walks reuse
+    /// Git's existing untracked cache after validating monitor events, worktree identity, and ignore rules.
+    /// `core.untrackedCache=false` disables this reuse. Caches are preserved and invalidated, but are not
+    /// created or repopulated; run Git status to warm them. Other walk modes read directories normally.
+    /// Like Git, an existing cache assumes `core.ignoreCase` has not changed since it was populated.
+    /// After changing that setting, remove the cache with `git update-index --no-untracked-cache` before warming it again.
+    /// Call [`Outcome::write_changes()`] after consuming the iterator to save the refreshed monitor
+    /// checkpoint, entry validity, and invalidated directory listings when a write is warranted.
+    /// Token-only updates retain the old checkpoint on disk; `gitoxide.fsmonitor.forceUpdateThreshold`
+    /// bounds the number of repeated events before requesting a write, as in Git (default: 100 paths).
+    /// Daemon retry, timeout, and response-size limits are configured through
+    /// [`gitoxide.fsmonitor`](crate::config::tree::gitoxide::FsMonitor).
+    /// Daemon sockets in alternate locations on remote filesystems currently fall back to ordinary checks.
     ///
     /// By default, this is set to the fastest and most immediate way of obtaining a status,
     /// which is most similar to

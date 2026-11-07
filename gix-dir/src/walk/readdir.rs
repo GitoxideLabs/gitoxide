@@ -1,11 +1,12 @@
 use std::{
     borrow::Cow,
+    ffi::OsStr,
     path::{Path, PathBuf},
     sync::atomic::Ordering,
 };
 
 use bstr::{BStr, BString, ByteSlice};
-use gix_error::{Result, ResultExt, bail, cancelled, message};
+use gix_error::{Result, ResultExt, bail, cancelled, message, validation};
 
 use crate::{
     Entry, EntryRef, entry,
@@ -37,9 +38,43 @@ pub(super) fn recursive(
     if ctx.should_interrupt.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
         bail!(cancelled("Interrupted"));
     }
-    out.read_dir_calls += 1;
-    let entries = gix_fs::read_dir(current, opts.precompose_unicode)
-        .or_raise(|| message!("Failed to read the directory at \"{}\"", current.display()))?;
+    let cached = ctx
+        .cached_listing
+        .filter(|listing| {
+            listing.includes_ignored
+                || (delegate.can_omit_ignored_directories()
+                    && opts.emit_ignored.is_none()
+                    && !opts.emit_pruned
+                    && !opts.emit_empty_directories
+                    && opts.emit_collapsed.is_none()
+                    && opts.for_deletion.is_none()
+                    && ctx.pathspec.patterns().len() == 0
+                    && ctx.excludes.is_some())
+        })
+        .and_then(|listing| {
+            listing.directories.get(current_bstr.as_bstr()).filter(|entries| {
+                listing.includes_ignored
+                    || (!entries.is_empty()
+                        && (!may_collapse
+                            || opts.emit_untracked != CollapseDirectory
+                            || entries.iter().all(|(_, kind)| !kind.is_dir())))
+            })
+        });
+    let disk = if cached.is_some() {
+        out.cached_dir_listings += 1;
+        None
+    } else {
+        out.read_dir_calls += 1;
+        Some(
+            gix_fs::read_dir(current, opts.precompose_unicode)
+                .or_raise(|| message!("Failed to read the directory at \"{}\"", current.display()))?,
+        )
+    };
+    let entries = cached
+        .into_iter()
+        .flatten()
+        .map(|entry| Ok(DirectoryEntry::Cached(entry)))
+        .chain(disk.into_iter().flatten().map(|entry| entry.map(DirectoryEntry::Disk)));
 
     let mut num_entries = 0;
     let mark = state.mark(may_collapse);
@@ -55,7 +90,7 @@ pub(super) fn recursive(
         if prev_len != 0 {
             current_bstr.push(b'/');
         }
-        let file_name = entry.file_name();
+        let file_name = entry.file_name()?;
         current_bstr.extend_from_slice(gix_path::try_os_str_into_bstr(Cow::Borrowed(file_name.as_ref()))?.as_ref());
         current.push(file_name);
 
@@ -64,7 +99,7 @@ pub(super) fn recursive(
             current_bstr,
             if prev_len == 0 { 0 } else { prev_len + 1 },
             None,
-            || entry.file_type().ok().map(Into::into),
+            || entry.kind(),
             opts,
             ctx,
         )?;
@@ -130,6 +165,35 @@ pub(super) fn recursive(
         delegate,
     );
     Ok((res, prevent_collapse))
+}
+
+enum DirectoryEntry<'a> {
+    Cached(&'a (BString, entry::Kind)),
+    Disk(gix_fs::read_dir::DirEntry),
+}
+
+impl DirectoryEntry<'_> {
+    fn file_name(&self) -> Result<Cow<'_, OsStr>> {
+        match self {
+            Self::Cached((name, _)) => {
+                let path = gix_path::from_byte_slice(name)?;
+                if name.contains(&0) || path.file_name() != Some(path.as_os_str()) {
+                    bail!(validation(format!(
+                        "Cached directory entry '{name}' is not a single file name"
+                    )));
+                }
+                Ok(Cow::Borrowed(path.as_os_str()))
+            }
+            Self::Disk(entry) => Ok(entry.file_name()),
+        }
+    }
+
+    fn kind(&self) -> Option<entry::Kind> {
+        match self {
+            Self::Cached((_, kind)) => Some(*kind),
+            Self::Disk(entry) => entry.file_type().ok().map(Into::into),
+        }
+    }
 }
 
 pub(super) struct State {

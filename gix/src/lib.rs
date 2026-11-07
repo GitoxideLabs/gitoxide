@@ -140,6 +140,8 @@ pub use gix_date as date;
 pub use gix_dir as dir;
 pub use gix_error as error;
 pub use gix_fs as fs;
+#[cfg(any(feature = "status", feature = "fsmonitor-server"))]
+pub use gix_fsmonitor as fsmonitor;
 pub use gix_glob as glob;
 pub use gix_hash as hash;
 pub use gix_hashtable as hashtable;
@@ -545,6 +547,10 @@ pub mod state;
 ///
 #[cfg(feature = "status")]
 pub mod status;
+
+/// Filesystem notifications interpreted using repository layout and ignore rules.
+#[cfg(feature = "notify")]
+pub mod notify;
 
 ///
 pub mod shallow;
