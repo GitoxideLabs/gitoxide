@@ -459,7 +459,6 @@ mod locations {
             } else if cfg!(target_pointer_width = "32") {
                 Self::Is32on32
             } else {
-                assert!(cfg!(target_pointer_width = "64"));
                 Self::Is64on64
             };
             Ok(platform_bitness)
@@ -528,9 +527,8 @@ mod locations {
                 .expect("The `CurrentVersion` registry key exists and allows reading")
                 .get_value::<OsString, _>("ProgramW6432Dir")
                 .map(PathBuf::from)
-                .map_err(|error| {
+                .inspect_err(|error| {
                     assert_eq!(error.kind(), ErrorKind::NotFound);
-                    error
                 })
                 .ok();
 
@@ -827,6 +825,7 @@ mod locations {
                 }
             },
             || -> Vec<PathBuf> { panic!("registry discovery must wait for earlier sources") },
+            || -> Vec<PathBuf> { panic!("MSYS2 registrations must remain untouched") },
         );
         assert_eq!(
             lookups.get(),
@@ -842,25 +841,34 @@ mod locations {
         );
 
         let mut locations = super::super::alternative_locations(
-            |key| match key {
-                "CONDA_PREFIX" => Some("C:/conda".into()),
-                "ChocolateyToolsLocation" => panic!("later package roots must remain untouched"),
-                _ => None,
-            },
-            || -> Vec<PathBuf> { panic!("an earlier package candidate avoids registry discovery") },
+            |key| (key == "CONDA_PREFIX").then(|| "C:/conda".into()),
+            || -> Vec<PathBuf> { panic!("fixed package paths must precede registry queries") },
+            || -> Vec<PathBuf> { panic!("fixed package paths must precede MSYS2 enumeration") },
         );
         assert_eq!(
             locations.next(),
             Some("C:/conda/Library/bin".into()),
-            "reach the active environment"
+            "even less common fixed paths precede registry queries"
+        );
+
+        let mut locations = super::super::alternative_locations(
+            |_| None,
+            || [PathBuf::from("C:/registered/cmd")],
+            || -> Vec<PathBuf> { panic!("native Git must not enumerate MSYS2 registrations") },
+        );
+        assert_eq!(
+            locations.next(),
+            Some("C:/registered/cmd".into()),
+            "direct installer registrations precede broader enumeration"
         );
 
         let registry_calls = Cell::new(0);
         let mut locations = super::super::alternative_locations(
             |_| None,
+            std::iter::empty::<PathBuf>,
             || {
                 registry_calls.set(registry_calls.get() + 1);
-                [PathBuf::from("C:/registered/cmd")]
+                [PathBuf::from("C:/registered-msys/usr/bin")]
             },
         );
         assert_eq!(
@@ -870,23 +878,49 @@ mod locations {
         );
         assert_eq!(
             locations.next(),
-            Some("C:/registered/cmd".into()),
-            "registry remains the last fallback"
+            Some("C:/registered-msys/usr/bin".into()),
+            "MSYS2 registry discovery remains the last fallback"
         );
         assert_eq!(locations.next(), None, "all sources are exhausted");
         assert_eq!(registry_calls.get(), 1, "the registry provider runs only once");
     }
 
     #[test]
-    fn scoop_locations_are_lazy() {
+    #[serial_test::serial]
+    fn scoop_locations_are_lazy() -> gix_error::TestResult {
+        let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only(
+            "windows-git-installations.sh",
+        )?)?;
         let locations = super::super::locations_under_scoop(|key| match key {
-            "GIT_INSTALL_ROOT" => Some(r"D:\portable\git".into()),
-            _ => panic!("Scoop roots must not be inspected before the explicit root is exhausted"),
+            "SCOOP" => Some(fixture.join("custom").into_os_string()),
+            _ => panic!("global and default Scoop roots must remain untouched"),
         });
         assert_eq!(
             locations.into_iter().next(),
+            Some(fixture.join("custom/apps/git/current/cmd")),
+            "a configured user installation precedes global Scoop roots"
+        );
+        assert!(
+            super::super::locations_under_scoop_without_junctions(|key| {
+                (key == "SCOOP").then(|| fixture.join("custom").into_os_string())
+            })
+            .next()
+            .is_none(),
+            "a usable current installation excludes retained versions from the scan fallback"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_installation_precedes_package_managers() {
+        let mut locations = super::super::locations_under_package_managers(|key| match key {
+            "GIT_INSTALL_ROOT" => Some(r"D:\portable\git".into()),
+            _ => panic!("package managers must not be inspected before the explicit root is exhausted"),
+        });
+        assert_eq!(
+            locations.next(),
             Some(PathBuf::from(r"D:\portable\git\cmd")),
-            "an explicit root precedes all Scoop directory inspection"
+            "an explicit Git root precedes package-manager fallbacks"
         );
     }
 
@@ -911,7 +945,6 @@ mod locations {
     #[test]
     fn scoop_locations_respect_configured_roots() {
         let locations: Vec<_> = super::super::locations_under_scoop(var_os_stub! {
-            "GIT_INSTALL_ROOT" => r"D:\portable\git",
             "SCOOP" => r"D:\custom",
             "SCOOP_GLOBAL" => r"E:\shared",
             "USERPROFILE" => r"C:\Users\alice",
@@ -920,11 +953,7 @@ mod locations {
         .collect();
         assert_eq!(
             locations,
-            pathbuf_vec![
-                r"D:\portable\git\cmd",
-                r"D:\custom\apps\git\current\cmd",
-                r"E:\shared\apps\git\current\cmd",
-            ],
+            pathbuf_vec![r"D:\custom\apps\git\current\cmd", r"E:\shared\apps\git\current\cmd",],
             "explicit installation roots take precedence over Scoop's default roots"
         );
     }
@@ -932,13 +961,9 @@ mod locations {
     #[test]
     fn scoop_locations_reject_relative_roots() {
         for invalid in ["", "relative", r"C:relative", r"\rooted"] {
-            let mut locations = super::super::locations_under_scoop(var_os_stub! {
-                "GIT_INSTALL_ROOT" => invalid,
-                "SCOOP" => invalid,
-                "SCOOP_GLOBAL" => invalid,
-                "USERPROFILE" => invalid,
-                "ProgramData" => invalid,
-            });
+            let variables = |_: &str| Some(OsString::from(invalid));
+            let mut locations = super::super::locations_under_scoop(variables)
+                .chain(super::super::locations_under_scoop_without_junctions(variables));
             assert!(
                 locations.next().is_none(),
                 "{invalid:?} must not cause discovery relative to the working directory"
@@ -965,6 +990,164 @@ mod locations {
                 "{invalid:?} must not enable discovery relative to the working directory"
             );
         }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn package_fallbacks_use_isolated_roots() -> gix_error::TestResult {
+        let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only(
+            "windows-git-installations.sh",
+        )?)?;
+        let missing = fixture.join("missing");
+        for (variable, root, expected) in [
+            ("SCOOP", "no-junction", "no-junction/apps/git/2.50.0/cmd/git.exe"),
+            ("ChocolateyToolsLocation", "chocolatey", "chocolatey/git/cmd/git.exe"),
+            ("CONDA_PREFIX", "conda", "conda/Library/bin/git.exe"),
+            ("LocalAppData", "winget", "winget/Microsoft/WinGet/Links/git.exe"),
+            ("ProgramW6432", "machine", "machine/WinGet/Links/git.exe"),
+            ("GIT_INSTALL_ROOT", "msys", "msys/usr/bin/git.exe"),
+            ("USERPROFILE", "user", "user/scoop/apps/git/current/cmd/git.exe"),
+            ("SCOOP", "custom", "custom/apps/git/current/cmd/git.exe"),
+            ("ProgramData", "global", "global/scoop/apps/git/current/cmd/git.exe"),
+            ("SCOOP_GLOBAL", "custom", "custom/apps/git/current/cmd/git.exe"),
+            ("GIT_INSTALL_ROOT", "explicit", "explicit/cmd/git.exe"),
+        ] {
+            for path in [None, Some(missing.as_os_str())] {
+                let executable = super::super::find_executable(path, || {
+                    super::super::alternative_locations(
+                        |key| (key == variable).then(|| fixture.join(root).into_os_string()),
+                        std::iter::empty::<PathBuf>,
+                        std::iter::empty::<PathBuf>,
+                    )
+                    .map(|bin| bin.join("git.exe"))
+                    .find(|path| path.is_file())
+                })
+                .expect("the fixture contains the package's Git executable");
+                assert_eq!(
+                    executable.invocation(),
+                    fixture.join(expected),
+                    "{variable} discovers its installation when PATH is absent or has no Git"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn fallback_candidates_follow_cost_then_installation_priority() -> gix_error::TestResult {
+        let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only(
+            "windows-git-installations.sh",
+        )?)?;
+        let variables = |key: &str| {
+            let root = match key {
+                "LocalAppData" => "winget",
+                "ProgramW6432" => "machine",
+                "ProgramFiles" => "other-machine",
+                "ProgramFiles(x86)" => "x86",
+                "GIT_INSTALL_ROOT" => "explicit",
+                "ChocolateyToolsLocation" => "chocolatey",
+                "SCOOP" => "no-junction",
+                "SCOOP_GLOBAL" => "global/scoop",
+                "CONDA_PREFIX" => "conda",
+                _ => return None,
+            };
+            Some(fixture.join(root).into_os_string())
+        };
+        let locations: Vec<_> = super::super::alternative_locations(
+            variables,
+            || [fixture.join("registered/cmd")],
+            || [fixture.join("registered-msys/usr/bin")],
+        )
+        .collect();
+        let mut expected = super::super::locations_under_program_files(variables);
+        expected.extend(
+            [
+                "explicit/cmd",
+                "winget/Microsoft/WinGet/Links",
+                "machine/WinGet/Links",
+                "other-machine/WinGet/Links",
+                "chocolatey/git/cmd",
+                "no-junction/apps/git/current/cmd",
+                "global/scoop/apps/git/current/cmd",
+                "conda/Library/bin",
+                "explicit/usr/bin",
+                "registered/cmd",
+                "no-junction/apps/git/2.50.0/cmd",
+                "registered-msys/usr/bin",
+            ]
+            .map(|bin| fixture.join(bin)),
+        );
+        assert_eq!(
+            locations, expected,
+            "fixed paths use installer priority, followed by direct registry queries, Scoop scans and MSYS2 enumeration"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn fixed_path_winners_avoid_registry_queries_and_version_scans() -> gix_error::TestResult {
+        let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only(
+            "windows-git-installations.sh",
+        )?)?;
+        for (explicit, winget, global_scoop, expected) in [
+            (Some("explicit"), Some("winget"), None, "explicit/cmd/git.exe"),
+            (None, Some("winget"), None, "winget/Microsoft/WinGet/Links/git.exe"),
+            (None, None, Some("custom"), "custom/apps/git/current/cmd/git.exe"),
+            (None, None, None, "conda/Library/bin/git.exe"),
+        ] {
+            let executable = super::super::find_executable(None, || {
+                super::super::alternative_locations(
+                    |key| {
+                        let root = match key {
+                            "LocalAppData" => winget?,
+                            "GIT_INSTALL_ROOT" => explicit?,
+                            "SCOOP" => "no-junction",
+                            "SCOOP_GLOBAL" => global_scoop?,
+                            "CONDA_PREFIX" => "conda",
+                            _ => return None,
+                        };
+                        Some(fixture.join(root).into_os_string())
+                    },
+                    || -> Vec<PathBuf> { panic!("a fixed-path winner avoids native registry queries") },
+                    || -> Vec<PathBuf> { panic!("a fixed-path winner avoids MSYS2 enumeration") },
+                )
+                .map(|bin| bin.join("git.exe"))
+                .find(|path| path.is_file())
+            })
+            .expect("several fixture installations contain Git");
+            assert_eq!(
+                executable.invocation(),
+                fixture.join(expected),
+                "fixed paths precede the installed Scoop version that requires a directory scan"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn direct_registration_wins_before_version_scans() -> gix_error::TestResult {
+        let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only(
+            "windows-git-installations.sh",
+        )?)?;
+        let executable = super::super::find_executable(None, || {
+            super::super::alternative_locations(
+                |key| (key == "SCOOP").then(|| fixture.join("no-junction").into_os_string()),
+                || [fixture.join("path")],
+                || -> Vec<PathBuf> { panic!("a direct registration avoids MSYS2 enumeration") },
+            )
+            .map(|bin| bin.join("git.exe"))
+            .find(|path| path.is_file())
+        })
+        .expect("the fixture contains registered and no-junction Git installations");
+        assert_eq!(
+            executable.invocation(),
+            fixture.join("path/git.exe"),
+            "direct registry keys are cheaper than searching retained Scoop versions"
+        );
+        Ok(())
     }
 
     #[test]

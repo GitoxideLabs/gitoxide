@@ -18,6 +18,8 @@ impl Drop for CurrentDir {
 }
 
 mod system_prefix {
+    #[cfg(windows)]
+    use super::super::system_prefix_from_git_launcher;
     use super::{
         super::{system_prefix_from_core_dir, system_prefix_from_exepath_var},
         CurrentDir,
@@ -189,6 +191,91 @@ mod system_prefix {
             assert_eq!(
                 outcome, None,
                 "multiple prefixes require querying Git to disambiguate {names:?}"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[serial]
+    fn git_launcher_in_cmd_with_unambiguous_subdir() {
+        for name in ["clangarm64", "ucrt64", "mingw64", "mingw32"] {
+            let root = ExePath::new();
+            let subdir = root.create_subdir(name);
+            let cmd = root.create_subdir("cmd");
+            std::fs::File::create_new(cmd.join("git.exe")).expect("can create the sibling launcher");
+            for cmd in ["cmd", "CMD", "bin", "BIN"] {
+                let outcome = system_prefix_from_git_launcher(&root.path.join(cmd).join("git.exe"));
+                assert_eq!(
+                    outcome.as_ref(),
+                    Some(&subdir),
+                    "{cmd}/git.exe belongs to the {name} prefix"
+                );
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[serial]
+    fn git_launcher_elsewhere_is_not_recognized() {
+        let root = ExePath::new();
+        root.create_subdir("mingw64");
+        for parent in ["bin", "shims", "mingw64/bin", "usr/bin"] {
+            let outcome = system_prefix_from_git_launcher(&root.path.join(parent).join("git.exe"));
+            assert_eq!(outcome, None, "{parent} isn't Git for Windows' launcher directory");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[serial]
+    fn git_launcher_with_ambiguous_or_no_subdir() {
+        for names in [
+            &[][..],
+            &["clang64"][..],
+            &["ucrt64", "mingw64"][..],
+            &["mingw32", "mingw64"][..],
+        ] {
+            let root = ExePath::new();
+            root.create_separate_subdirs(names);
+            let outcome = system_prefix_from_git_launcher(&root.path.join("cmd/git.exe"));
+            assert_eq!(outcome, None, "{names:?} needs querying Git");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn git_launcher_must_be_absolute() {
+        for executable in ["git.exe", "cmd/git.exe", "./cmd/git.exe"] {
+            assert_eq!(
+                system_prefix_from_git_launcher(Path::new(executable)),
+                None,
+                "{executable} doesn't say where the installation is"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn runtime_binary_identifies_its_prefix_lexically() {
+        for runtime in ["clangarm64", "ucrt64", "mingw64", "mingw32", "UCRT64"] {
+            let prefix = Path::new("C:/Git").join(runtime);
+            assert_eq!(
+                super::super::system_prefix_from_git_executable(&prefix.join("bin/git.exe")),
+                Some(prefix),
+                "the selected runtime binary identifies its own prefix"
+            );
+        }
+        for executable in [
+            "ucrt64/bin/git.exe",
+            "C:/Git/unknown/bin/git.exe",
+            "C:/Git/ucrt64/shims/git.exe",
+        ] {
+            assert_eq!(
+                super::super::system_prefix_from_git_executable(Path::new(executable)),
+                None,
+                "relative paths and unrecognized layouts cannot identify a runtime"
             );
         }
     }
