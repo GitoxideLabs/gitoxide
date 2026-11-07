@@ -1,0 +1,52 @@
+use std::path::{Path, PathBuf};
+
+fn fixture() -> gix_error::TestResult<PathBuf> {
+    Ok(std::path::absolute(gix_testtools::scripted_fixture_read_only(
+        "windows-git-layouts.sh",
+    )?)?)
+}
+
+fn select(bin: &Path) -> gix_testtools::Env<'static> {
+    gix_testtools::Env::new()
+        .unset("EXEPATH")
+        .unset("GIT_EXEC_PATH")
+        .set("PATH", bin.to_str().expect("UTF-8 fixture path"))
+}
+
+fn assert_native_paths(root: &Path, runtime: &str) {
+    assert_eq!(
+        gix_path::env::exe_invocation(),
+        Path::new("git.exe"),
+        "the selected PATH entry retains its short invocation"
+    );
+    assert_eq!(
+        gix_path::env::system_prefix(),
+        Some(root.join(runtime).as_path()),
+        "the selected runtime determines the prefix without launching the empty executable"
+    );
+    assert_eq!(
+        gix_path::env::installation_config(),
+        Some(root.join("etc/gitconfig").as_path()),
+        "the modern installation configuration is found without launching Git"
+    );
+    assert_eq!(
+        gix_path::env::system_config(),
+        gix_path::env::installation_config(),
+        "modern Git for Windows has one system configuration file"
+    );
+    assert!(
+        gix_path::env::installation_config_is_system(),
+        "the file has system scope"
+    );
+}
+
+#[test]
+fn runtime_bin_selects_its_own_prefix_in_a_mixed_installation() -> gix_error::TestResult {
+    let root = fixture()?.join("mixed");
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _env = select(&root.join("ucrt64/bin"));
+    assert_native_paths(&root, "ucrt64");
+    Ok(())
+}

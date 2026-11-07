@@ -251,6 +251,30 @@ mod system_prefix {
         }
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn runtime_binary_identifies_its_prefix_lexically() {
+        for runtime in ["clangarm64", "ucrt64", "mingw64", "mingw32", "UCRT64"] {
+            let prefix = Path::new("C:/Git").join(runtime);
+            assert_eq!(
+                super::super::system_prefix_from_git_executable(&prefix.join("bin/git.exe")),
+                Some(prefix),
+                "the selected runtime binary identifies its own prefix"
+            );
+        }
+        for executable in [
+            "ucrt64/bin/git.exe",
+            "C:/Git/unknown/bin/git.exe",
+            "C:/Git/ucrt64/shims/git.exe",
+        ] {
+            assert_eq!(
+                super::super::system_prefix_from_git_executable(Path::new(executable)),
+                None,
+                "relative paths and unrecognized layouts cannot identify a runtime"
+            );
+        }
+    }
+
     #[test]
     #[serial]
     fn exepath_empty_string() {
