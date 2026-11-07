@@ -14,25 +14,32 @@ mod registry;
 #[cfg(windows)]
 mod scoop;
 
-/// Other places to find Git in, probing each source only after earlier candidates are exhausted.
+/// Try fixed paths before registry queries and directory scans, preferring common installers
+/// within each cost tier. Each source is only probed after earlier candidates are exhausted.
 #[cfg(windows)]
-fn alternative_locations<I: IntoIterator<Item = PathBuf>>(
+fn alternative_locations<G: IntoIterator<Item = PathBuf>, M: IntoIterator<Item = PathBuf>>(
     var_os: impl Fn(&str) -> Option<std::ffi::OsString> + Copy,
-    registered: impl FnOnce() -> I,
+    registered_git: impl FnOnce() -> G,
+    registered_msys: impl FnOnce() -> M,
 ) -> impl Iterator<Item = PathBuf> {
     std::iter::once_with(move || locations_under_program_files(var_os))
         .flatten()
-        .chain(locations_under_scoop(var_os))
         .chain(locations_under_package_managers(var_os))
-        .chain(std::iter::once_with(registered).flatten())
+        .chain(std::iter::once_with(registered_git).flatten())
+        .chain(locations_under_scoop_without_junctions(var_os))
+        .chain(std::iter::once_with(registered_msys).flatten())
 }
 
 #[cfg(windows)]
 fn alternative_executable() -> Option<&'static Path> {
     static EXECUTABLE: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
-        alternative_locations(|key| env::var_os(key), registry::installation_bins)
-            .map(|prefix| prefix.join(EXE_NAME))
-            .find(|path| path.is_file())
+        alternative_locations(
+            |key| env::var_os(key),
+            registry::git_for_windows_bins,
+            registry::msys2_bins,
+        )
+        .map(|prefix| prefix.join(EXE_NAME))
+        .find(|path| path.is_file())
     });
     EXECUTABLE.as_deref()
 }
@@ -118,31 +125,30 @@ where
 
 #[cfg(windows)]
 fn locations_under_scoop(var_os: impl Fn(&str) -> Option<std::ffi::OsString>) -> impl Iterator<Item = PathBuf> {
+    scoop_roots(var_os).map(|root| root.join("apps/git/current/cmd"))
+}
+
+#[cfg(windows)]
+fn locations_under_scoop_without_junctions(
+    var_os: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> impl Iterator<Item = PathBuf> {
+    scoop_roots(var_os).filter_map(|root| {
+        let app = root.join("apps/git");
+        // Enumerating retained versions is more expensive than all fixed-path probes.
+        (!app.join("current/cmd").join(EXE_NAME).is_file())
+            .then(|| scoop_version_without_junction(&app))
+            .flatten()
+    })
+}
+
+#[cfg(windows)]
+fn scoop_roots(var_os: impl Fn(&str) -> Option<std::ffi::OsString>) -> impl Iterator<Item = PathBuf> {
     let absolute = move |name| var_os(name).map(PathBuf::from).filter(|path| path.is_absolute());
-    // Scoop exports GIT_INSTALL_ROOT even when its root was configured outside the environment.
-    // Find the stable `current` installation without relying on Scoop's shims being on PATH.
-    [
-        ("GIT_INSTALL_ROOT", None),
-        ("SCOOP", Some("USERPROFILE")),
-        ("SCOOP_GLOBAL", Some("ProgramData")),
-    ]
-    .into_iter()
-    .filter_map(move |(variable, default_base)| {
-        let root = absolute(variable).or_else(|| absolute(default_base?).map(|base| base.join("scoop")))?;
-        Some((root, default_base.is_some()))
-    })
-    .flat_map(|(root, is_scoop)| {
-        if is_scoop {
-            let app = root.join("apps/git");
-            let current = app.join("current/cmd");
-            let version = (!current.join(EXE_NAME).is_file())
-                .then(|| scoop_version_without_junction(&app))
-                .flatten();
-            version.into_iter().chain(Some(current))
-        } else {
-            None.into_iter().chain(Some(root.join("cmd")))
-        }
-    })
+    [("SCOOP", "USERPROFILE"), ("SCOOP_GLOBAL", "ProgramData")]
+        .into_iter()
+        .filter_map(move |(variable, default_base)| {
+            absolute(variable).or_else(|| absolute(default_base).map(|base| base.join("scoop")))
+        })
 }
 
 #[cfg(windows)]
@@ -172,20 +178,34 @@ fn scoop_version_without_junction(app: &Path) -> Option<PathBuf> {
 
 #[cfg(windows)]
 fn locations_under_package_managers(
-    var_os: impl Fn(&str) -> Option<std::ffi::OsString>,
+    var_os: impl Fn(&str) -> Option<std::ffi::OsString> + Copy,
 ) -> impl Iterator<Item = PathBuf> {
-    // These are stable entry points, including WinGet's links for custom portable roots.
-    // Only the active Conda/Mamba environment participates; do not pick an inactive environment.
-    [
-        ("CONDA_PREFIX", "Library/bin"),
-        ("ChocolateyToolsLocation", "git/cmd"),
-        ("LocalAppData", "Microsoft/WinGet/Links"),
-        ("ProgramW6432", "WinGet/Links"),
-        ("ProgramFiles", "WinGet/Links"),
-        ("GIT_INSTALL_ROOT", "usr/bin"),
-    ]
-    .into_iter()
-    .filter_map(move |(variable, suffix)| {
+    // Honor a known Git root, including the one Scoop exports, before guessing package roots.
+    // These are all fixed paths, ordered by expected prevalence within the cheap tier.
+    locations_from_env(
+        var_os,
+        [
+            ("GIT_INSTALL_ROOT", "cmd"),
+            ("LocalAppData", "Microsoft/WinGet/Links"),
+            ("ProgramW6432", "WinGet/Links"),
+            ("ProgramFiles", "WinGet/Links"),
+            ("ChocolateyToolsLocation", "git/cmd"),
+        ],
+    )
+    .chain(locations_under_scoop(var_os))
+    .chain(locations_from_env(
+        var_os,
+        // Only an active Conda/Mamba environment participates; do not pick inactive environments.
+        [("CONDA_PREFIX", "Library/bin"), ("GIT_INSTALL_ROOT", "usr/bin")],
+    ))
+}
+
+#[cfg(windows)]
+fn locations_from_env(
+    var_os: impl Fn(&str) -> Option<std::ffi::OsString>,
+    roots: impl IntoIterator<Item = (&'static str, &'static str)>,
+) -> impl Iterator<Item = PathBuf> {
+    roots.into_iter().filter_map(move |(variable, suffix)| {
         var_os(variable)
             .map(PathBuf::from)
             .filter(|root| root.is_absolute())

@@ -116,15 +116,18 @@ pub fn shell_command() -> std::process::Command {
 ///
 /// Note that on Windows, we will find the executable in the `PATH` if it exists there, or search it
 /// in alternative locations which when found yields the full path to it.
-/// These include standard Git for Windows installations and Scoop's user and global installations
-/// (`SCOOP`/`SCOOP_GLOBAL`, defaulting to `USERPROFILE/scoop` and `ProgramData/scoop`), as well as
-/// `GIT_INSTALL_ROOT`. Installation roots must be absolute paths.
+/// Fallbacks prioritize cheap probes, then expected installer prevalence. Fixed paths come first:
+/// standard Git for Windows locations, `GIT_INSTALL_ROOT/cmd`, WinGet's user and machine `Links`
+/// directories, `ChocolateyToolsLocation/git/cmd`, Scoop's user and global `current` installations,
+/// the active Conda/Mamba environment's `CONDA_PREFIX/Library/bin`, and MSYS2's
+/// `GIT_INSTALL_ROOT/usr/bin`. Next come direct Git for Windows registry registrations, including
+/// custom roots. Directory scans for Scoop installations without junctions follow, with the broader
+/// MSYS2 uninstall-registry scan last. An executable selected by `PATH` always takes precedence.
+///
+/// Scoop uses `SCOOP`/`SCOOP_GLOBAL`, defaulting to `USERPROFILE/scoop` and `ProgramData/scoop`.
 /// When Scoop's `current` junction is absent, its most recently installed version is used.
-/// Also searched are `ChocolateyToolsLocation/git/cmd`, the active Conda/Mamba environment's
-/// `CONDA_PREFIX/Library/bin`, and WinGet's user and machine `Links` directories. For an MSYS2
-/// installation outside `PATH`, `GIT_INSTALL_ROOT` can name its root (containing `usr/bin`).
-/// Finally, registered Git for Windows and MSYS2 installations are searched, including custom
-/// roots, preferring current-user registrations to machine registrations.
+/// Installation roots must be absolute paths. Registry discovery prefers current-user
+/// registrations to machine registrations.
 /// Fallback sources are inspected only when earlier locations do not contain Git, and the
 /// selected executable is cached for the lifetime of the process.
 /// File symlinks, including WinGet's portable links, are resolved for layout discovery while

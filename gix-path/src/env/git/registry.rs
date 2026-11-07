@@ -1,49 +1,58 @@
 use std::{ffi::OsString, path::PathBuf};
 
 use winreg::{
-    RegKey,
+    HKEY, RegKey,
     enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_32KEY, KEY_WOW64_64KEY},
 };
 
 const UNINSTALL: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall";
 
 /// Installer registrations also cover custom roots, without guessing directories on each drive.
-pub(super) fn installation_bins() -> impl Iterator<Item = PathBuf> {
+pub(super) fn git_for_windows_bins() -> impl Iterator<Item = PathBuf> {
+    registration_bins(|hive, view| {
+        RegKey::predef(hive)
+            .open_subkey_with_flags(r"Software\GitForWindows", KEY_READ | view)
+            .ok()
+            .and_then(|key| key.get_value::<OsString, _>("InstallPath").ok())
+            .and_then(absolute)
+            .map(|root| root.join("cmd"))
+    })
+}
+
+/// Scan uninstall registrations only after callers exhaust more likely Git installations.
+pub(super) fn msys2_bins() -> impl Iterator<Item = PathBuf> {
+    registration_bins(|hive, view| {
+        RegKey::predef(hive)
+            .open_subkey_with_flags(UNINSTALL, KEY_READ | view)
+            .ok()
+            .into_iter()
+            .flat_map(move |uninstall| {
+                // Qt's MSYS2 installer uses a generated product UUID as the key name.
+                let mut names: Vec<_> = uninstall.enum_keys().filter_map(Result::ok).collect();
+                names.sort();
+                names.into_iter().filter_map(move |name| {
+                    uninstall
+                        .open_subkey_with_flags(name, KEY_READ | view)
+                        .ok()
+                        .and_then(|key| msys2_bin(|name| key.get_value(name).ok()))
+                })
+            })
+    })
+}
+
+fn registration_bins<I: IntoIterator<Item = PathBuf>>(
+    mut query: impl FnMut(HKEY, u32) -> I,
+) -> impl Iterator<Item = PathBuf> {
     let mut locations = Vec::new();
     // Prefer the current user's installations, and 64-bit entries within each hive.
     [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE]
         .into_iter()
         .flat_map(|hive| {
-            [KEY_WOW64_64KEY, KEY_WOW64_32KEY].into_iter().flat_map(move |view| {
-                registration_bins(
-                    move || {
-                        RegKey::predef(hive)
-                            .open_subkey_with_flags(r"Software\GitForWindows", KEY_READ | view)
-                            .ok()
-                            .and_then(|key| key.get_value::<OsString, _>("InstallPath").ok())
-                            .and_then(absolute)
-                            .map(|root| root.join("cmd"))
-                    },
-                    move || {
-                        RegKey::predef(hive)
-                            .open_subkey_with_flags(UNINSTALL, KEY_READ | view)
-                            .ok()
-                            .into_iter()
-                            .flat_map(move |uninstall| {
-                                // Qt's MSYS2 installer uses a generated product UUID as the key name.
-                                let mut names: Vec<_> = uninstall.enum_keys().filter_map(Result::ok).collect();
-                                names.sort();
-                                names.into_iter().filter_map(move |name| {
-                                    uninstall
-                                        .open_subkey_with_flags(name, KEY_READ | view)
-                                        .ok()
-                                        .and_then(|key| msys2_bin(|name| key.get_value(name).ok()))
-                                })
-                            })
-                    },
-                )
-            })
+            [KEY_WOW64_64KEY, KEY_WOW64_32KEY]
+                .into_iter()
+                .map(move |view| (hive, view))
         })
+        .flat_map(move |(hive, view)| query(hive, view))
         .filter(move |bin| {
             if locations.contains(bin) {
                 false
@@ -52,15 +61,6 @@ pub(super) fn installation_bins() -> impl Iterator<Item = PathBuf> {
                 true
             }
         })
-}
-
-fn registration_bins<I: IntoIterator<Item = PathBuf>>(
-    git_for_windows: impl FnOnce() -> Option<PathBuf>,
-    msys2: impl FnOnce() -> I,
-) -> impl Iterator<Item = PathBuf> {
-    std::iter::once_with(git_for_windows)
-        .flatten()
-        .chain(std::iter::once_with(msys2).flatten())
 }
 
 fn absolute(value: OsString) -> Option<PathBuf> {
@@ -80,38 +80,54 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registration_probes_are_deferred_until_needed() {
+    fn registry_views_are_lazy_ordered_and_deduplicated() {
         let probes = std::cell::RefCell::new(Vec::new());
-        let mut bins = registration_bins(
-            || {
-                probes.borrow_mut().push("git");
-                Some(PathBuf::from("C:/Git/cmd"))
-            },
-            || {
-                probes.borrow_mut().push("uninstall");
-                ["C:/msys64/usr/bin", "D:/msys64/usr/bin"].into_iter().map(|bin| {
-                    probes.borrow_mut().push(bin);
-                    PathBuf::from(bin)
-                })
-            },
-        );
+        let mut bins = registration_bins(|hive, view| {
+            probes.borrow_mut().push((hive, view));
+            if hive == HKEY_CURRENT_USER {
+                vec![PathBuf::from("C:/user/cmd")]
+            } else if view == KEY_WOW64_64KEY {
+                vec![PathBuf::from("C:/machine64/cmd"), PathBuf::from("D:/machine64/cmd")]
+            } else {
+                vec![PathBuf::from("C:/machine32/cmd")]
+            }
+        });
         assert!(
             probes.borrow().is_empty(),
             "constructing candidates must not read the registry"
         );
-        assert_eq!(bins.next(), Some(PathBuf::from("C:/Git/cmd")));
+        assert_eq!(bins.next(), Some(PathBuf::from("C:/user/cmd")));
         assert_eq!(
             *probes.borrow(),
-            ["git"],
-            "finding Git for Windows must not open the uninstall key"
+            [(HKEY_CURRENT_USER, KEY_WOW64_64KEY)],
+            "finding the first user registration must not query later views"
         );
-        assert_eq!(bins.next(), Some(PathBuf::from("C:/msys64/usr/bin")));
+        assert_eq!(
+            bins.next(),
+            Some(PathBuf::from("C:/machine64/cmd")),
+            "duplicate user registrations across views are skipped"
+        );
         assert_eq!(
             *probes.borrow(),
-            ["git", "uninstall", "C:/msys64/usr/bin"],
-            "finding the first MSYS2 candidate must not inspect later registrations"
+            [
+                (HKEY_CURRENT_USER, KEY_WOW64_64KEY),
+                (HKEY_CURRENT_USER, KEY_WOW64_32KEY),
+                (HKEY_LOCAL_MACHINE, KEY_WOW64_64KEY),
+            ],
+            "all user views precede the machine's 64-bit view"
         );
-        assert_eq!(bins.next(), Some(PathBuf::from("D:/msys64/usr/bin")));
+        assert_eq!(bins.next(), Some(PathBuf::from("D:/machine64/cmd")));
+        assert_eq!(
+            probes.borrow().len(),
+            3,
+            "consume the current view before querying another"
+        );
+        assert_eq!(bins.next(), Some(PathBuf::from("C:/machine32/cmd")));
+        assert_eq!(
+            probes.borrow().last(),
+            Some(&(HKEY_LOCAL_MACHINE, KEY_WOW64_32KEY)),
+            "the machine's 32-bit view has the lowest precedence"
+        );
         assert_eq!(bins.next(), None, "registration providers are only queried once");
     }
 
