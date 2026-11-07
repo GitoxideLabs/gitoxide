@@ -43,7 +43,7 @@ pub mod pipeline;
 ///
 pub mod platform;
 
-/// Information about the diff performed to detect similarity.
+/// Line counts from a blob diff, computed independently of rewrite similarity.
 #[derive(Debug, Default, Clone, Copy, PartialEq, PartialOrd)]
 pub struct DiffLineStats {
     /// The amount of lines to remove from the source to get to the destination.
@@ -54,10 +54,6 @@ pub struct DiffLineStats {
     pub before: usize,
     /// The amount of lines of the new state, in the destination.
     pub after: usize,
-    /// A range from 0 to 1.0, where 1.0 is a perfect match and 0.5 is a similarity of 50%.
-    /// Similarity is the ratio between all lines in the previous blob and the current blob,
-    /// calculated as `(old_lines_count - new_lines_count) as f32 / old_lines_count.max(new_lines_count) as f32`.
-    pub similarity: f32,
 }
 
 /// A way to classify a resource suitable for diffing.

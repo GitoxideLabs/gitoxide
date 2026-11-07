@@ -408,9 +408,9 @@ pub enum Item {
         /// Note that it doesn't (necessarily) exist in the object database, and may be [null](gix_hash::ObjectId::null) if no hashing
         /// was performed.
         dirwalk_entry_id: gix_hash::ObjectId,
-        /// It's `None` if the 'source.id' is equal to `dirwalk_entry_id`, as identity made an actual diff computation unnecessary.
-        /// Otherwise, and if enabled, it's `Some(stats)` to indicate how similar both entries were.
-        diff: Option<gix_diff::blob::DiffLineStats>,
+        /// The content similarity used to match entries with different object IDs.
+        /// It's `None` for an identity match. A score of 100% does not imply identical contents.
+        similarity: Option<gix_diff::rewrites::Similarity>,
         /// If true, this rewrite is created by copy, and 'source.id' is pointing to its source.
         /// Otherwise, it's a rename, and 'source.id' points to a deleted object,
         /// as renames are tracked as deletions and additions of the same or similar content.
@@ -448,7 +448,7 @@ pub enum RewriteSource {
         /// It will also be `Some(dir_status)` if that option was [CollapsedEntriesEmissionMode::All](gix_dir::walk::CollapsedEntriesEmissionMode::All).
         source_dirwalk_entry_collapsed_directory_status: Option<gix_dir::entry::Status>,
         /// The object id as it would appear if the entry was written to the object database.
-        /// It's the same as [`dirwalk_entry_id`](Item::Rewrite), or `diff` is `Some(_)` to indicate that the copy
+        /// It's the same as [`dirwalk_entry_id`](Item::Rewrite), or `similarity` is `Some(_)` to indicate that the copy
         /// was determined by similarity, not by content equality.
         source_dirwalk_entry_id: gix_hash::ObjectId,
     },
@@ -580,14 +580,14 @@ pub mod iter {
                     dirwalk_entry,
                     dirwalk_entry_collapsed_directory_status,
                     dirwalk_entry_id,
-                    diff,
+                    similarity,
                     copy,
                 } => Item::Rewrite {
                     source: source.into(),
                     dirwalk_entry,
                     dirwalk_entry_collapsed_directory_status,
                     dirwalk_entry_id,
-                    diff,
+                    similarity,
                     copy,
                 },
             }

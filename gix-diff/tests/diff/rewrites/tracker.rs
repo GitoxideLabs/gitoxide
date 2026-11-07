@@ -1,9 +1,7 @@
 use gix_diff::{
-    Rewrites,
-    blob::DiffLineStats,
-    rewrites,
+    Rewrites, rewrites,
     rewrites::{
-        Copies, CopySource,
+        Copies, CopySource, Similarity,
         tracker::{
             ChangeKind,
             visit::{Source, SourceKind},
@@ -55,7 +53,7 @@ fn rename_by_id() -> TestResult {
                     kind: SourceKind::Rename,
                     location: "b".into(),
                     change: &Change::deletion(),
-                    diff: None,
+                    similarity: None,
                 }
             );
             assert_eq!(dst.location, "c");
@@ -222,7 +220,7 @@ fn copy_by_id() -> TestResult {
                         id,
                         ..Change::modification()
                     },
-                    diff: None,
+                    similarity: None,
                 };
                 match calls {
                     0 => {
@@ -237,6 +235,10 @@ fn copy_by_id() -> TestResult {
                         assert_eq!(dst.location, "a-cpy-2");
                     }
                     2 => {
+                        assert!(src.is_none());
+                        assert_eq!(dst.location, "a", "copy sources retain their own modification");
+                    }
+                    3 => {
                         assert!(src.is_none());
                         assert_eq!(dst.location, "d");
                     }
@@ -299,7 +301,7 @@ fn copy_by_id_search_in_all_sources() -> TestResult {
                         id: content_id,
                         ..Change::modification()
                     },
-                    diff: None,
+                    similarity: None,
                 };
                 match calls {
                     0 => {
@@ -383,13 +385,7 @@ fn copy_by_50_percent_similarity() -> TestResult {
                     id,
                     ..Change::modification()
                 },
-                diff: Some(DiffLineStats {
-                    removals: 0,
-                    insertions: 1,
-                    before: 1,
-                    after: 2,
-                    similarity: 0.6666667,
-                }),
+                similarity: Similarity::from_score(40000),
             };
             match calls {
                 0 => {
@@ -405,6 +401,10 @@ fn copy_by_50_percent_similarity() -> TestResult {
                     assert_eq!(dst.location, "a-cpy-2");
                 }
                 2 => {
+                    assert!(src.is_none());
+                    assert_eq!(dst.location, "a", "copy sources retain their own modification");
+                }
+                3 => {
                     assert!(src.is_none());
                     assert_eq!(dst.location, "d");
                 }
@@ -647,13 +647,7 @@ fn rename_by_50_percent_similarity() -> TestResult {
                                 id,
                                 ..Change::deletion()
                             },
-                            diff: Some(DiffLineStats {
-                                removals: 1,
-                                insertions: 1,
-                                before: 2,
-                                after: 2,
-                                similarity: 0.53846157
-                            })
+                            similarity: Similarity::from_score(32307)
                         }
                     );
                     assert_eq!(dst.location, "b");
@@ -670,24 +664,14 @@ fn rename_by_50_percent_similarity() -> TestResult {
         odb,
     );
 
-    // The rename tracker currently sorts by hash, hence the outcome is hash-dependent.
-    let expected = match crate::fixture_hash_kind() {
-        gix_hash::Kind::Sha1 => rewrites::Outcome {
-            options: rewrites,
-            num_similarity_checks: 1,
-            ..Default::default()
-        },
-        gix_hash::Kind::Sha256 => rewrites::Outcome {
+    assert_eq!(
+        out,
+        rewrites::Outcome {
             options: rewrites,
             num_similarity_checks: 2,
             ..Default::default()
         },
-        _ => todo!(),
-    };
-    assert_eq!(
-        out, expected,
-        "the first attempt already yields the one pair, so it doesn't participate anymore\
- - we don't have best candidates yet, thus only one check"
+        "both destinations are scored before selecting the globally strongest pair"
     );
 
     Ok(())
@@ -724,7 +708,7 @@ fn rename_by_similarity_prefers_stronger_match_over_same_filename_match() -> Tes
                     );
                     assert_eq!(dst.location, "new/foo");
                     assert!(
-                        src.diff.expect("similarity match includes diff stats").similarity > 0.8,
+                        src.similarity.expect("inexact matches include their score").fraction() > 0.8,
                         "the selected source should be the high-similarity candidate"
                     );
                 }
@@ -743,10 +727,10 @@ fn rename_by_similarity_prefers_stronger_match_over_same_filename_match() -> Tes
         out,
         rewrites::Outcome {
             options: rewrites,
-            num_similarity_checks: 2,
+            num_similarity_checks: 3,
             ..Default::default()
         },
-        "all viable sources are compared before selecting the best rename source"
+        "the basename candidate is below the stricter threshold, so the matrix compares both sources"
     );
     assert_eq!(calls, 2, "both the rename and the unmatched deletion should be emitted");
     Ok(())
@@ -828,92 +812,45 @@ fn directory_renames_by_id_can_fail_gracefully() -> TestResult {
         ],
     )?;
 
-    // The rename tracker currently sorts by hash, hence the outcome is hash-dependent.
     let mut calls = 0;
-    match crate::fixture_hash_kind() {
-        gix_hash::Kind::Sha1 => {
-            let out = util::assert_emit_with_objects(
-                &mut track,
-                |dst, src| {
-                    match calls {
-                        0..=2 => {
-                            let src = src.unwrap();
-                            let (expected_src, expected_dst) =
-                                &[("d/a", "d-renamed/a"), ("d/c", "d-renamed/subdir/c"), ("a", "b")][calls];
-                            assert_eq!(src.location, expected_src);
-                            assert_eq!(dst.location, expected_dst);
-                        }
-                        3 => {
-                            assert_eq!(src.unwrap().location, "d");
-                            assert_eq!(
-                                dst.location, "d-renamed",
-                                "it can now track modified and renamed directories"
-                            );
-                        }
-                        4 => {
-                            assert_eq!(src, None);
-                            assert_eq!(dst.change.kind, ChangeKind::Deletion);
-                            assert_eq!(dst.location, "d/subdir/d");
-                        }
-                        _ => unreachable!("Should have expected emission call {calls}"),
-                    }
-                    calls += 1;
-                    std::ops::ControlFlow::Continue(())
-                },
-                &odb,
-            );
-            assert_eq!(
-                out,
-                rewrites::Outcome {
-                    options: rename_by_similarity,
-                    num_similarity_checks: 2,
-                    ..Default::default()
+    let out = util::assert_emit_with_objects(
+        &mut track,
+        |dst, src| {
+            match calls {
+                0..=2 => {
+                    let src = src.unwrap();
+                    let (expected_src, expected_dst) =
+                        &[("a", "b"), ("d/a", "d-renamed/a"), ("d/c", "d-renamed/subdir/c")][calls];
+                    assert_eq!(src.location, expected_src);
+                    assert_eq!(dst.location, expected_dst);
                 }
-            );
-        }
-        gix_hash::Kind::Sha256 => {
-            let out = util::assert_emit_with_objects(
-                &mut track,
-                |dst, src| {
-                    match calls {
-                        0..=2 => {
-                            let src = src.unwrap();
-                            let (expected_src, expected_dst) =
-                                &[("d/c", "d-renamed/subdir/c"), ("d/a", "d-renamed/a"), ("a", "b")][calls];
-                            assert_eq!(src.location, expected_src);
-                            assert_eq!(dst.location, expected_dst);
-                        }
-                        3 => {
-                            assert_eq!(src.unwrap().location, "d");
-                            assert_eq!(
-                                dst.location, "d-renamed",
-                                "it can now track modified and renamed directories"
-                            );
-                        }
-                        4 => {
-                            assert_eq!(src, None);
-                            assert_eq!(dst.change.kind, ChangeKind::Deletion);
-                            assert_eq!(dst.location, "d/subdir/d");
-                        }
-                        _ => unreachable!("Should have expected emission call {calls}"),
-                    }
-                    calls += 1;
-                    std::ops::ControlFlow::Continue(())
-                },
-                &odb,
-            );
-            assert_eq!(
-                out,
-                rewrites::Outcome {
-                    options: rename_by_similarity,
-                    num_similarity_checks: 2,
-                    ..Default::default()
+                3 => {
+                    assert_eq!(src.unwrap().location, "d");
+                    assert_eq!(
+                        dst.location, "d-renamed",
+                        "it can now track modified and renamed directories"
+                    );
                 }
-            );
-            assert_eq!(calls, 5, "Should not have too few calls");
+                4 => {
+                    assert_eq!(src, None);
+                    assert_eq!(dst.change.kind, ChangeKind::Deletion);
+                    assert_eq!(dst.location, "d/subdir/d");
+                }
+                _ => unreachable!("Should have expected emission call {calls}"),
+            }
+            calls += 1;
+            std::ops::ControlFlow::Continue(())
+        },
+        &odb,
+    );
+    assert_eq!(
+        out,
+        rewrites::Outcome {
+            options: rename_by_similarity,
+            num_similarity_checks: 2,
+            ..Default::default()
         }
-        _ => todo!(),
-    }
+    );
     assert_eq!(calls, 5, "Should not have too few calls");
     Ok(())
 }

@@ -86,9 +86,10 @@ pub enum Change<'a, 'old, 'new> {
         /// Note that this is the same as `id` if we require the [similarity to be 100%](gix_diff::Rewrites::percentage), but may
         /// be different otherwise.
         source_id: Id<'old>,
-        /// Information about the diff we performed to detect similarity and match the `source_id` with the current state at `id`.
-        /// It's `None` if `source_id` is equal to `id`, as identity made an actual diff computation unnecessary.
-        diff: Option<gix_diff::blob::DiffLineStats>,
+        /// The content similarity used to match entries with different object IDs.
+        /// It's `None` for identity matches and inferred directory renames.
+        /// A score of 100% does not imply identical contents. Use [`Change::diff()`] to compute line changes separately.
+        similarity: Option<gix_diff::rewrites::Similarity>,
         /// The mode of the entry after the rename.
         /// It could differ but still be considered a rename as we are concerned only about content.
         entry_mode: gix_object::tree::EntryMode,

@@ -203,6 +203,37 @@ impl Pipeline {
         convert: Mode,
         out: &mut Vec<u8>,
     ) -> Result<Outcome> {
+        self.convert_to_diffable_inner(id, mode, rela_path, kind, attributes, objects, convert, false, out)
+    }
+
+    /// Retain original Git-form bytes for rename scoring, including binary and large files.
+    #[expect(clippy::too_many_arguments)]
+    pub(super) fn convert_for_renames(
+        &mut self,
+        id: &gix_hash::oid,
+        mode: EntryKind,
+        rela_path: &BStr,
+        kind: ResourceKind,
+        attributes: &mut dyn FnMut(&BStr, &mut gix_filter::attributes::search::Outcome),
+        objects: &dyn gix_object::FindObjectOrHeader,
+        out: &mut Vec<u8>,
+    ) -> Result<Outcome> {
+        self.convert_to_diffable_inner(id, mode, rela_path, kind, attributes, objects, Mode::ToGit, true, out)
+    }
+
+    #[expect(clippy::too_many_arguments)]
+    fn convert_to_diffable_inner(
+        &mut self,
+        id: &gix_hash::oid,
+        mode: EntryKind,
+        rela_path: &BStr,
+        kind: ResourceKind,
+        attributes: &mut dyn FnMut(&BStr, &mut gix_filter::attributes::search::Outcome),
+        objects: &dyn gix_object::FindObjectOrHeader,
+        convert: Mode,
+        for_renames: bool,
+        out: &mut Vec<u8>,
+    ) -> Result<Outcome> {
         let is_symlink = match mode {
             EntryKind::Link => true,
             EntryKind::Blob | EntryKind::BlobExecutable => false,
@@ -223,7 +254,9 @@ impl Pipeline {
         let mut is_binary = if let Some(driver) = driver {
             driver
                 .is_binary
-                .map(|is_binary| is_binary && driver.binary_to_text_command.is_none())
+                .map(|is_binary| is_binary && (for_renames || driver.binary_to_text_command.is_none()))
+        } else if for_renames && attr.assignment.state.is_set() {
+            Some(false)
         } else {
             attr.assignment.state.is_unset().then_some(true)
         };
@@ -249,8 +282,9 @@ impl Pipeline {
                         .transpose()?
                 } else {
                     let need_size_only = is_binary == Some(true);
-                    let size_in_bytes = (need_size_only
-                        || (is_binary != Some(false) && self.options.large_file_threshold_bytes > 0))
+                    let size_in_bytes = (!for_renames
+                        && (need_size_only
+                            || (is_binary != Some(false) && self.options.large_file_threshold_bytes > 0)))
                         .then(|| {
                             none_if_missing(self.path.metadata().map(|md| md.len())).or_raise(|| {
                                 message!("Entry at {rela_path:?} could not be opened for reading or read from")
@@ -345,7 +379,9 @@ impl Pipeline {
 
                                             Some(if is_binary.unwrap_or_else(|| is_binary_buf(out)) {
                                                 let size = out.len() as u64;
-                                                out.clear();
+                                                if !for_renames {
+                                                    out.clear();
+                                                }
                                                 Data::Binary { size }
                                             } else {
                                                 Data::Buffer { is_derived: false }
@@ -369,13 +405,14 @@ impl Pipeline {
                         .or_raise(|| message!("Could not find object {id}"))?
                         .ok_or_else(|| message!("An object with id {id} could not be found").not_found())
                         .or_error()?;
-                    if is_binary.is_none()
+                    if !for_renames
+                        && is_binary.is_none()
                         && self.options.large_file_threshold_bytes > 0
                         && header.size > self.options.large_file_threshold_bytes
                     {
                         is_binary = Some(true);
                     }
-                    let data = if is_binary == Some(true) {
+                    let data = if !for_renames && is_binary == Some(true) {
                         Data::Binary { size: header.size }
                     } else {
                         objects
@@ -479,11 +516,13 @@ impl Pipeline {
                             }
                         }
 
-                        if driver.is_none_or(|d| d.binary_to_text_command.is_none())
+                        if (for_renames || driver.is_none_or(|d| d.binary_to_text_command.is_none()))
                             && is_binary.unwrap_or_else(|| is_binary_buf(out))
                         {
                             let size = out.len() as u64;
-                            out.clear();
+                            if !for_renames {
+                                out.clear();
+                            }
                             Data::Binary { size }
                         } else {
                             Data::Buffer { is_derived }
@@ -546,5 +585,110 @@ impl Driver {
             .arg(path)
             .try_into()?;
         Ok(Some(cmd))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gix_object::Write;
+
+    use super::{Data, Options, Pipeline, ResourceKind, WorktreeRoots};
+
+    #[test]
+    fn renames_keep_binary_bytes_and_ignore_display_conversions() -> gix_error::TestResult {
+        let root = gix_testtools::scripted_fixture_read_only("make_blob_repo.sh")?;
+        let object_hash = gix_testtools::object_hash();
+        let db = gix_odb::memory::Proxy::new(gix_object::find::Never, object_hash);
+        let data = b"some\0\r\n";
+        let blob_id = db.write_buf(gix_object::Kind::Blob, data)?;
+        let mut attributes = gix_filter::attributes::Search::default();
+        let mut collection = gix_filter::attributes::search::MetadataCollection::default();
+        attributes.add_patterns_buffer(
+            b"a diff=converted
+b diff=text
+c diff
+unset -diff
+",
+            "<memory>".into(),
+            None,
+            &mut collection,
+            true,
+        )?;
+        let mut pipeline = Pipeline::new(
+            WorktreeRoots {
+                old_root: None,
+                new_root: Some(root.clone()),
+            },
+            gix_filter::Pipeline::new(Default::default(), object_hash, Default::default()),
+            vec![
+                crate::blob::Driver {
+                    name: "converted".into(),
+                    binary_to_text_command: Some("must-not-run-textconv".into()),
+                    is_binary: Some(true),
+                    ..Default::default()
+                },
+                crate::blob::Driver {
+                    name: "text".into(),
+                    is_binary: Some(false),
+                    ..Default::default()
+                },
+            ],
+            Options {
+                large_file_threshold_bytes: 1,
+                ..Default::default()
+            },
+        );
+        let mut buf = Vec::new();
+        for (name, object_is_binary, worktree_is_binary) in [
+            ("a", true, true),
+            ("b", false, false),
+            ("c", false, false),
+            ("unset", true, true),
+            ("e-no-attr", true, false),
+        ] {
+            for (kind, is_binary) in [
+                (ResourceKind::OldOrSource, object_is_binary),
+                (ResourceKind::NewOrDestination, worktree_is_binary),
+            ] {
+                let outcome = pipeline.convert_for_renames(
+                    &blob_id,
+                    gix_object::tree::EntryKind::Blob,
+                    name.into(),
+                    kind,
+                    &mut |path, out| {
+                        out.initialize(&collection);
+                        attributes.pattern_matching_relative_path(
+                            path,
+                            gix_worktree::glob::pattern::Case::Sensitive,
+                            Some(false),
+                            out,
+                        );
+                    },
+                    &db,
+                    &mut buf,
+                )?;
+                let expected = if kind == ResourceKind::OldOrSource {
+                    data.to_vec()
+                } else {
+                    std::fs::read(root.join(name))?
+                };
+                assert_eq!(
+                    buf, expected,
+                    "{kind} {name}: raw content survives binary classification and size limits"
+                );
+                assert_eq!(
+                    outcome.data,
+                    Some(if is_binary {
+                        Data::Binary {
+                            size: expected.len() as u64,
+                        }
+                    } else {
+                        Data::Buffer { is_derived: false }
+                    }),
+                    "{kind} {name}: attributes and driver binary settings govern CRLF normalization"
+                );
+            }
+        }
+        Ok(())
     }
 }

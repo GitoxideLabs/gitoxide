@@ -51,63 +51,54 @@ fn gitlink_type_changes_are_not_also_untracked() -> gix_testtools::TestResult {
 #[test]
 fn changed_and_untracked_and_renamed() {
     let expectations_with_dirwalk = [
-        // Not always will we match the right source to destinations, there is ambiguity.
+        // A deleted source can supply copies; its last destination is the rename.
         Expectation::Rewrite {
             source_rela_path: "dir/content",
             dest_rela_path: "content-copy",
             dest_dirwalk_status: gix_dir::entry::Status::Untracked,
-            diff: None,
-            copy: false,
+            similarity: None,
+            copy: true,
         },
-        Expectation::DirwalkEntry {
-            rela_path: "content-copy-with-rewrite",
-            status: gix_dir::entry::Status::Untracked,
-            disk_kind: Some(gix_dir::entry::Kind::File),
+        Expectation::Rewrite {
+            source_rela_path: "dir/content",
+            dest_rela_path: "content-copy-with-rewrite",
+            dest_dirwalk_status: gix_dir::entry::Status::Untracked,
+            similarity: gix_diff::rewrites::Similarity::from_score(40_000),
+            copy: true,
         },
         Expectation::Rewrite {
             source_rela_path: "dir/content2",
             dest_rela_path: "content-with-rewrite",
             dest_dirwalk_status: gix_dir::entry::Status::Untracked,
-            diff: Some(gix_diff::blob::DiffLineStats {
-                removals: 0,
-                insertions: 1,
-                before: 1,
-                after: 2,
-                similarity: 0.72,
-            }),
+            similarity: gix_diff::rewrites::Similarity::from_score(43_200),
             copy: false,
         },
         Expectation::Rewrite {
             source_rela_path: "empty",
             dest_rela_path: "dir/untracked",
             dest_dirwalk_status: gix_dir::entry::Status::Untracked,
-            diff: None,
+            similarity: None,
             copy: true,
         },
-        // This is just detected as untracked, related to how the rename-tracker matches pairs
-        Expectation::DirwalkEntry {
-            rela_path: "plainly-renamed-content",
-            status: gix_dir::entry::Status::Untracked,
-            disk_kind: Some(gix_dir::entry::Kind::File),
+        Expectation::Rewrite {
+            source_rela_path: "dir/content",
+            dest_rela_path: "plainly-renamed-content",
+            dest_dirwalk_status: gix_dir::entry::Status::Untracked,
+            similarity: None,
+            copy: false,
         },
         Expectation::Rewrite {
             source_rela_path: "executable",
             dest_rela_path: "rewritten-executable",
             dest_dirwalk_status: gix_dir::entry::Status::Untracked,
-            diff: Some(gix_diff::blob::DiffLineStats {
-                removals: 0,
-                insertions: 1,
-                before: 1,
-                after: 2,
-                similarity: 0.53333336,
-            }),
+            similarity: gix_diff::rewrites::Similarity::from_score(32_000),
             copy: false,
         },
         Expectation::Rewrite {
             source_rela_path: "empty",
             dest_rela_path: "untracked",
             dest_dirwalk_status: gix_dir::entry::Status::Untracked,
-            diff: None,
+            similarity: None,
             copy: true,
         },
     ];
@@ -133,7 +124,7 @@ fn changed_and_untracked_and_renamed() {
         out.rewrites,
         Some(gix_diff::rewrites::Outcome {
             options: rewrites,
-            num_similarity_checks: 11,
+            num_similarity_checks: 12,
             num_similarity_checks_skipped_for_rename_tracking_due_to_limit: 0,
             num_similarity_checks_skipped_for_copy_tracking_due_to_limit: 0,
         })
@@ -455,14 +446,14 @@ fn records_to_expectations<'a>(recs: &'a [Entry<'_, (), ()>]) -> Vec<Expectation
             Entry::Rewrite {
                 source,
                 dirwalk_entry,
-                diff,
+                similarity,
                 copy,
                 ..
             } => Expectation::Rewrite {
                 source_rela_path: source.rela_path().to_str().unwrap(),
                 dest_rela_path: dirwalk_entry.rela_path.to_str().unwrap(),
                 dest_dirwalk_status: dirwalk_entry.status,
-                diff: *diff,
+                similarity: *similarity,
                 copy: *copy,
             },
         })
@@ -484,7 +475,7 @@ enum Expectation<'a> {
         source_rela_path: &'a str,
         dest_rela_path: &'a str,
         dest_dirwalk_status: gix_dir::entry::Status,
-        diff: Option<gix_diff::blob::DiffLineStats>,
+        similarity: Option<gix_diff::rewrites::Similarity>,
         copy: bool,
     },
 }

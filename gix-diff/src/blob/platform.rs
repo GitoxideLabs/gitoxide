@@ -732,6 +732,69 @@ impl Platform {
 }
 
 impl Platform {
+    pub(crate) fn similarity_size(
+        &self,
+        id: &gix_hash::oid,
+        kind: ResourceKind,
+        objects: &impl gix_object::FindObjectOrHeader,
+    ) -> Result<Option<u64>> {
+        if self.filter.roots.by_kind(kind).is_some() || id.is_null() {
+            return Ok(None);
+        }
+        let header = objects
+            .try_header(id)
+            .or_raise(|| message!("Failed to read header of {kind} blob {id} for rename scoring"))?
+            .ok_or_else(|| message!("An object with id {id} could not be found").not_found())
+            .or_error()?;
+        Ok(Some(header.size))
+    }
+
+    pub(crate) fn similarity_signature(
+        &mut self,
+        id: &gix_hash::oid,
+        mode: gix_object::tree::EntryKind,
+        rela_path: &BStr,
+        kind: ResourceKind,
+        objects: &impl gix_object::FindObjectOrHeader,
+    ) -> Result<Option<crate::rewrites::similarity::Signature>> {
+        let mut buf = self.free_list.pop().unwrap_or_default();
+        let outcome = self.rename_resource(id, mode, rela_path, kind, objects, &mut buf)?;
+        let signature = outcome.data.map(|data| {
+            crate::rewrites::similarity::Signature::new(&buf, matches!(data, pipeline::Data::Binary { .. }))
+        });
+        buf.clear();
+        self.free_list.push(buf);
+        Ok(signature)
+    }
+
+    fn rename_resource(
+        &mut self,
+        id: &gix_hash::oid,
+        mode: gix_object::tree::EntryKind,
+        rela_path: &BStr,
+        kind: ResourceKind,
+        objects: &impl gix_object::FindObjectOrHeader,
+        buf: &mut Vec<u8>,
+    ) -> Result<pipeline::Outcome> {
+        let entry = self
+            .attr_stack
+            .at_entry(rela_path, None, objects)
+            .or_raise(|| message!("Failed to obtain attributes for {kind} resource at {rela_path:?}"))?;
+        self.filter
+            .convert_for_renames(
+                id,
+                mode,
+                rela_path,
+                kind,
+                &mut |_, out| {
+                    let _ = entry.matching_attributes(out);
+                },
+                objects,
+                buf,
+            )
+            .or_raise(|| message!("Failed to prepare {kind} resource at {rela_path:?} for rename scoring"))
+    }
+
     fn set_resource_inner(
         &mut self,
         id: gix_hash::ObjectId,

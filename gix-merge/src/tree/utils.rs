@@ -841,7 +841,7 @@ mod tree_nodes_tests {
                 source_entry_mode: EntryKind::Tree.into(),
                 source_relation: None,
                 source_id: gix_hash::Kind::Sha1.null(),
-                diff: None,
+                similarity: None,
                 entry_mode: EntryKind::Tree.into(),
                 id: gix_hash::Kind::Sha1.null(),
                 location: "new".into(),

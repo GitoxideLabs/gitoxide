@@ -122,7 +122,6 @@ pub mod diff {
                         insertions: diff.count_additions(),
                         before: input.before.len(),
                         after: input.after.len(),
-                        similarity: 0.0,
                     }))
                 }
                 Operation::ExternalCommand { .. } => {
