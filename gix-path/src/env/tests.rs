@@ -201,7 +201,9 @@ mod system_prefix {
         for name in ["clangarm64", "ucrt64", "mingw64", "mingw32"] {
             let root = ExePath::new();
             let subdir = root.create_subdir(name);
-            for cmd in ["cmd", "CMD"] {
+            let cmd = root.create_subdir("cmd");
+            std::fs::File::create_new(cmd.join("git.exe")).expect("can create the sibling launcher");
+            for cmd in ["cmd", "CMD", "bin", "BIN"] {
                 let outcome = system_prefix_from_git_launcher(&root.path.join(cmd).join("git.exe"));
                 assert_eq!(
                     outcome.as_ref(),
