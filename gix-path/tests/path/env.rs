@@ -355,6 +355,8 @@ mod windows_prefix {
         let _env =
             gix_testtools::Env::new().set("EXEPATH", installation.path().to_str().expect("UTF-8 temporary path"));
         let config = installation.path().join("etc/gitconfig");
+        std::fs::create_dir(config.parent().expect("config has a parent"))?;
+        std::fs::File::create_new(&config)?;
         assert_eq!(
             gix_path::env::installation_config(),
             Some(config.as_path()),
@@ -388,6 +390,8 @@ mod windows_prefix {
             .unset("GIT_EXEC_PATH")
             .set("PATH", cmd.to_str().expect("UTF-8 temporary path"));
         let config = installation.path().join("etc/gitconfig");
+        std::fs::create_dir(config.parent().expect("config has a parent"))?;
+        std::fs::File::create_new(&config)?;
         assert_eq!(
             gix_path::env::system_prefix(),
             Some(installation.path().join("ucrt64").as_path()),
@@ -406,6 +410,40 @@ mod windows_prefix {
         assert!(
             gix_path::env::installation_config_is_system(),
             "the installation file has system scope"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn git_in_cmd_directory_without_modern_config_is_queried() -> gix_testtools::TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let installation = tempfile::tempdir()?;
+        let cmd = installation.path().join("cmd");
+        std::fs::create_dir(&cmd)?;
+        std::fs::create_dir_all(installation.path().join("mingw64/etc"))?;
+        std::fs::write(
+            installation.path().join("mingw64/etc/gitconfig"),
+            "[core]
+                autocrlf = true
+            ",
+        )?;
+        // A legacy runtime directory does not establish the modern configuration layout.
+        // This placeholder cannot run, so falling back to Git yields no installation config.
+        std::fs::File::create_new(cmd.join("git.exe"))?;
+        let _env = gix_testtools::Env::new()
+            .unset("EXEPATH")
+            .unset("GIT_EXEC_PATH")
+            .set("PATH", cmd.to_str().expect("UTF-8 temporary path"));
+        assert_eq!(
+            gix_path::env::installation_config(),
+            None,
+            "without a confirmed modern config file, discovery must query Git instead of inventing a path"
+        );
+        assert!(
+            !gix_path::env::installation_config_is_system(),
+            "a failed configuration query cannot establish the installation config's scope"
         );
         Ok(())
     }
