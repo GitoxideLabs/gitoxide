@@ -18,6 +18,9 @@ impl Platform {
     /// * `rela_path` is the relative path as seen from the (work)tree root.
     /// * `kind` identifies the side of the merge this resource will be used for.
     /// * `objects` provides access to the object database in case the resource can't be read from a worktree.
+    ///
+    /// If setup fails, the resource of `kind` is unset. Other resources remain available, but preparing a merge
+    /// requires successfully setting the failed resource again.
     pub fn set_resource(
         &mut self,
         id: Option<gix_hash::ObjectId>,
@@ -26,6 +29,12 @@ impl Platform {
         kind: ResourceKind,
         objects: &impl gix_object::FindObjectOrHeader,
     ) -> Result {
+        let storage = match kind {
+            ResourceKind::OtherOrTheirs => &mut self.other,
+            ResourceKind::CommonAncestorOrBase => &mut self.ancestor,
+            ResourceKind::CurrentOrOurs => &mut self.current,
+        };
+        let mut buffer = storage.take().map_or_else(Vec::new, |resource| resource.buffer);
         if !matches!(
             mode,
             gix_object::tree::EntryKind::Blob | gix_object::tree::EntryKind::BlobExecutable
@@ -38,13 +47,6 @@ impl Platform {
             .at_entry(rela_path, None, objects)
             .or_raise(|| message!("Failed to obtain attributes for {kind:?} resource at '{rela_path}'"))?;
 
-        let storage = match kind {
-            ResourceKind::OtherOrTheirs => &mut self.other,
-            ResourceKind::CommonAncestorOrBase => &mut self.ancestor,
-            ResourceKind::CurrentOrOurs => &mut self.current,
-        };
-
-        let mut buf_storage = Vec::new();
         let out = self
             .filter
             .convert_to_mergeable(
@@ -57,27 +59,17 @@ impl Platform {
                 },
                 objects,
                 self.filter_mode,
-                storage.as_mut().map_or(&mut buf_storage, |s| &mut s.buffer),
+                &mut buffer,
             )
             .or_raise(|| message("Failed to convert resource to mergeable form"))?;
 
-        match storage {
-            None => {
-                *storage = Some(Resource {
-                    id,
-                    rela_path: rela_path.to_owned(),
-                    data: out,
-                    mode,
-                    buffer: buf_storage,
-                });
-            }
-            Some(storage) => {
-                storage.id = id;
-                storage.rela_path = rela_path.to_owned();
-                storage.data = out;
-                storage.mode = mode;
-            }
-        }
+        *storage = Some(Resource {
+            id,
+            rela_path: rela_path.to_owned(),
+            data: out,
+            mode,
+            buffer,
+        });
         Ok(())
     }
 }

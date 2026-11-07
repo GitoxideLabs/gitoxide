@@ -1293,10 +1293,73 @@ mod prepare_merge {
 }
 
 mod set_resource {
-    use gix_merge::blob::{ResourceKind, pipeline};
-    use gix_object::tree::EntryKind;
+    use gix_merge::blob::{ResourceKind, pipeline, platform::resource::Data};
+    use gix_object::{Write, tree::EntryKind};
+    use gix_testtools::TestResult;
 
     use crate::blob::platform::new_platform;
+
+    #[test]
+    fn failed_replacement_unsets_only_its_resource() -> TestResult {
+        let mut platform = new_platform(None, pipeline::Mode::ToGit);
+        platform.filter.roots = Default::default();
+        let db = gix_odb::memory::Proxy::new(gix_object::find::Never, gix_testtools::object_hash());
+        let original_blob_id = db.write_buf(gix_object::Kind::Blob, b"original\n")?;
+        let replacement_blob_id = db.write_buf(gix_object::Kind::Blob, b"replacement\n")?;
+        let missing_blob_id = gix_testtools::object_hash().empty_blob();
+        let kinds = [
+            ResourceKind::CommonAncestorOrBase,
+            ResourceKind::CurrentOrOurs,
+            ResourceKind::OtherOrTheirs,
+        ];
+        for kind in kinds {
+            for (mode, path, blob_id) in [
+                (EntryKind::Blob, "replacement", missing_blob_id),
+                (EntryKind::Blob, "../invalid", original_blob_id),
+                (EntryKind::Tree, "replacement", original_blob_id),
+            ] {
+                for side in kinds {
+                    platform.set_resource(Some(original_blob_id), EntryKind::Blob, "original".into(), side, &db)?;
+                }
+                let err = platform
+                    .set_resource(Some(blob_id), mode, path.into(), kind, &db)
+                    .expect_err("invalid modes, invalid paths, and unavailable objects cannot replace a resource");
+                assert!(
+                    platform.prepare_merge(&db, Default::default()).is_err(),
+                    "failed setup must unset {kind:?}, even if it was already populated: {err}"
+                );
+
+                platform.set_resource(
+                    Some(replacement_blob_id),
+                    EntryKind::Blob,
+                    "replacement".into(),
+                    kind,
+                    &db,
+                )?;
+                let prepared = platform.prepare_merge(&db, Default::default())?;
+                for (side, resource) in kinds
+                    .into_iter()
+                    .zip([prepared.ancestor, prepared.current, prepared.other])
+                {
+                    let (expected_blob_id, expected_path, expected_data) = if side == kind {
+                        (replacement_blob_id, "replacement", &b"replacement\n"[..])
+                    } else {
+                        (original_blob_id, "original", &b"original\n"[..])
+                    };
+                    assert_eq!(
+                        (resource.id, resource.rela_path, resource.data),
+                        (
+                            Some(expected_blob_id.as_ref()),
+                            expected_path.into(),
+                            Data::Buffer(expected_data)
+                        ),
+                        "retry replaces the failed side and preserves the other resources"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn invalid_resource_types() {
