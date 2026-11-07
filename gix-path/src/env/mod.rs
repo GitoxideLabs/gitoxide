@@ -3,11 +3,16 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use bstr::{BString, ByteSlice};
 use std::sync::LazyLock;
 
-mod auxiliary;
 mod git;
+
+#[cfg(windows)]
+#[path = "windows/mod.rs"]
+mod platform;
+#[cfg(not(windows))]
+#[path = "non_windows.rs"]
+mod platform;
 
 /// Return the unoverridden location at which an installation-specific Git configuration file can be found, or
 /// `None` if the binary could not be executed or its results could not be parsed.
@@ -51,11 +56,7 @@ pub fn installation_config_prefix() -> Option<&'static Path> {
 /// On Windows this shares the single Git invocation used by [`installation_config()`].
 /// The caller is responsible for applying `GIT_CONFIG_SYSTEM` and `GIT_CONFIG_NOSYSTEM`.
 pub fn system_config() -> Option<&'static Path> {
-    if cfg!(windows) {
-        git::system_config_path().and_then(|p| crate::from_byte_slice(p).ok())
-    } else {
-        Some(Path::new("/etc/gitconfig"))
-    }
+    platform::system_config()
 }
 
 /// Return the shell that Git would use, the shell to execute commands from.
@@ -80,20 +81,7 @@ struct Shell {
 }
 
 fn shell_configuration() -> &'static Shell {
-    static SHELL: LazyLock<Shell> = LazyLock::new(|| {
-        if cfg!(windows) {
-            let shell = auxiliary::find_git_associated_windows_executable_with_fallback("sh");
-            Shell {
-                program: shell.program,
-                needs_posix_mode: shell.is_shim,
-            }
-        } else {
-            Shell {
-                program: "/bin/sh".into(),
-                needs_posix_mode: false,
-            }
-        }
-    });
+    static SHELL: LazyLock<Shell> = LazyLock::new(platform::shell);
     &SHELL
 }
 
@@ -137,14 +125,7 @@ pub fn shell_command() -> std::process::Command {
 /// Plain Scoop shims are resolved through their `.shim` sidecars; shims with arguments or
 /// unsupported metadata still require querying Git.
 pub fn exe_invocation() -> &'static Path {
-    #[cfg(windows)]
-    {
-        git::exe_invocation()
-    }
-    #[cfg(not(windows))]
-    {
-        Path::new("git")
-    }
+    platform::exe_invocation()
 }
 
 /// Returns the fully qualified path in the *xdg-home* directory (or equivalent in the home dir) to
@@ -171,39 +152,7 @@ pub fn xdg_config(file: &str, env_var: &mut dyn FnMut(&str) -> Option<OsString>)
         })
 }
 
-static GIT_CORE_DIR: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
-    #[cfg(windows)]
-    if let Some(core) = system_prefix_from_git_in_path()
-        .map(|prefix| prefix.join("libexec/git-core"))
-        .filter(|core| core.is_dir())
-    {
-        // Git emits forward slashes, which companion-program lookup also preserves.
-        return Some(
-            crate::from_bstr(crate::to_unix_separators(crate::into_bstr(core).ok()?))
-                .ok()?
-                .into_owned(),
-        );
-    }
-    #[cfg(windows)]
-    if let Some(core) = git::msys_core_dir() {
-        return Some(core);
-    }
-    let mut cmd = std::process::Command::new(exe_invocation());
-
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    let output = cmd.arg("--exec-path").output().ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    git::native_path(BString::new(output.stdout).strip_suffix(b"\n")?.to_path().ok()?)
-});
+static GIT_CORE_DIR: LazyLock<Option<PathBuf>> = LazyLock::new(platform::core_dir);
 
 /// Return the directory that `git --exec-path` would report.
 ///
@@ -250,117 +199,12 @@ pub fn installation_program(name: &str) -> Option<PathBuf> {
         return None;
     }
 
-    core_dir_program(name).or_else(|| {
-        if cfg!(windows) {
-            auxiliary::find_git_associated_windows_executable(name).map(|executable| executable.program.into())
-        } else {
-            None
-        }
-    })
+    core_dir_program(name).or_else(|| platform::associated_program(name))
 }
 
 fn is_bare_program_name(name: &str) -> bool {
     let mut components = Path::new(name).components();
     matches!(components.next(), Some(std::path::Component::Normal(_))) && components.next().is_none()
-}
-
-fn system_prefix_from_core_dir<F>(core_dir_func: F) -> Option<PathBuf>
-where
-    F: Fn() -> Option<&'static Path>,
-{
-    core_dir_func()?
-        .ancestors()
-        .find(|path| path.file_name() == Some(OsStr::new("libexec")) || (cfg!(windows) && path.ends_with("usr/lib")))?
-        .parent()
-        .filter(|prefix| !prefix.as_os_str().is_empty())
-        .map(Path::to_path_buf)
-}
-
-fn system_prefix_from_exepath_var<F>(var_os_func: F) -> Option<PathBuf>
-where
-    F: Fn(&str) -> Option<OsString>,
-{
-    // Only attempt this optimization if the `EXEPATH` variable is set to an absolute path.
-    let root = var_os_func("EXEPATH").map(PathBuf::from).filter(|r| r.is_absolute())?;
-    unambiguous_runtime_prefix(&root)
-}
-
-/// Like [`system_prefix_from_exepath_var()`], but for Git for Windows' `cmd` and `bin` launchers.
-///
-/// The installer puts `<root>/cmd` into `PATH`, so this is the `git.exe` that shells other than Git
-/// Bash find, and these don't have `EXEPATH` set.
-/// Chocolatey portable and Conda/Mamba instead expose `bin`, with `cmd` alongside it.
-#[cfg(windows)]
-fn system_prefix_from_git_launcher(executable: &Path) -> Option<PathBuf> {
-    let directory = executable.parent().filter(|_| executable.is_absolute())?;
-    let root = directory.parent()?;
-    let name = directory.file_name()?;
-    (name.eq_ignore_ascii_case("cmd") || (name.eq_ignore_ascii_case("bin") && root.join("cmd/git.exe").is_file()))
-        .then(|| unambiguous_runtime_prefix(root))
-        .flatten()
-}
-
-/// A runtime binary selects its own prefix even if other runtimes are installed alongside it.
-#[cfg(windows)]
-fn system_prefix_from_git_executable(executable: &Path) -> Option<PathBuf> {
-    let bin = executable.parent().filter(|_| executable.is_absolute())?;
-    let prefix = bin.parent()?;
-    if bin.file_name()?.eq_ignore_ascii_case("bin")
-        && ["clangarm64", "ucrt64", "mingw64", "mingw32"].iter().any(|name| {
-            prefix
-                .file_name()
-                .is_some_and(|component| component.eq_ignore_ascii_case(name))
-        })
-    {
-        return Some(prefix.to_owned());
-    }
-    system_prefix_from_git_launcher(executable)
-}
-
-/// Return the only Git for Windows runtime directory in `root`, or `None` if there is none or more than one.
-fn unambiguous_runtime_prefix(root: &Path) -> Option<PathBuf> {
-    let mut candidates = ["clangarm64", "ucrt64", "mingw64", "mingw32"]
-        .iter()
-        .map(|component| root.join(component))
-        .filter(|candidate| candidate.is_dir());
-
-    let path = candidates.next()?;
-    match candidates.next() {
-        Some(_) => None, // Multiple plausible candidates, so don't use this optimization.
-        None => Some(path),
-    }
-}
-
-/// Return the system prefix if it can be told from the environment, which is much faster than running Git.
-fn system_prefix_without_running_git() -> Option<PathBuf> {
-    // Read EXEPATH when each public API first needs it, independently of the cached executable.
-    system_prefix_from_exepath_var(|key| std::env::var_os(key))
-        .or_else(|| system_prefix_from_git_in_path().map(ToOwned::to_owned))
-}
-
-fn system_prefix_from_git_in_path() -> Option<&'static Path> {
-    // Git reports `GIT_EXEC_PATH` as its own location, which the executable's location can't tell.
-    #[cfg(windows)]
-    if std::env::var_os("GIT_EXEC_PATH").is_none() {
-        static PREFIX: LazyLock<Option<PathBuf>> =
-            LazyLock::new(|| system_prefix_from_git_executable(git::exe_path()?));
-        return PREFIX.as_deref();
-    }
-    None
-}
-
-/// Return Git's conventional system configuration path relative to its runtime `prefix`.
-///
-/// Git for Windows builds this path as `../etc/gitconfig`, beside its runtime directory. On Unix,
-/// [`system_prefix()`] is `/`, yielding `/etc/gitconfig`. This is used by the `EXEPATH` shortcut
-/// and as a fallback when querying Git yields no origin.
-fn config_path_from_system_prefix(prefix: &Path) -> PathBuf {
-    let prefix = if cfg!(windows) {
-        prefix.parent().unwrap_or(prefix)
-    } else {
-        prefix
-    };
-    prefix.join("etc/gitconfig")
 }
 
 /// Returns the platform dependent system prefix or `None` if it cannot be found (right now only on Windows).
@@ -381,13 +225,7 @@ fn config_path_from_system_prefix(prefix: &Path) -> PathBuf {
 /// This happens only Windows if the git binary can't be found at all for obtaining its executable
 /// path, or if the git binary wasn't built with a well-known directory structure or environment.
 pub fn system_prefix() -> Option<&'static Path> {
-    if cfg!(windows) {
-        static PREFIX: LazyLock<Option<PathBuf>> =
-            LazyLock::new(|| system_prefix_without_running_git().or_else(|| system_prefix_from_core_dir(core_dir)));
-        PREFIX.as_deref()
-    } else {
-        Path::new("/").into()
-    }
+    platform::system_prefix()
 }
 
 /// Returns `$HOME` or `None` if it cannot be found.
