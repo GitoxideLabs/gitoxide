@@ -241,11 +241,7 @@ mod system_prefix {
 
     #[cfg(windows)]
     #[test]
-    #[serial]
-    fn git_launcher_must_be_absolute() -> gix_testtools::TestResult {
-        let root = ExePath::new();
-        root.create_subdir("mingw64");
-        let _cwd = CurrentDir::set(&root.path)?;
+    fn git_launcher_must_be_absolute() {
         for executable in ["git.exe", "cmd/git.exe", "./cmd/git.exe"] {
             assert_eq!(
                 system_prefix_from_git_launcher(Path::new(executable)),
@@ -253,7 +249,6 @@ mod system_prefix {
                 "{executable} doesn't say where the installation is"
             );
         }
-        Ok(())
     }
 
     #[test]
