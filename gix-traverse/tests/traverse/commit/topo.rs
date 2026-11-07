@@ -2,6 +2,7 @@ use crate::Result;
 use crate::hex_to_id;
 use crate::util::{
     CountingFind, commit_graph, fixture, fixture_odb, named_fixture, parse_commit_names, rev_list_baseline,
+    unseen_generation_fixture,
 };
 use gix_hash::{ObjectId, oid};
 use gix_object::bstr::ByteSlice;
@@ -339,6 +340,106 @@ fn empty_and_short_ranges_do_not_walk_shared_history() -> gix_testtools::TestRes
                         lookups.get()
                     );
                 }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn unseen_uncomputed_generation_orders_multiple_tips_like_git() -> gix_testtools::TestResult {
+    // A's newer timestamp must not let it escape before its descendants H and Z.
+    assert_unseen_generation_matches_git("short", &["A", "H"], &[], &["H", "Z", "A"])
+}
+
+#[test]
+fn unseen_uncomputed_generation_hides_deep_ancestors_like_git() -> gix_testtools::TestResult {
+    // H -> Z1 -> Z2 -> A needs hidden painting beyond a two-edge lookahead.
+    assert_unseen_generation_matches_git("long", &["A"], &["H"], &[])
+}
+
+fn assert_unseen_generation_matches_git(
+    repo_name: &str,
+    tips: &[&str],
+    ends: &[&str],
+    expected: &[&str],
+) -> gix_testtools::TestResult {
+    let (repo_dir, odb) = unseen_generation_fixture(repo_name)?;
+    let commits = parse_commit_names(&repo_dir)?;
+    let load_graph =
+        || gix_commitgraph::Graph::from_info_dir(&repo_dir.join(".git/objects/info"), gix_testtools::object_hash());
+    let graph = load_graph()?;
+    assert!(
+        !graph.generation_numbers_available(),
+        "the unseen middle layer prevents generation-ordered stopping"
+    );
+    let a_time = graph
+        .commit_by_id(commits["A"])
+        .expect("A is in the graph")
+        .committer_timestamp();
+    for (name, commit_id) in &commits {
+        let commit = graph.commit_by_id(*commit_id).expect("every commit is in the graph");
+        assert_eq!(
+            commit.generation(),
+            if name.starts_with('Z') { 0 } else { 1 },
+            "{name}: only the unseen middle layer has uncomputed generations"
+        );
+        assert!(
+            name == "A" || a_time > commit.committer_timestamp(),
+            "A is newer than all its descendants"
+        );
+    }
+    let tip_commit_ids = tips.iter().map(|name| commits[*name]).collect::<Vec<_>>();
+    let end_commit_ids = ends.iter().map(|name| commits[*name]).collect::<Vec<_>>();
+    let expected = expected.iter().map(|name| commits[*name]).collect::<Vec<_>>();
+    let revisions = tips
+        .iter()
+        .map(ToString::to_string)
+        .chain(ends.iter().map(|name| format!("^{name}")))
+        .collect::<Vec<_>>()
+        .join(" ");
+    for with_graph in [false, true] {
+        for (sorting, order) in [
+            (topo::Sorting::TopoOrder, "topo-order"),
+            (topo::Sorting::DateOrder, "date-order"),
+        ] {
+            for (parents, parent_mode) in [(Parents::All, "do-walk"), (Parents::First, "first-parent")] {
+                // Compare on the same patched chain, with Git's environment isolated by the shared helper.
+                let output = gix_testtools::git(&repo_dir, &format!("rev-list --{order} --{parent_mode} {revisions}"))?;
+                let baseline = output
+                    .lines()
+                    .map(|line| ObjectId::from_hex(line.as_bytes()))
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                assert_eq!(
+                    baseline, expected,
+                    "Git's --{order} --{parent_mode} {revisions} baseline"
+                );
+                let lookups = Rc::new(Cell::new(0));
+                let actual = topo::Builder::from_iters(
+                    CountingFind {
+                        inner: &odb,
+                        lookups: Rc::clone(&lookups),
+                    },
+                    tip_commit_ids.clone(),
+                    (!ends.is_empty()).then(|| end_commit_ids.clone()),
+                )
+                .sorting(sorting)
+                .parents(parents)
+                .with_commit_graph(if with_graph { Some(load_graph()?) } else { None })
+                .build()?
+                .map(|item| item.map(|info| info.id))
+                .collect::<gix_error::Result<Vec<_>>>()?;
+                if with_graph {
+                    assert_eq!(
+                        lookups.get(),
+                        0,
+                        "uncomputed generations must not discard the fully populated commit-graph"
+                    );
+                }
+                assert_eq!(
+                    actual, baseline,
+                    "{repo_name}, --{order} --{parent_mode} {revisions}, commit-graph: {with_graph}: unseen generations must not expose ancestors early"
+                );
             }
         }
     }

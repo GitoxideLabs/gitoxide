@@ -123,6 +123,10 @@ pub fn graph_and_expected_named(
         gix_testtools::object_hash(),
     )
     .expect("graph present and valid");
+    assert!(
+        cg.generation_numbers_available(),
+        "Git computes generations in every layer of these fixtures"
+    );
     let object_hash = cg.object_hash();
     let any_ref = expected.values().next().expect("at least one ref");
     assert_eq!(

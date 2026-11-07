@@ -165,6 +165,11 @@ fn to_queue_key(i: i64, order: CommitTimeOrder) -> QueueKey<i64> {
 /// Without them, Git's date-based heuristic stops after five hidden commits when only hidden
 /// commits older than the last visible commit remain queued. Extreme clock skew can put hidden
 /// ancestors beyond this stopping point.
+/// With usable generation numbers, painting also stops once every queued commit carries `HIDDEN`,
+/// like Git's `everybody_uninteresting()` in `limit_list()`. Generation order makes this exact:
+/// no popped commit is reachable from a queued commit, so popped commits keep their flags.
+/// Every commit the visible walk asks about, a tip or a parent of a commit it yields,
+/// was either popped already or is still queued with both flags.
 ///
 /// The returned set is not all commits reachable from hidden tips. It covers the overlap frontier
 /// where the visible traversal must stop. The actual `Simple` walk then skips these commits and
@@ -185,10 +190,16 @@ pub(super) fn compute_hidden_frontier(
     let mut last_visible_time = SecondsSinceUnixEpoch::MAX;
     let mut slop = 5;
     let mut stopped_on_date = false;
+    // Queued commits painted only `VISIBLE`. They were queued once, when they gained that flag.
+    let mut visible_only_commit_ids = gix_hashtable::HashSet::default();
+    // Check every layer up front: an unseen legacy layer can hide ancestors that sort above it.
+    let mut saw_uncomputed_generation = cache.is_some_and(|cache| !cache.generation_numbers_available());
 
     for &visible in visible_tips {
         graph.get_or_insert_full_commit(visible, |commit| {
             commit.data |= PaintFlags::VISIBLE;
+            saw_uncomputed_generation |= commit.generation == Some(0);
+            visible_only_commit_ids.insert(visible);
             queue.insert(GenThenTime::from(&*commit), visible);
         })?;
     }
@@ -196,7 +207,9 @@ pub(super) fn compute_hidden_frontier(
         graph.get_or_insert_full_commit(hidden, |commit| {
             if commit.data == PaintFlags::VISIBLE {
                 unhidden_tips -= 1;
+                visible_only_commit_ids.remove(&hidden);
             }
+            saw_uncomputed_generation |= commit.generation == Some(0);
             commit.data |= PaintFlags::HIDDEN;
             queue.insert(GenThenTime::from(&*commit), hidden);
         })?;
@@ -213,6 +226,15 @@ pub(super) fn compute_hidden_frontier(
         if unhidden_tips == 0 {
             break;
         }
+        // With zero-generation layers ruled out, a usable queue head means all queued commits have one.
+        if visible_only_commit_ids.is_empty()
+            && !saw_uncomputed_generation
+            && queue
+                .peek()
+                .is_some_and(|(key, _)| (1..gix_commitgraph::GENERATION_NUMBER_MAX).contains(&key.generation))
+        {
+            break;
+        }
         let (_info, commit_id) = match queue.pop() {
             Some(v) => v,
             None => break,
@@ -225,6 +247,7 @@ pub(super) fn compute_hidden_frontier(
             .is_none_or(|generation| !(1..gix_commitgraph::GENERATION_NUMBER_MAX).contains(&generation));
         if !flags.contains(PaintFlags::HIDDEN) {
             last_visible_time = commit.commit_time;
+            visible_only_commit_ids.remove(&commit_id);
         }
         if flags == (PaintFlags::VISIBLE | PaintFlags::HIDDEN) {
             flags |= PaintFlags::STALE;
@@ -240,14 +263,18 @@ pub(super) fn compute_hidden_frontier(
                 }
             }
             graph.get_or_insert_full_commit(parent_id, |parent| {
+                saw_uncomputed_generation |= parent.generation == Some(0);
                 if (parent.data & flags) != flags {
-                    if flags.contains(PaintFlags::HIDDEN)
-                        && parent.data == PaintFlags::VISIBLE
-                        && visible_tips.binary_search(&parent_id).is_ok()
-                    {
-                        unhidden_tips -= 1;
+                    if flags.contains(PaintFlags::HIDDEN) && parent.data == PaintFlags::VISIBLE {
+                        visible_only_commit_ids.remove(&parent_id);
+                        if visible_tips.binary_search(&parent_id).is_ok() {
+                            unhidden_tips -= 1;
+                        }
                     }
                     parent.data |= flags;
+                    if parent.data == PaintFlags::VISIBLE {
+                        visible_only_commit_ids.insert(parent_id);
+                    }
                     queue.insert(GenThenTime::from(&*parent), parent_id);
                 }
             })?;
@@ -808,4 +835,57 @@ fn collect_parents(
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compute_hidden_frontier;
+    use crate::commit::Parents;
+
+    #[test]
+    fn hidden_paint_stops_at_the_fork_point_above_unrelated_history() -> gix_testtools::TestResult {
+        let repo_dir =
+            gix_testtools::scripted_fixture_read_only("make_repo_for_hidden_bug.sh")?.join("unrelated_history");
+        let names = std::fs::read_to_string(repo_dir.join("commit-names.baseline"))?;
+        let commit_id = |name: &str| {
+            names
+                .lines()
+                .find_map(|line| line.strip_suffix(name)?.strip_suffix(' '))
+                .map(|hex| gix_hash::ObjectId::from_hex(hex.as_bytes()).expect("the baseline has valid hashes"))
+                .expect("the fixture has a commit with this message")
+        };
+        let objects_dir = repo_dir.join(".git").join("objects");
+        let odb = gix_odb::at(&objects_dir, gix_testtools::object_hash())?;
+        let graph = gix_commitgraph::at(objects_dir.join("info"), gix_testtools::object_hash(), None)?;
+
+        let paint = |visible_commit_ids: &mut [gix_hash::ObjectId], hidden_commit_ids: &[gix_hash::ObjectId]| {
+            visible_commit_ids.sort();
+            compute_hidden_frontier(
+                visible_commit_ids,
+                hidden_commit_ids,
+                &odb,
+                Some(&graph),
+                Parents::All,
+                |_| true,
+            )
+        };
+
+        let frontier = paint(&mut [commit_id("topic-1")], &[commit_id("main-39")])?;
+        assert_eq!(
+            frontier.into_keys().collect::<Vec<_>>(),
+            [commit_id("main-29")],
+            "painting stops once the hidden paint reaches the fork point, \
+             so neither older mainline commits nor the unrelated history are painted"
+        );
+
+        let frontier = paint(
+            &mut [commit_id("topic-1"), commit_id("unrelated-0")],
+            &[commit_id("main-39"), commit_id("unrelated-0")],
+        )?;
+        assert!(
+            frontier.contains_key(&commit_id("main-29")) && !frontier.contains_key(&commit_id("main-28")),
+            "a visible tip that is also hidden doesn't keep painting past the fork point"
+        );
+        Ok(())
+    }
 }

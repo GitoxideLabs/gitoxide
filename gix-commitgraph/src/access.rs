@@ -33,6 +33,17 @@ impl Graph {
         r.file.id_at(r.pos)
     }
 
+    /// Return whether all graph layers have computed topological generation numbers.
+    ///
+    /// This checks the first commit in each nonempty file, relying on Git's invariant that a file
+    /// contains either all zero (uncomputed) or all nonzero generations. It does not validate that
+    /// invariant or rule out capped generations at [`crate::GENERATION_NUMBER_MAX`].
+    pub fn generation_numbers_available(&self) -> bool {
+        self.files
+            .iter()
+            .all(|file| file.iter_commits().next().is_none_or(|commit| commit.generation() != 0))
+    }
+
     /// Iterate over commits in unsorted order.
     pub fn iter_commits(&self) -> impl Iterator<Item = Commit<'_>> {
         self.files.iter().flat_map(File::iter_commits)

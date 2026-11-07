@@ -125,6 +125,8 @@ where
     /// Without a commit graph, this visits the visible history before yielding commits.
     /// Hidden ancestry is limited with Git's date-based heuristic, as in [`crate::commit::Simple::hide()`];
     /// extreme clock skew can leave hidden ancestors beyond the stopping point.
+    /// With a commit graph containing an uncomputed-generation layer, this explores all reachable
+    /// history and computes indegrees before yielding, while still using the graph for lookups.
     pub fn build(self) -> Result<Topo<Find, Predicate>> {
         let mut w = Topo {
             commit_graph: self.commit_graph,
@@ -198,6 +200,15 @@ where
             }
         }
 
+        if w.commit_graph
+            .as_ref()
+            .is_some_and(|graph| !graph.generation_numbers_available())
+        {
+            // An unseen zero-generation layer can lead back to higher generations. Settle all
+            // hidden marks before counting indegrees, and disable depth limits for the whole walk.
+            w.min_gen = 0;
+            w.explore_to_depth(0)?;
+        }
         w.compute_indegrees_to_depth(w.min_gen)?;
 
         // NOTE: in Git the ends are also added to the topo_queue in addition to

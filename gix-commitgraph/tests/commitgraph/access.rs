@@ -1,6 +1,23 @@
 use crate::{check_common, graph_and_expected, graph_and_expected_named};
 
 #[test]
+fn legacy_graph_has_no_generation_numbers() -> gix_testtools::TestResult {
+    let repo_dir = gix_testtools::scripted_fixture_read_only("single_commit.sh")?;
+    let mut data = std::fs::read(repo_dir.join(".git/objects/info/commit-graph"))?;
+    let hash_len = gix_testtools::object_hash().len_in_bytes();
+    let generation_offset = crate::chunk_range(&data, *b"CDAT")?.start + hash_len + 8;
+    let timestamp_bits = u32::from_be_bytes(data[generation_offset..][..4].try_into()?) & 3;
+    data[generation_offset..][..4].copy_from_slice(&timestamp_bits.to_be_bytes());
+    crate::update_checksum(&mut data)?;
+    let graph = gix_commitgraph::Graph::new(vec![crate::mapped_file(&data, "commit-graph")?])?;
+    assert!(
+        !graph.generation_numbers_available(),
+        "a legacy graph stores zero instead of computed generation numbers"
+    );
+    Ok(())
+}
+
+#[test]
 fn single_parent() {
     let (cg, refs) = graph_and_expected("single_parent.sh", &["parent", "child"]);
     check_common(&cg, &refs);
