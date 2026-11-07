@@ -17,8 +17,246 @@ use pretty_assertions::assert_eq;
 
 use crate::{
     hex_to_id,
-    rewrites::{Change, NULL_ID},
+    rewrites::{Change, ID},
 };
+
+#[test]
+fn optional_ids_require_content_to_match() -> TestResult {
+    #[derive(Clone)]
+    struct OptionalId(Option<gix_hash::ObjectId>, ChangeKind);
+    impl rewrites::tracker::Change for OptionalId {
+        fn id(&self) -> Option<&gix_hash::oid> {
+            self.0.as_deref()
+        }
+        fn relation(&self) -> Option<Relation> {
+            None
+        }
+        fn kind(&self) -> ChangeKind {
+            self.1
+        }
+        fn entry_mode(&self) -> gix_object::tree::EntryMode {
+            EntryKind::Blob.into()
+        }
+        fn id_and_entry_mode(&self) -> (Option<&gix_hash::oid>, gix_object::tree::EntryMode) {
+            (self.id(), self.entry_mode())
+        }
+    }
+    for old_id in [None, Some(crate::fixture_hash_kind().null())] {
+        for new_id in [None, Some(crate::fixture_hash_kind().null())] {
+            for worktree in [false, true] {
+                for percentage in [None, Some(0.0)] {
+                    let mut tracker = rewrites::Tracker::new(Rewrites {
+                        percentage,
+                        ..Default::default()
+                    });
+                    tracker.try_push_change(OptionalId(old_id, ChangeKind::Deletion), "a".into());
+                    tracker.try_push_change(OptionalId(new_id, ChangeKind::Addition), "b".into());
+                    let mut platform = util::new_platform_no_worktree();
+                    if worktree {
+                        let root = crate::scripted_fixture_read_only("make_blob_repo.sh")?;
+                        platform.filter.roots.old_root = Some(root.clone());
+                        platform.filter.roots.new_root = Some(root);
+                    }
+                    let expect_match = worktree && percentage.is_some();
+                    let mut emitted = 0;
+                    tracker.emit(
+                        |_, source| {
+                            assert_eq!(
+                                source.is_some(),
+                                expect_match,
+                                "unavailable IDs require a content comparison"
+                            );
+                            if let Some(source) = source {
+                                assert_eq!(source.id, None, "even Some(null) is exposed as unavailable");
+                                assert!(source.diff.is_some(), "None == None never establishes identity");
+                            }
+                            emitted += 1;
+                            std::ops::ControlFlow::Continue(())
+                        },
+                        &mut platform,
+                        &gix_object::find::Never,
+                        |_| Ok::<_, std::io::Error>(()),
+                    )?;
+                    assert_eq!(emitted, if expect_match { 1 } else { 2 });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn unavailable_ids_do_not_match() {
+    for mode in [EntryKind::Blob, EntryKind::Link, EntryKind::Commit, EntryKind::Tree] {
+        for percentage in [None, Some(0.0), Some(0.5)] {
+            for source_kind in [ChangeKind::Deletion, ChangeKind::Modification] {
+                if mode == EntryKind::Tree && source_kind == ChangeKind::Modification {
+                    continue;
+                }
+                let mut track = util::new_tracker(Rewrites {
+                    percentage,
+                    copies: Some(Copies {
+                        source: CopySource::FromSetOfModifiedFiles,
+                        percentage,
+                    }),
+                    ..Default::default()
+                });
+                for (kind, path, parent) in [(source_kind, "old", 1), (ChangeKind::Addition, "new", 2)] {
+                    let change = Change {
+                        id: crate::fixture_hash_kind().null(),
+                        kind,
+                        mode: mode.into(),
+                        relation: (mode == EntryKind::Tree).then_some(Relation::Parent(parent)),
+                    };
+                    track.try_push_change(change, path.into());
+                }
+                let mut unmatched = 0;
+                util::assert_emit(&mut track, |_destination, source| {
+                    assert!(source.is_none(), "unavailable IDs cannot establish content equality");
+                    unmatched += 1;
+                    std::ops::ControlFlow::Continue(())
+                });
+                assert_eq!(unmatched, 2, "both changes remain unmatched without content");
+            }
+        }
+    }
+}
+
+#[test]
+fn unavailable_destination_id_can_match_only_with_available_content() -> TestResult {
+    for worktree in [false, true] {
+        let mut track = util::new_tracker(Rewrites {
+            percentage: Some(0.0),
+            ..Default::default()
+        });
+        let objects = util::add_retained_blobs(&mut track, [(Change::deletion(), "old", "a\n")])?;
+        track.try_push_change(
+            Change {
+                id: crate::fixture_hash_kind().null(),
+                ..Change::addition()
+            },
+            "a".into(),
+        );
+        let mut platform = util::new_platform_no_worktree();
+        if worktree {
+            platform.filter.roots.new_root = Some(crate::scripted_fixture_read_only("make_blob_repo.sh")?);
+        }
+        let mut emitted = 0;
+        track.emit(
+            |_destination, source| {
+                assert_eq!(
+                    source.is_some(),
+                    worktree,
+                    "only available content can establish similarity"
+                );
+                if let Some(source) = source {
+                    assert!((source.diff.expect("matched by content").similarity - 1.0).abs() < f32::EPSILON);
+                }
+                emitted += 1;
+                std::ops::ControlFlow::Continue(())
+            },
+            &mut platform,
+            &objects,
+            |_push| Ok::<_, std::io::Error>(()),
+        )?;
+        assert_eq!(
+            emitted,
+            if worktree { 1 } else { 2 },
+            "missing content leaves both changes unmatched"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn unavailable_empty_ids_respect_track_empty_and_missing_resources() -> TestResult {
+    let (root, ()) = gix_testtools::scripted_fixture_read_only_with_post("make_blob_repo.sh", 1, |fixture| {
+        if let gix_testtools::FixtureState::Uninitialized(path) = fixture {
+            // These present, unhashed files must remain distinguishable from missing resources.
+            // Prepare them before caching; the tracker only reads this fixture.
+            std::fs::write(path.join("empty-old"), b"")?;
+            std::fs::write(path.join("empty-new"), b"")?;
+        }
+        Ok(())
+    })?;
+    for track_empty in [false, true] {
+        for child_of_parent in [false, true] {
+            for percentage in [None, Some(0.0), Some(0.5)] {
+                for (old_path, new_path, both_present) in [
+                    ("missing-old", "missing-new", false),
+                    ("missing-old", "empty-new", false),
+                    ("empty-old", "missing-new", false),
+                    ("empty-old", "empty-new", true),
+                ] {
+                    let case = format!(
+                        "{old_path} -> {new_path}, track_empty={track_empty}, child_of_parent={child_of_parent}, percentage={percentage:?}"
+                    );
+                    let mut track = util::new_tracker(Rewrites {
+                        track_empty,
+                        percentage,
+                        ..Default::default()
+                    });
+                    for (kind, path, parent) in
+                        [(ChangeKind::Deletion, old_path, 1), (ChangeKind::Addition, new_path, 2)]
+                    {
+                        assert!(
+                            track
+                                .try_push_change(
+                                    Change {
+                                        id: crate::fixture_hash_kind().null(),
+                                        kind,
+                                        mode: EntryKind::Blob.into(),
+                                        relation: child_of_parent.then_some(Relation::ChildOfParent(parent)),
+                                    },
+                                    path.into(),
+                                )
+                                .is_none(),
+                            "unknown IDs must be retained until their content is available: {case}"
+                        );
+                    }
+                    let mut platform = util::new_platform_no_worktree();
+                    platform.filter.roots.old_root = Some(root.clone());
+                    platform.filter.roots.new_root = Some(root.clone());
+                    let expect_match = both_present && (track_empty || child_of_parent) && percentage.is_some();
+                    let mut emitted = 0;
+                    track.emit(
+                        |destination, source| {
+                            assert_eq!(
+                                source.is_some(),
+                                expect_match,
+                                "empty content needs permission to match; missing content and unknown identity never match: {case}"
+                            );
+                            if let Some(source) = source {
+                                assert_eq!(source.kind, SourceKind::Rename, "content establishes a rename: {case}");
+                                assert_eq!(source.location, old_path, "the empty source is matched: {case}");
+                                assert_eq!(destination.location, new_path, "the empty destination is matched: {case}");
+                                assert_eq!(
+                                    source.diff.expect("unhashed resources can only match by content"),
+                                    DiffLineStats {
+                                        similarity: 1.0,
+                                        ..Default::default()
+                                    },
+                                    "two present empty buffers have finite, perfect similarity: {case}"
+                                );
+                            }
+                            emitted += 1;
+                            std::ops::ControlFlow::Continue(())
+                        },
+                        &mut platform,
+                        &gix_object::find::Never,
+                        |_push| Ok::<_, std::io::Error>(()),
+                    )?;
+                    assert_eq!(
+                        emitted,
+                        if expect_match { 1 } else { 2 },
+                        "unmatched changes must both be emitted: {case}"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
 
 #[test]
 fn rename_by_id() -> TestResult {
@@ -51,7 +289,7 @@ fn rename_by_id() -> TestResult {
                 src.unwrap(),
                 Source {
                     entry_mode: EntryKind::Blob.into(),
-                    id: *NULL_ID,
+                    id: Some(*ID),
                     kind: SourceKind::Rename,
                     location: "b".into(),
                     change: &Change::deletion(),
@@ -215,7 +453,7 @@ fn copy_by_id() -> TestResult {
                 );
                 let source_a = Source {
                     entry_mode: EntryKind::Blob.into(),
-                    id,
+                    id: Some(id),
                     kind: SourceKind::Copy,
                     location: "a".into(),
                     change: &Change {
@@ -292,7 +530,7 @@ fn copy_by_id_search_in_all_sources() -> TestResult {
             |dst, src| {
                 let source_a = Source {
                     entry_mode: EntryKind::Blob.into(),
-                    id: content_id,
+                    id: Some(content_id),
                     kind: SourceKind::Copy,
                     location: "a-src".into(),
                     change: &Change {
@@ -376,7 +614,7 @@ fn copy_by_50_percent_similarity() -> TestResult {
             );
             let source_a = Source {
                 entry_mode: EntryKind::Blob.into(),
-                id,
+                id: Some(id),
                 kind: SourceKind::Copy,
                 location: "a".into(),
                 change: &Change {
@@ -640,7 +878,7 @@ fn rename_by_50_percent_similarity() -> TestResult {
                         src.unwrap(),
                         Source {
                             entry_mode: EntryKind::Blob.into(),
-                            id,
+                            id: Some(id),
                             kind: SourceKind::Rename,
                             location: "a".into(),
                             change: &Change {
@@ -756,7 +994,7 @@ fn rename_by_similarity_prefers_stronger_match_over_same_filename_match() -> Tes
 fn directories_without_relation_are_ignored() -> TestResult {
     let mut track = util::new_tracker(Default::default());
     let tree_without_relation = Change {
-        id: *NULL_ID,
+        id: *ID,
         kind: ChangeKind::Deletion,
         mode: EntryKind::Tree.into(),
         relation: None,
@@ -1361,7 +1599,7 @@ mod util {
         rewrites::Tracker::new(rewrites)
     }
 
-    fn new_platform_no_worktree() -> gix_diff::blob::Platform {
+    pub fn new_platform_no_worktree() -> gix_diff::blob::Platform {
         let root = crate::scripted_fixture_read_only("make_blob_repo.sh").expect("valid fixture");
         let attributes = gix_worktree::Stack::new(
             root,

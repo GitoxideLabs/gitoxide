@@ -2,7 +2,7 @@ use gix_error::Result;
 use std::num::NonZeroU32;
 
 use gix_diff::{blob::TokenSource, tree::Visit};
-use gix_error::{ErrorExt, OptionExt, ResultExt, message};
+use gix_error::{ErrorExt, OptionExt, ResultExt, bail, message};
 use gix_hash::ObjectId;
 use gix_object::{
     FindExt,
@@ -36,6 +36,13 @@ use crate::{
 ///    - A *slash-separated* worktree-relative path to the file to blame.
 /// * `options`
 ///    - An instance of [`Options`].
+///
+/// ## Errors
+///
+/// Comparisons between historical blobs require both diff resources to exist and be text. If the
+/// configured pipeline produces missing or binary resources, blame returns an error instead of
+/// treating them as empty. Text-converted resources are also rejected because blame ranges and
+/// returned content use the original blobs, whose line numbers may differ from converted text.
 ///
 /// ## The algorithm
 ///
@@ -770,8 +777,10 @@ fn blob_changes(
     diff_algorithm: gix_diff::blob::Algorithm,
     stats: &mut Statistics,
 ) -> Result<Vec<Change>> {
+    use gix_diff::blob::platform::prepare_diff::{Operation, TextChange};
+
     resource_cache.set_resource(
-        previous_oid,
+        Some(previous_oid),
         // TODO(blame): add a test to show of symlink blaming works.
         gix_object::tree::EntryKind::Blob,
         previous_file_path,
@@ -779,7 +788,7 @@ fn blob_changes(
         &odb,
     )?;
     resource_cache.set_resource(
-        oid,
+        Some(oid),
         gix_object::tree::EntryKind::Blob,
         file_path,
         gix_diff::blob::ResourceKind::NewOrDestination,
@@ -787,10 +796,38 @@ fn blob_changes(
     )?;
 
     let outcome = resource_cache.prepare_diff()?;
+    let pair = match outcome.operation {
+        Operation::InternalDiff {
+            change: TextChange::Modification(pair),
+            ..
+        }
+        | Operation::ExternalCommand {
+            change: TextChange::Modification(pair),
+            ..
+        } => pair,
+        Operation::SourceOrDestinationIsBinary => {
+            bail!(message!(
+                "Cannot blame \"{file_path}\" against \"{previous_file_path}\": a diff resource is binary; force text diffing to blame its original bytes"
+            ).validation());
+        }
+        Operation::InternalDiff { .. } | Operation::ExternalCommand { .. } | Operation::NeitherExists => {
+            bail!(message!(
+                "Cannot blame \"{file_path}\" against \"{previous_file_path}\": both diff resources must exist; check the configured worktree roots"
+            ).validation());
+        }
+    };
 
+    // shortcut: reject text conversion until blame ranges and output use converted content too.
+    if pair.before().is_derived() || pair.after().is_derived() {
+        bail!(message!(
+            "Cannot blame \"{file_path}\" against \"{previous_file_path}\": a diff resource uses text conversion, which can change line numbers; disable text conversion"
+        ).validation());
+    }
+
+    // Blame selects its own algorithm, even when a driver requests an external diff.
     Ok(blob_changes_from_data(
-        outcome.old.data.as_slice().unwrap_or_default(),
-        outcome.new.data.as_slice().unwrap_or_default(),
+        pair.before().as_slice(),
+        pair.after().as_slice(),
         diff_algorithm,
         stats,
     ))

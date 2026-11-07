@@ -49,7 +49,13 @@ pub fn display_object(
                     std::io::copy(&mut converted, &mut out).or_error()?;
                 }
                 (BlobFormat::Diff | BlobFormat::DiffOrGit, cache) => {
-                    cache.set_resource(id.detach(), mode.kind(), path, ResourceKind::OldOrSource, &repo.objects)?;
+                    cache.set_resource(
+                        Some(id.detach()),
+                        mode.kind(),
+                        path,
+                        ResourceKind::OldOrSource,
+                        &repo.objects,
+                    )?;
                     let resource = cache.resource(ResourceKind::OldOrSource).expect("just set");
                     let data = resource
                         .data

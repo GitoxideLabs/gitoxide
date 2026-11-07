@@ -29,7 +29,7 @@ pub mod baseline {
         pub fn to_item(&self) -> gix_refspec::match_group::Item<'_> {
             gix_refspec::match_group::Item {
                 full_ref_name: self.name.borrow(),
-                target: &self.target,
+                target: Some(&self.target),
                 object: self.object.as_deref(),
             }
         }

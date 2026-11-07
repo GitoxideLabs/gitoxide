@@ -458,7 +458,7 @@ pub(super) mod function {
         {
             Modification(crate::index_as_worktree::Record<'index, T, U>),
             DirwalkEntry {
-                id: gix_hash::ObjectId,
+                id: Option<gix_hash::ObjectId>,
                 entry: gix_dir::Entry,
                 collapsed_directory_status: Option<gix_dir::entry::Status>,
             },
@@ -469,10 +469,12 @@ pub(super) mod function {
             T: Clone,
             U: Clone,
         {
-            fn id(&self) -> &oid {
+            fn id(&self) -> Option<&oid> {
                 match self {
-                    ModificationOrDirwalkEntry::Modification(m) => &m.entry.id,
-                    ModificationOrDirwalkEntry::DirwalkEntry { id, .. } => id,
+                    ModificationOrDirwalkEntry::Modification(m) => {
+                        (!m.entry.id.is_null()).then_some(m.entry.id.as_ref())
+                    }
+                    ModificationOrDirwalkEntry::DirwalkEntry { id, .. } => id.as_deref(),
                 }
             }
 
@@ -518,13 +520,13 @@ pub(super) mod function {
                 .unwrap_or(gix_object::tree::EntryKind::Blob.into())
             }
 
-            fn id_and_entry_mode(&self) -> (&oid, EntryMode) {
+            fn id_and_entry_mode(&self) -> (Option<&oid>, EntryMode) {
                 (self.id(), self.entry_mode())
             }
         }
 
-        /// Note that for non-files, we always return a null-sha and assume that the rename-tracking
-        /// does nothing for these anyway.
+        /// `None` means hashing was unavailable or inapplicable. It cannot establish identity;
+        /// blob similarity still requires available content from the worktree.
         #[expect(clippy::too_many_arguments)]
         pub(super) fn calculate_worktree_id(
             object_hash: gix_hash::Kind,
@@ -536,15 +538,15 @@ pub(super) mod function {
             objects: &dyn gix_object::Find,
             buf: &mut Vec<u8>,
             should_interrupt: &std::sync::atomic::AtomicBool,
-        ) -> Result<gix_hash::ObjectId> {
+        ) -> Result<Option<gix_hash::ObjectId>> {
             let Some(kind) = disk_kind else {
-                return Ok(object_hash.null());
+                return Ok(None);
             };
 
-            Ok(match kind {
+            Ok(Some(match kind {
                 Kind::Untrackable => {
                     // Go along with unreadable files, they are passed along without rename tracking.
-                    return Ok(object_hash.null());
+                    return Ok(None);
                 }
                 Kind::File => {
                     let platform = attrs.at_entry(rela_path, None, objects).or_raise(|| {
@@ -565,7 +567,7 @@ pub(super) mod function {
                                 ?err,
                                 "ignoring worktree file as it can't be read for hashing"
                             );
-                            return Ok(object_hash.null());
+                            return Ok(None);
                         }
                         Err(err) => {
                             return Err(err.and_raise(message!(
@@ -620,8 +622,8 @@ pub(super) mod function {
                     gix_object::compute_hash(object_hash, gix_object::Kind::Blob, &target)
                         .or_raise(|| message!("Could not hash worktree link \"{}\"", path.display()))?
                 }
-                Kind::Directory | Kind::Repository => object_hash.null(),
-            })
+                Kind::Directory | Kind::Repository => return Ok(None),
+            }))
         }
 
         #[inline]

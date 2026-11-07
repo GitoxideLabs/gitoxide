@@ -11,7 +11,7 @@ impl<'a> ResourceRef<'a> {
                 pipeline::Data::TooLarge { size } => Data::TooLarge { size },
             }),
             rela_path: cache.rela_path.as_ref(),
-            id: &cache.id,
+            id: cache.id.as_deref(),
         }
     }
 }
@@ -19,10 +19,12 @@ impl<'a> ResourceRef<'a> {
 /// The data of a mergeable resource, as it could be determined and computed previously.
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub enum Data<'a> {
-    /// The object is missing, either because it didn't exist in the working tree or because its `id` was null.
-    /// Such data equals an empty buffer.
+    /// The object is missing, either because it didn't exist in the working tree or because its `id` was `None`
+    /// and no worktree root was configured. A supplied ID does not override absence from the worktree.
+    /// Text merges interpret this as an empty buffer; binary identity checks retain the distinction.
     Missing,
-    /// The textual data as processed and ready for merging, i.e. suitable for storage in Git.
+    /// The data as processed and ready for merging, i.e. suitable for storage in Git.
+    /// An empty buffer represents a present resource with empty content, unlike [`Data::Missing`].
     Buffer(&'a [u8]),
     /// The file or blob is above the big-file threshold and cannot be processed.
     ///
@@ -38,13 +40,12 @@ pub enum Data<'a> {
 }
 
 impl<'a> Data<'a> {
-    /// Return ourselves as slice of bytes if this instance stores data.
-    /// Note that missing data is interpreted as empty slice, to facilitate additions and deletions.
+    /// Return the bytes of a present [`Data::Buffer`], including an empty one.
+    /// Return `None` for [`Data::Missing`] and [`Data::TooLarge`]; inspect the variant to distinguish them.
     pub fn as_slice(&self) -> Option<&'a [u8]> {
         match self {
             Data::Buffer(d) => Some(d),
-            Data::Missing => Some(&[]),
-            Data::TooLarge { .. } => None,
+            Data::Missing | Data::TooLarge { .. } => None,
         }
     }
 }

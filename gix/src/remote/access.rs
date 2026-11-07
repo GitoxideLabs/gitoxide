@@ -116,7 +116,7 @@ impl<'repo> Remote<'repo> {
         MatchGroup::from_fetch_specs(self.fetch_specs.iter().map(RefSpec::to_ref)).match_rhs(std::iter::once(
             match_group::Item {
                 full_ref_name: tracking_ref.as_bstr(),
-                target: self.repo.object_hash().null_ref(),
+                target: None,
                 object: None,
             },
         ))

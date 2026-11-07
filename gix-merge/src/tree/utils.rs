@@ -157,16 +157,16 @@ pub fn perform_blob_merge(
         ConflictMapping::Original => (ResourceKind::CurrentOrOurs, ResourceKind::OtherOrTheirs),
         ConflictMapping::Swapped => (ResourceKind::OtherOrTheirs, ResourceKind::CurrentOrOurs),
     };
-    blob_merge.set_resource(our_id, our_mode.kind(), our_location.as_bstr(), our_kind, objects)?;
+    blob_merge.set_resource(Some(our_id), our_mode.kind(), our_location.as_bstr(), our_kind, objects)?;
     blob_merge.set_resource(
-        their_id,
+        Some(their_id),
         their_mode.kind(),
         their_location.as_bstr(),
         their_kind,
         objects,
     )?;
     blob_merge.set_resource(
-        previous_id,
+        Some(previous_id),
         previous_mode.kind(),
         previous_location.as_bstr(),
         ResourceKind::CommonAncestorOrBase,

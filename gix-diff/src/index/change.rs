@@ -163,10 +163,10 @@ impl ChangeRef<'_, '_> {
 }
 
 impl rewrites::tracker::Change for ChangeRef<'_, '_> {
-    fn id(&self) -> &gix_hash::oid {
+    fn id(&self) -> Option<&gix_hash::oid> {
         match self {
             ChangeRef::Addition { id, .. } | ChangeRef::Deletion { id, .. } | ChangeRef::Modification { id, .. } => {
-                id.as_ref()
+                (!id.is_null()).then_some(id.as_ref())
             }
             ChangeRef::Rewrite { .. } => {
                 unreachable!("BUG")
@@ -203,14 +203,14 @@ impl rewrites::tracker::Change for ChangeRef<'_, '_> {
         }
     }
 
-    fn id_and_entry_mode(&self) -> (&gix_hash::oid, tree::EntryMode) {
+    fn id_and_entry_mode(&self) -> (Option<&gix_hash::oid>, tree::EntryMode) {
         match self {
             ChangeRef::Addition { id, entry_mode, .. }
             | ChangeRef::Deletion { id, entry_mode, .. }
             | ChangeRef::Modification { id, entry_mode, .. }
             | ChangeRef::Rewrite { id, entry_mode, .. } => {
                 (
-                    id,
+                    (!id.is_null()).then_some(id.as_ref()),
                     entry_mode
                         .to_tree_entry_mode()
                         // Default is for the impossible case - just don't let it participate in rename tracking.

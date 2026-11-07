@@ -1,6 +1,7 @@
 use gix_error::Result;
 
 pub(crate) struct TreeEntry {
+    /// Null during construction; successful delta traversal computes every ID before sorting or writing.
     pub id: gix_hash::ObjectId,
     pub crc32: u32,
 }

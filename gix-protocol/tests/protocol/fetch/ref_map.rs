@@ -3,6 +3,46 @@ mod from_refs {
     use gix_transport::client::Capabilities;
 
     #[test]
+    fn unborn_refs_keep_typed_absence_through_name_matching() -> gix_error::TestResult {
+        use gix_protocol::handshake::Ref;
+        let unborn = Ref::Unborn {
+            full_ref_name: "HEAD".into(),
+            target: "refs/heads/main".into(),
+        };
+        for excluded in [false, true] {
+            let mut specs = vec!["HEAD:refs/remotes/origin/HEAD"];
+            if excluded {
+                specs.push("^HEAD");
+            }
+            let mut context = ctx();
+            context.fetch_refspecs = specs
+                .into_iter()
+                .map(|spec| {
+                    gix_refspec::parse(spec.into(), gix_refspec::parse::Operation::Fetch).map(|spec| spec.to_owned())
+                })
+                .collect::<Result<_, _>>()?;
+            let map = RefMap::from_refs(vec![unborn.clone()], &caps_with(b"object-format=sha1"), context)?;
+            assert_eq!(
+                map.mappings.len(),
+                usize::from(!excluded),
+                "negative specs also match unborn references by name"
+            );
+            if let Some(mapping) = map.mappings.first() {
+                assert!(
+                    matches!(&mapping.remote, refmap::Source::Ref(reference) if reference == &unborn),
+                    "mapping retains the original unborn reference"
+                );
+                assert_eq!(
+                    mapping.remote.as_id(),
+                    None,
+                    "the internal null placeholder must not leak as an object ID"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn sha1_capability_is_honored() {
         let caps = caps_with(b"symref=HEAD:refs/heads/main object-format=sha1 agent=git/2.54.0");
         let map = RefMap::from_refs(Vec::new(), &caps, ctx()).expect("known format");

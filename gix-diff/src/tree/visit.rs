@@ -105,10 +105,9 @@ mod change_impls {
     };
 
     impl crate::rewrites::tracker::Change for crate::tree::visit::Change {
-        fn id(&self) -> &oid {
-            match self {
-                Change::Addition { oid, .. } | Change::Deletion { oid, .. } | Change::Modification { oid, .. } => oid,
-            }
+        fn id(&self) -> Option<&oid> {
+            let (id, _) = self.oid_and_entry_mode();
+            (!id.is_null()).then_some(id)
         }
 
         fn relation(&self) -> Option<Relation> {
@@ -134,11 +133,13 @@ mod change_impls {
             }
         }
 
-        fn id_and_entry_mode(&self) -> (&oid, EntryMode) {
+        fn id_and_entry_mode(&self) -> (Option<&oid>, EntryMode) {
             match self {
                 Change::Addition { entry_mode, oid, .. }
                 | Change::Deletion { entry_mode, oid, .. }
-                | Change::Modification { entry_mode, oid, .. } => (oid, *entry_mode),
+                | Change::Modification { entry_mode, oid, .. } => {
+                    ((!oid.is_null()).then_some(oid.as_ref()), *entry_mode)
+                }
             }
         }
     }

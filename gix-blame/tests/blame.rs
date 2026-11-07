@@ -158,6 +158,13 @@ impl Fixture {
     }
 
     fn for_worktree_path(worktree_path: PathBuf) -> gix_testtools::Result<Fixture> {
+        Self::for_worktree_path_with_drivers(worktree_path, vec![])
+    }
+
+    fn for_worktree_path_with_drivers(
+        worktree_path: PathBuf,
+        drivers: Vec<gix_diff::blob::Driver>,
+    ) -> gix_testtools::Result<Fixture> {
         use gix_ref::store::WriteReflog;
 
         let object_hash = fixture_hash_kind();
@@ -199,7 +206,7 @@ impl Fixture {
                     new_root: None,
                 },
                 gix_filter::Pipeline::new(Default::default(), gix_testtools::object_hash(), Default::default()),
-                vec![],
+                drivers,
                 gix_diff::blob::pipeline::Options {
                     large_file_threshold_bytes: 0,
                     fs: capabilities,
@@ -739,6 +746,166 @@ mod untracked_changes {
 
         pretty_assertions::assert_eq!(lines_blamed, baseline);
 
+        Ok(())
+    }
+}
+
+mod diff_resources {
+    use gix_diff::blob::{
+        Algorithm, Driver,
+        pipeline::Mode,
+        platform::prepare_diff::{Operation, TextChange},
+    };
+
+    use crate::{Baseline, Fixture};
+
+    #[test]
+    fn binary_comparisons_are_rejected() -> gix_error::TestResult {
+        let worktree_path = gix_testtools::scripted_fixture_read_only("make_blame_diff_resources_repo.sh")?;
+        for path in ["old-binary.txt", "new-binary.txt", "both-binary.txt"] {
+            let mut fixture = Fixture::for_worktree_path(worktree_path.clone())?;
+            let err = fixture
+                .blame_file(path.into(), Default::default())
+                .expect_err("binary resources must not be replaced with empty text");
+            let message = err.to_string();
+            assert!(
+                message.contains("binary"),
+                "the error explains why blame cannot diff: {err}"
+            );
+            assert!(message.contains(path), "the error identifies the file to blame: {err}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn missing_comparison_resources_are_rejected() -> gix_error::TestResult {
+        let worktree_path = gix_testtools::scripted_fixture_read_only("make_blame_diff_resources_repo.sh")?;
+        for (old_missing, new_missing) in [(true, false), (false, true), (true, true)] {
+            let mut fixture = Fixture::for_worktree_path(worktree_path.clone())?;
+            // The committed blobs exist, but these worktree overrides deliberately have no file.
+            fixture.resource_cache.filter.roots.old_root = old_missing.then(|| worktree_path.join("missing"));
+            fixture.resource_cache.filter.roots.new_root = new_missing.then(|| worktree_path.join("missing"));
+            let err = fixture
+                .blame_file("text.txt".into(), Default::default())
+                .expect_err("missing diff resources must not be replaced with empty text");
+            let message = err.to_string();
+            assert!(
+                message.contains("both diff resources must exist"),
+                "missing resources require an explicit error (old: {old_missing}, new: {new_missing}): {err}"
+            );
+            assert!(
+                message.contains("text.txt"),
+                "the error identifies the file to blame: {err}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn empty_text_is_not_a_missing_resource() -> gix_error::TestResult {
+        let worktree_path = gix_testtools::scripted_fixture_read_only("make_blame_diff_resources_repo.sh")?;
+        let mut fixture = Fixture::for_worktree_path(worktree_path.clone())?;
+        let outcome = fixture.blame_file("empty-before.txt".into(), Default::default())?;
+        let baseline = Baseline::collect(
+            worktree_path.join(".git/empty-before.baseline"),
+            "empty-before.txt".into(),
+        )?;
+        assert_eq!(
+            outcome.entries, baseline,
+            "an existing empty blob remains a valid text input"
+        );
+        assert_eq!(
+            outcome.statistics.blobs_diffed, 1,
+            "the empty parent blob is actually compared"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn external_diff_configuration_still_uses_blames_algorithm() -> gix_error::TestResult {
+        let worktree_path = gix_testtools::scripted_fixture_read_only("make_blame_diff_resources_repo.sh")?;
+        let baseline = Baseline::collect(worktree_path.join(".git/text.baseline"), "text.txt".into())?;
+        for diff_algorithm in [Algorithm::Myers, Algorithm::Histogram] {
+            let mut fixture = Fixture::for_worktree_path_with_drivers(
+                worktree_path.clone(),
+                vec![Driver {
+                    name: "custom".into(),
+                    command: Some("false".into()),
+                    algorithm: Some(Algorithm::MyersMinimal),
+                    ..Default::default()
+                }],
+            )?;
+            fixture
+                .resource_cache
+                .options
+                .skip_internal_diff_if_external_is_configured = true;
+            let outcome = fixture.blame_file(
+                "text.txt".into(),
+                gix_blame::Options {
+                    diff_algorithm,
+                    ..Default::default()
+                },
+            )?;
+            assert_eq!(
+                outcome.entries, baseline,
+                "blame computes its own diff despite an external command"
+            );
+            assert_eq!(
+                outcome.statistics.blobs_diffed, 1,
+                "the configured comparison is exercised"
+            );
+            assert!(
+                matches!(
+                    fixture.resource_cache.prepare_diff()?.operation,
+                    Operation::ExternalCommand {
+                        change: TextChange::Modification(_),
+                        ..
+                    }
+                ),
+                "the driver actually requests an external diff with a validated text pair"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn text_converted_comparisons_are_rejected() -> gix_error::TestResult {
+        let worktree_path = gix_testtools::scripted_fixture_read_only("make_blame_diff_resources_repo.sh")?;
+        // Removing the unchanged first line would attribute the raw "stable" line to the latest commit.
+        for command in ["sed '1d'", "cat"] {
+            let mut fixture = Fixture::for_worktree_path_with_drivers(
+                worktree_path.clone(),
+                vec![Driver {
+                    name: "custom".into(),
+                    is_binary: Some(true),
+                    binary_to_text_command: Some(command.into()),
+                    ..Default::default()
+                }],
+            )?;
+            fixture.resource_cache.filter_mode = Mode::ToGitUnlessBinaryToTextIsPresent;
+            let err = fixture
+                .blame_file("text.txt".into(), Default::default())
+                .expect_err("converted line numbers must not be applied to original blob content");
+            let message = err.to_string();
+            assert!(
+                message.contains("text conversion"),
+                "the error identifies the unsupported input: {err}"
+            );
+            assert!(
+                message.contains("text.txt"),
+                "the error identifies the file to blame: {err}"
+            );
+            assert!(
+                matches!(
+                    fixture.resource_cache.prepare_diff()?.operation,
+                    Operation::InternalDiff {
+                        change: TextChange::Modification(pair),
+                        ..
+                    } if pair.before().is_derived() && pair.after().is_derived()
+                ),
+                "both diff inputs actually passed through text conversion"
+            );
+        }
         Ok(())
     }
 }
