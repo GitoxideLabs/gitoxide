@@ -444,3 +444,144 @@ fn already_hidden_tips_do_not_walk_their_ancestry() -> gix_testtools::TestResult
     );
     Ok(())
 }
+
+/// Walk each range of `(tips, hidden tips, baseline prefix)` in `repo_name` in every sorting and parent mode,
+/// and expect the commits that `git rev-list` printed. Without a commit-graph, hidden painting can't use
+/// generation numbers to stop early, and [`traverse_both()`] asserts that the walk with one yields the same
+/// commits in the same order.
+fn assert_hidden_ranges_match_git(repo_name: &str, ranges: &[(&[&str], &[&str], &str)]) -> gix_testtools::TestResult {
+    let (repo_dir, odb) = hidden_bug_repo(repo_name)?;
+    let commits = parse_commit_names(&repo_dir)?;
+    for (tips, hidden, baseline_prefix) in ranges {
+        let tip_commit_ids = tips.iter().map(|name| commits[*name]).collect::<Vec<_>>();
+        let hidden_commit_ids = hidden.iter().map(|name| commits[*name]).collect::<Vec<_>>();
+        for (parents, mode) in [(Parents::All, "do-walk"), (Parents::First, "first-parent")] {
+            let baseline_name = format!("rev-list-{baseline_prefix}{mode}");
+            let mut baseline = rev_list_baseline(&repo_dir, &baseline_name)?;
+            baseline.sort();
+            for sorting in all_sortings() {
+                let mut actual = traverse_both(
+                    tip_commit_ids.clone(),
+                    &odb,
+                    sorting,
+                    parents,
+                    hidden_commit_ids.clone(),
+                )?;
+                actual.sort();
+                assert_eq!(actual, baseline, "{repo_name}, {baseline_name}, {sorting:?}");
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn unrelated_history_on_either_side_matches_git() -> gix_testtools::TestResult {
+    for repo_name in ["unrelated_history", "unrelated_history_same_date"] {
+        assert_hidden_ranges_match_git(
+            repo_name,
+            &[
+                (&["topic-1"], &["main-39"], "topic-"),
+                (&["main-39"], &["topic-1"], "main-"),
+                (&["combined"], &["main-39"], "combined-"),
+                (&["combined"], &["main-29"], "combined-base-"),
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+#[test]
+fn hidden_commits_missing_from_the_object_database_match_git() -> gix_testtools::TestResult {
+    assert_hidden_ranges_match_git(
+        "unrelated_history_missing_commit",
+        &[(&["topic-1"], &["main-39"], "topic-")],
+    )
+}
+
+#[test]
+fn criss_cross_merges_match_git() -> gix_testtools::TestResult {
+    assert_hidden_ranges_match_git(
+        "criss_cross",
+        &[
+            (&["a3"], &["b3"], "a3-b3-"),
+            (&["b3"], &["a3"], "b3-a3-"),
+            (&["both"], &["a2"], "both-a2-"),
+            (&["a3", "b3"], &["a2", "b2"], "a3-b3-a2-b2-"),
+        ],
+    )
+}
+
+#[test]
+fn skewed_commits_outside_the_commit_graph_match_git() -> gix_testtools::TestResult {
+    assert_hidden_ranges_match_git("skewed_partial_graph", &[(&["visible"], &["hidden", "base"], "")])
+}
+
+#[test]
+fn uncomputed_generations_in_the_commit_graph_match_git() -> gix_testtools::TestResult {
+    let (repo_dir, odb) = hidden_bug_repo("uncomputed_generation")?;
+    let commits = parse_commit_names(&repo_dir)?;
+    let patched = gix_testtools::tempfile::tempdir()?;
+    let graph_path = patched.path().join("commit-graph");
+    write_with_uncomputed_generation(
+        &odb.store_ref().path().join("info").join("commit-graph"),
+        &graph_path,
+        &commits["hidden"],
+    )?;
+    let load_graph = || gix_commitgraph::Graph::from_file(&graph_path, gix_testtools::object_hash());
+    let hidden_generation = load_graph()?
+        .commit_by_id(commits["hidden"])
+        .expect("the commit-graph contains the hidden tip")
+        .generation();
+    assert_eq!(hidden_generation, 0, "the hidden tip has a legacy generation");
+
+    // The legacy generation is seen on the hidden tip itself, or on the parent of one.
+    for hidden in ["hidden", "hidden-child"] {
+        let baseline = rev_list_baseline(&repo_dir, &format!("rev-list-{hidden}"))?;
+        for sorting in all_sortings() {
+            for graph in [None, Some(load_graph()?)] {
+                let with_graph = graph.is_some();
+                let actual = Simple::new([commits["visible"]], &odb)
+                    .sorting(sorting)?
+                    .commit_graph(graph)
+                    .hide([commits[hidden], commits["other"]])?
+                    .map(|item| item.map(|info| info.id))
+                    .collect::<gix_error::Result<Vec<_>>>()?;
+                assert_eq!(
+                    actual, baseline,
+                    "{hidden}, {sorting:?}, commit-graph: {with_graph}: a generation of zero doesn't order commits"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Copy the commit-graph file at `source` to `destination` with the generation of `commit_id` set to zero,
+/// as Git wrote it before computing generation numbers. The two high bits of its commit time stay.
+fn write_with_uncomputed_generation(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+    commit_id: &gix_hash::oid,
+) -> gix_testtools::TestResult {
+    let file = gix_commitgraph::File::at(source)?;
+    let position = file.lookup(commit_id).expect("the commit-graph contains the commit");
+    let hash_len = file.object_hash().len_in_bytes();
+    drop(file);
+
+    let mut data = std::fs::read(source)?;
+    let chunk_count = usize::from(data[6]);
+    let commit_data_offset = data[8..8 + 12 * chunk_count]
+        .as_chunks::<12>()
+        .0
+        .iter()
+        .find(|entry| entry[..4] == *b"CDAT")
+        .map(|entry| u64::from_be_bytes(entry[4..].try_into().expect("chunk offsets have 8 bytes")))
+        .expect("the commit-graph has commit data");
+    let generation_offset =
+        usize::try_from(commit_data_offset)? + usize::try_from(position.0)? * (hash_len + 16) + hash_len + 8;
+    let generation_and_time = u32::from_be_bytes(data[generation_offset..][..4].try_into()?);
+    data[generation_offset..][..4].copy_from_slice(&(generation_and_time & 0b11).to_be_bytes());
+    std::fs::write(destination, data)?;
+    Ok(())
+}
