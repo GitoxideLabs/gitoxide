@@ -18,7 +18,8 @@ mod git;
 /// ### Performance
 ///
 /// This can invoke the Git binary, which is slow on Windows. An unambiguous Git for Windows
-/// installation identified by `EXEPATH`, or by `git.exe` in its `cmd` directory, avoids that invocation.
+/// installation identified by `EXEPATH`, or by `git.exe` in its `cmd` or runtime `bin` directory,
+/// avoids that invocation when its modern configuration file exists.
 pub fn installation_config() -> Option<&'static Path> {
     git::install_config_path().and_then(|p| crate::from_byte_slice(p).ok())
 }
@@ -265,6 +266,23 @@ fn system_prefix_from_git_launcher(executable: &Path) -> Option<PathBuf> {
     is_cmd.then(|| unambiguous_runtime_prefix(cmd.parent()?)).flatten()
 }
 
+/// A runtime binary selects its own prefix even if other runtimes are installed alongside it.
+#[cfg(windows)]
+fn system_prefix_from_git_executable(executable: &Path) -> Option<PathBuf> {
+    let bin = executable.parent().filter(|_| executable.is_absolute())?;
+    let prefix = bin.parent()?;
+    if bin.file_name()?.eq_ignore_ascii_case("bin")
+        && ["clangarm64", "ucrt64", "mingw64", "mingw32"].iter().any(|name| {
+            prefix
+                .file_name()
+                .is_some_and(|component| component.eq_ignore_ascii_case(name))
+        })
+    {
+        return Some(prefix.to_owned());
+    }
+    system_prefix_from_git_launcher(executable)
+}
+
 /// Return the only Git for Windows runtime directory in `root`, or `None` if there is none or more than one.
 fn unambiguous_runtime_prefix(root: &Path) -> Option<PathBuf> {
     let mut candidates = ["clangarm64", "ucrt64", "mingw64", "mingw32"]
@@ -288,7 +306,7 @@ fn system_prefix_from_git_in_path() -> Option<PathBuf> {
     // Git reports `GIT_EXEC_PATH` as its own location, which the executable's location can't tell.
     #[cfg(windows)]
     if std::env::var_os("GIT_EXEC_PATH").is_none() {
-        return system_prefix_from_git_launcher(git::exe_path()?);
+        return system_prefix_from_git_executable(git::exe_path()?);
     }
     None
 }
@@ -317,7 +335,7 @@ fn config_path_from_system_prefix(prefix: &Path) -> PathBuf {
 ///
 /// On Windows, the slowest part is the launch of the Git executable in the PATH. This is often
 /// avoided by inspecting the environment, when launched from inside a Git Bash MSYS2 shell,
-/// or by finding Git for Windows' `cmd` directory in the PATH.
+/// or by finding Git for Windows' `cmd` or runtime `bin` directory in the PATH.
 ///
 /// ### When `None` is returned
 ///
