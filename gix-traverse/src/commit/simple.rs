@@ -167,8 +167,8 @@ fn to_queue_key(i: i64, order: CommitTimeOrder) -> QueueKey<i64> {
 /// ancestors beyond this stopping point.
 /// With usable generation numbers, painting also stops once every queued commit carries `HIDDEN`,
 /// like Git's `everybody_uninteresting()` in `limit_list()`. Generation order makes this exact:
-/// no queued commit is an ancestor of a commit that was already popped, so popped commits keep
-/// their flags. Every commit the visible walk asks about, a tip or a parent of a commit it yields,
+/// no popped commit is reachable from a queued commit, so popped commits keep their flags.
+/// Every commit the visible walk asks about, a tip or a parent of a commit it yields,
 /// was either popped already or is still queued with both flags.
 ///
 /// The returned set is not all commits reachable from hidden tips. It covers the overlap frontier
@@ -192,8 +192,8 @@ pub(super) fn compute_hidden_frontier(
     let mut stopped_on_date = false;
     // Queued commits painted only `VISIBLE`. They were queued once, when they gained that flag.
     let mut visible_only_commit_ids = gix_hashtable::HashSet::default();
-    // Generation zero marks a legacy commit-graph layer, whose ancestors may sort above it.
-    let mut saw_uncomputed_generation = false;
+    // Check every layer up front: an unseen legacy layer can hide ancestors that sort above it.
+    let mut saw_uncomputed_generation = cache.is_some_and(|cache| !cache.generation_numbers_available());
 
     for &visible in visible_tips {
         graph.get_or_insert_full_commit(visible, |commit| {
@@ -226,7 +226,7 @@ pub(super) fn compute_hidden_frontier(
         if unhidden_tips == 0 {
             break;
         }
-        // A queued head with a usable generation means that every queued commit has one.
+        // With zero-generation layers ruled out, a usable queue head means all queued commits have one.
         if visible_only_commit_ids.is_empty()
             && !saw_uncomputed_generation
             && queue

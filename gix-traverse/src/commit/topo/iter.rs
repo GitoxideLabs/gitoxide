@@ -97,7 +97,7 @@ where
         Ok(())
     }
 
-    fn explore_to_depth(&mut self, gen_cutoff: u32) -> Result {
+    pub(super) fn explore_to_depth(&mut self, gen_cutoff: u32) -> Result {
         while let Some(((generation, _), _)) = self.explore_queue.peek() {
             if *generation >= gen_cutoff {
                 self.explore_walk_step()?;

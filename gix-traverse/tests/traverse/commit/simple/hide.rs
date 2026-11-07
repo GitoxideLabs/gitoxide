@@ -1,6 +1,6 @@
 use super::*;
 use crate::Result;
-use crate::util::{CountingFind, commit_graph, fixture, odb_at, rev_list_baseline};
+use crate::util::{CountingFind, commit_graph, fixture, odb_at, rev_list_baseline, unseen_generation_fixture};
 use std::{cell::Cell, rc::Rc};
 
 fn assert_simple_repo_graph(repo_dir: &std::path::Path) -> Result {
@@ -550,6 +550,64 @@ fn uncomputed_generations_in_the_commit_graph_match_git() -> gix_testtools::Test
                 assert_eq!(
                     actual, baseline,
                     "{hidden}, {sorting:?}, commit-graph: {with_graph}: a generation of zero doesn't order commits"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn unseen_uncomputed_generation_in_a_split_graph_matches_git() -> gix_testtools::TestResult {
+    let (repo_dir, odb) = unseen_generation_fixture("short")?;
+
+    // Git and Simple traverse the same patched, verified chain, not the original graph.
+    let baseline = gix_testtools::git(&repo_dir, "rev-list A ^H")?;
+    assert!(
+        baseline.is_empty(),
+        "Git hides A through H -> Z -> A in the patched chain"
+    );
+    let commits = parse_commit_names(&repo_dir)?;
+    let load_graph =
+        || gix_commitgraph::Graph::from_info_dir(&repo_dir.join(".git/objects/info"), gix_testtools::object_hash());
+    let graph = load_graph()?;
+    assert!(
+        !graph.generation_numbers_available(),
+        "an uncomputed intermediate layer prevents generation-ordered stopping"
+    );
+    assert_eq!(
+        graph
+            .iter_commits()
+            .map(|commit| (commit.id().to_owned(), commit.generation()))
+            .collect::<Vec<_>>(),
+        [(commits["A"], 1), (commits["Z"], 0), (commits["H"], 1)],
+        "only the unseen middle layer has uncomputed generations"
+    );
+    assert!(
+        graph
+            .commit_by_id(commits["A"])
+            .expect("A is in the graph")
+            .committer_timestamp()
+            > graph
+                .commit_by_id(commits["H"])
+                .expect("H is in the graph")
+                .committer_timestamp(),
+        "A sorts before H while Z's zero generation is still unseen"
+    );
+
+    for with_graph in [false, true] {
+        for sorting in all_sortings() {
+            for (parents, mode) in [(Parents::All, "all"), (Parents::First, "first")] {
+                let actual = Simple::new([commits["A"]], &odb)
+                    .sorting(sorting)?
+                    .parents(parents)
+                    .commit_graph(if with_graph { Some(load_graph()?) } else { None })
+                    .hide([commits["H"]])?
+                    .map(|item| item.map(|info| info.id))
+                    .collect::<gix_error::Result<Vec<_>>>()?;
+                assert!(
+                    actual.is_empty(),
+                    "{sorting:?}, {mode}, commit-graph: {with_graph}: Git hides A through the unseen layer, got {actual:?}"
                 );
             }
         }
