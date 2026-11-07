@@ -18,7 +18,7 @@ mod git;
 /// ### Performance
 ///
 /// This can invoke the Git binary, which is slow on Windows. An unambiguous Git for Windows
-/// installation identified by `EXEPATH` avoids that invocation.
+/// installation identified by `EXEPATH`, or by `git.exe` in its `cmd` directory, avoids that invocation.
 pub fn installation_config() -> Option<&'static Path> {
     git::install_config_path().and_then(|p| crate::from_byte_slice(p).ok())
 }
@@ -251,7 +251,22 @@ where
 {
     // Only attempt this optimization if the `EXEPATH` variable is set to an absolute path.
     let root = var_os_func("EXEPATH").map(PathBuf::from).filter(|r| r.is_absolute())?;
+    unambiguous_runtime_prefix(&root)
+}
 
+/// Like [`system_prefix_from_exepath_var()`], but for a Git executable in Git for Windows' `cmd` directory.
+///
+/// The installer puts `<root>/cmd` into `PATH`, so this is the `git.exe` that shells other than Git
+/// Bash find, and these don't have `EXEPATH` set.
+#[cfg(windows)]
+fn system_prefix_from_git_launcher(executable: &Path) -> Option<PathBuf> {
+    let cmd = executable.parent().filter(|_| executable.is_absolute())?;
+    let is_cmd = cmd.file_name()?.as_encoded_bytes().eq_ignore_ascii_case(b"cmd");
+    is_cmd.then(|| unambiguous_runtime_prefix(cmd.parent()?)).flatten()
+}
+
+/// Return the only Git for Windows runtime directory in `root`, or `None` if there is none or more than one.
+fn unambiguous_runtime_prefix(root: &Path) -> Option<PathBuf> {
     let mut candidates = ["clangarm64", "ucrt64", "mingw64", "mingw32"]
         .iter()
         .map(|component| root.join(component))
@@ -259,9 +274,23 @@ where
 
     let path = candidates.next()?;
     match candidates.next() {
-        Some(_) => None, // Multiple plausible candidates, so don't use the `EXEPATH` optimization.
+        Some(_) => None, // Multiple plausible candidates, so don't use this optimization.
         None => Some(path),
     }
+}
+
+/// Return the system prefix if it can be told from the environment, which is much faster than running Git.
+fn system_prefix_without_running_git() -> Option<PathBuf> {
+    system_prefix_from_exepath_var(|key| std::env::var_os(key)).or_else(system_prefix_from_git_in_path)
+}
+
+fn system_prefix_from_git_in_path() -> Option<PathBuf> {
+    // Git reports `GIT_EXEC_PATH` as its own location, which the executable's location can't tell.
+    #[cfg(windows)]
+    if std::env::var_os("GIT_EXEC_PATH").is_none() {
+        return system_prefix_from_git_launcher(git::exe_path()?);
+    }
+    None
 }
 
 /// Return Git's conventional system configuration path relative to its runtime `prefix`.
@@ -287,7 +316,8 @@ fn config_path_from_system_prefix(prefix: &Path) -> PathBuf {
 /// ### Performance
 ///
 /// On Windows, the slowest part is the launch of the Git executable in the PATH. This is often
-/// avoided by inspecting the environment, when launched from inside a Git Bash MSYS2 shell.
+/// avoided by inspecting the environment, when launched from inside a Git Bash MSYS2 shell,
+/// or by finding Git for Windows' `cmd` directory in the PATH.
 ///
 /// ### When `None` is returned
 ///
@@ -295,10 +325,8 @@ fn config_path_from_system_prefix(prefix: &Path) -> PathBuf {
 /// path, or if the git binary wasn't built with a well-known directory structure or environment.
 pub fn system_prefix() -> Option<&'static Path> {
     if cfg!(windows) {
-        static PREFIX: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
-            system_prefix_from_exepath_var(|key| std::env::var_os(key))
-                .or_else(|| system_prefix_from_core_dir(core_dir))
-        });
+        static PREFIX: LazyLock<Option<PathBuf>> =
+            LazyLock::new(|| system_prefix_without_running_git().or_else(|| system_prefix_from_core_dir(core_dir)));
         PREFIX.as_deref()
     } else {
         Path::new("/").into()

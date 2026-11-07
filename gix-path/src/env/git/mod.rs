@@ -305,11 +305,12 @@ struct ConfigPaths {
 
 /// Obtain and cache the installation and system configuration paths.
 ///
-/// An unambiguous `EXEPATH` identifies Git for Windows' conventional configuration location.
+/// An unambiguous `EXEPATH`, or `git.exe` in the `cmd` directory of an unambiguous installation,
+/// identifies Git for Windows' conventional configuration location.
 /// Otherwise, query the Git executable found in `PATH` or an alternative location.
 static GIT_CONFIG_PATHS: LazyLock<ConfigPaths> = LazyLock::new(|| {
     #[cfg(windows)]
-    if let Some(system_prefix) = super::system_prefix_from_exepath_var(|key| std::env::var_os(key)) {
+    if let Some(system_prefix) = super::system_prefix_without_running_git() {
         let system_config =
             crate::os_string_into_bstring(super::config_path_from_system_prefix(&system_prefix).into()).ok();
         return ConfigPaths {
