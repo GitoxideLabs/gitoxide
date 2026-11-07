@@ -6,6 +6,7 @@ const SCRIPT_NAME: &str = "make_basic.sh";
 fn scripted_fixture_read_only_with_post_returns_value() -> TestResult {
     let (dir, value) = gix_testtools::scripted_fixture_read_only_with_post(SCRIPT_NAME, 1, |fixture| {
         let dir = fixture.path();
+        assert!(dir.is_absolute(), "post-processing receives an absolute fixture path");
         // The script should have already created these files
         assert!(dir.join("script_file.txt").exists());
         assert!(dir.join("subdir/nested.txt").exists());
@@ -15,6 +16,7 @@ fn scripted_fixture_read_only_with_post_returns_value() -> TestResult {
     })?;
 
     // Verify the fixture path is valid
+    assert!(dir.is_absolute(), "read-only fixtures return absolute paths");
     assert!(dir.is_dir());
     assert!(dir.join("script_file.txt").exists());
 

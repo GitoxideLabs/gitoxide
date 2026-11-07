@@ -825,7 +825,9 @@ pub fn fixture_bytes(path: impl AsRef<Path>) -> Vec<u8> {
 }
 
 /// Run the executable at `script_name`, like `make_repo.sh` or `my_setup.py` to produce a read-only directory to which
-/// the path is returned.
+/// an absolute path is returned, regardless of whether it is generated, cached, or extracted from an archive.
+/// Paths passed to post-processing closures are absolute as well. Making paths absolute does not resolve symlinks
+/// or introduce Windows verbatim prefixes; callers needing canonical paths must opt into that separately.
 ///
 /// Note that it persists and the script at `script_name` will only be executed once if it ran without error.
 /// Inherited `GIT_TEMPLATE_DIR` is cleared; Git's installed templates remain available.
@@ -1471,7 +1473,10 @@ pub fn scripted_fixture_writable_with_args_single_archive_with_post_with_git_ver
     .map(|fixture| fixture.map(|(tmp, opt)| (tmp, opt.expect("post_process was provided"))))
 }
 
-/// Execute a Rust closure in a directory, returning a read-only fixture path.
+/// Execute a Rust closure in a directory, returning an absolute read-only fixture path.
+///
+/// Like [`scripted_fixture_read_only()`], the returned path and the path passed to the closure are absolute,
+/// without resolving symlinks or introducing Windows verbatim prefixes.
 ///
 /// - `version` should be incremented when the closure's behavior changes to invalidate the cache.
 /// - `name` is used to identify this fixture for caching purposes and should be unique within the crate.
@@ -1617,7 +1622,7 @@ where
         object_hash,
         &script_identity,
         None,
-    );
+    )?;
     let _marker = marker_if_needed(destination_dir, archive_name)?;
 
     run_fixture_generator_with_marker_handling(
@@ -1664,8 +1669,8 @@ fn force_and_dir(
     object_hash: Option<gix_hash::Kind>,
     script_identity: &dyn std::fmt::Display,
     cache_variant: Option<&str>,
-) -> (bool, PathBuf) {
-    destination_dir.map_or_else(
+) -> std::io::Result<(bool, PathBuf)> {
+    let (force_run, dir) = destination_dir.map_or_else(
         || {
             let mut dir = fixture_base.join(
                 Path::new("generated-do-not-edit")
@@ -1679,7 +1684,8 @@ fn force_and_dir(
             (false, dir)
         },
         |d| (true, d.to_owned()),
-    )
+    );
+    Ok((force_run, std::path::absolute(dir)?))
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -1873,7 +1879,7 @@ where
         Some(object_hash),
         &script_identity,
         archive_policy.cache_variant(),
-    );
+    )?;
     let script_identity_for_archive = match args_in_hash {
         ArgsInHash::Yes => script_identity,
         ArgsInHash::No => 0,

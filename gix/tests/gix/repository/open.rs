@@ -1103,9 +1103,8 @@ mod worktree {
 
     #[test]
     fn with_worktree_configs() -> gix_testtools::TestResult {
-        let manifest_dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?);
         let fixture_dir = gix_testtools::scripted_fixture_read_only("make_worktree_repo_with_configs.sh")?;
-        let worktree_base = manifest_dir.join(&fixture_dir).join("repo/.git/worktrees");
+        let worktree_base = fixture_dir.join("repo/.git/worktrees");
 
         {
             let base = open(fixture_dir.join("repo"))?;
@@ -1142,7 +1141,7 @@ mod worktree {
             let wt1_config = wt1.config_snapshot();
             assert_eq!(
                 wt1.workdir(),
-                Some(manifest_dir.join(&fixture_dir).join("wt-1").as_path()),
+                Some(fixture_dir.join("wt-1").as_path()),
                 "a linked worktree in its own location"
             );
             assert_eq!(
@@ -1172,7 +1171,7 @@ mod worktree {
             let wt2_config = wt2.config_snapshot();
             assert_eq!(
                 wt2.workdir(),
-                Some(manifest_dir.join(&fixture_dir).join("wt-2").as_path()),
+                Some(fixture_dir.join("wt-2").as_path()),
                 "another linked worktree as sibling to wt-1"
             );
             assert_eq!(wt2.git_dir(), worktree_base.join("wt-2"));

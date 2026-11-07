@@ -5,6 +5,7 @@ fn rust_fixture_read_only_creates_and_caches_fixture() -> TestResult {
     // First call should create the fixture
     let (dir, (a, b, c)) = gix_testtools::rust_fixture_read_only("test_fixture_read_only", 1, |fixture| {
         let dir = fixture.path();
+        assert!(dir.is_absolute(), "Rust fixture callbacks receive absolute paths");
         let a = dir.join("test_file.txt");
         let b = dir.join("subdir");
         let c = dir.join("subdir/nested.txt");
@@ -17,6 +18,7 @@ fn rust_fixture_read_only_creates_and_caches_fixture() -> TestResult {
     })?;
 
     // Verify the fixture was created correctly
+    assert!(dir.is_absolute(), "read-only Rust fixtures return absolute paths");
     assert!(dir.is_dir());
     assert!(a.exists());
     assert_eq!(std::fs::read_to_string(&a)?, "test content");
@@ -27,6 +29,7 @@ fn rust_fixture_read_only_creates_and_caches_fixture() -> TestResult {
     // Second call with same version should return cached result
     // The closure is still called but knows that it's fresh.
     let (dir2, _) = gix_testtools::rust_fixture_read_only("test_fixture_read_only", 1, |fixture| {
+        assert_eq!(fixture.path(), dir, "cached callbacks receive the same absolute path");
         assert!(
             matches!(fixture, gix_testtools::FixtureState::Fresh(_)),
             "Expected cached fixture on second call"

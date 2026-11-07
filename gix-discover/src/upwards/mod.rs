@@ -434,7 +434,6 @@ pub(crate) mod function {
         #[test]
         fn ownership_checks_skip_identical_candidate_and_git_directory() -> gix_testtools::TestResult {
             let root = gix_testtools::scripted_fixture_read_only("make_ownership_repos.sh")?;
-            let root = std::env::current_dir()?.join(root);
             for (name, bare) in [("worktree", false), ("bare", true)] {
                 let repository = root.join(name);
                 let git_dir = if bare {

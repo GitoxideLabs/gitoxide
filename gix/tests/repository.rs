@@ -10,7 +10,7 @@ fn config_path_uses_repository_options_for_global_sources() -> gix_testtools::Te
     let mut diagnostics = Vec::new();
     use gix::config::Source;
 
-    let fixture = gix::path::realpath(gix_testtools::scripted_fixture_read_only("make_config_repos.sh")?)?;
+    let fixture = gix_testtools::scripted_fixture_read_only("make_config_repos.sh")?;
     let git_dir = fixture.join("bare-repo");
     let missing = fixture.join("missing");
     let installation = missing.join("installation.config");
@@ -102,7 +102,7 @@ fn config_path_uses_repository_options_for_global_sources() -> gix_testtools::Te
 fn config_paths_use_the_opening_cwd() -> gix_testtools::TestResult {
     use gix::config::Source;
 
-    let fixture = gix::path::realpath(gix_testtools::scripted_fixture_read_only("make_config_repos.sh")?)?;
+    let fixture = gix_testtools::scripted_fixture_read_only("make_config_repos.sh")?;
     let _cwd = gix_testtools::set_current_dir(&fixture)?;
     let _env = Env::new()
         .set("GIT_CONFIG_GLOBAL", "missing/global.config")
@@ -212,7 +212,7 @@ fn config_file_paths_follow_a_precomposed_opening_cwd() -> gix_testtools::TestRe
 #[test]
 #[serial]
 fn relative_paths_use_the_cwd_captured_when_opening() -> gix_testtools::TestResult {
-    let root = gix::path::realpath(gix_testtools::scripted_fixture_read_only("make_basic_repo.sh")?)?;
+    let root = gix_testtools::scripted_fixture_read_only("make_basic_repo.sh")?;
     let nested = root.join("some/very");
 
     let _cwd = gix_testtools::set_current_dir(&nested)?;
@@ -327,9 +327,7 @@ fn absolute_paths_outside_the_repository_are_rejected() -> gix_testtools::TestRe
 #[cfg(feature = "status")]
 #[serial]
 fn is_dirty_sees_index_changes_outside_the_current_working_directory() -> gix_testtools::TestResult {
-    let root = gix::path::realpath(
-        gix_testtools::scripted_fixture_read_only("make_status_repos.sh")?.join("index-changed-outside-subdir"),
-    )?;
+    let root = gix_testtools::scripted_fixture_read_only("make_status_repos.sh")?.join("index-changed-outside-subdir");
 
     let _cwd = gix_testtools::set_current_dir(root.join("subdir"))?;
     let repo = gix::discover_opts(".", Default::default(), gix::open::Options::isolated())?;
@@ -344,7 +342,7 @@ fn is_dirty_sees_index_changes_outside_the_current_working_directory() -> gix_te
 #[cfg(feature = "revision")]
 #[serial]
 fn revspec_paths_starting_with_a_dot_are_relative_to_the_current_directory() -> gix_testtools::TestResult {
-    let root = gix::path::realpath(gix_testtools::scripted_fixture_read_only("make_basic_repo.sh")?)?;
+    let root = gix_testtools::scripted_fixture_read_only("make_basic_repo.sh")?;
     let nested = root.join("some/very");
 
     let _cwd = gix_testtools::set_current_dir(&nested)?;
@@ -393,7 +391,7 @@ fn revspec_paths_starting_with_a_dot_are_relative_to_the_current_directory() -> 
 #[cfg(feature = "revision")]
 #[serial]
 fn revspec_paths_starting_with_a_dot_need_a_worktree_to_stay_within() -> gix_testtools::TestResult {
-    let root = gix::path::realpath(gix_testtools::scripted_fixture_read_only("make_basic_repo.sh")?)?;
+    let root = gix_testtools::scripted_fixture_read_only("make_basic_repo.sh")?;
 
     let _cwd = gix_testtools::set_current_dir(&root)?;
     let repo = gix::discover_opts(".", Default::default(), gix::open::Options::isolated())?;

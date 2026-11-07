@@ -144,7 +144,7 @@ fn more_restrictive_ceiling_dirs_overrule_less_restrictive_ones() -> TestResult 
 #[test]
 fn nonmatching_relative_ceiling_is_ignored_after_resolving_start_path() -> TestResult {
     let outer = gix_testtools::scripted_fixture_read_only("make_nested_repos.sh")?;
-    let inner = std::env::current_dir()?.join(outer).join("inner");
+    let inner = outer.join("inner");
     let dir = Path::new("some/very/deeply/nested/subdir/../../../../../..");
     let (repo_path, _trust) = gix_discover::upwards_opts(
         dir,
@@ -193,7 +193,7 @@ fn ceilings_are_adjusted_to_match_search_dir() -> TestResult {
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
     }
-    let work_dir = std::env::current_dir()?.join(repo_path()?);
+    let work_dir = repo_path()?;
     let _cwd = gix_testtools::set_current_dir(&work_dir)?;
     let (repo_path, _trust) = gix_discover::upwards_opts(
         Path::new("some"),

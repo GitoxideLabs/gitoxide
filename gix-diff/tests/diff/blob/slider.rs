@@ -128,7 +128,6 @@ fn read_fixture(
     let baseline_path = worktree_path.join(&file_name);
     let baseline = std::fs::read(&baseline_path)?;
     let baseline = crate::blob::skip_header_and_fold_to_unidiff(&baseline);
-    let baseline_path = crate_root.join(&baseline_path);
     let baseline_path = baseline_path
         .strip_prefix(project_root)
         .unwrap_or(&baseline_path)

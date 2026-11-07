@@ -151,7 +151,7 @@ mod index {
     fn basics() -> TestResult {
         let repo = crate::named_subrepo_opts("make_basic_repo.sh", "unborn", gix::open::Options::isolated())?;
         let err = repo.index().expect_err("the fixture has no index");
-        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&repo.current_dir().join(repo.git_dir()).to_string_lossy(), "<git-dir>")]), "a missing index has standard not-found classification", @r#"
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&repo.git_dir().to_string_lossy(), "<git-dir>")]), "a missing index has standard not-found classification", @r#"
         Message {
             message: "Could not find index file at \"<git-dir>/index\" for opening.",
             class: NotFound,

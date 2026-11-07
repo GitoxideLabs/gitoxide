@@ -61,7 +61,7 @@ const MSYS_USR_VARIANTS: &[&str] = &["clangarm64", "ucrt64", "mingw64", "mingw32
 /// really relate to configuration, could be replaced with `git_for_windows_root()` in the future.
 fn git_for_windows_root() -> Option<&'static Path> {
     static GIT_ROOT: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
-        super::core_dir()
+        super::super::core_dir()
             .filter(|core| {
                 // Only use this if the directory structure resembles a Git installation. This
                 // accepts installations of common types that are not broken when `GIT_EXEC_PATH`
@@ -90,13 +90,12 @@ const BIN_DIR_FRAGMENTS: &[&str] = &["bin", "usr/bin"];
 /// The resulting path uses only `/` separators so long as the path obtained from `git --exec-path`
 /// does, which is the case unless it is overridden by setting `GIT_EXEC_PATH` to an unusual value.
 ///
-/// This is used for finding `sh.exe` and by [`super::installation_program()`]. Depending on desired
+/// This is used for finding `sh.exe` and by [`crate::env::installation_program()`]. Depending on desired
 /// semantics for future callers, it should possibly also check a `cmd` directory; directories like
-/// `<platform>/bin`, for any applicable variants (such as `mingw64`); and `super::core_dir()` itself,
+/// `<platform>/bin`, for any applicable variants (such as `mingw64`); and `super::super::core_dir()` itself,
 /// which it could safely check even if its value is not safe for inferring other paths.
 pub(super) fn find_git_associated_windows_executable(stem: &str) -> Option<WindowsExecutable> {
-    #[cfg(windows)]
-    if let Some(bin) = super::git::msys_bin() {
+    if let Some(bin) = super::msys_bin() {
         // Stay inside the selected MSYS runtime's bin directory. In particular, do not infer
         // a sibling of an arbitrary `usr` directory from GIT_EXEC_PATH.
         let program = bin.join(format!("{stem}.exe"));
@@ -168,7 +167,7 @@ mod tests {
     /// Shouldn't find anything nonexistent, or only in PATH or in `bin`s we don't mean to search.
     ///
     /// If dirs like `mingsw64/bin` are added, `git-credential-manager` should be moved to `SHOULD_FIND`.
-    /// Likewise, if `super::core_dir()` is added, `git-daemon` should be moved to `SHOULD_FIND`.
+    /// Likewise, if `super::super::core_dir()` is added, `git-daemon` should be moved to `SHOULD_FIND`.
     const SHOULD_NOT_FIND: &[&str] = &[
         "nonexistent-command",
         "cmd",
@@ -179,7 +178,6 @@ mod tests {
     ];
 
     #[test]
-    #[cfg_attr(not(windows), ignore = "only meaningful on Windows")]
     fn find_git_associated_windows_executable() {
         for stem in SHOULD_FIND {
             let path = super::find_git_associated_windows_executable(stem);
@@ -188,7 +186,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(not(windows), ignore = "only meaningful on Windows")]
     fn find_git_associated_windows_executable_no_extra() {
         for stem in SHOULD_NOT_FIND {
             let path = super::find_git_associated_windows_executable(stem);
@@ -197,7 +194,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(not(windows), ignore = "only meaningful on Windows")]
     fn find_git_associated_windows_executable_with_fallback() {
         for stem in SHOULD_FIND {
             let executable = super::find_git_associated_windows_executable_with_fallback(stem);
@@ -206,7 +202,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(not(windows), ignore = "only meaningful on Windows")]
     fn find_git_associated_windows_executable_with_fallback_falls_back() {
         for stem in SHOULD_NOT_FIND {
             let path = super::find_git_associated_windows_executable_with_fallback(stem)
