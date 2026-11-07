@@ -15,6 +15,11 @@ fn select(bin: &Path) -> gix_testtools::Env<'static> {
 
 fn assert_native_paths(root: &Path, runtime: &str) {
     assert_eq!(
+        gix_path::env::core_dir(),
+        Some(root.join(runtime).join("libexec/git-core").as_path()),
+        "the installed core directory is found without launching Git"
+    );
+    assert_eq!(
         gix_path::env::exe_invocation(),
         Path::new("git.exe"),
         "the selected PATH entry retains its short invocation"
@@ -68,5 +73,62 @@ fn bin_launcher(directory: &str) -> gix_error::TestResult {
     }
     let _env = select(&root.join("bin"));
     assert_native_paths(&root, "ucrt64");
+    Ok(())
+}
+
+#[test]
+fn core_directory_uses_the_selected_executable_instead_of_exepath() -> gix_error::TestResult {
+    let fixture = fixture()?;
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _env = select(&fixture.join("mixed/ucrt64/bin")).set(
+        "EXEPATH",
+        fixture.join("conda/Library").to_str().expect("UTF-8 fixture path"),
+    );
+    assert_eq!(
+        gix_path::env::core_dir(),
+        Some(fixture.join("mixed/ucrt64/libexec/git-core").as_path()),
+        "EXEPATH may describe a different Git installation"
+    );
+    Ok(())
+}
+
+#[test]
+fn core_directory_override_requires_querying_git() -> gix_error::TestResult {
+    let fixture = fixture()?;
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _env = select(&fixture.join("mixed/ucrt64/bin")).set("GIT_EXEC_PATH", "custom/git-core");
+    assert_eq!(
+        gix_path::env::core_dir(),
+        None,
+        "an override disables inference, and the placeholder executable cannot answer the query"
+    );
+    Ok(())
+}
+
+#[test]
+fn incomplete_core_directory_requires_querying_git() -> gix_error::TestResult {
+    unrecognized_core("incomplete/ucrt64/bin")
+}
+
+#[test]
+fn unknown_core_directory_requires_querying_git() -> gix_error::TestResult {
+    unrecognized_core("unknown")
+}
+
+fn unrecognized_core(bin: &str) -> gix_error::TestResult {
+    let fixture = fixture()?;
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _env = select(&fixture.join(bin));
+    assert_eq!(
+        gix_path::env::core_dir(),
+        None,
+        "without an established core directory, discovery must query the placeholder Git and fail"
+    );
     Ok(())
 }
