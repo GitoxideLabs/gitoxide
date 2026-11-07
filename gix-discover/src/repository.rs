@@ -65,10 +65,9 @@ mod trust_tests {
 
     #[test]
     fn known_candidate_trust_skips_only_identical_git_directory_spellings() -> gix_testtools::TestResult {
-        let root = gix_testtools::scripted_fixture_read_only("make_ownership_repos.sh")?;
-        let cwd = std::env::current_dir()?;
+        let cwd = gix_testtools::scripted_fixture_read_only("make_ownership_repos.sh")?;
         for name in ["worktree/.git", "bare"] {
-            let git_dir = root.join(name);
+            let git_dir = std::path::PathBuf::from(name);
             for candidate in [git_dir.clone(), cwd.join(&git_dir), git_dir.join(".")] {
                 let mut checked_paths = Vec::new();
                 let trust = trust_with(&git_dir, None, &cwd, (&candidate, Some(Trust::Reduced)), |path| {

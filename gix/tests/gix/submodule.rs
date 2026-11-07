@@ -327,9 +327,7 @@ mod open {
         if gix_testtools::run_in_isolated_process()? {
             return Ok(());
         }
-        let fixture = gix::path::realpath(gix_testtools::scripted_fixture_read_only(
-            "make_submodule_symlink_paths.sh",
-        )?)?;
+        let fixture = gix_testtools::scripted_fixture_read_only("make_submodule_symlink_paths.sh")?;
         let repo = gix::open_opts(fixture.join("bare.git"), gix::open::Options::isolated())?;
         let _cwd = gix_testtools::set_current_dir(fixture.join("superproject"))?;
         assert!(repo.workdir().is_none(), "the superproject has no worktree");

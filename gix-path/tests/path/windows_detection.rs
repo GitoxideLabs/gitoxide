@@ -1,9 +1,7 @@
 use std::path::{Path, PathBuf};
 
 fn fixture() -> gix_error::TestResult<PathBuf> {
-    Ok(std::path::absolute(gix_testtools::scripted_fixture_read_only(
-        "windows-git-layouts.sh",
-    )?)?)
+    Ok(gix_testtools::scripted_fixture_read_only("windows-git-layouts.sh")?)
 }
 
 fn fixture_with_shells() -> gix_error::TestResult<PathBuf> {
@@ -16,7 +14,7 @@ fn fixture_with_shells() -> gix_error::TestResult<PathBuf> {
         }
         Ok(())
     })?;
-    Ok(std::path::absolute(fixture)?)
+    Ok(fixture)
 }
 
 fn select(bin: &Path) -> gix_testtools::Env<'static> {
@@ -339,7 +337,7 @@ fn winget_machine_link_chain() -> gix_error::TestResult {
 }
 
 fn linked_installation(bin: &str) -> gix_error::TestResult {
-    let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only("windows-git-links.sh")?)?;
+    let fixture = gix_testtools::scripted_fixture_read_only("windows-git-links.sh")?;
     if !gix_testtools::fixture_has_symlinks(&fixture)? {
         return Ok(());
     }
@@ -358,7 +356,7 @@ fn linked_installation(bin: &str) -> gix_error::TestResult {
 
 #[test]
 fn symlink_location_does_not_override_unknown_target_layout() -> gix_error::TestResult {
-    let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only("windows-git-links.sh")?)?;
+    let fixture = gix_testtools::scripted_fixture_read_only("windows-git-links.sh")?;
     if !gix_testtools::fixture_has_symlinks(&fixture)? {
         return Ok(());
     }
@@ -390,7 +388,7 @@ fn scoop_shim_without_junctions() -> gix_error::TestResult {
 }
 
 fn scoop_shim(directory: &str, installation: &str) -> gix_error::TestResult {
-    let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only("windows-scoop-shims.sh")?)?;
+    let fixture = gix_testtools::scripted_fixture_read_only("windows-scoop-shims.sh")?;
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
     }
@@ -402,7 +400,7 @@ fn scoop_shim(directory: &str, installation: &str) -> gix_error::TestResult {
 
 #[test]
 fn scoop_shim_with_arguments_requires_querying_git() -> gix_error::TestResult {
-    let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only("windows-scoop-shims.sh")?)?;
+    let fixture = gix_testtools::scripted_fixture_read_only("windows-scoop-shims.sh")?;
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
     }
@@ -442,7 +440,7 @@ fn msys_package_paths_respect_independent_mounts() -> gix_error::TestResult {
 
 #[test]
 fn msys_configuration_before_core_respects_independent_mounts() -> gix_error::TestResult {
-    let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only("windows-msys-git.sh")?)?;
+    let fixture = gix_testtools::scripted_fixture_read_only("windows-msys-git.sh")?;
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
     }
@@ -462,7 +460,7 @@ fn msys_configuration_before_core_respects_independent_mounts() -> gix_error::Te
 
 #[test]
 fn msys_missing_mounted_core_does_not_hide_configuration() -> gix_error::TestResult {
-    let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only("windows-msys-git.sh")?)?;
+    let fixture = gix_testtools::scripted_fixture_read_only("windows-msys-git.sh")?;
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
     }
@@ -481,7 +479,7 @@ fn msys_missing_mounted_core_does_not_hide_configuration() -> gix_error::TestRes
 }
 
 fn msys_package(installation: &str, core: &str, config: &str, config_exists: bool) -> gix_error::TestResult {
-    let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only("windows-msys-git.sh")?)?;
+    let fixture = gix_testtools::scripted_fixture_read_only("windows-msys-git.sh")?;
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
     }
@@ -511,7 +509,7 @@ fn msys_package(installation: &str, core: &str, config: &str, config_exists: boo
 
 #[test]
 fn msys_core_override_requires_querying_git() -> gix_error::TestResult {
-    let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only("windows-msys-git.sh")?)?;
+    let fixture = gix_testtools::scripted_fixture_read_only("windows-msys-git.sh")?;
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
     }
@@ -531,7 +529,7 @@ fn msys_core_override_requires_querying_git() -> gix_error::TestResult {
 
 #[test]
 fn msys_cached_defaults_do_not_hide_a_later_core_override() -> gix_error::TestResult {
-    let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only("windows-msys-git.sh")?)?;
+    let fixture = gix_testtools::scripted_fixture_read_only("windows-msys-git.sh")?;
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
     }
@@ -552,7 +550,7 @@ fn msys_cached_defaults_do_not_hide_a_later_core_override() -> gix_error::TestRe
 
 #[test]
 fn unregistered_msys_git_requires_querying_git() -> gix_error::TestResult {
-    let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only("windows-msys-git.sh")?)?;
+    let fixture = gix_testtools::scripted_fixture_read_only("windows-msys-git.sh")?;
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
     }

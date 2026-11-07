@@ -379,7 +379,7 @@ pub(crate) mod apply {
             "baseline.sh",
             [driver_path().to_string()],
         )?;
-        let worktree = gix_path::realpath(fixture.join("no-process"))?;
+        let worktree = fixture.join("no-process");
         let elsewhere = gix_testtools::tempfile::TempDir::new()?;
         let _cwd = gix_testtools::set_current_dir(elsewhere.path())?;
         let mut state = driver::State::new(gix_command::Context {

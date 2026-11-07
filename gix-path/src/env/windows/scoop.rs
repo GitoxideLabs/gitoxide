@@ -95,7 +95,7 @@ mod tests {
         if gix_testtools::run_in_isolated_process()? {
             return Ok(());
         }
-        let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only("windows-scoop-shims.sh")?)?;
+        let fixture = gix_testtools::scripted_fixture_read_only("windows-scoop-shims.sh")?;
         for (installation, version) in [("scoop", "current"), ("no-junction", "2.56.0")] {
             let root = fixture.join(installation);
             assert_eq!(

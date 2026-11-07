@@ -21,9 +21,7 @@ fn shell() {
 mod windows_installations {
     #[test]
     fn path_takes_precedence() -> gix_error::TestResult {
-        let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only(
-            "windows-git-installations.sh",
-        )?)?;
+        let fixture = gix_testtools::scripted_fixture_read_only("windows-git-installations.sh")?;
         if gix_testtools::run_in_isolated_process()? {
             return Ok(());
         }
@@ -48,9 +46,7 @@ mod windows_installations {
 
     #[test]
     fn path_inside_a_package_installation_keeps_the_short_invocation() -> gix_error::TestResult {
-        let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only(
-            "windows-git-installations.sh",
-        )?)?;
+        let fixture = gix_testtools::scripted_fixture_read_only("windows-git-installations.sh")?;
         if gix_testtools::run_in_isolated_process()? {
             return Ok(());
         }

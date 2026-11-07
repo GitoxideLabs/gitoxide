@@ -488,6 +488,10 @@ fn fixture_process() -> TestResult {
                     args,
                     version.parse()?,
                     |state| {
+                        assert!(
+                            state.path().is_absolute(),
+                            "post-processing receives absolute paths on every backend"
+                        );
                         if let gix_testtools::FixtureState::Uninitialized(path) = state {
                             std::fs::write(path.join("post-version"), &version)?;
                         }
@@ -500,15 +504,24 @@ fn fixture_process() -> TestResult {
         },
         operation => panic!("unknown fixture operation: {operation}"),
     };
-    if operation == "read" && fixture.is_absolute() {
+    assert!(
+        fixture.is_absolute(),
+        "generated, cached, and archived fixtures return absolute paths"
+    );
+    #[cfg(windows)]
+    assert!(
+        !matches!(fixture.components().next(), Some(std::path::Component::Prefix(prefix)) if prefix.kind().is_verbatim()),
+        "ordinary fixture paths do not acquire a verbatim prefix"
+    );
+    if operation == "read" && fixture.join("generation-path").is_file() {
         let generation_path = std::fs::read_to_string(fixture.join("generation-path"))?;
         assert_eq!(
-            fixture,
+            gix_path::realpath(&fixture)?,
             Path::new(generation_path.trim()),
-            "shared paths match the physical paths recorded by the shell"
+            "fixture paths refer to the physical paths recorded by the shell"
         );
     }
-    std::fs::write(report, gix_path::realpath(fixture)?.to_string_lossy().as_bytes())?;
+    std::fs::write(report, fixture.to_string_lossy().as_bytes())?;
     Ok(())
 }
 

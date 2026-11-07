@@ -7,7 +7,7 @@ use serial_test::serial;
 #[serial]
 fn from_globals() -> TestResult {
     let _environment = gix_testtools::isolate_git_environment()?;
-    let worktree_dir = crate::scripted_fixture_read_only("make_config_repo.sh")?.canonicalize()?;
+    let worktree_dir = crate::scripted_fixture_read_only("make_config_repo.sh")?;
     let _environment = _environment.set(
         "GIT_CONFIG_GLOBAL",
         worktree_dir.join(".gitconfig").display().to_string(),
@@ -36,7 +36,6 @@ fn from_git_dir() -> TestResult {
     let _environment = gix_testtools::isolate_git_environment()?;
     let worktree_dir = crate::scripted_fixture_read_only("make_config_repo.sh")?;
     let git_dir = worktree_dir.join(".git");
-    let worktree_dir = worktree_dir.canonicalize()?;
     let _environment = _environment
         .set(
             "GIT_CONFIG_SYSTEM",

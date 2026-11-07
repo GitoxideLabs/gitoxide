@@ -64,7 +64,7 @@ mod tests {
         if gix_testtools::run_in_isolated_process()? {
             return Ok(());
         }
-        let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only("windows-msys-git.sh")?)?;
+        let fixture = gix_testtools::scripted_fixture_read_only("windows-msys-git.sh")?;
         for installation in ["standard", "missing-config", "mounted"] {
             let bin = fixture.join(installation).join("usr/bin");
             assert_eq!(
@@ -88,7 +88,7 @@ mod tests {
         if gix_testtools::run_in_isolated_process()? {
             return Ok(());
         }
-        let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only("windows-msys-git.sh")?)?;
+        let fixture = gix_testtools::scripted_fixture_read_only("windows-msys-git.sh")?;
         for (installation, core, config) in [
             ("standard", "standard/usr/lib/git-core", "standard/etc/gitconfig"),
             ("mounted", "mounted-lib/git-core", "mounted-etc/gitconfig"),

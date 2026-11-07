@@ -1049,9 +1049,7 @@ mod locations {
 
     #[test]
     fn path_hits_do_not_inspect_fallbacks() -> gix_error::TestResult {
-        let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only(
-            "windows-git-installations.sh",
-        )?)?;
+        let fixture = gix_testtools::scripted_fixture_read_only("windows-git-installations.sh")?;
         if gix_testtools::run_in_isolated_process()? {
             return Ok(());
         }
@@ -1165,9 +1163,7 @@ mod locations {
     #[test]
     #[serial_test::serial]
     fn scoop_locations_are_lazy() -> gix_error::TestResult {
-        let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only(
-            "windows-git-installations.sh",
-        )?)?;
+        let fixture = gix_testtools::scripted_fixture_read_only("windows-git-installations.sh")?;
         let locations = super::super::locations_under_scoop(|key| match key {
             "SCOOP" => Some(fixture.join("custom").into_os_string()),
             _ => panic!("global and default Scoop roots must remain untouched"),
@@ -1272,9 +1268,7 @@ mod locations {
     #[test]
     #[serial_test::serial]
     fn package_fallbacks_use_isolated_roots() -> gix_error::TestResult {
-        let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only(
-            "windows-git-installations.sh",
-        )?)?;
+        let fixture = gix_testtools::scripted_fixture_read_only("windows-git-installations.sh")?;
         let missing = fixture.join("missing");
         for (variable, root, expected) in [
             ("SCOOP", "no-junction", "no-junction/apps/git/2.50.0/cmd/git.exe"),
@@ -1313,9 +1307,7 @@ mod locations {
     #[test]
     #[serial_test::serial]
     fn fallback_candidates_follow_cost_then_installation_priority() -> gix_error::TestResult {
-        let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only(
-            "windows-git-installations.sh",
-        )?)?;
+        let fixture = gix_testtools::scripted_fixture_read_only("windows-git-installations.sh")?;
         let variables = |key: &str| {
             let root = match key {
                 "LocalAppData" => "winget",
@@ -1365,9 +1357,7 @@ mod locations {
     #[test]
     #[serial_test::serial]
     fn fixed_path_winners_avoid_registry_queries_and_version_scans() -> gix_error::TestResult {
-        let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only(
-            "windows-git-installations.sh",
-        )?)?;
+        let fixture = gix_testtools::scripted_fixture_read_only("windows-git-installations.sh")?;
         for (explicit, winget, global_scoop, expected) in [
             (Some("explicit"), Some("winget"), None, "explicit/cmd/git.exe"),
             (None, Some("winget"), None, "winget/Microsoft/WinGet/Links/git.exe"),
@@ -1406,9 +1396,7 @@ mod locations {
     #[test]
     #[serial_test::serial]
     fn direct_registration_wins_before_version_scans() -> gix_error::TestResult {
-        let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only(
-            "windows-git-installations.sh",
-        )?)?;
+        let fixture = gix_testtools::scripted_fixture_read_only("windows-git-installations.sh")?;
         let executable = super::super::find_executable(None, || {
             super::super::alternative_locations(
                 |key| (key == "SCOOP").then(|| fixture.join("no-junction").into_os_string()),
@@ -1429,9 +1417,7 @@ mod locations {
 
     #[test]
     fn msys_paths_and_companions_use_the_selected_runtime() -> gix_error::TestResult {
-        let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only(
-            "windows-git-installations.sh",
-        )?)?;
+        let fixture = gix_testtools::scripted_fixture_read_only("windows-git-installations.sh")?;
         if gix_testtools::run_in_isolated_process()? {
             return Ok(());
         }

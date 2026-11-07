@@ -2780,6 +2780,9 @@ fn from_nonbare_parent_repo() -> TestResult {
 
 #[test]
 fn linked_worktree_proxy_base_with_relative_linking_files() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
     let Some(fixture) =
         gix_testtools::scripted_fixture_read_only_with_git_version("make_worktree_relative_linking.sh", |version| {
             version >= (2, 48, 0)
@@ -2787,10 +2790,11 @@ fn linked_worktree_proxy_base_with_relative_linking_files() -> TestResult {
     else {
         return Ok(());
     };
-    let main = fixture.join("main");
+    let _cwd = gix_testtools::set_current_dir(&fixture)?;
     let linked = fixture.join("linked");
-    let private_git_dir = main.join(".git/worktrees/linked");
-    let repo = gix::open_opts(&main, crate::restricted())?;
+    let repo = gix::open_opts("main", crate::restricted())?;
+    assert!(repo.git_dir().is_relative(), "exercise a relative parent Git directory");
+    let private_git_dir = repo.git_dir().join("worktrees/linked");
     let worktrees = repo.worktrees()?;
     assert_eq!(worktrees.len(), 1, "the relative-path fixture has one linked worktree");
     let proxy = worktrees.into_iter().next().expect("one worktree");
