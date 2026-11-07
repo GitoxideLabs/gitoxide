@@ -1,3 +1,39 @@
+## Rename and copy detection
+
+The built-in rename baseline generates before/after trees in an isolated fixture and compares the public
+tracker's event kinds, source/destination paths and integer similarity percentages with `git diff-tree`.
+It sorts records, so it checks matching decisions rather than callback order. Private scoring tests cover
+the full-precision arithmetic. Cases cover exact-match ranking and its candidate cap, unique basenames,
+the four-candidate matrix (including below-threshold candidates that affect tie order), byte-span scoring
+for text and binary files, copy sources, thresholds and limits. Separate tree/index Git baselines verify
+original copy-source IDs, modes and indices, and that directory shortcuts preserve file matching decisions.
+No developer checkout is used as a test repository.
+
+```shell
+GIX_TEST_IGNORE_ARCHIVES=1 cargo test -p gix-diff --test diff rewrites::git_baseline
+GIX_TEST_IGNORE_ARCHIVES=1 GIX_TEST_FIXTURE_HASH=sha256 cargo test -p gix-diff
+```
+
+Git versions predating its unterminated-span fix skip that one live comparison; the private scoring tests
+always check the corrected behavior. Cancellation, separate rename/copy thresholds and directory relations
+are tested as extensions of the tracker API.
+
+Rewrite events retain optional IDs: unavailable IDs cannot match exactly, but present worktree content can match by similarity.
+They report `similarity: Option<rewrites::Similarity>` without computing line diffs. The score
+retains Git's integer precision; `percentage()` returns the truncated percentage used by Git. `None` means
+an identity match or inferred directory rename, while an inexact match can also score 100%.
+Callers that need line counts can request them with `gix`'s `change.diff(&mut cache)?.line_counts()`;
+the returned `DiffLineStats` contains line counts only and follows normal blob-diff size limits.
+
+The rewrite benchmarks assert their expected matches and cover exact renames, repeated identical content,
+similarity with and without matching basenames, edited binary files, copy reuse and renamed directories.
+For a local before/after comparison, run on each implementation respectively:
+
+```shell
+cargo bench -p gix-diff --bench rewrite-tracker -- --save-baseline before
+cargo bench -p gix-diff --bench rewrite-tracker -- --baseline before
+```
+
 ## Running the diff-slider tests
 
 The tests compare `gix-diff` with Git using data produced by

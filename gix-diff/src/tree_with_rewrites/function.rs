@@ -144,12 +144,15 @@ where
                     let change = ChangeRef::Rewrite {
                         source_location: source.location,
                         source_entry_mode: source.entry_mode,
-                        source_id: source.id,
+                        source_id: match source.change {
+                            crate::tree::visit::Change::Modification { previous_oid, .. } => *previous_oid,
+                            change => change.oid_and_entry_mode().0.to_owned(),
+                        },
                         source_relation: source.change.relation(),
                         entry_mode: mode,
                         id: oid.to_owned(),
                         relation: dest.change.relation(),
-                        diff: source.diff,
+                        similarity: source.similarity,
                         location: dest.location,
                         copy: match source.kind {
                             tracker::visit::SourceKind::Rename => false,
@@ -262,17 +265,15 @@ mod tree_to_changes {
         }
 
         fn visit_nontree(&mut self, entry: &EntryRef<'_>) -> gix_traverse::tree::visit::Action {
-            if entry.mode.is_blob() {
-                (self.push)(
-                    Change::Modification {
-                        previous_entry_mode: entry.mode,
-                        previous_oid: gix_hash::ObjectId::null(entry.oid.kind()),
-                        entry_mode: entry.mode,
-                        oid: entry.oid.to_owned(),
-                    },
-                    self.recorder.path(),
-                );
-            }
+            (self.push)(
+                Change::Modification {
+                    previous_entry_mode: entry.mode,
+                    previous_oid: entry.oid.to_owned(),
+                    entry_mode: entry.mode,
+                    oid: entry.oid.to_owned(),
+                },
+                self.recorder.path(),
+            );
             std::ops::ControlFlow::Continue(true)
         }
     }

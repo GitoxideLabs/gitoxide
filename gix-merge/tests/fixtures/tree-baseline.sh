@@ -1266,7 +1266,6 @@ git init conflicting-rename-complex
 
   git branch A
   git branch B
-  git branch expected
 
   git checkout A
   write_lines 1 2 3 4 5 >a/x.f
@@ -1281,21 +1280,8 @@ git init conflicting-rename-complex
   git mv tmp a
   git commit -am "change something in subdirectory, then overwrite directory with subdirectory"
 
-  git checkout expected
-  rm .git/index
-  rm -Rf ./a
-  mkdir -p a-renamed/sub
-  write_lines 1 2 3 4 5 6 >a-renamed/sub/y.f
-  write_lines 1 2 3 4 5 >a-renamed/x.f
-  write_lines 1 2 3 4 5 6 >a-renamed/y.f
-  touch a-renamed/z a-renamed/w a-renamed/sub/z
-  git add .
-  git commit -m "Close to what Git has, but different due to rename tracking. Contents follow their true renames thanks to filename-aware matching, while Git also keeps rename/rename destinations that we compose."
-
-
-  # Since the whole state is very different, the expected index is as well, but at least it should make sense for what it is.
-  # Files pair up by matching filename like in Git, so `y.f` and `z` follow their true renames,
-  # while `a/x.f` and `a/w` which `B` deleted conflict with `A`'s directory rename and keep our side.
+  # The merged tree agrees with Git. Directory relations additionally retain
+  # conflict stages for empty `sub/z` and `w`; Git instead stages `z` as conflicting.
   rm .git/index
   git update-index --index-info <<EOF
 100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 2	a-renamed/sub/y.f
@@ -2323,7 +2309,7 @@ baseline rename-within-rename A-B-deviates A B "Git doesn't detect the rename-ne
 baseline rename-within-rename-2 A-B-deviates A B "Git keeps the doubly-renamed file in both rename destinations as it doesn't compose nested directory renames - we do, and merge contents cleanly in one place, in both merge directions"
 baseline conflicting-rename A-B A B
 baseline conflicting-rename-2 A-B A B
-baseline conflicting-rename-complex A-B A B "Git has different rename tracking - overall result it's still close enough"
+baseline conflicting-rename-complex A-B A B
 
 baseline same-rename-different-mode A-B A B "Git works for the A/B case, but for B/A it forgets to set the executable bit"
 baseline renamed-symlink-with-conflict A-B A B
@@ -2614,8 +2600,12 @@ EOF
 )
 
 (cd rename-delete-after-consumed-path
-  # Trees now agree with Git, but ambiguous identical blobs still choose a
-  # different base source for the rename/delete conflict.
+  # Trees agree with Git. Ordinary diff-tree pairs A's identical payloads as
+  # a/a -> a/d/a, f/a -> e, and h/d/a -> f; merge-ort instead chooses
+  # a/a -> e, f/a -> f, and h/d/a -> a/d/a. Both pair B's a/a -> b/a/a.
+  # Following ordinary diff-tree produces a rename/rename ancestor at a/a
+  # (executable), instead of merge-ort's rename/delete ancestor at a/d/a
+  # (regular). Keep this merge-specific source-selection deviation explicit.
   for direction in A-B A-B-reversed; do
     IFS= read -r -d '' merged_tree_id <"$direction.merge-info"
     git read-tree "$merged_tree_id"
@@ -2630,9 +2620,6 @@ EOF
 100644 $(git rev-parse A:f) $ours	f
 100644 $(git rev-parse B:f) $theirs	f
 EOF
-    if test "$direction" = A-B; then
-      printf '100755 %s 1\ta/d/a\n' "$(git rev-parse main:a/a)" | git update-index --index-info
-    fi
     make_conflict_index "rename-delete-after-consumed-path-$direction"
   done
 )
@@ -3690,3 +3677,79 @@ for kind in blob symlink; do
     make_resolve_tree ours B A
   )
 done
+
+# Rename scoring counts material regardless of line order. Without that rename,
+# B's mode change conflicts with A's deletion instead of following the new path.
+git init rename-tracker-reordered-text
+(cd rename-tracker-reordered-text
+  git config core.filemode true
+  for i in $(seq 20); do printf '%02d\n' "$i"; done >source
+  git add source && git commit -m "text source"
+  git branch A
+  git branch B
+
+  git checkout A
+  sort -r source >renamed
+  git rm source
+  git add renamed && git commit -m "rename and reverse all lines"
+
+  git checkout B
+  chmod +x source
+  git update-index --chmod=+x source
+  git commit -m "make the source executable"
+)
+baseline rename-tracker-reordered-text A-B A B
+
+# Two of three 64-byte binary spans survive the rename. Recognizing the rename
+# exposes B's deletion as a rename/delete conflict instead of a clean addition.
+git init rename-tracker-edited-binary
+(cd rename-tracker-edited-binary
+  git config core.filemode true
+  printf '\0%063d%064d%064d\n' 1 2 3 >source
+  git add source && git commit -m "binary source"
+  git branch A
+  git branch B
+
+  git checkout A
+  printf '\0%063d%064d%064d\n' 1 2 4 >renamed
+  git rm source
+  git add renamed && git commit -m "rename and edit the final binary span"
+
+  git checkout B
+  git rm source
+  git commit -m "delete the binary source"
+)
+baseline rename-tracker-edited-binary A-B A B
+
+# Both destinations prefer old-a. Reserve it for the stronger new-b match;
+# otherwise the opposite mode changes on B reach the wrong destinations.
+git init rename-tracker-global-best
+(cd rename-tracker-global-best
+  git config core.filemode true
+  lines() {
+    local prefix="$1" count="$2" i
+    for i in $(seq "$count"); do printf '%s%02d\n' "$prefix" "$i"; done
+  }
+  lines shared 10 >old-a
+  { lines shared 6; lines other 4; } >old-b
+  chmod +x old-b
+  git add .
+  git update-index --chmod=+x old-b
+  git commit -m "two similar sources with different modes"
+  git branch A
+  git branch B
+
+  git checkout A
+  { lines shared 8; lines extra 2; } >new-a
+  { lines shared 9; lines third 1; } >new-b
+  git rm old-a old-b
+  git add new-a new-b && git commit -m "rename both sources with competing similarities"
+
+  git checkout B
+  chmod +x old-a
+  chmod -x old-b
+  git update-index --chmod=+x old-a
+  git update-index --chmod=-x old-b
+  git commit -m "toggle each source mode"
+)
+baseline rename-tracker-global-best A-B A B

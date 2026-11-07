@@ -37,23 +37,22 @@ pub fn file(
     let roots = worktree_roots(base_id, ours_id, theirs_id, repo.workdir())?;
 
     let mut cache = repo.merge_resource_cache(roots)?;
-    let null = repo.object_hash().null();
     cache.set_resource(
-        base_id.map_or(null, Id::detach),
+        base_id.map(Id::detach),
         EntryKind::Blob,
         base.as_ref(),
         ResourceKind::CommonAncestorOrBase,
         &repo.objects,
     )?;
     cache.set_resource(
-        ours_id.map_or(null, Id::detach),
+        ours_id.map(Id::detach),
         EntryKind::Blob,
         ours.as_ref(),
         ResourceKind::CurrentOrOurs,
         &repo.objects,
     )?;
     cache.set_resource(
-        theirs_id.map_or(null, Id::detach),
+        theirs_id.map(Id::detach),
         EntryKind::Blob,
         theirs.as_ref(),
         ResourceKind::OtherOrTheirs,

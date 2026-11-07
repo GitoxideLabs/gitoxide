@@ -15,7 +15,7 @@ use gix_object::{
 
 const EXACT_RENAME_COUNTS: &[usize] = &[128, 1_024, 4_096];
 const AMBIGUOUS_IDENTICAL_COUNTS: &[usize] = &[16, 128, 512];
-const SIMILARITY_RENAME_COUNTS: &[usize] = &[16, 64, 128];
+const SIMILARITY_RENAME_COUNTS: &[usize] = &[16, 64, 128, 512];
 const EXHAUSTIVE_COPY_COUNTS: &[usize] = &[16, 128, 512];
 
 #[derive(Clone, Copy)]
@@ -38,8 +38,8 @@ impl Change {
 }
 
 impl gix_diff::rewrites::tracker::Change for Change {
-    fn id(&self) -> &oid {
-        &self.id
+    fn id(&self) -> Option<&oid> {
+        (!self.id.is_null()).then_some(self.id.as_ref())
     }
 
     fn relation(&self) -> Option<Relation> {
@@ -52,10 +52,6 @@ impl gix_diff::rewrites::tracker::Change for Change {
 
     fn entry_mode(&self) -> EntryMode {
         self.mode
-    }
-
-    fn id_and_entry_mode(&self) -> (&oid, EntryMode) {
-        (&self.id, self.mode)
     }
 }
 
@@ -113,19 +109,26 @@ fn bench_ambiguous_identical_content(c: &mut Criterion) {
 }
 
 fn bench_similarity_renames(c: &mut Criterion) {
-    let mut group = c.benchmark_group("rewrite-tracker/similarity-renames");
-    for &count in SIMILARITY_RENAME_COUNTS {
-        let scenario = similarity_renames(count);
-        group.throughput(Throughput::Elements(count as u64));
-        group.bench_with_input(BenchmarkId::from_parameter(count), &scenario, |b, scenario| {
-            b.iter_batched(
-                || scenario,
-                |scenario| black_box(run_tracker(scenario)),
-                BatchSize::SmallInput,
-            );
-        });
+    for (name, make_scenario) in [
+        ("similarity-renames", similarity_renames as fn(usize) -> Scenario),
+        ("similarity-without-basename", similarity_without_basename),
+        ("edited-binary", edited_binary),
+        ("reused-copy-candidates", reused_copy_candidates),
+    ] {
+        let mut group = c.benchmark_group(format!("rewrite-tracker/{name}"));
+        for &count in SIMILARITY_RENAME_COUNTS {
+            let scenario = make_scenario(count);
+            group.throughput(Throughput::Elements(scenario.expected_matches as u64));
+            group.bench_with_input(BenchmarkId::from_parameter(count), &scenario, |b, scenario| {
+                b.iter_batched(
+                    || scenario,
+                    |scenario| black_box(run_tracker(scenario)),
+                    BatchSize::SmallInput,
+                );
+            });
+        }
+        group.finish();
     }
-    group.finish();
 }
 
 fn bench_exhaustive_copy_sources(c: &mut Criterion) {
@@ -231,6 +234,46 @@ fn similarity_renames(count: usize) -> Scenario {
         expected_matches: count,
         expected_similarity_checks: None,
     }
+}
+
+fn similarity_without_basename(count: usize) -> Scenario {
+    let mut scenario = similarity_renames(count);
+    for (idx, (_, path)) in scenario.changes.iter_mut().enumerate() {
+        if idx % 2 == 1 {
+            *path = format!("new/renamed-{:05}.txt", idx / 2).into();
+        }
+    }
+    scenario
+}
+
+fn edited_binary(count: usize) -> Scenario {
+    let mut scenario = similarity_without_basename(count);
+    for (idx, (change, _)) in scenario.changes.iter_mut().enumerate() {
+        let data = format!("\0{}", text_blob(idx / 2, idx % 2 == 1));
+        change.id = insert_blob(&scenario.objects, &data);
+    }
+    scenario
+}
+
+fn reused_copy_candidates(count: usize) -> Scenario {
+    let mut scenario = similarity_without_basename(count);
+    scenario.rewrites.copies = Some(Copies {
+        percentage: Some(0.8),
+        ..Default::default()
+    });
+    for (change, _) in &mut scenario.changes {
+        if change.kind == ChangeKind::Deletion {
+            change.kind = ChangeKind::Modification;
+        }
+    }
+    for idx in 0..count {
+        scenario.changes.push((
+            scenario.changes[idx * 2 + 1].0,
+            format!("second/copy-{idx:05}.txt").into(),
+        ));
+    }
+    scenario.expected_matches = 2 * count;
+    scenario
 }
 
 fn exhaustive_copy_sources(count: usize) -> Scenario {

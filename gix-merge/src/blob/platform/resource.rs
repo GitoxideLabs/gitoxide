@@ -11,7 +11,7 @@ impl<'a> ResourceRef<'a> {
                 pipeline::Data::TooLarge { size } => Data::TooLarge { size },
             }),
             rela_path: cache.rela_path.as_ref(),
-            id: &cache.id,
+            id: cache.id.as_deref(),
         }
     }
 }
@@ -19,7 +19,7 @@ impl<'a> ResourceRef<'a> {
 /// The data of a mergeable resource, as it could be determined and computed previously.
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub enum Data<'a> {
-    /// The object is missing, either because it didn't exist in the working tree or because its `id` was null
+    /// The object is missing, either because it didn't exist in the working tree or because its `id` was `None`
     /// and no worktree root was configured. A supplied ID does not override absence from the worktree.
     /// Text merges interpret this as an empty buffer; binary identity checks retain the distinction.
     Missing,

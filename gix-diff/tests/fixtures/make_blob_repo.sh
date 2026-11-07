@@ -20,3 +20,7 @@ unset -diff
 EOF
 
 git add . && git commit -m "init"
+
+# Present, unhashed empty files must remain distinct from missing rewrite resources.
+: > empty-old
+: > empty-new

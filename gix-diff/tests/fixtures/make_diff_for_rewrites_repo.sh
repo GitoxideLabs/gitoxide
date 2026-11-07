@@ -812,7 +812,8 @@ git -c diff.renames=1 show > baseline-3.with-renames
 git -c diff.renames=0 show HEAD~2 > baseline-2.no-renames
 git -c diff.renames=1 show HEAD~2 > baseline-2.with-renames
 git -c diff.renames=0 show HEAD~4 > baseline.no-renames
-git -c diff.renames=1 show HEAD~4 > baseline.with-renames
+# Match the identity test's copy detection, empty sources, and small fuzzy limit.
+git -c diff.renames=copies show --rename-empty -l1 HEAD~4 > baseline.with-renames
 
 echo 1 >src/plumbing/main.rs
 echo 2 >src/plumbing/mod.rs

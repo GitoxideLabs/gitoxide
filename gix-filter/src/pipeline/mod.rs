@@ -80,6 +80,11 @@ impl Pipeline {
 
 /// Access
 impl Pipeline {
+    /// Return the object format used by this pipeline.
+    pub fn object_hash(&self) -> gix_hash::Kind {
+        self.object_hash
+    }
+
     /// Return a mutable reference to the state that handles long running processes.
     /// Interacting with it directly allows to handle delayed results.
     pub fn driver_state_mut(&mut self) -> &mut driver::State {
