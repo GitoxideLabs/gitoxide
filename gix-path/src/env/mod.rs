@@ -22,6 +22,7 @@ mod git;
 /// avoids that invocation when its modern configuration file exists.
 /// Prefixes derived from the selected executable are shared with core-directory, prefix, and shell discovery.
 /// Registered MSYS2 Git packages use their known configuration path, translated by `cygpath`.
+/// Their core and configuration paths share a single cached conversion.
 pub fn installation_config() -> Option<&'static Path> {
     git::install_config_path().and_then(|p| crate::from_byte_slice(p).ok())
 }
@@ -210,6 +211,7 @@ static GIT_CORE_DIR: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
 /// `GIT_EXEC_PATH` is unset. Other installations and overrides are queried from Git.
 /// Registered MSYS2 Git packages also avoid the Git query, translating their known core path
 /// through the same installation's `cygpath` to respect custom mounts.
+/// This conversion is shared with configuration discovery.
 /// Returns `None` if Git could not be found, returned an error, or its path could not be translated.
 pub fn core_dir() -> Option<&'static Path> {
     GIT_CORE_DIR.as_deref()

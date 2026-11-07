@@ -440,6 +440,46 @@ fn msys_package_paths_respect_independent_mounts() -> gix_error::TestResult {
     msys_package("mounted", "mounted-lib/git-core", "mounted-etc/gitconfig", true)
 }
 
+#[test]
+fn msys_configuration_before_core_respects_independent_mounts() -> gix_error::TestResult {
+    let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only("windows-msys-git.sh")?)?;
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _env = select(&fixture.join("mounted/usr/bin"));
+    assert_eq!(
+        gix_path::env::installation_config(),
+        Some(fixture.join("mounted-etc/gitconfig").as_path()),
+        "configuration can populate shared defaults before core discovery"
+    );
+    assert_eq!(
+        gix_path::env::core_dir(),
+        Some(fixture.join("mounted-lib/git-core").as_path()),
+        "the cached core path retains its independent mount"
+    );
+    Ok(())
+}
+
+#[test]
+fn msys_missing_mounted_core_does_not_hide_configuration() -> gix_error::TestResult {
+    let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only("windows-msys-git.sh")?)?;
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _env = select(&fixture.join("missing-mounted-core/usr/bin"));
+    assert_eq!(
+        gix_path::env::core_dir(),
+        None,
+        "a missing translated core directory requires querying the nonlaunchable Git executable"
+    );
+    assert_eq!(
+        gix_path::env::installation_config(),
+        Some(fixture.join("missing-mounted-core/etc/gitconfig").as_path()),
+        "the absent core directory does not discard the independent configuration path"
+    );
+    Ok(())
+}
+
 fn msys_package(installation: &str, core: &str, config: &str, config_exists: bool) -> gix_error::TestResult {
     let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only("windows-msys-git.sh")?)?;
     if gix_testtools::run_in_isolated_process()? {
@@ -477,9 +517,35 @@ fn msys_core_override_requires_querying_git() -> gix_error::TestResult {
     }
     let _env = select(&fixture.join("standard/usr/bin")).set("GIT_EXEC_PATH", "/custom/git-core");
     assert_eq!(
+        gix_path::env::system_config(),
+        Some(fixture.join("standard/etc/gitconfig").as_path()),
+        "a core override does not prevent configuration from caching the package defaults"
+    );
+    assert_eq!(
         gix_path::env::core_dir(),
         None,
         "an override still requires querying the nonlaunchable Git executable"
+    );
+    Ok(())
+}
+
+#[test]
+fn msys_cached_defaults_do_not_hide_a_later_core_override() -> gix_error::TestResult {
+    let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only("windows-msys-git.sh")?)?;
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _env = select(&fixture.join("standard/usr/bin"));
+    assert_eq!(
+        gix_path::env::system_config(),
+        Some(fixture.join("standard/etc/gitconfig").as_path()),
+        "the package defaults are known before the core override"
+    );
+    let _override = gix_testtools::Env::new().set("GIT_EXEC_PATH", "/custom/git-core");
+    assert_eq!(
+        gix_path::env::core_dir(),
+        None,
+        "core discovery still observes its override after configuration populated the cache"
     );
     Ok(())
 }

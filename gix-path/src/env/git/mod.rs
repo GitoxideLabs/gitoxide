@@ -283,7 +283,8 @@ pub(super) fn exe_invocation() -> &'static Path {
 /// MSYS Git uses Unix paths. Bind conversion and companion lookup to its own runtime.
 #[cfg(windows)]
 pub(super) fn msys_bin() -> Option<&'static Path> {
-    msys_bin_at(exe_path()?)
+    static BIN: LazyLock<Option<&'static Path>> = LazyLock::new(|| msys_bin_at(exe_path()?));
+    *BIN
 }
 
 /// The pacman Git package uses this compiled path, translated by its own mount table.
@@ -292,8 +293,8 @@ pub(super) fn msys_core_dir() -> Option<PathBuf> {
     if env::var_os("GIT_EXEC_PATH").is_some() {
         return None;
     }
-    let bin = msys::bin()?;
-    native_path_with(Path::new("/usr/lib/git-core"), || Some(bin)).filter(|core| core.is_dir())
+    let core = &msys::paths()?.core;
+    core.is_dir().then(|| core.clone())
 }
 
 #[cfg(windows)]
@@ -323,20 +324,38 @@ fn native_path_with<'a>(path: &Path, msys_bin: impl FnOnce() -> Option<&'a Path>
         return Some(path.to_owned());
     }
     if let Some(bin) = msys_bin() {
-        use std::os::windows::process::CommandExt;
-        let output = Command::new(bin.join("cygpath.exe"))
-            .args(["-am", "--"])
-            .arg(path)
-            .creation_flags(0x08000000) // CREATE_NO_WINDOW
-            .output()
-            .ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        let path = output.stdout.strip_suffix(b"\n")?.to_path().ok()?.to_owned();
-        return path.is_absolute().then_some(path);
+        return native_paths(bin, [path]).map(|[path]| path);
     }
     Some(path.to_owned())
+}
+
+#[cfg(windows)]
+fn native_paths<const N: usize>(bin: &Path, paths: [&Path; N]) -> Option<[PathBuf; N]> {
+    use std::os::windows::process::CommandExt;
+    let output = Command::new(bin.join("cygpath.exe"))
+        .args(["-am", "--"])
+        .args(paths)
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_native_paths(&output.stdout)
+}
+
+#[cfg(windows)]
+fn parse_native_paths<const N: usize>(stdout: &[u8]) -> Option<[PathBuf; N]> {
+    stdout
+        .strip_suffix(b"\n")?
+        .split(|byte| *byte == b'\n')
+        .map(|line| {
+            let path = line.to_path().ok()?;
+            path.is_absolute().then(|| path.to_owned())
+        })
+        .collect::<Option<Vec<_>>>()?
+        .try_into()
+        .ok()
 }
 
 #[cfg(windows)]
@@ -380,11 +399,10 @@ static GIT_CONFIG_PATHS: LazyLock<ConfigPaths> = LazyLock::new(|| {
 
 #[cfg(windows)]
 fn config_paths_from_msys() -> Option<ConfigPaths> {
-    let bin = msys::bin()?;
     // /etc can be mounted separately from /usr, and the system path is valid even when absent.
-    let config = native_path_with(Path::new("/etc/gitconfig"), || Some(bin))?;
+    let config = &msys::paths()?.config;
     let exists = config.is_file();
-    let config = crate::os_string_into_bstring(config.into()).ok()?;
+    let config = crate::into_bstr(config).ok()?.into_owned();
     Some(ConfigPaths {
         installation: exists.then(|| config.clone()),
         installation_is_system: exists,

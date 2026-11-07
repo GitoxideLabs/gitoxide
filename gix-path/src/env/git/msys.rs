@@ -1,9 +1,23 @@
-use std::{path::Path, sync::LazyLock};
+use std::{
+    path::{Path, PathBuf},
+    sync::LazyLock,
+};
 
-/// Recognize the selected MSYS2 Git package before relying on its compiled Unix paths.
-pub(super) fn bin() -> Option<&'static Path> {
-    static BIN: LazyLock<Option<&'static Path>> = LazyLock::new(|| registered_bin(super::msys_bin()?));
-    *BIN
+pub(super) struct Paths {
+    pub core: PathBuf,
+    pub config: PathBuf,
+}
+
+/// Share one conversion of the registered package's defaults, regardless of which is requested first.
+pub(super) fn paths() -> Option<&'static Paths> {
+    static PATHS: LazyLock<Option<Paths>> = LazyLock::new(|| paths_at(super::msys_bin()?));
+    PATHS.as_ref()
+}
+
+fn paths_at(bin: &Path) -> Option<Paths> {
+    let bin = registered_bin(bin)?;
+    let [core, config] = super::native_paths(bin, [Path::new("/usr/lib/git-core"), Path::new("/etc/gitconfig")])?;
+    Some(Paths { core, config })
 }
 
 fn registered_bin(bin: &Path) -> Option<&Path> {
@@ -42,8 +56,8 @@ fn registered_bin(bin: &Path) -> Option<&Path> {
 
 #[cfg(test)]
 mod tests {
-    use super::registered_bin;
-    use std::path::Path;
+    use super::{paths_at, registered_bin};
+    use std::path::PathBuf;
 
     #[test]
     fn package_registration_establishes_the_layout() -> gix_error::TestResult {
@@ -80,14 +94,58 @@ mod tests {
             ("mounted", "mounted-lib/git-core", "mounted-etc/gitconfig"),
         ] {
             let bin = fixture.join(installation).join("usr/bin");
-            for (unix_path, expected) in [("/usr/lib/git-core", core), ("/etc/gitconfig", config)] {
-                assert_eq!(
-                    super::super::native_path_with(Path::new(unix_path), || Some(&bin)),
-                    Some(fixture.join(expected)),
-                    "the selected runtime's mount table controls {unix_path}"
-                );
-            }
+            let paths = paths_at(&bin).expect("the registered package's runtime converts both paths");
+            assert_eq!(
+                paths.core,
+                fixture.join(core),
+                "the runtime's mount table controls /usr/lib"
+            );
+            assert_eq!(
+                paths.config,
+                fixture.join(config),
+                "the runtime's mount table controls /etc"
+            );
         }
         Ok(())
+    }
+
+    #[test]
+    fn batched_paths_require_complete_absolute_results() {
+        use super::super::parse_native_paths;
+
+        assert_eq!(
+            parse_native_paths::<2>(
+                b"C:/a directory with spaces /git-core
+D:/separate config/gitconfig
+"
+            ),
+            Some([
+                PathBuf::from("C:/a directory with spaces /git-core"),
+                PathBuf::from("D:/separate config/gitconfig"),
+            ]),
+            "conversion preserves path order and whitespace"
+        );
+        for output in [
+            &b""[..],
+            b"C:/only-one\n",
+            b"C:/core
+D:/config",
+            b"C:/core
+D:/config
+E:/extra
+",
+            b"C:/core
+relative/config
+",
+            b"C:/core
+\xff
+",
+        ] {
+            assert_eq!(
+                parse_native_paths::<2>(output),
+                None,
+                "incomplete, extra, relative or unrepresentable results cannot establish the two paths"
+            );
+        }
     }
 }
