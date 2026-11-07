@@ -157,3 +157,44 @@ fn linked_installation(bin: &str) -> gix_error::TestResult {
 fn symlink_location_does_not_override_unknown_target_layout() -> gix_error::TestResult {
     unrecognized_core("symlinked/ucrt64/bin")
 }
+
+#[test]
+fn scoop_current_shim() -> gix_error::TestResult {
+    scoop_shim("scoop", "apps/git/current")
+}
+
+#[test]
+fn scoop_shim_without_junctions() -> gix_error::TestResult {
+    scoop_shim("no-junction", "apps/git/2.56.0")
+}
+
+fn scoop_shim(directory: &str, installation: &str) -> gix_error::TestResult {
+    let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only("windows-scoop-shims.sh")?)?;
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let root = fixture.join(directory);
+    let _env = select(&root.join("shims")).set("GIT_INSTALL_ROOT", fixture.to_str().expect("UTF-8 fixture path"));
+    assert_native_paths(&root.join(installation), "ucrt64");
+    Ok(())
+}
+
+#[test]
+fn scoop_shim_with_arguments_requires_querying_git() -> gix_error::TestResult {
+    let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only("windows-scoop-shims.sh")?)?;
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _env = select(&fixture.join("args/shims"));
+    assert_eq!(
+        gix_path::env::core_dir(),
+        None,
+        "arguments can change Git's behavior, so the placeholder shim must be queried"
+    );
+    assert_eq!(
+        gix_path::env::installation_config(),
+        None,
+        "a shim with arguments cannot establish the target's configuration layout"
+    );
+    Ok(())
+}

@@ -128,6 +128,8 @@ pub fn shell_command() -> std::process::Command {
 /// selected executable is cached for the lifetime of the process.
 /// File symlinks, including WinGet's portable links, are resolved for layout discovery while
 /// retaining the selected invocation.
+/// Plain Scoop shims are resolved through their `.shim` sidecars; shims with arguments or
+/// unsupported metadata still require querying Git.
 pub fn exe_invocation() -> &'static Path {
     #[cfg(windows)]
     {

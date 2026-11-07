@@ -9,6 +9,8 @@ use std::sync::LazyLock;
 
 #[cfg(windows)]
 mod registry;
+#[cfg(windows)]
+mod scoop;
 
 /// Other places to find Git in, probing each source only after earlier candidates are exhausted.
 #[cfg(windows)]
@@ -236,12 +238,16 @@ fn executable() -> Option<&'static Executable> {
 pub(super) fn exe_path() -> Option<&'static Path> {
     static PATH: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
         let path = &executable()?.path;
-        if std::fs::symlink_metadata(path).ok()?.file_type().is_symlink() {
+        let path = if std::fs::symlink_metadata(path).ok()?.file_type().is_symlink() {
             // WinGet's Links directory points into the selected portable package, potentially
             // at a custom installation root. Follow links rather than searching other packages.
-            crate::realpath(path).ok()
+            crate::realpath(path).ok()?
         } else {
-            Some(path.clone())
+            path.clone()
+        };
+        match scoop::target(&path) {
+            Some(target) => crate::realpath(target).ok(),
+            None => Some(path),
         }
     });
     PATH.as_deref()
