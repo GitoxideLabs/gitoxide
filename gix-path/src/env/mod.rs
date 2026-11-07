@@ -162,6 +162,18 @@ pub fn xdg_config(file: &str, env_var: &mut dyn FnMut(&str) -> Option<OsString>)
 }
 
 static GIT_CORE_DIR: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
+    #[cfg(windows)]
+    if let Some(core) = system_prefix_from_git_in_path()
+        .map(|prefix| prefix.join("libexec/git-core"))
+        .filter(|core| core.is_dir())
+    {
+        // Git emits forward slashes, which companion-program lookup also preserves.
+        return Some(
+            crate::from_bstr(crate::to_unix_separators(crate::into_bstr(core).ok()?))
+                .ok()?
+                .into_owned(),
+        );
+    }
     let mut cmd = std::process::Command::new(exe_invocation());
 
     #[cfg(windows)]
@@ -179,8 +191,10 @@ static GIT_CORE_DIR: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
     git::native_path(BString::new(output.stdout).strip_suffix(b"\n")?.to_path().ok()?)
 });
 
-/// Return the directory obtained by calling `git --exec-path`.
+/// Return the directory that `git --exec-path` would report.
 ///
+/// Known Git for Windows layouts avoid starting Git when their core directory exists and
+/// `GIT_EXEC_PATH` is unset. Other installations and overrides are queried from Git.
 /// MSYS2 paths are translated for native Windows callers using the same installation's `cygpath`.
 /// Returns `None` if Git could not be found, returned an error, or its path could not be translated.
 pub fn core_dir() -> Option<&'static Path> {
