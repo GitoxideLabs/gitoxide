@@ -50,3 +50,23 @@ fn runtime_bin_selects_its_own_prefix_in_a_mixed_installation() -> gix_error::Te
     assert_native_paths(&root, "ucrt64");
     Ok(())
 }
+
+#[test]
+fn chocolatey_portable_bin_launcher() -> gix_error::TestResult {
+    bin_launcher("chocolatey/git")
+}
+
+#[test]
+fn conda_and_mamba_library_bin_launcher() -> gix_error::TestResult {
+    bin_launcher("conda/Library")
+}
+
+fn bin_launcher(directory: &str) -> gix_error::TestResult {
+    let root = fixture()?.join(directory);
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _env = select(&root.join("bin"));
+    assert_native_paths(&root, "ucrt64");
+    Ok(())
+}

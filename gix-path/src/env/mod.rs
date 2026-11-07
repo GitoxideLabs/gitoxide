@@ -18,7 +18,7 @@ mod git;
 /// ### Performance
 ///
 /// This can invoke the Git binary, which is slow on Windows. An unambiguous Git for Windows
-/// installation identified by `EXEPATH`, or by `git.exe` in its `cmd` or runtime `bin` directory,
+/// installation identified by `EXEPATH`, or by `git.exe` in its `cmd` or `bin` directories,
 /// avoids that invocation when its modern configuration file exists.
 pub fn installation_config() -> Option<&'static Path> {
     git::install_config_path().and_then(|p| crate::from_byte_slice(p).ok())
@@ -255,15 +255,19 @@ where
     unambiguous_runtime_prefix(&root)
 }
 
-/// Like [`system_prefix_from_exepath_var()`], but for a Git executable in Git for Windows' `cmd` directory.
+/// Like [`system_prefix_from_exepath_var()`], but for Git for Windows' `cmd` and `bin` launchers.
 ///
 /// The installer puts `<root>/cmd` into `PATH`, so this is the `git.exe` that shells other than Git
 /// Bash find, and these don't have `EXEPATH` set.
+/// Chocolatey portable and Conda/Mamba instead expose `bin`, with `cmd` alongside it.
 #[cfg(windows)]
 fn system_prefix_from_git_launcher(executable: &Path) -> Option<PathBuf> {
-    let cmd = executable.parent().filter(|_| executable.is_absolute())?;
-    let is_cmd = cmd.file_name()?.as_encoded_bytes().eq_ignore_ascii_case(b"cmd");
-    is_cmd.then(|| unambiguous_runtime_prefix(cmd.parent()?)).flatten()
+    let directory = executable.parent().filter(|_| executable.is_absolute())?;
+    let root = directory.parent()?;
+    let name = directory.file_name()?;
+    (name.eq_ignore_ascii_case("cmd") || (name.eq_ignore_ascii_case("bin") && root.join("cmd/git.exe").is_file()))
+        .then(|| unambiguous_runtime_prefix(root))
+        .flatten()
 }
 
 /// A runtime binary selects its own prefix even if other runtimes are installed alongside it.
@@ -335,7 +339,8 @@ fn config_path_from_system_prefix(prefix: &Path) -> PathBuf {
 ///
 /// On Windows, the slowest part is the launch of the Git executable in the PATH. This is often
 /// avoided by inspecting the environment, when launched from inside a Git Bash MSYS2 shell,
-/// or by finding Git for Windows' `cmd` or runtime `bin` directory in the PATH.
+/// or by finding Git for Windows' `cmd` or `bin` directories in the PATH, including the
+/// launchers installed by Chocolatey portable and Conda/Mamba.
 ///
 /// ### When `None` is returned
 ///
