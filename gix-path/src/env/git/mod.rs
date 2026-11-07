@@ -8,6 +8,8 @@ use bstr::{BStr, BString, ByteSlice};
 use std::sync::LazyLock;
 
 #[cfg(windows)]
+mod msys;
+#[cfg(windows)]
 mod registry;
 #[cfg(windows)]
 mod scoop;
@@ -264,6 +266,16 @@ pub(super) fn msys_bin() -> Option<&'static Path> {
     msys_bin_at(exe_path()?)
 }
 
+/// The pacman Git package uses this compiled path, translated by its own mount table.
+#[cfg(windows)]
+pub(super) fn msys_core_dir() -> Option<PathBuf> {
+    if env::var_os("GIT_EXEC_PATH").is_some() {
+        return None;
+    }
+    let bin = msys::bin()?;
+    native_path_with(Path::new("/usr/lib/git-core"), || Some(bin)).filter(|core| core.is_dir())
+}
+
 #[cfg(windows)]
 fn msys_bin_at(executable: &Path) -> Option<&Path> {
     let bin = executable.parent()?;
@@ -339,8 +351,26 @@ static GIT_CONFIG_PATHS: LazyLock<ConfigPaths> = LazyLock::new(|| {
             system: system_config,
         };
     }
+    #[cfg(windows)]
+    if let Some(paths) = config_paths_from_msys() {
+        return paths;
+    }
     config_paths_from_executable()
 });
+
+#[cfg(windows)]
+fn config_paths_from_msys() -> Option<ConfigPaths> {
+    let bin = msys::bin()?;
+    // /etc can be mounted separately from /usr, and the system path is valid even when absent.
+    let config = native_path_with(Path::new("/etc/gitconfig"), || Some(bin))?;
+    let exists = config.is_file();
+    let config = crate::os_string_into_bstring(config.into()).ok()?;
+    Some(ConfigPaths {
+        installation: exists.then(|| config.clone()),
+        installation_is_system: exists,
+        system: Some(config),
+    })
+}
 
 // There are a number of ways to refer to the null device on Windows, but they are not all equally
 // well supported. Git for Windows rejects `\\.\NUL` and `\\.\nul`. On Windows 11 ARM64 (and maybe

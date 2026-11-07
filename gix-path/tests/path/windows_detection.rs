@@ -198,3 +198,83 @@ fn scoop_shim_with_arguments_requires_querying_git() -> gix_error::TestResult {
     );
     Ok(())
 }
+
+#[test]
+fn msys_package_paths_without_running_git() -> gix_error::TestResult {
+    msys_package("standard", "standard/usr/lib/git-core", "standard/etc/gitconfig", true)
+}
+
+#[test]
+fn msys_package_without_configuration() -> gix_error::TestResult {
+    msys_package(
+        "missing-config",
+        "missing-config/usr/lib/git-core",
+        "missing-config/etc/gitconfig",
+        false,
+    )
+}
+
+#[test]
+fn msys_package_paths_respect_independent_mounts() -> gix_error::TestResult {
+    msys_package("mounted", "mounted-lib/git-core", "mounted-etc/gitconfig", true)
+}
+
+fn msys_package(installation: &str, core: &str, config: &str, config_exists: bool) -> gix_error::TestResult {
+    let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only("windows-msys-git.sh")?)?;
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _env = select(&fixture.join(installation).join("usr/bin"));
+    assert_eq!(
+        gix_path::env::core_dir(),
+        Some(fixture.join(core).as_path()),
+        "the registered MSYS package's core path is translated without running the empty Git executable"
+    );
+    assert_eq!(
+        gix_path::env::system_config(),
+        Some(fixture.join(config).as_path()),
+        "the system path follows /etc even if the file does not exist"
+    );
+    assert_eq!(
+        gix_path::env::installation_config(),
+        config_exists.then(|| fixture.join(config)).as_deref(),
+        "only an existing installation file is reported"
+    );
+    assert_eq!(
+        gix_path::env::installation_config_is_system(),
+        config_exists,
+        "MSYS installation configuration has system scope when present"
+    );
+    Ok(())
+}
+
+#[test]
+fn msys_core_override_requires_querying_git() -> gix_error::TestResult {
+    let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only("windows-msys-git.sh")?)?;
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _env = select(&fixture.join("standard/usr/bin")).set("GIT_EXEC_PATH", "/custom/git-core");
+    assert_eq!(
+        gix_path::env::core_dir(),
+        None,
+        "an override still requires querying the nonlaunchable Git executable"
+    );
+    Ok(())
+}
+
+#[test]
+fn unregistered_msys_git_requires_querying_git() -> gix_error::TestResult {
+    let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only("windows-msys-git.sh")?)?;
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _env = select(&fixture.join("unregistered/usr/bin"));
+    assert_eq!(gix_path::env::core_dir(), None, "an unknown MSYS build must be queried");
+    assert_eq!(
+        gix_path::env::installation_config(),
+        None,
+        "without package registration, configuration paths cannot be inferred"
+    );
+    Ok(())
+}
