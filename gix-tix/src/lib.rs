@@ -8837,7 +8837,7 @@ fn staged_change(change: gix::diff::index::Change) -> Result<(PathChange, FileCh
                 source_entry_mode,
                 source_relation: None,
                 source_id: source_id.into_owned(),
-                diff: None,
+                similarity: None,
                 entry_mode: current_entry_mode,
                 id: id.into_owned(),
                 location: path.clone(),

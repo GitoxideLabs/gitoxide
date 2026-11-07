@@ -162,15 +162,14 @@ mod track_rewrites {
     use crate::{object::tree::diff::tree_named, util::named_subrepo_opts};
 
     #[test]
-    fn jj_realistic_needs_to_be_more_clever() -> TestResult {
-        // The test case only works (and is only needed) for SHA-1.
-        // Ideally this can be ported to SHA-256 once rename tracking is par with Git.
+    fn jj_realistic_renames() -> TestResult {
+        // The fixture reconstructs trees containing SHA-1 object IDs.
         if gix_testtools::object_hash() == gix::hash::Kind::Sha256 {
             return Ok(());
         }
         let repo = named_subrepo_opts("make_diff_repos.sh", "jj-trackcopy-1", gix::open::Options::isolated())?;
 
-        let mut expected = HashMap::<&BStr, (&BStr, u32)>::new();
+        let mut expected = HashMap::<&BStr, (&BStr, u8)>::new();
         expected.insert(
             "cli/src/commands/file/chmod.rs".into(),
             ("cli/src/commands/chmod.rs".into(), 90),
@@ -207,13 +206,12 @@ mod track_rewrites {
             .for_each_to_obtain_tree(&to, |change| {
                 if let Change::Rewrite {
                     source_location,
-                    diff: Some(diff),
+                    similarity: Some(similarity),
                     location,
                     ..
                 } = change
                 {
-                    // Round to percentage points to avoid floating point error.
-                    let similarity = (diff.similarity * 100.0) as u32;
+                    let similarity = similarity.percentage();
                     let v = expected.remove(location);
                     assert_eq!(v, Some((source_location, similarity)));
                 }
@@ -223,8 +221,8 @@ mod track_rewrites {
         assert_eq!(expected, HashMap::new());
         let out = out.expect("tracking enabled");
         assert_eq!(
-            out.num_similarity_checks, 23,
-            "this probably increases once the algorithm improves"
+            out.num_similarity_checks, 85,
+            "Git's exhaustive rename and copy matching considers competing candidates"
         );
         assert_eq!(
             out.num_similarity_checks_skipped_for_rename_tracking_due_to_limit, 0,
@@ -247,18 +245,34 @@ mod track_rewrites {
         insta::assert_debug_snapshot!(actual, @r#"
         [
             Rewrite {
+                source_location: "cli/src/commands/chmod.rs",
+                source_entry_mode: EntryMode(0o100644),
+                source_relation: None,
+                source_id: Sha1(8f55dec5b81779d23539fa7146d713cc42df70f4),
+                similarity: Some(
+                    Similarity(
+                        54363,
+                    ),
+                ),
+                entry_mode: EntryMode(0o100644),
+                id: Sha1(94f78deb408d181ccea9da574d0e45ac32a98092),
+                location: "cli/src/commands/file/chmod.rs",
+                relation: Some(
+                    ChildOfParent(
+                        1,
+                    ),
+                ),
+                copy: false,
+            },
+            Rewrite {
                 source_location: "cli/src/commands/cat.rs",
                 source_entry_mode: EntryMode(0o100644),
                 source_relation: None,
                 source_id: Sha1(f09e8b0e6bf963d8d6d5b578fea48ff4c9b723fb),
-                diff: Some(
-                    DiffLineStats {
-                        removals: 3,
-                        insertions: 20,
-                        before: 131,
-                        after: 148,
-                        similarity: 0.900421,
-                    },
+                similarity: Some(
+                    Similarity(
+                        54025,
+                    ),
                 ),
                 entry_mode: EntryMode(0o100644),
                 id: Sha1(081093be2ba0d2be62d14363f43859355bee2aa2),
@@ -271,38 +285,14 @@ mod track_rewrites {
                 copy: false,
             },
             Rewrite {
-                source_location: "cli/tests/test_cat_command.rs",
-                source_entry_mode: EntryMode(0o100644),
-                source_relation: None,
-                source_id: Sha1(8c80364c37b7fc364778efb4214575536e6a1df4),
-                diff: Some(
-                    DiffLineStats {
-                        removals: 17,
-                        insertions: 12,
-                        before: 123,
-                        after: 118,
-                        similarity: 0.77923656,
-                    },
-                ),
-                entry_mode: EntryMode(0o100644),
-                id: Sha1(45bb2cf6b7fa96a39c95301f619ca3e4cc3eb0f3),
-                location: "cli/tests/test_file_print_command.rs",
-                relation: None,
-                copy: false,
-            },
-            Rewrite {
                 source_location: "cli/tests/test_chmod_command.rs",
                 source_entry_mode: EntryMode(0o100644),
                 source_relation: None,
                 source_id: Sha1(c24ae8e04f53b84e09838d232b3e8c0167ccc010),
-                diff: Some(
-                    DiffLineStats {
-                        removals: 13,
-                        insertions: 19,
-                        before: 244,
-                        after: 250,
-                        similarity: 0.88720536,
-                    },
+                similarity: Some(
+                    Similarity(
+                        53262,
+                    ),
                 ),
                 entry_mode: EntryMode(0o100644),
                 id: Sha1(8defe631bc82bf35a53cd25083f85664516f412f),
@@ -311,27 +301,19 @@ mod track_rewrites {
                 copy: false,
             },
             Rewrite {
-                source_location: "cli/src/commands/chmod.rs",
+                source_location: "cli/tests/test_cat_command.rs",
                 source_entry_mode: EntryMode(0o100644),
                 source_relation: None,
-                source_id: Sha1(8f55dec5b81779d23539fa7146d713cc42df70f4),
-                diff: Some(
-                    DiffLineStats {
-                        removals: 0,
-                        insertions: 17,
-                        before: 124,
-                        after: 141,
-                        similarity: 0.9060576,
-                    },
-                ),
-                entry_mode: EntryMode(0o100644),
-                id: Sha1(94f78deb408d181ccea9da574d0e45ac32a98092),
-                location: "cli/src/commands/file/chmod.rs",
-                relation: Some(
-                    ChildOfParent(
-                        1,
+                source_id: Sha1(8c80364c37b7fc364778efb4214575536e6a1df4),
+                similarity: Some(
+                    Similarity(
+                        46754,
                     ),
                 ),
+                entry_mode: EntryMode(0o100644),
+                id: Sha1(45bb2cf6b7fa96a39c95301f619ca3e4cc3eb0f3),
+                location: "cli/tests/test_file_print_command.rs",
+                relation: None,
                 copy: false,
             },
             Modification {
@@ -471,7 +453,7 @@ mod track_rewrites {
                     ),
                 ),
                 source_id: Sha1(f203064a6a81df47498fb415a2064a8ec568ed67),
-                diff: None,
+                similarity: None,
                 entry_mode: EntryMode(0o40000),
                 id: Sha1(f203064a6a81df47498fb415a2064a8ec568ed67),
                 location: "c",
@@ -491,7 +473,7 @@ mod track_rewrites {
                     ),
                 ),
                 source_id: Sha1(081093be2ba0d2be62d14363f43859355bee2aa2),
-                diff: None,
+                similarity: None,
                 entry_mode: EntryMode(0o100644),
                 id: Sha1(081093be2ba0d2be62d14363f43859355bee2aa2),
                 location: "c/src/commands/file/print.rs",
@@ -511,7 +493,7 @@ mod track_rewrites {
                     ),
                 ),
                 source_id: Sha1(0f3bc154b577b84fb5ce31383e25acc99c2f24a5),
-                diff: None,
+                similarity: None,
                 entry_mode: EntryMode(0o40000),
                 id: Sha1(0f3bc154b577b84fb5ce31383e25acc99c2f24a5),
                 location: "c/src/commands/file",
@@ -531,7 +513,7 @@ mod track_rewrites {
                     ),
                 ),
                 source_id: Sha1(17be3b367831653883a36a2f2a8dea418b8d96b7),
-                diff: None,
+                similarity: None,
                 entry_mode: EntryMode(0o40000),
                 id: Sha1(17be3b367831653883a36a2f2a8dea418b8d96b7),
                 location: "c/tests",
@@ -551,7 +533,7 @@ mod track_rewrites {
                     ),
                 ),
                 source_id: Sha1(3d7598b4e4c570eef701f40853ef3e3b0fb224f7),
-                diff: None,
+                similarity: None,
                 entry_mode: EntryMode(0o100644),
                 id: Sha1(3d7598b4e4c570eef701f40853ef3e3b0fb224f7),
                 location: "c/tests/test_immutable_commits.rs",
@@ -571,7 +553,7 @@ mod track_rewrites {
                     ),
                 ),
                 source_id: Sha1(45bb2cf6b7fa96a39c95301f619ca3e4cc3eb0f3),
-                diff: None,
+                similarity: None,
                 entry_mode: EntryMode(0o100644),
                 id: Sha1(45bb2cf6b7fa96a39c95301f619ca3e4cc3eb0f3),
                 location: "c/tests/test_file_print_command.rs",
@@ -591,7 +573,7 @@ mod track_rewrites {
                     ),
                 ),
                 source_id: Sha1(5253f0ff160e8b7001a7bd271ca4a07968ff81a3),
-                diff: None,
+                similarity: None,
                 entry_mode: EntryMode(0o100644),
                 id: Sha1(5253f0ff160e8b7001a7bd271ca4a07968ff81a3),
                 location: "c/tests/runner.rs",
@@ -611,7 +593,7 @@ mod track_rewrites {
                     ),
                 ),
                 source_id: Sha1(80e5b08f25f75c2050afbcb794e8434f4cf082f1),
-                diff: None,
+                similarity: None,
                 entry_mode: EntryMode(0o40000),
                 id: Sha1(80e5b08f25f75c2050afbcb794e8434f4cf082f1),
                 location: "c/src",
@@ -631,7 +613,7 @@ mod track_rewrites {
                     ),
                 ),
                 source_id: Sha1(8defe631bc82bf35a53cd25083f85664516f412f),
-                diff: None,
+                similarity: None,
                 entry_mode: EntryMode(0o100644),
                 id: Sha1(8defe631bc82bf35a53cd25083f85664516f412f),
                 location: "c/tests/test_file_chmod_command.rs",
@@ -651,7 +633,7 @@ mod track_rewrites {
                     ),
                 ),
                 source_id: Sha1(92853cde19b20cadd74113ea3566c87d4def591b),
-                diff: None,
+                similarity: None,
                 entry_mode: EntryMode(0o100644),
                 id: Sha1(92853cde19b20cadd74113ea3566c87d4def591b),
                 location: "c/tests/cli-reference@.md.snap",
@@ -671,7 +653,7 @@ mod track_rewrites {
                     ),
                 ),
                 source_id: Sha1(94f78deb408d181ccea9da574d0e45ac32a98092),
-                diff: None,
+                similarity: None,
                 entry_mode: EntryMode(0o100644),
                 id: Sha1(94f78deb408d181ccea9da574d0e45ac32a98092),
                 location: "c/src/commands/file/chmod.rs",
@@ -691,7 +673,7 @@ mod track_rewrites {
                     ),
                 ),
                 source_id: Sha1(a03b50a8a9c23c68d641b51b7c887ea088cd0d2b),
-                diff: None,
+                similarity: None,
                 entry_mode: EntryMode(0o100644),
                 id: Sha1(a03b50a8a9c23c68d641b51b7c887ea088cd0d2b),
                 location: "c/tests/test_new_command.rs",
@@ -711,7 +693,7 @@ mod track_rewrites {
                     ),
                 ),
                 source_id: Sha1(a0c0340e495fa759c0b705dd46cee322aa0d80c8),
-                diff: None,
+                similarity: None,
                 entry_mode: EntryMode(0o100644),
                 id: Sha1(a0c0340e495fa759c0b705dd46cee322aa0d80c8),
                 location: "c/tests/test_global_opts.rs",
@@ -731,7 +713,7 @@ mod track_rewrites {
                     ),
                 ),
                 source_id: Sha1(ac9ad5761637cd731abe1bf4a075fedda7bfc61f),
-                diff: None,
+                similarity: None,
                 entry_mode: EntryMode(0o100644),
                 id: Sha1(ac9ad5761637cd731abe1bf4a075fedda7bfc61f),
                 location: "c/tests/test_move_command.rs",
@@ -751,7 +733,7 @@ mod track_rewrites {
                     ),
                 ),
                 source_id: Sha1(b8b29cc0ca0176fafaa97c7421a10ed116bcba8a),
-                diff: None,
+                similarity: None,
                 entry_mode: EntryMode(0o100644),
                 id: Sha1(b8b29cc0ca0176fafaa97c7421a10ed116bcba8a),
                 location: "c/tests/test_unsquash_command.rs",
@@ -771,7 +753,7 @@ mod track_rewrites {
                     ),
                 ),
                 source_id: Sha1(d67f782327ea286136b8532eaf9a509806a87e83),
-                diff: None,
+                similarity: None,
                 entry_mode: EntryMode(0o100644),
                 id: Sha1(d67f782327ea286136b8532eaf9a509806a87e83),
                 location: "c/src/commands/file/mod.rs",
@@ -791,7 +773,7 @@ mod track_rewrites {
                     ),
                 ),
                 source_id: Sha1(e0baefc79038fed0bcf56f2d8c3588a26d5bf985),
-                diff: None,
+                similarity: None,
                 entry_mode: EntryMode(0o100644),
                 id: Sha1(e0baefc79038fed0bcf56f2d8c3588a26d5bf985),
                 location: "c/tests/test_fix_command.rs",
@@ -811,7 +793,7 @@ mod track_rewrites {
                     ),
                 ),
                 source_id: Sha1(e3a9ec4524d27aa7035a38fd7c5db414809623c4),
-                diff: None,
+                similarity: None,
                 entry_mode: EntryMode(0o100644),
                 id: Sha1(e3a9ec4524d27aa7035a38fd7c5db414809623c4),
                 location: "c/src/commands/mod.rs",
@@ -831,7 +813,7 @@ mod track_rewrites {
                     ),
                 ),
                 source_id: Sha1(f414de88468352d59c129d0e7686fb1e1f387929),
-                diff: None,
+                similarity: None,
                 entry_mode: EntryMode(0o40000),
                 id: Sha1(f414de88468352d59c129d0e7686fb1e1f387929),
                 location: "c/src/commands",
@@ -851,7 +833,7 @@ mod track_rewrites {
                     ),
                 ),
                 source_id: Sha1(f644e4c8dd0be6fbe5493b172ce10839bcd9e25c),
-                diff: None,
+                similarity: None,
                 entry_mode: EntryMode(0o100644),
                 id: Sha1(f644e4c8dd0be6fbe5493b172ce10839bcd9e25c),
                 location: "c/tests/test_acls.rs",
@@ -871,7 +853,7 @@ mod track_rewrites {
                     ),
                 ),
                 source_id: Sha1(fd57f61e92d4d49b4920c08c3522c066cb03ecd2),
-                diff: None,
+                similarity: None,
                 entry_mode: EntryMode(0o100644),
                 id: Sha1(fd57f61e92d4d49b4920c08c3522c066cb03ecd2),
                 location: "c/tests/test_diffedit_command.rs",
@@ -891,7 +873,7 @@ mod track_rewrites {
                     ),
                 ),
                 source_id: Sha1(ff1c247d4312adb5b372c6d9ff93fa71846ca527),
-                diff: None,
+                similarity: None,
                 entry_mode: EntryMode(0o100644),
                 id: Sha1(ff1c247d4312adb5b372c6d9ff93fa71846ca527),
                 location: "c/tests/test_squash_command.rs",

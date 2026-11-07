@@ -285,7 +285,7 @@ pub(super) mod function {
                                             dirwalk_entry: entry,
                                             dirwalk_entry_collapsed_directory_status: collapsed_directory_status,
                                             dirwalk_entry_id: id,
-                                            diff: src.diff,
+                                            similarity: src.similarity,
                                             copy: src.kind == gix_diff::rewrites::tracker::visit::SourceKind::Copy,
                                         };
                                         if let Some(v) = entries_for_sorting.as_mut() {
@@ -516,10 +516,6 @@ pub(super) mod function {
                     }),
                 }
                 .unwrap_or(gix_object::tree::EntryKind::Blob.into())
-            }
-
-            fn id_and_entry_mode(&self) -> (&oid, EntryMode) {
-                (self.id(), self.entry_mode())
             }
         }
 
