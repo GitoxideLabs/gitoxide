@@ -197,6 +197,7 @@ mod system_prefix {
 
     #[cfg(windows)]
     #[test]
+    #[serial]
     fn git_launcher_in_cmd_with_unambiguous_subdir() {
         for name in ["clangarm64", "ucrt64", "mingw64", "mingw32"] {
             let root = ExePath::new();
@@ -216,6 +217,7 @@ mod system_prefix {
 
     #[cfg(windows)]
     #[test]
+    #[serial]
     fn git_launcher_elsewhere_is_not_recognized() {
         let root = ExePath::new();
         root.create_subdir("mingw64");
@@ -227,6 +229,7 @@ mod system_prefix {
 
     #[cfg(windows)]
     #[test]
+    #[serial]
     fn git_launcher_with_ambiguous_or_no_subdir() {
         for names in [
             &[][..],

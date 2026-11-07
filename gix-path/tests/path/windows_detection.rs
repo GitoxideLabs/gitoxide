@@ -144,18 +144,44 @@ fn winget_machine_link_chain() -> gix_error::TestResult {
 }
 
 fn linked_installation(bin: &str) -> gix_error::TestResult {
-    let fixture = fixture()?;
+    let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only("windows-git-links.sh")?)?;
+    if !gix_testtools::fixture_has_symlinks(&fixture)? {
+        return Ok(());
+    }
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
     }
-    let _env = select(&fixture.join(bin));
-    assert_native_paths(&fixture.join("conda/Library"), "ucrt64");
+    let bin = fixture.join(bin);
+    assert!(
+        std::fs::symlink_metadata(bin.join("git.exe"))?.file_type().is_symlink(),
+        "the selected WinGet entry must be a native link, not a copied executable"
+    );
+    let _env = select(&bin);
+    assert_native_paths(&fixture.join("native"), "ucrt64");
     Ok(())
 }
 
 #[test]
 fn symlink_location_does_not_override_unknown_target_layout() -> gix_error::TestResult {
-    unrecognized_core("symlinked/ucrt64/bin")
+    let fixture = std::path::absolute(gix_testtools::scripted_fixture_read_only("windows-git-links.sh")?)?;
+    if !gix_testtools::fixture_has_symlinks(&fixture)? {
+        return Ok(());
+    }
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let bin = fixture.join("symlinked/ucrt64/bin");
+    assert!(
+        std::fs::symlink_metadata(bin.join("git.exe"))?.file_type().is_symlink(),
+        "the known layout must contain a native link to the unknown target"
+    );
+    let _env = select(&bin);
+    assert_eq!(
+        gix_path::env::core_dir(),
+        None,
+        "an unknown symlink target must be queried instead of using the link's apparent layout"
+    );
+    Ok(())
 }
 
 #[test]

@@ -459,7 +459,6 @@ mod locations {
             } else if cfg!(target_pointer_width = "32") {
                 Self::Is32on32
             } else {
-                assert!(cfg!(target_pointer_width = "64"));
                 Self::Is64on64
             };
             Ok(platform_bitness)
@@ -528,9 +527,8 @@ mod locations {
                 .expect("The `CurrentVersion` registry key exists and allows reading")
                 .get_value::<OsString, _>("ProgramW6432Dir")
                 .map(PathBuf::from)
-                .map_err(|error| {
+                .inspect_err(|error| {
                     assert_eq!(error.kind(), ErrorKind::NotFound);
-                    error
                 })
                 .ok();
 
