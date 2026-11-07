@@ -15,3 +15,5 @@ mod home_dir {
 
 mod env;
 mod util;
+#[cfg(windows)]
+mod windows_detection;
