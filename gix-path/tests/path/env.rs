@@ -450,13 +450,22 @@ mod windows_prefix {
 
     #[test]
     fn prefix_is_the_one_git_reports() -> gix_testtools::TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only("windows-git-installations.sh")?;
         if gix_testtools::run_in_isolated_process()? {
             return Ok(());
         }
         let _env = gix_testtools::Env::new().unset("EXEPATH").unset("GIT_EXEC_PATH");
         let spelled_alike = |path: &std::path::Path| path.to_string_lossy().to_lowercase().replace('/', "\\");
-        let from_git = gix_path::env::core_dir()
-            .and_then(|core_dir| core_dir.ancestors().nth(2))
+        let reported = gix_testtools::git(&fixture, "--exec-path")?;
+        let core_dir = std::path::Path::new(reported.trim_end());
+        assert_eq!(
+            spelled_alike(gix_path::env::core_dir().expect("Git's core directory is found")),
+            spelled_alike(core_dir),
+            "inferred core directories must agree with an actual Git query"
+        );
+        let from_git = core_dir
+            .ancestors()
+            .nth(2)
             .expect("Git for Windows reports `<prefix>/libexec/git-core`");
         let prefix = gix_path::env::system_prefix().expect("a Git installation is present");
         assert_eq!(
