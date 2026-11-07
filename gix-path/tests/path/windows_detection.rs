@@ -6,6 +6,19 @@ fn fixture() -> gix_error::TestResult<PathBuf> {
     )?)?)
 }
 
+fn fixture_with_shells() -> gix_error::TestResult<PathBuf> {
+    let (fixture, ()) = gix_testtools::scripted_fixture_read_only_with_post("windows-git-layouts.sh", 1, |fixture| {
+        if let gix_testtools::FixtureState::Uninitialized(root) = fixture {
+            // Distinct shell markers expose accidentally reusing EXEPATH for companion discovery.
+            for installation in ["chocolatey/git", "conda/Library"] {
+                std::fs::File::create_new(root.join(installation).join("bin/sh.exe"))?;
+            }
+        }
+        Ok(())
+    })?;
+    Ok(std::path::absolute(fixture)?)
+}
+
 fn select(bin: &Path) -> gix_testtools::Env<'static> {
     gix_testtools::Env::new()
         .unset("EXEPATH")
@@ -73,6 +86,188 @@ fn bin_launcher(directory: &str) -> gix_error::TestResult {
     }
     let _env = select(&root.join("bin"));
     assert_native_paths(&root, "ucrt64");
+    Ok(())
+}
+
+#[test]
+fn native_cmd_configuration_before_core_and_shell() -> gix_error::TestResult {
+    let root = fixture_with_shells()?.join("chocolatey/git");
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _env = select(&root.join("cmd"));
+    assert_eq!(
+        gix_path::env::installation_config(),
+        Some(root.join("etc/gitconfig").as_path()),
+        "configuration can establish the native layout before core or shell discovery"
+    );
+    assert_native_paths(&root, "ucrt64");
+    assert_eq!(
+        Path::new(gix_path::env::shell()),
+        root.join("bin/sh.exe"),
+        "the same native installation supplies the shell"
+    );
+    Ok(())
+}
+
+#[test]
+fn configuration_first_keeps_exepath_separate_from_the_selected_executable() -> gix_error::TestResult {
+    discovery_with_exepath(true)
+}
+
+#[test]
+fn shell_first_keeps_exepath_separate_from_the_selected_executable() -> gix_error::TestResult {
+    discovery_with_exepath(false)
+}
+
+fn discovery_with_exepath(config_first: bool) -> gix_error::TestResult {
+    let fixture = fixture_with_shells()?;
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let selected = fixture.join("chocolatey/git");
+    let hinted = fixture.join("conda/Library");
+    let _env = select(&selected.join("cmd")).set("EXEPATH", hinted.to_str().expect("UTF-8 fixture path"));
+    if config_first {
+        let _ = gix_path::env::installation_config();
+    } else {
+        let _ = gix_path::env::shell();
+    }
+    assert_eq!(
+        gix_path::env::system_prefix(),
+        Some(hinted.join("ucrt64").as_path()),
+        "EXEPATH retains precedence for the system prefix regardless of discovery order"
+    );
+    assert_eq!(
+        gix_path::env::core_dir(),
+        Some(selected.join("ucrt64/libexec/git-core").as_path()),
+        "core discovery follows the selected executable even after configuration discovery"
+    );
+    assert_eq!(
+        gix_path::env::installation_config(),
+        Some(hinted.join("etc/gitconfig").as_path()),
+        "configuration keeps the EXEPATH installation even after shell discovery"
+    );
+    assert_eq!(
+        gix_path::env::system_config(),
+        gix_path::env::installation_config(),
+        "both configuration paths use the hinted installation"
+    );
+    assert_eq!(
+        Path::new(gix_path::env::shell()),
+        selected.join("bin/sh.exe"),
+        "the shell remains associated with the selected executable"
+    );
+    Ok(())
+}
+
+#[test]
+fn exepath_configuration_does_not_bypass_a_core_override() -> gix_error::TestResult {
+    let fixture = fixture_with_shells()?;
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let hinted = fixture.join("conda/Library");
+    let _env = select(&fixture.join("chocolatey/git/cmd"))
+        .set("EXEPATH", hinted.to_str().expect("UTF-8 fixture path"))
+        .set("GIT_EXEC_PATH", "custom/git-core");
+    assert_eq!(
+        gix_path::env::installation_config(),
+        Some(hinted.join("etc/gitconfig").as_path()),
+        "a valid EXEPATH still supplies configuration when GIT_EXEC_PATH is overridden"
+    );
+    assert_eq!(
+        gix_path::env::system_prefix(),
+        Some(hinted.join("ucrt64").as_path()),
+        "EXEPATH retains precedence over the core override for prefix discovery"
+    );
+    assert_eq!(
+        gix_path::env::core_dir(),
+        None,
+        "the core override requires querying the nonlaunchable selected executable"
+    );
+    assert_eq!(
+        Path::new(gix_path::env::shell()),
+        Path::new("sh.exe"),
+        "EXEPATH cannot supply a shell when the overridden core cannot be established"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_known_native_prefix_does_not_hide_a_later_core_override() -> gix_error::TestResult {
+    let root = fixture_with_shells()?.join("chocolatey/git");
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _env = select(&root.join("cmd"));
+    assert_eq!(
+        gix_path::env::system_prefix(),
+        Some(root.join("ucrt64").as_path()),
+        "the native layout is known before another API observes the override"
+    );
+    let _override = gix_testtools::Env::new().set("GIT_EXEC_PATH", "custom/git-core");
+    assert_eq!(
+        gix_path::env::core_dir(),
+        None,
+        "a later core lookup must honor its override even when the native layout is already known"
+    );
+    assert_eq!(
+        gix_path::env::installation_config(),
+        None,
+        "without EXEPATH, the override also prevents inferring configuration from the known layout"
+    );
+    assert_eq!(
+        Path::new(gix_path::env::shell()),
+        Path::new("sh.exe"),
+        "a known prefix cannot bypass the overridden core when locating the shell"
+    );
+    Ok(())
+}
+
+#[test]
+fn configuration_discovery_does_not_snapshot_exepath_for_prefix() -> gix_error::TestResult {
+    let fixture = fixture()?;
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let selected = fixture.join("chocolatey/git");
+    let hinted = fixture.join("conda/Library");
+    let _env = select(&selected.join("cmd"));
+    assert_eq!(
+        gix_path::env::installation_config(),
+        Some(selected.join("etc/gitconfig").as_path()),
+        "configuration uses the selected executable while EXEPATH is unset"
+    );
+    let _exepath = gix_testtools::Env::new().set("EXEPATH", hinted.to_str().expect("UTF-8 fixture path"));
+    assert_eq!(
+        gix_path::env::system_prefix(),
+        Some(hinted.join("ucrt64").as_path()),
+        "the first prefix lookup observes EXEPATH set after configuration discovery"
+    );
+    Ok(())
+}
+
+#[test]
+fn prefix_discovery_does_not_snapshot_exepath_for_configuration() -> gix_error::TestResult {
+    let fixture = fixture()?;
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let selected = fixture.join("chocolatey/git");
+    let hinted = fixture.join("conda/Library");
+    let _env = select(&selected.join("cmd")).set("EXEPATH", selected.to_str().expect("UTF-8 fixture path"));
+    assert_eq!(
+        gix_path::env::system_prefix(),
+        Some(selected.join("ucrt64").as_path()),
+        "prefix discovery observes the original EXEPATH installation"
+    );
+    let _exepath = gix_testtools::Env::new().set("EXEPATH", hinted.to_str().expect("UTF-8 fixture path"));
+    assert_eq!(
+        gix_path::env::installation_config(),
+        Some(hinted.join("etc/gitconfig").as_path()),
+        "the first configuration lookup observes EXEPATH changed after prefix discovery"
+    );
     Ok(())
 }
 

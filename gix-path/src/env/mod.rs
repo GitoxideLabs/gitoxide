@@ -20,6 +20,7 @@ mod git;
 /// This can invoke the Git binary, which is slow on Windows. An unambiguous Git for Windows
 /// installation identified by `EXEPATH`, or by `git.exe` in its `cmd` or `bin` directories,
 /// avoids that invocation when its modern configuration file exists.
+/// Prefixes derived from the selected executable are shared with core-directory, prefix, and shell discovery.
 /// Registered MSYS2 Git packages use their known configuration path, translated by `cygpath`.
 pub fn installation_config() -> Option<&'static Path> {
     git::install_config_path().and_then(|p| crate::from_byte_slice(p).ok())
@@ -330,14 +331,18 @@ fn unambiguous_runtime_prefix(root: &Path) -> Option<PathBuf> {
 
 /// Return the system prefix if it can be told from the environment, which is much faster than running Git.
 fn system_prefix_without_running_git() -> Option<PathBuf> {
-    system_prefix_from_exepath_var(|key| std::env::var_os(key)).or_else(system_prefix_from_git_in_path)
+    // Read EXEPATH when each public API first needs it, independently of the cached executable.
+    system_prefix_from_exepath_var(|key| std::env::var_os(key))
+        .or_else(|| system_prefix_from_git_in_path().map(ToOwned::to_owned))
 }
 
-fn system_prefix_from_git_in_path() -> Option<PathBuf> {
+fn system_prefix_from_git_in_path() -> Option<&'static Path> {
     // Git reports `GIT_EXEC_PATH` as its own location, which the executable's location can't tell.
     #[cfg(windows)]
     if std::env::var_os("GIT_EXEC_PATH").is_none() {
-        return system_prefix_from_git_executable(git::exe_path()?);
+        static PREFIX: LazyLock<Option<PathBuf>> =
+            LazyLock::new(|| system_prefix_from_git_executable(git::exe_path()?));
+        return PREFIX.as_deref();
     }
     None
 }
