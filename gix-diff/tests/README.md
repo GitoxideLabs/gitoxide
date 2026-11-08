@@ -6,7 +6,7 @@ It sorts records, so it checks matching decisions rather than callback order. Pr
 the full-precision arithmetic. Cases cover exact-match ranking and its candidate cap, unique basenames,
 the four-candidate matrix (including below-threshold candidates that affect tie order), byte-span scoring
 for text and binary files, copy sources, thresholds and limits. Separate tree/index Git baselines verify
-original copy-source IDs, modes and indices, and that directory shortcuts preserve file matching decisions.
+original copy-source IDs, modes and indices, and that directory inference follows completed file matches.
 No developer checkout is used as a test repository.
 
 ```shell
@@ -15,8 +15,9 @@ GIX_TEST_IGNORE_ARCHIVES=1 GIX_TEST_FIXTURE_HASH=sha256 cargo test -p gix-diff
 ```
 
 Git versions predating its unterminated-span fix skip that one live comparison; the private scoring tests
-always check the corrected behavior. Cancellation, separate rename/copy thresholds and directory relations
-are tested as extensions of the tracker API.
+always check the corrected behavior. Cancellation and separate rename/copy thresholds are tested as
+extensions of the tracker API. Directory inference and its cancellation are tested through tree diffs;
+the generic tracker accepts only leaves and applies `track_empty` independently of directory membership.
 
 Rewrite events retain optional IDs: unavailable IDs cannot match exactly, but present worktree content can match by similarity.
 They report `similarity: Option<rewrites::Similarity>` without computing line diffs. The score
@@ -26,7 +27,8 @@ Callers that need line counts can request them with `gix`'s `change.diff(&mut ca
 the returned `DiffLineStats` contains line counts only and follows normal blob-diff size limits.
 
 The rewrite benchmarks assert their expected matches and cover exact renames, repeated identical content,
-similarity with and without matching basenames, edited binary files, copy reuse and renamed directories.
+similarity with and without matching basenames, edited binary files and copy reuse. The directory scenario
+uses the tree-diff API to exercise inference from unchanged children of edited directories.
 For a local before/after comparison, run on each implementation respectively:
 
 ```shell

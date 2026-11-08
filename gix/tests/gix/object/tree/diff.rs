@@ -445,206 +445,6 @@ mod track_rewrites {
         insta::assert_debug_snapshot!(actual, @r#"
         [
             Rewrite {
-                source_location: "cli",
-                source_entry_mode: EntryMode(0o40000),
-                source_relation: Some(
-                    Parent(
-                        2,
-                    ),
-                ),
-                source_id: Sha1(f203064a6a81df47498fb415a2064a8ec568ed67),
-                similarity: None,
-                entry_mode: EntryMode(0o40000),
-                id: Sha1(f203064a6a81df47498fb415a2064a8ec568ed67),
-                location: "c",
-                relation: Some(
-                    Parent(
-                        1,
-                    ),
-                ),
-                copy: false,
-            },
-            Rewrite {
-                source_location: "cli/src/commands/file/print.rs",
-                source_entry_mode: EntryMode(0o100644),
-                source_relation: Some(
-                    ChildOfParent(
-                        2,
-                    ),
-                ),
-                source_id: Sha1(081093be2ba0d2be62d14363f43859355bee2aa2),
-                similarity: None,
-                entry_mode: EntryMode(0o100644),
-                id: Sha1(081093be2ba0d2be62d14363f43859355bee2aa2),
-                location: "c/src/commands/file/print.rs",
-                relation: Some(
-                    ChildOfParent(
-                        1,
-                    ),
-                ),
-                copy: false,
-            },
-            Rewrite {
-                source_location: "cli/src/commands/file",
-                source_entry_mode: EntryMode(0o40000),
-                source_relation: Some(
-                    ChildOfParent(
-                        2,
-                    ),
-                ),
-                source_id: Sha1(0f3bc154b577b84fb5ce31383e25acc99c2f24a5),
-                similarity: None,
-                entry_mode: EntryMode(0o40000),
-                id: Sha1(0f3bc154b577b84fb5ce31383e25acc99c2f24a5),
-                location: "c/src/commands/file",
-                relation: Some(
-                    ChildOfParent(
-                        1,
-                    ),
-                ),
-                copy: false,
-            },
-            Rewrite {
-                source_location: "cli/tests",
-                source_entry_mode: EntryMode(0o40000),
-                source_relation: Some(
-                    ChildOfParent(
-                        2,
-                    ),
-                ),
-                source_id: Sha1(17be3b367831653883a36a2f2a8dea418b8d96b7),
-                similarity: None,
-                entry_mode: EntryMode(0o40000),
-                id: Sha1(17be3b367831653883a36a2f2a8dea418b8d96b7),
-                location: "c/tests",
-                relation: Some(
-                    ChildOfParent(
-                        1,
-                    ),
-                ),
-                copy: false,
-            },
-            Rewrite {
-                source_location: "cli/tests/test_immutable_commits.rs",
-                source_entry_mode: EntryMode(0o100644),
-                source_relation: Some(
-                    ChildOfParent(
-                        2,
-                    ),
-                ),
-                source_id: Sha1(3d7598b4e4c570eef701f40853ef3e3b0fb224f7),
-                similarity: None,
-                entry_mode: EntryMode(0o100644),
-                id: Sha1(3d7598b4e4c570eef701f40853ef3e3b0fb224f7),
-                location: "c/tests/test_immutable_commits.rs",
-                relation: Some(
-                    ChildOfParent(
-                        1,
-                    ),
-                ),
-                copy: false,
-            },
-            Rewrite {
-                source_location: "cli/tests/test_file_print_command.rs",
-                source_entry_mode: EntryMode(0o100644),
-                source_relation: Some(
-                    ChildOfParent(
-                        2,
-                    ),
-                ),
-                source_id: Sha1(45bb2cf6b7fa96a39c95301f619ca3e4cc3eb0f3),
-                similarity: None,
-                entry_mode: EntryMode(0o100644),
-                id: Sha1(45bb2cf6b7fa96a39c95301f619ca3e4cc3eb0f3),
-                location: "c/tests/test_file_print_command.rs",
-                relation: Some(
-                    ChildOfParent(
-                        1,
-                    ),
-                ),
-                copy: false,
-            },
-            Rewrite {
-                source_location: "cli/tests/runner.rs",
-                source_entry_mode: EntryMode(0o100644),
-                source_relation: Some(
-                    ChildOfParent(
-                        2,
-                    ),
-                ),
-                source_id: Sha1(5253f0ff160e8b7001a7bd271ca4a07968ff81a3),
-                similarity: None,
-                entry_mode: EntryMode(0o100644),
-                id: Sha1(5253f0ff160e8b7001a7bd271ca4a07968ff81a3),
-                location: "c/tests/runner.rs",
-                relation: Some(
-                    ChildOfParent(
-                        1,
-                    ),
-                ),
-                copy: false,
-            },
-            Rewrite {
-                source_location: "cli/src",
-                source_entry_mode: EntryMode(0o40000),
-                source_relation: Some(
-                    ChildOfParent(
-                        2,
-                    ),
-                ),
-                source_id: Sha1(80e5b08f25f75c2050afbcb794e8434f4cf082f1),
-                similarity: None,
-                entry_mode: EntryMode(0o40000),
-                id: Sha1(80e5b08f25f75c2050afbcb794e8434f4cf082f1),
-                location: "c/src",
-                relation: Some(
-                    ChildOfParent(
-                        1,
-                    ),
-                ),
-                copy: false,
-            },
-            Rewrite {
-                source_location: "cli/tests/test_file_chmod_command.rs",
-                source_entry_mode: EntryMode(0o100644),
-                source_relation: Some(
-                    ChildOfParent(
-                        2,
-                    ),
-                ),
-                source_id: Sha1(8defe631bc82bf35a53cd25083f85664516f412f),
-                similarity: None,
-                entry_mode: EntryMode(0o100644),
-                id: Sha1(8defe631bc82bf35a53cd25083f85664516f412f),
-                location: "c/tests/test_file_chmod_command.rs",
-                relation: Some(
-                    ChildOfParent(
-                        1,
-                    ),
-                ),
-                copy: false,
-            },
-            Rewrite {
-                source_location: "cli/tests/cli-reference@.md.snap",
-                source_entry_mode: EntryMode(0o100644),
-                source_relation: Some(
-                    ChildOfParent(
-                        2,
-                    ),
-                ),
-                source_id: Sha1(92853cde19b20cadd74113ea3566c87d4def591b),
-                similarity: None,
-                entry_mode: EntryMode(0o100644),
-                id: Sha1(92853cde19b20cadd74113ea3566c87d4def591b),
-                location: "c/tests/cli-reference@.md.snap",
-                relation: Some(
-                    ChildOfParent(
-                        1,
-                    ),
-                ),
-                copy: false,
-            },
-            Rewrite {
                 source_location: "cli/src/commands/file/chmod.rs",
                 source_entry_mode: EntryMode(0o100644),
                 source_relation: Some(
@@ -657,86 +457,6 @@ mod track_rewrites {
                 entry_mode: EntryMode(0o100644),
                 id: Sha1(94f78deb408d181ccea9da574d0e45ac32a98092),
                 location: "c/src/commands/file/chmod.rs",
-                relation: Some(
-                    ChildOfParent(
-                        1,
-                    ),
-                ),
-                copy: false,
-            },
-            Rewrite {
-                source_location: "cli/tests/test_new_command.rs",
-                source_entry_mode: EntryMode(0o100644),
-                source_relation: Some(
-                    ChildOfParent(
-                        2,
-                    ),
-                ),
-                source_id: Sha1(a03b50a8a9c23c68d641b51b7c887ea088cd0d2b),
-                similarity: None,
-                entry_mode: EntryMode(0o100644),
-                id: Sha1(a03b50a8a9c23c68d641b51b7c887ea088cd0d2b),
-                location: "c/tests/test_new_command.rs",
-                relation: Some(
-                    ChildOfParent(
-                        1,
-                    ),
-                ),
-                copy: false,
-            },
-            Rewrite {
-                source_location: "cli/tests/test_global_opts.rs",
-                source_entry_mode: EntryMode(0o100644),
-                source_relation: Some(
-                    ChildOfParent(
-                        2,
-                    ),
-                ),
-                source_id: Sha1(a0c0340e495fa759c0b705dd46cee322aa0d80c8),
-                similarity: None,
-                entry_mode: EntryMode(0o100644),
-                id: Sha1(a0c0340e495fa759c0b705dd46cee322aa0d80c8),
-                location: "c/tests/test_global_opts.rs",
-                relation: Some(
-                    ChildOfParent(
-                        1,
-                    ),
-                ),
-                copy: false,
-            },
-            Rewrite {
-                source_location: "cli/tests/test_move_command.rs",
-                source_entry_mode: EntryMode(0o100644),
-                source_relation: Some(
-                    ChildOfParent(
-                        2,
-                    ),
-                ),
-                source_id: Sha1(ac9ad5761637cd731abe1bf4a075fedda7bfc61f),
-                similarity: None,
-                entry_mode: EntryMode(0o100644),
-                id: Sha1(ac9ad5761637cd731abe1bf4a075fedda7bfc61f),
-                location: "c/tests/test_move_command.rs",
-                relation: Some(
-                    ChildOfParent(
-                        1,
-                    ),
-                ),
-                copy: false,
-            },
-            Rewrite {
-                source_location: "cli/tests/test_unsquash_command.rs",
-                source_entry_mode: EntryMode(0o100644),
-                source_relation: Some(
-                    ChildOfParent(
-                        2,
-                    ),
-                ),
-                source_id: Sha1(b8b29cc0ca0176fafaa97c7421a10ed116bcba8a),
-                similarity: None,
-                entry_mode: EntryMode(0o100644),
-                id: Sha1(b8b29cc0ca0176fafaa97c7421a10ed116bcba8a),
-                location: "c/tests/test_unsquash_command.rs",
                 relation: Some(
                     ChildOfParent(
                         1,
@@ -765,18 +485,18 @@ mod track_rewrites {
                 copy: false,
             },
             Rewrite {
-                source_location: "cli/tests/test_fix_command.rs",
+                source_location: "cli/src/commands/file/print.rs",
                 source_entry_mode: EntryMode(0o100644),
                 source_relation: Some(
                     ChildOfParent(
                         2,
                     ),
                 ),
-                source_id: Sha1(e0baefc79038fed0bcf56f2d8c3588a26d5bf985),
+                source_id: Sha1(081093be2ba0d2be62d14363f43859355bee2aa2),
                 similarity: None,
                 entry_mode: EntryMode(0o100644),
-                id: Sha1(e0baefc79038fed0bcf56f2d8c3588a26d5bf985),
-                location: "c/tests/test_fix_command.rs",
+                id: Sha1(081093be2ba0d2be62d14363f43859355bee2aa2),
+                location: "c/src/commands/file/print.rs",
                 relation: Some(
                     ChildOfParent(
                         1,
@@ -805,18 +525,38 @@ mod track_rewrites {
                 copy: false,
             },
             Rewrite {
-                source_location: "cli/src/commands",
-                source_entry_mode: EntryMode(0o40000),
+                source_location: "cli/tests/cli-reference@.md.snap",
+                source_entry_mode: EntryMode(0o100644),
                 source_relation: Some(
                     ChildOfParent(
                         2,
                     ),
                 ),
-                source_id: Sha1(f414de88468352d59c129d0e7686fb1e1f387929),
+                source_id: Sha1(92853cde19b20cadd74113ea3566c87d4def591b),
                 similarity: None,
-                entry_mode: EntryMode(0o40000),
-                id: Sha1(f414de88468352d59c129d0e7686fb1e1f387929),
-                location: "c/src/commands",
+                entry_mode: EntryMode(0o100644),
+                id: Sha1(92853cde19b20cadd74113ea3566c87d4def591b),
+                location: "c/tests/cli-reference@.md.snap",
+                relation: Some(
+                    ChildOfParent(
+                        1,
+                    ),
+                ),
+                copy: false,
+            },
+            Rewrite {
+                source_location: "cli/tests/runner.rs",
+                source_entry_mode: EntryMode(0o100644),
+                source_relation: Some(
+                    ChildOfParent(
+                        2,
+                    ),
+                ),
+                source_id: Sha1(5253f0ff160e8b7001a7bd271ca4a07968ff81a3),
+                similarity: None,
+                entry_mode: EntryMode(0o100644),
+                id: Sha1(5253f0ff160e8b7001a7bd271ca4a07968ff81a3),
+                location: "c/tests/runner.rs",
                 relation: Some(
                     ChildOfParent(
                         1,
@@ -865,6 +605,146 @@ mod track_rewrites {
                 copy: false,
             },
             Rewrite {
+                source_location: "cli/tests/test_file_chmod_command.rs",
+                source_entry_mode: EntryMode(0o100644),
+                source_relation: Some(
+                    ChildOfParent(
+                        2,
+                    ),
+                ),
+                source_id: Sha1(8defe631bc82bf35a53cd25083f85664516f412f),
+                similarity: None,
+                entry_mode: EntryMode(0o100644),
+                id: Sha1(8defe631bc82bf35a53cd25083f85664516f412f),
+                location: "c/tests/test_file_chmod_command.rs",
+                relation: Some(
+                    ChildOfParent(
+                        1,
+                    ),
+                ),
+                copy: false,
+            },
+            Rewrite {
+                source_location: "cli/tests/test_file_print_command.rs",
+                source_entry_mode: EntryMode(0o100644),
+                source_relation: Some(
+                    ChildOfParent(
+                        2,
+                    ),
+                ),
+                source_id: Sha1(45bb2cf6b7fa96a39c95301f619ca3e4cc3eb0f3),
+                similarity: None,
+                entry_mode: EntryMode(0o100644),
+                id: Sha1(45bb2cf6b7fa96a39c95301f619ca3e4cc3eb0f3),
+                location: "c/tests/test_file_print_command.rs",
+                relation: Some(
+                    ChildOfParent(
+                        1,
+                    ),
+                ),
+                copy: false,
+            },
+            Rewrite {
+                source_location: "cli/tests/test_fix_command.rs",
+                source_entry_mode: EntryMode(0o100644),
+                source_relation: Some(
+                    ChildOfParent(
+                        2,
+                    ),
+                ),
+                source_id: Sha1(e0baefc79038fed0bcf56f2d8c3588a26d5bf985),
+                similarity: None,
+                entry_mode: EntryMode(0o100644),
+                id: Sha1(e0baefc79038fed0bcf56f2d8c3588a26d5bf985),
+                location: "c/tests/test_fix_command.rs",
+                relation: Some(
+                    ChildOfParent(
+                        1,
+                    ),
+                ),
+                copy: false,
+            },
+            Rewrite {
+                source_location: "cli/tests/test_global_opts.rs",
+                source_entry_mode: EntryMode(0o100644),
+                source_relation: Some(
+                    ChildOfParent(
+                        2,
+                    ),
+                ),
+                source_id: Sha1(a0c0340e495fa759c0b705dd46cee322aa0d80c8),
+                similarity: None,
+                entry_mode: EntryMode(0o100644),
+                id: Sha1(a0c0340e495fa759c0b705dd46cee322aa0d80c8),
+                location: "c/tests/test_global_opts.rs",
+                relation: Some(
+                    ChildOfParent(
+                        1,
+                    ),
+                ),
+                copy: false,
+            },
+            Rewrite {
+                source_location: "cli/tests/test_immutable_commits.rs",
+                source_entry_mode: EntryMode(0o100644),
+                source_relation: Some(
+                    ChildOfParent(
+                        2,
+                    ),
+                ),
+                source_id: Sha1(3d7598b4e4c570eef701f40853ef3e3b0fb224f7),
+                similarity: None,
+                entry_mode: EntryMode(0o100644),
+                id: Sha1(3d7598b4e4c570eef701f40853ef3e3b0fb224f7),
+                location: "c/tests/test_immutable_commits.rs",
+                relation: Some(
+                    ChildOfParent(
+                        1,
+                    ),
+                ),
+                copy: false,
+            },
+            Rewrite {
+                source_location: "cli/tests/test_move_command.rs",
+                source_entry_mode: EntryMode(0o100644),
+                source_relation: Some(
+                    ChildOfParent(
+                        2,
+                    ),
+                ),
+                source_id: Sha1(ac9ad5761637cd731abe1bf4a075fedda7bfc61f),
+                similarity: None,
+                entry_mode: EntryMode(0o100644),
+                id: Sha1(ac9ad5761637cd731abe1bf4a075fedda7bfc61f),
+                location: "c/tests/test_move_command.rs",
+                relation: Some(
+                    ChildOfParent(
+                        1,
+                    ),
+                ),
+                copy: false,
+            },
+            Rewrite {
+                source_location: "cli/tests/test_new_command.rs",
+                source_entry_mode: EntryMode(0o100644),
+                source_relation: Some(
+                    ChildOfParent(
+                        2,
+                    ),
+                ),
+                source_id: Sha1(a03b50a8a9c23c68d641b51b7c887ea088cd0d2b),
+                similarity: None,
+                entry_mode: EntryMode(0o100644),
+                id: Sha1(a03b50a8a9c23c68d641b51b7c887ea088cd0d2b),
+                location: "c/tests/test_new_command.rs",
+                relation: Some(
+                    ChildOfParent(
+                        1,
+                    ),
+                ),
+                copy: false,
+            },
+            Rewrite {
                 source_location: "cli/tests/test_squash_command.rs",
                 source_entry_mode: EntryMode(0o100644),
                 source_relation: Some(
@@ -877,6 +757,126 @@ mod track_rewrites {
                 entry_mode: EntryMode(0o100644),
                 id: Sha1(ff1c247d4312adb5b372c6d9ff93fa71846ca527),
                 location: "c/tests/test_squash_command.rs",
+                relation: Some(
+                    ChildOfParent(
+                        1,
+                    ),
+                ),
+                copy: false,
+            },
+            Rewrite {
+                source_location: "cli/tests/test_unsquash_command.rs",
+                source_entry_mode: EntryMode(0o100644),
+                source_relation: Some(
+                    ChildOfParent(
+                        2,
+                    ),
+                ),
+                source_id: Sha1(b8b29cc0ca0176fafaa97c7421a10ed116bcba8a),
+                similarity: None,
+                entry_mode: EntryMode(0o100644),
+                id: Sha1(b8b29cc0ca0176fafaa97c7421a10ed116bcba8a),
+                location: "c/tests/test_unsquash_command.rs",
+                relation: Some(
+                    ChildOfParent(
+                        1,
+                    ),
+                ),
+                copy: false,
+            },
+            Rewrite {
+                source_location: "cli",
+                source_entry_mode: EntryMode(0o40000),
+                source_relation: Some(
+                    Parent(
+                        2,
+                    ),
+                ),
+                source_id: Sha1(f203064a6a81df47498fb415a2064a8ec568ed67),
+                similarity: None,
+                entry_mode: EntryMode(0o40000),
+                id: Sha1(f203064a6a81df47498fb415a2064a8ec568ed67),
+                location: "c",
+                relation: Some(
+                    Parent(
+                        1,
+                    ),
+                ),
+                copy: false,
+            },
+            Rewrite {
+                source_location: "cli/src",
+                source_entry_mode: EntryMode(0o40000),
+                source_relation: Some(
+                    ChildOfParent(
+                        2,
+                    ),
+                ),
+                source_id: Sha1(80e5b08f25f75c2050afbcb794e8434f4cf082f1),
+                similarity: None,
+                entry_mode: EntryMode(0o40000),
+                id: Sha1(80e5b08f25f75c2050afbcb794e8434f4cf082f1),
+                location: "c/src",
+                relation: Some(
+                    ChildOfParent(
+                        1,
+                    ),
+                ),
+                copy: false,
+            },
+            Rewrite {
+                source_location: "cli/tests",
+                source_entry_mode: EntryMode(0o40000),
+                source_relation: Some(
+                    ChildOfParent(
+                        2,
+                    ),
+                ),
+                source_id: Sha1(17be3b367831653883a36a2f2a8dea418b8d96b7),
+                similarity: None,
+                entry_mode: EntryMode(0o40000),
+                id: Sha1(17be3b367831653883a36a2f2a8dea418b8d96b7),
+                location: "c/tests",
+                relation: Some(
+                    ChildOfParent(
+                        1,
+                    ),
+                ),
+                copy: false,
+            },
+            Rewrite {
+                source_location: "cli/src/commands",
+                source_entry_mode: EntryMode(0o40000),
+                source_relation: Some(
+                    ChildOfParent(
+                        2,
+                    ),
+                ),
+                source_id: Sha1(f414de88468352d59c129d0e7686fb1e1f387929),
+                similarity: None,
+                entry_mode: EntryMode(0o40000),
+                id: Sha1(f414de88468352d59c129d0e7686fb1e1f387929),
+                location: "c/src/commands",
+                relation: Some(
+                    ChildOfParent(
+                        1,
+                    ),
+                ),
+                copy: false,
+            },
+            Rewrite {
+                source_location: "cli/src/commands/file",
+                source_entry_mode: EntryMode(0o40000),
+                source_relation: Some(
+                    ChildOfParent(
+                        2,
+                    ),
+                ),
+                source_id: Sha1(0f3bc154b577b84fb5ce31383e25acc99c2f24a5),
+                similarity: None,
+                entry_mode: EntryMode(0o40000),
+                id: Sha1(0f3bc154b577b84fb5ce31383e25acc99c2f24a5),
+                location: "c/src/commands/file",
                 relation: Some(
                     ChildOfParent(
                         1,

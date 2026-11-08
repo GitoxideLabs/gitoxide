@@ -88,3 +88,72 @@ cp old-a/file new-a/different
 cp old-a/file new-b/file
 git rm -q -rf old-a old-b old-c
 record_after directory-duplicate-sources -M100%
+
+# A split directory follows the destination receiving most finalized file renames,
+# even when another destination sorts first and a winning file also changes name.
+git rm -q -rf .
+mkdir old
+printf 'one\n' >old/one
+printf 'two\n' >old/two
+printf 'three\n' >old/three
+record_before directory-split
+mkdir other winner
+mv old/one winner/renamed
+mv old/two winner/two
+mv old/three other/three
+rmdir old
+record_after directory-split -M100%
+
+# Equal support for two destinations does not establish a directory rename.
+git rm -q -rf .
+mkdir old
+printf 'one\n' >old/one
+printf 'two\n' >old/two
+record_before directory-tie
+mkdir first second
+mv old/one first/one
+mv old/two second/two
+rmdir old
+record_after directory-tie -M100%
+
+# With empty-file tracking disabled, equal tree IDs cannot manufacture leaf renames.
+git rm -q -rf .
+mkdir old
+touch old/empty
+record_before directory-empty
+mv old new
+record_after directory-empty -M100%
+
+# A leaf moving between different nested directories identifies their rename,
+# but does not establish a rename of the roots above them.
+git rm -q -rf .
+mkdir -p old/sub
+printf 'one\n' >old/sub/file
+record_before directory-different-suffix
+mkdir -p new/other
+mv old/sub/file new/other/file
+rmdir old/sub old
+record_after directory-different-suffix -M100%
+
+# An independently renamed exact subtree remains visible alongside its renamed
+# root. The root-level child supports a/ -> b/ despite sub/ -> renamed/ below it.
+git rm -q -rf .
+mkdir -p a/sub
+printf 'nested\n' >a/sub/file
+printf 'root\n' >a/root
+record_before directory-nested
+mkdir b
+mv a/sub b/renamed
+mv a/root b/root
+rmdir a
+record_after directory-nested -M100%
+
+# A removed root may move beneath a newly added root; parent/child relation
+# labels must not restrict the inferred directory source and destination.
+git rm -q -rf .
+mkdir old
+printf 'deeper\n' >old/file
+record_before directory-deeper
+mkdir new
+mv old new/sub
+record_after directory-deeper -M100%

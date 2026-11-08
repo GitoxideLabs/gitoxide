@@ -3,7 +3,7 @@ use gix_error::ErrorExt;
 use gix_error::Result;
 use gix_object::TreeRefIter;
 
-use super::{Action, ChangeRef, Options};
+use super::{Action, ChangeRef, Options, directories::Directories};
 use crate::{rewrites, rewrites::tracker, tree::Error};
 
 /// Call `for_each` repeatedly with all changes that are needed to convert `lhs` to `rhs`.
@@ -22,6 +22,11 @@ use crate::{rewrites, rewrites::tracker, tree::Error};
 ///
 /// `rhs` or `lhs` can be empty to indicate deletion or addition of an entire tree.
 ///
+/// Directory renames are inferred from finalized file renames between deleted and added trees.
+/// Each source directory needs a unique destination with the most renamed children. Renamed files support
+/// their containing directories and ancestors with matching relative directory suffixes.
+/// Directory inference does not affect file matching.
+///
 /// Note that the rewrite outcome is only available if [rewrite-tracking was enabled](Options::rewrites).
 pub fn diff(
     lhs: TreeRefIter<'_>,
@@ -38,11 +43,16 @@ pub fn diff(
 
     let mut delegate = Delegate {
         src_tree: lhs,
-        recorder: crate::tree::Recorder::default().track_location(options.location),
+        recorder: crate::tree::Recorder::default().track_location(if options.rewrites.is_some() {
+            Some(crate::tree::recorder::Location::Path)
+        } else {
+            options.location
+        }),
         visit: for_each,
         location: options.location,
         objects,
         tracked: options.rewrites.map(rewrites::Tracker::new),
+        directories: Directories::default(),
         err: None,
     };
     match crate::tree(lhs, rhs, tree_diff_state, objects, &mut delegate) {
@@ -66,6 +76,7 @@ struct Delegate<'a, 'old, VisitFn, Objects> {
     objects: &'a Objects,
     visit: VisitFn,
     tracked: Option<rewrites::Tracker<crate::tree::visit::Change>>,
+    directories: Directories,
     location: Option<crate::tree::recorder::Location>,
     err: Option<gix_error::Error>,
 }
@@ -75,49 +86,14 @@ where
     Objects: gix_object::FindObjectOrHeader,
     VisitFn: FnMut(ChangeRef<'_>) -> Result<Action>,
 {
-    /// Call `visit` on an attached version of `change`.
+    /// Call `visit` with the requested path representation.
     fn emit_change(
-        change: crate::tree::visit::Change,
-        location: &BStr,
+        change: ChangeRef<'_>,
+        location: Option<crate::tree::recorder::Location>,
         visit: &mut VisitFn,
         stored_err: &mut Option<gix_error::Error>,
     ) -> crate::tree::visit::Action {
-        use crate::tree::visit::Change::*;
-        let change = match change {
-            Addition {
-                entry_mode,
-                oid,
-                relation,
-            } => ChangeRef::Addition {
-                location,
-                relation,
-                entry_mode,
-                id: oid,
-            },
-            Deletion {
-                entry_mode,
-                oid,
-                relation,
-            } => ChangeRef::Deletion {
-                entry_mode,
-                location,
-                relation,
-                id: oid,
-            },
-            Modification {
-                previous_entry_mode,
-                previous_oid,
-                entry_mode,
-                oid,
-            } => ChangeRef::Modification {
-                location,
-                previous_entry_mode,
-                entry_mode,
-                previous_id: previous_oid,
-                id: oid,
-            },
-        };
-        match visit(change) {
+        match visit(change.with_location(location)) {
             Ok(std::ops::ControlFlow::Break(())) => std::ops::ControlFlow::Break(()),
             Ok(std::ops::ControlFlow::Continue(())) => std::ops::ControlFlow::Continue(()),
             Err(err) => {
@@ -131,53 +107,59 @@ where
         &mut self,
         diff_cache: &mut crate::blob::Platform,
     ) -> std::result::Result<Option<rewrites::Outcome>, Error> {
-        use crate::rewrites::tracker::Change as _;
         let tracked = match self.tracked.as_mut() {
             Some(t) => t,
             None => return Ok(None),
         };
 
+        self.directories.index_paths();
+        let mut cancelled = false;
         let outcome = tracked.emit(
-            |dest, source| match source {
-                Some(source) => {
-                    let (oid, mode) = dest.change.oid_and_entry_mode();
-                    let change = ChangeRef::Rewrite {
-                        source_location: source.location,
-                        source_entry_mode: source.entry_mode,
-                        source_id: match source.change {
-                            crate::tree::visit::Change::Modification { previous_oid, .. } => *previous_oid,
-                            change => change.oid_and_entry_mode().0.to_owned(),
-                        },
-                        source_relation: source.change.relation(),
-                        entry_mode: mode,
-                        id: oid.to_owned(),
-                        relation: dest.change.relation(),
-                        similarity: source.similarity,
-                        location: dest.location,
-                        copy: match source.kind {
-                            tracker::visit::SourceKind::Rename => false,
-                            tracker::visit::SourceKind::Copy => true,
-                        },
-                    };
-                    match (self.visit)(change) {
-                        Ok(std::ops::ControlFlow::Break(())) => std::ops::ControlFlow::Break(()),
-                        Ok(std::ops::ControlFlow::Continue(())) => std::ops::ControlFlow::Continue(()),
-                        Err(err) => {
-                            self.err = Some(err);
-                            std::ops::ControlFlow::Break(())
+            |dest, source| {
+                let change = match source {
+                    Some(source) => {
+                        if source.kind == tracker::visit::SourceKind::Rename {
+                            self.directories.record_rename(source.location, dest.location);
+                        }
+                        let (oid, mode) = dest.change.oid_and_entry_mode();
+                        ChangeRef::Rewrite {
+                            source_location: source.location,
+                            source_entry_mode: source.entry_mode,
+                            source_id: match source.change {
+                                crate::tree::visit::Change::Modification { previous_oid, .. } => *previous_oid,
+                                change => change.oid_and_entry_mode().0.to_owned(),
+                            },
+                            source_relation: source.change.relation(),
+                            entry_mode: mode,
+                            id: oid.to_owned(),
+                            relation: dest.change.relation(),
+                            similarity: source.similarity,
+                            location: dest.location,
+                            copy: match source.kind {
+                                tracker::visit::SourceKind::Rename => false,
+                                tracker::visit::SourceKind::Copy => true,
+                            },
                         }
                     }
-                }
-                None => Self::emit_change(dest.change, dest.location, &mut self.visit, &mut self.err),
+                    None => ChangeRef::from_tree_change(&dest.change, dest.location),
+                };
+                let action = Self::emit_change(change, self.location, &mut self.visit, &mut self.err);
+                cancelled = action.is_break();
+                action
             },
             diff_cache,
             self.objects,
             |push| {
-                let mut delegate = tree_to_changes::Delegate::new(push, self.location);
+                let mut delegate = tree_to_changes::Delegate::new(push, Some(crate::tree::recorder::Location::Path));
                 let state = gix_traverse::tree::breadthfirst::State::default();
                 gix_traverse::tree::breadthfirst(self.src_tree, state, self.objects, &mut delegate)
             },
         )?;
+        if !cancelled {
+            let _ = self
+                .directories
+                .emit(|change| Self::emit_change(change, self.location, &mut self.visit, &mut self.err));
+        }
         Ok(Some(outcome))
     }
 }
@@ -204,14 +186,26 @@ where
     }
 
     fn visit(&mut self, change: crate::tree::visit::Change) -> crate::tree::visit::Action {
-        match self.tracked.as_mut() {
-            Some(tracked) => tracked
-                .try_push_change(change, self.recorder.path())
-                .map_or(std::ops::ControlFlow::Continue(()), |change| {
-                    Self::emit_change(change, self.recorder.path(), &mut self.visit, &mut self.err)
-                }),
-            None => Self::emit_change(change, self.recorder.path(), &mut self.visit, &mut self.err),
-        }
+        let change = match self.tracked.as_mut() {
+            Some(_) if change.entry_mode().is_tree() => {
+                if !matches!(change, crate::tree::visit::Change::Modification { .. }) {
+                    self.directories.push(change, self.recorder.path());
+                    return std::ops::ControlFlow::Continue(());
+                }
+                change
+            }
+            Some(tracked) => match tracked.try_push_change(change, self.recorder.path()) {
+                Some(change) => change,
+                None => return std::ops::ControlFlow::Continue(()),
+            },
+            None => change,
+        };
+        Self::emit_change(
+            ChangeRef::from_tree_change(&change, self.recorder.path()),
+            self.location,
+            &mut self.visit,
+            &mut self.err,
+        )
     }
 }
 

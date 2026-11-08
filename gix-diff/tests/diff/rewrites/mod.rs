@@ -1,9 +1,6 @@
 use std::sync::LazyLock;
 
-use gix_diff::{
-    rewrites::tracker::ChangeKind,
-    tree::visit::{ChangeId, Relation},
-};
+use gix_diff::rewrites::tracker::ChangeKind;
 use gix_hash::{ObjectId, oid};
 use gix_object::tree::{EntryKind, EntryMode};
 
@@ -37,16 +34,11 @@ pub struct Change {
     id: ObjectId,
     kind: ChangeKind,
     mode: EntryMode,
-    relation: Option<Relation>,
 }
 
 impl gix_diff::rewrites::tracker::Change for Change {
     fn id(&self) -> Option<&oid> {
         (!self.id.is_null()).then_some(self.id.as_ref())
-    }
-
-    fn relation(&self) -> Option<Relation> {
-        self.relation
     }
 
     fn kind(&self) -> ChangeKind {
@@ -68,7 +60,6 @@ impl Change {
             id: *ID,
             kind: ChangeKind::Modification,
             mode: EntryKind::Blob.into(),
-            relation: None,
         }
     }
     fn deletion() -> Self {
@@ -76,7 +67,6 @@ impl Change {
             id: *ID,
             kind: ChangeKind::Deletion,
             mode: EntryKind::Blob.into(),
-            relation: None,
         }
     }
     fn addition() -> Self {
@@ -84,43 +74,6 @@ impl Change {
             id: *ID,
             kind: ChangeKind::Addition,
             mode: EntryKind::Blob.into(),
-            relation: None,
-        }
-    }
-
-    fn addition_in_tree(id: ChangeId) -> Self {
-        Change {
-            id: *ID,
-            kind: ChangeKind::Addition,
-            mode: EntryKind::Blob.into(),
-            relation: Some(Relation::ChildOfParent(id)),
-        }
-    }
-
-    fn deletion_in_tree(id: ChangeId) -> Self {
-        Change {
-            id: *ID,
-            kind: ChangeKind::Deletion,
-            mode: EntryKind::Blob.into(),
-            relation: Some(Relation::ChildOfParent(id)),
-        }
-    }
-
-    fn tree_addition(id: ChangeId) -> Self {
-        Change {
-            id: *ID,
-            kind: ChangeKind::Addition,
-            mode: EntryKind::Tree.into(),
-            relation: Some(Relation::Parent(id)),
-        }
-    }
-
-    fn tree_deletion(id: ChangeId) -> Self {
-        Change {
-            id: *ID,
-            kind: ChangeKind::Deletion,
-            mode: EntryKind::Tree.into(),
-            relation: Some(Relation::Parent(id)),
         }
     }
 }

@@ -1051,7 +1051,6 @@ git init rename-within-rename
 
   git branch A
   git branch B
-  git branch expected
 
   git checkout A
   write_lines 1 2 3 4 5 >a/x.f
@@ -1064,41 +1063,6 @@ git init rename-within-rename
   write_lines original 1 2 3 4 5 6 >a/sub/y.f
   git mv a/sub a/sub-renamed
   git commit -am "changed all content, renamed a/sub -> a/sub-renamed"
-
-  git checkout expected
-  write_lines 1 2 3 4 5 6 >a/x.f
-  write_lines 1 2 3 4 5 6 >a/sub/y.f
-  cp -Rv a/sub a/sub-renamed
-  git add .
-  git mv a a-renamed
-  git commit -am "we also have duplication just like Git, but we are consistent independently of the side, hence the expectation"
-
-  # We retain both destinations, with conflict stages at the inferred paths
-  # present in the provisional tree, instead of Git's original destinations.
-  rm .git/index
-  git update-index --index-info <<EOF
-100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 2	a-renamed/sub/y.f
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 2	a-renamed/sub/z
-100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 3	a-renamed/sub-renamed/y.f
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 3	a-renamed/sub-renamed/z
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 0	a-renamed/w
-100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 0	a-renamed/x.f
-100644 $(oid 44065282f89b9bd6439ed2e4674721383fd987eb) 1	a/sub/y.f
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 1	a/sub/z
-EOF
-  make_conflict_index rename-within-rename-A-B-deviates
-  rm .git/index
-  git update-index --index-info <<EOF
-100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 3	a-renamed/sub/y.f
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 3	a-renamed/sub/z
-100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 2	a-renamed/sub-renamed/y.f
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 2	a-renamed/sub-renamed/z
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 0	a-renamed/w
-100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 0	a-renamed/x.f
-100644 $(oid 44065282f89b9bd6439ed2e4674721383fd987eb) 1	a/sub/y.f
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 1	a/sub/z
-EOF
-  make_conflict_index rename-within-rename-A-B-deviates-reversed
 )
 
 git init rename-within-rename-2
@@ -1110,7 +1074,6 @@ git init rename-within-rename-2
 
   git branch A
   git branch B
-  git branch expected
 
   git checkout A
   write_lines 1 2 3 4 5 >a/x.f
@@ -1124,26 +1087,6 @@ git init rename-within-rename-2
   write_lines original 1 2 3 4 5 6 >a/sub/y.f
   git mv a/sub a/sub-renamed
   git commit -am "changed all content, renamed a/sub -> a/sub-renamed"
-
-  git checkout expected
-  write_lines 1 2 3 4 5 6 >a/x.f
-  write_lines 1 2 3 4 5 6 >a/sub/y.f
-  git mv a/sub a/sub-renamed
-  git mv a a-renamed
-  git commit -am "tracked both renames, applied all modifications by merge"
-  # Both merge directions yield this tree, so `expected` serves the reversed case as well.
-
-
-  # Both directions produce the same cleanly merged state, and the index is the same as well.
-  rm .git/index
-  git update-index --index-info <<EOF
-100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 0	a-renamed/sub-renamed/y.f
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 0	a-renamed/sub-renamed/z
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 0	a-renamed/w
-100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 0	a-renamed/x.f
-EOF
-  make_conflict_index rename-within-rename-2-A-B-deviates
-  make_conflict_index rename-within-rename-2-A-B-deviates-reversed
 )
 
 git init conflicting-rename
@@ -1168,42 +1111,7 @@ git init conflicting-rename
   git mv a a-different
   git commit -am "changed all content, renamed a -> a-different"
 
-# Git only sees the files with content changes as conflicting, and somehow misses to add the
-# bases of the files without content changes. After all, these also have been renamed into
-# different places which must be a conflict just as much.
-  rm .git/index
-  git update-index --index-info <<EOF
-100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 3	a-different/sub/y.f
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 3	a-different/sub/z
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 3	a-different/w
-100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 3	a-different/x.f
-100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 2	a-renamed/sub/y.f
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 2	a-renamed/sub/z
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 2	a-renamed/w
-100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 2	a-renamed/x.f
-100644 $(oid 44065282f89b9bd6439ed2e4674721383fd987eb) 1	a/sub/y.f
-100644 $(oid 44065282f89b9bd6439ed2e4674721383fd987eb) 1	a/x.f
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 1	a/sub/z
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 1	a/w
-EOF
-  make_conflict_index conflicting-rename-A-B
 
-  rm .git/index
-  git update-index --index-info <<EOF
-100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 2	a-different/sub/y.f
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 2	a-different/sub/z
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 2	a-different/w
-100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 2	a-different/x.f
-100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 3	a-renamed/sub/y.f
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 3	a-renamed/sub/z
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 3	a-renamed/w
-100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 3	a-renamed/x.f
-100644 $(oid 44065282f89b9bd6439ed2e4674721383fd987eb) 1	a/sub/y.f
-100644 $(oid 44065282f89b9bd6439ed2e4674721383fd987eb) 1	a/x.f
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 1	a/sub/z
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 1	a/w
-EOF
-  make_conflict_index conflicting-rename-A-B-reversed
 )
 
 git init conflicting-rename-2
@@ -1228,33 +1136,7 @@ git init conflicting-rename-2
   git mv a/sub a/sub-different
   git commit -am "changed all content, renamed a/sub -> a/sub-different"
 
-# Here it's the same as above, i.e. Git doesn't list files as conflicting if
-# they didn't change, even though they have a conflicting rename.
-  rm .git/index
-  git update-index --index-info <<EOF
-100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 3	a/sub-different/y.f
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 3	a/sub-different/z
-100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 2	a/sub-renamed/y.f
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 2	a/sub-renamed/z
-100644 $(oid 44065282f89b9bd6439ed2e4674721383fd987eb) 1	a/sub/y.f
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 1	a/sub/z
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 0	a/w
-100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 0	a/x.f
-EOF
-  make_conflict_index conflicting-rename-2-A-B
 
-  rm .git/index
-  git update-index --index-info <<EOF
-100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 2	a/sub-different/y.f
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 2	a/sub-different/z
-100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 3	a/sub-renamed/y.f
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 3	a/sub-renamed/z
-100644 $(oid 44065282f89b9bd6439ed2e4674721383fd987eb) 1	a/sub/y.f
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 1	a/sub/z
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 0	a/w
-100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 0	a/x.f
-EOF
-  make_conflict_index conflicting-rename-2-A-B-reversed
 )
 
 git init conflicting-rename-complex
@@ -1280,18 +1162,16 @@ git init conflicting-rename-complex
   git mv tmp a
   git commit -am "change something in subdirectory, then overwrite directory with subdirectory"
 
-  # The merged tree agrees with Git. Directory relations additionally retain
-  # conflict stages for empty `sub/z` and `w`; Git instead stages `z` as conflicting.
+  # The merged tree agrees with Git. The inferred relocation of the added empty
+  # `z` is unconflicted here, whereas Git stages that relocation as conflicting.
   rm .git/index
   git update-index --index-info <<EOF
 100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 2	a-renamed/sub/y.f
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 1	a-renamed/sub/z
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 2	a-renamed/sub/z
+100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 0	a-renamed/sub/z
 100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 3	a-renamed/y.f
 100644 $(oid 44065282f89b9bd6439ed2e4674721383fd987eb) 1	a-renamed/x.f
 100644 $(oid 8a1218a1024a212bb3db30becd860315f9f3ac52) 2	a-renamed/x.f
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 1	a-renamed/w
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 2	a-renamed/w
+100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 0	a-renamed/w
 100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 0	a-renamed/z
 100644 $(oid 44065282f89b9bd6439ed2e4674721383fd987eb) 1	a/sub/y.f
 EOF
@@ -1300,13 +1180,11 @@ EOF
   rm .git/index
   git update-index --index-info <<EOF
 100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 3	a-renamed/sub/y.f
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 1	a-renamed/sub/z
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 3	a-renamed/sub/z
+100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 0	a-renamed/sub/z
 100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 2	a-renamed/y.f
 100644 $(oid 44065282f89b9bd6439ed2e4674721383fd987eb) 1	a-renamed/x.f
 100644 $(oid 8a1218a1024a212bb3db30becd860315f9f3ac52) 3	a-renamed/x.f
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 1	a-renamed/w
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 3	a-renamed/w
+100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 0	a-renamed/w
 100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 0	a-renamed/z
 100644 $(oid 44065282f89b9bd6439ed2e4674721383fd987eb) 1	a/sub/y.f
 EOF
@@ -2305,8 +2183,10 @@ baseline super-1 A-B-diff3 A B
 baseline super-2 A-B A B
 baseline super-2 A-B-diff3 A B
 
-baseline rename-within-rename A-B-deviates A B "Git doesn't detect the rename-nesting, we do neither"
-baseline rename-within-rename-2 A-B-deviates A B "Git keeps the doubly-renamed file in both rename destinations as it doesn't compose nested directory renames - we do, and merge contents cleanly in one place, in both merge directions"
+# Neither side adds a leaf directly under `a`, so the parent move does not
+# relocate the other side's explicit subdirectory rename. Both destinations conflict.
+baseline rename-within-rename A-B-deviates A B
+baseline rename-within-rename-2 A-B-deviates A B
 baseline conflicting-rename A-B A B
 baseline conflicting-rename-2 A-B A B
 baseline conflicting-rename-complex A-B A B
@@ -2490,8 +2370,11 @@ EOF
 )
 
 (cd unrelated-renames-overlapping-destinations
-  # Ancestor rejects the conflicting rename destinations and keeps both base files.
+  # Ancestor rejects the conflicting h/b/a destinations, freeing c for the
+  # independent a/a/a rename. Only the conflicting source stays at its base path.
   git read-tree main
+  git update-index --force-remove a/a/a
+  git update-index --add --cacheinfo "100644,$(git rev-parse B:c),c"
   make_resolve_tree ancestor A B
   make_resolve_tree ancestor B A
 
@@ -2976,11 +2859,14 @@ EOF
 (cd conflicting-rename
   rm .git/index
   # 'A' renames 'a' to 'a-renamed', 'B' renames 'a' to 'a-different'.
-  # All these conflicts are dropped in favor of keeping the 'ancestor' *location*.
+  # Keep the ancestor location for conflicting nonempty files. Empty additions
+  # at both destinations remain regardless of the conflict resolution choice.
   git update-index --index-info <<EOF
 100644 blob $(oid 44065282f89b9bd6439ed2e4674721383fd987eb)	a/sub/y.f
-100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a/sub/z
-100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a/w
+100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a-different/sub/z
+100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a-different/w
+100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a-renamed/sub/z
+100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a-renamed/w
 100644 blob $(oid 44065282f89b9bd6439ed2e4674721383fd987eb)	a/x.f
 EOF
   make_resolve_tree ancestor A B
@@ -2990,6 +2876,8 @@ EOF
   # Much like the ancestor version, except that it applied the 'A' rename,
   # along with its *merged* content.
   git update-index --index-info <<EOF
+100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a-different/sub/z
+100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a-different/w
 100644 blob $(oid b414108e81e5091fe0974a1858b4d0d22b107f70)	a-renamed/sub/y.f
 100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a-renamed/sub/z
 100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a-renamed/w
@@ -2999,6 +2887,8 @@ EOF
   rm .git/index
   # Just like 'A' above, but with the 'B' rename chosen and all the merges.
   git update-index --index-info <<EOF
+100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a-renamed/sub/z
+100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a-renamed/w
 100644 blob $(oid b414108e81e5091fe0974a1858b4d0d22b107f70)	a-different/sub/y.f
 100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a-different/sub/z
 100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a-different/w
@@ -3010,10 +2900,11 @@ EOF
 (cd conflicting-rename-2
   rm .git/index
   # Like 'conflicting-rename', but this one only renames a single sub-directory for very much the same effect.
-  # Thus, keeping the 'ancestor' version is the same as 'main', except for merged content.
+  # Only the nonempty file conflicts; both new empty paths remain for every choice.
   git update-index --index-info <<EOF
 100644 blob $(oid 44065282f89b9bd6439ed2e4674721383fd987eb)	a/sub/y.f
-100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a/sub/z
+100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a/sub-different/z
+100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a/sub-renamed/z
 100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a/w
 100644 blob $(oid b414108e81e5091fe0974a1858b4d0d22b107f70)	a/x.f
 EOF
@@ -3024,6 +2915,7 @@ EOF
   git update-index --index-info <<EOF
 100644 blob $(oid b414108e81e5091fe0974a1858b4d0d22b107f70)	a/sub-renamed/y.f
 100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a/sub-renamed/z
+100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a/sub-different/z
 100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a/w
 100644 blob $(oid b414108e81e5091fe0974a1858b4d0d22b107f70)	a/x.f
 EOF
@@ -3032,6 +2924,7 @@ EOF
   git update-index --index-info <<EOF
 100644 blob $(oid b414108e81e5091fe0974a1858b4d0d22b107f70)	a/sub-different/y.f
 100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a/sub-different/z
+100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a/sub-renamed/z
 100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a/w
 100644 blob $(oid b414108e81e5091fe0974a1858b4d0d22b107f70)	a/x.f
 EOF
@@ -3042,13 +2935,13 @@ EOF
   rm .git/index
   # 'A" renames 'a' to 'a-renamed', but 'B' moves 'a/sub/' up one level, and replaces everything in its wake
   # so its two files are the only ones left.
-  # As result, we actually have one unconflicting change which ends up creating the new directory 'a-renamed',
-  # but everything else is conflicting so it keeps the 'ancestor' version.
+  # Empty additions are unconflicted at their new paths. Conflicting nonempty
+  # files keep their ancestor versions.
   git update-index --index-info <<EOF
 100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a-renamed/z
 100644 blob $(oid 44065282f89b9bd6439ed2e4674721383fd987eb)	a/sub/y.f
-100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a/sub/z
-100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a/w
+100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a-renamed/sub/z
+100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a-renamed/w
 100644 blob $(oid 44065282f89b9bd6439ed2e4674721383fd987eb)	a/x.f
 EOF
   make_resolve_tree ancestor A B
@@ -3069,8 +2962,10 @@ EOF
 
   rm .git/index
   # It applies the merged result of the content, and interestingly also managed to reconcile the rename from 'A'.
-  # However, it also drops all of 'their' conflicting changes in favor of 'ours', a respectable result.
+  # It drops their conflicting changes, while keeping their unconflicted empty additions.
   git update-index --index-info <<EOF
+  100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a-renamed/sub/z
+  100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a-renamed/w
   100644 blob $(oid b414108e81e5091fe0974a1858b4d0d22b107f70)	a-renamed/y.f
   100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a-renamed/z
 EOF
@@ -3332,16 +3227,15 @@ EOF
 (cd rename-within-rename
   # 'A' and 'B' change all content in a mergable manner. 'A' renames 'a' to 'a-renamed',
   # and 'B' renames 'a/sub' to 'a/sub-renamed'.
-  # Ideally, we get both together, but doing so added a lot of complexity so maybe give
-  # that another go and try to keep it simple.
-  # In ancestor mode, only those ancestors of conflicts are kept unchanged, so some renames
-  # go through.
+  # Only nonempty file renames conflict. The empty files remain clean additions
+  # at both destinations under every forced-resolution policy.
   rm .git/index
   git update-index --index-info <<EOF
 100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 0	a-renamed/w
 100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 0	a-renamed/x.f
 100644 $(oid 44065282f89b9bd6439ed2e4674721383fd987eb) 0	a/sub/y.f
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 0	a/sub/z
+100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 0	a-renamed/sub/z
+100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 0	a/sub-renamed/z
 EOF
   make_resolve_tree ancestor A B
   make_resolve_tree ancestor B A
@@ -3351,16 +3245,18 @@ EOF
   git update-index --index-info <<EOF
 100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 0	a-renamed/sub/y.f
 100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 0	a-renamed/sub/z
+100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 0	a/sub-renamed/z
 100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 0	a-renamed/w
 100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 0	a-renamed/x.f
 EOF
   make_resolve_tree ours A B
 
-  # Now ours is the renamed sub-directory, with merges. It can bring everything together even.
+  # Choosing B keeps its explicit subdirectory destination, with merged content.
   rm .git/index
   git update-index --index-info <<EOF
-100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 0	a-renamed/sub-renamed/y.f
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 0	a-renamed/sub-renamed/z
+100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 0	a/sub-renamed/y.f
+100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 0	a/sub-renamed/z
+100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 0	a-renamed/sub/z
 100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 0	a-renamed/w
 100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 0	a-renamed/x.f
 EOF
@@ -3753,3 +3649,88 @@ git init rename-tracker-global-best
   git commit -m "toggle each source mode"
 )
 baseline rename-tracker-global-best A-B A B
+
+# Directory inference uses completed file renames. A unique plurality wins even
+# without an absolute majority; equal destinations must not relocate the new path.
+for case_name in directory-rename-plurality directory-rename-tie; do
+  git init "$case_name"
+  (cd "$case_name"
+    git config merge.directoryRenames true
+    mkdir old
+    for file in one two three four; do
+      write_lines "$file" >"old/$file"
+    done
+    git add . && git commit -m "four distinct files in one directory"
+    git branch A
+    git branch B
+
+    git checkout A
+    mkdir a-first b-second z-last
+    git mv old/one a-first/one
+    if test "$case_name" = directory-rename-plurality; then
+      git mv old/two b-second/two
+    else
+      git mv old/two a-first/two
+    fi
+    git mv old/three old/four z-last/
+    git commit -m "split the directory across destinations"
+
+    git checkout B
+    write_lines added >old/new
+    git add old/new && git commit -m "add a file to the original directory"
+  )
+  baseline "$case_name" A-B A B
+done
+
+# Each removed directory can choose the same destination. Added paths on the
+# other side must follow both source mappings into the combined directory.
+git init directory-renames-combine
+(cd directory-renames-combine
+  git config merge.directoryRenames true
+  mkdir old-a old-b
+  write_lines first >old-a/file-a
+  write_lines second >old-b/file-b
+  git add . && git commit -m "two directories with distinct files"
+  git branch A
+  git branch B
+
+  git checkout A
+  mkdir joined
+  git mv old-a/file-a old-b/file-b joined/
+  git commit -m "combine both directories"
+
+  git checkout B
+  write_lines added-a >old-a/new-a
+  write_lines added-b >old-b/new-b
+  git add . && git commit -m "add a file in each original directory"
+)
+baseline directory-renames-combine A-B A B
+
+# A nested directory keeps its own inferred destination when both its parent and
+# its basename change. New paths from the other side follow the nested move,
+# including when one supporting file was edited during the rename. A direct
+# addition under `a` makes its removed descendants relevant too, so the new
+# `deep` subtree follows the nested mapping even without a direct addition to `a/sub`.
+git init directory-rename-nested
+(cd directory-rename-nested
+  git config merge.directoryRenames true
+  mkdir -p a/sub
+  write_lines unchanged >a/sub/kept
+  write_lines original 1 2 3 4 5 >a/sub/edited
+  git add . && git commit -m "two files in a nested directory"
+  git branch A
+  git branch B
+
+  git checkout A
+  git mv a b
+  git mv b/sub b/renamed
+  write_lines original 1 2 3 4 5 6 >b/renamed/edited
+  git commit -am "move the parent and rename the edited child directory"
+
+  git checkout B
+  write_lines added >a/new
+  mkdir a/sub/deep
+  write_lines deeply-added >a/sub/deep/new
+  git add . && git commit -m "add a root file and a deeper nested file"
+)
+baseline directory-rename-nested A-B A B

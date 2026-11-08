@@ -101,6 +101,19 @@ fn run_baseline() -> TestResult {
         )?
         .tree_merge;
         assert_no_unknown_conflicts(&actual, &case_name);
+        if case_name.starts_with("directory-rename-tie-") {
+            assert!(
+                merge_info
+                    .information
+                    .iter()
+                    .any(|info| matches!(info.kind, baseline::ConflictKind::DirectoryRenameSplit)),
+                "Git reports the tied directory destinations"
+            );
+            assert!(
+                actual.conflicts.is_empty(),
+                "tied destinations currently retain new paths without a directory-split diagnostic"
+            );
+        }
 
         let actual_id = actual.tree.write(|tree| odb.write(tree))?;
         match &deviation {
@@ -233,11 +246,11 @@ fn run_baseline() -> TestResult {
     }
 
     assert_eq!(
-        actual_cases, 293,
+        actual_cases, 301,
         "BUG: update this number, and don't forget to remove a filter in the end"
     );
     assert_eq!(
-        skipped_tree_resolve_cases, 354,
+        skipped_tree_resolve_cases, 370,
         "this is done when no case is skipped, and we don't want to accidentally skip them.\
         Some don't actually have conflicts.\
         The ones we skipped don't have irreconcilable conflicts"

@@ -53,8 +53,8 @@ pub enum ChangeRef<'a> {
         /// The object id after the modification.
         id: gix_hash::ObjectId,
     },
-    /// Entries are considered rewritten if they are not trees and they, according to some understanding of identity, were renamed
-    /// or copied.
+    /// Entries are considered rewritten if they, according to some understanding of identity, were renamed or copied.
+    /// Directory renames are inferred from the completed file renames within deleted and added directories.
     /// In case of renames, this means they originally appeared as [`Deletion`](ChangeRef::Deletion) signalling their source as well as an
     /// [`Addition`](ChangeRef::Addition) acting as destination.
     ///
@@ -149,8 +149,8 @@ pub enum Change {
         /// The object id after the modification.
         id: gix_hash::ObjectId,
     },
-    /// Entries are considered rewritten if they are not trees and they, according to some understanding of identity, were renamed
-    /// or copied.
+    /// Entries are considered rewritten if they, according to some understanding of identity, were renamed or copied.
+    /// Directory renames are inferred from the completed file renames within deleted and added directories.
     /// In case of renames, this means they originally appeared as [`Deletion`](ChangeRef::Deletion) signalling their source as well as an
     /// [`Addition`](ChangeRef::Addition) acting as destination.
     ///
@@ -260,6 +260,63 @@ impl ChangeRef<'_> {
                 copy,
             },
         }
+    }
+}
+
+impl<'a> ChangeRef<'a> {
+    pub(super) fn from_tree_change(change: &tree::visit::Change, location: &'a BStr) -> Self {
+        match *change {
+            tree::visit::Change::Addition {
+                entry_mode,
+                oid,
+                relation,
+            } => Self::Addition {
+                location,
+                relation,
+                entry_mode,
+                id: oid,
+            },
+            tree::visit::Change::Deletion {
+                entry_mode,
+                oid,
+                relation,
+            } => Self::Deletion {
+                entry_mode,
+                location,
+                relation,
+                id: oid,
+            },
+            tree::visit::Change::Modification {
+                previous_entry_mode,
+                previous_oid,
+                entry_mode,
+                oid,
+            } => Self::Modification {
+                location,
+                previous_entry_mode,
+                entry_mode,
+                previous_id: previous_oid,
+                id: oid,
+            },
+        }
+    }
+
+    pub(super) fn with_location(mut self, location: Option<tree::recorder::Location>) -> Self {
+        let project = |path: &'a BStr| match location {
+            None => BStr::new(b""),
+            Some(tree::recorder::Location::FileName) => path.rsplit_str(b"/").next().unwrap_or_default().as_bstr(),
+            Some(tree::recorder::Location::Path) => path,
+        };
+        if let Self::Rewrite { source_location, .. } = &mut self {
+            *source_location = project(source_location);
+        }
+        match &mut self {
+            Self::Addition { location, .. }
+            | Self::Deletion { location, .. }
+            | Self::Modification { location, .. }
+            | Self::Rewrite { location, .. } => *location = project(location),
+        }
+        self
     }
 }
 

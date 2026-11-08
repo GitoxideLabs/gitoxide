@@ -7,7 +7,6 @@ use gix_diff::{
             visit::{Source, SourceKind},
         },
     },
-    tree::visit::Relation,
 };
 use gix_object::tree::EntryKind;
 use gix_testtools::TestResult;
@@ -25,9 +24,6 @@ fn optional_ids_require_content_to_match() -> TestResult {
     impl rewrites::tracker::Change for OptionalId {
         fn id(&self) -> Option<&gix_hash::oid> {
             self.0.as_deref()
-        }
-        fn relation(&self) -> Option<Relation> {
-            None
         }
         fn kind(&self) -> ChangeKind {
             self.1
@@ -82,12 +78,9 @@ fn optional_ids_require_content_to_match() -> TestResult {
 
 #[test]
 fn unavailable_ids_do_not_match() {
-    for mode in [EntryKind::Blob, EntryKind::Link, EntryKind::Commit, EntryKind::Tree] {
+    for mode in [EntryKind::Blob, EntryKind::Link, EntryKind::Commit] {
         for percentage in [None, Some(0.0), Some(0.5)] {
             for source_kind in [ChangeKind::Deletion, ChangeKind::Modification] {
-                if mode == EntryKind::Tree && source_kind == ChangeKind::Modification {
-                    continue;
-                }
                 let mut track = util::new_tracker(Rewrites {
                     percentage,
                     copies: Some(Copies {
@@ -96,12 +89,11 @@ fn unavailable_ids_do_not_match() {
                     }),
                     ..Default::default()
                 });
-                for (kind, path, parent) in [(source_kind, "old", 1), (ChangeKind::Addition, "new", 2)] {
+                for (kind, path) in [(source_kind, "old"), (ChangeKind::Addition, "new")] {
                     let change = Change {
                         id: crate::fixture_hash_kind().null(),
                         kind,
                         mode: mode.into(),
-                        relation: (mode == EntryKind::Tree).then_some(Relation::Parent(parent)),
                     };
                     track.try_push_change(change, path.into());
                 }
@@ -167,75 +159,68 @@ fn unavailable_destination_id_can_match_only_with_available_content() -> TestRes
 fn unavailable_empty_ids_respect_track_empty_and_missing_resources() -> TestResult {
     let root = crate::scripted_fixture_read_only("make_blob_repo.sh")?;
     for track_empty in [false, true] {
-        for child_of_parent in [false, true] {
-            for percentage in [None, Some(0.0), Some(0.5)] {
-                for (old_path, new_path, both_present) in [
-                    ("missing-old", "missing-new", false),
-                    ("missing-old", "empty-new", false),
-                    ("empty-old", "missing-new", false),
-                    ("empty-old", "empty-new", true),
-                ] {
-                    let case = format!(
-                        "{old_path} -> {new_path}, track_empty={track_empty}, child_of_parent={child_of_parent}, percentage={percentage:?}"
-                    );
-                    let mut track = util::new_tracker(Rewrites {
-                        track_empty,
-                        percentage,
-                        ..Default::default()
-                    });
-                    for (kind, path, parent) in
-                        [(ChangeKind::Deletion, old_path, 1), (ChangeKind::Addition, new_path, 2)]
-                    {
-                        assert!(
-                            track
-                                .try_push_change(
-                                    Change {
-                                        id: crate::fixture_hash_kind().null(),
-                                        kind,
-                                        mode: EntryKind::Blob.into(),
-                                        relation: child_of_parent.then_some(Relation::ChildOfParent(parent)),
-                                    },
-                                    path.into(),
-                                )
-                                .is_none(),
-                            "unknown IDs must be retained until their content is available: {case}"
-                        );
-                    }
-                    let mut platform = util::new_platform_no_worktree();
-                    platform.filter.roots.old_root = Some(root.clone());
-                    platform.filter.roots.new_root = Some(root.clone());
-                    let expect_match = both_present && (track_empty || child_of_parent) && percentage.is_some();
-                    let mut emitted = 0;
-                    track.emit(
-                        |destination, source| {
-                            assert_eq!(
-                                source.is_some(),
-                                expect_match,
-                                "empty content needs permission to match; missing content and unknown identity never match: {case}"
-                            );
-                            if let Some(source) = source {
-                                assert_eq!(source.kind, SourceKind::Rename, "content establishes a rename: {case}");
-                                assert_eq!(source.location, old_path, "the empty source is matched: {case}");
-                                assert_eq!(destination.location, new_path, "the empty destination is matched: {case}");
-                                assert_eq!(
-                                    source.similarity.expect("unhashed resources can only match by content"),
-                                    Similarity::from_score(60_000).expect("perfect similarity is valid"),
-                                    "two present empty buffers have finite, perfect similarity: {case}"
-                                );
-                            }
-                            emitted += 1;
-                            std::ops::ControlFlow::Continue(())
-                        },
-                        &mut platform,
-                        &gix_object::find::Never,
-                        |_push| Ok::<_, std::io::Error>(()),
-                    )?;
-                    assert_eq!(
-                        emitted,
-                        if expect_match { 1 } else { 2 },
-                        "unmatched changes must both be emitted: {case}"
+        for percentage in [None, Some(0.0), Some(0.5)] {
+            for (old_path, new_path, both_present) in [
+                ("missing-old", "missing-new", false),
+                ("missing-old", "empty-new", false),
+                ("empty-old", "missing-new", false),
+                ("empty-old", "empty-new", true),
+            ] {
+                let case = format!("{old_path} -> {new_path}, track_empty={track_empty}, percentage={percentage:?}");
+                let mut track = util::new_tracker(Rewrites {
+                    track_empty,
+                    percentage,
+                    ..Default::default()
+                });
+                for (kind, path) in [(ChangeKind::Deletion, old_path), (ChangeKind::Addition, new_path)] {
+                    assert!(
+                        track
+                            .try_push_change(
+                                Change {
+                                    id: crate::fixture_hash_kind().null(),
+                                    kind,
+                                    mode: EntryKind::Blob.into(),
+                                },
+                                path.into(),
+                            )
+                            .is_none(),
+                        "unknown IDs must be retained until their content is available: {case}"
                     );
                 }
+                let mut platform = util::new_platform_no_worktree();
+                platform.filter.roots.old_root = Some(root.clone());
+                platform.filter.roots.new_root = Some(root.clone());
+                let expect_match = both_present && track_empty && percentage.is_some();
+                let mut emitted = 0;
+                track.emit(
+                    |destination, source| {
+                        assert_eq!(
+                            source.is_some(),
+                            expect_match,
+                            "empty content needs permission to match; missing content and unknown identity never match: {case}"
+                        );
+                        if let Some(source) = source {
+                            assert_eq!(source.kind, SourceKind::Rename, "content establishes a rename: {case}");
+                            assert_eq!(source.location, old_path, "the empty source is matched: {case}");
+                            assert_eq!(destination.location, new_path, "the empty destination is matched: {case}");
+                            assert_eq!(
+                                source.similarity.expect("unhashed resources can only match by content"),
+                                Similarity::from_score(60_000).expect("perfect similarity is valid"),
+                                "two present empty buffers have finite, perfect similarity: {case}"
+                            );
+                        }
+                        emitted += 1;
+                        std::ops::ControlFlow::Continue(())
+                    },
+                    &mut platform,
+                    &gix_object::find::Never,
+                    |_push| Ok::<_, std::io::Error>(()),
+                )?;
+                assert_eq!(
+                    emitted,
+                    if expect_match { 1 } else { 2 },
+                    "unmatched changes must both be emitted: {case}"
+                );
             }
         }
     }
@@ -309,7 +294,6 @@ fn gitlinks_are_renamed_only_by_id() {
         id,
         kind,
         mode: EntryKind::Commit.into(),
-        relation: None,
     };
 
     let mut tracker = util::new_tracker(Default::default());
@@ -961,288 +945,24 @@ fn rename_by_similarity_prefers_stronger_match_over_same_filename_match() -> Tes
 }
 
 #[test]
-fn directories_without_relation_are_ignored() -> TestResult {
-    let mut track = util::new_tracker(Default::default());
-    let tree_without_relation = Change {
-        id: *ID,
-        kind: ChangeKind::Deletion,
-        mode: EntryKind::Tree.into(),
-        relation: None,
-    };
-    assert_eq!(
-        track.try_push_change(tree_without_relation, "dir".into()),
-        Some(tree_without_relation),
-        "trees without a relation are ignored"
-    );
-    Ok(())
-}
-
-#[test]
-fn directory_renames_by_id_can_fail_gracefully() -> TestResult {
-    let rename_by_similarity = Rewrites {
-        copies: None,
-        percentage: Some(0.5),
-        limit: 0,
-        track_empty: false,
-    };
-    let mut track = util::new_tracker(rename_by_similarity);
-    let tree_dst_id = 1;
-    let tree_id = hex_to_id(
-        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    );
-    assert!(
-        track
-            .try_push_change(
-                Change {
-                    id: tree_id,
-                    kind: ChangeKind::Addition,
-                    mode: EntryKind::Tree.into(),
-                    relation: Some(Relation::Parent(tree_dst_id)),
-                },
-                "d-renamed".into()
-            )
-            .is_none()
-    );
-
-    let tree_src_id = 3;
-    let tree_id = hex_to_id(
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    );
-    assert!(
-        track
-            .try_push_change(
-                Change {
-                    id: tree_id,
-                    kind: ChangeKind::Addition,
-                    mode: EntryKind::Tree.into(),
-                    relation: Some(Relation::Parent(tree_src_id)),
-                },
-                "d".into()
-            )
-            .is_none()
-    );
-    let odb = util::add_retained_blobs(
-        &mut track,
-        [
-            (Change::deletion_in_tree(tree_src_id), "d/a", "a"),
-            (Change::deletion_in_tree(tree_src_id), "d/c", "c"),
-            (Change::deletion_in_tree(tree_src_id), "d/subdir/d", "d"),
-            (Change::addition_in_tree(tree_dst_id), "d-renamed/a", "a"),
-            (Change::addition_in_tree(tree_dst_id), "d-renamed/subdir/c", "c"),
-            (Change::deletion(), "a", "first\nsecond\n"),
-            (Change::addition(), "b", "firt\nsecond\n"),
-        ],
-    )?;
-
-    let mut calls = 0;
-    let out = util::assert_emit_with_objects(
-        &mut track,
-        |dst, src| {
-            match calls {
-                0..=2 => {
-                    let src = src.unwrap();
-                    let (expected_src, expected_dst) =
-                        &[("a", "b"), ("d/a", "d-renamed/a"), ("d/c", "d-renamed/subdir/c")][calls];
-                    assert_eq!(src.location, expected_src);
-                    assert_eq!(dst.location, expected_dst);
-                }
-                3 => {
-                    assert_eq!(src.unwrap().location, "d");
-                    assert_eq!(
-                        dst.location, "d-renamed",
-                        "it can now track modified and renamed directories"
-                    );
-                }
-                4 => {
-                    assert_eq!(src, None);
-                    assert_eq!(dst.change.kind, ChangeKind::Deletion);
-                    assert_eq!(dst.location, "d/subdir/d");
-                }
-                _ => unreachable!("Should have expected emission call {calls}"),
-            }
-            calls += 1;
-            std::ops::ControlFlow::Continue(())
-        },
-        &odb,
-    );
-    assert_eq!(
-        out,
-        rewrites::Outcome {
-            options: rename_by_similarity,
-            num_similarity_checks: 2,
-            ..Default::default()
-        }
-    );
-    assert_eq!(calls, 5, "Should not have too few calls");
-    Ok(())
-}
-
-#[test]
-fn simple_directory_rename_by_id() -> TestResult {
-    let renames_by_identity = Rewrites {
-        copies: None,
-        percentage: None,
-        limit: 0,
-        track_empty: false,
-    };
-    let mut track = util::new_tracker(renames_by_identity);
-    let tree_dst_id = 1;
-    assert!(
-        track
-            .try_push_change(Change::tree_addition(tree_dst_id), "d-renamed".into())
-            .is_none()
-    );
-    let tree_src_id = 3;
-    assert!(
-        track
-            .try_push_change(Change::tree_deletion(tree_src_id), "d".into())
-            .is_none()
-    );
-    let tree_id = hex_to_id(
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    );
-    assert!(
-        track
-            .try_push_change(
-                Change {
-                    id: tree_id, /* does not matter for trees */
-                    kind: ChangeKind::Deletion,
-                    mode: EntryKind::Tree.into(),
-                    relation: Some(Relation::ChildOfParent(tree_src_id)),
-                },
-                "d/subdir".into(),
-            )
-            .is_none(),
-        "trees that are children are kept and matched. That way, they can quickly be pruned which is done first.\
-        Those who don't need them can prune them in a later step."
-    );
-    assert!(
-        track
-            .try_push_change(
-                Change {
-                    id: tree_id,
-                    kind: ChangeKind::Addition,
-                    mode: EntryKind::Tree.into(),
-                    relation: Some(Relation::ChildOfParent(tree_dst_id)),
-                },
-                "d-renamed/subdir".into(),
-            )
-            .is_none()
-    );
-    let _odb = util::add_retained_blobs(
-        &mut track,
-        [
-            (Change::deletion_in_tree(tree_src_id), "d/a", "a"),
-            (Change::deletion_in_tree(tree_src_id), "d/b", "b"),
-            (Change::deletion_in_tree(tree_src_id), "d/c", "c"),
-            (Change::deletion_in_tree(tree_src_id), "d/subdir/d", "d"),
-            (Change::addition_in_tree(tree_dst_id), "d-renamed/a", "a"),
-            (Change::addition_in_tree(tree_dst_id), "d-renamed/b", "b"),
-            (Change::addition_in_tree(tree_dst_id), "d-renamed/c", "c"),
-            (Change::addition_in_tree(tree_dst_id), "d-renamed/subdir/d", "d"),
-            (Change::deletion(), "a", "first\nsecond\n"),
-            (Change::addition(), "b", "firt\nsecond\n"),
-        ],
-    );
-
-    let mut calls = 0;
-    match crate::fixture_hash_kind() {
-        gix_hash::Kind::Sha1 => {
-            let out = util::assert_emit(&mut track, |dst, src| {
-                match calls {
-                    0 => {
-                        let src = src.unwrap();
-                        assert_eq!(src.location, "d");
-                        assert_eq!(src.entry_mode.kind(), EntryKind::Tree);
-                        assert_eq!(src.change.relation, Some(Relation::Parent(3)));
-                        assert_eq!(dst.location, "d-renamed", "it found the renamed directory");
-                        assert_eq!(dst.change.relation, Some(Relation::Parent(1)));
-                        assert_eq!(dst.change.mode.kind(), EntryKind::Tree);
-                    }
-                    1..=5 => {
-                        let src = src.unwrap();
-                        let (expected_src, expected_dst) = &[
-                            ("d/a", "d-renamed/a"),
-                            ("d/c", "d-renamed/c"),
-                            ("d/b", "d-renamed/b"),
-                            ("d/subdir", "d-renamed/subdir"),
-                            ("d/subdir/d", "d-renamed/subdir/d"),
-                        ][calls - 1];
-                        assert_eq!(src.location, expected_src);
-                        assert_eq!(dst.location, expected_dst);
-                    }
-                    6 => {
-                        assert_eq!(src, None);
-                        assert_eq!(dst.location, "a");
-                    }
-                    7 => {
-                        assert_eq!(src, None);
-                        assert_eq!(dst.location, "b");
-                    }
-                    _ => unreachable!("Should have expected emission call {calls}"),
-                }
-                calls += 1;
-                std::ops::ControlFlow::Continue(())
-            });
-            assert_eq!(
-                out,
-                rewrites::Outcome {
-                    options: renames_by_identity,
-                    ..Default::default()
-                }
-            );
-        }
-        gix_hash::Kind::Sha256 => {
-            let out = util::assert_emit(&mut track, |dst, src| {
-                match calls {
-                    0 => {
-                        let src = src.unwrap();
-                        assert_eq!(src.location, "d");
-                        assert_eq!(src.entry_mode.kind(), EntryKind::Tree);
-                        assert_eq!(src.change.relation, Some(Relation::Parent(3)));
-                        assert_eq!(dst.location, "d-renamed", "it found the renamed directory");
-                        assert_eq!(dst.change.relation, Some(Relation::Parent(1)));
-                        assert_eq!(dst.change.mode.kind(), EntryKind::Tree);
-                    }
-                    1..=5 => {
-                        let src = src.unwrap();
-                        let (expected_src, expected_dst) = &[
-                            ("d/subdir/d", "d-renamed/subdir/d"),
-                            ("d/b", "d-renamed/b"),
-                            ("d/subdir", "d-renamed/subdir"),
-                            ("d/c", "d-renamed/c"),
-                            ("d/a", "d-renamed/a"),
-                        ][calls - 1];
-                        assert_eq!(src.location, expected_src);
-                        assert_eq!(dst.location, expected_dst);
-                    }
-                    6 => {
-                        assert_eq!(src, None);
-                        assert_eq!(dst.location, "a");
-                    }
-                    7 => {
-                        assert_eq!(src, None);
-                        assert_eq!(dst.location, "b");
-                    }
-                    _ => unreachable!("Should have expected emission call {calls}"),
-                }
-                calls += 1;
-                std::ops::ControlFlow::Continue(())
-            });
-            assert_eq!(
-                out,
-                rewrites::Outcome {
-                    options: renames_by_identity,
-                    ..Default::default()
-                }
-            );
-        }
-        _ => todo!(),
+fn directories_are_not_tracked() -> TestResult {
+    let mut track = util::new_tracker(Rewrites {
+        copies: Some(Copies::default()),
+        ..Default::default()
+    });
+    for kind in [ChangeKind::Addition, ChangeKind::Deletion, ChangeKind::Modification] {
+        let directory = Change {
+            id: *ID,
+            kind,
+            mode: EntryKind::Tree.into(),
+        };
+        assert_eq!(
+            track.try_push_change(directory, "dir".into()),
+            Some(directory),
+            "the generic tracker leaves directory changes to its caller"
+        );
     }
-    assert_eq!(calls, 8, "Should not have too few calls");
+    util::assert_emit(&mut track, |_, _| panic!("directory changes were not retained"));
     Ok(())
 }
 

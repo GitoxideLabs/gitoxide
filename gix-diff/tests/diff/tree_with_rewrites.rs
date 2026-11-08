@@ -1423,7 +1423,7 @@ fn realistic_renames_2() -> TestResult {
             rewrites: Some(Rewrites {
                 copies: Some(Copies::default()),
                 limit: 1,
-                track_empty: false,
+                track_empty: true,
                 ..Default::default()
             }),
         },
@@ -1687,199 +1687,101 @@ fn realistic_renames_3_without_identity() -> TestResult {
                 copies: None,
                 percentage: None,
                 limit: 0,
-                track_empty: false,
+                track_empty: true,
             }),
         },
     )?;
 
-    // The same rewrites are found in both modes, but their emitted order follows object-id ordering.
-    match crate::fixture_hash_kind() {
-        gix_hash::Kind::Sha1 => {
-            insta::assert_snapshot!(crate::normalize_debug_snapshot(&(
-                changes
-                    .into_iter()
-                    .filter(|c| !c.entry_mode().is_tree() || c.relation().is_some_and(|r| matches!(r, Relation::Parent(_))))
-                    .collect::<Vec<_>>())).0,
-                @r#"
-            [
-                Rewrite {
-                    source_location: "src/plumbing/main.rs",
-                    source_entry_mode: EntryMode(0o100644),
-                    source_relation: Some(
-                        ChildOfParent(
-                            2,
-                        ),
-                    ),
-                    source_id: Oid(1),
-                    similarity: None,
-                    entry_mode: EntryMode(0o100644),
-                    id: Oid(1),
-                    location: "src/plumbing-renamed/main.rs",
-                    relation: Some(
-                        ChildOfParent(
-                            1,
-                        ),
-                    ),
-                    copy: false,
-                },
-                Rewrite {
-                    source_location: "src/plumbing/mod.rs",
-                    source_entry_mode: EntryMode(0o100644),
-                    source_relation: Some(
-                        ChildOfParent(
-                            2,
-                        ),
-                    ),
-                    source_id: Oid(2),
-                    similarity: None,
-                    entry_mode: EntryMode(0o100644),
-                    id: Oid(2),
-                    location: "src/plumbing-renamed/mod.rs",
-                    relation: Some(
-                        ChildOfParent(
-                            1,
-                        ),
-                    ),
-                    copy: false,
-                },
-                Rewrite {
-                    source_location: "src/plumbing/options.rs",
-                    source_entry_mode: EntryMode(0o100644),
-                    source_relation: Some(
-                        ChildOfParent(
-                            2,
-                        ),
-                    ),
-                    source_id: Oid(3),
-                    similarity: None,
-                    entry_mode: EntryMode(0o100644),
-                    id: Oid(3),
-                    location: "src/plumbing-renamed/options/mod.rs",
-                    relation: Some(
-                        ChildOfParent(
-                            1,
-                        ),
-                    ),
-                    copy: false,
-                },
-                Rewrite {
-                    source_location: "src/plumbing",
-                    source_entry_mode: EntryMode(0o40000),
-                    source_relation: Some(
-                        Parent(
-                            2,
-                        ),
-                    ),
-                    source_id: Oid(4),
-                    similarity: None,
-                    entry_mode: EntryMode(0o40000),
-                    id: Oid(5),
-                    location: "src/plumbing-renamed",
-                    relation: Some(
-                        Parent(
-                            1,
-                        ),
-                    ),
-                    copy: false,
-                },
-            ]
-            "#
-            );
-        }
-        gix_hash::Kind::Sha256 => {
-            insta::assert_snapshot!(crate::normalize_debug_snapshot(&(
-                changes
-                    .into_iter()
-                    .filter(|c| !c.entry_mode().is_tree() || c.relation().is_some_and(|r| matches!(r, Relation::Parent(_))))
-                    .collect::<Vec<_>>())).0,
-                @r#"
-            [
-                Rewrite {
-                    source_location: "src/plumbing/main.rs",
-                    source_entry_mode: EntryMode(0o100644),
-                    source_relation: Some(
-                        ChildOfParent(
-                            2,
-                        ),
-                    ),
-                    source_id: Oid(1),
-                    similarity: None,
-                    entry_mode: EntryMode(0o100644),
-                    id: Oid(1),
-                    location: "src/plumbing-renamed/main.rs",
-                    relation: Some(
-                        ChildOfParent(
-                            1,
-                        ),
-                    ),
-                    copy: false,
-                },
-                Rewrite {
-                    source_location: "src/plumbing/mod.rs",
-                    source_entry_mode: EntryMode(0o100644),
-                    source_relation: Some(
-                        ChildOfParent(
-                            2,
-                        ),
-                    ),
-                    source_id: Oid(2),
-                    similarity: None,
-                    entry_mode: EntryMode(0o100644),
-                    id: Oid(2),
-                    location: "src/plumbing-renamed/mod.rs",
-                    relation: Some(
-                        ChildOfParent(
-                            1,
-                        ),
-                    ),
-                    copy: false,
-                },
-                Rewrite {
-                    source_location: "src/plumbing/options.rs",
-                    source_entry_mode: EntryMode(0o100644),
-                    source_relation: Some(
-                        ChildOfParent(
-                            2,
-                        ),
-                    ),
-                    source_id: Oid(3),
-                    similarity: None,
-                    entry_mode: EntryMode(0o100644),
-                    id: Oid(3),
-                    location: "src/plumbing-renamed/options/mod.rs",
-                    relation: Some(
-                        ChildOfParent(
-                            1,
-                        ),
-                    ),
-                    copy: false,
-                },
-                Rewrite {
-                    source_location: "src/plumbing",
-                    source_entry_mode: EntryMode(0o40000),
-                    source_relation: Some(
-                        Parent(
-                            2,
-                        ),
-                    ),
-                    source_id: Oid(4),
-                    similarity: None,
-                    entry_mode: EntryMode(0o40000),
-                    id: Oid(5),
-                    location: "src/plumbing-renamed",
-                    relation: Some(
-                        Parent(
-                            1,
-                        ),
-                    ),
-                    copy: false,
-                },
-            ]
-            "#
-            );
-        }
-        _ => unreachable!("tests only support sha1 and sha256 fixtures"),
-    }
+    insta::assert_snapshot!(crate::normalize_debug_snapshot(&(
+        changes
+            .into_iter()
+            .filter(|c| !c.entry_mode().is_tree() || c.relation().is_some_and(|r| matches!(r, Relation::Parent(_))))
+            .collect::<Vec<_>>())).0,
+        @r#"
+    [
+        Rewrite {
+            source_location: "src/plumbing/main.rs",
+            source_entry_mode: EntryMode(0o100644),
+            source_relation: Some(
+                ChildOfParent(
+                    2,
+                ),
+            ),
+            source_id: Oid(1),
+            similarity: None,
+            entry_mode: EntryMode(0o100644),
+            id: Oid(1),
+            location: "src/plumbing-renamed/main.rs",
+            relation: Some(
+                ChildOfParent(
+                    1,
+                ),
+            ),
+            copy: false,
+        },
+        Rewrite {
+            source_location: "src/plumbing/mod.rs",
+            source_entry_mode: EntryMode(0o100644),
+            source_relation: Some(
+                ChildOfParent(
+                    2,
+                ),
+            ),
+            source_id: Oid(2),
+            similarity: None,
+            entry_mode: EntryMode(0o100644),
+            id: Oid(2),
+            location: "src/plumbing-renamed/mod.rs",
+            relation: Some(
+                ChildOfParent(
+                    1,
+                ),
+            ),
+            copy: false,
+        },
+        Rewrite {
+            source_location: "src/plumbing/options.rs",
+            source_entry_mode: EntryMode(0o100644),
+            source_relation: Some(
+                ChildOfParent(
+                    2,
+                ),
+            ),
+            source_id: Oid(3),
+            similarity: None,
+            entry_mode: EntryMode(0o100644),
+            id: Oid(3),
+            location: "src/plumbing-renamed/options/mod.rs",
+            relation: Some(
+                ChildOfParent(
+                    1,
+                ),
+            ),
+            copy: false,
+        },
+        Rewrite {
+            source_location: "src/plumbing",
+            source_entry_mode: EntryMode(0o40000),
+            source_relation: Some(
+                Parent(
+                    2,
+                ),
+            ),
+            source_id: Oid(4),
+            similarity: None,
+            entry_mode: EntryMode(0o40000),
+            id: Oid(5),
+            location: "src/plumbing-renamed",
+            relation: Some(
+                Parent(
+                    1,
+                ),
+            ),
+            copy: false,
+        },
+    ]
+    "#
+    );
 
     let out = out.expect("tracking enabled");
     assert_eq!(

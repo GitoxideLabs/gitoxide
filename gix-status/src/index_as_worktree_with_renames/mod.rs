@@ -442,7 +442,7 @@ pub(super) mod function {
             index_as_worktree_with_renames::Entry,
         };
         use bstr::BStr;
-        use gix_diff::{rewrites::tracker::ChangeKind, tree::visit::Relation};
+        use gix_diff::rewrites::tracker::ChangeKind;
         use gix_dir::entry::Kind;
         use gix_filter::pipeline::convert::ToGitOutcome;
         use gix_hash::oid;
@@ -476,12 +476,6 @@ pub(super) mod function {
                     }
                     ModificationOrDirwalkEntry::DirwalkEntry { id, .. } => id.as_deref(),
                 }
-            }
-
-            fn relation(&self) -> Option<Relation> {
-                // TODO: figure out if index or worktree can provide containerization - worktree should be possible.
-                //       index would take some processing.
-                None
             }
 
             fn kind(&self) -> ChangeKind {

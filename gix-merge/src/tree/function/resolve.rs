@@ -136,6 +136,8 @@ pub fn tree<'objects>(
         options.rewrites,
         options.directory_renames,
     )?;
+    ours.retain_relevant_directory_renames(&theirs);
+    theirs.retain_relevant_directory_renames(&ours);
     let mut conflicts = Vec::new();
     let mut failed_on_first_conflict = false;
     let mut should_fail_on_conflict = |mut conflict: Conflict| -> bool {
@@ -851,6 +853,8 @@ pub fn tree<'objects>(
                             (
                                 Change::Rewrite {
                                     source_location,
+                                    source_entry_mode,
+                                    source_id,
                                     entry_mode: blocking_mode,
                                     id: blocking_id,
                                     location: blocking_location,
@@ -894,6 +898,15 @@ pub fn tree<'objects>(
                                             apply_change_and_mark(&mut editor, ours, &mut ours_disposition)?;
                                         }
                                         Swapped => {
+                                            if our_changes[ours_idx].was_applied() {
+                                                editor.remove_if_leaf(toc(blocking_location))?;
+                                                editor.upsert(
+                                                    toc(source_location),
+                                                    source_entry_mode.kind(),
+                                                    *source_id,
+                                                )?;
+                                            }
+                                            our_tree.remove_change(blocking_location.as_bstr());
                                             apply_change_and_mark(&mut editor, theirs, &mut theirs_disposition)?;
                                         }
                                     },
@@ -1689,6 +1702,8 @@ pub fn tree<'objects>(
                             (
                                 Change::Rewrite {
                                     source_location: blocking_source,
+                                    source_entry_mode,
+                                    source_id,
                                     entry_mode: blocking_mode,
                                     id: blocking_id,
                                     location: blocking_location,
@@ -1739,6 +1754,15 @@ pub fn tree<'objects>(
                                             apply_change_and_mark(&mut editor, ours, &mut ours_disposition)?;
                                         }
                                         Swapped => {
+                                            if our_changes[ours_idx].was_applied() {
+                                                editor.remove_if_leaf(toc(blocking_location))?;
+                                                editor.upsert(
+                                                    toc(blocking_source),
+                                                    source_entry_mode.kind(),
+                                                    *source_id,
+                                                )?;
+                                            }
+                                            our_tree.remove_change(blocking_location.as_bstr());
                                             apply_change_and_mark(&mut editor, theirs, &mut theirs_disposition)?;
                                         }
                                     },
@@ -2091,7 +2115,7 @@ pub fn tree<'objects>(
                                     break 'outer;
                                 }
 
-                                let ours_is_rewrite = side.is_swapped();
+                                let ours_is_rewrite = side.to_global(outer_side).is_swapped();
                                 if resolve_tree_conflicts.is_none()
                                     || (matches!(resolve_tree_conflicts, Some(ResolveWith::Ours)) && ours_is_rewrite)
                                 {

@@ -1,6 +1,7 @@
 use crate::{Rewrites, tree::recorder::Location};
 
 mod change;
+mod directories;
 pub use change::{Change, ChangeRef};
 
 /// Returned by the [`tree_with_rewrites()`](super::tree_with_rewrites()) function to control flow.
@@ -14,6 +15,7 @@ pub type Action = std::ops::ControlFlow<()>;
 pub struct Options {
     /// Determine how locations of changes, i.e. their repository-relative path, should be tracked.
     /// If `None`, locations will always be empty.
+    /// Rewrite tracking uses full paths internally regardless of this setting.
     pub location: Option<Location>,
     /// If not `None`, rename tracking will be performed accordingly.
     pub rewrites: Option<Rewrites>,

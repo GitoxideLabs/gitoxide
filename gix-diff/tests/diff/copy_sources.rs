@@ -302,20 +302,198 @@ fn incompatible_sizes_skip_payloads() -> TestResult {
 
 #[test]
 fn identical_directory_does_not_reserve_the_first_copy_as_a_rename() -> TestResult {
-    directory_rewrites_match_git("directory-copy-exact", 1.0, true)
+    directory_rewrites_match_git("directory-copy-exact", 1.0, true, &[("old", "b")])
 }
 
 #[test]
 fn identical_directory_does_not_reserve_the_exact_copy_as_a_rename() -> TestResult {
-    directory_rewrites_match_git("directory-copy-edited", 0.5, true)
+    directory_rewrites_match_git("directory-copy-edited", 0.5, true, &[("old", "b")])
 }
 
 #[test]
 fn identical_directories_do_not_preempt_duplicate_file_sources() -> TestResult {
-    directory_rewrites_match_git("directory-duplicate-sources", 1.0, false)
+    directory_rewrites_match_git(
+        "directory-duplicate-sources",
+        1.0,
+        false,
+        &[("old-a", "new-a"), ("old-b", "new-b")],
+    )
 }
 
-fn directory_rewrites_match_git(case: &str, percentage: f32, copies: bool) -> TestResult {
+#[test]
+fn split_directory_follows_the_unique_highest_destination() -> TestResult {
+    directory_rewrites_match_git("directory-split", 1.0, false, &[("old", "winner")])
+}
+
+#[test]
+fn equally_split_directory_remains_unpaired() -> TestResult {
+    directory_rewrites_match_git("directory-tie", 1.0, false, &[])
+}
+
+#[test]
+fn directories_with_only_empty_files_have_no_renames_to_infer_from() -> TestResult {
+    directory_rewrites_match_git("directory-empty", 1.0, false, &[])
+}
+
+#[test]
+fn nested_directory_move_does_not_imply_a_root_move() -> TestResult {
+    directory_rewrites_match_git("directory-different-suffix", 1.0, false, &[("old/sub", "new/other")])
+}
+
+#[test]
+fn nested_directory_move_is_retained_beside_a_root_move() -> TestResult {
+    directory_rewrites_match_git("directory-nested", 1.0, false, &[("a", "b"), ("a/sub", "b/renamed")])
+}
+
+#[test]
+fn nested_directory_move_into_a_new_parent() -> TestResult {
+    directory_rewrites_match_git("directory-deeper", 1.0, false, &[("old", "new/sub")])
+}
+
+#[test]
+fn cancellation_stops_file_changes_and_inferred_directories() -> TestResult {
+    let root = crate::scripted_fixture_read_only("make_copy_sources.sh")?;
+    let objects = crate::open_odb(root.join(".git/objects"))?;
+    let before_tree_id = read_tree_id(&root, "directory-split", "before")?;
+    let after_tree_id = read_tree_id(&root, "directory-split", "after")?;
+    let mut expected = Vec::new();
+    let mut cache = new_cache(&root);
+    for stop_after in [None, Some(1), Some(3), Some(4)] {
+        let (mut before_buf, mut after_buf) = (Vec::new(), Vec::new());
+        let mut actual = Vec::new();
+        gix_diff::tree_with_rewrites(
+            objects.find_tree_iter(&before_tree_id, &mut before_buf)?,
+            objects.find_tree_iter(&after_tree_id, &mut after_buf)?,
+            &mut cache,
+            &mut Default::default(),
+            &objects,
+            |change| {
+                actual.push(change.into_owned());
+                Ok(if Some(actual.len()) == stop_after {
+                    std::ops::ControlFlow::Break(())
+                } else {
+                    std::ops::ControlFlow::Continue(())
+                })
+            },
+            gix_diff::tree_with_rewrites::Options {
+                location: Some(gix_diff::tree::recorder::Location::Path),
+                rewrites: Some(Rewrites {
+                    percentage: None,
+                    ..Default::default()
+                }),
+            },
+        )?;
+        if let Some(stop_after) = stop_after {
+            assert_eq!(
+                actual,
+                expected[..stop_after],
+                "cancellation prevents every later callback, including directory inference"
+            );
+        } else {
+            assert_eq!(
+                actual.len(),
+                5,
+                "three file renames, one directory rename and one added directory"
+            );
+            assert!(
+                actual[..3].iter().all(|change| !change.entry_mode().is_tree())
+                    && actual[3..].iter().all(|change| change.entry_mode().is_tree()),
+                "file matching completes before directory changes are emitted"
+            );
+            expected = actual;
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn location_projection_preserves_file_and_directory_matches() -> TestResult {
+    use gix_diff::{tree::recorder::Location, tree_with_rewrites::Change};
+
+    let root = crate::scripted_fixture_read_only("make_copy_sources.sh")?;
+    let objects = crate::open_odb(root.join(".git/objects"))?;
+    let before_tree_id = read_tree_id(&root, "directory-split", "before")?;
+    let after_tree_id = read_tree_id(&root, "directory-split", "after")?;
+    let mut cache = new_cache(&root);
+    let mut expected_changes = Vec::new();
+    for (location, expected_paths) in [
+        (
+            Some(Location::Path),
+            [
+                ("old", "winner"),
+                ("old/one", "winner/renamed"),
+                ("old/three", "other/three"),
+                ("old/two", "winner/two"),
+                ("other", "other"),
+            ],
+        ),
+        (
+            Some(Location::FileName),
+            [
+                ("old", "winner"),
+                ("one", "renamed"),
+                ("other", "other"),
+                ("three", "three"),
+                ("two", "two"),
+            ],
+        ),
+        (None, [("", ""); 5]),
+    ] {
+        let (mut before_buf, mut after_buf) = (Vec::new(), Vec::new());
+        let (mut changes, mut paths) = (Vec::new(), Vec::new());
+        gix_diff::tree_with_rewrites(
+            objects.find_tree_iter(&before_tree_id, &mut before_buf)?,
+            objects.find_tree_iter(&after_tree_id, &mut after_buf)?,
+            &mut cache,
+            &mut Default::default(),
+            &objects,
+            |change| {
+                let mut change = change.into_owned();
+                paths.push((change.source_location().to_owned(), change.location().to_owned()));
+                if let Change::Rewrite { source_location, .. } = &mut change {
+                    source_location.clear();
+                }
+                match &mut change {
+                    Change::Addition { location, .. }
+                    | Change::Deletion { location, .. }
+                    | Change::Modification { location, .. }
+                    | Change::Rewrite { location, .. } => location.clear(),
+                }
+                changes.push(change);
+                Ok(std::ops::ControlFlow::Continue(()))
+            },
+            gix_diff::tree_with_rewrites::Options {
+                location,
+                rewrites: Some(Rewrites {
+                    percentage: None,
+                    ..Default::default()
+                }),
+            },
+        )?;
+        paths.sort();
+        assert_eq!(
+            paths,
+            expected_paths.map(|(source, destination)| (BString::from(source), BString::from(destination))),
+            "callback locations follow the requested projection"
+        );
+        if expected_changes.is_empty() {
+            expected_changes = changes;
+        } else {
+            assert_eq!(
+                changes, expected_changes,
+                "location projection preserves chosen objects, relations and callback order"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn directory_rewrites_match_git(
+    case: &str,
+    percentage: f32,
+    copies: bool,
+    expected_directories: &[(&str, &str)],
+) -> TestResult {
     let root = crate::scripted_fixture_read_only("make_copy_sources.sh")?;
     let objects = crate::open_odb(root.join(".git/objects"))?;
     let before_tree_id = read_tree_id(&root, case, "before")?;
@@ -475,14 +653,10 @@ fn directory_rewrites_match_git(case: &str, percentage: f32, copies: bool) -> Te
         "tree rewrites match Git for {case}"
     );
     directories.sort();
-    let expected_directories = if copies {
-        vec![(BString::from("old"), BString::from("b"))]
-    } else {
-        vec![
-            (BString::from("old-a"), BString::from("new-a")),
-            (BString::from("old-b"), BString::from("new-b")),
-        ]
-    };
+    let expected_directories: Vec<_> = expected_directories
+        .iter()
+        .map(|&(source, destination)| (BString::from(source), BString::from(destination)))
+        .collect();
     assert_eq!(
         directories, expected_directories,
         "the inferred directory renames follow the chosen file sources"

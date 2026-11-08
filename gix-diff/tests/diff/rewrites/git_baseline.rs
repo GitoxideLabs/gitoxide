@@ -4,7 +4,6 @@ use bstr::{BString, ByteSlice};
 use gix_diff::{
     Rewrites,
     rewrites::{Copies, CopySource, Tracker, tracker::visit::SourceKind},
-    tree::visit::Relation,
 };
 use gix_error::TestResult;
 use gix_object::tree::{EntryKind, EntryMode};
@@ -212,7 +211,6 @@ fn assert_baseline(case: &str, variant: &str, rewrites: Rewrites) -> TestResult 
                         kind: ChangeKind::Modification,
                         mode: EntryMode::from_bytes(fields[0]).expect("ls-tree writes valid modes"),
                         id: gix_hash::ObjectId::from_hex(fields[2]).expect("ls-tree writes valid object IDs"),
-                        relation: None,
                     },
                     path.as_bstr(),
                 );
@@ -252,7 +250,6 @@ fn input_tracker(case_dir: &Path, rewrites: Rewrites) -> TestResult<(Tracker<Cha
             kind,
             mode: EntryMode::from_bytes(mode).expect("Git writes valid nonzero modes"),
             id: gix_hash::ObjectId::from_hex(blob_id)?,
-            relation: None,
         };
         if tracker.try_push_change(change, path.as_bstr()).is_some() {
             actual.push(plain_record(kind, path));
@@ -287,87 +284,6 @@ fn cancellation_stops_file_pairs_and_unmatched_changes() -> TestResult {
             |_, _| panic!("a cancelled tracker must not retain changes for another emit"),
             &mut platform(&root),
             &odb,
-            |_| Ok::<_, std::io::Error>(()),
-        )?;
-    }
-    Ok(())
-}
-
-#[test]
-fn cancellation_stops_directory_parents_children_and_inference() -> TestResult {
-    let root = crate::scripted_fixture_read_only("make_rewrite_git_baseline.sh")?;
-    let hash = crate::fixture_hash_kind();
-    let source_tree_id = gix_hash::ObjectId::empty_tree(hash);
-    let child_blob_id = gix_hash::ObjectId::empty_blob(hash);
-    let different_tree_id = hash.null();
-    for (identical, stop_after) in [(true, 1), (true, 2), (false, 2)] {
-        let mut tracker = Tracker::<Change>::new(renames(1.0));
-        for (path, kind, mode, id, relation) in [
-            (
-                "old",
-                ChangeKind::Deletion,
-                EntryKind::Tree,
-                source_tree_id,
-                Some(Relation::Parent(1)),
-            ),
-            (
-                "new",
-                ChangeKind::Addition,
-                EntryKind::Tree,
-                if identical { source_tree_id } else { different_tree_id },
-                Some(Relation::Parent(2)),
-            ),
-            (
-                "old/file",
-                ChangeKind::Deletion,
-                EntryKind::Blob,
-                child_blob_id,
-                Some(Relation::ChildOfParent(1)),
-            ),
-            (
-                "new/file",
-                ChangeKind::Addition,
-                EntryKind::Blob,
-                child_blob_id,
-                Some(Relation::ChildOfParent(2)),
-            ),
-            ("leftover", ChangeKind::Addition, EntryKind::Blob, hash.null(), None),
-        ] {
-            assert!(
-                tracker
-                    .try_push_change(
-                        Change {
-                            kind,
-                            mode: mode.into(),
-                            id,
-                            relation
-                        },
-                        path.into()
-                    )
-                    .is_none(),
-                "all changes participate in the directory cancellation test"
-            );
-        }
-        let mut calls = 0;
-        tracker.emit(
-            |_, source| {
-                calls += 1;
-                assert!(source.is_some(), "cancellation must precede the unmatched addition");
-                if calls == stop_after {
-                    ControlFlow::Break(())
-                } else {
-                    ControlFlow::Continue(())
-                }
-            },
-            &mut platform(&root),
-            &gix_object::find::Never,
-            |_| Ok::<_, std::io::Error>(()),
-        )?;
-        assert_eq!(calls, stop_after, "directory cancellation is propagated to emit");
-        tracker.emit(
-            |_, _| panic!("directory cancellation must drain pending changes"),
-            &mut platform(&root),
-            &gix_object::find::Never,
             |_| Ok::<_, std::io::Error>(()),
         )?;
     }

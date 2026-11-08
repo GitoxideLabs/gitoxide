@@ -7,7 +7,6 @@ use crate::{
     index::{Change, ChangeRef},
     rewrites,
     rewrites::tracker::ChangeKind,
-    tree::visit::Relation,
 };
 
 impl ChangeRef<'_, '_> {
@@ -191,10 +190,6 @@ impl rewrites::tracker::Change for ChangeRef<'_, '_> {
                 unreachable!("BUG")
             }
         }
-    }
-
-    fn relation(&self) -> Option<Relation> {
-        None
     }
 
     fn kind(&self) -> ChangeKind {

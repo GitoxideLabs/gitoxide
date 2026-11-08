@@ -484,6 +484,7 @@ pub struct Options {
 /// Control inferred relocation of additions and rename destinations through directory renames.
 ///
 /// This corresponds to Git's `merge.directoryRenames` and defaults to [`Conflict`](Self::Conflict), like Git.
+/// Tied destination counts leave new paths in place without reporting Git's directory-split conflict.
 #[derive(Default, Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum DirectoryRenames {
     /// Leave new paths at their explicit locations, without disabling file-rename detection.
