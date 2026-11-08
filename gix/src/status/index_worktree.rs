@@ -35,7 +35,8 @@ pub struct Options {
     /// Note that there is no git-configuration specific to index-worktree rename tracking.
     /// When rewrite tracking is enabled, there will be a delay for some entries as they partake in the rename-analysis.
     pub rewrites: Option<gix_diff::Rewrites>,
-    /// If set, don't use more than this amount of threads for the tracked modification check.
+    /// If set, don't use more than this amount of threads for the tracked modification check,
+    /// and for reading directories ahead of the directory walk.
     /// Otherwise, usually use as many threads as there are logical cores.
     /// A value of 0 is interpreted as no-limit
     pub thread_limit: Option<usize>,
@@ -143,7 +144,13 @@ impl Repository {
                     fscache,
                 },
                 fscache,
-                dirwalk: options.dirwalk_options.map(Into::into),
+                dirwalk: options.dirwalk_options.map(|dirwalk_options| gix_dir::walk::Options {
+                    prefetch_threads: match gix_parallel::num_threads(options.thread_limit) {
+                        1 => 0,
+                        threads => threads,
+                    },
+                    ..dirwalk_options.into()
+                }),
                 rewrites: options.rewrites,
             },
         )?;
