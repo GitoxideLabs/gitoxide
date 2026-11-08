@@ -289,11 +289,52 @@ fn unreadable_untracked() {
     );
 }
 
+#[test]
+fn untracked_file_removed_after_open() -> gix_testtools::TestResult {
+    untracked_file_changed_after_open("bash .git/change-untracked.sh remove")
+}
+
+#[test]
+fn untracked_file_replaced_after_open() -> gix_testtools::TestResult {
+    untracked_file_changed_after_open("bash .git/change-untracked.sh replace")
+}
+
+fn untracked_file_changed_after_open(process: &'static str) -> gix_testtools::TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let out = fixture_filtered_detailed(
+        "status_untracked_race.sh",
+        "",
+        &[],
+        &[Expectation::Rewrite {
+            source_rela_path: "source",
+            dest_rela_path: "renamed",
+            dest_dirwalk_status: gix_dir::entry::Status::Untracked,
+            diff: None,
+            copy: false,
+        }],
+        Some(gix_diff::Rewrites {
+            percentage: None,
+            ..Default::default()
+        }),
+        Some(Default::default()),
+        Fixture::WritableWithFilterProcess(process),
+    );
+    assert_eq!(
+        out.rewrites.expect("rewrite tracking is enabled").num_similarity_checks,
+        0,
+        "the opened file's contents and length still identify an exact rename after its path changes"
+    );
+    Ok(())
+}
+
 enum Fixture {
     ReadOnly,
     ReadOnlyNeedsArchive,
     #[cfg(unix)]
     WritableExecuted,
+    WritableWithFilterProcess(&'static str),
 }
 
 fn fixture_filtered_detailed(
@@ -313,6 +354,7 @@ fn fixture_filtered_detailed(
         out
     }
 
+    let mut filter_process = None;
     let (worktree, _tmp) = match fixture {
         Fixture::ReadOnly => {
             let dir = fixture_path(script).join(subdir);
@@ -327,6 +369,12 @@ fn fixture_filtered_detailed(
         #[cfg(unix)]
         Fixture::WritableExecuted => {
             let tmp = crate::fixture_path_rw_slow(script);
+            let dir = tmp.path().join(subdir);
+            (dir, Some(tmp))
+        }
+        Fixture::WritableWithFilterProcess(process) => {
+            filter_process = Some(process);
+            let tmp = crate::scripted_fixture_writable(script).expect("script works");
             let dir = tmp.path().join(subdir);
             (dir, Some(tmp))
         }
@@ -351,6 +399,17 @@ fn fixture_filtered_detailed(
         index.path_backing(),
     );
     let capabilities = gix_fs::Capabilities::probe(&git_dir);
+    let mut filter = gix_filter::Pipeline::new(Default::default(), object_hash, Default::default());
+    if let Some(process) = filter_process {
+        filter.driver_state_mut().context.worktree_dir = Some(worktree.clone());
+        filter.options_mut().drivers.push(gix_filter::Driver {
+            name: "race".into(),
+            clean: None,
+            smudge: None,
+            process: Some(process.into()),
+            required: true,
+        });
+    }
     let resource_cache = gix_diff::blob::Platform::new(
         Default::default(),
         gix_diff::blob::Pipeline::new(
@@ -358,7 +417,7 @@ fn fixture_filtered_detailed(
                 old_root: None,
                 new_root: Some(worktree.to_owned()),
             },
-            gix_filter::Pipeline::new(Default::default(), gix_testtools::object_hash(), Default::default()),
+            filter,
             vec![],
             gix_diff::blob::pipeline::Options {
                 large_file_threshold_bytes: 0,
