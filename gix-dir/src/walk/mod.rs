@@ -165,6 +165,9 @@ pub struct Options<'a> {
     /// them, and otherwise assure that no entries are observable that shouldn't be deleted.
     /// If `None`, precious files are treated like expendable files, which is usually what you want when displaying them
     /// for addition to the repository, and the collapse of folders can be more generous in relation to ignored files.
+    /// Directory-open and iteration errors abort deletion walks, including errors caused by disappearing paths.
+    /// Other walks skip the unreadable directory, report the failure through tracing and
+    /// [`Outcome::read_dir_errors`], and prevent its ancestors from collapsing.
     pub for_deletion: Option<ForDeletionMode>,
     /// If `true`, we will not only find non-bare repositories in untracked directories, but also bare ones.
     ///
@@ -267,6 +270,10 @@ pub struct Context<'a> {
 pub struct Outcome {
     /// The amount of calls to read the directory contents.
     pub read_dir_calls: u32,
+    /// The amount of ignored directory-open or iteration errors.
+    /// A nonzero value means the listing is incomplete; path and error details are available through tracing.
+    /// Always zero for successful deletion walks.
+    pub read_dir_errors: u32,
     /// The amount of returned entries provided to the callback. This number can be lower than `seen_entries`.
     pub returned_entries: usize,
     /// The amount of entries, prior to pathspecs filtering them out or otherwise excluding them.

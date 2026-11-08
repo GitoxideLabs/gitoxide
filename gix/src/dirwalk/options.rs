@@ -95,6 +95,8 @@ impl Options {
     /// them, and otherwise assure that no entries are observable that shouldn't be deleted.
     /// If `None`, precious files are treated like expendable files, which is usually what you want when displaying them
     /// for addition to the repository, and the collapse of folders can be more generous in relation to ignored files.
+    /// Directory-open and iteration errors abort deletion walks. Other walks skip unreadable directories and
+    /// report incomplete listings through [`gix_dir::walk::Outcome::read_dir_errors`].
     pub fn for_deletion(mut self, value: Option<ForDeletionMode>) -> Self {
         self.for_deletion = value;
         self

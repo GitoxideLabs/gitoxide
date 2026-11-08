@@ -585,20 +585,24 @@ pub(super) mod function {
                         )
                         .or_raise(|| message!("Could not convert worktree file {rela_path:?} to Git format"))?;
                     match out {
-                        ToGitOutcome::Unchanged(mut file) => gix_object::compute_stream_hash(
-                            object_hash,
-                            gix_object::Kind::Blob,
-                            &mut file,
-                            file_path
+                        ToGitOutcome::Unchanged(mut file) => {
+                            // The path may have been removed or replaced since opening the file.
+                            let file_size = file
                                 .metadata()
                                 .or_raise(|| {
                                     message!("Could not read metadata for worktree file \"{}\"", file_path.display())
                                 })?
-                                .len(),
-                            &mut gix_utils::progress::Discard,
-                            should_interrupt,
-                        )
-                        .or_raise(|| message!("Could not hash worktree file \"{}\"", file_path.display()))?,
+                                .len();
+                            gix_object::compute_stream_hash(
+                                object_hash,
+                                gix_object::Kind::Blob,
+                                &mut file,
+                                file_size,
+                                &mut gix_utils::progress::Discard,
+                                should_interrupt,
+                            )
+                            .or_raise(|| message!("Could not hash worktree file \"{}\"", file_path.display()))?
+                        }
                         ToGitOutcome::Buffer(buf) => gix_object::compute_hash(object_hash, gix_object::Kind::Blob, buf)
                             .or_raise(|| message!("Could not hash worktree file \"{}\"", file_path.display()))?,
                         ToGitOutcome::Process(mut stream) => {

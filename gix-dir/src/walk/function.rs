@@ -28,6 +28,11 @@ use crate::{
 /// useful to transform the paths returned for the user. It's always within the `worktree_root`, or the same,
 /// but is hard to guess due to additional logic affecting it.
 ///
+/// Directory-open and iteration errors abort walks configured with [`Options::for_deletion`].
+/// Other walks skip the unreadable directory, retaining entries already seen and counting failures in
+/// [`Outcome::read_dir_errors`]. Path and error details are available through tracing.
+/// An unreadable directory and its ancestors won't be collapsed, even if no entries could be read.
+///
 /// ### Performance Notes
 ///
 /// Parallel traversal is abandoned as it's not worth managing a thread-pool over this, also given that
