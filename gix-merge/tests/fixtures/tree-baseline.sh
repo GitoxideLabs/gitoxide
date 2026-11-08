@@ -3578,7 +3578,6 @@ done
 # B's mode change conflicts with A's deletion instead of following the new path.
 git init rename-tracker-reordered-text
 (cd rename-tracker-reordered-text
-  git config core.filemode true
   for i in $(seq 20); do printf '%02d\n' "$i"; done >source
   git add source && git commit -m "text source"
   git branch A
@@ -3600,7 +3599,6 @@ baseline rename-tracker-reordered-text A-B A B
 # exposes B's deletion as a rename/delete conflict instead of a clean addition.
 git init rename-tracker-edited-binary
 (cd rename-tracker-edited-binary
-  git config core.filemode true
   printf '\0%063d%064d%064d\n' 1 2 3 >source
   git add source && git commit -m "binary source"
   git branch A
@@ -3621,7 +3619,6 @@ baseline rename-tracker-edited-binary A-B A B
 # otherwise the opposite mode changes on B reach the wrong destinations.
 git init rename-tracker-global-best
 (cd rename-tracker-global-best
-  git config core.filemode true
   lines() {
     local prefix="$1" count="$2" i
     for i in $(seq "$count"); do printf '%s%02d\n' "$prefix" "$i"; done
@@ -3734,3 +3731,43 @@ git init directory-rename-nested
   git add . && git commit -m "add a root file and a deeper nested file"
 )
 baseline directory-rename-nested A-B A B
+
+# Existing directories participate in directory-rename voting alongside new
+# directories. Their votes can win, lose, or prevent a tied destination from
+# relocating the other side's addition.
+for case_name in directory-rename-existing-majority directory-rename-new-majority directory-rename-tie-existing; do
+  git init "$case_name"
+  (cd "$case_name"
+    mkdir old existing
+    write_lines retained >existing/kept
+    write_lines one >old/one
+    write_lines two >old/two
+    if test "$case_name" != directory-rename-tie-existing; then
+      write_lines three >old/three
+    fi
+    git add . && git commit -m "source files and an existing destination"
+    git branch A
+    git branch B
+
+    git checkout A
+    mkdir new
+    git mv old/one new/one
+    git mv old/two existing/two
+    case "$case_name" in
+      directory-rename-existing-majority) git mv old/three existing/three ;;
+      directory-rename-new-majority) git mv old/three new/three ;;
+    esac
+    git commit -m "split the source between an existing and a new directory"
+
+    git checkout B
+    write_lines added >old/fresh
+    git add old/fresh && git commit -m "add a file to the original directory"
+  )
+  for mode in true conflict false; do
+    if test "$case_name" != directory-rename-existing-majority && test "$mode" != true; then
+      continue
+    fi
+    (cd "$case_name" && git config merge.directoryRenames "$mode")
+    baseline "$case_name" "directory-renames-$mode" A B
+  done
+done

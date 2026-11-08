@@ -6,6 +6,7 @@ use gix_diff::{
     Rewrites,
     rewrites::{Copies, CopySource, Outcome, Tracker, tracker::ChangeKind},
     tree::visit::Action,
+    tree_with_rewrites::ChangeRef,
 };
 use gix_hash::{ObjectId, oid};
 use gix_object::{
@@ -17,7 +18,7 @@ const EXACT_RENAME_COUNTS: &[usize] = &[128, 1_024, 4_096];
 const AMBIGUOUS_IDENTICAL_COUNTS: &[usize] = &[16, 128, 512];
 const SIMILARITY_RENAME_COUNTS: &[usize] = &[16, 64, 128, 512];
 const EXHAUSTIVE_COPY_COUNTS: &[usize] = &[16, 128, 512];
-const RENAMED_DIRECTORY_COUNTS: &[usize] = &[128, 1_024, 4_096];
+const DIRECTORY_COUNTS: &[usize] = &[128, 1_024, 4_096];
 /// The files of each renamed directory that keep their content, so their renames can be matched by id.
 const UNCHANGED_FILES_PER_DIRECTORY: usize = 4;
 
@@ -144,20 +145,45 @@ fn bench_exhaustive_copy_sources(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_renamed_directories(c: &mut Criterion) {
-    let mut group = c.benchmark_group("tree-diff/renamed-directories");
-    for &count in RENAMED_DIRECTORY_COUNTS {
-        let scenario = renamed_directories(count);
-        group.throughput(Throughput::Elements(count as u64));
-        group.bench_with_input(BenchmarkId::from_parameter(count), &scenario, |b, scenario| {
-            b.iter_batched(
-                || scenario,
-                |scenario| black_box(run_directory_diff(scenario)),
-                BatchSize::SmallInput,
-            );
-        });
+fn bench_directories(c: &mut Criterion) {
+    for (name, make_scenario, rewrites_enabled) in [
+        (
+            "renamed-directories",
+            (|count| renamed_directories(count, false)) as fn(usize) -> DirectoryScenario,
+            true,
+        ),
+        (
+            "renamed-into-existing-directories",
+            |count| renamed_directories(count, true),
+            true,
+        ),
+        ("modified-directories", |count| modified_directories(count, 0), true),
+        (
+            "modified-directories-no-rewrites",
+            |count| modified_directories(count, 0),
+            false,
+        ),
+        (
+            "modified-directories-with-renames",
+            |count| modified_directories(count, 8),
+            true,
+        ),
+        ("one-renamed-directory", one_renamed_directory, true),
+    ] {
+        let mut group = c.benchmark_group(format!("tree-diff/{name}"));
+        for &count in DIRECTORY_COUNTS {
+            let scenario = make_scenario(count);
+            group.throughput(Throughput::Elements(count as u64));
+            group.bench_with_input(BenchmarkId::from_parameter(count), &scenario, |b, scenario| {
+                b.iter_batched(
+                    || scenario,
+                    |scenario| black_box(run_directory_diff(scenario, rewrites_enabled)),
+                    BatchSize::SmallInput,
+                );
+            });
+        }
+        group.finish();
     }
-    group.finish();
 }
 
 fn exact_renames(count: usize) -> Scenario {
@@ -326,17 +352,33 @@ struct DirectoryScenario {
     objects: ObjectDb,
     source_tree_id: ObjectId,
     destination_tree_id: ObjectId,
-    count: usize,
+    expected: CallbackCounts,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct CallbackCounts {
+    /// Additions, deletions, modifications, and rewrites, in that order.
+    files: [usize; 4],
+    /// Additions, deletions, modifications, and rewrites, in that order.
+    directories: [usize; 4],
 }
 
 /// Independent directory moves with one edited child each require inference from file renames.
-fn renamed_directories(count: usize) -> DirectoryScenario {
+/// Existing destinations retain an unchanged child on both sides of the diff.
+fn renamed_directories(count: usize, existing_destinations: bool) -> DirectoryScenario {
     let objects = object_db();
     let mut source = gix_object::tree::Editor::new(Tree::default(), &gix_object::find::Never, gix_hash::Kind::Sha1);
     let mut destination =
         gix_object::tree::Editor::new(Tree::default(), &gix_object::find::Never, gix_hash::Kind::Sha1);
     for idx in 0..count {
         let (old_dir, new_dir) = (format!("old-{idx:05}"), format!("new-{idx:05}"));
+        if existing_destinations {
+            let kept_blob_id = insert_blob(&objects, &format!("retained file in directory {idx}\n"));
+            for tree in [&mut source, &mut destination] {
+                tree.upsert([new_dir.as_str(), "kept.txt"], EntryKind::Blob, kept_blob_id)
+                    .expect("benchmark paths are valid");
+            }
+        }
         for file in 0..=UNCHANGED_FILES_PER_DIRECTORY {
             let name = format!("file-{file}.txt");
             let source_blob_id = insert_blob(&objects, &format!("file {file} in directory {idx}\n"));
@@ -361,13 +403,90 @@ fn renamed_directories(count: usize) -> DirectoryScenario {
             .write(|tree| objects.write(tree))
             .expect("in-memory tree writes succeed"),
         objects,
-        count,
+        expected: CallbackCounts {
+            files: [count, count, 0, count * UNCHANGED_FILES_PER_DIRECTORY],
+            directories: [0, 0, count * usize::from(existing_destinations), count],
+        },
     }
 }
 
-fn run_directory_diff(scenario: &DirectoryScenario) -> Option<Outcome> {
+/// Existing directories each modify one file. An optional directory move exercises inference
+/// while leaving all directory modifications unrelated to it.
+fn modified_directories(count: usize, renames: usize) -> DirectoryScenario {
+    let objects = object_db();
+    let mut source = gix_object::tree::Editor::new(Tree::default(), &gix_object::find::Never, gix_hash::Kind::Sha1);
+    let mut destination =
+        gix_object::tree::Editor::new(Tree::default(), &gix_object::find::Never, gix_hash::Kind::Sha1);
+    for idx in 0..count {
+        let directory = format!("dir-{idx:05}");
+        let source_blob_id = insert_blob(&objects, &format!("original file in directory {idx}\n"));
+        let destination_blob_id = insert_blob(&objects, &format!("modified file in directory {idx}\n"));
+        source
+            .upsert([directory.as_str(), "file.txt"], EntryKind::Blob, source_blob_id)
+            .expect("benchmark paths are valid");
+        destination
+            .upsert([directory.as_str(), "file.txt"], EntryKind::Blob, destination_blob_id)
+            .expect("benchmark paths are valid");
+    }
+    for idx in 0..renames {
+        let name = format!("file-{idx}.txt");
+        let blob_id = insert_blob(&objects, &format!("exact rename {idx}\n"));
+        source
+            .upsert(["old-renamed", name.as_str()], EntryKind::Blob, blob_id)
+            .expect("benchmark paths are valid");
+        destination
+            .upsert(["new-renamed", name.as_str()], EntryKind::Blob, blob_id)
+            .expect("benchmark paths are valid");
+    }
+    DirectoryScenario {
+        source_tree_id: source
+            .write(|tree| objects.write(tree))
+            .expect("in-memory tree writes succeed"),
+        destination_tree_id: destination
+            .write(|tree| objects.write(tree))
+            .expect("in-memory tree writes succeed"),
+        objects,
+        expected: CallbackCounts {
+            files: [0, 0, count, renames],
+            directories: [0, 0, count, usize::from(renames > 0)],
+        },
+    }
+}
+
+/// Many exact file renames all vote for one destination directory.
+fn one_renamed_directory(count: usize) -> DirectoryScenario {
+    let objects = object_db();
+    let mut source = gix_object::tree::Editor::new(Tree::default(), &gix_object::find::Never, gix_hash::Kind::Sha1);
+    let mut destination =
+        gix_object::tree::Editor::new(Tree::default(), &gix_object::find::Never, gix_hash::Kind::Sha1);
+    for idx in 0..count {
+        let name = format!("file-{idx:05}.txt");
+        let blob_id = insert_blob(&objects, &format!("unique file {idx}\n"));
+        source
+            .upsert(["old", name.as_str()], EntryKind::Blob, blob_id)
+            .expect("benchmark paths are valid");
+        destination
+            .upsert(["new", name.as_str()], EntryKind::Blob, blob_id)
+            .expect("benchmark paths are valid");
+    }
+    DirectoryScenario {
+        source_tree_id: source
+            .write(|tree| objects.write(tree))
+            .expect("in-memory tree writes succeed"),
+        destination_tree_id: destination
+            .write(|tree| objects.write(tree))
+            .expect("in-memory tree writes succeed"),
+        objects,
+        expected: CallbackCounts {
+            files: [0, 0, 0, count],
+            directories: [0, 0, 0, 1],
+        },
+    }
+}
+
+fn run_directory_diff(scenario: &DirectoryScenario, rewrites_enabled: bool) -> Option<Outcome> {
     let (mut source_buf, mut destination_buf) = (Vec::new(), Vec::new());
-    let (mut directories, mut files) = (0, 0);
+    let mut actual = CallbackCounts::default();
     let outcome = gix_diff::tree_with_rewrites(
         scenario
             .objects
@@ -381,19 +500,24 @@ fn run_directory_diff(scenario: &DirectoryScenario) -> Option<Outcome> {
         &mut Default::default(),
         &scenario.objects,
         |change| {
-            if let gix_diff::tree_with_rewrites::ChangeRef::Rewrite { entry_mode, .. } = change {
-                if entry_mode.is_tree() {
-                    directories += 1;
-                } else {
-                    files += 1;
-                }
-            }
+            let (entry_mode, kind) = match change {
+                ChangeRef::Addition { entry_mode, .. } => (entry_mode, 0),
+                ChangeRef::Deletion { entry_mode, .. } => (entry_mode, 1),
+                ChangeRef::Modification { entry_mode, .. } => (entry_mode, 2),
+                ChangeRef::Rewrite { entry_mode, .. } => (entry_mode, 3),
+            };
+            let counts = if entry_mode.is_tree() {
+                &mut actual.directories
+            } else {
+                &mut actual.files
+            };
+            counts[kind] += 1;
             black_box(change);
             Ok(Action::Continue(()))
         },
         gix_diff::tree_with_rewrites::Options {
             location: Some(gix_diff::tree::recorder::Location::Path),
-            rewrites: Some(Rewrites {
+            rewrites: rewrites_enabled.then_some(Rewrites {
                 percentage: None,
                 limit: 0,
                 ..Default::default()
@@ -401,11 +525,9 @@ fn run_directory_diff(scenario: &DirectoryScenario) -> Option<Outcome> {
         },
     )
     .expect("benchmark tree diff succeeds");
-    assert_eq!(directories, scenario.count, "each moved directory is inferred");
     assert_eq!(
-        files,
-        scenario.count * UNCHANGED_FILES_PER_DIRECTORY,
-        "only unchanged files match exactly"
+        actual, scenario.expected,
+        "each callback kind occurs exactly as expected"
     );
     outcome
 }
@@ -498,6 +620,6 @@ criterion_group!(
     bench_ambiguous_identical_content,
     bench_similarity_renames,
     bench_exhaustive_copy_sources,
-    bench_renamed_directories
+    bench_directories
 );
 criterion_main!(benches);

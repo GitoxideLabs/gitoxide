@@ -22,7 +22,7 @@ use crate::{rewrites, rewrites::tracker, tree::Error};
 ///
 /// `rhs` or `lhs` can be empty to indicate deletion or addition of an entire tree.
 ///
-/// Directory renames are inferred from finalized file renames between deleted and added trees.
+/// Directory renames are inferred from finalized file renames from deleted trees into added or modified trees.
 /// Each source directory needs a unique destination with the most renamed children. Renamed files support
 /// their containing directories and ancestors with matching relative directory suffixes.
 /// Directory inference does not affect file matching.
@@ -188,8 +188,8 @@ where
     fn visit(&mut self, change: crate::tree::visit::Change) -> crate::tree::visit::Action {
         let change = match self.tracked.as_mut() {
             Some(_) if change.entry_mode().is_tree() => {
+                self.directories.push(change.clone(), self.recorder.path());
                 if !matches!(change, crate::tree::visit::Change::Modification { .. }) {
-                    self.directories.push(change, self.recorder.path());
                     return std::ops::ControlFlow::Continue(());
                 }
                 change

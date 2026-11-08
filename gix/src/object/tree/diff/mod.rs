@@ -60,10 +60,11 @@ pub enum Change<'a, 'old, 'new> {
         /// The object id after the modification.
         id: Id<'new>,
     },
-    /// Entries are considered rewritten if they are not trees and they, according to some understanding of identity, were renamed
-    /// or copied.
+    /// Entries are considered rewritten if they, according to some understanding of identity, were renamed or copied.
+    /// Directory renames are inferred from completed file renames into added or existing directories.
     /// In case of renames, this means they originally appeared as [`Deletion`](Change::Deletion) signalling their source as well as an
-    /// [`Addition`](Change::Addition) acting as destination.
+    /// [`Addition`](Change::Addition) acting as destination, or a [`Modification`](Change::Modification) for an existing directory.
+    /// Existing destination directories retain their modification event alongside the inferred rename.
     ///
     /// In case of copies, the `copy` flag is true and typically represents a perfect copy of a source was made.
     ///

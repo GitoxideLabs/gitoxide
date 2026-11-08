@@ -104,6 +104,65 @@ mv old/three other/three
 rmdir old
 record_after directory-split -M100%
 
+# A surviving directory contributes votes alongside a newly added destination,
+# and its original tree modification must survive directory-rename inference.
+for result in existing-wins new-wins existing-tie; do
+  git rm -q -rf .
+  mkdir old existing
+  printf 'keep\n' >existing/keep
+  printf 'one\n' >old/one
+  printf 'two\n' >old/two
+  if [ "$result" != existing-tie ]; then printf 'three\n' >old/three; fi
+  record_before "directory-$result"
+  mkdir new
+  mv old/one new/one
+  mv old/two existing/two
+  case "$result" in
+    existing-wins) mv old/three existing/three ;;
+    new-wins) mv old/three new/three ;;
+  esac
+  rmdir old
+  record_after "directory-$result" -M100%
+done
+
+# Two removed roots share existing destinations at both levels. Inference must
+# recover their new tree IDs and preserve the original modifications only once.
+git rm -q -rf .
+mkdir -p old/sub other/sub existing/sub
+printf 'keep\n' >existing/sub/keep
+printf 'one\n' >old/sub/one
+printf 'two\n' >other/sub/two
+record_before directory-nested-existing
+mv old/sub/one other/sub/two existing/sub/
+rmdir old/sub old other/sub other
+record_after directory-nested-existing -M100%
+
+# The repository root also receives votes, although it cannot be emitted as a
+# directory rewrite. A nested move to sub/ must propagate votes into the root.
+for result in root-wins root-tie nested-root-wins; do
+  git rm -q -rf .
+  source_dir=old
+  destination_dir=.
+  other_dir=new
+  if [ "$result" = nested-root-wins ]; then
+    source_dir=old/sub
+    destination_dir=sub
+    other_dir=new/sub
+  fi
+  mkdir -p "$source_dir"
+  printf 'one\n' >"$source_dir/one"
+  printf 'two\n' >"$source_dir/two"
+  if [ "$result" != root-tie ]; then printf 'three\n' >"$source_dir/three"; fi
+  record_before "directory-$result"
+  mkdir -p "$destination_dir" "$other_dir"
+  mv "$source_dir/one" "$other_dir/one"
+  mv "$source_dir/two" "$destination_dir/two"
+  if [ "$result" != root-tie ]; then mv "$source_dir/three" "$destination_dir/three"; fi
+  if [ "$result" = nested-root-wins ]; then rmdir old/sub; fi
+  rmdir old
+  record_after "directory-$result" -M100%
+done
+
 # Equal support for two destinations does not establish a directory rename.
 git rm -q -rf .
 mkdir old

@@ -26,15 +26,22 @@ an identity match or inferred directory rename, while an inexact match can also 
 Callers that need line counts can request them with `gix`'s `change.diff(&mut cache)?.line_counts()`;
 the returned `DiffLineStats` contains line counts only and follows normal blob-diff size limits.
 
-The rewrite benchmarks assert their expected matches and cover exact renames, repeated identical content,
-similarity with and without matching basenames, edited binary files and copy reuse. The directory scenario
-uses the tree-diff API to exercise inference from unchanged children of edited directories.
-For a local before/after comparison, run on each implementation respectively:
+Rewrite benchmarks check exact renames, duplicate content, similarity with and without matching basenames,
+binary edits and copy reuse. Tree-diff scenarios cover new and existing destination directories, modifications
+with and without rewrite tracking, one directory rename amid unrelated modifications, and many-file directory
+rename inference. Modified-directory cases expose metadata overhead, including during rename inference;
+disabling rewrite tracking provides a control. Scenarios use 128, 1,024 or 4,096 files or directories,
+assert expected matches and callback counts, and exclude fixture construction from timing.
+
+For before/after tree-diff comparisons, keep benchmark sources identical and run on each implementation respectively:
 
 ```shell
-cargo bench -p gix-diff --bench rewrite-tracker -- --save-baseline before
-cargo bench -p gix-diff --bench rewrite-tracker -- --baseline before
+cargo bench -p gix-diff --bench rewrite-tracker -- tree-diff/ --save-baseline before
+cargo bench -p gix-diff --bench rewrite-tracker -- tree-diff/ --baseline before
 ```
+
+Use `--test` instead of the baseline option to check the scenario assertions without timing them.
+Omit `tree-diff/` to include the file-tracker benchmarks too.
 
 ## Running the diff-slider tests
 
