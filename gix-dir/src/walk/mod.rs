@@ -198,6 +198,13 @@ pub struct Options<'a> {
     /// They will automatically be detected as 'tracked', but without providing index information (as there is no actual index entry).
     /// Note that the unicode composition must match the `precompose_unicode` field so that paths will match verbatim.
     pub worktree_relative_worktree_dirs: Option<&'a BTreeSet<BString>>,
+    /// The number of additional threads that read directories known to contain tracked files ahead of the traversal.
+    ///
+    /// Reading directories is dominated by system calls, so reading them concurrently makes walks over large worktrees faster.
+    /// The traversal itself still happens on the calling thread, and its results are unaffected.
+    /// If `0`, the default, all directories are read by the calling thread.
+    /// It has no effect on walks [for deletion](Self::for_deletion).
+    pub prefetch_threads: usize,
 }
 
 /// All information that is required to perform a dirwalk, and classify paths properly.
@@ -282,4 +289,5 @@ pub struct Outcome {
 
 mod classify;
 pub(crate) mod function;
+mod prefetch;
 mod readdir;

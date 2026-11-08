@@ -5238,3 +5238,61 @@ fn in_repo_hidden_worktree() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn prefetching_directories_yields_the_same_outcome() -> TestResult {
+    let root = gix_testtools::scripted_fixture_read_only("many.sh")?;
+    let mut num_compared = 0;
+    for entry in std::fs::read_dir(&root)? {
+        let worktree_root = entry?.path();
+        if !worktree_root.join(".git").is_dir() {
+            continue;
+        }
+        for base in [
+            options(),
+            options_emit_all(),
+            walk::Options {
+                emit_untracked: CollapseDirectory,
+                emit_ignored: Some(CollapseDirectory),
+                emit_collapsed: Some(OnStatusMismatch),
+                ..options()
+            },
+        ] {
+            for fresh_index in [true, false] {
+                let [serial, prefetched] = [0, 3].map(|prefetch_threads| {
+                    try_collect_filtered_opts_collect(
+                        &worktree_root,
+                        None,
+                        |keep, ctx| {
+                            walk(
+                                &worktree_root,
+                                ctx,
+                                walk::Options {
+                                    prefetch_threads,
+                                    ..base
+                                },
+                                keep,
+                            )
+                        },
+                        None::<&str>,
+                        Options {
+                            fresh_index,
+                            ..Default::default()
+                        },
+                    )
+                    .map_err(|err| err.to_string())
+                });
+                assert_eq!(
+                    prefetched, serial,
+                    "reading directories ahead in {worktree_root:?} must not change entries or statistics"
+                );
+                num_compared += 1;
+            }
+        }
+    }
+    assert!(
+        num_compared > 100,
+        "all repositories of the fixture are compared, got {num_compared}"
+    );
+    Ok(())
+}

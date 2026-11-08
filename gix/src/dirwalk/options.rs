@@ -40,6 +40,7 @@ impl From<Options> for gix_dir::walk::Options<'static> {
             symlinks_to_directories_are_ignored_like_directories: v
                 .symlinks_to_directories_are_ignored_like_directories,
             worktree_relative_worktree_dirs: None,
+            prefetch_threads: 0,
         }
     }
 }

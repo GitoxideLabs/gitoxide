@@ -38,6 +38,7 @@ pub fn options_emit_all() -> walk::Options<'static> {
         emit_collapsed: None,
         symlinks_to_directories_are_ignored_like_directories: false,
         worktree_relative_worktree_dirs: None,
+        prefetch_threads: 0,
     }
 }
 

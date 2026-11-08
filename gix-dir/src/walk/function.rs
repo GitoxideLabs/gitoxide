@@ -9,7 +9,7 @@ use gix_error::{OptionExt, ResultExt, bail};
 
 use crate::{
     EntryRef, entry,
-    walk::{Action, Context, Delegate, ForDeletionMode, Options, Outcome, classify, readdir},
+    walk::{Action, Context, Delegate, ForDeletionMode, Options, Outcome, classify, prefetch, readdir},
 };
 
 /// A function to perform a git-style, unsorted, directory walk.
@@ -35,18 +35,9 @@ use crate::{
 ///
 /// ### Performance Notes
 ///
-/// Parallel traversal is abandoned as it's not worth managing a thread-pool over this, also given that
-/// traversal is rare in typical Git usage.
-///
-/// Thus the decision was made to start out with something akin to the Git implementation, get all tests and
-/// baseline comparison to pass, and see if an iterator with just `filter_entry` would be capable of dealing with
-/// it. Note that `filter_entry` is the only just-in-time traversal control that `walkdir` offers, even though
-/// one could consider switching to `jwalk` and just use its single-threaded implementation if a unified interface
-/// is necessary to make this work - `jwalk` has a more powerful API for this to work.
-///
-/// If that was the case, we are talking about 0.5s for single-threaded traversal (without doing any extra work)
-/// or 0.25s for optimal multi-threaded performance, all in the WebKit directory with 388k items to traverse.
-/// Thus, the speedup could easily be 2x or more and thus worth investigating in due time.
+/// The traversal and classification happen on the calling thread to remain close to the Git implementation.
+/// Directory reads, however, are dominated by system calls, so [`Options::prefetch_threads`] can be used to read
+/// directories that are known to contain tracked files on other threads ahead of the traversal.
 pub fn walk(
     worktree_root: &Path,
     mut ctx: Context<'_>,
@@ -110,19 +101,46 @@ pub fn walk(
         return Ok((out, root.to_owned()));
     }
 
-    let mut state = readdir::State::new(worktree_root, ctx.current_dir, options.for_deletion.is_some());
+    let prefetch = (options.prefetch_threads > 0 && options.for_deletion.is_none())
+        .then(|| prefetch::Prefetch::new(ctx.index, buf.as_bstr()))
+        .flatten();
+    let mut state = readdir::State::new(
+        worktree_root,
+        ctx.current_dir,
+        options.for_deletion.is_some(),
+        prefetch.as_ref(),
+    );
     let may_collapse = root != worktree_root && state.may_collapse(&current);
-    let (action, _) = readdir::recursive(
-        may_collapse,
-        &mut current,
-        &mut buf,
-        root_info,
-        &mut ctx,
-        options,
-        delegate,
-        &mut out,
-        &mut state,
-    )?;
+    let should_interrupt = ctx.should_interrupt;
+    let (action, _) = std::thread::scope(|scope| {
+        if let Some(prefetch) = prefetch.as_ref() {
+            for _ in 0..options.prefetch_threads {
+                let spawned = std::thread::Builder::new()
+                    .name("gix_dir::prefetch".into())
+                    .spawn_scoped(scope, move || {
+                        prefetch.run(worktree_root, options.precompose_unicode, should_interrupt);
+                    });
+                if spawned.is_err() {
+                    break;
+                }
+            }
+        }
+        let res = readdir::recursive(
+            may_collapse,
+            &mut current,
+            &mut buf,
+            root_info,
+            &mut ctx,
+            options,
+            delegate,
+            &mut out,
+            &mut state,
+        );
+        if let Some(prefetch) = prefetch.as_ref() {
+            prefetch.finish();
+        }
+        res
+    })?;
     if action.is_continue() {
         state.emit_remaining(may_collapse, options, &mut out, delegate);
         assert_eq!(state.on_hold.len(), 0, "BUG: after emission, on hold must be empty");

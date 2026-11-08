@@ -39,20 +39,29 @@ pub(super) fn recursive(
     opts: Options<'_>,
     delegate: &mut dyn Delegate,
     out: &mut Outcome,
-    state: &mut State,
+    state: &mut State<'_>,
 ) -> Result<(Action, bool)> {
     if ctx.should_interrupt.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
         bail!(cancelled("Interrupted"));
     }
     out.read_dir_calls += 1;
-    let Some(entries) = read_dir_result(
-        gix_fs::read_dir(current, opts.precompose_unicode),
-        current,
-        opts.for_deletion,
-        out,
-    )?
-    else {
-        return Ok((std::ops::ControlFlow::Continue(()), true));
+    let prefetched = state
+        .prefetch
+        .and_then(|prefetch| prefetch.get(current_bstr.as_bstr(), current, opts.precompose_unicode));
+    let entries = match prefetched {
+        Some(listing) => Entries::Prefetched(listing.iter()),
+        None => {
+            let Some(entries) = read_dir_result(
+                gix_fs::read_dir(current, opts.precompose_unicode),
+                current,
+                opts.for_deletion,
+                out,
+            )?
+            else {
+                return Ok((std::ops::ControlFlow::Continue(()), true));
+            };
+            Entries::Live(entries)
+        }
     };
 
     let mut num_entries = 0;
@@ -80,7 +89,7 @@ pub(super) fn recursive(
             current_bstr,
             if prev_len == 0 { 0 } else { prev_len + 1 },
             None,
-            || entry.file_type().ok().map(Into::into),
+            || entry.file_type().map(Into::into),
             opts,
             ctx,
         )?;
@@ -167,14 +176,52 @@ fn read_dir_result<T>(
     }
 }
 
-pub(super) struct State {
+enum Entries<'a, I> {
+    Prefetched(std::slice::Iter<'a, (std::ffi::OsString, Option<std::fs::FileType>)>),
+    Live(I),
+}
+
+enum DirEntry<'a> {
+    Prefetched(&'a (std::ffi::OsString, Option<std::fs::FileType>)),
+    Live(gix_fs::read_dir::DirEntry),
+}
+
+impl DirEntry<'_> {
+    fn file_name(&self) -> Cow<'_, std::ffi::OsStr> {
+        match self {
+            DirEntry::Prefetched((name, _)) => Cow::Borrowed(name.as_os_str()),
+            DirEntry::Live(entry) => entry.file_name(),
+        }
+    }
+
+    fn file_type(&self) -> Option<std::fs::FileType> {
+        match self {
+            DirEntry::Prefetched((_, file_type)) => *file_type,
+            DirEntry::Live(entry) => entry.file_type().ok(),
+        }
+    }
+}
+
+impl<'a, I: Iterator<Item = io::Result<gix_fs::read_dir::DirEntry>>> Iterator for Entries<'a, I> {
+    type Item = io::Result<DirEntry<'a>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Entries::Prefetched(iter) => iter.next().map(|entry| Ok(DirEntry::Prefetched(entry))),
+            Entries::Live(iter) => iter.next().map(|res| res.map(DirEntry::Live)),
+        }
+    }
+}
+
+pub(super) struct State<'prefetch> {
+    pub(super) prefetch: Option<&'prefetch super::prefetch::Prefetch<'prefetch>>,
     /// The entries to hold back until it's clear what to do with them.
     pub on_hold: Vec<Entry>,
     /// The path the user is currently in, as seen from the workdir root.
     worktree_relative_current_dir: Option<PathBuf>,
 }
 
-impl State {
+impl<'prefetch> State<'prefetch> {
     /// Hold the entry with the given `status` if it's a candidate for collapsing the containing directory.
     fn held_for_directory_collapse(&mut self, rela_path: &BStr, info: classify::Outcome, opts: &Options<'_>) -> bool {
         if opts.should_hold(info.status) {
@@ -195,7 +242,12 @@ impl State {
         }
     }
 
-    pub(super) fn new(worktree_root: &Path, current_dir: &Path, is_delete_mode: bool) -> Self {
+    pub(super) fn new(
+        worktree_root: &Path,
+        current_dir: &Path,
+        is_delete_mode: bool,
+        prefetch: Option<&'prefetch super::prefetch::Prefetch<'prefetch>>,
+    ) -> Self {
         let worktree_relative_current_dir = if is_delete_mode {
             gix_path::realpath_opts(worktree_root, current_dir, gix_path::realpath::MAX_SYMLINKS)
                 .ok()
@@ -205,6 +257,7 @@ impl State {
             None
         };
         Self {
+            prefetch,
             on_hold: Vec::new(),
             worktree_relative_current_dir,
         }
@@ -247,7 +300,7 @@ impl Mark {
     fn reduce_held_entries(
         mut self,
         num_entries: usize,
-        state: &mut State,
+        state: &mut State<'_>,
         prevent_collapse: &mut bool,
         dir_path: &Path,
         dir_rela_path: &BStr,
@@ -300,7 +353,7 @@ impl Mark {
 
     fn emit_all_held(
         &mut self,
-        state: &mut State,
+        state: &mut State<'_>,
         opts: Options<'_>,
         out: &mut walk::Outcome,
         delegate: &mut dyn walk::Delegate,
@@ -320,7 +373,7 @@ impl Mark {
         &self,
         dir_rela_path: &BStr,
         dir_info: classify::Outcome,
-        state: &mut State,
+        state: &mut State<'_>,
         out: &mut walk::Outcome,
         opts: Options<'_>,
         ctx: &mut Context<'_>,
