@@ -79,30 +79,50 @@ impl ChangeRef<'_, '_> {
 }
 
 impl ChangeRef<'_, '_> {
-    /// Return all shared fields among all variants: `(location, index, entry_mode, id)`
+    /// Return `(location, index, entry_mode, id)` for the entry in `lhs`, before the change.
     ///
-    /// In case of rewrites, the fields return to the current change.
-    ///
-    /// Note that there are also more specific accessors in case you only need to access to one of
-    /// these fields individually.
-    ///
-    /// See [`ChangeRef::location()`], [`ChangeRef::index()`], [`ChangeRef::entry_mode()`] and
-    /// [`ChangeRef::id()`].
-    pub fn fields(&self) -> (&BStr, usize, gix_index::entry::Mode, &gix_hash::oid) {
+    /// This is the removed entry for deletions, the previous entry for modifications, and the
+    /// source entry for rewrites. Additions return `None` as they have no entry in `lhs`.
+    /// See [`Self::rhs_fields()`] for the entry after the change.
+    pub fn lhs_fields(&self) -> Option<(&BStr, usize, gix_index::entry::Mode, &gix_hash::oid)> {
         match self {
+            ChangeRef::Addition { .. } => None,
+            ChangeRef::Deletion {
+                location,
+                index,
+                entry_mode,
+                id,
+            }
+            | ChangeRef::Modification {
+                location,
+                previous_index: index,
+                previous_entry_mode: entry_mode,
+                previous_id: id,
+                ..
+            }
+            | ChangeRef::Rewrite {
+                source_location: location,
+                source_index: index,
+                source_entry_mode: entry_mode,
+                source_id: id,
+                ..
+            } => Some((location.as_ref(), *index, *entry_mode, id)),
+        }
+    }
+
+    /// Return `(location, index, entry_mode, id)` for the entry in `rhs`, after the change.
+    ///
+    /// This is the added entry for additions, the new entry for modifications, and the
+    /// destination entry for rewrites. Deletions return `None` as they have no entry in `rhs`.
+    /// See [`Self::lhs_fields()`] for the entry before the change.
+    pub fn rhs_fields(&self) -> Option<(&BStr, usize, gix_index::entry::Mode, &gix_hash::oid)> {
+        match self {
+            ChangeRef::Deletion { .. } => None,
             ChangeRef::Addition {
                 location,
                 index,
                 entry_mode,
                 id,
-                ..
-            }
-            | ChangeRef::Deletion {
-                location,
-                index,
-                entry_mode,
-                id,
-                ..
             }
             | ChangeRef::Modification {
                 location,
@@ -117,7 +137,7 @@ impl ChangeRef<'_, '_> {
                 entry_mode,
                 id,
                 ..
-            } => (location.as_ref(), *index, *entry_mode, id),
+            } => Some((location.as_ref(), *index, *entry_mode, id)),
         }
     }
 

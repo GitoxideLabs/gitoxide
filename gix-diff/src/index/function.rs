@@ -165,22 +165,14 @@ where
         let out = tracker.emit(
             |dst, src| {
                 let change = if let Some(src) = src {
-                    let (lhs_path, lhs_index, lhs_mode, lhs_id) = match src.change {
-                        ChangeRef::Modification {
-                            location,
-                            previous_index,
-                            previous_entry_mode,
-                            previous_id,
-                            ..
-                        } => (
-                            location.as_ref(),
-                            *previous_index,
-                            *previous_entry_mode,
-                            previous_id.as_ref(),
-                        ),
-                        change => change.fields(),
-                    };
-                    let (rhs_path, rhs_index, rhs_mode, rhs_id) = dst.change.fields();
+                    let (lhs_path, lhs_index, lhs_mode, lhs_id) = src
+                        .change
+                        .lhs_fields()
+                        .expect("rewrite sources are deletions or modifications with an entry in lhs");
+                    let (rhs_path, rhs_index, rhs_mode, rhs_id) = dst
+                        .change
+                        .rhs_fields()
+                        .expect("rewrite destinations are additions with an entry in rhs");
                     ChangeRef::Rewrite {
                         source_location: Cow::Owned(lhs_path.into()),
                         source_index: lhs_index,

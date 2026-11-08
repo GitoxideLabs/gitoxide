@@ -72,7 +72,7 @@ pub enum ChangeRef<'lhs, 'rhs> {
     Rewrite {
         /// The location of the source of the rename or copy operation, in `lhs`.
         source_location: Cow<'lhs, BStr>,
-        /// The index of the entry before the rename, into the entries array of `rhs` for full access.
+        /// The index of the entry before the rewrite, into the entries array of `lhs` for full access.
         source_index: usize,
         /// The mode of the entry before the rewrite, in `lhs`.
         source_entry_mode: gix_index::entry::Mode,

@@ -125,7 +125,7 @@ pub fn show(
         let item = item?;
         match item {
             status::Item::TreeIndex(change) => {
-                let (location, _, _, _) = change.fields();
+                let location = change.location();
                 let status = match change {
                     gix::diff::index::Change::Addition { .. } => "A",
                     gix::diff::index::Change::Deletion { .. } => "D",
