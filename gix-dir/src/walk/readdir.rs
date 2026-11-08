@@ -1,11 +1,12 @@
 use std::{
     borrow::Cow,
+    io,
     path::{Path, PathBuf},
     sync::atomic::Ordering,
 };
 
 use bstr::{BStr, BString, ByteSlice};
-use gix_error::{Result, ResultExt, bail, cancelled, message};
+use gix_error::{ErrorExt, Result, bail, cancelled, message};
 
 use crate::{
     Entry, EntryRef, entry,
@@ -19,9 +20,15 @@ use crate::{
     },
 };
 
+/// Recursively walk `current`, returning `(action, prevent_collapse)` on success.
+///
+/// `action` indicates whether traversal should continue or stop. `prevent_collapse` is `true` if
+/// this directory or a descendant prevents collapsing this directory and its ancestors into single
+/// directory entries. Callers must propagate this flag to their parents.
+///
 /// ### Deviation
 ///
-/// Git mostly silently ignores IO errors and stops iterating seemingly quietly, while we error loudly.
+/// Like Git, ordinary walks skip directory-read errors, but deletion walks abort on every such error.
 #[expect(clippy::too_many_arguments)]
 pub(super) fn recursive(
     may_collapse: bool,
@@ -38,15 +45,24 @@ pub(super) fn recursive(
         bail!(cancelled("Interrupted"));
     }
     out.read_dir_calls += 1;
-    let entries = gix_fs::read_dir(current, opts.precompose_unicode)
-        .or_raise(|| message!("Failed to read the directory at \"{}\"", current.display()))?;
+    let Some(entries) = read_dir_result(
+        gix_fs::read_dir(current, opts.precompose_unicode),
+        current,
+        opts.for_deletion,
+        out,
+    )?
+    else {
+        return Ok((std::ops::ControlFlow::Continue(()), true));
+    };
 
     let mut num_entries = 0;
-    let mark = state.mark(may_collapse);
+    let mut mark = state.mark(may_collapse);
     let mut prevent_collapse = false;
     for entry in entries {
-        let entry =
-            entry.or_raise(|| message!("Could not obtain directory entry in root of '{}'", current.display()))?;
+        let Some(entry) = read_dir_result(entry, current, opts.for_deletion, out)? else {
+            // Preserve earlier entries without treating the unreadable directory as empty or collapsible.
+            return Ok((mark.emit_all_held(state, opts, out, delegate), true));
+        };
         // Important to count right away, otherwise the directory could be seen as empty even though it's not.
         // That is, this should be independent of the kind.
         num_entries += 1;
@@ -130,6 +146,25 @@ pub(super) fn recursive(
         delegate,
     );
     Ok((res, prevent_collapse))
+}
+
+fn read_dir_result<T>(
+    result: io::Result<T>,
+    directory: &Path,
+    for_deletion: Option<ForDeletionMode>,
+    out: &mut Outcome,
+) -> Result<Option<T>> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(err) => {
+            if for_deletion.is_some() {
+                return Err(err.and_raise(message!("Failed to read the directory at \"{}\"", directory.display())));
+            }
+            gix_trace::warn!(?directory, ?err, "Skipping unreadable directory");
+            out.read_dir_errors += 1;
+            Ok(None)
+        }
+    }
 }
 
 pub(super) struct State {
@@ -429,5 +464,50 @@ impl Options<'_> {
             return false;
         }
         self.emit_ignored == Some(CollapseDirectory) || self.emit_untracked == CollapseDirectory
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn directory_read_failures_follow_deletion_policy() -> gix_testtools::TestResult {
+        for for_deletion in [None, Some(ForDeletionMode::default())] {
+            let mut out = Outcome::default();
+            assert_eq!(
+                read_dir_result(Ok(42), Path::new("directory"), for_deletion, &mut out)?,
+                Some(42),
+                "successful reads retain their value in either mode"
+            );
+            assert_eq!(out.read_dir_errors, 0, "successful reads do not count as errors");
+            for kind in [
+                io::ErrorKind::NotFound,
+                io::ErrorKind::NotADirectory,
+                io::ErrorKind::PermissionDenied,
+                io::ErrorKind::Interrupted,
+                io::ErrorKind::Other,
+            ] {
+                let mut out = Outcome::default();
+                let result = read_dir_result::<()>(
+                    Err(io::Error::from(kind)),
+                    Path::new("directory"),
+                    for_deletion,
+                    &mut out,
+                );
+                if for_deletion.is_some() {
+                    let err = result.expect_err("deletion must reject every directory-read failure");
+                    assert_eq!(
+                        err.downcast_any_ref::<io::Error>().map(io::Error::kind),
+                        Some(kind),
+                        "the original I/O error stays available for callers"
+                    );
+                } else {
+                    assert_eq!(result?, None, "ordinary walks skip failed reads");
+                    assert_eq!(out.read_dir_errors, 1, "each failed read marks the listing incomplete");
+                }
+            }
+        }
+        Ok(())
     }
 }

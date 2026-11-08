@@ -234,6 +234,7 @@ fn changed_and_untracked() {
         dirwalk,
         gix_dir::walk::Outcome {
             read_dir_calls: 3,
+            read_dir_errors: 0,
             returned_entries: 2,
             seen_entries: 8,
         }
@@ -281,6 +282,7 @@ fn unreadable_untracked() {
         dirwalk,
         gix_dir::walk::Outcome {
             read_dir_calls: 1,
+            read_dir_errors: 0,
             returned_entries: 1,
             seen_entries: 3,
         }
