@@ -502,6 +502,9 @@ fn parse_time_component(time: &str) -> Option<(u32, u32, u32)> {
     let (hour, minute, second) = if time.contains(':') {
         // Colon-separated: HH:MM:SS or HH:MM
         let parts: Vec<&str> = time.split(':').collect();
+        if !(2..=3).contains(&parts.len()) {
+            return None;
+        }
         let hour: u32 = parts.first()?.parse().ok()?;
         let minute: u32 = parts.get(1).unwrap_or(&"0").parse().ok()?;
         let second: u32 = parts.get(2).unwrap_or(&"0").parse().ok()?;

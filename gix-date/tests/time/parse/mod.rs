@@ -713,6 +713,20 @@ mod numeric_dates {
             gix_date::parse("02/14/08", None).is_err(),
             "a numeric date without a clock does not acquire one from the current time"
         );
+        for clock in ["20:30:45:garbage", "20:30:45:00", "20:30:45:", "20:", "20::30"] {
+            for date in ["02/14/08", "20080214T", "2008-02-14"] {
+                let input = format!("{date} {clock} -0500");
+                for now in [
+                    None,
+                    Some(jiff::Timestamp::UNIX_EPOCH.to_zoned(jiff::tz::TimeZone::UTC)),
+                ] {
+                    assert!(
+                        gix_date::parse(&input, now).is_err(),
+                        "{input}: flexible clocks require exactly two or three nonempty fields"
+                    );
+                }
+            }
+        }
     }
 }
 
