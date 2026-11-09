@@ -101,6 +101,14 @@ pub(super) fn recursive(
         .map(|entry| Ok(DirectoryEntry::Cached(entry)))
         .chain(disk.into_iter().flatten().map(|entry| entry.map(DirectoryEntry::Disk)));
 
+    let index_entries = if opts.ignore_case || current_bstr.is_empty() {
+        ctx.index.entries()
+    } else {
+        current_bstr.push(b'/');
+        let entries = ctx.index.prefixed_entries(current_bstr.as_bstr()).unwrap_or_default();
+        current_bstr.pop();
+        entries
+    };
     let mut num_entries = 0;
     let mut mark = state.mark(may_collapse);
     let mut prevent_collapse = false;
@@ -119,6 +127,8 @@ pub(super) fn recursive(
         }
         let file_name = entry.file_name()?;
         current_bstr.extend_from_slice(gix_path::try_os_str_into_bstr(Cow::Borrowed(file_name.as_ref()))?.as_ref());
+        #[cfg(all(unix, not(target_os = "cygwin")))]
+        let parent_path_len = current.as_os_str().len();
         current.push(file_name);
 
         let mut info = classify::path(
@@ -128,6 +138,7 @@ pub(super) fn recursive(
             None,
             || entry.kind(),
             opts,
+            index_entries,
             ctx,
         )?;
 
@@ -168,7 +179,9 @@ pub(super) fn recursive(
                     ctx.git_dir_realpath,
                 );
             }
-            if !state.held_for_directory_collapse(current_bstr.as_bstr(), info, &opts) {
+            let hidden_tracked = info.status == Status::Tracked && !opts.emit_tracked;
+            prevent_collapse |= hidden_tracked;
+            if hidden_tracked || !state.held_for_directory_collapse(current_bstr.as_bstr(), info, &opts) {
                 let action = emit_entry(Cow::Borrowed(current_bstr.as_bstr()), info, None, opts, out, delegate);
                 if action.is_break() {
                     return Ok((action, prevent_collapse));
@@ -176,6 +189,14 @@ pub(super) fn recursive(
             }
         }
         current_bstr.truncate(prev_len);
+        #[cfg(all(unix, not(target_os = "cygwin")))]
+        {
+            // Restore the known parent bytes without parsing the appended component again.
+            let mut path = gix_path::into_bstr(std::mem::take(current))?.into_owned();
+            path.truncate(parent_path_len);
+            *current = gix_path::from_bstring(path)?;
+        }
+        #[cfg(not(all(unix, not(target_os = "cygwin"))))]
         current.pop();
     }
 
@@ -223,7 +244,10 @@ impl DirectoryEntry<'_> {
         match self {
             Self::Cached((name, _)) => {
                 let path = gix_path::from_byte_slice(name)?;
-                if name.contains(&0) || path.file_name() != Some(path.as_os_str()) {
+                if matches!(name.as_slice(), b"" | b"." | b"..")
+                    || name.find_byteset(b"/\0").is_some()
+                    || ((!cfg!(unix) || cfg!(target_os = "cygwin")) && path.file_name() != Some(path.as_os_str()))
+                {
                     bail!(validation(format!(
                         "Cached directory entry '{name}' is not a single file name"
                     )));
@@ -545,6 +569,38 @@ impl Options<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_names_match_native_path_components() -> gix_error::TestResult {
+        for name in [
+            b"".as_slice(),
+            b".",
+            b"..",
+            b"...",
+            b"file",
+            b"file.",
+            b"file ",
+            b"nested/file",
+            b"/absolute",
+            b"trailing/",
+            b"nul\0",
+            b"nested\\file",
+            b"C:file",
+            b"C:\\file",
+            b"\\\\server\\file",
+            b"\xff",
+        ] {
+            let expected = gix_path::from_byte_slice(name)
+                .is_ok_and(|path| !name.contains(&0) && path.file_name() == Some(path.as_os_str()));
+            let cached = (BString::from(name), entry::Kind::File);
+            assert_eq!(
+                DirectoryEntry::Cached(&cached).file_name().is_ok(),
+                expected,
+                "cached name {name:?} must retain native path validation"
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn directory_read_failures_follow_deletion_policy() -> gix_testtools::TestResult {
