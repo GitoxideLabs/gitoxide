@@ -821,7 +821,12 @@ fn a_hit_moves_its_index_to_the_front_and_keeps_the_others_in_order() -> Result 
 /// Write a pack with `blobs` and `fillers` more blobs of its own to `objects_dir`, along with a v1 index.
 /// A blob with a base is written as a `REF_DELTA` against the base's id, which the pack doesn't hold, like in a thin
 /// pack that was stored as it was received.
-fn write_pack(objects_dir: &std::path::Path, name: &str, blobs: &[(&[u8], Option<&[u8]>)], fillers: usize) -> Result {
+fn write_pack(
+    objects_dir: &std::path::Path,
+    name: &str,
+    blobs: &[(&[u8], Option<&[u8]>)],
+    fillers: usize,
+) -> Result<std::path::PathBuf> {
     use std::io::Write;
 
     use gix_pack::data;
@@ -889,81 +894,154 @@ fn write_pack(objects_dir: &std::path::Path, name: &str, blobs: &[(&[u8], Option
     let pack_dir = objects_dir.join("pack");
     std::fs::create_dir_all(&pack_dir)?;
     std::fs::write(pack_dir.join(format!("pack-{pack_id}.pack")), pack)?;
-    std::fs::write(pack_dir.join(format!("pack-{pack_id}.idx")), index)?;
-    Ok(())
+    let index_path = pack_dir.join(format!("pack-{pack_id}.idx"));
+    std::fs::write(&index_path, index)?;
+    Ok(index_path)
 }
 
 #[test]
-fn a_hit_that_needs_a_delta_base_from_another_pack_moves_its_own_index_to_the_front() -> Result {
+fn a_ref_delta_lookup_keeps_its_pack_after_loading_the_base() -> gix_error::TestResult {
+    delta_base_lookup_keeps_its_pack(false)
+}
+
+#[test]
+fn a_ref_delta_header_keeps_its_pack_after_loading_the_base() -> gix_error::TestResult {
+    delta_base_lookup_keeps_its_pack(true)
+}
+
+fn delta_base_lookup_keeps_its_pack(read_header: bool) -> gix_error::TestResult {
     let object_hash = gix_testtools::object_hash();
     let blob_id = |blob: &[u8]| gix_object::compute_hash(object_hash, gix_object::Kind::Blob, blob);
     let (object, base) = (b"a delta".as_slice(), b"its base".as_slice());
+    let other_base = b"a different base".as_slice();
     // `in_every_pack` is answered by the front index, and `next_to_the_base` tells the base's index from the other one.
     let (in_every_pack, next_to_the_base) = (b"in every pack".as_slice(), b"next to the base".as_slice());
-
-    // The pack with the delta is in slot 0 or 1, and the base is in a pack behind it, so looking up the base moves the
-    // delta's index back by one slot.
-    for delta_slot in [0, 1] {
-        let dir = gix_testtools::tempfile::tempdir()?;
-        // With the delta in slot 1, the other pack comes first. With the delta in slot 0, it comes second and also holds
-        // the object in full: looking the object up again must not end up there, as that pack isn't loaded.
-        let mut other = vec![(in_every_pack, None), (next_to_the_base, None)];
-        if delta_slot == 0 {
-            other.push((object, None));
+    let variant = |delta_slot, duplicate_in_midx, duplicate_is_delta| {
+        format!("delta-{delta_slot}-midx-{duplicate_in_midx}-duplicate-delta-{duplicate_is_delta}")
+    };
+    let (fixture, ()) = gix_testtools::rust_fixture_read_only("out-of-pack-delta", 2, |state| {
+        if let gix_testtools::FixtureState::Uninitialized(path) = state {
+            for delta_slot in [0, 1] {
+                for (duplicate_in_midx, duplicate_is_delta) in [(false, false), (true, false), (true, true)] {
+                    let dir = path.join(variant(delta_slot, duplicate_in_midx, duplicate_is_delta));
+                    let mut other = vec![(in_every_pack, None), (next_to_the_base, None)];
+                    if delta_slot == 0 {
+                        other.push((object, None));
+                    }
+                    // Both standalone indices exceed the MIDX's size, so the base's index starts last.
+                    let (delta_fillers, other_fillers) = if delta_slot == 0 { (80, 40) } else { (40, 80) };
+                    write_pack(
+                        &dir,
+                        "delta",
+                        &[(object, Some(base)), (in_every_pack, None)],
+                        delta_fillers,
+                    )?;
+                    write_pack(&dir, "other", &other, other_fillers)?;
+                    let base_index = write_pack(
+                        &dir,
+                        "base",
+                        &[
+                            (base, None),
+                            (other_base, None),
+                            (in_every_pack, None),
+                            (next_to_the_base, None),
+                        ],
+                        0,
+                    )?;
+                    if duplicate_in_midx {
+                        // Resolving the base opens only its pack, leaving the MIDX's duplicate object pack unloaded.
+                        // A duplicate delta needs its own base; reusing the original delta's resolved base cannot decode it.
+                        let duplicate_index = write_pack(
+                            &dir,
+                            "duplicate",
+                            &[(object, duplicate_is_delta.then_some(other_base))],
+                            0,
+                        )?;
+                        gix_pack::multi_index::write_from_index_paths(
+                            vec![base_index, duplicate_index],
+                            &mut std::fs::File::create(dir.join("pack/multi-pack-index"))?,
+                            &mut gix_utils::progress::Discard,
+                            &std::sync::atomic::AtomicBool::default(),
+                            gix_pack::multi_index::write::Options { object_hash },
+                        )?;
+                    }
+                }
+            }
         }
-        // The handle asks the indices of bigger packs first, so the fillers put the delta's pack into its slot, and the
-        // base's pack last.
-        let (delta_fillers, other_fillers) = if delta_slot == 0 { (4, 1) } else { (2, 4) };
-        write_pack(
-            dir.path(),
-            "delta",
-            &[(object, Some(base)), (in_every_pack, None)],
-            delta_fillers,
-        )?;
-        write_pack(dir.path(), "other", &other, other_fillers)?;
-        write_pack(
-            dir.path(),
-            "base",
-            &[(base, None), (in_every_pack, None), (next_to_the_base, None)],
-            0,
-        )?;
+        Ok(())
+    })?;
 
-        let mut handle = crate::odb_at(dir.path())?.into_arc()?.into_inner();
-        handle.prevent_pack_unload();
-        assert!(
-            !gix_pack::Find::contains(&handle, &ObjectId::null(object_hash)),
-            "a miss loads every index"
-        );
-        let delta_pack_id = answering_pack_id(&handle.clone(), &blob_id(b"delta filler 0")?)?;
-        let base_pack_id = answering_pack_id(&handle.clone(), &blob_id(base)?)?;
-
-        type Lookup = fn(&StoreHandle, &ObjectId) -> Result<Option<u64>>;
-        let lookups: [(&str, Lookup); 2] = [
-            ("try_find", |handle, id| {
-                Ok(gix_pack::Find::try_find(handle, id, &mut Vec::new())?
-                    .map(|(data, _location)| data.data.len() as u64))
-            }),
-            ("try_header", |handle, id| {
-                Ok(gix_odb::Header::try_header(handle, id)?.map(|header| header.size()))
-            }),
-        ];
-        for (name, lookup) in lookups {
-            let handle = handle.clone();
-            assert_eq!(
-                lookup(&handle, &blob_id(object)?)?,
-                Some(object.len() as u64),
-                "{name}: the delta in slot {delta_slot} resolves against the base in another pack"
-            );
-            assert_eq!(
-                answering_pack_id(&handle, &blob_id(in_every_pack)?)?,
-                delta_pack_id,
-                "{name}: the delta's index moved to the front from slot {delta_slot}, wherever looking up its base put it"
-            );
-            assert_eq!(
-                answering_pack_id(&handle, &blob_id(next_to_the_base)?)?,
-                base_pack_id,
-                "{name}: the base's index comes second"
-            );
+    for delta_slot in [1, 0] {
+        for (duplicate_in_midx, duplicate_is_delta) in [(true, false), (true, true), (false, false)] {
+            for load_all_indices in [true, false] {
+                let dir = fixture.join(variant(delta_slot, duplicate_in_midx, duplicate_is_delta));
+                let mut handle = std::sync::Arc::new(gix_odb::Store::at_opts(
+                    dir,
+                    object_hash,
+                    &mut std::iter::empty(),
+                    Default::default(),
+                )?)
+                .to_handle_arc();
+                handle.prevent_pack_unload();
+                if load_all_indices {
+                    assert!(
+                        !gix_pack::Find::contains(&handle, &ObjectId::null(object_hash)),
+                        "a miss loads every index"
+                    );
+                    assert_eq!(
+                        handle.store_ref().metrics().open_reachable_indices,
+                        3,
+                        "the two standalone indices and the base's index are loaded"
+                    );
+                }
+                assert_eq!(
+                    handle.store_ref().metrics().open_reachable_packs,
+                    0,
+                    "each lookup starts with cold packs"
+                );
+                let actual_pack_id = if read_header {
+                    let header =
+                        gix_odb::Header::try_header(&handle, &blob_id(object)?)?.expect("the delta has a header");
+                    assert_eq!(header.kind(), gix_object::Kind::Blob, "the delta reconstructs a blob");
+                    assert_eq!(
+                        header.size(),
+                        object.len() as u64,
+                        "the header describes the reconstructed object"
+                    );
+                    None
+                } else {
+                    let mut buffer = Vec::new();
+                    let (data, location) = gix_pack::Find::try_find(&handle, &blob_id(object)?, &mut buffer)?
+                        .expect("the delta resolves against its out-of-pack base");
+                    assert_eq!(data.data, object, "the decoded bytes match the requested object");
+                    Some(location.expect("the object is packed").pack_id)
+                };
+                if load_all_indices {
+                    assert_eq!(
+                        handle.store_ref().metrics().open_reachable_packs,
+                        2,
+                        "only the original delta and base packs were opened"
+                    );
+                    let delta_pack_id = answering_pack_id(&handle.clone(), &blob_id(b"delta filler 0")?)?;
+                    let base_pack_id = answering_pack_id(&handle.clone(), &blob_id(base)?)?;
+                    if let Some(actual_pack_id) = actual_pack_id {
+                        assert_eq!(
+                            actual_pack_id, delta_pack_id,
+                            "decoding retains the original pack's location"
+                        );
+                    }
+                    assert_eq!(
+                        answering_pack_id(&handle, &blob_id(in_every_pack)?)?,
+                        delta_pack_id,
+                        "the original delta's index moves to the front after resolving its base"
+                    );
+                    assert_eq!(
+                        answering_pack_id(&handle, &blob_id(next_to_the_base)?)?,
+                        base_pack_id,
+                        "the base's index comes second"
+                    );
+                }
+            }
         }
     }
     Ok(())
