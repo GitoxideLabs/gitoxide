@@ -329,6 +329,12 @@ pub mod status {
         /// Define how to show untracked files. If set without a value, show all individual untracked files.
         #[clap(long, short = 'u', require_equals = true)]
         pub untracked: Option<Option<Untracked>>,
+        /// Show exact ahead/behind commit counts relative to the current branch's fetch upstream.
+        ///
+        /// This uses locally available history without fetching, and can be expensive for large histories.
+        /// No counts are shown for detached or unborn HEADs, or branches without an upstream.
+        #[clap(long)]
+        pub ahead_behind: bool,
         /// Define how to display the submodule status. Defaults to git configuration if unset.
         #[clap(long)]
         pub submodules: Option<Submodules>,

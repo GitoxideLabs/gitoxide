@@ -24,9 +24,17 @@ function ofs_commit () {
   echo $commit
 }
 
+# Each sample records names, resolved IDs, ahead/behind counts (pairs only),
+# then merge bases. Keep both Git oracles in the cached fixture so tests never
+# need to spawn Git to compare the same pairs, including all permutations.
 function baseline() {
   echo "$@"
   echo $(git rev-parse "$@")
+  if [ "$#" -eq 2 ]; then
+    git rev-list --left-right --count "$1...$2"
+  else
+    echo
+  fi
   git merge-base --all "$@" || :
   echo
 }
@@ -38,6 +46,7 @@ ofs_commit 100 DB
 {
   echo "just-one-returns-one-in-code"
   echo $(git rev-parse DA)
+  echo
   echo $(git rev-parse DA)
   echo
   baseline DA DB
@@ -220,3 +229,12 @@ merge JE JC
 
 git commit-graph write --no-progress --reachable
 git repack -adq
+
+# Create a child only after writing the commit-graph: its cached parent A has
+# reliable generations, but UNCACHED_A does not. Do not rewrite the graph here;
+# read-only traversal tests must exercise the transition back into cached history.
+ofs_commit 9 UNCACHED_A "$A"
+{
+  baseline UNCACHED_A A
+  baseline A UNCACHED_A
+} > 6_uncached.baseline
