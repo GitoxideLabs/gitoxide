@@ -1800,6 +1800,41 @@ mod fsmonitor {
             valid.len(),
             "monitor skips are counted"
         );
+
+        let prototype = index.entries()[0].clone();
+        for number in 0..3000 {
+            index.dangerously_push_entry(
+                prototype.stat,
+                prototype.id,
+                if number % 2 == 0 {
+                    Flags::SKIP_WORKTREE
+                } else {
+                    Flags::empty()
+                },
+                Mode::FILE,
+                BStr::new(&format!("z-skipped-{number:04}")),
+            );
+        }
+        index.sort_entries();
+        let valid: Vec<_> = index
+            .entries()
+            .iter()
+            .map(|entry| AtomicBool::new(!entry.flags.contains(Flags::SKIP_WORKTREE)))
+            .collect();
+        let (records, chunked, changed) = run(&index, &worktree, &valid, &[], false)?;
+        assert!(records.is_empty(), "flag and monitor skips need no filesystem entries");
+        assert!(!changed, "skipped entries retain their incoming validity");
+        assert_eq!(
+            chunked.entries_processed,
+            valid.len(),
+            "every chunk contributes to progress"
+        );
+        assert_eq!(
+            chunked.entries_skipped_by_entry_flags,
+            valid.len(),
+            "all chunk-local skips are counted"
+        );
+        assert_eq!(chunked.symlink_metadata_calls, 0, "skips avoid filesystem checks");
         Ok(())
     }
 
@@ -1826,8 +1861,16 @@ mod fsmonitor {
         for valid in &valid {
             valid.store(false, Ordering::Relaxed);
         }
-        let (_, _, changed) = run(&index, &worktree, &valid, &[], true)?;
+        let (_, interrupted, changed) = run(&index, &worktree, &valid, &[], true)?;
         assert!(!changed, "interruption cannot validate unchecked entries");
+        assert_eq!(
+            interrupted.entries_processed, 0,
+            "interruption cannot count unchecked entries"
+        );
+        assert_eq!(
+            interrupted.entries_skipped_by_entry_flags, 0,
+            "interruption leaves no skips to count"
+        );
         assert!(
             valid.iter().all(|valid| !valid.load(Ordering::Relaxed)),
             "interruption leaves unchecked entries invalid"

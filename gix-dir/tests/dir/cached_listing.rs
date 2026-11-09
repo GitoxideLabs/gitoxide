@@ -455,6 +455,32 @@ fn partial_listings_preserve_collapses_with_empty_and_ignored_children() -> Test
             actual, expected,
             "omitted ignored files cannot make a parent look empty"
         );
+        let ((with_tracked, _), mut visible) = try_collect_filtered_opts_collect(
+            &root,
+            None,
+            |keep, ctx| {
+                walk(
+                    &root,
+                    ctx,
+                    walk::Options {
+                        emit_tracked: true,
+                        ..options
+                    },
+                    keep,
+                )
+            },
+            None::<&str>,
+            Options {
+                cached_listing: Some(&listing),
+                ..Default::default()
+            },
+        )?;
+        visible.retain(|(entry, _)| entry.status != entry::Status::Tracked);
+        assert_eq!(visible, actual, "hidden tracked paths still prevent ancestor collapse");
+        assert_eq!(
+            with_tracked.seen_entries, cached.seen_entries,
+            "hidden tracked paths count as seen without being retained for output"
+        );
         assert!(
             cached.cached_dir_listings >= 2,
             "a tracked file keeps its parent listing reusable even beside a subdirectory: {cached:?}"
