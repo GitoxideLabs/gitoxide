@@ -236,7 +236,7 @@ pub struct CachedListing {
     /// no ignored, pruned, empty-directory, or collapsed-child output, and no deletion mode.
     /// Empty partial listings are read from disk so omitted names cannot make a repository appear empty.
     /// When collapsing untracked directories, partial listings containing subdirectories are also read
-    /// from disk, except at the worktree root which cannot collapse. This preserves the distinction
+    /// from disk, unless the worktree root or a tracked file prevents collapsing. This preserves the distinction
     /// between empty descendants and descendants accompanied by omitted ignored files.
     pub includes_ignored: bool,
 }

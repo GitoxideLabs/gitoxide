@@ -93,6 +93,17 @@ fn git_untracked_cache_avoids_directory_reads_without_losing_tracked_names() -> 
         walk.cached_dir_listings >= 3,
         "the root and tracked-only branch avoid directory reads: {walk:?}"
     );
+    let precious = gix::open_opts(
+        &root,
+        gix::open::Options::isolated().config_overrides(["gitoxide.parsePrecious=true"]),
+    )?;
+    let (paths, outcome) = status(&precious)?;
+    assert_eq!(paths, actual, "precious parsing preserves ordinary ignore rules");
+    assert_eq!(
+        outcome.index_worktree.dirwalk.expect("dirwalk is enabled"),
+        walk,
+        "enabling precious parsing alone must not disable the cache"
+    );
     #[cfg(windows)]
     {
         let repo = gix::open_opts(root.canonicalize()?, gix::open::Options::isolated())?;
@@ -118,6 +129,58 @@ fn git_untracked_cache_avoids_directory_reads_without_losing_tracked_names() -> 
                 .read_dir_calls,
         "eligible cached directories reduce actual filesystem reads: {walk:?}"
     );
+    Ok(())
+}
+
+#[test]
+fn precious_patterns_cannot_reuse_git_ignore_decisions() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    for (version, source) in [
+        (170, ".gitignore"),
+        (171, "tracked-only/.gitignore"),
+        (172, ".git/global-excludes"),
+        (173, ".git/info/exclude"),
+    ] {
+        let root = fixture_with(version, |root| {
+            // Git hides the literal dollar-prefixed name, while precious parsing reveals it.
+            std::fs::write(root.join(source), "$literal\n")?;
+            std::fs::write(root.join("tracked-only/$literal"), "untracked\n")?;
+            prime_cache(root)
+        })?;
+        let repo = gix::open_opts(
+            &root,
+            gix::open::Options::isolated().config_overrides(["gitoxide.parsePrecious=true"]),
+        )?;
+        let (actual, outcome) = status(&repo)?;
+        let uncached = gix::open_opts(
+            &root,
+            gix::open::Options::isolated()
+                .config_overrides(["gitoxide.parsePrecious=true", "core.untrackedCache=false"]),
+        )?;
+        assert_eq!(actual, status(&uncached)?.0, "{source}: cached and fresh walks agree");
+        assert!(
+            actual.iter().any(|path| path == "tracked-only/$literal"),
+            "{source}: precious parsing reveals the name omitted by Git"
+        );
+        assert_eq!(
+            outcome
+                .index_worktree
+                .dirwalk
+                .as_ref()
+                .expect("dirwalk is enabled")
+                .cached_dir_listings,
+            0,
+            "{source}: different ignore semantics require fresh listings"
+        );
+        if source.starts_with(".git/") {
+            assert!(
+                !outcome.has_changes(),
+                "different parser settings alone must not invalidate Git's cache"
+            );
+        }
+    }
     Ok(())
 }
 

@@ -1,8 +1,8 @@
 use std::{path::Path, sync::atomic::Ordering};
 
-use crate::error::ErrorExt;
 #[cfg(windows)]
 use crate::error::ResultExt;
+use crate::error::{ErrorExt, bail, message};
 use crate::{
     Repository, Result,
     bstr::{BStr, BString, ByteSlice},
@@ -22,6 +22,7 @@ impl super::Refresh {
         options: Option<crate::dirwalk::Options>,
         has_pathspec: bool,
     ) -> Result<Option<CachedListing>> {
+        let _span = gix_trace::detail!("gix::status::fsmonitor::cached_listing");
         let Some(cache) = &mut self.untracked else {
             return Ok(None);
         };
@@ -45,7 +46,6 @@ impl super::Refresh {
             || options.emit_collapsed.is_some()
             || options.for_deletion.is_some()
             || options.symlinks_to_directories_are_ignored_like_directories
-            || repo.config.ignore_pattern_parser()?.support_precious
         {
             gix_trace::debug!("untracked cache options differ from Git's cached walk");
             return Ok(None);
@@ -62,12 +62,16 @@ impl super::Refresh {
         }
         let listing = listing(repo, index, cache, lookup);
         match listing {
-            Ok(listing) => {
+            Ok(Some(listing)) => {
                 gix_trace::debug!(
                     cached_directories = listing.directories.len(),
                     "prepared untracked directory cache"
                 );
                 Ok(Some(listing))
+            }
+            Ok(None) => {
+                gix_trace::debug!("precious ignore patterns differ from Git's cached rules; scanning directories");
+                Ok(None)
             }
             Err(_err) => {
                 gix_trace::debug!(reason = %_err, "untracked cache validation failed; scanning directories");
@@ -83,8 +87,7 @@ fn listing<'index>(
     index: &'index gix_index::State,
     cache: &UntrackedCache,
     lookup: Option<&gix_index::AccelerateLookup<'index>>,
-) -> Result<CachedListing> {
-    use crate::error::{bail, message};
+) -> Result<Option<CachedListing>> {
     let root = crate::path::realpath_opts(
         repo.workdir().expect("status has a worktree"),
         repo.current_dir(),
@@ -121,15 +124,23 @@ fn listing<'index>(
         bail!(message("untracked cache belongs to another worktree or system"));
     }
     let global = repo.config.excludes_file(&mut |_| {})?;
-    if !ignore_matches(
+    let support_precious = repo.config.ignore_pattern_parser()?.support_precious;
+    if !validate_ignore(
         &repo.common_dir().join("info/exclude"),
         cache.info_exclude().map(|value| value.id),
         repo.object_hash(),
+        support_precious,
     )? || !match global {
-        Some(path) => ignore_matches(&path, cache.excludes_file().map(|value| value.id), repo.object_hash())?,
-        None => cache.excludes_file().is_none(),
+        Some(path) => validate_ignore(
+            &path,
+            cache.excludes_file().map(|value| value.id),
+            repo.object_hash(),
+            support_precious,
+        )?,
+        None if cache.excludes_file().is_none() => true,
+        None => bail!(message("global ignore rules changed")),
     } {
-        bail!(message("global ignore rules changed"));
+        return Ok(None);
     }
     let mut out = CachedListing::default();
     let mut pending = vec![(0, BString::default())];
@@ -144,13 +155,14 @@ fn listing<'index>(
             bail!(message("cached directory spelling differs from the index"));
         }
         if (dir.stat().is_none() || dir.exclude_file_oid().is_some())
-            && !ignore_matches(
+            && !validate_ignore(
                 &root.join(crate::path::from_bstr(&path)?).join(".gitignore"),
                 dir.exclude_file_oid(),
                 repo.object_hash(),
+                support_precious,
             )?
         {
-            bail!(message("directory ignore rules changed"));
+            return Ok(None);
         }
         for &child in dir.sub_directories() {
             let name = cache.directories()[child].name();
@@ -179,36 +191,47 @@ fn listing<'index>(
         out.directories.insert(path, entries);
     }
     // UNTR omits tracked names, which still prevent a mixed directory from collapsing.
+    let mut previous = b"".as_slice();
     for entry in index.entries() {
         let path = entry.path(index);
-        let mut parent = BString::default();
-        let mut components = path.split(|byte| *byte == b'/').peekable();
-        while let Some(name) = components.next() {
+        let mut end = path.len();
+        let mut kind = if entry.mode.is_submodule() {
+            Kind::Directory
+        } else if entry.mode == gix_index::entry::Mode::SYMLINK {
+            Kind::Symlink
+        } else {
+            Kind::File
+        };
+        loop {
+            let start = path[..end].rfind_byte(b'/').map_or(0, |position| position + 1);
+            let parent = path[..start.saturating_sub(1)].as_bstr();
+            if let Some(entries) = out.directories.get_mut(parent) {
+                entries.push((path[start..end].into(), kind));
+            }
+            // Adjacent paths share parents that have already been added and checked.
+            if start != 0 && previous.starts_with(&path[..start]) {
+                break;
+            }
             // More than one index spelling can map to the same canonical directory.
             if let Some(lookup) = lookup
-                && let Some(entry) = index.entry_closest_to_directory_or_directory_icase(parent.as_bstr(), true, lookup)
-                && entry.path(index).get(..parent.len()) != Some(parent.as_slice())
+                && let Some(entry) = index.entry_closest_to_directory_or_directory_icase(parent, true, lookup)
+                && entry.path(index).get(..parent.len()) != Some(parent.as_ref())
             {
                 bail!(message("index directory spellings differ"));
             }
-            if let Some(entries) = out.directories.get_mut(&parent) {
-                let kind = if components.peek().is_some() || entry.mode.is_submodule() {
-                    Kind::Directory
-                } else if entry.mode == gix_index::entry::Mode::SYMLINK {
-                    Kind::Symlink
-                } else {
-                    Kind::File
-                };
-                entries.push((name.into(), kind));
+            if start == 0 {
+                break;
             }
-            parent = join(parent.as_bstr(), name.as_bstr());
+            end = start - 1;
+            kind = Kind::Directory;
         }
+        previous = path.as_ref();
     }
     for entries in out.directories.values_mut() {
         entries.sort_unstable();
         entries.dedup_by(|a, b| a.0 == b.0);
     }
-    Ok(out)
+    Ok(Some(out))
 }
 
 fn component(name: &BStr) -> bool {
@@ -224,19 +247,29 @@ fn join(parent: &BStr, name: &BStr) -> BString {
     path
 }
 
-fn ignore_matches(path: &Path, expected: Option<gix_hash::ObjectId>, hash: gix_hash::Kind) -> Result<bool> {
+fn validate_ignore(
+    path: &Path,
+    expected: Option<gix_hash::ObjectId>,
+    hash: gix_hash::Kind,
+    support_precious: bool,
+) -> Result<bool> {
     let mut bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(expected.is_none()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound && expected.is_none() => return Ok(true),
         Err(err) => return Err(err.raise()),
     };
-    let Some(expected) = expected else { return Ok(false) };
-    if gix_object::compute_hash(hash, gix_object::Kind::Blob, &bytes)? == expected {
-        return Ok(true);
+    let Some(expected) = expected else {
+        bail!(message!("Ignore rules changed at '{}'", path.display()));
+    };
+    if gix_object::compute_hash(hash, gix_object::Kind::Blob, &bytes)? != expected {
+        // Git's ignore parser appends a newline before hashing files read from disk.
+        if !bytes.is_empty() {
+            bytes.push(b'\n');
+        }
+        if gix_object::compute_hash(hash, gix_object::Kind::Blob, &bytes)? != expected {
+            bail!(message!("Ignore rules changed at '{}'", path.display()));
+        }
     }
-    // Git's ignore parser appends a newline before hashing files read from disk.
-    if !bytes.is_empty() {
-        bytes.push(b'\n');
-    }
-    Ok(gix_object::compute_hash(hash, gix_object::Kind::Blob, &bytes)? == expected)
+    // Incompatible parser settings skip reuse without invalidating Git's unchanged cache.
+    Ok(!support_precious || gix_ignore::parse(&bytes, true).eq(gix_ignore::parse(&bytes, false)))
 }
