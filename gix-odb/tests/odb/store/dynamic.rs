@@ -818,6 +818,157 @@ fn a_hit_moves_its_index_to_the_front_and_keeps_the_others_in_order() -> Result 
     Ok(())
 }
 
+/// Write a pack with `blobs` and `fillers` more blobs of its own to `objects_dir`, along with a v1 index.
+/// A blob with a base is written as a `REF_DELTA` against the base's id, which the pack doesn't hold, like in a thin
+/// pack that was stored as it was received.
+fn write_pack(objects_dir: &std::path::Path, name: &str, blobs: &[(&[u8], Option<&[u8]>)], fillers: usize) -> Result {
+    use std::io::Write;
+
+    use gix_pack::data;
+
+    let object_hash = gix_testtools::object_hash();
+    let blob_id = |blob: &[u8]| gix_object::compute_hash(object_hash, gix_object::Kind::Blob, blob);
+    let fillers: Vec<_> = (0..fillers)
+        .map(|i| format!("{name} filler {i}").into_bytes())
+        .collect();
+    let blobs = blobs
+        .iter()
+        .copied()
+        .chain(fillers.iter().map(|blob| (blob.as_slice(), None)));
+
+    let mut pack = data::header::encode(data::Version::V2, blobs.clone().count() as u32).to_vec();
+    let mut index_entries = Vec::new();
+    for (blob, base) in blobs {
+        index_entries.push((blob_id(blob)?, pack.len() as u32));
+        let entry_data = match base {
+            None => {
+                data::entry::Header::Blob.write_to(blob.len() as u64, &mut pack)?;
+                blob.to_vec()
+            }
+            Some(base) => {
+                assert!(
+                    base.len() < 0x80 && (1..0x80).contains(&blob.len()),
+                    "both sizes and the one insert instruction fit into a byte each"
+                );
+                let delta = [[base.len() as u8, blob.len() as u8, blob.len() as u8].as_slice(), blob].concat();
+                data::entry::Header::RefDelta {
+                    base_id: blob_id(base)?,
+                }
+                .write_to(delta.len() as u64, &mut pack)?;
+                delta
+            }
+        };
+        let mut compressed = gix_zlib::stream::deflate::Write::new(Vec::new(), gix_zlib::Compression::DEFAULT);
+        compressed.write_all(&entry_data)?;
+        compressed.flush()?;
+        pack.extend(compressed.into_inner());
+    }
+    let mut hasher = gix_hash::hasher(object_hash);
+    hasher.update(&pack);
+    let pack_id = hasher.try_finalize()?;
+    pack.extend_from_slice(pack_id.as_slice());
+
+    index_entries.sort();
+    let mut index = Vec::new();
+    for first_byte in 0..=255 {
+        let count = index_entries
+            .iter()
+            .filter(|(id, _)| id.first_byte() <= first_byte)
+            .count();
+        index.extend_from_slice(&(count as u32).to_be_bytes());
+    }
+    for (id, pack_offset) in &index_entries {
+        index.extend_from_slice(&pack_offset.to_be_bytes());
+        index.extend_from_slice(id.as_slice());
+    }
+    index.extend_from_slice(pack_id.as_slice());
+    let mut hasher = gix_hash::hasher(object_hash);
+    hasher.update(&index);
+    index.extend_from_slice(hasher.try_finalize()?.as_slice());
+
+    let pack_dir = objects_dir.join("pack");
+    std::fs::create_dir_all(&pack_dir)?;
+    std::fs::write(pack_dir.join(format!("pack-{pack_id}.pack")), pack)?;
+    std::fs::write(pack_dir.join(format!("pack-{pack_id}.idx")), index)?;
+    Ok(())
+}
+
+#[test]
+fn a_hit_that_needs_a_delta_base_from_another_pack_moves_its_own_index_to_the_front() -> Result {
+    let object_hash = gix_testtools::object_hash();
+    let blob_id = |blob: &[u8]| gix_object::compute_hash(object_hash, gix_object::Kind::Blob, blob);
+    let (object, base) = (b"a delta".as_slice(), b"its base".as_slice());
+    // `in_every_pack` is answered by the front index, and `next_to_the_base` tells the base's index from the other one.
+    let (in_every_pack, next_to_the_base) = (b"in every pack".as_slice(), b"next to the base".as_slice());
+
+    // The pack with the delta is in slot 0 or 1, and the base is in a pack behind it, so looking up the base moves the
+    // delta's index back by one slot.
+    for delta_slot in [0, 1] {
+        let dir = gix_testtools::tempfile::tempdir()?;
+        // With the delta in slot 1, the other pack comes first. With the delta in slot 0, it comes second and also holds
+        // the object in full: looking the object up again must not end up there, as that pack isn't loaded.
+        let mut other = vec![(in_every_pack, None), (next_to_the_base, None)];
+        if delta_slot == 0 {
+            other.push((object, None));
+        }
+        // The handle asks the indices of bigger packs first, so the fillers put the delta's pack into its slot, and the
+        // base's pack last.
+        let (delta_fillers, other_fillers) = if delta_slot == 0 { (4, 1) } else { (2, 4) };
+        write_pack(
+            dir.path(),
+            "delta",
+            &[(object, Some(base)), (in_every_pack, None)],
+            delta_fillers,
+        )?;
+        write_pack(dir.path(), "other", &other, other_fillers)?;
+        write_pack(
+            dir.path(),
+            "base",
+            &[(base, None), (in_every_pack, None), (next_to_the_base, None)],
+            0,
+        )?;
+
+        let mut handle = crate::odb_at(dir.path())?.into_arc()?.into_inner();
+        handle.prevent_pack_unload();
+        assert!(
+            !gix_pack::Find::contains(&handle, &ObjectId::null(object_hash)),
+            "a miss loads every index"
+        );
+        let delta_pack_id = answering_pack_id(&handle.clone(), &blob_id(b"delta filler 0")?)?;
+        let base_pack_id = answering_pack_id(&handle.clone(), &blob_id(base)?)?;
+
+        type Lookup = fn(&StoreHandle, &ObjectId) -> Result<Option<u64>>;
+        let lookups: [(&str, Lookup); 2] = [
+            ("try_find", |handle, id| {
+                Ok(gix_pack::Find::try_find(handle, id, &mut Vec::new())?
+                    .map(|(data, _location)| data.data.len() as u64))
+            }),
+            ("try_header", |handle, id| {
+                Ok(gix_odb::Header::try_header(handle, id)?.map(|header| header.size()))
+            }),
+        ];
+        for (name, lookup) in lookups {
+            let handle = handle.clone();
+            assert_eq!(
+                lookup(&handle, &blob_id(object)?)?,
+                Some(object.len() as u64),
+                "{name}: the delta in slot {delta_slot} resolves against the base in another pack"
+            );
+            assert_eq!(
+                answering_pack_id(&handle, &blob_id(in_every_pack)?)?,
+                delta_pack_id,
+                "{name}: the delta's index moved to the front from slot {delta_slot}, wherever looking up its base put it"
+            );
+            assert_eq!(
+                answering_pack_id(&handle, &blob_id(next_to_the_base)?)?,
+                base_pack_id,
+                "{name}: the base's index comes second"
+            );
+        }
+    }
+    Ok(())
+}
+
 mod disambiguate_prefix {
     use std::cmp::Ordering;
 

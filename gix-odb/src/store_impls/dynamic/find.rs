@@ -78,7 +78,7 @@ where
         'outer: loop {
             {
                 let marker = snapshot.marker;
-                for (idx, index) in snapshot.indices.iter_mut().enumerate() {
+                for (mut idx, index) in snapshot.indices.iter_mut().enumerate() {
                     if let Some(handle::index_lookup::Outcome {
                         object_index: handle::IndexForObjectInPack { pack_id, pack_offset },
                         index_file,
@@ -192,9 +192,12 @@ where
                                     Some(res) => res,
                                     None => {
                                         let mut out = None;
-                                        for index in &mut snapshot.indices {
+                                        for (other_idx, index) in snapshot.indices.iter_mut().enumerate() {
                                             out = index.lookup(id)?;
                                             if out.is_some() {
+                                                // Looking up the base moved indices, so the one that answers now is
+                                                // the one to move to the front.
+                                                idx = other_idx;
                                                 break;
                                             }
                                         }
