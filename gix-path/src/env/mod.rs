@@ -22,12 +22,19 @@ mod platform;
 ///
 /// ### Performance
 ///
-/// This can invoke the Git binary, which is slow on Windows. An unambiguous Git for Windows
+/// This can invoke the Git binary. An unambiguous Git for Windows
 /// installation identified by `EXEPATH`, or by `git.exe` in its `cmd` or `bin` directories,
 /// avoids that invocation when its modern configuration file exists.
 /// Prefixes derived from the selected executable are shared with core-directory, prefix, and shell discovery.
 /// Registered MSYS2 Git packages use their known configuration path, translated by `cygpath`.
 /// Their core and configuration paths share a single cached conversion.
+/// On Unix, the first executable in `PATH` is resolved through symlinks. Known Homebrew Cellar
+/// layouts, Linux `/usr/bin/git` and `/bin/git`, and direct Apple developer binaries avoid the query
+/// when their expected configuration file exists. Apple's `/usr/bin/git` shim still queries Git,
+/// leaving developer-directory and toolchain selection to the shim.
+/// Unknown layouts, relative `PATH` entries, and restricted execute bits also query Git.
+/// Indirect Apple Git invocations also query Git, as their config can differ from the symlink target's.
+/// These shortcuts assume the recognized installations use their standard build-time config paths.
 pub fn installation_config() -> Option<&'static Path> {
     git::install_config_path().and_then(|p| crate::from_byte_slice(p).ok())
 }
