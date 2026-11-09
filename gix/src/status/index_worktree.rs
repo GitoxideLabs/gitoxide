@@ -65,6 +65,8 @@ impl Repository {
     /// ### Note
     ///
     /// This is a lower-level method, prefer the [`status`](Repository::status()) method for greater ease of use.
+    /// Configured filesystem monitor hooks are queried for every call. To persist their refreshed checkpoint
+    /// and avoid repeated work, use the status iterator and its [`write_changes()`](crate::status::Outcome::write_changes).
     #[expect(clippy::too_many_arguments)]
     pub fn index_worktree_status<'index, T, U>(
         &self,
@@ -81,6 +83,42 @@ impl Repository {
         should_interrupt: &AtomicBool,
         options: Options,
     ) -> Result<gix_status::index_as_worktree_with_renames::Outcome>
+    where
+        T: Send + Clone,
+        U: Send + Clone,
+    {
+        self.index_worktree_status_inner(
+            index,
+            patterns,
+            delegate,
+            compare,
+            submodule,
+            progress,
+            should_interrupt,
+            options,
+        )
+        .map(|(out, _)| out)
+    }
+
+    #[expect(clippy::too_many_arguments)]
+    pub(in crate::status) fn index_worktree_status_inner<'index, T, U>(
+        &self,
+        index: &'index gix_index::State,
+        patterns: impl IntoIterator<Item = impl AsRef<BStr>>,
+        delegate: &mut impl gix_status::index_as_worktree_with_renames::VisitEntry<
+            'index,
+            ContentChange = T,
+            SubmoduleStatus = U,
+        >,
+        compare: impl CompareBlobs<Output = T> + Send + Clone,
+        submodule: impl SubmoduleStatus<Output = U> + Send + Clone,
+        progress: &mut dyn gix_utils::progress::Progress,
+        should_interrupt: &AtomicBool,
+        options: Options,
+    ) -> Result<(
+        gix_status::index_as_worktree_with_renames::Outcome,
+        Option<super::fsmonitor::Refresh>,
+    )>
     where
         T: Send + Clone,
         U: Send + Clone,
@@ -106,6 +144,20 @@ impl Repository {
             // if unset, default to enabled on Windows. Good for missing Git installations that would turn it on by installation config
             .unwrap_or(cfg!(windows));
         let accelerate_lookup = fs_caps.ignore_case.then(|| index.prepare_icase_backing());
+        let mut fsmonitor = super::fsmonitor::refresh(self, index, accelerate_lookup.as_ref())?;
+        let cached_listing = fsmonitor
+            .as_mut()
+            .map(|monitor| {
+                monitor.cached_listing(
+                    self,
+                    index,
+                    accelerate_lookup.as_ref(),
+                    options.dirwalk_options,
+                    pathspec.search.patterns().len() != 0,
+                )
+            })
+            .transpose()?
+            .flatten();
         let resource_cache = crate::diff::resource_cache(
             self,
             gix_diff::blob::pipeline::Mode::ToGit,
@@ -125,6 +177,7 @@ impl Repository {
             self.objects.clone().into_arc().expect("arc conversion always works"),
             progress,
             gix_status::index_as_worktree_with_renames::Context {
+                fsmonitor: fsmonitor.as_ref().and_then(super::fsmonitor::Refresh::status),
                 pathspec: pathspec.search,
                 resource_cache,
                 should_interrupt,
@@ -132,6 +185,7 @@ impl Repository {
                     git_dir_realpath: git_dir_realpath.as_path(),
                     current_dir: cwd,
                     ignore_case_index_lookup: accelerate_lookup.as_ref(),
+                    cached_listing: cached_listing.as_ref(),
                 },
             },
             gix_status::index_as_worktree_with_renames::Options {
@@ -147,7 +201,14 @@ impl Repository {
                 rewrites: options.rewrites,
             },
         )?;
-        Ok(out)
+        if let Some(_walk) = &out.dirwalk {
+            gix_trace::debug!(
+                read_dir_calls = _walk.read_dir_calls,
+                cached_dir_listings = _walk.cached_dir_listings,
+                "status directory walk finished"
+            );
+        }
+        Ok((out, fsmonitor))
     }
 
     pub(super) fn index_worktree_status_pathspec(

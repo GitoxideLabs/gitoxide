@@ -16,6 +16,8 @@ impl Gitoxide {
     pub const COMMITTER: Committer = Committer;
     /// The `gitoxide.credentials` section.
     pub const CREDENTIALS: Credentials = Credentials;
+    /// The `gitoxide.fsmonitor` section.
+    pub const FS_MONITOR: FsMonitor = FsMonitor;
     /// The `gitoxide.http` section.
     pub const HTTP: Http = Http;
     /// The `gitoxide.https` section.
@@ -75,6 +77,7 @@ impl Section for Gitoxide {
             &Self::COMMIT,
             &Self::COMMITTER,
             &Self::CREDENTIALS,
+            &Self::FS_MONITOR,
             &Self::HTTP,
             &Self::HTTPS,
             &Self::OBJECTS,
@@ -94,6 +97,82 @@ mod subsections {
             tree::{Gitoxide, Key, Section, http, keys},
         },
     };
+
+    /// The `gitoxide.fsmonitor` sub-section.
+    ///
+    /// Limits accept non-negative Git integers up to `i64::MAX`; counts and byte sizes must also fit in `usize`.
+    #[derive(Copy, Clone, Default)]
+    pub struct FsMonitor;
+
+    impl FsMonitor {
+        /// The default number of connection retries after the initial attempt.
+        pub const CONNECT_RETRIES_DEFAULT: usize = 100;
+        /// The default delay between connection retries, in milliseconds.
+        pub const CONNECT_RETRY_DELAY_DEFAULT: u64 = 50;
+        /// The default Unix socket read and write timeout, in milliseconds.
+        pub const SOCKET_TIMEOUT_DEFAULT: u64 = 30_000;
+        /// The default maximum combined daemon response payload, in bytes.
+        pub const MAX_RESPONSE_SIZE_DEFAULT: usize = 64 * 1024 * 1024;
+
+        /// The `gitoxide.fsmonitor.connectRetries` key.
+        ///
+        /// Retry at most this many times after starting the daemon or finding a busy Windows pipe.
+        /// Defaults to 100; zero leaves only the initial connection attempt in either case.
+        pub const CONNECT_RETRIES: keys::UnsignedInteger =
+            keys::UnsignedInteger::new_unsigned_integer("connectRetries", &Gitoxide::FS_MONITOR).with_default(b"100");
+
+        /// The `gitoxide.fsmonitor.connectRetryDelay` key.
+        ///
+        /// Delay between daemon connection retries, in milliseconds. Defaults to 50; zero retries immediately.
+        pub const CONNECT_RETRY_DELAY: keys::UnsignedInteger =
+            keys::UnsignedInteger::new_unsigned_integer("connectRetryDelay", &Gitoxide::FS_MONITOR).with_default(b"50");
+
+        /// The `gitoxide.fsmonitor.socketTimeout` key.
+        ///
+        /// Timeout for each Unix socket read and write, in milliseconds. Defaults to 30000; zero disables
+        /// the timeout. Windows named pipes retain synchronous blocking I/O regardless of this value.
+        pub const SOCKET_TIMEOUT: keys::UnsignedInteger =
+            keys::UnsignedInteger::new_unsigned_integer("socketTimeout", &Gitoxide::FS_MONITOR).with_default(b"30000");
+
+        /// The `gitoxide.fsmonitor.maxResponseSize` key.
+        ///
+        /// Maximum combined daemon response payload, including the token, in bytes. Defaults to 64 MiB.
+        /// Larger responses fall back to a full scan; zero rejects every nonempty payload.
+        /// Git's `k`, `m` and `g` suffixes apply.
+        pub const MAX_RESPONSE_SIZE: keys::UnsignedInteger =
+            keys::UnsignedInteger::new_unsigned_integer("maxResponseSize", &Gitoxide::FS_MONITOR).with_default(b"64m");
+
+        /// The default number of reported paths above which a checkpoint write is requested, matching Git.
+        pub const FORCE_UPDATE_THRESHOLD_DEFAULT: usize = 100;
+        /// The `gitoxide.fsmonitor.forceUpdateThreshold` key.
+        ///
+        /// Request index writeback when a successful incremental response contains more than this many paths.
+        /// Counts include duplicate, untracked and ignored paths. Zero forces a write for every nonempty
+        /// incremental response; token-only responses do not independently request a write.
+        pub const FORCE_UPDATE_THRESHOLD: keys::UnsignedInteger =
+            keys::UnsignedInteger::new_unsigned_integer("forceUpdateThreshold", &Gitoxide::FS_MONITOR)
+                .with_default(b"100");
+    }
+
+    impl Section for FsMonitor {
+        fn name(&self) -> &str {
+            "fsmonitor"
+        }
+
+        fn keys(&self) -> &[&dyn Key] {
+            &[
+                &Self::CONNECT_RETRIES,
+                &Self::CONNECT_RETRY_DELAY,
+                &Self::SOCKET_TIMEOUT,
+                &Self::MAX_RESPONSE_SIZE,
+                &Self::FORCE_UPDATE_THRESHOLD,
+            ]
+        }
+
+        fn parent(&self) -> Option<&dyn Section> {
+            Some(&Tree::GITOXIDE)
+        }
+    }
 
     /// The `Core` sub-section.
     #[derive(Copy, Clone, Default)]
@@ -613,7 +692,9 @@ mod subsections {
         }
     }
 }
-pub use subsections::{Allow, Author, Commit, Committer, Core, Credentials, Http, Https, Objects, Pathspec, Ssh, User};
+pub use subsections::{
+    Allow, Author, Commit, Committer, Core, Credentials, FsMonitor, Http, Https, Objects, Pathspec, Ssh, User,
+};
 
 pub mod validate {
     use gix_error::bail;

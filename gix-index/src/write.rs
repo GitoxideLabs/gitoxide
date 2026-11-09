@@ -62,9 +62,8 @@ pub struct Options {
 impl State {
     /// Serialize this instance to `out` with [`options`][Options].
     ///
-    /// Note that the `tree` (tree-cache) extension is written as-is and is **not** recomputed or
-    /// invalidated to match the entries; see [`File::write()`](crate::File::write()) for the
-    /// implications and the recommended workaround.
+    /// The `tree` (tree-cache) extension is written as-is. Mutable entry or path access removes it;
+    /// callers restoring it with [`State::set_tree()`] must ensure it is current.
     pub fn write_to(
         &self,
         out: impl std::io::Write,
@@ -124,6 +123,22 @@ impl State {
                 extensions
                     .should_write(extension::tree::SIGNATURE)
                     .and_then(|signature| self.tree().map(|tree| tree.write_to(write).map(|_| signature)))
+            },
+            &|write| {
+                extensions
+                    .should_write(extension::fs_monitor::SIGNATURE)
+                    .and_then(|signature| {
+                        self.fs_monitor()
+                            .map(|monitor| monitor.write_to(write, self.entries()).map(|_| signature))
+                    })
+            },
+            &|write| {
+                extensions
+                    .should_write(extension::untracked_cache::SIGNATURE)
+                    .and_then(|signature| {
+                        self.untracked()
+                            .map(|cache| cache.write_to(write, self.object_hash).map(|_| signature))
+                    })
             },
             &|write| {
                 self.is_sparse()

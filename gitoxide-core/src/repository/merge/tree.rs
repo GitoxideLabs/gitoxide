@@ -111,8 +111,13 @@ pub(super) mod function {
         if let Some(message) = message {
             let head_id = repo.head_id()?;
             let commit_id = if update_head {
-                let commit_id = repo.commit("HEAD", message, tree_id, Some(head_id))?;
                 let mut index = repo.index_from_tree(&tree_id)?;
+                if let Some(previous) = repo.try_index()?
+                    && let Err(_err) = index.carry_over_fsmonitor_data_from(&previous)
+                {
+                    gix::trace::debug!(reason = %_err, "discarding unusable filesystem monitor and untracked cache data");
+                }
+                let commit_id = repo.commit("HEAD", message, tree_id, Some(head_id))?;
                 index.write(Default::default())?;
                 commit_id
             } else {

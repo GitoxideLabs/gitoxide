@@ -9,9 +9,10 @@ git init -q
 printf 'ignored/*.txt\n*.txt/\nfile-dir-*/\n' >.gitignore
 git add .gitignore
 git commit -qm init
-mkdir nested ignored
+# Adjacent prefixes keep per-directory index searches from leaking into siblings.
+mkdir nested nested-sibling nested2 ignored
 blob_id=$(printf 'content\n' | git hash-object -w --stdin)
-for prefix in '' nested/ ignored/; do
+for prefix in '' nested/ nested-sibling/ nested2/ ignored/; do
   for conflict in 'DD:1' 'AU:2' 'UA:3' 'UD:1 2' 'DU:1 3' 'AA:2 3' 'UU:1 2 3'; do
     path="${prefix}${conflict%%:*}.txt"
     printf 'content\n' >"$path"

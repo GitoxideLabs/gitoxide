@@ -193,6 +193,7 @@ fn fixture_filtered_detailed(
             },
         ),
         should_interrupt: &AtomicBool::default(),
+        fsmonitor: None,
     };
     let options = Options {
         fs: fs_capabilities.map_or_else(|| gix_fs::Capabilities::probe(&git_dir), |new| new(&git_dir)),
@@ -564,6 +565,11 @@ fn intent_to_add() {
             symlink_metadata_calls: 1,
             ..Default::default()
         }
+    );
+    fixture_with_index(
+        "status_intent_to_add",
+        |index| index.entries_mut()[0].flags.insert(Flags::FSMONITOR_VALID),
+        &[(BStr::new(b"content"), 0, EntryStatus::IntentToAdd)],
     );
 }
 
@@ -1128,6 +1134,7 @@ fn clean_filter_receives_worktree_relative_path_from_worktree_root() -> gix_test
             },
         ),
         should_interrupt: &AtomicBool::default(),
+        fsmonitor: None,
     };
     ctx.filter.driver_state_mut().context.worktree_dir = Some(worktree.clone());
     let cleaned = RecordCleaned::default();
@@ -1464,6 +1471,7 @@ fn racy_git() -> gix_testtools::TestResult {
         stack: attributes_stack(worktree, &index),
         filter: gix_filter::Pipeline::new(Default::default(), gix_testtools::object_hash(), Default::default()),
         should_interrupt: &AtomicBool::default(),
+        fsmonitor: None,
     };
     let out = index_as_worktree(
         &index,
@@ -1615,6 +1623,7 @@ where
             stack: attributes_stack(worktree, &index),
             filter: gix_filter::Pipeline::new(Default::default(), gix_testtools::object_hash(), Default::default()),
             should_interrupt: &AtomicBool::default(),
+            fsmonitor: None,
         },
         Options {
             fs: gix_fs::Capabilities::probe(&git_dir),
@@ -1691,6 +1700,280 @@ fn default_pathspec() -> gix_pathspec::Search {
     gix_pathspec::Search::from_specs(to_pathspecs(&[]), None, std::path::Path::new("")).expect("empty is always valid")
 }
 
+mod fsmonitor {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn entry_flags_alone_do_not_authorize_monitor_shortcuts() -> gix_error::TestResult {
+        let out = fixture_with_index(
+            "status_unchanged",
+            |index| {
+                for entry in index.entries_mut() {
+                    entry.flags.insert(Flags::FSMONITOR_VALID);
+                }
+            },
+            &[],
+        );
+        assert!(
+            out.symlink_metadata_calls > 0,
+            "monitor shortcuts require an explicitly refreshed mask"
+        );
+        Ok(())
+    }
+
+    #[expect(clippy::type_complexity)]
+    fn run<'index>(
+        index: &'index gix_index::State,
+        worktree: &std::path::Path,
+        valid: &[AtomicBool],
+        patterns: &[&str],
+        interrupt: bool,
+    ) -> Result<(Vec<Record<'index, (), ()>>, Outcome, bool)> {
+        let mut recorder = Recorder::default();
+        let changed = AtomicBool::new(false);
+        let outcome = index_as_worktree(
+            index,
+            worktree,
+            &mut recorder,
+            FastEq,
+            SubmoduleStatusMock { dirty: true },
+            gix_object::find::Never,
+            &mut gix_utils::progress::Discard,
+            Context {
+                pathspec: gix_pathspec::Search::from_specs(to_pathspecs(patterns), None, std::path::Path::new(""))?,
+                stack: attributes_stack(worktree, index),
+                filter: gix_filter::Pipeline::new(Default::default(), gix_testtools::object_hash(), Default::default()),
+                should_interrupt: &AtomicBool::new(interrupt),
+                fsmonitor: Some(gix_status::index_as_worktree::FsMonitor {
+                    valid,
+                    changed: &changed,
+                }),
+            },
+            Options {
+                fs: gix_fs::Capabilities::probe(&worktree.join(".git")),
+                stat: TEST_OPTIONS,
+                ..Default::default()
+            },
+        )?;
+        Ok((recorder.records, outcome, changed.into_inner()))
+    }
+
+    #[test]
+    fn clean_entries_become_valid_and_avoid_repeated_metadata_calls() -> gix_error::TestResult {
+        let worktree = crate::scripted_fixture_read_only("status_unchanged.sh")?;
+        let mut index = gix_index::File::at(
+            worktree.join(".git/index"),
+            gix_testtools::object_hash(),
+            false,
+            Default::default(),
+        )?;
+        for entry in index.entries_mut() {
+            entry.stat = Default::default();
+            entry.flags.insert(Flags::FSMONITOR_VALID);
+        }
+        let valid: Vec<_> = index.entries().iter().map(|_| AtomicBool::new(false)).collect();
+        let (records, first, changed) = run(&index, &worktree, &valid, &[], false)?;
+        assert!(changed, "confirming invalid entries clean requests validity writeback");
+        assert_eq!(
+            first.symlink_metadata_calls,
+            valid.len(),
+            "the supplied mask overrides stale entry flags"
+        );
+        assert!(
+            records
+                .iter()
+                .all(|record| matches!(record.status, EntryStatus::NeedsUpdate(_))),
+            "stale stats require refresh, not a change report"
+        );
+        assert!(
+            valid.iter().all(|valid| valid.load(Ordering::Relaxed)),
+            "all confirmed clean entries gain validity"
+        );
+
+        let (records, second, changed) = run(&index, &worktree, &valid, &[], false)?;
+        assert!(!changed, "skipping already valid entries does not request writeback");
+        assert!(records.is_empty(), "valid entries need no further checks");
+        assert_eq!(second.symlink_metadata_calls, 0, "valid entries avoid metadata calls");
+        assert_eq!(
+            second.entries_skipped_by_entry_flags,
+            valid.len(),
+            "monitor skips are counted"
+        );
+
+        let prototype = index.entries()[0].clone();
+        for number in 0..3000 {
+            index.dangerously_push_entry(
+                prototype.stat,
+                prototype.id,
+                if number % 2 == 0 {
+                    Flags::SKIP_WORKTREE
+                } else {
+                    Flags::empty()
+                },
+                Mode::FILE,
+                BStr::new(&format!("z-skipped-{number:04}")),
+            );
+        }
+        index.sort_entries();
+        let valid: Vec<_> = index
+            .entries()
+            .iter()
+            .map(|entry| AtomicBool::new(!entry.flags.contains(Flags::SKIP_WORKTREE)))
+            .collect();
+        let (records, chunked, changed) = run(&index, &worktree, &valid, &[], false)?;
+        assert!(records.is_empty(), "flag and monitor skips need no filesystem entries");
+        assert!(!changed, "skipped entries retain their incoming validity");
+        assert_eq!(
+            chunked.entries_processed,
+            valid.len(),
+            "every chunk contributes to progress"
+        );
+        assert_eq!(
+            chunked.entries_skipped_by_entry_flags,
+            valid.len(),
+            "all chunk-local skips are counted"
+        );
+        assert_eq!(chunked.symlink_metadata_calls, 0, "skips avoid filesystem checks");
+        Ok(())
+    }
+
+    #[test]
+    fn dirty_excluded_and_interrupted_entries_do_not_gain_validity() -> gix_error::TestResult {
+        let worktree = crate::scripted_fixture_read_only("status_unchanged.sh")?;
+        let mut index = gix_index::File::at(
+            worktree.join(".git/index"),
+            gix_testtools::object_hash(),
+            false,
+            Default::default(),
+        )?;
+        index.entries_mut()[0].flags.insert(Flags::SKIP_WORKTREE);
+        let valid: Vec<_> = index.entries().iter().map(|_| AtomicBool::new(false)).collect();
+        run(&index, &worktree, &valid, &["dir"], false)?;
+        assert_eq!(
+            valid
+                .iter()
+                .map(|valid| valid.load(Ordering::Relaxed))
+                .collect::<Vec<_>>(),
+            [false, true, false, false],
+            "only the checked entry becomes valid, using its absolute index position"
+        );
+        for valid in &valid {
+            valid.store(false, Ordering::Relaxed);
+        }
+        let (_, interrupted, changed) = run(&index, &worktree, &valid, &[], true)?;
+        assert!(!changed, "interruption cannot validate unchecked entries");
+        assert_eq!(
+            interrupted.entries_processed, 0,
+            "interruption cannot count unchecked entries"
+        );
+        assert_eq!(
+            interrupted.entries_skipped_by_entry_flags, 0,
+            "interruption leaves no skips to count"
+        );
+        assert!(
+            valid.iter().all(|valid| !valid.load(Ordering::Relaxed)),
+            "interruption leaves unchecked entries invalid"
+        );
+
+        let worktree = crate::scripted_fixture_read_only("status_changed.sh")?;
+        let index = gix_index::File::at(
+            worktree.join(".git/index"),
+            gix_testtools::object_hash(),
+            false,
+            Default::default(),
+        )?;
+        let valid: Vec<_> = index.entries().iter().map(|_| AtomicBool::new(false)).collect();
+        let (records, _, _) = run(&index, &worktree, &valid, &[], false)?;
+        assert!(
+            records
+                .iter()
+                .any(|record| matches!(record.status, EntryStatus::Change(_))),
+            "the fixture contains dirty entries"
+        );
+        for (entry_index, valid) in valid.iter().enumerate() {
+            let clean = records
+                .iter()
+                .find(|record| record.entry_index == entry_index)
+                .is_none_or(|record| matches!(record.status, EntryStatus::NeedsUpdate(_)));
+            assert_eq!(
+                valid.load(Ordering::Relaxed),
+                clean,
+                "dirty entries remain invalid while checked clean entries become valid"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn special_entries_are_checked_even_with_valid_flags_or_mask_bits() -> gix_error::TestResult {
+        for (script, subdir) in [
+            ("status_intent_to_add.sh", ""),
+            ("status_conflict.sh", ""),
+            ("status_submodule.sh", "no-change"),
+        ] {
+            let worktree = crate::scripted_fixture_read_only(script)?.join(subdir);
+            let mut index = gix_index::File::at(
+                worktree.join(".git/index"),
+                gix_testtools::object_hash(),
+                false,
+                Default::default(),
+            )?;
+            for entry in index.entries_mut() {
+                entry.flags.insert(Flags::FSMONITOR_VALID);
+            }
+            for initially_valid in [false, true] {
+                let valid: Vec<_> = index
+                    .entries()
+                    .iter()
+                    .map(|_| AtomicBool::new(initially_valid))
+                    .collect();
+                let (records, _, _) = run(&index, &worktree, &valid, &[], false)?;
+                let special = records
+                    .iter()
+                    .find(|record| {
+                        matches!(
+                            record.status,
+                            EntryStatus::IntentToAdd
+                                | EntryStatus::Conflict { .. }
+                                | EntryStatus::Change(Change::SubmoduleModification(()))
+                        )
+                    })
+                    .expect("monitor validity cannot hide intent-to-add, conflicts or submodule changes");
+                assert_eq!(
+                    valid[special.entry_index].load(Ordering::Relaxed),
+                    initially_valid,
+                    "special entries do not gain validity"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_mask_lengths_fail_without_modifying_the_mask() -> gix_error::TestResult {
+        let worktree = crate::scripted_fixture_read_only("status_unchanged.sh")?;
+        let index = gix_index::File::at(
+            worktree.join(".git/index"),
+            gix_testtools::object_hash(),
+            false,
+            Default::default(),
+        )?;
+        for len in [index.entries().len() - 1, index.entries().len() + 1] {
+            let valid: Vec<_> = (0..len).map(|_| AtomicBool::new(false)).collect();
+            assert!(
+                run(&index, &worktree, &valid, &[], false).is_err(),
+                "validity must map to exactly the index entries"
+            );
+            assert!(
+                valid.iter().all(|valid| !valid.load(Ordering::Relaxed)),
+                "invalid masks are rejected before any changes"
+            );
+        }
+        Ok(())
+    }
+}
+
 #[cfg(windows)]
 mod windows {
     use super::*;
@@ -1752,6 +2035,7 @@ mod windows {
             stack: attributes_stack(worktree, index),
             filter: gix_filter::Pipeline::new(Default::default(), gix_testtools::object_hash(), Default::default()),
             should_interrupt: &AtomicBool::default(),
+            fsmonitor: None,
         };
         let mut recorder = Recorder::default();
         let outcome = index_as_worktree(
