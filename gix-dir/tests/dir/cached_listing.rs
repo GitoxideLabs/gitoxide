@@ -415,7 +415,10 @@ fn partial_listings_preserve_collapses_with_empty_and_ignored_children() -> Test
             ("nested", vec![("parent", Directory)]),
             ("nested/parent", vec![("empty", Directory)]),
             ("only-empty", vec![("empty", Directory)]),
-            ("leaf", vec![("tracked", File), ("untracked", File)]),
+            (
+                "leaf",
+                vec![("tracked", File), ("untracked", File), ("empty", Directory)],
+            ),
         ]
         .into_iter()
         .map(|(path, entries)| {
@@ -454,7 +457,7 @@ fn partial_listings_preserve_collapses_with_empty_and_ignored_children() -> Test
         );
         assert!(
             cached.cached_dir_listings >= 2,
-            "root and tracked leaf listings remain cached: {cached:?}"
+            "a tracked file keeps its parent listing reusable even beside a subdirectory: {cached:?}"
         );
         assert!(cached.read_dir_calls < uncached.read_dir_calls);
         if emit_untracked == CollapseDirectory {

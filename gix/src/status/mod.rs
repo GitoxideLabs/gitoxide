@@ -73,6 +73,7 @@ impl Repository {
     /// Setting it to `true` queries Git's built-in daemon and starts it on demand when supported.
     /// Failed or malformed queries fall back to ordinary checks. Compatible whole-worktree walks reuse
     /// Git's existing untracked cache after validating monitor events, worktree identity, and ignore rules.
+    /// Precious-file parsing permits reuse when the ignore patterns have the same meaning as in Git.
     /// `core.untrackedCache=false` disables this reuse. Caches are preserved and invalidated, but are not
     /// created or repopulated; run Git status to warm them. Other walk modes read directories normally.
     /// Like Git, an existing cache assumes `core.ignoreCase` has not changed since it was populated.

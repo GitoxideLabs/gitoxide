@@ -64,7 +64,19 @@ pub(super) fn recursive(
                     || (!entries.is_empty()
                         && (!may_collapse
                             || opts.emit_untracked != CollapseDirectory
-                            || entries.iter().all(|(_, kind)| !kind.is_dir())))
+                            || entries.iter().all(|(_, kind)| !kind.is_dir())
+                            || (!opts.ignore_case
+                                && entries.iter().any(|(name, kind)| {
+                                    !kind.is_dir()
+                                        && !name.eq_ignore_ascii_case(b".git")
+                                        && ctx
+                                            .index
+                                            .entry_by_path(&gix_path::join_bstr_unix_pathsep(
+                                                current_bstr.as_bstr(),
+                                                name.as_bstr(),
+                                            ))
+                                            .is_some_and(|entry| !entry.mode.is_sparse())
+                                }))))
             })
         });
     let disk = if cached.is_some() {
