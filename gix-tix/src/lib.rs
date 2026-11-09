@@ -629,7 +629,7 @@ fn set_worktree_resources(
     let old_resource = old.unwrap_or(fallback);
     cache
         .set_resource(
-            old.map_or_else(|| repository.object_hash().null(), |resource| resource.id),
+            old.map(|resource| resource.id),
             old_resource.mode.kind(),
             old_resource.path.as_bstr(),
             gix::diff::blob::ResourceKind::OldOrSource,
@@ -639,7 +639,7 @@ fn set_worktree_resources(
     let new_resource = new.unwrap_or(fallback);
     cache
         .set_resource(
-            new.map_or_else(|| repository.object_hash().null(), |resource| resource.id),
+            new.map(|resource| resource.id),
             new_resource.mode.kind(),
             new_resource.path.as_bstr(),
             gix::diff::blob::ResourceKind::NewOrDestination,
@@ -7525,10 +7525,10 @@ fn prepare_file_diff_content(
         .map_err(gix::Error::from)
         .or_raise(|| message("could not prepare selected diff"))?;
     match prepared.operation {
-        gix::diff::blob::platform::prepare_diff::Operation::ExternalCommand { command } => {
+        gix::diff::blob::platform::prepare_diff::Operation::ExternalCommand { command, change } => {
             let counts = count_lines
                 .then(|| {
-                    let input = prepared.interned_input();
+                    let input = change.patch_input();
                     let diff = gix::diff::blob::diff_with_slider_heuristics(
                         repository
                             .diff_algorithm()
@@ -7542,17 +7542,20 @@ fn prepare_file_diff_content(
             prepare_external_diff(repository, &resources, command)
                 .map(|command| PreparedFileDiff::External(command, counts))
         }
-        gix::diff::blob::platform::prepare_diff::Operation::InternalDiff { algorithm } => {
+        gix::diff::blob::platform::prepare_diff::Operation::InternalDiff {
+            algorithm,
+            change: text_change,
+        } => {
             if let Some(command) = global_command {
                 let counts = count_lines.then(|| {
-                    let input = prepared.interned_input();
+                    let input = text_change.patch_input();
                     let diff = gix::diff::blob::diff_with_slider_heuristics(algorithm, &input);
                     (diff.count_additions(), diff.count_removals())
                 });
                 return prepare_external_diff(repository, &resources, command)
                     .map(|command| PreparedFileDiff::External(command, counts));
             }
-            let input = prepared.interned_input();
+            let input = text_change.patch_input();
             let diff = gix::diff::blob::diff_with_slider_heuristics(algorithm, &input);
             let counts = Some((diff.count_additions(), diff.count_removals()));
             let rendered = gix::diff::blob::UnifiedDiff::new(
@@ -7570,6 +7573,12 @@ fn prepare_file_diff_content(
         }
         gix::diff::blob::platform::prepare_diff::Operation::SourceOrDestinationIsBinary => {
             Ok(PreparedFileDiff::BuiltIn(built_in_diff(path, change, None, true), None))
+        }
+        gix::diff::blob::platform::prepare_diff::Operation::NeitherExists => {
+            bail!(
+                "neither side of '{}' exists; refresh the changes and select an existing file",
+                path.path
+            );
         }
     }
 }
@@ -8837,7 +8846,7 @@ fn staged_change(change: gix::diff::index::Change) -> Result<(PathChange, FileCh
                 source_entry_mode,
                 source_relation: None,
                 source_id: source_id.into_owned(),
-                diff: None,
+                similarity: None,
                 entry_mode: current_entry_mode,
                 id: id.into_owned(),
                 location: path.clone(),
@@ -12726,6 +12735,115 @@ mod tests {
             ])
             .status()?;
         assert!(status.success(), "the isolated recovery process completes successfully");
+        Ok(())
+    }
+
+    #[test]
+    fn file_diffs_count_only_validated_text() -> gix_testtools::TestResult {
+        let (fixture, ()) = gix_testtools::scripted_fixture_read_only_with_post("history.sh", 1, |fixture| {
+            if let gix_testtools::FixtureState::Uninitialized(path) = fixture {
+                // Keep empty, binary, and missing paths distinct, with an optional per-path external driver.
+                std::fs::write(path.join(".gitattributes"), "* diff=validated\n")?;
+                std::fs::write(
+                    path.join("text"),
+                    "root
+added
+",
+                )?;
+                std::fs::write(path.join("empty"), b"")?;
+                std::fs::write(path.join("binary"), b"\0binary\n")?;
+            }
+            Ok(())
+        })?;
+        for external in [
+            None,
+            Some("diff.external=test --flag"),
+            Some("diff.validated.command=test --flag"),
+        ] {
+            let repository = crate::test_repository::open_with(&fixture, external)?;
+            let root_blob_id = repository.rev_parse_single("HEAD:root")?.detach();
+            let (mut tree_cache, mut worktree_cache) = line_diff_state(&repository)?;
+            for (old_path, new_path, kind, counts, patch_line) in [
+                (None, Some("text"), ChangeKind::Added, Some((2, 0)), Some("+added")),
+                (Some("deleted"), None, ChangeKind::Deleted, Some((0, 1)), Some("-root")),
+                (
+                    Some("text"),
+                    Some("text"),
+                    ChangeKind::Modified,
+                    Some((1, 0)),
+                    Some("+added"),
+                ),
+                (None, Some("empty"), ChangeKind::Added, Some((0, 0)), None),
+                (None, Some("binary"), ChangeKind::Added, None, None),
+                (None, Some("missing"), ChangeKind::Added, None, None),
+            ] {
+                let name = new_path.or(old_path).expect("each case has a resource path");
+                let change = FileChange::Worktree {
+                    old: old_path.map(|path| DiffResource {
+                        id: root_blob_id,
+                        mode: gix::objs::tree::EntryKind::Blob.into(),
+                        path: path.into(),
+                    }),
+                    new: new_path.map(|path| DiffResource {
+                        id: repository.object_hash().null(),
+                        mode: gix::objs::tree::EntryKind::Blob.into(),
+                        path: path.into(),
+                    }),
+                };
+                let path = PathChange {
+                    kind,
+                    group: ChangeGroup::Unstaged,
+                    source: None,
+                    path: name.into(),
+                    lines: None,
+                };
+                assert_eq!(
+                    line_counts_for_change(&repository, &change, &mut tree_cache, worktree_cache.as_mut())?,
+                    counts,
+                    "only existing text contributes line counts for {name} with {external:?}"
+                );
+                let prepared = prepare_file_diff_content(&repository, &change, &path, true);
+                if name == "missing" {
+                    let err = prepared.err().expect("neither side exists, so no patch can be opened");
+                    assert!(
+                        err.to_string()
+                            .contains("refresh the changes and select an existing file"),
+                        "a stale path produces actionable feedback instead of an empty patch or external command"
+                    );
+                    continue;
+                }
+                match prepared? {
+                    PreparedFileDiff::External(_, actual) => {
+                        assert!(external.is_some(), "external commands require configuration");
+                        assert_eq!(
+                            actual, counts,
+                            "external commands retain validated text counts for {name}"
+                        );
+                        assert!(actual.is_some(), "binary input must not launch an external command");
+                    }
+                    PreparedFileDiff::BuiltIn(diff, actual) => {
+                        assert_eq!(actual, counts, "built-in diffs retain text counts for {name}");
+                        if name == "binary" {
+                            assert!(
+                                diff.lines.iter().any(|line| line == "Binary files differ"),
+                                "binary input is reported without text tokenization"
+                            );
+                        } else {
+                            assert!(
+                                external.is_none(),
+                                "configured external commands take precedence for text"
+                            );
+                            if let Some(line) = patch_line {
+                                assert!(
+                                    diff.lines.iter().any(|actual| actual == line),
+                                    "the patch contains {line}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
         Ok(())
     }
 

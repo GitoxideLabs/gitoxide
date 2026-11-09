@@ -1,10 +1,7 @@
 use bstr::{BStr, BString, ByteSlice};
 use gix_error::ExnResult;
 
-use crate::{
-    blob::{DiffLineStats, ResourceKind},
-    tree,
-};
+use crate::{blob::ResourceKind, rewrites::Similarity, tree};
 
 /// Represents any possible change in order to turn one tree into another, which references data owned by its producer.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -56,10 +53,11 @@ pub enum ChangeRef<'a> {
         /// The object id after the modification.
         id: gix_hash::ObjectId,
     },
-    /// Entries are considered rewritten if they are not trees and they, according to some understanding of identity, were renamed
-    /// or copied.
+    /// Entries are considered rewritten if they, according to some understanding of identity, were renamed or copied.
+    /// Directory renames are inferred from completed file renames into added or existing directories.
     /// In case of renames, this means they originally appeared as [`Deletion`](ChangeRef::Deletion) signalling their source as well as an
-    /// [`Addition`](ChangeRef::Addition) acting as destination.
+    /// [`Addition`](ChangeRef::Addition) acting as destination, or a [`Modification`](ChangeRef::Modification) for an existing directory.
+    /// Existing destination directories retain their modification event alongside the inferred rename.
     ///
     /// In case of copies, the `copy` flag is true and typically represents a perfect copy of a source was made.
     ///
@@ -82,9 +80,10 @@ pub enum ChangeRef<'a> {
         /// Note that this is the same as `id` if we require the [similarity to be 100%](super::Rewrites::percentage), but may
         /// be different otherwise.
         source_id: gix_hash::ObjectId,
-        /// Information about the diff we performed to detect similarity and match the `source_id` with the current state at `id`.
-        /// It's `None` if `source_id` is equal to `id`, as identity made an actual diff computation unnecessary.
-        diff: Option<DiffLineStats>,
+        /// The byte-span score of an inexact match, including binary files.
+        /// `None` denotes an exact identity match or an inferred directory rename.
+        /// Line statistics can be computed separately with the blob diff APIs.
+        similarity: Option<Similarity>,
         /// The mode of the entry after the rename.
         /// It could differ but still be considered a rename as we are concerned only about content.
         entry_mode: gix_object::tree::EntryMode,
@@ -151,10 +150,11 @@ pub enum Change {
         /// The object id after the modification.
         id: gix_hash::ObjectId,
     },
-    /// Entries are considered rewritten if they are not trees and they, according to some understanding of identity, were renamed
-    /// or copied.
+    /// Entries are considered rewritten if they, according to some understanding of identity, were renamed or copied.
+    /// Directory renames are inferred from completed file renames into added or existing directories.
     /// In case of renames, this means they originally appeared as [`Deletion`](ChangeRef::Deletion) signalling their source as well as an
-    /// [`Addition`](ChangeRef::Addition) acting as destination.
+    /// [`Addition`](ChangeRef::Addition) acting as destination, or a [`Modification`](ChangeRef::Modification) for an existing directory.
+    /// Existing destination directories retain their modification event alongside the inferred rename.
     ///
     /// In case of copies, the `copy` flag is true and typically represents a perfect copy of a source was made.
     ///
@@ -176,9 +176,10 @@ pub enum Change {
         /// Note that this is the same as `id` if we require the [similarity to be 100%](super::Rewrites::percentage), but may
         /// be different otherwise.
         source_id: gix_hash::ObjectId,
-        /// Information about the diff we performed to detect similarity and match the `source_id` with the current state at `id`.
-        /// It's `None` if `source_id` is equal to `id`, as identity made an actual diff computation unnecessary.
-        diff: Option<DiffLineStats>,
+        /// The byte-span score of an inexact match, including binary files.
+        /// `None` denotes an exact identity match or an inferred directory rename.
+        /// Line statistics can be computed separately with the blob diff APIs.
+        similarity: Option<Similarity>,
         /// The mode of the entry after the rename.
         /// It could differ but still be considered a rename as we are concerned only about content.
         entry_mode: gix_object::tree::EntryMode,
@@ -242,7 +243,7 @@ impl ChangeRef<'_> {
                 source_relation,
                 source_entry_mode,
                 source_id,
-                diff,
+                similarity,
                 entry_mode,
                 id,
                 location,
@@ -253,7 +254,7 @@ impl ChangeRef<'_> {
                 source_relation,
                 source_entry_mode,
                 source_id,
-                diff,
+                similarity,
                 entry_mode,
                 id,
                 location: location.to_owned(),
@@ -261,6 +262,63 @@ impl ChangeRef<'_> {
                 copy,
             },
         }
+    }
+}
+
+impl<'a> ChangeRef<'a> {
+    pub(super) fn from_tree_change(change: &tree::visit::Change, location: &'a BStr) -> Self {
+        match *change {
+            tree::visit::Change::Addition {
+                entry_mode,
+                oid,
+                relation,
+            } => Self::Addition {
+                location,
+                relation,
+                entry_mode,
+                id: oid,
+            },
+            tree::visit::Change::Deletion {
+                entry_mode,
+                oid,
+                relation,
+            } => Self::Deletion {
+                entry_mode,
+                location,
+                relation,
+                id: oid,
+            },
+            tree::visit::Change::Modification {
+                previous_entry_mode,
+                previous_oid,
+                entry_mode,
+                oid,
+            } => Self::Modification {
+                location,
+                previous_entry_mode,
+                entry_mode,
+                previous_id: previous_oid,
+                id: oid,
+            },
+        }
+    }
+
+    pub(super) fn with_location(mut self, location: Option<tree::recorder::Location>) -> Self {
+        let project = |path: &'a BStr| match location {
+            None => BStr::new(b""),
+            Some(tree::recorder::Location::FileName) => path.rsplit_str(b"/").next().unwrap_or_default().as_bstr(),
+            Some(tree::recorder::Location::Path) => path,
+        };
+        if let Self::Rewrite { source_location, .. } = &mut self {
+            *source_location = project(source_location);
+        }
+        match &mut self {
+            Self::Addition { location, .. }
+            | Self::Deletion { location, .. }
+            | Self::Modification { location, .. }
+            | Self::Rewrite { location, .. } => *location = project(location),
+        }
+        self
     }
 }
 
@@ -309,7 +367,7 @@ impl Change {
                 source_relation,
                 source_entry_mode,
                 source_id,
-                diff,
+                similarity,
                 entry_mode,
                 id,
                 location,
@@ -320,7 +378,7 @@ impl Change {
                 source_relation: *source_relation,
                 source_entry_mode: *source_entry_mode,
                 source_id: *source_id,
-                diff: *diff,
+                similarity: *similarity,
                 entry_mode: *entry_mode,
                 id: *id,
                 location: location.as_bstr(),
@@ -350,14 +408,14 @@ impl crate::blob::Platform {
                 entry_mode,
                 id,
             } => {
+                self.set_resource(None, entry_mode.kind(), location, ResourceKind::OldOrSource, objects)?;
                 self.set_resource(
-                    id.kind().null(),
+                    Some(id),
                     entry_mode.kind(),
                     location,
-                    ResourceKind::OldOrSource,
+                    ResourceKind::NewOrDestination,
                     objects,
                 )?;
-                self.set_resource(id, entry_mode.kind(), location, ResourceKind::NewOrDestination, objects)?;
             }
             ChangeRef::Deletion {
                 location,
@@ -365,9 +423,15 @@ impl crate::blob::Platform {
                 entry_mode,
                 id,
             } => {
-                self.set_resource(id, entry_mode.kind(), location, ResourceKind::OldOrSource, objects)?;
                 self.set_resource(
-                    id.kind().null(),
+                    Some(id),
+                    entry_mode.kind(),
+                    location,
+                    ResourceKind::OldOrSource,
+                    objects,
+                )?;
+                self.set_resource(
+                    None,
                     entry_mode.kind(),
                     location,
                     ResourceKind::NewOrDestination,
@@ -382,13 +446,19 @@ impl crate::blob::Platform {
                 id,
             } => {
                 self.set_resource(
-                    previous_id,
+                    Some(previous_id),
                     previous_entry_mode.kind(),
                     location,
                     ResourceKind::OldOrSource,
                     objects,
                 )?;
-                self.set_resource(id, entry_mode.kind(), location, ResourceKind::NewOrDestination, objects)?;
+                self.set_resource(
+                    Some(id),
+                    entry_mode.kind(),
+                    location,
+                    ResourceKind::NewOrDestination,
+                    objects,
+                )?;
             }
             ChangeRef::Rewrite {
                 source_location,
@@ -399,17 +469,23 @@ impl crate::blob::Platform {
                 id,
                 location,
                 relation: _,
-                diff: _,
+                similarity: _,
                 copy: _,
             } => {
                 self.set_resource(
-                    source_id,
+                    Some(source_id),
                     source_entry_mode.kind(),
                     source_location,
                     ResourceKind::OldOrSource,
                     objects,
                 )?;
-                self.set_resource(id, entry_mode.kind(), location, ResourceKind::NewOrDestination, objects)?;
+                self.set_resource(
+                    Some(id),
+                    entry_mode.kind(),
+                    location,
+                    ResourceKind::NewOrDestination,
+                    objects,
+                )?;
             }
         }
         Ok(self)

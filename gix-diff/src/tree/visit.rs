@@ -13,7 +13,8 @@ pub enum Relation {
     /// assuming that empty directories are not allowed in valid trees.
     /// It's also always a tree which is the start of a recursive deletion or addition.
     ///
-    /// The change with this relation is always emitted first.
+    /// The raw tree traversal emits this change before its children. Tree diffs with rename
+    /// tracking may emit an inferred directory rename after matching the children.
     Parent(ChangeId),
     /// This is a direct or indirect child, tree or not tree, of the parent with the given ID.
     ChildOfParent(ChangeId),
@@ -28,7 +29,7 @@ pub enum Change {
         entry_mode: tree::EntryMode,
         /// The object id of the added entry.
         oid: ObjectId,
-        /// Possibly associate this change with another for hierarchical rename tracking.
+        /// Associate this change with its recursive tree addition.
         relation: Option<Relation>,
     },
     /// An entry was deleted, like the deletion of a file or directory.
@@ -37,7 +38,7 @@ pub enum Change {
         entry_mode: tree::EntryMode,
         /// The object id of the deleted entry.
         oid: ObjectId,
-        /// Possibly associate this change with another for hierarchical rename tracking.
+        /// Associate this change with its recursive tree deletion.
         relation: Option<Relation>,
     },
     /// An entry was modified, e.g. changing the contents of a file adjusts its object id and turning
@@ -56,6 +57,14 @@ pub enum Change {
 }
 
 impl Change {
+    /// Return the recursive tree addition or deletion this change belongs to.
+    pub fn relation(&self) -> Option<Relation> {
+        match self {
+            Change::Addition { relation, .. } | Change::Deletion { relation, .. } => *relation,
+            Change::Modification { .. } => None,
+        }
+    }
+
     /// Return the current object id.
     pub fn oid(&self) -> &gix_hash::oid {
         match self {
@@ -99,23 +108,15 @@ mod change_impls {
     use gix_hash::oid;
     use gix_object::tree::EntryMode;
 
-    use crate::{
-        rewrites::tracker::ChangeKind,
-        tree::visit::{Change, Relation},
-    };
+    use crate::{rewrites::tracker::ChangeKind, tree::visit::Change};
 
     impl crate::rewrites::tracker::Change for crate::tree::visit::Change {
-        fn id(&self) -> &oid {
-            match self {
-                Change::Addition { oid, .. } | Change::Deletion { oid, .. } | Change::Modification { oid, .. } => oid,
-            }
-        }
-
-        fn relation(&self) -> Option<Relation> {
-            match self {
-                Change::Addition { relation, .. } | Change::Deletion { relation, .. } => *relation,
-                Change::Modification { .. } => None,
-            }
+        fn id(&self) -> Option<&oid> {
+            let id = match self {
+                Change::Addition { oid, .. } | Change::Deletion { oid, .. } => oid,
+                Change::Modification { previous_oid, .. } => previous_oid,
+            };
+            (!id.is_null()).then_some(id.as_ref())
         }
 
         fn kind(&self) -> ChangeKind {
@@ -128,17 +129,10 @@ mod change_impls {
 
         fn entry_mode(&self) -> EntryMode {
             match self {
-                Change::Addition { entry_mode, .. }
-                | Change::Deletion { entry_mode, .. }
-                | Change::Modification { entry_mode, .. } => *entry_mode,
-            }
-        }
-
-        fn id_and_entry_mode(&self) -> (&oid, EntryMode) {
-            match self {
-                Change::Addition { entry_mode, oid, .. }
-                | Change::Deletion { entry_mode, oid, .. }
-                | Change::Modification { entry_mode, oid, .. } => (oid, *entry_mode),
+                Change::Addition { entry_mode, .. } | Change::Deletion { entry_mode, .. } => *entry_mode,
+                Change::Modification {
+                    previous_entry_mode, ..
+                } => *previous_entry_mode,
             }
         }
     }

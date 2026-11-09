@@ -8,7 +8,7 @@ version = "0.64.0"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 license = "MIT OR Apache-2.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 include = ["/src/**/*", "/LICENSE-*"]
 
 [lib]
@@ -85,8 +85,8 @@ crossbeam-channel = { version = "0.5.15", optional = true }
 smallvec = { version = "1.15.1", optional = true }
 
 # for 'query' and 'corpus'
-# Specific version needed for MSRV 1.88
-rusqlite = { version = "0.39.0", optional = true, features = ["bundled", "fallible_uint"] }
+# Use patched bundled SQLite (RUSTSEC-2026-0459).
+rusqlite = { version = "0.41.0", optional = true, features = ["bundled", "fallible_uint"] }
 
 # for 'corpus'
 parking_lot = { version = "0.12.4", optional = true }

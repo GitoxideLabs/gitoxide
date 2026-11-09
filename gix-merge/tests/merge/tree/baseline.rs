@@ -38,6 +38,8 @@ pub enum ConflictKind {
     DirectoryRenamedWithModificationInside,
     /// A path was automatically moved through a directory rename.
     PathUpdatedDueToDirectoryRename,
+    /// Multiple destinations have the same number of file renames from a directory.
+    DirectoryRenameSplit,
     /// Added files differ in mode.
     DistinctModes,
     /// The same file was renamed to different destinations.
@@ -286,6 +288,9 @@ fn parse_info<'a>(mut lines: impl Iterator<Item = &'a str>) -> Option<ConflictIn
         "CONFLICT (modify/delete)" => ConflictKind::ConflictModifyDelete,
         "CONFLICT (directory rename suggested)" => ConflictKind::DirectoryRenamedWithModificationInside,
         "Path updated due to directory rename" => ConflictKind::PathUpdatedDueToDirectoryRename,
+        "CONFLICT (directory rename split)" | "CONFLICT(directory rename unclear split)" => {
+            ConflictKind::DirectoryRenameSplit
+        }
         "CONFLICT (distinct modes)" => ConflictKind::DistinctModes,
         "CONFLICT (rename/rename)" => ConflictKind::RenameRename,
         "CONFLICT (rename/delete)" => ConflictKind::RenameAddDelete,

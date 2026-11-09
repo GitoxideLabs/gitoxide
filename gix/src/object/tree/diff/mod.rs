@@ -60,10 +60,11 @@ pub enum Change<'a, 'old, 'new> {
         /// The object id after the modification.
         id: Id<'new>,
     },
-    /// Entries are considered rewritten if they are not trees and they, according to some understanding of identity, were renamed
-    /// or copied.
+    /// Entries are considered rewritten if they, according to some understanding of identity, were renamed or copied.
+    /// Directory renames are inferred from completed file renames into added or existing directories.
     /// In case of renames, this means they originally appeared as [`Deletion`](Change::Deletion) signalling their source as well as an
-    /// [`Addition`](Change::Addition) acting as destination.
+    /// [`Addition`](Change::Addition) acting as destination, or a [`Modification`](Change::Modification) for an existing directory.
+    /// Existing destination directories retain their modification event alongside the inferred rename.
     ///
     /// In case of copies, the `copy` flag is true and typically represents a perfect copy of a source was made.
     ///
@@ -86,9 +87,10 @@ pub enum Change<'a, 'old, 'new> {
         /// Note that this is the same as `id` if we require the [similarity to be 100%](gix_diff::Rewrites::percentage), but may
         /// be different otherwise.
         source_id: Id<'old>,
-        /// Information about the diff we performed to detect similarity and match the `source_id` with the current state at `id`.
-        /// It's `None` if `source_id` is equal to `id`, as identity made an actual diff computation unnecessary.
-        diff: Option<gix_diff::blob::DiffLineStats>,
+        /// The content similarity used to match entries with different object IDs.
+        /// It's `None` for identity matches and inferred directory renames.
+        /// A score of 100% does not imply identical contents. Use [`Change::diff()`] to compute line changes separately.
+        similarity: Option<gix_diff::rewrites::Similarity>,
         /// The mode of the entry after the rename.
         /// It could differ but still be considered a rename as we are concerned only about content.
         entry_mode: gix_object::tree::EntryMode,

@@ -7,7 +7,6 @@ use crate::{
     index::{Change, ChangeRef},
     rewrites,
     rewrites::tracker::ChangeKind,
-    tree::visit::Relation,
 };
 
 impl ChangeRef<'_, '_> {
@@ -79,30 +78,50 @@ impl ChangeRef<'_, '_> {
 }
 
 impl ChangeRef<'_, '_> {
-    /// Return all shared fields among all variants: `(location, index, entry_mode, id)`
+    /// Return `(location, index, entry_mode, id)` for the entry in `lhs`, before the change.
     ///
-    /// In case of rewrites, the fields return to the current change.
-    ///
-    /// Note that there are also more specific accessors in case you only need to access to one of
-    /// these fields individually.
-    ///
-    /// See [`ChangeRef::location()`], [`ChangeRef::index()`], [`ChangeRef::entry_mode()`] and
-    /// [`ChangeRef::id()`].
-    pub fn fields(&self) -> (&BStr, usize, gix_index::entry::Mode, &gix_hash::oid) {
+    /// This is the removed entry for deletions, the previous entry for modifications, and the
+    /// source entry for rewrites. Additions return `None` as they have no entry in `lhs`.
+    /// See [`Self::rhs_fields()`] for the entry after the change.
+    pub fn lhs_fields(&self) -> Option<(&BStr, usize, gix_index::entry::Mode, &gix_hash::oid)> {
         match self {
+            ChangeRef::Addition { .. } => None,
+            ChangeRef::Deletion {
+                location,
+                index,
+                entry_mode,
+                id,
+            }
+            | ChangeRef::Modification {
+                location,
+                previous_index: index,
+                previous_entry_mode: entry_mode,
+                previous_id: id,
+                ..
+            }
+            | ChangeRef::Rewrite {
+                source_location: location,
+                source_index: index,
+                source_entry_mode: entry_mode,
+                source_id: id,
+                ..
+            } => Some((location.as_ref(), *index, *entry_mode, id)),
+        }
+    }
+
+    /// Return `(location, index, entry_mode, id)` for the entry in `rhs`, after the change.
+    ///
+    /// This is the added entry for additions, the new entry for modifications, and the
+    /// destination entry for rewrites. Deletions return `None` as they have no entry in `rhs`.
+    /// See [`Self::lhs_fields()`] for the entry before the change.
+    pub fn rhs_fields(&self) -> Option<(&BStr, usize, gix_index::entry::Mode, &gix_hash::oid)> {
+        match self {
+            ChangeRef::Deletion { .. } => None,
             ChangeRef::Addition {
                 location,
                 index,
                 entry_mode,
                 id,
-                ..
-            }
-            | ChangeRef::Deletion {
-                location,
-                index,
-                entry_mode,
-                id,
-                ..
             }
             | ChangeRef::Modification {
                 location,
@@ -117,7 +136,7 @@ impl ChangeRef<'_, '_> {
                 entry_mode,
                 id,
                 ..
-            } => (location.as_ref(), *index, *entry_mode, id),
+            } => Some((location.as_ref(), *index, *entry_mode, id)),
         }
     }
 
@@ -163,19 +182,14 @@ impl ChangeRef<'_, '_> {
 }
 
 impl rewrites::tracker::Change for ChangeRef<'_, '_> {
-    fn id(&self) -> &gix_hash::oid {
+    fn id(&self) -> Option<&gix_hash::oid> {
         match self {
-            ChangeRef::Addition { id, .. } | ChangeRef::Deletion { id, .. } | ChangeRef::Modification { id, .. } => {
-                id.as_ref()
-            }
+            ChangeRef::Addition { id, .. } | ChangeRef::Deletion { id, .. } => (!id.is_null()).then_some(id.as_ref()),
+            ChangeRef::Modification { previous_id, .. } => (!previous_id.is_null()).then_some(previous_id.as_ref()),
             ChangeRef::Rewrite { .. } => {
                 unreachable!("BUG")
             }
         }
-    }
-
-    fn relation(&self) -> Option<Relation> {
-        None
     }
 
     fn kind(&self) -> ChangeKind {
@@ -190,33 +204,15 @@ impl rewrites::tracker::Change for ChangeRef<'_, '_> {
     }
 
     fn entry_mode(&self) -> tree::EntryMode {
-        match self {
-            ChangeRef::Addition { entry_mode, .. }
-            | ChangeRef::Deletion { entry_mode, .. }
-            | ChangeRef::Modification { entry_mode, .. }
-            | ChangeRef::Rewrite { entry_mode, .. } => {
-                entry_mode
-                    .to_tree_entry_mode()
-                    // Default is for the impossible case - just don't let it participate in rename tracking.
-                    .unwrap_or(tree::EntryKind::Tree.into())
-            }
-        }
-    }
-
-    fn id_and_entry_mode(&self) -> (&gix_hash::oid, tree::EntryMode) {
-        match self {
-            ChangeRef::Addition { id, entry_mode, .. }
-            | ChangeRef::Deletion { id, entry_mode, .. }
-            | ChangeRef::Modification { id, entry_mode, .. }
-            | ChangeRef::Rewrite { id, entry_mode, .. } => {
-                (
-                    id,
-                    entry_mode
-                        .to_tree_entry_mode()
-                        // Default is for the impossible case - just don't let it participate in rename tracking.
-                        .unwrap_or(tree::EntryKind::Tree.into()),
-                )
-            }
-        }
+        let mode = match self {
+            ChangeRef::Addition { entry_mode, .. } | ChangeRef::Deletion { entry_mode, .. } => entry_mode,
+            ChangeRef::Modification {
+                previous_entry_mode, ..
+            } => previous_entry_mode,
+            ChangeRef::Rewrite { .. } => unreachable!("BUG: rewrites can't be determined ahead of time"),
+        };
+        mode.to_tree_entry_mode()
+            // Default is for the impossible case - just don't let it participate in rename tracking.
+            .unwrap_or(tree::EntryKind::Tree.into())
     }
 }

@@ -1205,6 +1205,9 @@ pub fn scripted_fixture_read_only_with_args_single_archive_with_git_version(
 /// Like [`scripted_fixture_read_only`], but runs a Rust closure after the script completes.
 ///
 /// - `version` should be incremented when the closure's behavior changes to invalidate the cache.
+///   Each version has a separate archive with a `.post-v{version}` suffix, so plain and
+///   post-processed fixtures can coexist. Use distinct versions for different post-processing
+///   variants of the same script and arguments.
 /// - The closure receives a [`FixtureState`] enum indicating whether the fixture is newly created
 ///   or was loaded from cache.
 /// - For uninitialized fixtures, the closure can modify the directory and compute values.
@@ -1861,13 +1864,15 @@ where
             }
             ArgsInHash::No => "".into(),
         };
+        // Dots are escaped in argument suffixes, keeping post-processing distinct from script arguments.
+        let post_suffix = post_version.map_or_else(String::new, |version| format!(".post-v{version}"));
         let potential_hash_suffix = if is_sha1(object_hash) {
             "".into()
         } else {
             format!("_{object_hash}")
         };
         format!(
-            "{}{suffix}{potential_hash_suffix}.{}",
+            "{}{suffix}{post_suffix}{potential_hash_suffix}.{}",
             script_basename.to_str().expect("valid UTF-8"),
             tar_extension()
         )

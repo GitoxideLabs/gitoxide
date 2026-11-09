@@ -374,50 +374,42 @@ fn copies_by_identity() -> TestResult {
     )?;
     insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes).0, @r#"
     [
-        Rewrite {
-            source_location: "base",
-            source_index: 3,
-            source_entry_mode: Mode(
+        Modification {
+            location: "base",
+            previous_index: 3,
+            previous_entry_mode: Mode(
                 FILE,
             ),
-            source_id: Oid(1),
+            previous_id: Oid(1),
+            index: 3,
+            entry_mode: Mode(
+                FILE,
+            ),
+            id: Oid(2),
+        },
+        Addition {
             location: "c1",
             index: 4,
             entry_mode: Mode(
                 FILE,
             ),
-            id: Oid(1),
-            copy: true,
+            id: Oid(2),
         },
-        Rewrite {
-            source_location: "base",
-            source_index: 3,
-            source_entry_mode: Mode(
-                FILE,
-            ),
-            source_id: Oid(1),
+        Addition {
             location: "c2",
             index: 5,
             entry_mode: Mode(
                 FILE,
             ),
-            id: Oid(1),
-            copy: true,
+            id: Oid(2),
         },
-        Rewrite {
-            source_location: "base",
-            source_index: 3,
-            source_entry_mode: Mode(
-                FILE,
-            ),
-            source_id: Oid(1),
+        Addition {
             location: "dir/c3",
             index: 9,
             entry_mode: Mode(
                 FILE,
             ),
-            id: Oid(1),
-            copy: true,
+            id: Oid(2),
         },
     ]
     "#);
@@ -453,7 +445,7 @@ fn copies_by_similarity() -> TestResult {
             entry_mode: Mode(
                 FILE,
             ),
-            id: Oid(1),
+            id: Oid(2),
             copy: true,
         },
         Rewrite {
@@ -468,7 +460,7 @@ fn copies_by_similarity() -> TestResult {
             entry_mode: Mode(
                 FILE,
             ),
-            id: Oid(2),
+            id: Oid(3),
             copy: true,
         },
         Rewrite {
@@ -483,16 +475,29 @@ fn copies_by_similarity() -> TestResult {
             entry_mode: Mode(
                 FILE,
             ),
-            id: Oid(3),
+            id: Oid(4),
             copy: true,
+        },
+        Modification {
+            location: "base",
+            previous_index: 3,
+            previous_entry_mode: Mode(
+                FILE,
+            ),
+            previous_id: Oid(1),
+            index: 3,
+            entry_mode: Mode(
+                FILE,
+            ),
+            id: Oid(2),
         },
     ]
     "#);
 
     let out = out.expect("tracking enabled");
     assert_eq!(
-        out.num_similarity_checks, 2,
-        "two are similar, the other one is identical"
+        out.num_similarity_checks, 3,
+        "all three copies differ from the original source"
     );
     assert_eq!(out.num_similarity_checks_skipped_for_rename_tracking_due_to_limit, 0);
     assert_eq!(out.num_similarity_checks_skipped_for_copy_tracking_due_to_limit, 0);
@@ -542,69 +547,72 @@ fn copies_in_entire_tree_by_similarity() -> TestResult {
     )?;
 
     insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes).0, @r#"
-        [
-            Rewrite {
-                source_location: "base",
-                source_index: 3,
-                source_entry_mode: Mode(
-                    FILE,
-                ),
-                source_id: Oid(1),
-                location: "c6",
-                index: 8,
-                entry_mode: Mode(
-                    FILE,
-                ),
-                id: Oid(1),
-                copy: true,
-            },
-            Rewrite {
-                source_location: "r/c3di",
-                source_index: 12,
-                source_entry_mode: Mode(
-                    FILE,
-                ),
-                source_id: Oid(2),
-                location: "c7",
-                index: 9,
-                entry_mode: Mode(
-                    FILE,
-                ),
-                id: Oid(2),
-                copy: true,
-            },
-            Rewrite {
-                source_location: "c5",
-                source_index: 7,
-                source_entry_mode: Mode(
-                    FILE,
-                ),
-                source_id: Oid(3),
-                location: "newly-added",
-                index: 19,
-                entry_mode: Mode(
-                    FILE,
-                ),
-                id: Oid(4),
-                copy: true,
-            },
-            Modification {
-                location: "b",
-                previous_index: 0,
-                previous_entry_mode: Mode(
-                    FILE,
-                ),
-                previous_id: Oid(5),
-                index: 0,
-                entry_mode: Mode(
-                    FILE,
-                ),
-                id: Oid(6),
-            },
-        ]
-        "#);
+    [
+        Rewrite {
+            source_location: "base",
+            source_index: 3,
+            source_entry_mode: Mode(
+                FILE,
+            ),
+            source_id: Oid(1),
+            location: "c6",
+            index: 8,
+            entry_mode: Mode(
+                FILE,
+            ),
+            id: Oid(1),
+            copy: true,
+        },
+        Rewrite {
+            source_location: "dir/c6",
+            source_index: 12,
+            source_entry_mode: Mode(
+                FILE,
+            ),
+            source_id: Oid(2),
+            location: "c7",
+            index: 9,
+            entry_mode: Mode(
+                FILE,
+            ),
+            id: Oid(2),
+            copy: true,
+        },
+        Rewrite {
+            source_location: "c5",
+            source_index: 7,
+            source_entry_mode: Mode(
+                FILE,
+            ),
+            source_id: Oid(3),
+            location: "newly-added",
+            index: 19,
+            entry_mode: Mode(
+                FILE,
+            ),
+            id: Oid(4),
+            copy: true,
+        },
+        Modification {
+            location: "b",
+            previous_index: 0,
+            previous_entry_mode: Mode(
+                FILE,
+            ),
+            previous_id: Oid(5),
+            index: 0,
+            entry_mode: Mode(
+                FILE,
+            ),
+            id: Oid(6),
+        },
+    ]
+    "#);
     let out = out.expect("tracking enabled");
-    assert_eq!(out.num_similarity_checks, 22);
+    assert_eq!(
+        out.num_similarity_checks, 13,
+        "each regular-file source is compared once"
+    );
     assert_eq!(
         out.num_similarity_checks_skipped_for_rename_tracking_due_to_limit, 0,
         "no limit configured"
@@ -649,7 +657,7 @@ fn copies_in_entire_tree_by_similarity_with_limit() -> TestResult {
             copy: true,
         },
         Rewrite {
-            source_location: "r/c3di",
+            source_location: "dir/c6",
             source_index: 12,
             source_entry_mode: Mode(
                 FILE,
@@ -688,12 +696,15 @@ fn copies_in_entire_tree_by_similarity_with_limit() -> TestResult {
     "#);
 
     let out = out.expect("tracking enabled");
-    assert_eq!(out.num_similarity_checks, 0, "similarity checks can't run");
+    assert_eq!(
+        out.num_similarity_checks, 1,
+        "the limit permits falling back to modified sources"
+    );
     assert_eq!(
         out.num_similarity_checks_skipped_for_rename_tracking_due_to_limit, 0,
         "no limit configured"
     );
-    assert_eq!(out.num_similarity_checks_skipped_for_copy_tracking_due_to_limit, 21);
+    assert_eq!(out.num_similarity_checks_skipped_for_copy_tracking_due_to_limit, 15);
 
     Ok(())
 }
@@ -726,15 +737,22 @@ fn realistic_renames_by_identity() -> TestResult {
                 FILE,
             ),
             id: Oid(1),
-            copy: false,
+            copy: true,
         },
-        Addition {
+        Rewrite {
+            source_location: "git-index/src/file.rs",
+            source_index: 18,
+            source_entry_mode: Mode(
+                FILE,
+            ),
+            source_id: Oid(1),
             location: "git-index/tests/index/file/access.rs",
             index: 45,
             entry_mode: Mode(
                 FILE,
             ),
             id: Oid(1),
+            copy: false,
         },
         Modification {
             location: "git-index/tests/index/file/mod.rs",
@@ -753,7 +771,7 @@ fn realistic_renames_by_identity() -> TestResult {
     "#);
 
     let out = out.expect("tracking enabled");
-    assert_eq!(out.num_similarity_checks, 1);
+    assert_eq!(out.num_similarity_checks, 0, "both destinations have exact sources");
     assert_eq!(out.num_similarity_checks_skipped_for_rename_tracking_due_to_limit, 0);
     assert_eq!(out.num_similarity_checks_skipped_for_copy_tracking_due_to_limit, 0);
 
@@ -1090,14 +1108,14 @@ fn realistic_renames_3_without_identity() -> TestResult {
             insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().collect::<Vec<_>>())).0, @r#"
             [
                 Rewrite {
-                    source_location: "src/plumbing/options.rs",
-                    source_index: 4,
+                    source_location: "src/plumbing/main.rs",
+                    source_index: 2,
                     source_entry_mode: Mode(
                         FILE,
                     ),
                     source_id: Oid(1),
-                    location: "src/plumbing-renamed/options/mod.rs",
-                    index: 4,
+                    location: "src/plumbing-renamed/main.rs",
+                    index: 2,
                     entry_mode: Mode(
                         FILE,
                     ),
@@ -1120,14 +1138,14 @@ fn realistic_renames_3_without_identity() -> TestResult {
                     copy: false,
                 },
                 Rewrite {
-                    source_location: "src/plumbing/main.rs",
-                    source_index: 2,
+                    source_location: "src/plumbing/options.rs",
+                    source_index: 4,
                     source_entry_mode: Mode(
                         FILE,
                     ),
                     source_id: Oid(3),
-                    location: "src/plumbing-renamed/main.rs",
-                    index: 2,
+                    location: "src/plumbing-renamed/options/mod.rs",
+                    index: 4,
                     entry_mode: Mode(
                         FILE,
                     ),
@@ -1141,14 +1159,14 @@ fn realistic_renames_3_without_identity() -> TestResult {
             insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().collect::<Vec<_>>())).0, @r#"
             [
                 Rewrite {
-                    source_location: "src/plumbing/mod.rs",
-                    source_index: 3,
+                    source_location: "src/plumbing/main.rs",
+                    source_index: 2,
                     source_entry_mode: Mode(
                         FILE,
                     ),
                     source_id: Oid(1),
-                    location: "src/plumbing-renamed/mod.rs",
-                    index: 3,
+                    location: "src/plumbing-renamed/main.rs",
+                    index: 2,
                     entry_mode: Mode(
                         FILE,
                     ),
@@ -1156,14 +1174,14 @@ fn realistic_renames_3_without_identity() -> TestResult {
                     copy: false,
                 },
                 Rewrite {
-                    source_location: "src/plumbing/main.rs",
-                    source_index: 2,
+                    source_location: "src/plumbing/mod.rs",
+                    source_index: 3,
                     source_entry_mode: Mode(
                         FILE,
                     ),
                     source_id: Oid(2),
-                    location: "src/plumbing-renamed/main.rs",
-                    index: 2,
+                    location: "src/plumbing-renamed/mod.rs",
+                    index: 3,
                     entry_mode: Mode(
                         FILE,
                     ),

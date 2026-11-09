@@ -117,11 +117,11 @@ impl<'a> Needle<'a> {
                 Match::GlobRange(*asterisk_pos..end)
             }
             Needle::Object(id) => {
-                if *id == item.target {
+                if item.target.is_some_and(|target| !target.is_null() && *id == target) {
                     return Match::Normal;
                 }
                 match item.object {
-                    Some(object) if object == *id => Match::Normal,
+                    Some(object) if !object.is_null() && object == *id => Match::Normal,
                     _ => Match::None,
                 }
             }

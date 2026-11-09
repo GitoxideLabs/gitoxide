@@ -9,7 +9,10 @@
 //! sibling `resolve` module; this module only prepares, indexes, and matches work.
 
 use bstr::{BString, ByteSlice};
-use gix_diff::{tree::recorder::Location, tree_with_rewrites::Change};
+use gix_diff::{
+    tree::recorder::Location,
+    tree_with_rewrites::{Change, ChangeRef},
+};
 use gix_error::ResultExt;
 use gix_error::{Result, message};
 use gix_object::FindExt;
@@ -23,6 +26,64 @@ pub(super) struct SideState {
 
 /// Lifecycle
 impl SideState {
+    /// Like Git, only use a directory rename when the other side adds a leaf directly inside it or an ancestor.
+    pub(super) fn retain_relevant_directory_renames(&mut self, other: &Self) {
+        if !self
+            .changes
+            .iter()
+            .any(|change| matches!(&change.inner, Change::Rewrite { entry_mode, .. } if entry_mode.is_tree()))
+        {
+            return;
+        }
+        let relevant_directories: std::collections::HashSet<_> = other
+            .changes
+            .iter()
+            .filter(|change| {
+                !change.inner.entry_mode().is_tree()
+                    && matches!(change.inner, Change::Addition { .. } | Change::Rewrite { .. })
+            })
+            .filter_map(|change| {
+                let path = change.inner.location();
+                path.rfind_byte(b'/').map(|slash| path[..slash].as_bstr())
+            })
+            .collect();
+        let is_irrelevant = |change: &Change| {
+            let Change::Rewrite {
+                source_location,
+                entry_mode,
+                ..
+            } = change
+            else {
+                return false;
+            };
+            if !entry_mode.is_tree() {
+                return false;
+            }
+            let mut path = source_location.as_bstr();
+            loop {
+                if relevant_directories.contains(path) {
+                    return false;
+                }
+                let Some(slash) = path.rfind_byte(b'/') else {
+                    return true;
+                };
+                path = path[..slash].as_bstr();
+            }
+        };
+        if !self.changes.iter().any(|change| is_irrelevant(&change.inner)) {
+            return;
+        }
+        let mut changes = Vec::with_capacity(self.changes.len());
+        for change in self.changes.drain(..) {
+            if is_irrelevant(&change.inner) {
+                track_without_directory_rename(change.inner.to_ref(), &mut changes);
+            } else {
+                changes.push(change);
+            }
+        }
+        *self = Self::from_changes(changes);
+    }
+
     fn from_changes(changes: ChangeList) -> Self {
         let mut tree = TreeNodes::new();
         for (idx, change) in changes.iter().enumerate() {
@@ -41,18 +102,14 @@ impl SideState {
     pub(super) fn parts_mut(&mut self) -> (&mut ChangeList, &mut TreeNodes) {
         (&mut self.changes, &mut self.tree)
     }
-    /// Return whether unrelated rewrite destinations can claim the same source identity.
-    ///
-    /// Rewrites derived from a parent directory rename have a relation and don't represent
-    /// ambiguous identity pairing themselves.
+    /// Return whether file rewrites can claim the same source identity.
+    /// Directory relations describe tree structure; all file rewrites are paired independently.
     pub(super) fn has_ambiguous_rewrite_sources(&self) -> bool {
         let mut sources = std::collections::HashSet::new();
         self.changes.iter().any(|change| match &change.inner {
             Change::Rewrite {
-                source_id,
-                relation: None,
-                ..
-            } => !sources.insert(*source_id),
+                source_id, entry_mode, ..
+            } if !entry_mode.is_tree() => !sources.insert(*source_id),
             _ => false,
         })
     }
@@ -114,38 +171,8 @@ pub(super) fn collect(
             diff_state,
             objects,
             |change| {
-                if directory_renames == crate::tree::DirectoryRenames::Disabled
-                    && let gix_diff::tree_with_rewrites::ChangeRef::Rewrite {
-                        source_location,
-                        source_entry_mode,
-                        source_id,
-                        entry_mode,
-                        id,
-                        location,
-                        relation,
-                        ..
-                    } = change
-                    && entry_mode.is_tree()
-                {
-                    // Keep structural boundaries for file/directory conflicts, but not the inferred relocation.
-                    track(
-                        gix_diff::tree_with_rewrites::ChangeRef::Deletion {
-                            location: source_location,
-                            entry_mode: source_entry_mode,
-                            id: source_id,
-                            relation,
-                        },
-                        &mut changes,
-                    );
-                    track(
-                        gix_diff::tree_with_rewrites::ChangeRef::Addition {
-                            location,
-                            entry_mode,
-                            id,
-                            relation,
-                        },
-                        &mut changes,
-                    );
+                if directory_renames == crate::tree::DirectoryRenames::Disabled {
+                    track_without_directory_rename(change, &mut changes);
                 } else {
                     track(change, &mut changes);
                 }
@@ -159,6 +186,44 @@ pub(super) fn collect(
         .or_raise(|| message("Tree merge failed"))?;
     }
     Ok(SideState::from_changes(changes))
+}
+
+fn track_without_directory_rename(change: ChangeRef<'_>, changes: &mut ChangeList) {
+    if let ChangeRef::Rewrite {
+        source_location,
+        source_entry_mode,
+        source_id,
+        source_relation,
+        entry_mode,
+        id,
+        location,
+        relation,
+        ..
+    } = change
+        && entry_mode.is_tree()
+    {
+        // Keep structural boundaries for file/directory conflicts, but not the inferred relocation.
+        track(
+            ChangeRef::Deletion {
+                location: source_location,
+                entry_mode: source_entry_mode,
+                id: source_id,
+                relation: source_relation,
+            },
+            changes,
+        );
+        track(
+            ChangeRef::Addition {
+                location,
+                entry_mode,
+                id,
+                relation,
+            },
+            changes,
+        );
+    } else {
+        track(change, changes);
+    }
 }
 
 /// Find an eligible change on our indexed side that structurally interacts with `theirs`.
@@ -271,5 +336,45 @@ pub(super) fn pair(candidate: &PossibleConflict, our_changes: &ChangeListRef) ->
         PossibleConflict::NonTreeToTree { change_idx } => (change_idx, Some(MatchKind::EraseLeaf)),
         PossibleConflict::Match { change_idx } => (Some(change_idx), None),
         _ => (None, None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gix_diff::{tree::visit::Relation, tree_with_rewrites::ChangeRef};
+    use gix_object::tree::EntryKind;
+
+    use super::{SideState, track};
+
+    #[test]
+    fn directory_children_can_have_ambiguous_rewrite_sources() {
+        let blob_id = gix_hash::ObjectId::empty_blob(gix_testtools::object_hash());
+        for entry_kind in [EntryKind::Blob, EntryKind::Tree] {
+            for relation in [None, Some(Relation::ChildOfParent(1))] {
+                let mut changes = Vec::new();
+                for (source, destination) in [("old/a", "new/a"), ("old/b", "new/b")] {
+                    track(
+                        ChangeRef::Rewrite {
+                            source_location: source.into(),
+                            source_entry_mode: entry_kind.into(),
+                            source_id: blob_id,
+                            source_relation: relation,
+                            entry_mode: entry_kind.into(),
+                            id: blob_id,
+                            relation,
+                            similarity: None,
+                            location: destination.into(),
+                            copy: false,
+                        },
+                        &mut changes,
+                    );
+                }
+                assert_eq!(
+                    SideState::from_changes(changes).has_ambiguous_rewrite_sources(),
+                    entry_kind != EntryKind::Tree,
+                    "directory membership does not make file pairings unambiguous: {entry_kind:?}, {relation:?}"
+                );
+            }
+        }
     }
 }

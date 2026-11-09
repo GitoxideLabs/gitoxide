@@ -1,7 +1,7 @@
 use gix_error::{Result, bail};
 use std::{io::Read, path::PathBuf};
 
-use crate::blob::{PlatformRef, Resolution, builtin_driver};
+use crate::blob::{PlatformRef, Resolution, builtin_driver, platform::resource::Data};
 
 /// Options for the use in the [`PlatformRef::merge()`] call.
 #[derive(Default, Copy, Clone, Debug, Eq, PartialEq)]
@@ -71,6 +71,8 @@ pub(super) mod inner {
             /// The resulting command should be spawned, and when successful, [the result file can be opened](merge::Command::open_result_file)
             /// to read back the result into a suitable buffer.
             ///
+            /// Missing inputs are passed as empty temporary files; too-large inputs are rejected.
+            ///
             /// ### Deviation
             ///
             /// * We allow passing more context than Git would by taking a whole `context`,
@@ -102,19 +104,19 @@ pub(super) mod inner {
                     Ok((file, path))
                 }
 
-                let base = self.ancestor.data.as_slice().ok_or_raise(|| {
+                let base = merge::content_merge_input(self.ancestor.data).ok_or_raise(|| {
                     validation(format!(
                         "The resource of kind {:?} was too large to be processed",
                         ResourceKind::CommonAncestorOrBase
                     ))
                 })?;
-                let ours = self.current.data.as_slice().ok_or_raise(|| {
+                let ours = merge::content_merge_input(self.current.data).ok_or_raise(|| {
                     validation(format!(
                         "The resource of kind {:?} was too large to be processed",
                         ResourceKind::CurrentOrOurs
                     ))
                 })?;
-                let theirs = self.other.data.as_slice().ok_or_raise(|| {
+                let theirs = merge::content_merge_input(self.other.data).ok_or_raise(|| {
                     validation(format!(
                         "The resource of kind {:?} was too large to be processed",
                         ResourceKind::OtherOrTheirs
@@ -262,7 +264,7 @@ pub(super) mod inner {
     pub mod builtin_merge {
         use crate::blob::{
             BuiltinDriver, PlatformRef, Resolution, builtin_driver,
-            platform::{resource, resource::Data},
+            platform::{merge::content_merge_input, resource::Data},
         };
 
         /// An identifier to tell us how a merge conflict was resolved by [builtin_merge](PlatformRef::builtin_merge).
@@ -270,15 +272,15 @@ pub(super) mod inner {
         pub enum Pick {
             /// In a binary merge, chose the ancestor.
             ///
-            /// Use [`PlatformRef::buffer_by_pick()`] to retrieve it.
+            /// Use [`PlatformRef::data_by_pick()`] to retrieve it.
             Ancestor,
             /// In a binary merge, chose our side.
             ///
-            /// Use [`PlatformRef::buffer_by_pick()`] to retrieve it.
+            /// Use [`PlatformRef::data_by_pick()`] to retrieve it.
             Ours,
             /// In a binary merge, chose their side.
             ///
-            /// Use [`PlatformRef::buffer_by_pick()`] to retrieve it.
+            /// Use [`PlatformRef::data_by_pick()`] to retrieve it.
             Theirs,
             /// New data was produced with the result of the merge, to be found in the buffer that was passed to
             /// [builtin_merge()](PlatformRef::builtin_merge).
@@ -291,7 +293,7 @@ pub(super) mod inner {
             /// Perform the merge using the given `driver`, possibly placing the output in `out`.
             /// `input` can be used to keep tokens between runs, but note it will only grow in size unless cleared manually.
             /// Use `labels` to annotate conflict sections in case of a text-merge.
-            /// Returns `None` if one of the buffers is too large, making a merge impossible.
+            /// Text and union drivers interpret missing inputs as empty content.
             /// Note that if the *pick* wasn't [`Pick::Buffer`], then `out` will not have been cleared,
             /// and one has to take the data from the respective resource.
             ///
@@ -304,9 +306,6 @@ pub(super) mod inner {
                 input: &mut imara_diff::InternedInput<&'parent [u8]>,
                 labels: builtin_driver::text::Labels<'_>,
             ) -> (Pick, Resolution) {
-                let base = self.ancestor.data.as_slice().unwrap_or_default();
-                let ours = self.current.data.as_slice().unwrap_or_default();
-                let theirs = self.other.data.as_slice().unwrap_or_default();
                 let driver = if driver != BuiltinDriver::Binary
                     && (is_binary_buf(self.ancestor.data)
                         || is_binary_buf(self.other.data)
@@ -317,18 +316,31 @@ pub(super) mod inner {
                     driver
                 };
                 match driver {
-                    BuiltinDriver::Text => {
-                        let resolution =
-                            builtin_driver::text(out, input, labels, ours, base, theirs, self.options.text);
+                    BuiltinDriver::Text | BuiltinDriver::Union => {
+                        let [base, ours, theirs] = [self.ancestor.data, self.current.data, self.other.data]
+                            .map(|data| content_merge_input(data).expect("too-large resources use the binary driver"));
+                        let options = if driver == BuiltinDriver::Union {
+                            builtin_driver::text::Options {
+                                conflict: builtin_driver::text::Conflict::ResolveWithUnion,
+                                ..self.options.text
+                            }
+                        } else {
+                            self.options.text
+                        };
+                        let resolution = builtin_driver::text(out, input, labels, ours, base, theirs, options);
                         (Pick::Buffer, resolution)
                     }
                     BuiltinDriver::Binary => {
-                        // Object IDs are authoritative when both resources have one. A null ID means the resource isn't
-                        // backed by an object, so compare its prepared data.
-                        let ours_matches_theirs = if self.current.id.is_null() || self.other.id.is_null() {
-                            ours == theirs
-                        } else {
-                            self.current.id == self.other.id
+                        let ours_matches_theirs = match (self.current.data, self.other.data) {
+                            (Data::Missing, Data::Missing) => true,
+                            (Data::Missing, _) | (_, Data::Missing) => false,
+                            _ if self.current.id.is_some_and(|id| !id.is_null())
+                                && self.other.id.is_some_and(|id| !id.is_null()) =>
+                            {
+                                self.current.id == self.other.id
+                            }
+                            (Data::Buffer(ours), Data::Buffer(theirs)) => ours == theirs,
+                            _ => false,
                         };
 
                         if ours_matches_theirs {
@@ -343,26 +355,11 @@ pub(super) mod inner {
                             (pick, resolution)
                         }
                     }
-                    BuiltinDriver::Union => {
-                        let resolution = builtin_driver::text(
-                            out,
-                            input,
-                            labels,
-                            ours,
-                            base,
-                            theirs,
-                            builtin_driver::text::Options {
-                                conflict: builtin_driver::text::Conflict::ResolveWithUnion,
-                                ..self.options.text
-                            },
-                        );
-                        (Pick::Buffer, resolution)
-                    }
                 }
             }
         }
 
-        fn is_binary_buf(data: resource::Data<'_>) -> bool {
+        fn is_binary_buf(data: Data<'_>) -> bool {
             match data {
                 Data::Missing => false,
                 Data::Buffer(buf) => {
@@ -376,15 +373,17 @@ pub(super) mod inner {
 }
 
 /// Convenience
-impl<'parent> PlatformRef<'parent> {
+impl PlatformRef<'_> {
     /// Perform the merge, possibly invoking an external merge command, and store the result in `out`, returning `(pick, resolution)`.
     /// Note that `pick` indicates which resource the buffer should be taken from, unless it's [`Pick::Buffer`](inner::builtin_merge::Pick::Buffer)
     /// to indicate it's `out`.
     /// Use `labels` to annotate conflict sections in case of a text-merge.
     /// The merge is configured by `opts` and possible merge driver command executions are affected by `context`.
     ///
-    /// Note that at this stage, none-existing input data will simply default to an empty buffer when running the actual merge algorithm.
-    /// Too-large resources will result in an error.
+    /// Text, union, and external drivers interpret missing inputs as empty content. Their output buffers cannot
+    /// distinguish a file deletion from empty content; callers must handle deletions before content merging.
+    /// Binary merges retain the distinction when selecting a resource.
+    /// External drivers reject too-large resources; built-in drivers fall back to binary merging.
     ///
     /// Like Git, an external merge driver exiting with a status from 1 to 128 has left conflicts in its result,
     /// which is then returned with [`Resolution::Conflict`].
@@ -441,20 +440,19 @@ impl<'parent> PlatformRef<'parent> {
         }
     }
 
-    /// Using a `pick` obtained from [`merge()`](Self::merge), obtain the respective buffer suitable for reading or copying.
-    /// Return `Ok(None)`  if the `pick` corresponds to a buffer (that was written separately).
-    /// Return `Err(())` if the buffer is *too large*, so it was never read.
-    #[expect(
-        clippy::result_unit_err,
-        // TODO: make this nicer once we have nicer errors. OOM should be a standard error anyway.
-        reason = "Err(()) is needed to encode 'too large', without need for anything specific"
-    )]
-    pub fn buffer_by_pick(&self, pick: inner::builtin_merge::Pick) -> std::result::Result<Option<&'parent [u8]>, ()> {
+    /// Return the data selected by `pick`, preserving missing, present, and too-large resource states.
+    /// Pass the output buffer supplied to [`merge()`](Self::merge) or [`builtin_merge()`](Self::builtin_merge)
+    /// as `merged`.
+    ///
+    /// [`Pick::Buffer`](inner::builtin_merge::Pick::Buffer) returns [`Data::Buffer`] containing `merged`, even
+    /// if it is empty or all inputs were missing. Other picks return the selected resource's original data,
+    /// including [`Data::Missing`] regardless of any supplied ID.
+    pub fn data_by_pick<'a>(&'a self, pick: inner::builtin_merge::Pick, merged: &'a [u8]) -> Data<'a> {
         match pick {
-            inner::builtin_merge::Pick::Ancestor => self.ancestor.data.as_slice().map(Some).ok_or(()),
-            inner::builtin_merge::Pick::Ours => self.current.data.as_slice().map(Some).ok_or(()),
-            inner::builtin_merge::Pick::Theirs => self.other.data.as_slice().map(Some).ok_or(()),
-            inner::builtin_merge::Pick::Buffer => Ok(None),
+            inner::builtin_merge::Pick::Ancestor => self.ancestor.data,
+            inner::builtin_merge::Pick::Ours => self.current.data,
+            inner::builtin_merge::Pick::Theirs => self.other.data,
+            inner::builtin_merge::Pick::Buffer => Data::Buffer(merged),
         }
     }
 
@@ -463,10 +461,12 @@ impl<'parent> PlatformRef<'parent> {
     /// In case of resources available in the object DB for binary merges, the object ID will be returned.
     /// If new content was produced due to a content merge, `buf` will be written out
     /// to the object database using `write_blob`.
+    /// For [`Pick::Buffer`](inner::builtin_merge::Pick::Buffer), even an empty `buf` is written as a blob;
+    /// missing inputs do not make a content-merge result a deletion.
     /// Beware that the returned ID could be `Ok(None)` if the underlying resource was loaded
     /// from the worktree *and* was too large so it was never loaded from disk.
-    /// `Ok(None)` will also be returned if one of the resources was missing.
-    /// `write_blob()` is used to turn buffers.
+    /// `Ok(None)` will also be returned if the selected resource was missing, even if an ID was supplied.
+    /// `write_blob()` is used to store buffers that have no existing ID.
     pub fn id_by_pick<E>(
         &self,
         pick: inner::builtin_merge::Pick,
@@ -481,10 +481,21 @@ impl<'parent> PlatformRef<'parent> {
         };
         use crate::blob::platform::resource::Data;
         match field.data {
-            Data::TooLarge { .. } | Data::Missing if !field.id.is_null() => Ok(Some(field.id.to_owned())),
-            Data::TooLarge { .. } | Data::Missing => Ok(None),
-            Data::Buffer(buf) if field.id.is_null() => write_blob(buf).map(Some),
-            Data::Buffer(_) => Ok(Some(field.id.to_owned())),
+            Data::Missing => Ok(None),
+            Data::TooLarge { .. } => Ok(field.id.filter(|id| !id.is_null()).map(ToOwned::to_owned)),
+            Data::Buffer(buf) => match field.id.filter(|id| !id.is_null()) {
+                Some(id) => Ok(Some(id.to_owned())),
+                None => write_blob(buf).map(Some),
+            },
         }
+    }
+}
+
+/// Content merge protocols represent absent inputs as empty files, but cannot process unread content.
+fn content_merge_input(data: Data<'_>) -> Option<&[u8]> {
+    match data {
+        Data::Missing => Some(&[]),
+        Data::Buffer(buf) => Some(buf),
+        Data::TooLarge { .. } => None,
     }
 }

@@ -136,6 +136,8 @@ pub fn tree<'objects>(
         options.rewrites,
         options.directory_renames,
     )?;
+    ours.retain_relevant_directory_renames(&theirs);
+    theirs.retain_relevant_directory_renames(&ours);
     let mut conflicts = Vec::new();
     let mut failed_on_first_conflict = false;
     let mut should_fail_on_conflict = |mut conflict: Conflict| -> bool {
@@ -836,11 +838,12 @@ pub fn tree<'objects>(
                             {
                                 push_deferred((theirs.clone(), Some(ours_idx)), their_changes);
                             }
-                            // An explicit file rename wins over an inferred directory relocation at the same destination;
-                            // keep the rename and apply the addition at its original path. For example, `file` is renamed
-                            // explicitly to `new`, while a directory rename would place an added child below `new/`.
-                            (Change::Rewrite { .. }, Change::Addition { .. })
-                                if matches!(match_kind, Some(MatchKind::EraseLeaf)) && rewritten_location.is_some() =>
+                            // A modified or explicitly renamed file blocks inferred directory relocation; retain the
+                            // addition at its original path instead of retrying that same relocation indefinitely.
+                            (Change::Rewrite { .. } | Change::Modification { .. }, Change::Addition { .. })
+                                if rewritten_location.is_some()
+                                    && (matches!(match_kind, Some(MatchKind::EraseLeaf))
+                                        || matches!(ours, Change::Modification { .. })) =>
                             {
                                 apply_change_and_mark(&mut editor, ours, &mut ours_disposition)?;
                                 apply_change_and_mark(&mut editor, theirs, &mut theirs_disposition)?;
@@ -851,6 +854,8 @@ pub fn tree<'objects>(
                             (
                                 Change::Rewrite {
                                     source_location,
+                                    source_entry_mode,
+                                    source_id,
                                     entry_mode: blocking_mode,
                                     id: blocking_id,
                                     location: blocking_location,
@@ -894,6 +899,15 @@ pub fn tree<'objects>(
                                             apply_change_and_mark(&mut editor, ours, &mut ours_disposition)?;
                                         }
                                         Swapped => {
+                                            if our_changes[ours_idx].was_applied() {
+                                                editor.remove_if_leaf(toc(blocking_location))?;
+                                                editor.upsert(
+                                                    toc(source_location),
+                                                    source_entry_mode.kind(),
+                                                    *source_id,
+                                                )?;
+                                            }
+                                            our_tree.remove_change(blocking_location.as_bstr());
                                             apply_change_and_mark(&mut editor, theirs, &mut theirs_disposition)?;
                                         }
                                     },
@@ -1382,7 +1396,8 @@ pub fn tree<'objects>(
                                     None => {
                                         editor.remove_if_leaf(toc(source_location))?;
                                         editor.upsert(toc(&renamed_location), entry_mode.kind(), *id)?;
-                                        their_tree.remove_existing_change(location.as_bstr());
+                                        // Another structural conflict may already have consumed this destination.
+                                        their_tree.remove_change(location.as_bstr());
                                         ours_disposition = ChangeDisposition::Applied;
                                         theirs_disposition = ChangeDisposition::Applied;
                                     }
@@ -1397,10 +1412,10 @@ pub fn tree<'objects>(
                                         )?;
                                         match outer_side {
                                             Original => {
-                                                their_tree.remove_existing_change(location.as_bstr());
+                                                their_tree.remove_change(location.as_bstr());
                                             }
                                             Swapped => {
-                                                our_tree.remove_existing_change(tree_location.as_bstr());
+                                                our_tree.remove_change(tree_location.as_bstr());
                                             }
                                         }
                                     }
@@ -1689,6 +1704,8 @@ pub fn tree<'objects>(
                             (
                                 Change::Rewrite {
                                     source_location: blocking_source,
+                                    source_entry_mode,
+                                    source_id,
                                     entry_mode: blocking_mode,
                                     id: blocking_id,
                                     location: blocking_location,
@@ -1739,6 +1756,15 @@ pub fn tree<'objects>(
                                             apply_change_and_mark(&mut editor, ours, &mut ours_disposition)?;
                                         }
                                         Swapped => {
+                                            if our_changes[ours_idx].was_applied() {
+                                                editor.remove_if_leaf(toc(blocking_location))?;
+                                                editor.upsert(
+                                                    toc(blocking_source),
+                                                    source_entry_mode.kind(),
+                                                    *source_id,
+                                                )?;
+                                            }
+                                            our_tree.remove_change(blocking_location.as_bstr());
                                             apply_change_and_mark(&mut editor, theirs, &mut theirs_disposition)?;
                                         }
                                     },
@@ -2091,7 +2117,7 @@ pub fn tree<'objects>(
                                     break 'outer;
                                 }
 
-                                let ours_is_rewrite = side.is_swapped();
+                                let ours_is_rewrite = side.to_global(outer_side).is_swapped();
                                 if resolve_tree_conflicts.is_none()
                                     || (matches!(resolve_tree_conflicts, Some(ResolveWith::Ours)) && ours_is_rewrite)
                                 {
@@ -2312,7 +2338,8 @@ pub fn tree<'objects>(
                                     let upsert_rename_destination = resolve_tree_conflicts.is_none() || ours_is_rename;
                                     if upsert_rename_destination {
                                         editor.upsert(toc(location), our_mode.kind(), our_id)?;
-                                        tree_with_rename.remove_existing_change(location.as_bstr());
+                                        // Earlier structural conflicts may already have consumed the rename destination.
+                                        tree_with_rename.remove_change(location.as_bstr());
                                     }
 
                                     let conflict = Conflict::without_resolution(

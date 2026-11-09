@@ -1,12 +1,9 @@
-//! ### Deviation
+//! Rename and copy detection following Git's `diffcore-rename.c`.
 //!
-//! Note that the algorithm implemented here is in many ways different from what `git` does.
-//!
-//! - it's less sophisticated than `git`, but prefers a candidate whose file name matches the
-//!   destination's in identity matches, and uses that as a tie-breaker for similarity matches.
-//! - the set used for copy-detection is probably smaller by default.
-// TODO: Rewrite this based on what Git actually this, as long as there are test-cases for any 'complication'.
-//       In practice, even this simplified version seems to have worked pretty well.
+//! Exact matches precede a unique-basename pass and a globally ranked, four-candidates-per-destination
+//! similarity matrix. Only leaf entries participate; tree diffs infer directory renames from
+//! the resulting file matches. Git's merge-specific directory heuristics and break detection
+//! are not part of this tracker.
 
 use gix_error::{Result, message};
 use std::ops::Range;
@@ -17,9 +14,13 @@ use gix_object::tree::{EntryKind, EntryMode};
 
 use crate::{
     Rewrites,
-    blob::{DiffLineStats, ResourceKind, platform::prepare_diff::Operation},
-    rewrites::{CopySource, Outcome, Tracker, tracker::visit::SourceKind},
-    tree::visit::{Action, ChangeId, Relation},
+    blob::ResourceKind,
+    rewrites::{
+        CopySource, Outcome, Similarity, Tracker,
+        similarity::{MAX_SCORE, Signature},
+        tracker::visit::SourceKind,
+    },
+    tree::visit::Action,
 };
 
 /// The kind of a change.
@@ -38,25 +39,15 @@ pub trait Change: Clone {
     /// Return the hash of the object behind this change for identification.
     ///
     /// Note that this is the id of the object as stored in `git`, i.e. it must have gone through workspace
-    /// conversions. What matters is that the IDs are comparable.
-    fn id(&self) -> &gix_hash::oid;
-    /// Return the relation that this change may have with other changes.
-    ///
-    /// It allows to associate a directory with its children that are added or removed at the same moment.
-    /// Note that this is ignored for modifications.
-    ///
-    /// If rename-tracking should always be on leaf-level, this should be set to `None` consistently.
-    /// Note that trees will never be looked up by their `id` as their children are assumed to be passed in
-    /// with the respective relationship.
-    ///
-    /// Also note that the tracker only sees what's given to it, it will not lookup trees or match paths itself.
-    fn relation(&self) -> Option<Relation>;
+    /// conversions. `None` means the hash is unavailable, and never establishes identity.
+    /// Such blobs can still match by similarity if their worktree content is available through the diff platform.
+    /// Implementations should return `None` for null IDs; the tracker also guards against `Some(null)`.
+    /// Modifications return the previous id, as copies originate from the source state.
+    fn id(&self) -> Option<&gix_hash::oid>;
     /// Return the kind of this change.
     fn kind(&self) -> ChangeKind;
-    /// Return more information about the kind of entry affected by this change.
+    /// Return the entry mode, using the previous mode for modifications.
     fn entry_mode(&self) -> EntryMode;
-    /// Return the id of the change along with its mode.
-    fn id_and_entry_mode(&self) -> (&gix_hash::oid, EntryMode);
 }
 
 /// A set of tracked items allows to figure out their relations by figuring out their similarity.
@@ -77,19 +68,8 @@ impl<T: Change> Item<T> {
         use EntryKind::*;
         matches!(
             (other.kind(), self.change.entry_mode().kind()),
-            (Blob | BlobExecutable, Blob | BlobExecutable) | (Link, Link) | (Tree, Tree) | (Commit, Commit)
+            (Blob | BlobExecutable, Blob | BlobExecutable) | (Link, Link) | (Commit, Commit)
         )
-    }
-
-    fn is_source_candidate(&self, kind: visit::SourceKind) -> bool {
-        match kind {
-            visit::SourceKind::Rename => !self.emitted && matches!(self.change.kind(), ChangeKind::Deletion),
-            visit::SourceKind::Copy => matches!(self.change.kind(), ChangeKind::Modification),
-        }
-    }
-
-    fn is_source_for_destination_of(&self, kind: visit::SourceKind, dest_item_mode: EntryMode) -> bool {
-        self.entry_mode_compatible(dest_item_mode) && self.is_source_candidate(kind)
     }
 }
 
@@ -98,23 +78,24 @@ pub mod visit {
     use bstr::BStr;
     use gix_object::tree::EntryMode;
 
-    use crate::blob::DiffLineStats;
+    use crate::rewrites::Similarity;
 
     /// The source of a rewrite, rename or copy.
     #[derive(Debug, Clone, PartialEq, PartialOrd)]
     pub struct Source<'a, T> {
         /// The kind of entry.
         pub entry_mode: EntryMode,
-        /// The hash of the state of the source as seen in the object database.
-        pub id: gix_hash::ObjectId,
+        /// The hash of the state of the source as seen in the object database, or `None` if unavailable.
+        pub id: Option<gix_hash::ObjectId>,
         /// Further specify what kind of source this is.
         pub kind: SourceKind,
         /// The repository-relative location of this entry.
         pub location: &'a BStr,
         /// The change that was registered as source.
         pub change: &'a T,
-        /// If this is a rewrite, indicate how many lines would need to change to turn this source into the destination.
-        pub diff: Option<DiffLineStats>,
+        /// The byte-span score of an inexact match, including binary files.
+        /// `None` denotes an exact identity match.
+        pub similarity: Option<Similarity>,
     }
 
     /// Further identify the kind of [Source].
@@ -144,7 +125,6 @@ impl<T: Change> Tracker<T> {
             items: vec![],
             path_backing: vec![],
             rewrites,
-            child_renames: Default::default(),
         }
     }
 }
@@ -158,11 +138,7 @@ impl<T: Change> Tracker<T> {
             return Some(change);
         }
 
-        let entry_kind = change.entry_mode().kind();
-        let relation = change
-            .relation()
-            .filter(|_| matches!(change_kind, ChangeKind::Addition | ChangeKind::Deletion));
-        if let (None, EntryKind::Tree) = (relation, entry_kind) {
+        if change.entry_mode().is_tree() {
             return Some(change);
         }
 
@@ -183,19 +159,14 @@ impl<T: Change> Tracker<T> {
     /// `cb(destination, source)` is called for each item, either with `Some(source)` if it's
     /// the destination of a copy or rename, or with `None` for source if no relation to other
     /// items in the tracked set exist, which is like saying 'no rename or rewrite or copy' happened.
-    /// Note that directories with [relation](Relation) will be emitted if there is a match, along with all their matching
-    /// child-items which are similarly bundled as rename.
+    /// Tree entries are returned by [`Self::try_push_change()`] for the caller to handle.
     ///
-    /// `objects` is used to access blob data for similarity checks if required and is taken directly from the object database.
-    /// Worktree filters and text conversions will be applied afterwards automatically. Note that object-caching *should not*
-    /// be enabled as caching is implemented by `diff_cache`, after all, the blob that's actually diffed is going
-    /// through conversion steps.
+    /// `objects` provides blob data for similarity checks. Worktree resources are converted to their Git form
+    /// using the filters in `diff_cache`. Similarity uses Git's byte-span fingerprints, including for binary files;
+    /// external diff commands, text conversions and the display-oriented large-file threshold are ignored.
     ///
-    /// `diff_cache` is a way to retain a cache of resources that are prepared for rapid diffing, and it also controls
-    /// the diff-algorithm (provided no user-algorithm is set).
-    /// Note that we control a few options of `diff_cache` to assure it will ignore external commands.
-    /// Note that we do not control how the `diff_cache` converts resources, it's left to the caller to decide
-    /// if it should look at what's stored in `git`, or in the working tree, along with all diff-specific conversions.
+    /// `diff_cache` supplies attributes, worktree roots, filters and reusable buffers. Fingerprints are cached for
+    /// this operation. Line diffs are not computed; use the blob diff APIs if line statistics are needed.
     ///
     /// `push_source_tree(push_fn: push(change, location))` is a function that is called when the entire tree of the source
     /// should be added as modifications by calling `push` repeatedly to use for perfect copy tracking. Note that `push`
@@ -211,114 +182,61 @@ impl<T: Change> Tracker<T> {
         PushSourceTreeFn: FnMut(&mut dyn FnMut(T, &BStr)) -> std::result::Result<(), E>,
         E: std::error::Error + Send + Sync + 'static,
     {
-        fn is_parent(change: &impl Change) -> bool {
-            matches!(change.relation(), Some(Relation::Parent(_)))
-        }
-
-        self.child_renames.clear();
-        diff_cache.options.skip_internal_diff_if_external_is_configured = false;
-
-        // Early abort: if there is no pair, don't do anything.
-        let has_work = {
-            let (mut num_deletions, mut num_additions, mut num_modifications) = (0, 0, 0);
-            let mut has_work = false;
-            for change in &self.items {
-                match change.change.kind() {
-                    ChangeKind::Deletion => {
-                        num_deletions += 1;
-                    }
-                    ChangeKind::Modification => {
-                        // This means we have copy-tracking enabled
-                        num_modifications += 1;
-                    }
-                    ChangeKind::Addition => num_additions += 1,
-                }
-                if (num_deletions != 0 && num_additions != 0)
-                    || (self.rewrites.copies.is_some() && num_modifications + num_additions > 1)
-                {
-                    has_work = true;
-                    break;
-                }
-            }
-            has_work
-        };
-
         let mut out = Outcome {
             options: self.rewrites,
             ..Default::default()
         };
-        if has_work {
-            self.sort_items_by_id_and_location();
-
-            // Rewrites by directory (without local changes) can be pruned out quickly,
-            // by finding only parents, their counterpart, and then all children can be matched by
-            // relationship ID.
-            self.match_pairs_of_kind(
-                visit::SourceKind::Rename,
-                &mut cb,
-                None, /* by identity for parents */
-                &mut out,
-                diff_cache,
-                objects,
-                Some(is_parent),
-            )?;
-
-            self.match_pairs_of_kind(
-                visit::SourceKind::Rename,
-                &mut cb,
-                self.rewrites.percentage,
-                &mut out,
-                diff_cache,
-                objects,
-                None,
-            )?;
-
-            self.match_renamed_directories(&mut cb)?;
-
-            if let Some(copies) = self.rewrites.copies {
-                self.match_pairs_of_kind(
-                    visit::SourceKind::Copy,
-                    &mut cb,
-                    copies.percentage,
-                    &mut out,
-                    diff_cache,
-                    objects,
-                    None,
-                )?;
-
-                match copies.source {
-                    CopySource::FromSetOfModifiedFiles => {}
-                    CopySource::FromSetOfModifiedFilesAndAllSources => {
-                        push_source_tree(&mut |change, location| {
-                            if self.try_push_change(change, location).is_none() {
-                                // make sure these aren't viable to be emitted anymore.
-                                self.items.last_mut().expect("just pushed").emitted = true;
-                            }
-                        })
-                        .or_raise(|| {
-                            message(
-                                "Could not obtain exhaustive item set to use as possible sources for copy detection",
-                            )
-                        })?;
-                        self.sort_items_by_id_and_location();
-
-                        self.match_pairs_of_kind(
-                            visit::SourceKind::Copy,
-                            &mut cb,
-                            copies.percentage,
-                            &mut out,
-                            diff_cache,
-                            objects,
-                            None,
-                        )?;
+        let has_destinations = self.items.iter().any(|item| item.change.kind() == ChangeKind::Addition);
+        if has_destinations {
+            if self
+                .rewrites
+                .copies
+                .is_some_and(|copies| copies.source == CopySource::FromSetOfModifiedFilesAndAllSources)
+            {
+                let mut sources: std::collections::HashSet<_> = self
+                    .items
+                    .iter()
+                    .filter(|item| item.change.kind() != ChangeKind::Addition)
+                    .map(|item| {
+                        (
+                            item.location(&self.path_backing).to_vec(),
+                            item.change.id().filter(|id| !id.is_null()).map(ToOwned::to_owned),
+                            item.change.entry_mode(),
+                        )
+                    })
+                    .collect();
+                push_source_tree(&mut |change, location| {
+                    assert_eq!(
+                        change.kind(),
+                        ChangeKind::Modification,
+                        "copy sources must be modifications"
+                    );
+                    if sources.insert((
+                        location.to_vec(),
+                        change.id().filter(|id| !id.is_null()).map(ToOwned::to_owned),
+                        change.entry_mode(),
+                    )) && self.try_push_change(change, location).is_none()
+                    {
+                        self.items.last_mut().expect("just pushed").emitted = true;
                     }
-                }
+                })
+                .or_raise(|| {
+                    message("Could not obtain exhaustive item set to use as possible sources for copy detection")
+                })?;
+            }
+            self.sort_items_by_id_and_location();
+            let pairs = self.find_file_renames(&mut out, diff_cache, objects)?;
+            if self.emit_pairs(&pairs, &mut cb).is_break() {
+                self.items.clear();
+                self.path_backing.clear();
+                return Ok(out);
             }
         }
 
+        self.items.retain(|item| !item.emitted);
         self.items
             .sort_by(|a, b| a.location(&self.path_backing).cmp(b.location(&self.path_backing)));
-        for item in self.items.drain(..).filter(|item| !item.emitted) {
+        for item in self.items.drain(..) {
             if cb(
                 visit::Destination {
                     location: item.location(&self.path_backing),
@@ -331,381 +249,430 @@ impl<T: Change> Tracker<T> {
                 break;
             }
         }
+        self.path_backing.clear();
         Ok(out)
     }
 }
 
 impl<T: Change> Tracker<T> {
     /// Sort `items` primarily by their id, so identity-based lookups can be found quickly by
-    /// partitioning (see `find_match`). Same-id items are then ordered by location, change-kind,
-    /// relation and entry-mode - a total order over each item's observable identity - so that
+    /// partitioning (see `exact_source`). Same-id items are then ordered by location, change-kind,
+    /// and entry-mode - a total order over each item's matching inputs - so that
     /// matching is deterministic and independent of the order in which changes were pushed, which
     /// the parallel dirwalk and index-traversal threads leave nondeterministic
-    /// (see <https://github.com/GitoxideLabs/gitoxide/issues/1832>). Any items that still compare
-    /// equal are identical in every observable field and are thus interchangeable for matching.
+    /// (see <https://github.com/GitoxideLabs/gitoxide/issues/1832>). Items that compare equal
+    /// have the same matching inputs.
     fn sort_items_by_id_and_location(&mut self) {
         self.items.sort_by(|a, b| {
             a.change
                 .id()
-                .cmp(b.change.id())
+                .cmp(&b.change.id())
                 .then_with(|| a.location(&self.path_backing).cmp(b.location(&self.path_backing)))
                 .then_with(|| a.change.kind().cmp(&b.change.kind()))
-                .then_with(|| a.change.relation().cmp(&b.change.relation()))
                 .then_with(|| a.change.entry_mode().cmp(&b.change.entry_mode()))
         });
     }
 
-    #[expect(clippy::too_many_arguments)]
-    fn match_pairs_of_kind(
-        &mut self,
-        kind: visit::SourceKind,
-        cb: &mut impl FnMut(visit::Destination<'_, T>, Option<visit::Source<'_, T>>) -> Action,
-        percentage: Option<f32>,
-        out: &mut Outcome,
-        diff_cache: &mut crate::blob::Platform,
-        objects: &impl gix_object::FindObjectOrHeader,
-        filter: Option<fn(&T) -> bool>,
-    ) -> Result {
-        // we try to cheaply reduce the set of possibilities first, before possibly looking more exhaustively.
-        let needs_second_pass = !needs_exact_match(percentage);
-
-        // https://github.com/git/git/blob/cc01bad4a9f566cf4453c7edd6b433851b0835e2/diffcore-rename.c#L350-L369
-        // We would need a hashmap to be OK to not use the limit here, otherwise the performance is too bad.
-        // This also means we don't find all renames if we hit the rename limit.
-        if self
-            .match_pairs(cb, None /* by identity */, kind, out, diff_cache, objects, filter)?
-            .is_break()
-        {
-            return Ok(());
-        }
-        if needs_second_pass {
-            let is_limited = if self.rewrites.limit == 0 {
-                false
-            } else {
-                let (num_src, num_dst) =
-                    estimate_involved_items(self.items.iter().map(|item| (item.emitted, item.change.kind())), kind);
-                if limit_is_exceeded(num_src, num_dst, self.rewrites.limit) {
-                    let permutations = num_src.saturating_mul(num_dst);
-                    match kind {
-                        visit::SourceKind::Rename => {
-                            out.num_similarity_checks_skipped_for_rename_tracking_due_to_limit = permutations;
-                        }
-                        visit::SourceKind::Copy => {
-                            out.num_similarity_checks_skipped_for_copy_tracking_due_to_limit = permutations;
-                        }
-                    }
-                    true
-                } else {
-                    false
-                }
-            };
-            if !is_limited {
-                let _ = self.match_pairs(cb, percentage, kind, out, diff_cache, objects, None)?;
-            }
-        }
-        Ok(())
+    fn path_order(&self, indices: &mut [usize]) {
+        indices.sort_by(|&a, &b| {
+            self.items[a]
+                .location(&self.path_backing)
+                .cmp(self.items[b].location(&self.path_backing))
+        });
     }
 
-    #[expect(clippy::too_many_arguments)]
-    fn match_pairs(
-        &mut self,
-        cb: &mut impl FnMut(visit::Destination<'_, T>, Option<visit::Source<'_, T>>) -> Action,
-        percentage: Option<f32>,
-        kind: visit::SourceKind,
-        stats: &mut Outcome,
-        diff_cache: &mut crate::blob::Platform,
-        objects: &impl gix_object::FindObjectOrHeader,
-        filter: Option<fn(&T) -> bool>,
-    ) -> Result<Action> {
-        let mut dest_ofs = 0;
-        let mut num_checks = 0;
-        let max_checks = {
-            let limit = self.rewrites.limit.saturating_pow(2);
-            // There can be trees with a lot of entries and pathological search behaviour, as they can be repeated
-            // and then have a lot of similar hashes. This also means we have to search a lot of candidates which
-            // can be too slow despite best attempts. So play it save and detect such cases 'roughly' by amount of items.
-            if self.items.len() < 100_000 { 0 } else { limit }
-        };
-        // Items only stop being possible sources while matching, so this is a superset of the sources for all
-        // destinations. Destinations then only need to be compared to these instead of to all items, which matters
-        // when there are many more destinations than sources.
-        let source_candidates: Vec<usize> = self
-            .items
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, item)| item.is_source_candidate(kind).then_some(idx))
-            .collect();
-        if source_candidates.is_empty() {
-            return Ok(std::ops::ControlFlow::Continue(()));
-        }
+    fn track_item(&self, item: &Item<T>) -> bool {
+        self.rewrites.track_empty
+            || item
+                .change
+                .id()
+                .is_none_or(|id| id != gix_hash::ObjectId::empty_blob(id.kind()))
+    }
 
-        while let Some((mut dest_idx, dest)) = self.items[dest_ofs..].iter().enumerate().find_map(|(idx, item)| {
-            (!item.emitted
-                && matches!(item.change.kind(), ChangeKind::Addition)
-                && filter.map_or_else(
-                    || {
-                        self.rewrites.track_empty
-                            // We always want to keep track of entries that are involved of a directory rename.
-                            // Note that this may still match them up arbitrarily if empty, but empty is empty.
-                            || matches!(item.change.relation(), Some(Relation::ChildOfParent(_)))
-                            || {
-                                let id = item.change.id();
-                                id != gix_hash::ObjectId::empty_blob(id.kind())
-                            }
-                    },
-                    |f| f(&item.change),
-                ))
-            .then_some((idx, item))
-        }) {
-            dest_idx += dest_ofs;
-            dest_ofs = dest_idx + 1;
-            self.items[dest_idx].location(&self.path_backing);
-            let src = find_match(
-                &self.items,
-                &source_candidates,
-                dest,
-                dest_idx,
-                percentage,
-                kind,
-                stats,
-                objects,
-                diff_cache,
-                &self.path_backing,
-                &mut num_checks,
-            )?
-            .map(|(src_idx, src, diff)| {
-                let (id, entry_mode) = src.change.id_and_entry_mode();
-                let id = id.to_owned();
-                let location = src.location(&self.path_backing);
-                (
-                    visit::Source {
-                        entry_mode,
-                        id,
-                        kind,
-                        location,
-                        change: &src.change,
-                        diff,
-                    },
-                    src_idx,
-                )
-            });
-            if max_checks != 0 && num_checks > max_checks {
-                gix_trace::warn!(
-                    "Cancelled rename matching as there were too many iterations ({num_checks} > {max_checks})"
-                );
-                return Ok(std::ops::ControlFlow::Break(()));
-            }
-            let Some((src, src_idx)) = src else {
+    fn exact_source(
+        &self,
+        sources_by_id: &[usize],
+        dst: usize,
+        used: &[bool],
+        copies: bool,
+        all_sources_used: bool,
+    ) -> Option<usize> {
+        let item = &self.items[dst];
+        let object_id = item.change.id().filter(|id| !id.is_null())?;
+        let start = sources_by_id.partition_point(|&idx| self.items[idx].change.id() < Some(object_id));
+        let end = sources_by_id.partition_point(|&idx| self.items[idx].change.id() <= Some(object_id));
+        let mut best = None;
+        let mut checked = 0;
+        for &src in &sources_by_id[start..end] {
+            let candidate = &self.items[src];
+            if (used[src] && !copies) || !candidate.entry_mode_compatible(item.change.entry_mode()) {
                 continue;
-            };
-            let location = dest.location(&self.path_backing);
-            let change = dest.change.clone();
-            let dest = visit::Destination { change, location };
-            let relations = if percentage.is_none() {
-                src.change.relation().zip(dest.change.relation())
-            } else {
-                None
-            };
-            let res = cb(dest, Some(src));
-
-            self.items[dest_idx].emitted = true;
-            self.items[src_idx].emitted = true;
-
-            if res.is_break() {
-                return Ok(std::ops::ControlFlow::Break(()));
             }
-
-            match relations {
-                Some((Relation::Parent(src), Relation::Parent(dst))) => {
-                    let res = self.emit_child_renames_matching_identity(cb, kind, src, dst)?;
-                    if res.is_break() {
-                        return Ok(std::ops::ControlFlow::Break(()));
-                    }
-                }
-                Some((Relation::ChildOfParent(src), Relation::ChildOfParent(dst))) => {
-                    self.child_renames
-                        .entry((src, dst))
-                        .or_default()
-                        .push((src_idx, dest_idx));
-                }
-                _ => {}
-            }
-        }
-        Ok(std::ops::ControlFlow::Continue(()))
-    }
-
-    /// Emit the children of `src_parent_id` and `dst_parent_id` as pairs of exact matches, which are assumed
-    /// as `src` and `dst` were an exact match (so all children have to match exactly).
-    /// Note that we intentionally do not record them as their parents will be emitted, too.
-    fn emit_child_renames_matching_identity(
-        &mut self,
-        cb: &mut impl FnMut(visit::Destination<'_, T>, Option<visit::Source<'_, T>>) -> Action,
-        kind: visit::SourceKind,
-        src_parent_id: ChangeId,
-        dst_parent_id: ChangeId,
-    ) -> Result<Action> {
-        debug_assert_ne!(
-            src_parent_id, dst_parent_id,
-            "src and destination directories must be distinct"
-        );
-        let (mut src_items, mut dst_items) = (Vec::with_capacity(1), Vec::with_capacity(1));
-        for item in self.items.iter_mut().filter(|item| !item.emitted) {
-            match item.change.relation() {
-                Some(Relation::ChildOfParent(id)) if id == src_parent_id => {
-                    src_items.push((item.change.id().to_owned(), item));
-                }
-                Some(Relation::ChildOfParent(id)) if id == dst_parent_id => {
-                    dst_items.push((item.change.id().to_owned(), item));
-                }
-                _ => continue,
-            }
-        }
-
-        for ((src_id, src_item), (dst_id, dst_item)) in src_items.into_iter().zip(dst_items) {
-            // Since the parent items are already identical by ID, we know that the children will also match, we just
-            // double-check to still have a chance to be correct in case some of that goes wrong.
-            if src_id == dst_id
-                && filename(src_item.location(&self.path_backing)) == filename(dst_item.location(&self.path_backing))
-            {
-                let entry_mode = src_item.change.entry_mode();
-                let location = src_item.location(&self.path_backing);
-                let src = visit::Source {
-                    entry_mode,
-                    id: src_id,
-                    kind,
-                    location,
-                    change: &src_item.change,
-                    diff: None,
-                };
-                let location = dst_item.location(&self.path_backing);
-                let change = dst_item.change.clone();
-                let dst = visit::Destination { change, location };
-                let res = cb(dst, Some(src));
-
-                src_item.emitted = true;
-                dst_item.emitted = true;
-
-                if res.is_break() {
-                    return Ok(res);
-                }
-            } else {
-                gix_trace::warn!(
-                    "Children of parents with change-id {src_parent_id} and {dst_parent_id} were not equal, even though their parents claimed to be"
+            let score = u8::from(!used[src])
+                + u8::from(
+                    filename(candidate.location(&self.path_backing)) == filename(item.location(&self.path_backing)),
                 );
+            if best.is_none_or(|(_, best_score)| score > best_score) {
+                best = Some((src, score));
+                if score == if all_sources_used { 1 } else { 2 } {
+                    break;
+                }
+            }
+            checked += 1;
+            if checked == 100 {
                 break;
             }
         }
-        Ok(std::ops::ControlFlow::Continue(()))
+        best.map(|(src, _)| src)
     }
 
-    /// Find directories with relation id that haven't been emitted yet and store them for lookup.
-    /// Then use the previously stored emitted renames with relation id to learn which directories they 'link'
-    /// and emit them, too.
-    /// Note that this works whenever top-level directories are renamed because they are always added and deleted,
-    /// and we only match those. One rewrite preserving the relative directory path is enough.
-    fn match_renamed_directories(
-        &mut self,
-        cb: &mut impl FnMut(visit::Destination<'_, T>, Option<visit::Source<'_, T>>) -> Action,
-    ) -> Result {
-        fn unemitted_directory_matching_relation_id<T: Change>(items: &[Item<T>], child_id: ChangeId) -> Option<usize> {
-            items.iter().position(|i| {
-                !i.emitted && matches!(i.change.relation(), Some(Relation::Parent(pid)) if pid == child_id)
+    fn find_file_renames(
+        &self,
+        out: &mut Outcome,
+        diff_cache: &mut crate::blob::Platform,
+        objects: &impl gix_object::FindObjectOrHeader,
+    ) -> Result<Vec<Candidate>> {
+        let copies = self.rewrites.copies.is_some();
+        let mut sources: Vec<_> = self
+            .items
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, item)| {
+                (self.track_item(item)
+                    && match item.change.kind() {
+                        ChangeKind::Deletion => !item.emitted || copies,
+                        ChangeKind::Modification => copies,
+                        ChangeKind::Addition => false,
+                    })
+                .then_some(idx)
             })
+            .collect();
+        let mut destinations: Vec<_> = self
+            .items
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, item)| {
+                (!item.emitted && item.change.kind() == ChangeKind::Addition && self.track_item(item)).then_some(idx)
+            })
+            .collect();
+        self.path_order(&mut destinations);
+        let mut used: Vec<_> = self
+            .items
+            .iter()
+            .map(|item| item.emitted || item.change.kind() == ChangeKind::Modification)
+            .collect();
+        let mut matches = vec![None; self.items.len()];
+        let mut unused_sources = sources.iter().filter(|&&src| !used[src]).count();
+        for &dst in &destinations {
+            if let Some(src) = self.exact_source(&sources, dst, &used, copies, unused_sources == 0) {
+                matches[dst] = Some(Candidate {
+                    src,
+                    dst,
+                    score: MAX_SCORE,
+                    name_score: false,
+                    exact: true,
+                    eligible: true,
+                });
+                if !used[src] {
+                    unused_sources -= 1;
+                    used[src] = true;
+                }
+            }
         }
-        for ((deleted_child_id, added_child_id), children) in &self.child_renames {
-            let Some(src_idx) = unemitted_directory_matching_relation_id(&self.items, *deleted_child_id) else {
-                continue;
-            };
-            let Some(dst_idx) = unemitted_directory_matching_relation_id(&self.items, *added_child_id) else {
-                // This could go wrong in case there are mismatches, so be defensive here.
-                // But generally, we'd expect the destination item to exist.
-                continue;
-            };
-
-            let (src_item, dst_item) = (&self.items[src_idx], &self.items[dst_idx]);
-            if !children.iter().any(|&(src_child_idx, dst_child_idx)| {
-                let relative_directory = |child_idx: usize, parent: &Item<T>| {
-                    let child = &self.items[child_idx];
-                    child
-                        .location(&self.path_backing)
-                        .strip_prefix(parent.location(&self.path_backing).as_bytes())
-                        .and_then(|path| path.strip_prefix(b"/"))
-                        .map(|path| {
-                            if child.change.entry_mode().is_tree() {
-                                path
-                            } else {
-                                // File names may change without renaming their containing directory.
-                                &path[..path.rfind_byte(b'/').unwrap_or(0)]
+        let rename_score = minimum_score(self.rewrites.percentage);
+        let copy_score = self
+            .rewrites
+            .copies
+            .map_or(MAX_SCORE, |copies| minimum_score(copies.percentage));
+        if rename_score < MAX_SCORE || copy_score < MAX_SCORE {
+            self.path_order(&mut sources);
+            let mut signatures: Vec<_> = (0..self.items.len()).map(|_| SimilarityData::default()).collect();
+            if !copies {
+                sources.retain(|&src| !used[src]);
+                // Git reserves unique basename pairs at a stricter threshold before checking the matrix limit.
+                let source_names = self.unique_basenames(sources.iter().copied());
+                let destination_names =
+                    self.unique_basenames(destinations.iter().copied().filter(|&dst| matches[dst].is_none()));
+                let basename_score = rename_score + (MAX_SCORE - rename_score) / 2;
+                for &src in &sources {
+                    let name = filename(self.items[src].location(&self.path_backing));
+                    if source_names.get(name) != Some(&Some(src)) {
+                        continue;
+                    }
+                    if let Some(&Some(dst)) = destination_names.get(name)
+                        && let Some(score) = self.estimate_similarity(
+                            src,
+                            dst,
+                            basename_score,
+                            &mut signatures,
+                            out,
+                            diff_cache,
+                            objects,
+                        )?
+                        && score >= basename_score
+                    {
+                        matches[dst] = Some(Candidate {
+                            src,
+                            dst,
+                            score,
+                            name_score: true,
+                            exact: false,
+                            eligible: true,
+                        });
+                        used[src] = true;
+                    }
+                }
+                sources.retain(|&src| !used[src]);
+            }
+            sources.retain(|&src| {
+                if used[src] {
+                    copy_score < MAX_SCORE
+                } else {
+                    rename_score < MAX_SCORE
+                }
+            });
+            let destinations: Vec<_> = destinations
+                .iter()
+                .copied()
+                .filter(|&dst| matches[dst].is_none())
+                .collect();
+            let mut limited =
+                self.rewrites.limit != 0 && limit_is_exceeded(sources.len(), destinations.len(), self.rewrites.limit);
+            if limited {
+                let permutations = sources.len().saturating_mul(destinations.len());
+                if copies {
+                    out.num_similarity_checks_skipped_for_copy_tracking_due_to_limit = permutations;
+                    if self
+                        .rewrites
+                        .copies
+                        .is_some_and(|copies| copies.source == CopySource::FromSetOfModifiedFilesAndAllSources)
+                    {
+                        let modified: Vec<_> = sources
+                            .iter()
+                            .copied()
+                            .filter(|&src| {
+                                !(self.items[src].emitted && self.items[src].change.kind() == ChangeKind::Modification)
+                            })
+                            .collect();
+                        if !limit_is_exceeded(modified.len(), destinations.len(), self.rewrites.limit) {
+                            sources = modified;
+                            limited = false;
+                        }
+                    }
+                } else {
+                    out.num_similarity_checks_skipped_for_rename_tracking_due_to_limit = permutations;
+                }
+            }
+            if !limited {
+                let mut matrix = Vec::with_capacity(destinations.len().saturating_mul(4));
+                for &dst in &destinations {
+                    let mut best = [None; 4];
+                    for &src in &sources {
+                        let threshold = if used[src] {
+                            copy_score
+                        } else if copies {
+                            rename_score.min(copy_score)
+                        } else {
+                            rename_score
+                        };
+                        let score =
+                            self.estimate_similarity(src, dst, threshold, &mut signatures, out, diff_cache, objects)?;
+                        // Git inserts even rejected (zero-score) and below-threshold comparisons. They affect
+                        // which slots later candidates replace, and thus the stable ordering of equal scores.
+                        let candidate = Candidate {
+                            src,
+                            dst,
+                            score: score.unwrap_or_default(),
+                            exact: false,
+                            eligible: score.is_some_and(|score| score >= threshold),
+                            name_score: filename(self.items[src].location(&self.path_backing))
+                                == filename(self.items[dst].location(&self.path_backing)),
+                        };
+                        let mut worst = 0;
+                        for idx in 1..best.len() {
+                            if candidate_rank(best[idx]) < candidate_rank(best[worst]) {
+                                worst = idx;
                             }
-                        })
-                };
-                let src_relative = relative_directory(src_child_idx, src_item);
-                let dst_relative = relative_directory(dst_child_idx, dst_item);
-                src_relative.is_some() && src_relative == dst_relative
-            }) {
-                continue;
-            }
-            let entry_mode = src_item.change.entry_mode();
-            let location = src_item.location(&self.path_backing);
-            let src = visit::Source {
-                entry_mode,
-                id: src_item.change.id().to_owned(),
-                kind: SourceKind::Rename,
-                location,
-                change: &src_item.change,
-                diff: None,
-            };
-            let location = dst_item.location(&self.path_backing);
-            let change = dst_item.change.clone();
-            let dst = visit::Destination { change, location };
-            let res = cb(dst, Some(src));
-
-            self.items[src_idx].emitted = true;
-            self.items[dst_idx].emitted = true;
-
-            if res.is_break() {
-                return Ok(());
+                        }
+                        if candidate_rank(Some(candidate)) > candidate_rank(best[worst]) {
+                            best[worst] = Some(candidate);
+                        }
+                    }
+                    matrix.extend(best.into_iter().flatten().filter(|candidate| candidate.eligible));
+                }
+                matrix.sort_by_key(|candidate| std::cmp::Reverse((candidate.score, candidate.name_score)));
+                for candidate in &matrix {
+                    if candidate.score >= rename_score && !used[candidate.src] && matches[candidate.dst].is_none() {
+                        matches[candidate.dst] = Some(*candidate);
+                        used[candidate.src] = true;
+                    }
+                }
+                if copies {
+                    for candidate in matrix {
+                        if candidate.score >= copy_score
+                            && (used[candidate.src] || candidate.score >= rename_score)
+                            && matches[candidate.dst].is_none()
+                        {
+                            matches[candidate.dst] = Some(candidate);
+                            used[candidate.src] = true;
+                        }
+                    }
+                }
             }
         }
-        Ok(())
+        Ok(destinations.into_iter().filter_map(|dst| matches[dst]).collect())
+    }
+
+    fn unique_basenames(
+        &self,
+        indices: impl Iterator<Item = usize>,
+    ) -> std::collections::HashMap<&BStr, Option<usize>> {
+        let mut names = std::collections::HashMap::new();
+        for idx in indices {
+            names
+                .entry(filename(self.items[idx].location(&self.path_backing)))
+                .and_modify(|index| *index = None)
+                .or_insert(Some(idx));
+        }
+        names
+    }
+
+    #[expect(clippy::too_many_arguments)]
+    fn estimate_similarity(
+        &self,
+        src: usize,
+        dst: usize,
+        minimum_score: u16,
+        signatures: &mut [SimilarityData],
+        out: &mut Outcome,
+        diff_cache: &mut crate::blob::Platform,
+        objects: &impl gix_object::FindObjectOrHeader,
+    ) -> Result<Option<u16>> {
+        if !self.items[src].change.entry_mode().is_blob() || !self.items[dst].change.entry_mode().is_blob() {
+            return Ok(None);
+        }
+        out.num_similarity_checks += 1;
+        for (idx, kind) in [(src, ResourceKind::OldOrSource), (dst, ResourceKind::NewOrDestination)] {
+            let cached = &mut signatures[idx];
+            if cached.size.is_none() && cached.signature.is_none() {
+                let item = &self.items[idx];
+                cached.size = diff_cache.similarity_size(item.change.id(), kind, objects)?;
+                // Worktree sizes are only comparable after applying clean filters.
+                if cached.size.is_none() {
+                    cached.signature = Some(diff_cache.similarity_signature(
+                        item.change.id(),
+                        item.change.entry_mode().kind(),
+                        item.location(&self.path_backing),
+                        kind,
+                        objects,
+                    )?);
+                    cached.size = cached
+                        .signature
+                        .as_ref()
+                        .and_then(Option::as_ref)
+                        .map(|s| s.size() as u64);
+                }
+            }
+        }
+        let (Some(source_size), Some(destination_size)) = (signatures[src].size, signatures[dst].size) else {
+            return Ok(None);
+        };
+        if destination_size == 0 && !self.rewrites.track_empty {
+            return Ok(None);
+        }
+        let max_size = source_size.max(destination_size) as u128;
+        let delta = source_size.abs_diff(destination_size) as u128;
+        if max_size * u128::from(MAX_SCORE - minimum_score) < delta * u128::from(MAX_SCORE) {
+            return Ok(None);
+        }
+        for (idx, kind) in [(src, ResourceKind::OldOrSource), (dst, ResourceKind::NewOrDestination)] {
+            if signatures[idx].signature.is_none() {
+                let item = &self.items[idx];
+                signatures[idx].signature = Some(diff_cache.similarity_signature(
+                    item.change.id(),
+                    item.change.entry_mode().kind(),
+                    item.location(&self.path_backing),
+                    kind,
+                    objects,
+                )?);
+            }
+        }
+        let (Some(source), Some(destination)) = (
+            signatures[src].signature.as_ref().and_then(Option::as_ref),
+            signatures[dst].signature.as_ref().and_then(Option::as_ref),
+        ) else {
+            return Ok(None);
+        };
+        Ok(Some(if source.size() == 0 && destination.size() == 0 {
+            MAX_SCORE
+        } else {
+            source.similarity(destination)
+        }))
+    }
+
+    fn emit_pairs(
+        &mut self,
+        pairs: &[Candidate],
+        cb: &mut impl FnMut(visit::Destination<'_, T>, Option<visit::Source<'_, T>>) -> Action,
+    ) -> Action {
+        if pairs.is_empty() {
+            return std::ops::ControlFlow::Continue(());
+        }
+        // Git labels the last destination of a removed source a rename, and earlier uses copies.
+        let mut last_destination = vec![None; self.items.len()];
+        for pair in pairs {
+            if !self.items[pair.src].emitted && pair.score >= minimum_score(self.rewrites.percentage) {
+                last_destination[pair.src] = Some(pair.dst);
+            }
+        }
+        for pair in pairs {
+            let kind = if self.items[pair.src].change.kind() == ChangeKind::Deletion
+                && last_destination[pair.src] == Some(pair.dst)
+            {
+                SourceKind::Rename
+            } else {
+                SourceKind::Copy
+            };
+            let similarity = (!pair.exact).then_some(Similarity(pair.score));
+            self.emit_pair(pair.src, pair.dst, kind, similarity, cb)?;
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    fn emit_pair(
+        &mut self,
+        src: usize,
+        dst: usize,
+        kind: SourceKind,
+        similarity: Option<Similarity>,
+        cb: &mut impl FnMut(visit::Destination<'_, T>, Option<visit::Source<'_, T>>) -> Action,
+    ) -> Action {
+        let source = &self.items[src];
+        let destination = &self.items[dst];
+        let action = cb(
+            visit::Destination {
+                change: destination.change.clone(),
+                location: destination.location(&self.path_backing),
+            },
+            Some(visit::Source {
+                entry_mode: source.change.entry_mode(),
+                id: source.change.id().filter(|id| !id.is_null()).map(ToOwned::to_owned),
+                kind,
+                location: source.location(&self.path_backing),
+                change: &source.change,
+                similarity,
+            }),
+        );
+        self.items[dst].emitted = true;
+        if self.items[src].change.kind() == ChangeKind::Deletion {
+            self.items[src].emitted = true;
+        }
+        action
     }
 }
 
 fn filename(path: &BStr) -> &BStr {
     path.rfind_byte(b'/').map_or(path, |idx| path[idx + 1..].as_bstr())
-}
-
-/// Returns the amount of viable sources and destinations for `items` as eligible for the given `kind` of operation.
-fn estimate_involved_items(
-    items: impl IntoIterator<Item = (bool, ChangeKind)>,
-    kind: visit::SourceKind,
-) -> (usize, usize) {
-    items
-        .into_iter()
-        .filter(|(emitted, _)| match kind {
-            visit::SourceKind::Rename => !*emitted,
-            visit::SourceKind::Copy => true,
-        })
-        .fold((0, 0), |(mut src, mut dest), (emitted, change_kind)| {
-            match change_kind {
-                ChangeKind::Addition => {
-                    if kind == visit::SourceKind::Rename || !emitted {
-                        dest += 1;
-                    }
-                }
-                ChangeKind::Deletion => {
-                    if kind == visit::SourceKind::Rename {
-                        src += 1;
-                    }
-                }
-                ChangeKind::Modification => {
-                    if kind == visit::SourceKind::Copy {
-                        src += 1;
-                    }
-                }
-            }
-            (src, dest)
-        })
 }
 
 fn limit_is_exceeded(num_src: usize, num_dst: usize, limit: usize) -> bool {
@@ -714,156 +681,29 @@ fn limit_is_exceeded(num_src: usize, num_dst: usize, limit: usize) -> bool {
     (num_src as u128) * (num_dst as u128) > limit * limit
 }
 
-fn needs_exact_match(percentage: Option<f32>) -> bool {
-    percentage.is_none_or(|p| p >= 1.0)
+fn minimum_score(percentage: Option<f32>) -> u16 {
+    (percentage.unwrap_or(1.0).clamp(0.0, 1.0) * f32::from(MAX_SCORE)) as u16
 }
 
-/// <`src_idx`, src, possibly diff stat>
-type SourceTuple<'a, T> = (usize, &'a Item<T>, Option<DiffLineStats>);
-
-/// Find `item` in our set of items ignoring `item_idx` to avoid finding ourselves, by similarity indicated by `percentage`.
-/// The latter can be `None` or `Some(x)` where `x>=1` for identity, and anything else for similarity.
-/// We also ignore emitted items entirely.
-/// Use `kind` to indicate what kind of match we are looking for, which might be deletions matching an `item` addition, or
-/// any non-deletion otherwise.
-/// Note that we always try to find by identity first even if a percentage is given as it's much faster and may reduce the set
-/// of items to be searched.
-#[expect(clippy::too_many_arguments)]
-fn find_match<'a, T: Change>(
-    items: &'a [Item<T>],
-    source_candidates: &[usize],
-    item: &Item<T>,
-    item_idx: usize,
-    percentage: Option<f32>,
-    kind: visit::SourceKind,
-    stats: &mut Outcome,
-    objects: &impl gix_object::FindObjectOrHeader,
-    diff_cache: &mut crate::blob::Platform,
-    path_backing: &[u8],
-    num_checks: &mut usize,
-) -> Result<Option<SourceTuple<'a, T>>> {
-    let (item_id, item_mode) = item.change.id_and_entry_mode();
-    // Symlinks and gitlinks only participate in exact-ID matching; neither has meaningful blob similarity here.
-    if needs_exact_match(percentage) || item_mode.is_link() || item_mode.is_commit() {
-        // Items are sorted by id, so the candidates with the same id are a contiguous range of `source_candidates`.
-        let start = source_candidates.partition_point(|&idx| items[idx].change.id() < item_id);
-        let end = source_candidates.partition_point(|&idx| items[idx].change.id() <= item_id);
-        if start == end {
-            return Ok(None);
-        }
-        let item_name = filename(item.location(path_backing));
-        let mut fallback = None;
-        for &src_idx in &source_candidates[start..end] {
-            let src = &items[src_idx];
-            *num_checks += 1;
-            if src_idx == item_idx || !src.is_source_for_destination_of(kind, item_mode) {
-                continue;
-            }
-            // Like Git, prefer a source whose file name matches the destination's to keep
-            // renames of equally-named files together when contents are identical.
-            if filename(src.location(path_backing)) == item_name {
-                return Ok(Some((src_idx, src, None)));
-            }
-            fallback.get_or_insert((src_idx, src, None));
-        }
-        if fallback.is_some() {
-            return Ok(fallback);
-        }
-    } else if item_mode.is_blob() {
-        let mut has_new = false;
-        let percentage = percentage.expect("it's set to something below 1.0 and we assured this");
-        let item_name = filename(item.location(path_backing));
-
-        // Like Git's inexact rename matrix, choose by similarity score first and use basename as
-        // a tie-breaker only.
-        let mut best: Option<(usize, &Item<T>, DiffLineStats, bool)> = None;
-        for (can_idx, src) in source_candidates
-            .iter()
-            .map(|&src_idx| (src_idx, &items[src_idx]))
-            .filter(|(src_idx, src)| *src_idx != item_idx && src.is_source_for_destination_of(kind, item_mode))
-        {
-            if !has_new {
-                diff_cache
-                    .set_resource(
-                        item_id.to_owned(),
-                        item_mode.kind(),
-                        item.location(path_backing),
-                        ResourceKind::NewOrDestination,
-                        objects,
-                    )
-                    .or_raise(|| message("Could not set destination for similarity checking"))?;
-                has_new = true;
-            }
-            let (src_id, src_mode) = src.change.id_and_entry_mode();
-            diff_cache
-                .set_resource(
-                    src_id.to_owned(),
-                    src_mode.kind(),
-                    src.location(path_backing),
-                    ResourceKind::OldOrSource,
-                    objects,
-                )
-                .or_raise(|| message("Could not set source for similarity checking"))?;
-            let prep = diff_cache
-                .prepare_diff()
-                .or_raise(|| message("Could not prepare resources for similarity checking"))?;
-            stats.num_similarity_checks += 1;
-            *num_checks += 1;
-            match prep.operation {
-                Operation::InternalDiff { algorithm } => {
-                    let tokens = crate::blob::InternedInput::new(prep.old.intern_source(), prep.new.intern_source());
-                    let diff = crate::blob::Diff::compute(algorithm, &tokens);
-                    let removed_bytes = diff::removed_bytes(&diff, &tokens);
-                    let old_data_len = prep.old.data.as_slice().unwrap_or_default().len();
-                    let new_data_len = prep.new.data.as_slice().unwrap_or_default().len();
-                    let similarity = (old_data_len - removed_bytes) as f32 / old_data_len.max(new_data_len) as f32;
-                    if similarity >= percentage {
-                        let candidate_diff = DiffLineStats {
-                            removals: diff.count_removals(),
-                            insertions: diff.count_additions(),
-                            before: tokens.before.len(),
-                            after: tokens.after.len(),
-                            similarity,
-                        };
-                        let has_same_filename = filename(src.location(path_backing)) == item_name;
-                        let is_better =
-                            best.as_ref()
-                                .is_none_or(|(_, _, best_diff, best_has_same_filename)| {
-                                    match candidate_diff.similarity.total_cmp(&best_diff.similarity) {
-                                        std::cmp::Ordering::Greater => true,
-                                        std::cmp::Ordering::Equal => has_same_filename && !best_has_same_filename,
-                                        std::cmp::Ordering::Less => false,
-                                    }
-                                });
-                        if is_better {
-                            best = Some((can_idx, src, candidate_diff, has_same_filename));
-                        }
-                    }
-                }
-                Operation::ExternalCommand { .. } => {
-                    unreachable!("we have disabled this possibility with an option")
-                }
-                Operation::SourceOrDestinationIsBinary => {
-                    // TODO: figure out if git does more here
-                }
-            }
-        }
-        return Ok(best.map(|(candidate_idx, src, diff, _)| (candidate_idx, src, Some(diff))));
-    }
-    Ok(None)
+#[derive(Default)]
+struct SimilarityData {
+    size: Option<u64>,
+    signature: Option<Option<Signature>>,
 }
 
-mod diff {
-    pub fn removed_bytes(diff: &crate::blob::Diff, input: &crate::blob::InternedInput<&[u8]>) -> usize {
-        diff.hunks()
-            .map(|hunk| {
-                input.before[hunk.before.start as usize..hunk.before.end as usize]
-                    .iter()
-                    .map(|token| input.interner[*token].len())
-                    .sum::<usize>()
-            })
-            .sum()
-    }
+#[derive(Clone, Copy)]
+struct Candidate {
+    src: usize,
+    dst: usize,
+    score: u16,
+    name_score: bool,
+    exact: bool,
+    /// Rejected and below-threshold comparisons occupy matrix slots without becoming matches.
+    eligible: bool,
+}
+
+fn candidate_rank(candidate: Option<Candidate>) -> Option<(bool, u16, bool)> {
+    candidate.map(|candidate| (candidate.eligible, candidate.score, candidate.name_score))
 }
 
 #[cfg(test)]
@@ -901,60 +741,6 @@ mod limit_is_exceeded {
         assert!(
             limit_is_exceeded(usize::MAX, 1, 1),
             "the product, not the smaller candidate count, determines whether the limit is exceeded"
-        );
-    }
-}
-
-#[cfg(test)]
-mod estimate_involved_items {
-    use super::estimate_involved_items;
-    use crate::rewrites::tracker::{ChangeKind, visit::SourceKind};
-
-    #[test]
-    fn renames_count_unemitted_as_sources_and_destinations() {
-        let items = [
-            (false, ChangeKind::Addition),
-            (true, ChangeKind::Deletion),
-            (true, ChangeKind::Deletion),
-        ];
-        assert_eq!(
-            estimate_involved_items(items, SourceKind::Rename),
-            (0, 1),
-            "here we only have one eligible source, hence nothing to do"
-        );
-        assert_eq!(
-            estimate_involved_items(items.into_iter().map(|t| (false, t.1)), SourceKind::Rename),
-            (2, 1),
-            "now we have more possibilities as renames count un-emitted deletions as source"
-        );
-    }
-
-    #[test]
-    fn copies_do_not_count_additions_as_sources() {
-        let items = [
-            (false, ChangeKind::Addition),
-            (true, ChangeKind::Addition),
-            (true, ChangeKind::Deletion),
-        ];
-        assert_eq!(
-            estimate_involved_items(items, SourceKind::Copy),
-            (0, 1),
-            "one addition as source, the other isn't counted as it's emitted, nor is it considered a copy-source.\
-            deletions don't count"
-        );
-    }
-
-    #[test]
-    fn copies_count_modifications_as_sources() {
-        let items = [
-            (false, ChangeKind::Addition),
-            (true, ChangeKind::Modification),
-            (false, ChangeKind::Modification),
-        ];
-        assert_eq!(
-            estimate_involved_items(items, SourceKind::Copy),
-            (2, 1),
-            "any modifications is a valid source, emitted or not"
         );
     }
 }

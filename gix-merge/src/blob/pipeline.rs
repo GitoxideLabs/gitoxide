@@ -126,9 +126,12 @@ impl Pipeline {
     ///
     /// If a [worktree root](WorktreeRoots) is present, read the file from there. A non-null `id` may be used to look up
     /// its index version for line-ending conversion. Null IDs are never looked up in `objects`.
-    /// If the worktree file doesn't exist, or no root is present and `id` [is null](gix_hash::ObjectId::is_null()),
+    /// Null IDs supplied in `Some` are treated as `None`.
+    /// If the worktree file doesn't exist, or no root is present and `id` is `None`,
     /// then `out` will be left cleared and the output data will be `None`.
-    /// This is useful to simplify the calling code as empty buffers signal that nothing is there.
+    /// An existing empty resource instead returns `Some(Data::Buffer)`. Buffer emptiness alone does not indicate
+    /// absence: missing resources, empty content, and resources that are too large to load all leave `out` empty.
+    /// Inspect the returned value to distinguish these states.
     ///
     /// Note that `mode` is trusted, and we will not re-validate that the entry in the worktree actually is of that mode.
     /// Only blobs are allowed.
@@ -137,7 +140,7 @@ impl Pipeline {
     #[expect(clippy::too_many_arguments)]
     pub fn convert_to_mergeable(
         &mut self,
-        id: &gix_hash::oid,
+        id: Option<&gix_hash::oid>,
         mode: EntryKind,
         rela_path: &BStr,
         kind: ResourceKind,
@@ -154,6 +157,7 @@ impl Pipeline {
             )));
         }
 
+        let id = id.filter(|id| !id.is_null());
         out.clear();
         match self.roots.by_kind(kind) {
             Some(root) => {
@@ -183,10 +187,12 @@ impl Pipeline {
                                         gix_path::from_bstr(rela_path)?.as_ref(),
                                         attributes,
                                         &mut |buf| {
-                                            if convert == Mode::Renormalize || id.is_null() {
+                                            if convert == Mode::Renormalize {
                                                 Ok(None)
                                             } else {
-                                                objects.try_find(id, buf).map(|obj| obj.map(|_| ()))
+                                                id.map_or(Ok(None), |id| {
+                                                    objects.try_find(id, buf).map(|obj| obj.map(|_| ()))
+                                                })
                                             }
                                         },
                                     )?;
@@ -225,9 +231,7 @@ impl Pipeline {
                 Ok(data)
             }
             None => {
-                let data = if id.is_null() {
-                    None
-                } else {
+                let data = if let Some(id) = id {
                     let header = objects
                         .try_header(id)
                         .or_raise(|| message!("Could not find object header for {id}"))?
@@ -301,6 +305,8 @@ impl Pipeline {
                         Data::Buffer
                     };
                     Some(data)
+                } else {
+                    None
                 };
                 Ok(data)
             }

@@ -484,6 +484,7 @@ pub struct Options {
 /// Control inferred relocation of additions and rename destinations through directory renames.
 ///
 /// This corresponds to Git's `merge.directoryRenames` and defaults to [`Conflict`](Self::Conflict), like Git.
+/// Tied destination counts leave new paths in place without reporting Git's directory-split conflict.
 #[derive(Default, Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum DirectoryRenames {
     /// Leave new paths at their explicit locations, without disabling file-rename detection.
@@ -532,6 +533,7 @@ pub mod apply_index_entries {
         use std::collections::{HashMap, hash_map};
 
         use bstr::{BStr, ByteSlice};
+        use gix_diff::tree_with_rewrites::Change;
 
         use crate::tree::{
             Conflict, ConflictIndexEntryPathHint, Resolution, ResolutionFailure, TreatAsUnresolved,
@@ -592,11 +594,19 @@ pub mod apply_index_entries {
                         ResolutionFailure::OursRenamedTheirsRenamedDifferently { .. } => {
                             (Some(conflict.theirs.location()), conflict.ours.location())
                         }
+                        ResolutionFailure::OursDeletedTheirsRenamed => {
+                            // Scheduling can swap stored sides independently of the resolution labels.
+                            let destination = if matches!(conflict.ours, Change::Rewrite { .. }) {
+                                conflict.ours.location()
+                            } else {
+                                conflict.theirs.location()
+                            };
+                            (Some(destination), destination)
+                        }
                         ResolutionFailure::OursModifiedTheirsRenamedTypeMismatch
                         | ResolutionFailure::SubmoduleMerge
                         | ResolutionFailure::SubmoduleAddAdd
                         | ResolutionFailure::OursRenamedTheirsRenamedToSameLocation
-                        | ResolutionFailure::OursDeletedTheirsRenamed
                         | ResolutionFailure::OursModifiedTheirsDeleted
                         | ResolutionFailure::Unknown => (None, conflict.ours.location()),
                         ResolutionFailure::OursModifiedTheirsDirectoryThenOursRenamed {

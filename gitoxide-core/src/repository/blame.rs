@@ -83,7 +83,7 @@ fn start_for_blame<'a>(
         gix::objs::tree::EntryKind::Blob
     };
     resources.set_resource(
-        repo.object_hash().null(),
+        None,
         entry_kind,
         file,
         gix::diff::blob::ResourceKind::OldOrSource,

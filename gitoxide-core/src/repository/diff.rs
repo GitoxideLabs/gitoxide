@@ -169,14 +169,14 @@ pub fn file(
     )?;
 
     resource_cache.set_resource(
-        old_blob_id,
+        Some(old_blob_id),
         gix::object::tree::EntryKind::Blob,
         old_path.as_ref(),
         gix::diff::blob::ResourceKind::OldOrSource,
         &repo.objects,
     )?;
     resource_cache.set_resource(
-        new_blob_id,
+        Some(new_blob_id),
         gix::object::tree::EntryKind::Blob,
         new_path.as_ref(),
         gix::diff::blob::ResourceKind::NewOrDestination,
@@ -187,20 +187,20 @@ pub fn file(
 
     use gix::diff::blob::platform::prepare_diff::Operation;
 
-    let algorithm = match outcome.operation {
-        Operation::InternalDiff { algorithm } => algorithm,
+    let (algorithm, change) = match outcome.operation {
+        Operation::InternalDiff { algorithm, change } => (algorithm, change),
         Operation::ExternalCommand { .. } => {
             unreachable!("We disabled that")
         }
         Operation::SourceOrDestinationIsBinary => {
             bail!(unsupported("Source or destination is binary and we can't diff that"))
         }
+        Operation::NeitherExists => {
+            bail!(message("Neither source nor destination exists; choose at least one existing file").validation())
+        }
     };
 
-    let interner = gix::diff::blob::InternedInput::new(
-        tokens_for_diffing(outcome.old.data.as_slice().unwrap_or_default()),
-        tokens_for_diffing(outcome.new.data.as_slice().unwrap_or_default()),
-    );
+    let interner = change.patch_input();
 
     let diff = gix::diff::blob::diff_with_slider_heuristics(algorithm, &interner);
     let rendered = gix::diff::blob::UnifiedDiff::new(
@@ -214,8 +214,4 @@ pub fn file(
     write!(out, "{rendered}").or_error()?;
 
     Ok(())
-}
-
-pub(crate) fn tokens_for_diffing(data: &[u8]) -> gix::diff::blob::platform::resource::ByteLinesWithoutTerminator<'_> {
-    gix::diff::blob::platform::resource::ByteLinesWithoutTerminator::new(data)
 }

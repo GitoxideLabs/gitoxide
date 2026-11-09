@@ -413,7 +413,7 @@ pub(super) fn find_custom_refname<'a>(
         .filter_map(|m| m.remote.as_name().zip(m.remote.as_id()))
         .map(|(full_ref_name, target)| gix_refspec::match_group::Item {
             full_ref_name,
-            target,
+            target: Some(target),
             object: None,
         })
         .collect();
@@ -422,17 +422,26 @@ pub(super) fn find_custom_refname<'a>(
     let find_item = |name: &BStr| filtered_items.iter().find(|item| item.full_ref_name == name).copied();
     // Preserve gix's documented full-ref support, then match git clone --branch by trying heads before tags.
     if let Some(item) = find_item(requested_name) {
-        return Ok((item.target, item.full_ref_name));
+        return Ok((
+            item.target.expect("only references with IDs were collected"),
+            item.full_ref_name,
+        ));
     }
     if !requested_name.starts_with(b"refs/") {
         let branch_name = Category::LocalBranch.to_full_name(requested_name).or_error()?;
         if let Some(item) = find_item(branch_name.as_bstr()) {
-            return Ok((item.target, item.full_ref_name));
+            return Ok((
+                item.target.expect("only references with IDs were collected"),
+                item.full_ref_name,
+            ));
         }
 
         let tag_name = Category::Tag.to_full_name(requested_name).or_error()?;
         if let Some(item) = find_item(tag_name.as_bstr()) {
-            return Ok((item.target, item.full_ref_name));
+            return Ok((
+                item.target.expect("only references with IDs were collected"),
+                item.full_ref_name,
+            ));
         }
     }
 
@@ -443,7 +452,10 @@ pub(super) fn find_custom_refname<'a>(
             let item = filtered_items[res.mappings[0]
                 .item_index
                 .expect("we map by name only and have no object-id in refspec")];
-            Ok((item.target, item.full_ref_name))
+            Ok((
+                item.target.expect("only references with IDs were collected"),
+                item.full_ref_name,
+            ))
         }
         _ => {
             let candidates = res
@@ -491,11 +503,10 @@ fn setup_branch_config(
         .find_remote(remote_name)
         .expect("remote was just created and must be visible in config");
     let group = gix_refspec::MatchGroup::from_fetch_specs(remote.fetch_specs.iter().map(gix_refspec::RefSpec::to_ref));
-    let null = gix_hash::ObjectId::null(repo.object_hash());
     let res = group.match_lhs(
         Some(gix_refspec::match_group::Item {
             full_ref_name: branch.as_bstr(),
-            target: branch_id.unwrap_or(&null),
+            target: branch_id,
             object: None,
         })
         .into_iter(),

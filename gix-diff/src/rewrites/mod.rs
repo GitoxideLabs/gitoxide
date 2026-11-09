@@ -1,9 +1,42 @@
-use std::collections::BTreeMap;
-
-use crate::{Rewrites, tree::visit::ChangeId};
+use crate::Rewrites;
 
 /// Types related to the rename tracker for renames, rewrites and copies.
 pub mod tracker;
+
+pub(crate) mod similarity;
+
+/// Git's byte-span similarity score, independent of line ordering and line-diff algorithms.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Similarity(u16);
+
+impl Similarity {
+    /// The largest score, representing 100% similarity.
+    pub const MAX_SCORE: u16 = 60_000;
+
+    /// Return a similarity for a Git score in `0..=60000`, or `None` if it is out of range.
+    pub const fn from_score(score: u16) -> Option<Self> {
+        if score <= Self::MAX_SCORE {
+            Some(Self(score))
+        } else {
+            None
+        }
+    }
+
+    /// Return the exact Git score, in `0..=60000`.
+    pub const fn score(self) -> u16 {
+        self.0
+    }
+
+    /// Return the whole percentage, rounded down like Git's diff output.
+    pub const fn percentage(self) -> u8 {
+        (self.0 / (Self::MAX_SCORE / 100)) as u8
+    }
+
+    /// Return similarity as a fraction in `0.0..=1.0`, suitable for comparison with [`Rewrites::percentage`].
+    pub fn fraction(self) -> f32 {
+        f32::from(self.0) / f32::from(Self::MAX_SCORE)
+    }
+}
 
 /// A type to retain state related to an ongoing tracking operation to retain sets of interesting changes
 /// of which some are retained to at a later stage compute the ones that seem to be renames or copies.
@@ -14,19 +47,17 @@ pub struct Tracker<T> {
     path_backing: Vec<u8>,
     /// How to track copies and/or rewrites.
     rewrites: Rewrites,
-    /// Previously emitted child item indices, grouped by their `(deleted source, added destination)` relation ids.
-    child_renames: BTreeMap<(ChangeId, ChangeId), Vec<(usize, usize)>>,
 }
 
 /// Determine in which set of files to search for copies.
 #[derive(Default, Debug, Copy, Clone, Eq, PartialEq)]
 pub enum CopySource {
-    /// Find copies from the set of modified files only.
+    /// Find copies from modified files and deleted files, including sources already used by renames.
     #[default]
     FromSetOfModifiedFiles,
     /// Find copies from the set of modified files, as well as all files known to the source (i.e. previous state of the tree).
     ///
-    /// This can be an expensive operation as it scales exponentially with the total amount of files in the set.
+    /// This can be expensive: exhaustive matching scales with the product of sources and destinations.
     FromSetOfModifiedFilesAndAllSources,
 }
 

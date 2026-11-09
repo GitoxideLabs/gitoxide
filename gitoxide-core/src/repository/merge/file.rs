@@ -3,11 +3,12 @@ use std::path::Path;
 use gix::{
     Id, Result,
     bstr::BString,
-    error::{ErrorExt, OptionExt, ResultExt, bail, message, unsupported},
+    error::{OptionExt, ResultExt, bail, message, unsupported},
     merge::blob::{
         Resolution, ResourceKind,
         builtin_driver::{binary, text::Conflict},
         pipeline::WorktreeRoots,
+        platform::resource::Data,
     },
     object::tree::EntryKind,
 };
@@ -36,23 +37,22 @@ pub fn file(
     let roots = worktree_roots(base_id, ours_id, theirs_id, repo.workdir())?;
 
     let mut cache = repo.merge_resource_cache(roots)?;
-    let null = repo.object_hash().null();
     cache.set_resource(
-        base_id.map_or(null, Id::detach),
+        base_id.map(Id::detach),
         EntryKind::Blob,
         base.as_ref(),
         ResourceKind::CommonAncestorOrBase,
         &repo.objects,
     )?;
     cache.set_resource(
-        ours_id.map_or(null, Id::detach),
+        ours_id.map(Id::detach),
         EntryKind::Blob,
         ours.as_ref(),
         ResourceKind::CurrentOrOurs,
         &repo.objects,
     )?;
     cache.set_resource(
-        theirs_id.map_or(null, Id::detach),
+        theirs_id.map(Id::detach),
         EntryKind::Blob,
         theirs.as_ref(),
         ResourceKind::OtherOrTheirs,
@@ -77,11 +77,12 @@ pub fn file(
     };
     let mut buf = repo.empty_reusable_buffer();
     let (pick, resolution) = platform.merge(&mut buf, labels, &repo.command_context()?)?;
-    let buf = platform
-        .buffer_by_pick(pick)
-        .map_err(|()| message("Participating object was too large").raise())?
-        .unwrap_or(&buf);
-    out.write_all(buf).or_error()?;
+    match platform.data_by_pick(pick, &buf) {
+        Data::Buffer(data) => out.write_all(data).or_error()?,
+        // Stdout has no file-existence state: a missing result emits no bytes.
+        Data::Missing => {}
+        Data::TooLarge { .. } => bail!(message("Participating object was too large")),
+    }
 
     if resolution == Resolution::Conflict {
         bail!(gix::error::conflict("File conflicted"))

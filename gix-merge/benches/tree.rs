@@ -482,6 +482,112 @@ fn new_blob_merge_platform() -> gix_merge::blob::Platform {
     )
 }
 
+mod edited_renames {
+    use std::{fmt::Write as _, hint::black_box};
+
+    use criterion::{BatchSize, BenchmarkId, Criterion, Throughput};
+    use gix_merge::tree::TreatAsUnresolved;
+
+    use super::*;
+
+    pub(super) fn tree_merge(c: &mut Criterion) {
+        let mut group = c.benchmark_group("tree-merge/edited-renames");
+        for count in [128, 512] {
+            let (scenario, expected_tree_id) = scenario(count);
+            let mut diff_state = gix_diff::tree::State::default();
+            let mut diff_resource_cache = new_diff_resource_cache();
+            let mut blob_merge = new_blob_merge_platform();
+            let options = Options {
+                rewrites: Some(Rewrites::default()),
+                ..Default::default()
+            };
+            let mut actual = merge(
+                &scenario,
+                scenario.ours,
+                scenario.theirs,
+                &mut diff_state,
+                &mut diff_resource_cache,
+                &mut blob_merge,
+                options.clone(),
+            );
+            assert!(
+                !actual.has_unresolved_conflicts(TreatAsUnresolved::git()),
+                "distant edits merge cleanly after fuzzy rename detection"
+            );
+            assert_eq!(
+                actual
+                    .tree
+                    .write(|tree| scenario.objects.write(tree))
+                    .expect("merged tree can be written"),
+                expected_tree_id,
+                "every renamed destination contains both edits, with no original paths left"
+            );
+            group.throughput(Throughput::Elements(count as u64));
+            group.bench_with_input(BenchmarkId::from_parameter(count), &scenario, |b, scenario| {
+                b.iter_batched(
+                    || options.clone(),
+                    |options| {
+                        black_box(merge(
+                            scenario,
+                            scenario.ours,
+                            scenario.theirs,
+                            &mut diff_state,
+                            &mut diff_resource_cache,
+                            &mut blob_merge,
+                            options,
+                        ))
+                    },
+                    BatchSize::SmallInput,
+                );
+            });
+        }
+        group.finish();
+    }
+
+    fn scenario(count: usize) -> (Scenario, ObjectId) {
+        let objects = ObjectDb::new(gix_object::find::Never, gix_hash::Kind::Sha1);
+        // Base, renamed with our edit, original paths with their edit, and expected combined destinations.
+        let mut trees: [_; 4] = std::array::from_fn(|_| {
+            gix_object::tree::Editor::new(Tree::default(), &gix_object::find::Never, gix_hash::Kind::Sha1)
+        });
+        for idx in 0..count {
+            for (state, tree) in trees.iter_mut().enumerate() {
+                let path = format!(
+                    "{}/file-{idx:04}.txt",
+                    if state == 1 || state == 3 { "new" } else { "old" }
+                );
+                let mut content = String::new();
+                for line in 0..32 {
+                    let text = match (state, line) {
+                        (1 | 3, 0) => "edited by ours",
+                        (2 | 3, 31) => "edited by theirs",
+                        _ => "original content",
+                    };
+                    writeln!(content, "file {idx:04}, line {line:02}: {text}").expect("writing to a string succeeds");
+                }
+                let blob_id = objects
+                    .write_buf(Kind::Blob, content.as_bytes())
+                    .expect("in-memory blob writes succeed");
+                tree.upsert(path.split('/'), EntryKind::Blob, blob_id)
+                    .expect("generated paths are valid");
+            }
+        }
+        let tree_ids = trees.each_mut().map(|tree| {
+            tree.write(|tree| objects.write(tree))
+                .expect("in-memory tree writes succeed")
+        });
+        (
+            Scenario {
+                objects,
+                base: tree_ids[0],
+                ours: tree_ids[1],
+                theirs: tree_ids[2],
+            },
+            tree_ids[3],
+        )
+    }
+}
+
 mod linux {
     use std::{fmt::Write as _, hint::black_box};
 
@@ -856,5 +962,5 @@ mod linux {
     }
 }
 
-criterion_group!(benches, tree_merge, linux::tree_merge);
+criterion_group!(benches, tree_merge, edited_renames::tree_merge, linux::tree_merge);
 criterion_main!(benches);

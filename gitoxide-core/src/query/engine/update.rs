@@ -265,9 +265,12 @@ pub fn update(
                                                                     false;
                                                                 if let Ok(prep) = cache.prepare_diff() {
                                                                     let mut nl = 0;
-                                                                    let tokens = prep.interned_input();
                                                                     match prep.operation {
-                                                                        Operation::InternalDiff { algorithm } => {
+                                                                        Operation::InternalDiff {
+                                                                            algorithm,
+                                                                            change,
+                                                                        } => {
+                                                                            let tokens = change.patch_input();
                                                                             let diff = gix::diff::blob::Diff::compute(
                                                                                 algorithm, &tokens,
                                                                             );
@@ -293,7 +296,8 @@ pub fn update(
                                                                         Operation::ExternalCommand { .. } => {
                                                                             unreachable!("disabled above")
                                                                         }
-                                                                        Operation::SourceOrDestinationIsBinary => {}
+                                                                        Operation::SourceOrDestinationIsBinary
+                                                                        | Operation::NeitherExists => {}
                                                                     }
                                                                 }
                                                             }
@@ -311,16 +315,26 @@ pub fn update(
                                                     }
                                                     Rewrite {
                                                         source_location,
-                                                        diff,
+                                                        source_entry_mode,
+                                                        similarity,
+                                                        entry_mode,
                                                         copy,
                                                         location,
                                                         ..
                                                     } => {
+                                                        let lines = if similarity.is_some()
+                                                            && source_entry_mode.is_blob()
+                                                            && entry_mode.is_blob()
+                                                        {
+                                                            change.diff(&mut diff_cache)?.line_counts()?
+                                                        } else {
+                                                            None
+                                                        };
                                                         out.push(FileChange {
                                                             relpath: location.to_owned(),
                                                             source_relpath: Some(source_location.to_owned()),
                                                             mode: if copy { FileMode::Copy } else { FileMode::Rename },
-                                                            lines: diff.map(|d| LineStats {
+                                                            lines: lines.map(|d| LineStats {
                                                                 added: d.insertions as usize,
                                                                 removed: d.removals as usize,
                                                                 before: d.before,

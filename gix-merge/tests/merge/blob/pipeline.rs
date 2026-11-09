@@ -31,7 +31,7 @@ fn without_transformation() -> TestResult {
         let a_content = "a-content";
         std::fs::write(tmp.path().join(a_name), a_content.as_bytes())?;
         let out = filter.convert_to_mergeable(
-            &does_not_matter,
+            Some(&does_not_matter),
             EntryKind::Blob,
             a_name.into(),
             ResourceKind::CommonAncestorOrBase,
@@ -47,7 +47,7 @@ fn without_transformation() -> TestResult {
         gix_fs::symlink::create(a_name.as_ref(), &tmp.path().join(link_name))?;
         let err = filter
             .convert_to_mergeable(
-                &does_not_matter,
+                Some(&does_not_matter),
                 EntryKind::Link,
                 link_name.into(),
                 ResourceKind::CommonAncestorOrBase,
@@ -72,7 +72,7 @@ fn without_transformation() -> TestResult {
         let id = insert(&db, b_content)?;
 
         let out = filter.convert_to_mergeable(
-            &id,
+            Some(&id),
             EntryKind::Blob,
             a_name.into(),
             ResourceKind::CurrentOrOurs,
@@ -90,7 +90,7 @@ fn without_transformation() -> TestResult {
         );
 
         let out = filter.convert_to_mergeable(
-            &does_not_matter,
+            Some(&does_not_matter),
             EntryKind::Blob,
             a_name.into(),
             ResourceKind::OtherOrTheirs,
@@ -102,7 +102,7 @@ fn without_transformation() -> TestResult {
         assert_eq!(out, None, "the lack of object in the database isn't a problem");
 
         let out = filter.convert_to_mergeable(
-            &does_not_matter,
+            Some(&does_not_matter),
             EntryKind::Blob,
             "does not exist on disk".into(),
             ResourceKind::CommonAncestorOrBase,
@@ -143,7 +143,7 @@ fn binary_below_large_file_threshold() -> TestResult {
     let binary_content = "a\0b";
     std::fs::write(tmp.path().join(a_name), binary_content.as_bytes())?;
     let out = filter.convert_to_mergeable(
-        &does_not_matter,
+        Some(&does_not_matter),
         EntryKind::BlobExecutable,
         a_name.into(),
         ResourceKind::CurrentOrOurs,
@@ -158,7 +158,7 @@ fn binary_below_large_file_threshold() -> TestResult {
     let db = object_db();
     let id = insert(&db, binary_content)?;
     let out = filter.convert_to_mergeable(
-        &id,
+        Some(&id),
         EntryKind::Blob,
         a_name.into(),
         ResourceKind::OtherOrTheirs,
@@ -193,7 +193,7 @@ fn above_large_file_threshold() -> TestResult {
     let large_content = "hello";
     std::fs::write(tmp.path().join(a_name), large_content.as_bytes())?;
     let out = filter.convert_to_mergeable(
-        &does_not_matter,
+        Some(&does_not_matter),
         EntryKind::BlobExecutable,
         a_name.into(),
         ResourceKind::CurrentOrOurs,
@@ -214,7 +214,7 @@ fn above_large_file_threshold() -> TestResult {
     let id = insert(&db, large_content)?;
 
     let out = filter.convert_to_mergeable(
-        &id,
+        Some(&id),
         EntryKind::Blob,
         a_name.into(),
         ResourceKind::CommonAncestorOrBase,
@@ -236,10 +236,10 @@ fn above_large_file_threshold() -> TestResult {
 
 #[test]
 fn non_existing() -> TestResult {
-    let tmp = gix_testtools::tempfile::TempDir::new()?;
+    let root = gix_testtools::scripted_fixture_read_only("make_blob_repo.sh")?;
     let mut filter = Pipeline::new(
         WorktreeRoots {
-            common_ancestor_root: Some(tmp.path().to_owned()),
+            common_ancestor_root: Some(root.clone()),
             ..Default::default()
         },
         gix_filter::Pipeline::new(Default::default(), gix_testtools::object_hash(), Default::default()),
@@ -249,12 +249,9 @@ fn non_existing() -> TestResult {
     let null = gix_hash::Kind::Sha1.null();
     let mut buf = vec![1];
     let a_name = "a";
-    assert!(
-        !tmp.path().join(a_name).exists(),
-        "precondition: worktree file doesn't exist"
-    );
+    assert!(!root.join(a_name).exists(), "precondition: worktree file doesn't exist");
     let out = filter.convert_to_mergeable(
-        &null,
+        Some(&null),
         EntryKind::Blob,
         a_name.into(),
         ResourceKind::CommonAncestorOrBase,
@@ -269,11 +266,37 @@ fn non_existing() -> TestResult {
     );
     assert_eq!(buf.len(), 0, "always cleared");
 
-    drop(tmp);
+    let db = object_db();
+    let empty_blob_id = insert(&db, "")?;
+    for (blob_id, kind) in [
+        (None, ResourceKind::CommonAncestorOrBase),
+        (Some(empty_blob_id.as_ref()), ResourceKind::OtherOrTheirs),
+    ] {
+        buf.push(1);
+        let out = filter.convert_to_mergeable(
+            blob_id,
+            EntryKind::Blob,
+            "empty".into(),
+            kind,
+            &mut |_, _| {},
+            &db,
+            pipeline::Mode::ToGit,
+            &mut buf,
+        )?;
+        assert_eq!(
+            out,
+            Some(pipeline::Data::Buffer),
+            "an empty worktree file or stored blob is present, unlike a missing resource"
+        );
+        assert!(
+            buf.is_empty(),
+            "empty content clears the buffer without implying absence"
+        );
+    }
 
     buf.push(1);
     let out = filter.convert_to_mergeable(
-        &null,
+        Some(&null),
         EntryKind::Blob,
         a_name.into(),
         ResourceKind::OtherOrTheirs,
@@ -292,7 +315,7 @@ fn non_existing() -> TestResult {
     let some_id = gix_hash::ObjectId::from_hex(b"45c160c35c17ad264b96431cceb9793160396e99")?;
     let err = filter
         .convert_to_mergeable(
-            &some_id,
+            Some(&some_id),
             EntryKind::Blob,
             a_name.into(),
             ResourceKind::OtherOrTheirs,
@@ -341,7 +364,7 @@ fn worktree_filter() -> TestResult {
     for mode in ALL_MODES {
         let does_not_matter = gix_hash::Kind::Sha1.null();
         let out = filter.convert_to_mergeable(
-            &does_not_matter,
+            Some(&does_not_matter),
             EntryKind::Blob,
             a_name.into(),
             ResourceKind::CommonAncestorOrBase,
@@ -359,7 +382,7 @@ fn worktree_filter() -> TestResult {
 
         let id = insert(&db, a_content)?;
         let out = filter.convert_to_mergeable(
-            &id,
+            Some(&id),
             EntryKind::Blob,
             a_name.into(),
             ResourceKind::CommonAncestorOrBase,
@@ -393,7 +416,7 @@ fn worktree_filter() -> TestResult {
     let id = insert(&db, b_content)?;
 
     let out = filter.convert_to_mergeable(
-        &id,
+        Some(&id),
         EntryKind::Blob,
         a_name.into(),
         ResourceKind::CurrentOrOurs,
@@ -410,7 +433,7 @@ fn worktree_filter() -> TestResult {
     let b_content = "b-content\r\n";
     let id = insert(&db, b_content)?;
     let out = filter.convert_to_mergeable(
-        &id,
+        Some(&id),
         EntryKind::Blob,
         a_name.into(),
         ResourceKind::OtherOrTheirs,

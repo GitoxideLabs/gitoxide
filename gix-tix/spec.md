@@ -1213,6 +1213,12 @@ views.
   per-path external diff drivers.
 - Diff preparation honors Git attributes, text conversion, binary detection,
   external diff commands, and the configured `core.pager` pipeline.
+- Only validated text is tokenized for patches and line counts, including counts
+  for external diff commands. Additions and deletions compare the existing text
+  with an empty side; an existing empty file remains a text resource. Binary
+  resources and paths missing on both sides have no line counts. Opening a path
+  missing on both sides reports an error directing the user to refresh the changes
+  and select an existing file, without launching a pager or external command.
 - Binary, submodule, conflicted, and otherwise unavailable file diffs do not
   launch an inappropriate pager; the changes status line reports the reason.
 - The built-in viewer takes over the alternate screen and supports the same

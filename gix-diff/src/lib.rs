@@ -29,13 +29,15 @@ pub struct Rewrites {
     ///
     /// If `None`, files are only considered equal if their content matches 100%.
     /// Note that values greater than 1.0 have no different effect than 1.0.
+    /// Similarity follows Git's byte-span scoring, quantized to 60000 steps, and is independent of the line-diff algorithm.
     pub percentage: Option<f32>,
     /// The amount of files to consider for fuzzy rename or copy tracking. Defaults to 1000, meaning that only 1000*1000
     /// combinations can be tested for fuzzy matches, i.e. the ones that try to find matches by comparing similarity.
     /// If 0, there is no limit.
     ///
-    /// If the limit would not be enough to test the entire set of combinations, the algorithm will trade in precision and not
-    /// run the fuzzy version of identity tests at all. That way results are never partial.
+    /// Exact matches and the stricter unique-basename pass run before this limit is applied.
+    /// If the remaining combinations exceed the limit, exhaustive similarity matching is skipped.
+    /// Copy detection over all sources may fall back to modified and deleted sources to stay within the limit.
     pub limit: usize,
 
     /// If `true`, empty blobs will be tracked. If `false`, they do not participate in rename tracking.

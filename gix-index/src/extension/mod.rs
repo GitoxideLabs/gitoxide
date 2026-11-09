@@ -22,7 +22,8 @@ pub struct Iter<'a> {
 pub struct Tree {
     /// The name of the tree/directory, or empty if it's the root tree.
     pub name: SmallVec<[u8; 23]>,
-    /// The id of the directory tree of the associated tree object.
+    /// The ID of the associated tree object, usable only when [`num_entries`](Self::num_entries) is `Some`.
+    /// Invalid nodes omit it on disk and decode it as null; invalidation may also leave a stale non-null ID.
     pub id: gix_hash::ObjectId,
     /// The amount of non-tree items in this directory tree, including sub-trees, recursively.
     /// The value of the top-level tree is thus equal to the value of the total amount of entries.

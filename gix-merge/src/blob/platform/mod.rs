@@ -6,8 +6,8 @@ use crate::blob::{BuiltinDriver, Pipeline, Platform, pipeline};
 /// A stored value representing a resource that participates in a merge.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Debug)]
 pub(super) struct Resource {
-    /// The `id` of the value, or `null` if it's only living in a worktree.
-    id: gix_hash::ObjectId,
+    /// The supplied Git object ID, or `None` if unavailable; `data` determines whether the resource exists.
+    id: Option<gix_hash::ObjectId>,
     /// The repository-relative path where the resource lives in the tree.
     rela_path: BString,
     /// The outcome of converting a resource into a mergable format using [Pipeline::convert_to_mergeable()].
@@ -26,10 +26,10 @@ pub struct ResourceRef<'a> {
     pub data: resource::Data<'a>,
     /// The location of the resource, relative to the working tree.
     pub rela_path: &'a BStr,
-    /// The id of the content as it would be stored in `git`, or `null` if the content doesn't exist anymore at
-    /// `rela_path` or if it was never computed. This can happen with content read from the worktree, which
-    /// after its 'to-git' conversion never had its hash computed.
-    pub id: &'a gix_hash::oid,
+    /// The supplied Git object ID, or `None` if unavailable. Two unavailable IDs do not establish identity.
+    /// Use [`data`](Self::data) to distinguish missing content from existing content without a hash.
+    /// A supplied ID does not guarantee that the worktree resource still exists.
+    pub id: Option<&'a gix_hash::oid>,
 }
 
 /// Options for use in [`Platform::new()`].
