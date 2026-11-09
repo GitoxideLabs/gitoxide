@@ -24,7 +24,8 @@ pub struct Args {
 
     /// The amount of threads to use for some operations.
     ///
-    /// If unset, or the value is 0, there is no limit and all logical cores can be used.
+    /// If unset, or the value is 0, the amount is chosen automatically: usually one per logical core,
+    /// but fewer for some operations on macOS.
     #[clap(long)]
     pub threads: Option<usize>,
 

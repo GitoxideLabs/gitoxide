@@ -35,9 +35,9 @@ pub struct Options {
     /// Note that there is no git-configuration specific to index-worktree rename tracking.
     /// When rewrite tracking is enabled, there will be a delay for some entries as they partake in the rename-analysis.
     pub rewrites: Option<gix_diff::Rewrites>,
-    /// If set, don't use more than this amount of threads for the tracked modification check.
-    /// Otherwise, usually use as many threads as there are logical cores.
-    /// A value of 0 is interpreted as no-limit
+    /// The maximum number of threads for the tracked modification check. `None` and `Some(0)` use
+    /// the available logical cores, capped at three on macOS. Positive limits override the cap, which helps
+    /// when many files have to be read and hashed.
     pub thread_limit: Option<usize>,
 }
 

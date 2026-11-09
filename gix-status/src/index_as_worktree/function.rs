@@ -81,7 +81,7 @@ where
     let (chunk_size, thread_limit, _) = gix_parallel::optimize_chunk_size_and_thread_limit(
         500, // just like git
         index.entries().len().into(),
-        options.thread_limit,
+        options.thread_limit(),
         None,
     );
 

@@ -8,9 +8,9 @@ use gix_index::entry;
 pub struct Options {
     /// Capabilities of the file system which affect the status computation.
     pub fs: gix_fs::Capabilities,
-    /// If set, don't use more than this amount of threads.
-    /// Otherwise, usually use as many threads as there are logical cores.
-    /// A value of 0 is interpreted as no-limit
+    /// The maximum number of threads. `None` and `Some(0)` use the available logical cores,
+    /// capped at three on macOS, where more threads mostly add system time to `lstat` calls.
+    /// Positive limits override the cap, which helps when many files have to be read and hashed.
     pub thread_limit: Option<usize>,
     /// Options that control how stat comparisons are made when checking if a file is fresh.
     pub stat: gix_index::entry::stat::Options,
@@ -19,6 +19,16 @@ pub struct Options {
     /// Misses fall through to a live `lstat`, so this only affects performance.
     /// Effective only on Windows.
     pub fscache: bool,
+}
+
+impl Options {
+    pub(super) fn thread_limit(&self) -> Option<usize> {
+        #[cfg(target_os = "macos")]
+        if self.thread_limit.is_none_or(|threads| threads == 0) {
+            return Some(gix_parallel::num_threads(None).min(3));
+        }
+        self.thread_limit
+    }
 }
 
 /// The context for [index_as_worktree()`](crate::index_as_worktree()).
@@ -235,4 +245,39 @@ pub trait VisitEntry<'index> {
         rela_path: &'index BStr,
         status: EntryStatus<Self::ContentChange, Self::SubmoduleStatus>,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Options;
+
+    #[test]
+    fn thread_limit_resolution() {
+        for thread_limit in [None, Some(0)] {
+            #[cfg(target_os = "macos")]
+            let expected = Some(gix_parallel::num_threads(None).min(3));
+            #[cfg(not(target_os = "macos"))]
+            let expected = thread_limit;
+            assert_eq!(
+                Options {
+                    thread_limit,
+                    ..Default::default()
+                }
+                .thread_limit(),
+                expected,
+                "automatic thread counts are capped at three on macOS, and left to `gix-parallel` elsewhere"
+            );
+        }
+        for threads in [1, 2, 8, usize::MAX] {
+            assert_eq!(
+                Options {
+                    thread_limit: Some(threads),
+                    ..Default::default()
+                }
+                .thread_limit(),
+                Some(threads),
+                "positive limits override the automatic thread count"
+            );
+        }
+    }
 }
