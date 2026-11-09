@@ -145,6 +145,7 @@ exposing their APIs through public crates, may remain _major-zero crates_ indefi
   * `gitoxide-core`
 * **very early**  _(possibly without any documentation and many rough edges)_
   * [gix-blame](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-blame)
+  * [gix-notify](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-notify)
 * **idea** _(just a name placeholder)_
   * [gix-note](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-note)
   * [gix-fetchhead](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-fetchhead)

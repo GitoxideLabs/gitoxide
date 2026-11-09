@@ -156,6 +156,9 @@ index = ["dep:gix-index"]
 ## Support directory walks with Git-style annoations.
 dirwalk = ["dep:gix-dir", "attributes", "excludes"]
 
+## Observe repository and worktree changes without retaining a repository handle.
+notify = ["dep:gix-notify", "dirwalk"]
+
 ## Access to credential helpers, which provide credentials for URLs.
 # Note that `gix-negotiate` just piggibacks here, as 'credentials' is equivalent to 'fetch & push' right now.
 credentials = ["dep:gix-credentials", "dep:gix-prompt", "dep:gix-negotiate"]
@@ -391,6 +394,7 @@ gix-date = { version = "^0.19.0", path = "../gix-date" }
 gix-refspec = { version = "^0.47.1", path = "../gix-refspec" }
 gix-filter = { version = "^0.36.1", path = "../gix-filter", optional = true }
 gix-dir = { version = "^0.32.0", path = "../gix-dir", optional = true }
+gix-notify = { version = "^0.1.0", path = "../gix-notify", optional = true }
 
 gix-config = { version = "^0.62.2", path = "../gix-config" }
 gix-odb = { version = "^0.87.0", path = "../gix-odb" }
@@ -529,6 +533,10 @@ ignored = [
     "prodash",
 ]
 
+[package.metadata.smart-release]
+# produce a GitHub release so it's easier to discover the changelog in the web-ui
+github-release = true
+
 [package.metadata.qa]
 # Major external consumers with advisory compatibility checks.
 # CI checks each repository's default branch; see DEVELOPMENT.md for the selection.
@@ -613,6 +621,15 @@ checks = [
     ] },
 ]
 tests = [
+    # Run notify once, independently of workspace feature unification. Keep the filter
+    # aligned with its baseline exclusion in tests/it/src/qa/native_tests.rs.
+    { args = [
+        "--no-default-features",
+        "--features",
+        "notify,sha1,sha256",
+        "-E",
+        "test(notify::) | test(=repository::worktree::linked_worktree_removal_notifies_through_shared_metadata)",
+    ] },
     { args = [
         "--no-default-features",
         "--features",
@@ -690,6 +707,8 @@ doctests = [
 args = ["--no-default-features", "--tests"]
 base = ["sha1", "sha256"]
 exclude = [
+    # The dedicated test variant already builds this independent configuration.
+    "notify",
     # Bundles and backend choices retain their explicit build/test configurations.
     "default",
     "basic",

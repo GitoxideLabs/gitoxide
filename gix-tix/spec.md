@@ -765,7 +765,7 @@ without trading responsiveness for metadata that is not visible.
 | `Shift-P` | Push the active branch from history or Worktree without a prefix; cycle the comparison parent while Tree has focus. |
 | `Shift-C` | Hide visible changes panes or show Tree + Worktree together, from history or a focused changes pane. |
 | `? e` | Cycle the tree/worktree changes display. |
-| `Shift-R` | Explicitly refresh the revision view and visible worktree status. |
+| `Shift-R` | Rebuild native subscriptions and explicitly refresh the revision view and visible worktree status. |
 | `y` | Copy the full selected commit hash first; when change IDs are displayed, including automatically for siblings, append a space and the full change ID. Copy the selected raw path when a changes block is focused. |
 | `Shift-y`/`Y` | Copy the selected author as `Name <email>`. |
 | `s` | Verify signed, unverified commits currently visible on screen. |
@@ -2268,9 +2268,23 @@ views.
 
 ## Refresh, focus, and diagnostics
 
-- Native reference watchers observe `HEAD`, loose and packed refs, linked-worktree
+- `gix::notify::RepositoryMonitor`, backed by `gix-notify`,
+  owns native watcher handles and paths without retaining a repository while idle.
+  Metadata coverage is established before the initial history snapshot, with
+  worktree coverage selected for the initial view without a redundant reset.
+  It observes `HEAD`, loose and packed refs, linked-worktree
   HEAD and membership changes, and the direct or symbolic refs used by view and
-  hide revspecs. Linked indexes, logs, locks, and unrelated metadata do not
+  hide revspecs. Linked-worktree membership and each administrative root use
+  non-recursive registrations, including directories whose `gitdir` file has
+  not been created yet. Foreign private refs, reflogs, and operation state
+  receive no recursive coverage; the current worktree's refs and operation
+  directories retain it. These are logical subscriptions: native backends such
+  as macOS FSEvents can observe registered directories recursively and filter
+  events before delivery.
+  Subscriptions stay within the worktree and its private and shared Git
+  directories. No additional parent directories are subscribed to for detecting
+  replacement of an entire root directory.
+  Linked indexes, logs, locks, and unrelated metadata do not
   trigger history refreshes. Missing refs during an atomic update are transient;
   malformed or inaccessible ordinary refs remain errors.
 - The worktrunk picker starts neither reference nor worktree watchers. Promoting
@@ -2288,25 +2302,50 @@ views.
   selected worktree HEAD or other moving reference follows its changed target,
   covering external branch and StGit patch rewrites. If none remains visible,
   selection falls back to the first selectable row.
-- The worktree watcher exists only while the combined worktree block is enabled.
-  It observes the index and ignore-aware directories that Git status would walk,
-  using non-recursive registrations so ignored build trees do not generate work.
+- Worktree subscriptions are enabled only while the combined worktree block is enabled.
+  It observes the index when it is within those roots and the ignore-aware
+  directories that Git status would walk, using non-recursive registrations so
+  ignored build trees do not generate work.
   Unrepresentable directory or index paths fail the refresh before updating
   registrations or the saved index projection; partial directory sets are not used.
-- Access-only and incomplete `.lock` activity are ignored. Completed atomic
+- Changing worktree coverage replaces the monitor using a freshly opened,
+  non-isolated repository, copying its current options and changing only coverage.
+  An unchanged selection neither reopens the repository nor resets the monitor;
+  preview mode keeps its monitor slot empty. Reopening happens first, so an open
+  failure preserves the existing monitor. Before constructing its replacement,
+  tix takes and drops the old monitor, releasing all subscriptions and pending
+  notifications, including metadata, without overlapping old and new resources.
+  Construction failure leaves the monitor slot empty and propagates the error.
+  On success, the next service establishes new baselines. The temporary repository
+  is dropped before returning to the event loop.
+- Read-access-only and incomplete metadata `.lock` activity are ignored; close-write
+  notifications remain relevant. Completed atomic
   renames, index/HEAD updates, relevant worktree paths, and backend rescan requests
   invalidate the appropriate cache.
 - Incremental status refreshes untracked child events from their top-level path
   so collapsed directories appear and disappear consistently with a full status.
-  Tracked file events retain their precise path scopes. Ignored directories stay
-  excluded even when a negated pattern matches a descendant, such as `!out/`
-  beneath an ignored build tree.
+  Tracked file events retain their precise path scopes. Watcher event-kind and
+  object-type hints are advisory; status refresh uses every reported path regardless
+  of its hints. Ignored directories stay excluded even when a negated pattern
+  matches a descendant, such as `!out/` beneath an ignored build tree.
 - Worktree updates retain the history selection and restore changed-path
   selection by raw path and relative viewport position. They never select the
   newest commit merely because status changed.
-- Event batches are bounded and coalesced. Worktree status waits 75 ms of quiet;
-  reference transactions wait for their final update. Watchers retry after
-  failure while still needed.
+- Native event queues and service batches are bounded by count and bytes. Queue
+  overflow and backend coverage loss request a complete refresh. Worktree events
+  are published on the next service call; metadata transactions wait for 100 ms of
+  quiet, capped at 250 ms from their first event. Monitoring failures retry after
+  five seconds while still needed. Updates follow native notifications and reported
+  coverage loss. When information appears stale,
+  `Shift-R` rebuilds native subscriptions and refreshes all enabled cache domains,
+  including the revision view and visible worktree status.
+- Configuration dependencies within those roots, including active includes and
+  missing permitted files, repository-local ignore rules, and local attribute
+  sources are observed. Their changes refresh both the subscriptions and
+  dependent views. Creating a missing parent directory causes subscriptions to
+  follow it down to the intended file, staying within those roots. External
+  configuration and global ignore or attribute files add no subscriptions;
+  reopening repositories reads current configuration naturally.
 - Refresh status remains hidden for 500 ms so quick background work does not
   flicker the footer.
 - A filesystem history refresh is presented immediately as one complete frame,
@@ -2320,7 +2359,8 @@ views.
 - Spawned workers inherit the active tracing subscriber and parent span so their
   diagnostics remain connected to the operation that started them.
 - Filesystem responses receive correlated IDs in daily tracing logs, including
-  semantic trigger, coalesced paths, phases, presentation count, elapsed time,
+  semantic triggers from repository invalidations, event and rescan counts,
+  phases, presentation count, elapsed time,
   and outcome. Logs use the platform application-log directory, retain seven
   days, and are best-effort. Failure to create or open the log is silently
   ignored and never prevents either command-line or interactive operation.
@@ -2330,10 +2370,14 @@ views.
   as bare, drops worktree state, keeps tree/history views live, and reports recovery
   in the attention notice. Missing administrative `HEAD`, `commondir`, or `gitdir`
   files count as removal even while the checkout and administration directories
-  still exist. View loads interrupted between boundary checks retry after recovery;
-  late history-worker failures return their graph for a refresh from the common
-  repository. A worktree that disappears during picker activation is marked
-  unavailable instead of closing the application. Errors unrelated to removal,
+  still exist. Recovery replaces monitoring using the freshly opened common
+  repository with worktree coverage disabled, even if coverage was already disabled.
+  It preserves the other options and drops the removed repository's monitor before
+  constructing the replacement, with the same empty-slot semantics on failure.
+  View loads interrupted between boundary checks retry after recovery; late
+  history-worker failures return their graph for a refresh from the common repository.
+  A worktree that disappears during picker activation is marked unavailable instead of
+  closing the application. Errors unrelated to removal,
   including failures from the surviving common repository, still propagate after
   terminal state is restored.
 

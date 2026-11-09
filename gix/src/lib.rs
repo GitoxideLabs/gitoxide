@@ -428,6 +428,7 @@ pub fn config(git_dir: Option<&std::path::Path>, options: &open::Options) -> Res
         &options.api_config_overrides,
         &options.cli_config_overrides,
         options.use_repository_local_environment,
+        &mut |_| {},
     )
 }
 
@@ -545,6 +546,10 @@ pub mod state;
 ///
 #[cfg(feature = "status")]
 pub mod status;
+
+/// Filesystem notifications interpreted using repository layout and ignore rules.
+#[cfg(feature = "notify")]
+pub mod notify;
 
 ///
 pub mod shallow;
