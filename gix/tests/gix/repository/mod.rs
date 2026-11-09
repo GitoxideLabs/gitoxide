@@ -23,6 +23,8 @@ mod mailmap;
 mod merge;
 #[cfg(feature = "notes")]
 mod note;
+#[cfg(feature = "notify")]
+mod notify;
 mod object;
 mod open;
 #[cfg(feature = "attributes")]

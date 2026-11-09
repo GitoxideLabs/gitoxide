@@ -628,6 +628,7 @@ pub(crate) struct App {
     pub(crate) worktree_changes_visible: bool,
     pub(crate) tree_changes: ChangesView,
     pub(crate) worktree_changes: ChangesView,
+    pub(crate) worktree_watch_error: Option<String>,
     pub(crate) changes_parent: usize,
     pub(crate) commit_offset: usize,
     pub(crate) commit_pane_background: Option<(u8, u8, u8)>,
@@ -755,6 +756,7 @@ impl App {
             worktree_changes_visible: false,
             tree_changes: ChangesView::default(),
             worktree_changes: ChangesView::default(),
+            worktree_watch_error: None,
             changes_parent: 0,
             commit_offset: 0,
             commit_pane_background: None,
@@ -3845,6 +3847,27 @@ impl App {
         self.worktree_changes = ChangesView::default();
     }
 
+    pub(crate) fn update_monitor_error(&mut self, outcome: &gix::notify::Outcome) -> bool {
+        let error = if let Some(error) = outcome.errors.last() {
+            Some(format!("filesystem watch: {error}"))
+        } else if outcome.recovery_pending {
+            return false;
+        } else {
+            None
+        };
+        let changed = self.worktree_watch_error != error;
+        self.worktree_watch_error = error;
+        changed
+    }
+
+    pub(crate) fn changes_error(&self, pane: ChangePane) -> Option<&str> {
+        if pane == ChangePane::Worktree && self.worktree_watch_error.is_some() {
+            self.worktree_watch_error.as_deref()
+        } else {
+            self.changes(pane).error.as_deref()
+        }
+    }
+
     pub(crate) fn changes(&self, pane: ChangePane) -> &ChangesView {
         match pane {
             ChangePane::Tree => &self.tree_changes,
@@ -4435,7 +4458,42 @@ fn transition(
 
 #[cfg(test)]
 mod tests {
+    use gix_error::ErrorExt;
+
     use super::*;
+    #[test]
+    fn monitor_warnings_survive_status_reload_and_navigation_until_recovery() {
+        let mut app = App::new(1);
+        app.changes_focus = Some(ChangePane::Worktree);
+        for reason in ["initial registration failed", "native watch disconnected"] {
+            assert!(app.update_monitor_error(&gix::notify::Outcome {
+                errors: vec![gix_error::message(reason).raise()],
+                recovery_pending: true,
+                ..Default::default()
+            }));
+            let expected = format!("filesystem watch: {reason}");
+            assert_eq!(app.changes_error(ChangePane::Worktree), Some(expected.as_str()));
+            app.worktree_changes.error = None;
+            app.update(Action::First);
+            assert!(
+                !app.update_monitor_error(&gix::notify::Outcome {
+                    recovery_pending: true,
+                    ..Default::default()
+                }),
+                "quiet retry backoff preserves the warning"
+            );
+            assert_eq!(
+                app.changes_error(ChangePane::Worktree),
+                Some(expected.as_str()),
+                "a successful status load and navigation cannot repair native coverage"
+            );
+            assert!(app.update_monitor_error(&gix::notify::Outcome::default()));
+            assert!(
+                app.changes_error(ChangePane::Worktree).is_none(),
+                "successful registration clears the warning and schedules a redraw"
+            );
+        }
+    }
 
     fn id(n: u16) -> ObjectId {
         let mut bytes = [0; 20];

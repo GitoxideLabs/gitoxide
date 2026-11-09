@@ -36,7 +36,8 @@
 //! through [`Fence::sequence`] in the same [`Fence::generation`]; intervening loss requires a full scan.
 //! A [`SynchronizeError`] means delivery was not certified, for example because synchronization is
 //! unsupported, timed out, or lost coverage. Do not treat it as evidence that the cache is current.
-//! Applications should also periodically verify their state, even when notifications appear healthy.
+//! Applications can offer an explicit full refresh for recovery when users notice stale state that
+//! native notifications did not report.
 //!
 //! # Platform behavior
 //!

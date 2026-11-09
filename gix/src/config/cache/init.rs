@@ -24,6 +24,8 @@ impl Cache {
         StageOne {
             git_dir_config,
             mut buf,
+            #[cfg(feature = "notify")]
+            mut source_paths,
             lossy,
             is_bare,
             object_hash,
@@ -62,7 +64,18 @@ impl Cache {
             api_config_overrides,
             cli_config_overrides,
             use_repository_local_environment,
+            &mut |path| {
+                #[cfg(feature = "notify")]
+                source_paths.push(path.to_owned());
+                #[cfg(not(feature = "notify"))]
+                let _ = path;
+            },
         )?;
+        #[cfg(feature = "notify")]
+        {
+            source_paths.sort();
+            source_paths.dedup();
+        }
 
         let hex_len = util::parse_core_abbrev(&config, object_hash).with_leniency(lenient_config)?;
 
@@ -85,6 +98,8 @@ impl Cache {
         // NOTE: When adding a new initial cache, consider adjusting `reread_values_and_clear_caches()` as well.
         Ok(Cache {
             resolved: config.into(),
+            #[cfg(feature = "notify")]
+            source_paths,
             use_multi_pack_index,
             object_hash,
             #[cfg(feature = "revision")]
@@ -276,6 +291,7 @@ pub(crate) fn load(
     api_config_overrides: &[BString],
     cli_config_overrides: &[BString],
     use_repository_local_environment: bool,
+    observe: &mut dyn FnMut(&std::path::Path),
 ) -> Result<gix_config::File> {
     let options = gix_config::file::init::Options {
         includes: if use_includes {
@@ -306,6 +322,7 @@ pub(crate) fn load(
             &mut source_env,
         )
         .map(|path| {
+            observe(&path);
             gix_config::file::Metadata::from(source)
                 .at(path)
                 .with(gix_sec::Trust::Full)
@@ -328,9 +345,16 @@ pub(crate) fn load(
     if let Some(git_dir_config) = git_dir_config {
         globals.append(git_dir_config)?;
     }
-    globals.resolve_includes(options)?;
+    globals.resolve_includes_with_observer(options, &mut *observe)?;
     if use_env {
-        globals.append(gix_config::File::from_env(options)?.unwrap_or_default())?;
+        // Keep environment includes separate: their `hasconfig` conditions cannot see file configuration.
+        let mut environment = gix_config::File::from_env(gix_config::file::init::Options {
+            includes: gix_config::file::includes::Options::no_follow(),
+            ..options
+        })?
+        .unwrap_or_default();
+        environment.resolve_includes_with_observer(options, &mut *observe)?;
+        globals.append(environment)?;
     }
     if !cli_config_overrides.is_empty() {
         config::overrides::append(&mut globals, cli_config_overrides, gix_config::Source::Cli, |_| None).or_raise(

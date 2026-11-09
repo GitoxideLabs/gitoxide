@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    collections::{BTreeSet, HashMap},
     fs,
     io::Write,
     path::{Path, PathBuf},
@@ -18,13 +18,10 @@ use tracing_subscriber::{
 
 const FILE_PREFIX: &str = "tix.log";
 const RETENTION: Duration = Duration::from_hours(7 * 24);
-const MAX_TRIGGER_PATHS: usize = 16;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum Trigger {
-    Head,
     Index,
-    PackedRefs,
     Refs,
     Rescan,
     Worktree,
@@ -44,11 +41,7 @@ struct Response {
     batches: usize,
     events: usize,
     rescans: usize,
-    kinds: BTreeMap<&'static str, usize>,
     triggers: BTreeSet<Trigger>,
-    seen_paths: HashSet<PathBuf>,
-    paths: Vec<PathBuf>,
-    omitted_paths: usize,
     presentations: usize,
 }
 
@@ -61,31 +54,26 @@ impl Response {
             batches: 0,
             events: 0,
             rescans: 0,
-            kinds: BTreeMap::new(),
             triggers: BTreeSet::new(),
-            seen_paths: HashSet::new(),
-            paths: Vec::new(),
-            omitted_paths: 0,
             presentations: 0,
         }
     }
 
-    fn observe(&mut self, event: &notify::Event, classify: impl Fn(&Path) -> Trigger) {
-        self.events += 1;
-        self.rescans += usize::from(event.need_rescan());
-        *self.kinds.entry(event_kind(&event.kind)).or_default() += 1;
-        if event.need_rescan() {
-            self.triggers.insert(Trigger::Rescan);
-        }
-        for path in &event.paths {
-            self.triggers.insert(classify(path));
-            if !self.seen_paths.insert(path.clone()) {
-                continue;
-            }
-            if self.paths.len() < MAX_TRIGGER_PATHS {
-                self.paths.push(path.clone());
-            } else {
-                self.omitted_paths += 1;
+    fn observe(&mut self, changes: &gix::notify::Changes, statistics: &gix::notify::Statistics) {
+        self.events += statistics.received;
+        self.rescans += statistics.rescans;
+        for (changed, trigger) in [
+            (changes.index, Trigger::Index),
+            (changes.references, Trigger::Refs),
+            (changes.worktree.is_some(), Trigger::Worktree),
+            (
+                changes.configuration || changes.ignores || changes.attributes || changes.operations || changes.layout,
+                Trigger::GitMetadata,
+            ),
+            (statistics.rescans != 0, Trigger::Rescan),
+        ] {
+            if changed {
+                self.triggers.insert(trigger);
             }
         }
     }
@@ -97,10 +85,7 @@ impl Response {
             batches = self.batches,
             events = self.events,
             rescans = self.rescans,
-            event_kinds = ?self.kinds,
             triggers = ?self.triggers,
-            paths = ?self.paths,
-            omitted_paths = self.omitted_paths,
             "filesystem UI response triggered"
         );
     }
@@ -119,30 +104,24 @@ pub(crate) struct FilesystemResponses {
 }
 
 impl FilesystemResponses {
-    pub(crate) fn observe_worktree(&mut self, event: &notify::Event, workdir: &Path, index: &Path) -> u64 {
-        let id = self.ensure_pending(WatcherKind::Worktree);
-        self.responses
-            .get_mut(&id)
-            .expect("a pending response is registered")
-            .observe(event, |path| {
-                if path == index {
-                    Trigger::Index
-                } else if path.starts_with(workdir) {
-                    Trigger::Worktree
-                } else {
-                    Trigger::GitMetadata
-                }
-            });
-        id
-    }
-
-    pub(crate) fn observe_references(&mut self, event: &notify::Event, git_dir: &Path, common_dir: &Path) -> u64 {
-        let id = self.ensure_pending(WatcherKind::References);
-        self.responses
-            .get_mut(&id)
-            .expect("a pending response is registered")
-            .observe(event, |path| classify_reference_path(path, git_dir, common_dir));
-        id
+    pub(crate) fn observe_monitor(&mut self, changes: &gix::notify::Changes, statistics: &gix::notify::Statistics) {
+        if changes.index || changes.ignores || changes.attributes || changes.configuration || changes.worktree.is_some()
+        {
+            let id = self.ensure_pending(WatcherKind::Worktree);
+            self.responses
+                .get_mut(&id)
+                .expect("a pending response is registered")
+                .observe(changes, statistics);
+            self.note_worktree_batch();
+        }
+        if changes.references || changes.configuration || changes.layout {
+            let id = self.ensure_pending(WatcherKind::References);
+            self.responses
+                .get_mut(&id)
+                .expect("a pending response is registered")
+                .observe(changes, statistics);
+            self.note_reference_batch();
+        }
     }
 
     pub(crate) fn note_worktree_batch(&mut self) {
@@ -209,21 +188,10 @@ impl FilesystemResponses {
         !self.frame_causes.is_empty()
     }
 
-    pub(crate) fn fail_pending_worktree(&mut self) {
-        self.cancel_pending_worktree("watcher-failure");
-    }
-
     pub(crate) fn cancel_pending_worktree(&mut self, outcome: &'static str) {
         if let Some(id) = self.pending_worktree.take() {
             self.log_trigger(id);
             self.finish(&[id], outcome);
-        }
-    }
-
-    pub(crate) fn fail_pending_references(&mut self) {
-        if let Some(id) = self.pending_references.take() {
-            self.log_trigger(id);
-            self.finish(&[id], "watcher-failure");
         }
     }
 
@@ -293,50 +261,6 @@ impl FilesystemResponses {
         if let Some(response) = id.and_then(|id| self.responses.get_mut(&id)) {
             response.batches += 1;
         }
-    }
-}
-
-fn event_kind(kind: &notify::EventKind) -> &'static str {
-    match kind {
-        notify::EventKind::Access(_) => "access",
-        notify::EventKind::Create(_) => "create",
-        notify::EventKind::Modify(_) => "modify",
-        notify::EventKind::Remove(_) => "remove",
-        notify::EventKind::Other => "other",
-        notify::EventKind::Any => "any",
-    }
-}
-
-fn classify_reference_path(path: &Path, git_dir: &Path, common_dir: &Path) -> Trigger {
-    let head = git_dir.join("HEAD");
-    let common_head = common_dir.join("HEAD");
-    let linked_head = path
-        .strip_prefix(common_dir.join("worktrees"))
-        .ok()
-        .is_some_and(|relative| {
-            let mut components = relative.components();
-            let name = components
-                .nth(1)
-                .map(|component| component.as_os_str().as_encoded_bytes());
-            matches!(name, Some(b"HEAD" | b"HEAD.lock")) && components.next().is_none()
-        });
-    let index = git_dir.join("index");
-    let packed_refs = common_dir.join("packed-refs");
-    if path == head
-        || path == head.with_extension("lock")
-        || path == common_head
-        || path == common_head.with_extension("lock")
-        || linked_head
-    {
-        Trigger::Head
-    } else if path == index || path == index.with_extension("lock") {
-        Trigger::Index
-    } else if path == packed_refs || path == packed_refs.with_extension("lock") {
-        Trigger::PackedRefs
-    } else if path.starts_with(git_dir.join("refs")) || path.starts_with(common_dir.join("refs")) {
-        Trigger::Refs
-    } else {
-        Trigger::GitMetadata
     }
 }
 
@@ -510,12 +434,13 @@ fn prune(directory: &Path, now: SystemTime) -> Vec<String> {
 mod tests {
     use std::{fs::File, time::UNIX_EPOCH};
 
-    use notify::event::{Flag, ModifyKind};
-
     use super::*;
 
-    fn modified(path: impl Into<PathBuf>) -> notify::Event {
-        notify::Event::new(notify::EventKind::Modify(ModifyKind::Any)).add_path(path.into())
+    fn statistics() -> gix::notify::Statistics {
+        gix::notify::Statistics {
+            received: 1,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -601,94 +526,101 @@ mod tests {
     }
 
     #[test]
-    fn classifies_reference_triggers() {
-        let common = Path::new("/repo/.git");
-        let linked = common.join("worktrees/topic");
-        assert_eq!(
-            classify_reference_path(&linked.join("HEAD"), &linked, common),
-            Trigger::Head
-        );
-        assert_eq!(
-            classify_reference_path(&linked.join("HEAD.lock"), &linked, common),
-            Trigger::Head,
-            "transaction lock files retain their semantic trigger"
-        );
-        assert_eq!(
-            classify_reference_path(&common.join("worktrees/other/HEAD"), &linked, common),
-            Trigger::Head,
-            "other linked worktree HEADs retain their semantic trigger"
-        );
-        assert_eq!(
-            classify_reference_path(&linked.join("index"), &linked, common),
-            Trigger::Index
-        );
-        assert_eq!(
-            classify_reference_path(&common.join("packed-refs"), &linked, common),
-            Trigger::PackedRefs
-        );
-        assert_eq!(
-            classify_reference_path(&common.join("refs/heads/main"), &linked, common),
-            Trigger::Refs
-        );
-        assert_eq!(
-            classify_reference_path(&common.join("config"), &linked, common),
-            Trigger::GitMetadata
-        );
-    }
-
-    #[test]
-    fn coalesces_batches_and_bounds_deduplicated_trigger_paths() {
-        let common = Path::new("/repo/.git");
+    fn coalesces_batches_and_semantic_triggers() {
+        let references = gix::notify::Changes {
+            references: true,
+            ..Default::default()
+        };
         let mut responses = FilesystemResponses::default();
-        let first = responses.observe_references(&modified(common.join("HEAD")), common, common);
-        responses.note_reference_batch();
-        let second = responses.observe_references(&modified(common.join("refs/heads/main")), common, common);
-        let rescan = notify::Event::new(notify::EventKind::Other).set_flag(Flag::Rescan);
-        let third = responses.observe_references(&rescan, common, common);
-        responses.note_reference_batch();
-        assert_eq!(first, second, "events before the deadline share one response");
-        assert_eq!(first, third, "rescans join the pending response");
+        responses.observe_monitor(&references, &statistics());
+        let first = responses
+            .pending_references
+            .expect("reference changes queue a response");
+        responses.observe_monitor(
+            &gix::notify::Changes {
+                index: true,
+                configuration: true,
+                worktree: Some(gix::notify::Scope::All),
+                ..Default::default()
+            },
+            &statistics(),
+        );
+        assert_eq!(
+            responses.pending_references,
+            Some(first),
+            "events before the deadline share one response"
+        );
+        responses.observe_monitor(
+            &references,
+            &gix::notify::Statistics {
+                received: 1,
+                rescans: 1,
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            responses.pending_references,
+            Some(first),
+            "rescans join the pending response"
+        );
         let response = responses
             .responses
             .get(&first)
             .expect("the response is retained until acted upon");
-        assert_eq!(response.events, 3);
-        assert_eq!(response.batches, 2);
-        assert_eq!(response.kinds, [("modify", 2), ("other", 1)].into_iter().collect());
+        assert_eq!(
+            response.events, 3,
+            "native event counts accumulate across service calls"
+        );
+        assert_eq!(response.rescans, 1, "coverage loss is counted independently of events");
+        assert_eq!(response.batches, 3, "each service call contributes a batch");
         assert_eq!(
             response.triggers,
-            [Trigger::Head, Trigger::Refs, Trigger::Rescan].into_iter().collect()
+            [
+                Trigger::Index,
+                Trigger::Refs,
+                Trigger::Worktree,
+                Trigger::GitMetadata,
+                Trigger::Rescan
+            ]
+            .into_iter()
+            .collect(),
+            "trigger categories come from semantic invalidations and coverage loss"
         );
 
         assert_eq!(responses.references_due(), [first]);
-        let next = responses.observe_references(&modified(common.join("HEAD")), common, common);
-        assert_ne!(next, first, "activity after the deadline starts another response");
-
-        let mut many = notify::Event::new(notify::EventKind::Modify(ModifyKind::Any));
-        for index in 0..MAX_TRIGGER_PATHS + 4 {
-            many = many.add_path(common.join(format!("refs/heads/{index}")));
-        }
-        many = many.add_path(common.join(format!("refs/heads/{}", MAX_TRIGGER_PATHS + 3)));
-        responses.observe_references(&many, common, common);
-        let response = responses.responses.get(&next).expect("the new response is pending");
-        assert_eq!(response.paths.len(), MAX_TRIGGER_PATHS);
-        assert_eq!(
-            response.omitted_paths, 5,
-            "only unique paths beyond the cap are counted"
+        responses.observe_monitor(&references, &statistics());
+        assert_ne!(
+            responses.pending_references,
+            Some(first),
+            "activity after the deadline starts another response"
         );
     }
 
     #[test]
     fn attributes_overlapping_responses_to_one_presented_frame() {
-        let common = Path::new("/repo/.git");
-        let workdir = Path::new("/repo");
         let mut responses = FilesystemResponses::default();
         assert!(!responses.has_queued_frame());
-        let worktree = responses.observe_worktree(&modified(workdir.join("file")), workdir, &common.join("index"));
+        responses.observe_monitor(
+            &gix::notify::Changes {
+                worktree: Some(gix::notify::Scope::All),
+                ..Default::default()
+            },
+            &statistics(),
+        );
+        let worktree = responses.pending_worktree.expect("worktree changes queue a response");
         responses.worktree_due(true);
         assert!(responses.has_queued_frame());
 
-        let references = responses.observe_references(&modified(common.join("HEAD")), common, common);
+        responses.observe_monitor(
+            &gix::notify::Changes {
+                references: true,
+                ..Default::default()
+            },
+            &statistics(),
+        );
+        let references = responses
+            .pending_references
+            .expect("reference changes queue a response");
         responses.references_due();
         assert_eq!(responses.begin_reference_refresh(), [references]);
         responses.queue_frame(&[references], "lane-computation-completed");
