@@ -259,6 +259,7 @@ impl App {
                     | Action::MoveDown
                     | Action::MoveUpBy(_)
                     | Action::MoveDownBy(_)
+                    | Action::SelectHistoryRow { .. }
                     | Action::TopologicalUp
                     | Action::TopologicalDown
                     | Action::PreviousChild
@@ -267,6 +268,7 @@ impl App {
                     | Action::CancelTopological
                     | Action::PanUpBy(_)
                     | Action::PanDownBy(_)
+                    | Action::PositionSelection(_)
                     | Action::ScrollLeft
                     | Action::ScrollRight
                     | Action::HalfPageUp
@@ -284,9 +286,11 @@ impl App {
                     | Action::CycleRefs
                     | Action::ToggleRefs
                     | Action::ToggleHistoryDisplay
+                    | Action::ToggleViewport
                     | Action::ToggleInformation
                     | Action::ToggleActions
                     | Action::ToggleCommit
+                    | Action::ToggleCommitFullscreen
                     | Action::ToggleChanges
                     | Action::ToggleChangesVisibility
                     | Action::CycleChangesParent
@@ -651,6 +655,7 @@ impl App {
             | Action::Last
             | Action::MoveUpBy(_)
             | Action::MoveDownBy(_)
+            | Action::SelectHistoryRow { .. }
             | Action::PageUp
             | Action::PageDown
             | Action::HalfPageUp

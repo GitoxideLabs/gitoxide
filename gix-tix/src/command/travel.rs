@@ -96,13 +96,14 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
     if detached && !forward {
         let source_is_pinned = crate::history::all_pins(&repository)?
             .into_iter()
+            .chain(crate::history::all_review_roots(&repository)?)
             .any(|pin| graph.is_ancestor(head_id, pin.id));
         if !source_is_pinned {
             bail!("detached HEAD or one of its descendants must be pinned before travelling into the past or sideways");
         }
     }
 
-    let reviews = crate::history::all_reviews(&repository)?
+    let reviews = crate::history::all_review_roots(&repository)?
         .into_iter()
         .map(|review| review.id)
         .collect::<Vec<_>>();
@@ -330,7 +331,7 @@ mod tests {
         let repository = crate::test_repository::open(path)?;
         let source_commit_id = repository.head_id()?.detach();
         let destination_commit_id = repository.rev_parse_single("HEAD~1")?.detach();
-        let stash_name = crate::edit::stash::reference(source_commit_id)?;
+        let stash_name = crate::edit::stash::reference(&repository, source_commit_id)?;
 
         run(
             repository,
@@ -400,7 +401,7 @@ mod tests {
         );
         assert!(
             repository
-                .try_find_reference(crate::edit::stash::reference(destination_commit_id)?.as_ref())?
+                .try_find_reference(crate::edit::stash::reference(&repository, destination_commit_id)?.as_ref())?
                 .is_none(),
             "a clean departure creates no stash"
         );
@@ -1173,7 +1174,7 @@ mod tests {
                 .any(|entry| entry.stage() != gix::index::entry::Stage::Unconflicted),
             "opt-in materialization writes the unresolved index"
         );
-        let stash_name = crate::edit::stash::reference(root)?.to_string();
+        let stash_name = crate::edit::stash::reference(&crate::test_repository::open(path)?, root)?.to_string();
         assert_eq!(
             git(path, &["show", &format!("{stash_name}:file")])?,
             b"unstaged local change\n",
