@@ -246,9 +246,7 @@ where
                             }
                         }?;
 
-                        if idx != 0 {
-                            snapshot.indices.swap(0, idx);
-                        }
+                        snapshot.move_to_front(idx);
                         return Ok(Some(res));
                     }
                 }
@@ -290,9 +288,7 @@ where
         loop {
             for (idx, index) in snapshot.indices.iter().enumerate() {
                 if index.contains(id) {
-                    if idx != 0 {
-                        snapshot.indices.swap(0, idx);
-                    }
+                    snapshot.move_to_front(idx);
                     return true;
                 }
             }
@@ -415,9 +411,7 @@ where
                             entry_size: entry.header_size() + entry_size_past_header,
                         };
 
-                        if idx != 0 {
-                            snapshot.indices.swap(0, idx);
-                        }
+                        snapshot.move_to_front(idx);
                         return Ok(Some(location));
                     }
                 }

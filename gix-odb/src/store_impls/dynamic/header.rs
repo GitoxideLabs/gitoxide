@@ -160,9 +160,7 @@ where
                             }
                         }?;
 
-                        if idx != 0 {
-                            snapshot.indices.swap(0, idx);
-                        }
+                        snapshot.move_to_front(idx);
                         return Ok(Some(res));
                     }
                 }

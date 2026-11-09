@@ -745,6 +745,79 @@ fn packed_object_count_causes_all_indices_to_be_loaded() {
     assert_all_indices_loaded(&handle, 1, 2);
 }
 
+/// A dynamic-store handle without the caches of [`gix_odb::Handle`] in front of it.
+type StoreHandle = gix_odb::store::Handle<std::sync::Arc<gix_odb::Store>>;
+
+/// The id of the pack whose index answers a lookup of `id` on `handle` first.
+fn answering_pack_id(handle: &StoreHandle, id: &ObjectId) -> Result<gix_pack::data::Id> {
+    Ok(gix_pack::Find::location_by_oid(handle, id, &mut Vec::new())?
+        .expect("the fixture packs every object")
+        .pack_id)
+}
+
+#[test]
+fn a_hit_moves_its_index_to_the_front_and_keeps_the_others_in_order() -> Result {
+    let dir = crate::scripted_fixture_read_only("make_overlapping_packs.sh")?;
+    let blob_id = |name: &str| -> Result<ObjectId> {
+        Ok(ObjectId::from_hex(
+            std::fs::read_to_string(dir.join(name))?.trim().as_bytes(),
+        )?)
+    };
+    let shared_blob_id = blob_id("shared")?;
+
+    let mut handle = crate::odb_at(dir.join(".git/objects"))?.into_arc()?.into_inner();
+    handle.prevent_pack_unload();
+    assert!(
+        !gix_pack::Find::contains(&handle, &ObjectId::null(gix_testtools::object_hash())),
+        "a miss loads every index, so each clone below starts with all of them, biggest first"
+    );
+    // Every hit reorders the handle it ran on, so each pack is named through a clone of its own.
+    let biggest_pack_id = answering_pack_id(&handle.clone(), &shared_blob_id)?;
+
+    type Lookup = fn(&StoreHandle, &ObjectId) -> Result<bool>;
+    let lookups: [(&str, Lookup); 4] = [
+        ("contains", |handle, id| Ok(gix_pack::Find::contains(handle, id))),
+        ("try_header", |handle, id| {
+            Ok(gix_odb::Header::try_header(handle, id)?.is_some())
+        }),
+        ("try_find", |handle, id| {
+            Ok(gix_pack::Find::try_find(handle, id, &mut Vec::new())?.is_some())
+        }),
+        ("location_by_oid", |handle, id| {
+            Ok(gix_pack::Find::location_by_oid(handle, id, &mut Vec::new())?.is_some())
+        }),
+    ];
+    // Both slots, as indices near the front are moved differently than those further back.
+    for slot in [2, 9] {
+        let only_in_slot_blob_id = blob_id(&format!("in-{slot}"))?;
+        let also_in_front_blob_id = blob_id(&format!("in-{slot}-and-front"))?;
+        let slot_pack_id = answering_pack_id(&handle.clone(), &only_in_slot_blob_id)?;
+        assert_eq!(
+            answering_pack_id(&handle.clone(), &also_in_front_blob_id)?,
+            biggest_pack_id,
+            "a new handle asks the biggest index before the one in slot {slot}"
+        );
+        for (name, lookup) in lookups {
+            let handle = handle.clone();
+            assert!(
+                lookup(&handle, &only_in_slot_blob_id)?,
+                "{name}: the index in slot {slot} holds the blob"
+            );
+            assert_eq!(
+                answering_pack_id(&handle, &also_in_front_blob_id)?,
+                slot_pack_id,
+                "{name}: the index that answered from slot {slot} moved to the front"
+            );
+            assert_eq!(
+                answering_pack_id(&handle, &shared_blob_id)?,
+                biggest_pack_id,
+                "{name}: the previous front index moved back by one slot, not to slot {slot}"
+            );
+        }
+    }
+    Ok(())
+}
+
 mod disambiguate_prefix {
     use std::cmp::Ordering;
 
