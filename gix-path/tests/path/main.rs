@@ -14,6 +14,8 @@ mod home_dir {
 }
 
 mod env;
+#[cfg(unix)]
+mod unix_detection;
 mod util;
 #[cfg(windows)]
 mod windows_detection;

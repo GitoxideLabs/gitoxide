@@ -19,6 +19,7 @@ pub(super) struct ConfigPaths {
 ///
 /// An unambiguous `EXEPATH`, or `git.exe` in the `cmd` directory of an unambiguous installation,
 /// identifies Git for Windows' modern configuration location if that file exists.
+/// Known Unix installation layouts also avoid the query when their configuration file exists.
 /// Otherwise, query the Git executable found in `PATH` or an alternative location.
 pub(super) static GIT_CONFIG_PATHS: LazyLock<ConfigPaths> =
     LazyLock::new(|| platform::config_paths_without_git().unwrap_or_else(config_paths_from_executable));
