@@ -104,7 +104,8 @@ where
                                              thread_limit = ?thread_limit);
 
     let entries_skipped_by_common_prefix = num_entries - entries.len();
-    let (skipped_by_pathspec, skipped_by_entry_flags, symlink_metadata_calls, entries_to_update) = Default::default();
+    let (skipped_by_pathspec, symlink_metadata_calls, entries_to_update) = Default::default();
+    let skipped_by_entry_flags = AtomicUsize::default();
     let (worktree_bytes, worktree_reads, odb_bytes, odb_reads, racy_clean) = Default::default();
 
     num_entries = entries.len();
@@ -113,7 +114,7 @@ where
 
     let new_state = {
         let options = &options;
-        let (skipped_by_pathspec, skipped_by_entry_flags) = (&skipped_by_pathspec, &skipped_by_entry_flags);
+        let skipped_by_pathspec = &skipped_by_pathspec;
         let (symlink_metadata_calls, entries_to_update) = (&symlink_metadata_calls, &entries_to_update);
         let (racy_clean, worktree_bytes) = (&racy_clean, &worktree_bytes);
         let (worktree_reads, odb_bytes, odb_reads) = (&worktree_reads, &odb_bytes, &odb_reads);
@@ -133,7 +134,7 @@ where
                     fscache: options.fscache.then(|| FsCache::new(worktree)),
 
                     skipped_by_pathspec,
-                    skipped_by_entry_flags,
+                    skipped_by_entry_flags: 0,
                     symlink_metadata_calls,
                     entries_to_update,
                     racy_clean,
@@ -191,6 +192,7 @@ where
                         continue;
                     }
                 }
+                let skipped_before = state.skipped_by_entry_flags;
                 let res = state.process(
                     all_entries,
                     entry,
@@ -202,11 +204,17 @@ where
                     &mut idx,
                 );
                 idx += 1;
-                count.fetch_add(1, Ordering::Relaxed);
+                if state.skipped_by_entry_flags == skipped_before {
+                    count.fetch_add(1, Ordering::Relaxed);
+                }
                 if let Some(res) = res {
                     out.push(res);
                 }
             }
+            // Batch cheap skips while keeping progress immediate for filesystem checks.
+            let skipped = std::mem::take(&mut state.skipped_by_entry_flags);
+            skipped_by_entry_flags.fetch_add(skipped, Ordering::Relaxed);
+            count.fetch_add(skipped, Ordering::Relaxed);
             out
         },
         ReduceChange {
@@ -252,7 +260,7 @@ struct State<'a, 'b> {
     fscache: Option<FsCache>,
 
     skipped_by_pathspec: &'a AtomicUsize,
-    skipped_by_entry_flags: &'a AtomicUsize,
+    skipped_by_entry_flags: usize,
     symlink_metadata_calls: &'a AtomicUsize,
     entries_to_update: &'a AtomicUsize,
     racy_clean: &'a AtomicUsize,
@@ -290,7 +298,7 @@ impl<'index> State<'_, 'index> {
                 | gix_index::entry::Flags::ASSUME_VALID,
         ) || (can_use_fsmonitor && fsmonitor_valid.is_some_and(|valid| valid.load(Ordering::Relaxed)))
         {
-            self.skipped_by_entry_flags.fetch_add(1, Ordering::Relaxed);
+            self.skipped_by_entry_flags += 1;
             return None;
         }
         let path = entry.path_in(self.path_backing);
