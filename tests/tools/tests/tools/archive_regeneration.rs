@@ -46,11 +46,12 @@ fn regenerate(object_format: &str, linked: bool) -> TestResult {
     let archive_dir = crate_root.join("tests/fixtures/generated-archives");
     std::fs::create_dir_all(&archive_dir)?;
     let extension = if cfg!(feature = "xz") { "tar.xz" } else { "tar" };
-    let tracked_archive = archive_dir.join(format!("rust-tracked.{extension}"));
+    let object_hash = gix_testtools::object_hash();
+    let tracked_archive = archive_dir.join(format!("rust-tracked_{object_hash}.{extension}"));
     std::fs::write(&tracked_archive, b"old archive")?;
     gix_testtools::git(
         &worktree,
-        &format!("add -f crate/tests/fixtures/generated-archives/rust-tracked.{extension}"),
+        &format!("add -f crate/tests/fixtures/generated-archives/rust-tracked_{object_hash}.{extension}"),
     )?;
     std::fs::remove_file(&tracked_archive)?;
     let _cwd = gix_testtools::set_current_dir(&crate_root)?;
@@ -75,7 +76,9 @@ fn regenerate(object_format: &str, linked: bool) -> TestResult {
         "a tracked archive is recreated despite inherited ignore rules"
     );
     assert!(
-        !archive_dir.join(format!("rust-untracked.{extension}")).exists(),
+        !archive_dir
+            .join(format!("rust-untracked_{object_hash}.{extension}"))
+            .exists(),
         "untracked archives still obey inherited ignore rules"
     );
     Ok(())
