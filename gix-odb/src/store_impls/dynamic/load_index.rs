@@ -23,6 +23,30 @@ pub(crate) struct Snapshot {
     pub(crate) marker: types::SlotIndexMarker,
 }
 
+impl Snapshot {
+    /// Return whether this snapshot observes a different store state than `marker`.
+    /// Loading or refreshing indices can change it; reordering indices within the snapshot does not.
+    pub(crate) fn store_state_changed_since(&self, marker: types::SlotIndexMarker) -> bool {
+        self.marker.generation != marker.generation || self.marker.state_id != marker.state_id
+    }
+
+    /// Move the index at `idx`, which just answered a lookup, to the front, and the ones before it back by one slot.
+    ///
+    /// Swapping it with the front index instead would move that one to where the answer came from, so lookups that
+    /// alternate between a few indices, like the two sides of a tree diff, would keep probing everything in between.
+    #[inline]
+    pub(crate) fn move_to_front(&mut self, idx: usize) {
+        // For the first few slots, adjacent swaps are cheaper than the `memmove()` of `rotate_right()`.
+        if idx < 8 {
+            for i in (0..idx).rev() {
+                self.indices.swap(i, i + 1);
+            }
+        } else {
+            self.indices[..=idx].rotate_right(1);
+        }
+    }
+}
+
 use crate::store::types::{Generation, IndexAndPacks, MutableIndexAndPack, PackId, SlotMapIndex};
 
 impl super::Store {

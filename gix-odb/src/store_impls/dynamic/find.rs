@@ -78,7 +78,7 @@ where
         'outer: loop {
             {
                 let marker = snapshot.marker;
-                for (idx, index) in snapshot.indices.iter_mut().enumerate() {
+                for (mut idx, index) in snapshot.indices.iter_mut().enumerate() {
                     if let Some(handle::index_lookup::Outcome {
                         object_index: handle::IndexForObjectInPack { pack_id, pack_offset },
                         index_file,
@@ -180,33 +180,23 @@ where
                                     })?
                                     .0
                                     .kind;
-                                let handle::index_lookup::Outcome {
-                                    object_index:
-                                        handle::IndexForObjectInPack {
-                                            pack_id: _,
-                                            pack_offset,
-                                        },
-                                    index_file,
-                                    pack: possibly_pack,
-                                } = match snapshot.indices[idx].lookup(id)? {
-                                    Some(res) => res,
-                                    None => {
-                                        let mut out = None;
-                                        for index in &mut snapshot.indices {
-                                            out = index.lookup(id)?;
-                                            if out.is_some() {
-                                                break;
-                                            }
-                                        }
-
-                                        out.unwrap_or_else(|| {
-                                           panic!("could not find object {id} in any index after looking up one of its base objects {base_id}" )
-                                       })
-                                    }
+                                // A refreshed snapshot may reuse pack ids; retry through normal pack loading.
+                                if snapshot.store_state_changed_since(marker) {
+                                    continue 'outer;
+                                }
+                                // Base lookup can reorder indices; keep the original pack and delta representation.
+                                idx = match snapshot.indices.iter().position(|index| index.id == pack_id.index) {
+                                    Some(idx) => idx,
+                                    None => continue 'outer,
                                 };
-                                let pack = possibly_pack
-                                    .as_ref()
-                                    .expect("pack to still be available like just now");
+                                let Some(handle::index_lookup::Outcome {
+                                    index_file,
+                                    pack: Some(pack),
+                                    ..
+                                }) = snapshot.indices[idx].lookup(id)?
+                                else {
+                                    continue 'outer;
+                                };
                                 let entry = pack.entry(pack_offset)?;
                                 let header_size = entry.header_size();
                                 pack.decode_entry(
@@ -246,9 +236,7 @@ where
                             }
                         }?;
 
-                        if idx != 0 {
-                            snapshot.indices.swap(0, idx);
-                        }
+                        snapshot.move_to_front(idx);
                         return Ok(Some(res));
                     }
                 }
@@ -290,9 +278,7 @@ where
         loop {
             for (idx, index) in snapshot.indices.iter().enumerate() {
                 if index.contains(id) {
-                    if idx != 0 {
-                        snapshot.indices.swap(0, idx);
-                    }
+                    snapshot.move_to_front(idx);
                     return true;
                 }
             }
@@ -415,9 +401,7 @@ where
                             entry_size: entry.header_size() + entry_size_past_header,
                         };
 
-                        if idx != 0 {
-                            snapshot.indices.swap(0, idx);
-                        }
+                        snapshot.move_to_front(idx);
                         return Ok(Some(location));
                     }
                 }

@@ -1612,7 +1612,9 @@ where
     // For Rust fixtures, the identity is simply the provided version number.
     // Users must increment this manually when the closure behavior changes.
     let script_identity = version;
-    let archive_name = format!("rust-{name}");
+    let object_hash = object_hash.unwrap_or_else(self::object_hash);
+    // Include both hashes to avoid reusing legacy archives or directories containing another hash's data.
+    let archive_name = format!("rust-{name}_{object_hash}");
     let fixture_base = fixture_base();
 
     let archive_file_path = fixture_base
@@ -1622,7 +1624,7 @@ where
         destination_dir,
         &fixture_base,
         &archive_name,
-        object_hash,
+        Some(object_hash),
         &script_identity,
         None,
     )?;
