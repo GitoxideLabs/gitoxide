@@ -1280,6 +1280,10 @@ overrides = [{ platform = 'cfg(unix)', default-filter = 'none()' }]
 
     #[test]
     fn collection_preserves_nextest_settings_and_declines_custom_scripts() -> gix_error::TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let _env = gix_testtools::Env::new().unset("NEXTEST_PROFILE");
         let root = gix_testtools::tempfile::tempdir()?;
         fs::create_dir(root.path().join(".config"))?;
         fs::write(
@@ -1294,6 +1298,13 @@ overrides = [{ platform = 'cfg(unix)', default-filter = 'none()' }]
             config["scripts"]["wrapper"]["gix-coverage"]["target-runner"].as_str(),
             Some("within-wrapper")
         );
+        for profile in ["default", "with-xml"] {
+            let _profile = gix_testtools::Env::new().set("NEXTEST_PROFILE", profile);
+            assert!(
+                wrapper_config(root.path(), &root.path().join("profile")).is_err(),
+                "an explicitly selected profile is not silently replaced"
+            );
+        }
         fs::write(
             root.path().join(".config/nextest.toml"),
             "[scripts.wrapper.custom]\ncommand = 'required-wrapper'\n",
