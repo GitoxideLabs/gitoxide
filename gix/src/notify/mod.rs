@@ -106,13 +106,6 @@ pub struct Options {
     pub max_latency: Duration,
     /// Retry failed repository discovery and watcher registration after this interval.
     pub retry_interval: Duration,
-    /// Periodically rediscover watches and invalidate all cached data, even without reported loss.
-    ///
-    /// This protects against silent notification gaps, such as memory-mapped writes missed by
-    /// inotify or filesystems that do not reliably emit events. It is independent of native
-    /// root-identity checks and recovery from reported loss. Defaults to sixty seconds;
-    /// `None` disables only this periodic full refresh.
-    pub safety_interval: Option<Duration>,
 }
 
 impl Default for Options {
@@ -124,7 +117,6 @@ impl Default for Options {
             metadata_debounce: Duration::from_millis(100),
             max_latency: Duration::from_millis(250),
             retry_interval: Duration::from_secs(5),
-            safety_interval: Some(Duration::from_secs(60)),
         }
     }
 }
@@ -396,8 +388,8 @@ impl Domain {
 ///
 /// Reported event loss invalidates the affected caches at the next [`service()`](Self::service)
 /// call and requests inventory repair. Lost native root identities also require re-registration,
-/// even when the desired paths are unchanged. The independent [`Options::safety_interval`]
-/// refresh protects against silent notification gaps that neither mechanism can report.
+/// even when the desired paths are unchanged. Full refreshes are never scheduled on a timer;
+/// use [`rescan()`](Self::rescan) for manual recovery if cached state appears stale.
 /// With metadata enabled, linked-worktree removal by Git is observed through the shared
 /// administrative directories. Without it, only dependencies needed by ignore-aware coverage are
 /// watched; [`WorktreeCoverage::All`] needs only the recursive worktree root.
@@ -416,7 +408,6 @@ pub struct RepositoryMonitor {
     inventory_dirty: bool,
     index_dirty: bool,
     maintenance: Option<Instant>,
-    safety: Option<Instant>,
     backlog: bool,
     started: bool,
     precompose_unicode: bool,
@@ -426,8 +417,8 @@ pub struct RepositoryMonitor {
 impl Repository {
     /// Observe this repository without keeping its object database or configuration caches alive.
     pub fn monitor(&self, options: Options) -> Result<RepositoryMonitor> {
-        if options.retry_interval.is_zero() || options.safety_interval.is_some_and(|interval| interval.is_zero()) {
-            return Err(message("monitor retry and safety intervals must be positive").raise());
+        if options.retry_interval.is_zero() {
+            return Err(message("monitor retry interval must be positive").raise());
         }
         let layout = Layout::for_options(self, &options)?;
         let filesystem = self
@@ -448,7 +439,6 @@ impl Repository {
             inventory_dirty: true,
             index_dirty: true,
             maintenance: Some(Instant::now()),
-            safety: None,
             backlog: false,
             started: false,
             precompose_unicode: filesystem.precompose_unicode,
@@ -587,7 +577,6 @@ impl RepositoryMonitor {
                 self.metadata = Domain::default();
                 self.pending_metadata = Pending::default();
                 self.pending_statistics = Statistics::default();
-                self.safety = None;
             }
         }
         self.metadata_dirty = true;
@@ -596,11 +585,15 @@ impl RepositoryMonitor {
         self.maintenance = Some(Instant::now());
     }
 
-    /// Rebuild native watches and invalidate caches at the next service call.
+    /// Force a full refresh at the next [`service()`](Self::service) call.
+    ///
+    /// Rebuild native watches, rediscover subscriptions, and invalidate every enabled domain,
+    /// including the entire worktree when selected, even without reported events.
+    /// Connect this to an explicit user refresh for recovery when cached state appears stale.
     pub fn rescan(&mut self) {
         self.metadata.rebuild = true;
         self.worktree.rebuild = true;
-        self.request_inventory();
+        self.coverage_lost(false, Instant::now());
     }
 
     /// Switch to a new repository layout, discarding notifications from the previous one.
@@ -621,14 +614,6 @@ impl RepositoryMonitor {
     fn active(&self) -> bool {
         self.options.metadata || self.worktree_enabled()
     }
-
-    fn request_inventory(&mut self) {
-        self.metadata_dirty = true;
-        self.inventory_dirty = true;
-        self.index_dirty = true;
-        self.maintenance = Some(Instant::now());
-    }
-
     /// Process a bounded event batch, maintain watches when due, and publish invalidations.
     ///
     /// `opener` must return a freshly opened repository using the caller's intended open options.
@@ -684,22 +669,6 @@ impl RepositoryMonitor {
                 self.maintenance = Some(now + self.options.retry_interval);
             }
         }
-        if let Some(interval) = self.options.safety_interval {
-            match self.safety {
-                None => self.safety = Some(now + interval),
-                Some(deadline) if deadline <= now => {
-                    self.request_inventory();
-                    self.maintenance = Some(now);
-                    self.safety = Some(now + interval);
-                    self.pending_metadata
-                        .add(Changes::metadata_all(), now, &self.options, true);
-                    if self.worktree_enabled() {
-                        self.pending_worktree.merge(Changes::worktree_all());
-                    }
-                }
-                Some(_) => {}
-            }
-        }
         if self.maintenance.is_some_and(|deadline| deadline <= now) {
             self.maintenance = None;
             let result = if !self.options.metadata && !self.ignore_aware() {
@@ -751,7 +720,7 @@ impl RepositoryMonitor {
             return Some(Duration::ZERO);
         }
         let poll = (self.metadata.watcher.is_some() || self.worktree.watcher.is_some()).then_some(POLL_INTERVAL);
-        [self.maintenance, self.safety, self.pending_metadata.deadline]
+        [self.maintenance, self.pending_metadata.deadline]
             .into_iter()
             .flatten()
             .map(|deadline| deadline.saturating_duration_since(now))

@@ -54,8 +54,8 @@ impl RepositoryMonitor {
     /// from being silently discarded during conversion.
     ///
     /// This resolves the native canonical root but installs no subscriptions. Call
-    /// [`WorktreeStream::register()`] before establishing a baseline. Monitor debounce, retry and
-    /// safety settings do not apply to the raw stream.
+    /// [`WorktreeStream::register()`] before establishing a baseline. Monitor debounce and retry
+    /// settings do not apply to the raw stream.
     pub fn into_worktree_stream(self) -> Result<WorktreeStream> {
         if self.options.metadata || !self.options.worktree || self.options.worktree_coverage != WorktreeCoverage::All {
             return Err(validation(

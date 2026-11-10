@@ -97,26 +97,25 @@ fn all_coverage_classifies_literal_paths_without_inventory() {
 }
 
 #[test]
-fn worktree_only_failures_and_safety_publish_no_metadata() {
-    for safety in [false, true] {
+fn worktree_only_failures_and_manual_refresh_publish_no_metadata() {
+    for manual_refresh in [false, true] {
         let now = Instant::now();
         let mut monitor = monitor();
         monitor.options.metadata = false;
-        if safety {
-            monitor.options.safety_interval = Some(Duration::from_secs(60));
-            monitor.safety = Some(now);
+        if manual_refresh {
+            monitor.rescan();
         } else {
             monitor.coverage_lost(false, now);
             monitor.coverage_lost(true, now);
         }
-        let outcome = monitor.service(now, || Err(message("unavailable repository").raise()));
+        let outcome = monitor.service(Instant::now(), || Err(message("unavailable repository").raise()));
         assert_eq!(
             outcome.changes,
             Changes {
                 worktree: Scope::All,
                 ..Changes::default()
             },
-            "loss, safety and recovery errors never publish metadata in worktree-only mode"
+            "loss, manual refresh and recovery errors never publish metadata in worktree-only mode"
         );
         assert_eq!(
             outcome.errors.len(),
@@ -189,10 +188,7 @@ fn layout() -> Layout {
 fn monitor() -> RepositoryMonitor {
     RepositoryMonitor {
         layout: layout(),
-        options: Options {
-            safety_interval: None,
-            ..Options::default()
-        },
+        options: Options::default(),
         metadata: Domain::default(),
         worktree: Domain::default(),
         directories: HashSet::from([PathBuf::from("/repo"), PathBuf::from("/repo/src")]),
@@ -205,7 +201,6 @@ fn monitor() -> RepositoryMonitor {
         inventory_dirty: false,
         index_dirty: false,
         maintenance: None,
-        safety: None,
         backlog: false,
         started: false,
         precompose_unicode: false,
@@ -574,35 +569,47 @@ fn reopening_failures_keep_invalidations_and_retry_deadlines() {
 }
 
 #[test]
-fn safety_refresh_and_worktree_toggles_remain_bounded() {
+fn idle_monitor_does_not_refresh_by_elapsed_time() {
     let now = Instant::now();
     let mut monitor = monitor();
-    assert!(
-        monitor
-            .service(now + Duration::from_secs(3600), || panic!(
-                "disabled safety polling never reopens"
-            ))
-            .changes
-            .is_empty(),
-        "disabling the timer avoids full-cache invalidation even after a long idle period"
+    for now in [now, now + Duration::from_secs(3600)] {
+        let outcome = monitor.service(now, || panic!("idle monitoring must not reopen the repository"));
+        assert!(outcome.changes.is_empty(), "elapsed time does not invalidate caches");
+        assert_eq!(
+            monitor.next_timeout(now),
+            None,
+            "idle monitoring has no refresh deadline"
+        );
+    }
+}
+
+#[test]
+fn manual_refresh_invalidates_all_caches_even_when_native_recovery_is_delayed() -> gix_error::TestResult {
+    let mut monitor = monitor();
+    let mut watcher = gix_notify::Watcher::new(Default::default())?;
+    watcher.set_waker(|| panic!("simulate a queued worktree notification error"));
+    monitor.worktree.watcher = Some(watcher);
+    monitor.rescan();
+    let now = Instant::now();
+    let outcome = monitor.service(now, || panic!("native recovery must respect its retry delay"));
+    assert_eq!(outcome.errors.len(), 1, "the queued worktree failure is reported");
+    let mut expected = Changes::metadata_all();
+    expected.merge(Changes::worktree_all());
+    assert_eq!(
+        outcome.changes, expected,
+        "manual refresh invalidates every cache even when a worktree error postpones maintenance"
     );
-    let now = now + Duration::from_secs(3600);
-    monitor.options.safety_interval = Options::default().safety_interval;
-    monitor.service(now, || panic!("starting the safety timer does not reopen"));
     assert_eq!(
         monitor.next_timeout(now),
-        Some(Duration::from_secs(60)),
-        "the default safety interval is one minute"
+        Some(monitor.options.retry_interval),
+        "full invalidation does not bypass native recovery backoff"
     );
-    let outcome = monitor.service(now + Duration::from_secs(60), || Err(message("offline").raise()));
-    assert!(
-        outcome.changes.references && outcome.changes.index,
-        "safety refresh covers every repository domain"
-    );
-    assert!(
-        !monitor.metadata.rebuild,
-        "periodic safety refresh reconciles without forcing native restarts"
-    );
+    Ok(())
+}
+
+#[test]
+fn worktree_toggles_and_manual_refresh_remain_bounded() {
+    let mut monitor = monitor();
     monitor.set_worktree_enabled(false);
     assert!(
         !monitor.worktree_enabled() && monitor.directories.is_empty(),
@@ -868,7 +875,6 @@ fn linked_worktree_membership_reconciles_shallow_watches() -> TestResult {
     let root = fixture.path();
     let mut monitor = open(root)?.monitor(Options {
         worktree: false,
-        safety_interval: None,
         ..Options::default()
     })?;
     let now = Instant::now();
@@ -1030,10 +1036,7 @@ fn physical_roots_and_config_symlink_replacements_are_both_observed() -> TestRes
 fn startup_verifies_registration_once_and_unchanged_sets_are_stable() -> TestResult {
     let fixture = fixture()?;
     let root = fixture.path();
-    let mut monitor = open(root)?.monitor(Options {
-        safety_interval: None,
-        ..Options::default()
-    })?;
+    let mut monitor = open(root)?.monitor(Options::default())?;
     let now = Instant::now();
     let mut opens = 0;
     let mut opener = || {
@@ -1089,10 +1092,7 @@ fn head_changes_rediscover_branch_conditioned_sources() -> TestResult {
         options.permissions.config.includes = true;
         crate::open_opts(root, options)
     };
-    let mut monitor = open()?.monitor(Options {
-        safety_interval: None,
-        ..Options::default()
-    })?;
+    let mut monitor = open()?.monitor(Options::default())?;
     assert!(
         monitor
             .layout

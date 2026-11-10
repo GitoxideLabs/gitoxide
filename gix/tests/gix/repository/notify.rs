@@ -8,7 +8,6 @@ fn worktree_only(coverage: WorktreeCoverage) -> Options {
         metadata: false,
         worktree_coverage: coverage,
         metadata_debounce: Duration::ZERO,
-        safety_interval: None,
         ..Options::default()
     }
 }

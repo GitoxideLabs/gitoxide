@@ -3,7 +3,7 @@ use gix_testtools::{Result, TestResult};
 
 #[cfg(all(feature = "notify", target_os = "macos"))]
 #[test]
-fn linked_worktree_removal_notifies_without_safety_refresh() -> TestResult {
+fn linked_worktree_removal_notifies_through_administrative_metadata() -> TestResult {
     use std::time::{Duration, Instant};
 
     let (repo, _fixture) = crate::basic_rw_repo()?;
@@ -21,7 +21,6 @@ fn linked_worktree_removal_notifies_without_safety_refresh() -> TestResult {
     );
     let mut monitor = repo.monitor(gix::notify::Options {
         worktree: false,
-        safety_interval: None,
         ..Default::default()
     })?;
     let opener = || gix::open_opts(main, crate::restricted());
@@ -64,6 +63,85 @@ fn linked_worktree_removal_notifies_without_safety_refresh() -> TestResult {
         std::thread::sleep(Duration::from_millis(20));
     }
     assert!(!linked.exists(), "Git also removed the working directory");
+    Ok(())
+}
+
+#[cfg(feature = "notify")]
+#[test]
+fn manual_monitor_refresh_invalidates_every_enabled_cache() -> TestResult {
+    use std::time::Instant;
+
+    use gix::error::{ErrorExt, message};
+    use gix::notify::{Changes, Options, Scope};
+
+    let repo = crate::basic_repo()?;
+    let root = repo.workdir().expect("the read-only fixture has a worktree");
+    let opener = || gix::open_opts(root, crate::restricted());
+    for worktree in [false, true] {
+        let mut monitor = repo.monitor(Options {
+            worktree,
+            ..Default::default()
+        })?;
+        for _ in 0..2 {
+            let outcome = monitor.service(Instant::now(), opener);
+            assert!(outcome.errors.is_empty(), "startup succeeds: {:?}", outcome.errors);
+        }
+        let idle = monitor.service(Instant::now(), || {
+            panic!("settled watches do not reopen the repository")
+        });
+        assert!(idle.changes.is_empty(), "startup invalidations have been consumed");
+
+        monitor.rescan();
+        let mut opens = 0;
+        let refreshed = monitor.service(Instant::now(), || {
+            opens += 1;
+            opener()
+        });
+        assert!(
+            refreshed.errors.is_empty(),
+            "manual refresh succeeds: {:?}",
+            refreshed.errors
+        );
+        assert_eq!(
+            opens, 1,
+            "manual refresh rediscovers the inventory using a fresh repository"
+        );
+        assert_eq!(
+            refreshed.changes,
+            Changes {
+                references: true,
+                index: worktree,
+                configuration: true,
+                ignores: true,
+                attributes: true,
+                operations: true,
+                layout: true,
+                worktree: if worktree { Scope::All } else { Scope::None },
+            },
+            "an explicit refresh invalidates every enabled cache even when the watch set is unchanged"
+        );
+        let verified = monitor.service(Instant::now(), opener);
+        assert!(
+            verified.errors.is_empty(),
+            "refreshed watches are verified successfully"
+        );
+        assert!(
+            verified.changes.is_empty(),
+            "verification does not repeat the full invalidation"
+        );
+
+        monitor.rescan();
+        let failed = monitor.service(Instant::now(), || Err(message("deliberate refresh failure").raise()));
+        assert_eq!(
+            failed.errors.len(),
+            1,
+            "failed rediscovery remains visible to the caller"
+        );
+        assert_eq!(
+            failed.changes, refreshed.changes,
+            "manual refresh invalidates every enabled cache even when rediscovery fails"
+        );
+    }
     Ok(())
 }
 

@@ -765,7 +765,7 @@ without trading responsiveness for metadata that is not visible.
 | `Shift-P` | Push the active branch from history or Worktree without a prefix; cycle the comparison parent while Tree has focus. |
 | `Shift-C` | Hide visible changes panes or show Tree + Worktree together, from history or a focused changes pane. |
 | `? e` | Cycle the tree/worktree changes display. |
-| `Shift-R` | Explicitly refresh the revision view and visible worktree status. |
+| `Shift-R` | Rebuild native subscriptions and explicitly refresh the revision view and visible worktree status. |
 | `y` | Copy the full selected commit hash first; when change IDs are displayed, including automatically for siblings, append a space and the full change ID. Copy the selected raw path when a changes block is focused. |
 | `Shift-y`/`Y` | Copy the selected author as `Name <email>`. |
 | `s` | Verify signed, unverified commits currently visible on screen. |
@@ -2323,8 +2323,10 @@ views.
   overflow and backend coverage loss request a complete refresh. Worktree events
   are published on the next service call; metadata transactions wait for 100 ms of
   quiet, capped at 250 ms from their first event. Monitoring failures retry after
-  five seconds while still needed. A 60-second safety refresh rediscovers watches
-  and refreshes cached information; the library interval is configurable.
+  five seconds while still needed. Updates follow native notifications and reported
+  coverage loss; no timer forces a full refresh. When information appears stale,
+  `Shift-R` rebuilds native subscriptions and refreshes all enabled cache domains,
+  including the revision view and visible worktree status.
 - Configuration dependencies within those roots, including active includes and
   missing permitted files, repository-local ignore rules, and local attribute
   sources are observed. Their changes refresh both the subscriptions and
