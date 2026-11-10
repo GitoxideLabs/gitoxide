@@ -13,17 +13,32 @@ use crate::Stack;
 pub trait ToNormalPathComponents {
     /// Return an iterator over the normal components of a path, without the separator.
     fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr>>;
+
+    /// Return whether the original path ends with a directory separator, before components remove it.
+    /// Native paths recognize platform separators, while Git paths only recognize `/`.
+    fn ends_with_separator(&self) -> bool;
 }
 
 impl ToNormalPathComponents for &Path {
     fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr>> {
         self.components().map(|c| component_to_os_str(c, self.display()))
     }
+
+    fn ends_with_separator(&self) -> bool {
+        self.as_os_str()
+            .as_encoded_bytes()
+            .last()
+            .is_some_and(|&b| std::path::is_separator(char::from(b)))
+    }
 }
 
 impl ToNormalPathComponents for PathBuf {
     fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr>> {
         self.components().map(|c| component_to_os_str(c, self.display()))
+    }
+
+    fn ends_with_separator(&self) -> bool {
+        self.as_path().ends_with_separator()
     }
 }
 
@@ -42,6 +57,10 @@ impl ToNormalPathComponents for &BStr {
         self.split(|b| *b == b'/')
             .filter_map(|c| bytes_component_to_os_str(c, self))
     }
+
+    fn ends_with_separator(&self) -> bool {
+        self.ends_with(b"/")
+    }
 }
 
 impl ToNormalPathComponents for &str {
@@ -49,12 +68,20 @@ impl ToNormalPathComponents for &str {
         self.split('/')
             .filter_map(|c| bytes_component_to_os_str(c.as_bytes(), (*self).into()))
     }
+
+    fn ends_with_separator(&self) -> bool {
+        self.ends_with('/')
+    }
 }
 
 impl ToNormalPathComponents for &BString {
     fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr>> {
         self.split(|b| *b == b'/')
             .filter_map(|c| bytes_component_to_os_str(c, self.as_bstr()))
+    }
+
+    fn ends_with_separator(&self) -> bool {
+        self.as_bstr().ends_with_separator()
     }
 }
 
