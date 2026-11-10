@@ -296,36 +296,36 @@ where
     /// Use it to avoid writing objects that already exist. A new object always misses, and in the default refresh
     /// mode each miss lists the pack directory again, which is slow with many packs. Here a miss costs at most a
     /// redundant write.
-    pub fn exists_without_refresh(&self, id: &gix_hash::oid) -> bool {
+    /// Index-loading failures are returned as errors.
+    pub fn exists_without_refresh(&self, id: &gix_hash::oid) -> Result<bool> {
         self.contains_with_refresh_mode(id, super::RefreshMode::Never)
     }
 
-    fn contains_with_refresh_mode(&self, id: &gix_hash::oid, refresh_mode: super::RefreshMode) -> bool {
+    fn contains_with_refresh_mode(&self, id: &gix_hash::oid, refresh_mode: super::RefreshMode) -> Result<bool> {
         let mut snapshot = self.snapshot.borrow_mut();
         loop {
             for (idx, index) in snapshot.indices.iter().enumerate() {
                 if index.contains(id) {
                     snapshot.move_to_front(idx);
-                    return true;
+                    return Ok(true);
                 }
             }
 
             for lodb in snapshot.loose_dbs.iter() {
                 if lodb.contains(id) {
-                    return true;
+                    return Ok(true);
                 }
             }
 
             match self.store.load_one_index(super::IndexCtx {
                 refresh_mode,
                 ..self.index_ctx(snapshot.marker)
-            }) {
-                Ok(Some(new_snapshot)) => {
+            })? {
+                Some(new_snapshot) => {
                     *snapshot = new_snapshot;
                     self.clear_cache();
                 }
-                Ok(None) => return false, // nothing more to load, or our refresh mode doesn't allow disk refreshes
-                Err(_) => return false, // something went wrong, nothing we can communicate here with this trait. TODO: Maybe that should change?
+                None => return Ok(false), // nothing more to load, or our refresh mode doesn't allow disk refreshes
             }
         }
     }
@@ -335,8 +335,7 @@ impl<S> gix_pack::Find for super::Handle<S>
 where
     S: Deref<Target = super::Store> + Clone,
 {
-    // TODO: make this method fallible to propagate index loading failures.
-    fn contains(&self, id: &gix_hash::oid) -> bool {
+    fn contains(&self, id: &gix_hash::oid) -> Result<bool> {
         self.contains_with_refresh_mode(id, self.refresh)
     }
 
@@ -555,7 +554,7 @@ where
     S: Deref<Target = super::Store> + Clone,
     Self: gix_pack::Find,
 {
-    fn exists(&self, id: &gix_hash::oid) -> bool {
+    fn exists(&self, id: &gix_hash::oid) -> Result<bool> {
         gix_pack::Find::contains(self, id)
     }
 }

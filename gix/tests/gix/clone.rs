@@ -580,7 +580,7 @@ mod blocking_io {
                             );
                         }
                         TargetRef::Object(id) => {
-                            assert!(repo.objects.exists(id), "part of the fetched pack");
+                            assert!(repo.objects.exists(id)?, "part of the fetched pack");
                         }
                     }
                     let r = repo

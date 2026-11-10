@@ -117,11 +117,11 @@ fn invalid_cache_trees_do_not_lookup_their_placeholder_ids() -> gix_error::TestR
     let mut missing_tree_id = gix_testtools::object_hash().null();
     missing_tree_id.as_mut_slice()[0] = 1;
     assert!(
-        !objects.exists(&missing_tree_id),
+        !objects.exists(&missing_tree_id)?,
         "the missing ID is absent from the fixture"
     );
     let blob_id = gix_testtools::object_hash().empty_blob();
-    assert!(objects.exists(&blob_id), "the fixture contains empty blobs");
+    assert!(objects.exists(&blob_id)?, "the fixture contains empty blobs");
     for invalid_tree_id in [gix_testtools::object_hash().null(), missing_tree_id, blob_id] {
         for leaf in [true, false] {
             let mut tree = original.clone();

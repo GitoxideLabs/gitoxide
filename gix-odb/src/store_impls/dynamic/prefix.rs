@@ -86,7 +86,7 @@ where
     pub fn disambiguate_prefix(&self, mut candidate: disambiguate::Candidate) -> Result<Option<gix_hash::Prefix>> {
         let max_hex_len = candidate.id().kind().len_in_hex();
         if candidate.hex_len() == max_hex_len {
-            return Ok(self.exists(candidate.id()).then(|| candidate.to_prefix()));
+            return Ok(self.exists(candidate.id())?.then(|| candidate.to_prefix()));
         }
 
         while candidate.hex_len() != max_hex_len {

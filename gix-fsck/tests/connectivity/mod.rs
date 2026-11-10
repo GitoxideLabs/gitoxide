@@ -1,3 +1,4 @@
+use gix_error::Result;
 use gix_fsck::Connectivity;
 use gix_hash::ObjectId;
 use gix_hashtable::HashMap;
@@ -54,6 +55,42 @@ fn all_commits() -> &'static [ObjectId] {
 fn no_missing() {
     // The "base" repo is the original, and has every object present
     assert_eq!(check_missing("base", all_commits()), HashMap::default());
+}
+
+#[test]
+fn blob_existence_errors_are_not_missing_objects() -> gix_error::TestResult {
+    struct CorruptExistence(gix_odb::Handle);
+
+    impl gix_object::Find for CorruptExistence {
+        fn try_find<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> Result<Option<gix_object::Data<'a>>> {
+            gix_object::Find::try_find(&self.0, id, buffer)
+        }
+    }
+
+    impl gix_object::Exists for CorruptExistence {
+        fn exists(&self, _id: &gix_hash::oid) -> Result<bool> {
+            Err(gix_error::message("index could not be loaded").corrupted_error())
+        }
+    }
+
+    let objects = gix_testtools::scripted_fixture_read_only("make_test_repos.sh")?.join("base/.git/objects");
+    let db = CorruptExistence(gix_odb::at(objects, gix_testtools::object_hash())?);
+    let mut check = Connectivity::new(db, |_, _| panic!("lookup failures must not report missing objects"));
+    for _ in 0..2 {
+        let err = check
+            .check_commit(&all_commits()[0])
+            .expect_err("failed blob existence checks must stop checking, including on retry");
+        assert!(
+            err.is_corrupted(),
+            "the original lookup error classification is preserved"
+        );
+        assert_eq!(
+            err.to_string(),
+            "index could not be loaded",
+            "the lookup diagnostic is preserved"
+        );
+    }
+    Ok(())
 }
 
 #[test]

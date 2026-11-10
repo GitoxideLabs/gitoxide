@@ -162,7 +162,9 @@ where
         {
             remote_ref_target_known[mapping_idx] = true;
             cutoff_date = cutoff_date.unwrap_or_default().max(commit.commit_time).into();
-        } else if want_id.is_some_and(|maybe_annotated_tag| objects.exists(maybe_annotated_tag)) {
+        } else if let Some(maybe_annotated_tag) = want_id
+            && objects.exists(maybe_annotated_tag)?
+        {
             remote_ref_target_known[mapping_idx] = true;
         }
     }

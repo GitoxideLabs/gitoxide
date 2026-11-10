@@ -163,8 +163,8 @@ impl<T> gix_object::Exists for Proxy<T>
 where
     T: gix_object::Exists,
 {
-    fn exists(&self, id: &gix_hash::oid) -> bool {
-        self.memory.as_ref().is_some_and(|map| map.borrow().contains_key(id)) || self.inner.exists(id)
+    fn exists(&self, id: &gix_hash::oid) -> Result<bool> {
+        Ok(self.memory.as_ref().is_some_and(|map| map.borrow().contains_key(id)) || self.inner.exists(id)?)
     }
 }
 
@@ -174,8 +174,9 @@ where
 {
     /// Like [`exists()`](gix_object::Exists::exists), but never look for packs that were added since the last refresh.
     /// See [`Handle::exists_without_refresh()`](crate::store::Handle::exists_without_refresh()).
-    pub fn exists_without_refresh(&self, id: &gix_hash::oid) -> bool {
-        self.memory.as_ref().is_some_and(|map| map.borrow().contains_key(id)) || self.inner.exists_without_refresh(id)
+    pub fn exists_without_refresh(&self, id: &gix_hash::oid) -> Result<bool> {
+        Ok(self.memory.as_ref().is_some_and(|map| map.borrow().contains_key(id))
+            || self.inner.exists_without_refresh(id)?)
     }
 }
 
