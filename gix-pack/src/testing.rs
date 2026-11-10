@@ -21,8 +21,8 @@ impl Memory {
 }
 
 impl crate::Find for Memory {
-    fn contains(&self, id: &gix_hash::oid) -> bool {
-        self.objects.contains_key(id)
+    fn contains(&self, id: &gix_hash::oid) -> Result<bool> {
+        Ok(self.objects.contains_key(id))
     }
 
     fn try_find_cached<'a>(

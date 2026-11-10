@@ -18,7 +18,7 @@ fn without_memory() -> gix_testtools::TestResult {
     let tree = odb.find_tree(&existing, &mut buf)?;
     assert_eq!(tree.entries.len(), 1);
     odb.header(existing)?;
-    assert!(odb.exists(&existing));
+    assert!(odb.exists(&existing)?);
 
     let mut tree = tree.to_owned();
     tree.entries.push(tree::Entry {
@@ -40,7 +40,7 @@ fn without_memory() -> gix_testtools::TestResult {
 
     let new_tree = odb.find_tree(&new_tree_id, &mut buf)?.to_owned();
     assert_eq!(new_tree, tree);
-    assert!(!odb.exists(&gix_testtools::object_hash().null()));
+    assert!(!odb.exists(&gix_testtools::object_hash().null())?);
 
     Ok(())
 }
@@ -60,7 +60,7 @@ fn with_memory() -> gix_testtools::TestResult {
         "95997c02e30a106c5413e7a68e7758c6b3c70e951f7471ee48d75c06edc7d234",
     );
     let tree = odb.find_tree(&existing, &mut buf)?;
-    assert!(odb.exists(&existing));
+    assert!(odb.exists(&existing)?);
     assert_eq!(tree.entries.len(), 1);
     odb.try_header(&existing)?.expect("header can be found just the same");
     assert_eq!(
@@ -109,7 +109,7 @@ fn with_memory() -> gix_testtools::TestResult {
     let odb2 = odb.clone();
     assert_eq!(odb2.num_objects_in_memory(), 1, "it also clones the object memory");
 
-    assert!(!odb.exists(&gix_testtools::object_hash().null()));
+    assert!(!odb.exists(&gix_testtools::object_hash().null())?);
 
     Ok(())
 }

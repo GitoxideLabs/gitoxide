@@ -178,7 +178,7 @@ mod impls {
     where
         S: gix_pack::Find,
     {
-        fn exists(&self, id: &oid) -> bool {
+        fn exists(&self, id: &oid) -> Result<bool> {
             self.inner.contains(id)
         }
     }
@@ -205,7 +205,7 @@ mod impls {
     where
         S: gix_pack::Find,
     {
-        fn contains(&self, id: &oid) -> bool {
+        fn contains(&self, id: &oid) -> Result<bool> {
             self.inner.contains(id)
         }
 

@@ -135,7 +135,7 @@ fn relative_paths_retain_runtime_state_and_the_selected_index_after_changing_cwd
     let next_blob_id = repo.write_blob(b"only in object memory after anchoring")?.detach();
     let disk = gix::open_opts(repo.git_dir(), crate::restricted())?;
     assert!(
-        !disk.has_object(blob_id) && !disk.has_object(next_blob_id),
+        !disk.has_object(blob_id)? && !disk.has_object(next_blob_id)?,
         "object memory stays enabled, so neither old nor new memory objects reach disk"
     );
     assert_eq!(
@@ -145,7 +145,7 @@ fn relative_paths_retain_runtime_state_and_the_selected_index_after_changing_cwd
     );
 
     assert!(
-        clone.has_object(blob_id),
+        clone.has_object(blob_id)?,
         "an existing clone retains its own memory objects"
     );
     #[cfg(feature = "index")]

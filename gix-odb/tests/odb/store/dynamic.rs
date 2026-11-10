@@ -333,7 +333,7 @@ fn multi_index_access() -> gix_testtools::TestResult {
         let mut buf = Vec::new();
         for oid in handle.iter()?.with_ordering(order) {
             let oid = oid?;
-            assert!(handle.exists(&oid));
+            assert!(handle.exists(&oid)?);
             let obj = handle.find(&oid, &mut buf)?;
             let hdr = handle.try_header(&oid)?.expect("exists");
             assert_eq!(hdr.kind(), obj.kind);
@@ -361,7 +361,7 @@ fn multi_index_access() -> gix_testtools::TestResult {
     );
 
     let non_existing_to_trigger_refresh = missing_id(&handle);
-    handle.exists(&non_existing_to_trigger_refresh);
+    handle.exists(&non_existing_to_trigger_refresh)?;
 
     assert_eq!(
         handle.store_ref().metrics(),
@@ -384,7 +384,7 @@ fn multi_index_access() -> gix_testtools::TestResult {
         handle.store_ref().path().join("pack/multi-pack-index"),
         filetime::FileTime::now(),
     )?;
-    handle.exists(&non_existing_to_trigger_refresh);
+    handle.exists(&non_existing_to_trigger_refresh)?;
 
     assert_eq!(
         handle.store_ref().metrics(),
@@ -542,7 +542,7 @@ fn multi_index_keep_open() -> gix_testtools::TestResult {
         handle.store_ref().path().join("pack/multi-pack-index"),
         filetime::FileTime::now(),
     )?;
-    gix_object::Exists::exists(&handle, &non_existing_to_trigger_refresh);
+    gix_object::Exists::exists(&handle, &non_existing_to_trigger_refresh)?;
 
     assert_eq!(
         handle.store_ref().metrics(),
@@ -596,7 +596,7 @@ fn an_object_in_a_pack_moved_by_an_external_process_can_be_found_from_a_stale_ha
     let stale_handle = gix_odb::at(tmp.path().join("objects"), gix_hash::Kind::Sha1)?;
     let id = hex_to_id("dd25c539efbb0ab018caa4cda2d133285634e9b5");
     assert!(
-        stale_handle.exists(&id),
+        stale_handle.exists(&id)?,
         "the soon-to-be-stale handle records the original index without loading its pack"
     );
     assert_eq!(
@@ -611,7 +611,7 @@ fn an_object_in_a_pack_moved_by_an_external_process_can_be_found_from_a_stale_ha
     std::fs::rename(original.with_extension("idx"), moved.with_extension("idx"))?;
     std::fs::rename(original.with_extension("pack"), moved.with_extension("pack"))?;
     assert!(
-        !refresh_handle.exists(&missing_id(&refresh_handle)),
+        !refresh_handle.exists(&missing_id(&refresh_handle))?,
         "a miss refreshes the shared store after the pack pair moved"
     );
 
@@ -756,10 +756,10 @@ fn object_replacement() -> gix_testtools::TestResult {
 }
 
 #[test]
-fn contains() {
+fn contains() -> gix_error::TestResult {
     let handle = db();
 
-    assert!(handle.exists(&hex_to_id("37d4e6c5c48ba0d245164c4e10d5f41140cab980"))); // loose object
+    assert!(handle.exists(&hex_to_id("37d4e6c5c48ba0d245164c4e10d5f41140cab980"))?); // loose object
     assert_eq!(
         handle.store_ref().metrics(),
         gix_odb::store::Metrics {
@@ -778,7 +778,7 @@ fn contains() {
     );
 
     // pack c043, the biggest one
-    assert!(handle.exists(&hex_to_id("dd25c539efbb0ab018caa4cda2d133285634e9b5")));
+    assert!(handle.exists(&hex_to_id("dd25c539efbb0ab018caa4cda2d133285634e9b5"))?);
 
     assert_eq!(
         handle.store_ref().metrics(),
@@ -800,7 +800,7 @@ fn contains() {
     // pack, the smallest one
     // The new handle should make no difference.
     let mut new_handle = handle.clone();
-    assert!(new_handle.exists(&hex_to_id("501b297447a8255d3533c6858bb692575cdefaa0")));
+    assert!(new_handle.exists(&hex_to_id("501b297447a8255d3533c6858bb692575cdefaa0"))?);
     assert_eq!(
         new_handle.store_ref().metrics(),
         gix_odb::store::Metrics {
@@ -818,7 +818,7 @@ fn contains() {
         "when asking for an object in the smallest pack, all in between packs are also loaded."
     );
 
-    assert!(!new_handle.exists(&missing_id(&new_handle)));
+    assert!(!new_handle.exists(&missing_id(&new_handle))?);
     assert_eq!(
         new_handle.store_ref().metrics(),
         gix_odb::store::Metrics {
@@ -837,7 +837,7 @@ fn contains() {
     );
 
     new_handle.refresh_never();
-    assert!(!new_handle.exists(&missing_id(&new_handle)));
+    assert!(!new_handle.exists(&missing_id(&new_handle))?);
     assert_eq!(
         new_handle.store_ref().metrics(),
         gix_odb::store::Metrics {
@@ -855,23 +855,25 @@ fn contains() {
         "if no refreshes are allowed, there is no additional refresh"
     );
 
-    assert_eq!(handle.store_ref().structure().unwrap().len(), 4);
+    assert_eq!(handle.store_ref().structure()?.len(), 4);
+    Ok(())
 }
 
 #[test]
-fn lookup() {
+fn lookup() -> gix_error::TestResult {
     let mut handle = db();
 
-    fn can_locate(db: &gix_odb::Handle, hex_id: &str) {
+    fn can_locate(db: &gix_odb::Handle, hex_id: &str) -> gix_error::TestResult {
         let id = hex_to_id(hex_id);
-        assert!(db.exists(&id));
+        assert!(db.exists(&id)?);
 
         let mut buf = Vec::new();
         let obj = db.find(&id, &mut buf).expect("exists");
 
-        let hdr = db.try_header(&id).unwrap().expect("exists");
+        let hdr = db.try_header(&id)?.expect("exists");
         assert_eq!(obj.kind, hdr.kind());
         assert_eq!(obj.data.len() as u64, hdr.size());
+        Ok(())
     }
     assert_eq!(
         handle.store_ref().metrics(),
@@ -891,9 +893,9 @@ fn lookup() {
     );
 
     // pack (in sort order inherent to the store)
-    can_locate(&handle, "501b297447a8255d3533c6858bb692575cdefaa0"); // pack 11fd
-    can_locate(&handle, "4dac9989f96bc5b5b1263b582c08f0c5f0b58542"); // pack a2bf
-    can_locate(&handle, "dd25c539efbb0ab018caa4cda2d133285634e9b5"); // pack c043
+    can_locate(&handle, "501b297447a8255d3533c6858bb692575cdefaa0")?; // pack 11fd
+    can_locate(&handle, "4dac9989f96bc5b5b1263b582c08f0c5f0b58542")?; // pack a2bf
+    can_locate(&handle, "dd25c539efbb0ab018caa4cda2d133285634e9b5")?; // pack c043
 
     let mut all_loaded = gix_odb::store::Metrics {
         num_handles: 1,
@@ -914,13 +916,13 @@ fn lookup() {
     );
 
     // Loose
-    can_locate(&handle, "37d4e6c5c48ba0d245164c4e10d5f41140cab980");
+    can_locate(&handle, "37d4e6c5c48ba0d245164c4e10d5f41140cab980")?;
 
     assert!(matches!(
         handle.refresh_mode(),
         store::RefreshMode::AfterAllIndicesLoaded
     ));
-    assert!(!handle.exists(&missing_id(&handle)));
+    assert!(!handle.exists(&missing_id(&handle))?);
 
     all_loaded.num_refreshes += 1;
     assert_eq!(
@@ -931,40 +933,42 @@ fn lookup() {
 
     handle.refresh_never();
     let previous_refresh_count = all_loaded.num_refreshes;
-    assert!(!handle.exists(&missing_id(&handle)));
+    assert!(!handle.exists(&missing_id(&handle))?);
     assert_eq!(
         handle.store_ref().metrics().num_refreshes,
         previous_refresh_count,
         "it didn't try to refresh the on-disk state after failing to find the object."
     );
+    Ok(())
 }
 
 #[test]
-fn exists_without_refresh() {
+fn exists_without_refresh() -> gix_error::TestResult {
     let handle = db();
     assert!(
-        handle.exists_without_refresh(&hex_to_id("dd25c539efbb0ab018caa4cda2d133285634e9b5")),
+        handle.exists_without_refresh(&hex_to_id("dd25c539efbb0ab018caa4cda2d133285634e9b5"))?,
         "the store still reads the object directory once and loads the indices it finds"
     );
     assert!(
-        handle.exists_without_refresh(&hex_to_id("37d4e6c5c48ba0d245164c4e10d5f41140cab980")),
+        handle.exists_without_refresh(&hex_to_id("37d4e6c5c48ba0d245164c4e10d5f41140cab980"))?,
         "loose objects are found too"
     );
 
     let num_refreshes = handle.store_ref().metrics().num_refreshes;
-    assert!(!handle.exists_without_refresh(&missing_id(&handle)));
+    assert!(!handle.exists_without_refresh(&missing_id(&handle))?);
     assert_eq!(
         handle.store_ref().metrics().num_refreshes,
         num_refreshes,
         "a miss doesn't look for new packs…"
     );
 
-    assert!(!handle.exists(&missing_id(&handle)));
+    assert!(!handle.exists(&missing_id(&handle))?);
     assert_eq!(
         handle.store_ref().metrics().num_refreshes,
         num_refreshes + 1,
         "…while `exists()` does, as the handle's refresh mode allows it"
     );
+    Ok(())
 }
 
 fn assert_all_indices_loaded(handle: &gix_odb::Handle, num_refreshes: usize, open_reachable_indices: usize) {
@@ -1020,7 +1024,7 @@ fn a_hit_moves_its_index_to_the_front_and_keeps_the_others_in_order() -> Result 
     // pack locations valid; it asserts the mode even for this read-only fixture.
     handle.prevent_pack_unload();
     assert!(
-        !gix_pack::Find::contains(&handle, gix_testtools::object_hash().null_ref()),
+        !gix_pack::Find::contains(&handle, gix_testtools::object_hash().null_ref())?,
         "a miss loads every index, so each clone below starts with all of them, biggest first"
     );
     assert_eq!(
@@ -1033,7 +1037,7 @@ fn a_hit_moves_its_index_to_the_front_and_keeps_the_others_in_order() -> Result 
 
     type Lookup = fn(&StoreHandle, &ObjectId) -> Result<bool>;
     let lookups: [(&str, Lookup); 4] = [
-        ("contains", |handle, id| Ok(gix_pack::Find::contains(handle, id))),
+        ("contains", |handle, id| Ok(gix_pack::Find::contains(handle, id)?)),
         ("try_header", |handle, id| {
             Ok(gix_odb::Header::try_header(handle, id)?.is_some())
         }),
@@ -1242,7 +1246,7 @@ fn delta_base_lookup_keeps_its_pack(read_header: bool) -> gix_error::TestResult 
                 handle.prevent_pack_unload();
                 if load_all_indices {
                     assert!(
-                        !gix_pack::Find::contains(&handle, &ObjectId::null(object_hash)),
+                        !gix_pack::Find::contains(&handle, &ObjectId::null(object_hash))?,
                         "a miss loads every index"
                     );
                     assert_eq!(
@@ -1541,9 +1545,9 @@ mod lookup_prefix {
 }
 
 #[test]
-fn missing_objects_triggers_everything_is_loaded() {
+fn missing_objects_triggers_everything_is_loaded() -> gix_error::TestResult {
     let handle = db();
-    assert!(!handle.exists(&missing_id(&handle)));
+    assert!(!handle.exists(&missing_id(&handle))?);
 
     assert_eq!(
         handle.store_ref().metrics(),
@@ -1581,6 +1585,7 @@ fn missing_objects_triggers_everything_is_loaded() {
         },
         "there are still no packs opened as no index contained the object"
     );
+    Ok(())
 }
 
 #[test]
@@ -1595,7 +1600,7 @@ fn iterate_over_a_bunch_of_loose_and_packed_objects() -> gix_testtools::TestResu
         );
         assert_eq!(iter.count(), 146, "it sees the correct amount of objects");
         for id in db.iter()? {
-            assert!(db.exists(&id?), "each object exists");
+            assert!(db.exists(&id?)?, "each object exists");
         }
     }
     Ok(())
