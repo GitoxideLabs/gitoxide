@@ -5,6 +5,29 @@ use std::path::{Path, PathBuf};
 
 use gix_fs::Stack;
 
+#[test]
+fn trailing_separators_follow_the_path_type() {
+    use gix_fs::stack::ToNormalPathComponents;
+
+    for (path, expected) in [("", false), ("target/", true), ("target\\", cfg!(windows))] {
+        assert_eq!(
+            Path::new(path).ends_with_separator(),
+            expected,
+            "native separators in {path:?}"
+        );
+        assert_eq!(
+            PathBuf::from(path).ends_with_separator(),
+            expected,
+            "owned native separators in {path:?}"
+        );
+    }
+    assert!("target/".ends_with_separator(), "Git paths recognize slashes");
+    assert!(
+        !"target\\".ends_with_separator(),
+        "backslashes are literal bytes in Git paths"
+    );
+}
+
 #[derive(Debug, Default, Eq, PartialEq)]
 struct Record {
     push_dir_count: usize,
