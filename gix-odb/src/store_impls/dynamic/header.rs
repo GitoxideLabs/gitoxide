@@ -117,9 +117,7 @@ where
                                             .with("object_id", id.to_string())
                                     })?;
                                 // A refreshed snapshot may reuse pack ids; retry through normal pack loading.
-                                if snapshot.marker.generation != marker.generation
-                                    || snapshot.marker.state_id != marker.state_id
-                                {
+                                if snapshot.store_state_changed_since(marker) {
                                     continue 'outer;
                                 }
                                 // Base lookup can reorder indices; keep the original pack and delta representation.

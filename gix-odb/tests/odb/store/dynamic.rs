@@ -758,18 +758,26 @@ fn answering_pack_id(handle: &StoreHandle, id: &ObjectId) -> Result<gix_pack::da
 #[test]
 fn a_hit_moves_its_index_to_the_front_and_keeps_the_others_in_order() -> Result {
     let dir = crate::scripted_fixture_read_only("make_overlapping_packs.sh")?;
-    let blob_id = |name: &str| -> Result<ObjectId> {
-        Ok(ObjectId::from_hex(
-            std::fs::read_to_string(dir.join(name))?.trim().as_bytes(),
-        )?)
-    };
+    let blobs = std::fs::read_to_string(dir.join("blobs"))?;
+    let blob_ids: std::collections::BTreeMap<_, _> = blobs
+        .lines()
+        .map(|line| line.split_once(' ').expect("each line holds a blob name and its id"))
+        .collect();
+    let blob_id = |name: &str| -> Result<ObjectId> { Ok(ObjectId::from_hex(blob_ids[name].as_bytes())?) };
     let shared_blob_id = blob_id("shared")?;
 
     let mut handle = crate::odb_at(dir.join(".git/objects"))?.into_arc()?.into_inner();
+    // `location_by_oid()` (also used by `answering_pack_id()`) requires this mode to keep returned
+    // pack locations valid; it asserts the mode even for this read-only fixture.
     handle.prevent_pack_unload();
     assert!(
-        !gix_pack::Find::contains(&handle, &ObjectId::null(gix_testtools::object_hash())),
+        !gix_pack::Find::contains(&handle, gix_testtools::object_hash().null_ref()),
         "a miss loads every index, so each clone below starts with all of them, biggest first"
+    );
+    assert_eq!(
+        handle.store_ref().metrics().open_reachable_indices,
+        10,
+        "only the ten overlapping packs remain, not the temporary source pack"
     );
     // Every hit reorders the handle it ran on, so each pack is named through a clone of its own.
     let biggest_pack_id = answering_pack_id(&handle.clone(), &shared_blob_id)?;
@@ -818,87 +826,6 @@ fn a_hit_moves_its_index_to_the_front_and_keeps_the_others_in_order() -> Result 
     Ok(())
 }
 
-/// Write a pack with `blobs` and `fillers` more blobs of its own to `objects_dir`, along with a v1 index.
-/// A blob with a base is written as a `REF_DELTA` against the base's id, which the pack doesn't hold, like in a thin
-/// pack that was stored as it was received.
-fn write_pack(
-    objects_dir: &std::path::Path,
-    name: &str,
-    blobs: &[(&[u8], Option<&[u8]>)],
-    fillers: usize,
-) -> Result<std::path::PathBuf> {
-    use std::io::Write;
-
-    use gix_pack::data;
-
-    let object_hash = gix_testtools::object_hash();
-    let blob_id = |blob: &[u8]| gix_object::compute_hash(object_hash, gix_object::Kind::Blob, blob);
-    let fillers: Vec<_> = (0..fillers)
-        .map(|i| format!("{name} filler {i}").into_bytes())
-        .collect();
-    let blobs = blobs
-        .iter()
-        .copied()
-        .chain(fillers.iter().map(|blob| (blob.as_slice(), None)));
-
-    let mut pack = data::header::encode(data::Version::V2, blobs.clone().count() as u32).to_vec();
-    let mut index_entries = Vec::new();
-    for (blob, base) in blobs {
-        index_entries.push((blob_id(blob)?, pack.len() as u32));
-        let entry_data = match base {
-            None => {
-                data::entry::Header::Blob.write_to(blob.len() as u64, &mut pack)?;
-                blob.to_vec()
-            }
-            Some(base) => {
-                assert!(
-                    base.len() < 0x80 && (1..0x80).contains(&blob.len()),
-                    "both sizes and the one insert instruction fit into a byte each"
-                );
-                let delta = [[base.len() as u8, blob.len() as u8, blob.len() as u8].as_slice(), blob].concat();
-                data::entry::Header::RefDelta {
-                    base_id: blob_id(base)?,
-                }
-                .write_to(delta.len() as u64, &mut pack)?;
-                delta
-            }
-        };
-        let mut compressed = gix_zlib::stream::deflate::Write::new(Vec::new(), gix_zlib::Compression::DEFAULT);
-        compressed.write_all(&entry_data)?;
-        compressed.flush()?;
-        pack.extend(compressed.into_inner());
-    }
-    let mut hasher = gix_hash::hasher(object_hash);
-    hasher.update(&pack);
-    let pack_id = hasher.try_finalize()?;
-    pack.extend_from_slice(pack_id.as_slice());
-
-    index_entries.sort();
-    let mut index = Vec::new();
-    for first_byte in 0..=255 {
-        let count = index_entries
-            .iter()
-            .filter(|(id, _)| id.first_byte() <= first_byte)
-            .count();
-        index.extend_from_slice(&(count as u32).to_be_bytes());
-    }
-    for (id, pack_offset) in &index_entries {
-        index.extend_from_slice(&pack_offset.to_be_bytes());
-        index.extend_from_slice(id.as_slice());
-    }
-    index.extend_from_slice(pack_id.as_slice());
-    let mut hasher = gix_hash::hasher(object_hash);
-    hasher.update(&index);
-    index.extend_from_slice(hasher.try_finalize()?.as_slice());
-
-    let pack_dir = objects_dir.join("pack");
-    std::fs::create_dir_all(&pack_dir)?;
-    std::fs::write(pack_dir.join(format!("pack-{pack_id}.pack")), pack)?;
-    let index_path = pack_dir.join(format!("pack-{pack_id}.idx"));
-    std::fs::write(&index_path, index)?;
-    Ok(index_path)
-}
-
 #[test]
 fn a_ref_delta_lookup_keeps_its_pack_after_loading_the_base() -> gix_error::TestResult {
     delta_base_lookup_keeps_its_pack(false)
@@ -910,6 +837,87 @@ fn a_ref_delta_header_keeps_its_pack_after_loading_the_base() -> gix_error::Test
 }
 
 fn delta_base_lookup_keeps_its_pack(read_header: bool) -> gix_error::TestResult {
+    /// Write a pack with `blobs` and `fillers` more blobs of its own to `objects_dir`, along with a v1 index.
+    /// A blob with a base is written as a `REF_DELTA` against the base's id, which the pack doesn't hold, like in a thin
+    /// pack that was stored as it was received.
+    fn write_pack(
+        objects_dir: &std::path::Path,
+        name: &str,
+        blobs: &[(&[u8], Option<&[u8]>)],
+        fillers: usize,
+    ) -> Result<std::path::PathBuf> {
+        use std::io::Write;
+
+        use gix_pack::data;
+
+        let object_hash = gix_testtools::object_hash();
+        let blob_id = |blob: &[u8]| gix_object::compute_hash(object_hash, gix_object::Kind::Blob, blob);
+        let fillers: Vec<_> = (0..fillers)
+            .map(|i| format!("{name} filler {i}").into_bytes())
+            .collect();
+        let blobs = blobs
+            .iter()
+            .copied()
+            .chain(fillers.iter().map(|blob| (blob.as_slice(), None)));
+
+        let mut pack = data::header::encode(data::Version::V2, blobs.clone().count() as u32).to_vec();
+        let mut index_entries = Vec::new();
+        for (blob, base) in blobs {
+            index_entries.push((blob_id(blob)?, pack.len() as u32));
+            let entry_data = match base {
+                None => {
+                    data::entry::Header::Blob.write_to(blob.len() as u64, &mut pack)?;
+                    blob.to_vec()
+                }
+                Some(base) => {
+                    assert!(
+                        base.len() < 0x80 && (1..0x80).contains(&blob.len()),
+                        "both sizes and the one insert instruction fit into a byte each"
+                    );
+                    let delta = [[base.len() as u8, blob.len() as u8, blob.len() as u8].as_slice(), blob].concat();
+                    data::entry::Header::RefDelta {
+                        base_id: blob_id(base)?,
+                    }
+                    .write_to(delta.len() as u64, &mut pack)?;
+                    delta
+                }
+            };
+            let mut compressed = gix_zlib::stream::deflate::Write::new(Vec::new(), gix_zlib::Compression::DEFAULT);
+            compressed.write_all(&entry_data)?;
+            compressed.flush()?;
+            pack.extend(compressed.into_inner());
+        }
+        let mut hasher = gix_hash::hasher(object_hash);
+        hasher.update(&pack);
+        let pack_id = hasher.try_finalize()?;
+        pack.extend_from_slice(pack_id.as_slice());
+
+        index_entries.sort();
+        let mut index = Vec::new();
+        for first_byte in 0..=255 {
+            let count = index_entries
+                .iter()
+                .filter(|(id, _)| id.first_byte() <= first_byte)
+                .count();
+            index.extend_from_slice(&(count as u32).to_be_bytes());
+        }
+        for (id, pack_offset) in &index_entries {
+            index.extend_from_slice(&pack_offset.to_be_bytes());
+            index.extend_from_slice(id.as_slice());
+        }
+        index.extend_from_slice(pack_id.as_slice());
+        let mut hasher = gix_hash::hasher(object_hash);
+        hasher.update(&index);
+        index.extend_from_slice(hasher.try_finalize()?.as_slice());
+
+        let pack_dir = objects_dir.join("pack");
+        std::fs::create_dir_all(&pack_dir)?;
+        std::fs::write(pack_dir.join(format!("pack-{pack_id}.pack")), pack)?;
+        let index_path = pack_dir.join(format!("pack-{pack_id}.idx"));
+        std::fs::write(&index_path, index)?;
+        Ok(index_path)
+    }
+
     let object_hash = gix_testtools::object_hash();
     let blob_id = |blob: &[u8]| gix_object::compute_hash(object_hash, gix_object::Kind::Blob, blob);
     let (object, base) = (b"a delta".as_slice(), b"its base".as_slice());
