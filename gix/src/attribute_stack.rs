@@ -56,11 +56,14 @@ impl AttributeStack<'_> {
     /// `mode` should reflect whether it's a directory or not, or left at `None` if unknown.
     ///
     /// If `relative` ends with `/` and `mode` is `None`, it is automatically assumed to be a directory.
+    /// Native paths also recognize `\` on Windows. Custom path types must report trailing separators through
+    /// [`ToNormalPathComponents::ends_with_separator()`].
     pub fn at_entry(
         &mut self,
         relative: impl ToNormalPathComponents,
         mode: Option<gix_index::entry::Mode>,
     ) -> Result<gix_worktree::stack::Platform<'_>> {
+        let mode = mode.or_else(|| relative.ends_with_separator().then_some(gix_index::entry::Mode::DIR));
         self.inner.at_path(relative, mode, &self.repo.objects).or_error()
     }
 }
