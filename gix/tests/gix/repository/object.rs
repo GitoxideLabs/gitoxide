@@ -14,7 +14,7 @@ mod object_database_impl {
     fn empty_tree_is_always_present() -> TestResult {
         let repo = crate::named_subrepo_opts("make_basic_repo.sh", "unborn", gix::open::Options::isolated())?;
         let empty_tree = gix::ObjectId::empty_tree(repo.object_hash());
-        assert!(repo.exists(&empty_tree));
+        assert!(repo.exists(&empty_tree)?);
         assert_eq!(
             repo.try_header(&empty_tree)?.expect("tree present"),
             gix_object::Header {
@@ -352,7 +352,7 @@ mod write_blob {
     fn from_slice() -> TestResult {
         let (_tmp, repo) = empty_bare_repo()?;
         let expected = blob_id(&repo, b"hello world");
-        assert!(!repo.has_object(expected));
+        assert!(!repo.has_object(expected)?);
 
         let oid = repo.write_blob(b"hello world")?;
         assert_eq!(oid, expected);
@@ -360,13 +360,13 @@ mod write_blob {
         let mut other_repo = gix::open_opts(repo.path(), gix::open::Options::isolated())?;
         other_repo.objects.enable_object_memory();
         assert!(
-            other_repo.has_object(oid),
+            other_repo.has_object(oid)?,
             "we definitely don't accidentally write to memory only"
         );
         let in_memory_id = other_repo.write_blob("hello world - to memory")?;
-        assert!(!repo.has_object(in_memory_id), "the object was never written to disk…");
+        assert!(!repo.has_object(in_memory_id)?, "the object was never written to disk…");
         assert!(
-            other_repo.has_object(in_memory_id),
+            other_repo.has_object(in_memory_id)?,
             "…and exists only in the instance that wrote it"
         );
         Ok(())
@@ -410,7 +410,7 @@ fn writes_avoid_io_using_duplicate_check() -> TestResult {
 
     for id in repo.objects.iter()? {
         let id = id?;
-        assert!(repo.has_object(id));
+        assert!(repo.has_object(id)?);
         let obj = repo.find_object(id)?;
         let header = repo.find_header(id)?;
         assert_eq!(obj.kind, header.kind(), "header and object agree");
@@ -467,6 +467,57 @@ fn writes_avoid_io_using_duplicate_check() -> TestResult {
         repo_clone.set_freelist(None).is_none(),
         "new instances inherit the free-list configuration of their parent"
     );
+    Ok(())
+}
+
+#[test]
+fn object_checks_and_writes_preserve_index_load_errors() -> gix_error::TestResult {
+    use gix_object::{Exists, Kind::Blob, Write};
+
+    let (repo, _tmp) = crate::repo_rw("make_packed_and_loose.sh")?;
+    for entry in std::fs::read_dir(repo.git_dir().join("objects/pack"))? {
+        let path = entry?.path();
+        if path.extension().is_some_and(|extension| extension == "idx") {
+            let replacement = path.with_extension("corrupt");
+            std::fs::write(&replacement, b"malformed index")?;
+            gix_testtools::rename(replacement, path)?;
+        }
+    }
+    let data = b"not yet written";
+    let blob_id = gix_object::compute_hash(repo.object_hash(), Blob, data)?;
+    let expected = repo
+        .try_find_header(blob_id)
+        .expect_err("the disk indices cannot establish whether the blob exists")
+        .to_string();
+    let empty_tree_id = repo.object_hash().empty_tree();
+    assert!(repo.has_object(empty_tree_id)?, "the empty tree needs no index lookup");
+    assert!(
+        repo.exists(&empty_tree_id)?,
+        "the object trait preserves the empty tree"
+    );
+    for err in [
+        repo.has_object(blob_id)
+            .expect_err("object presence must report a failed lookup"),
+        repo.exists(&blob_id)
+            .expect_err("the object trait must preserve lookup errors"),
+        repo.write_blob(data)
+            .expect_err("blob writes must preserve duplicate-check errors"),
+        repo.write_blob_stream(&data[..])
+            .expect_err("stream writes must preserve duplicate-check errors"),
+        repo.write_object(gix::objs::BlobRef { data })
+            .expect_err("object writes must preserve duplicate-check errors"),
+        repo.write_buf(Blob, data)
+            .expect_err("buffer writes must preserve duplicate-check errors"),
+        repo.write_buf_with_known_id(Blob, data, blob_id)
+            .expect_err("known IDs must preserve duplicate-check errors"),
+    ] {
+        assert_eq!(
+            err.to_string(),
+            expected,
+            "presence checks and writes preserve the index-loading diagnostic"
+        );
+        assert!(!err.is_not_found(), "index corruption is not object absence");
+    }
     Ok(())
 }
 
@@ -544,7 +595,7 @@ mod find {
         let repo = basic_repo()?;
         let empty_tree = gix::hash::ObjectId::empty_tree(repo.object_hash());
         assert_eq!(repo.find_object(empty_tree)?.into_tree().iter().count(), 0);
-        assert!(repo.has_object(empty_tree));
+        assert!(repo.has_object(empty_tree)?);
         assert_eq!(
             repo.find_header(empty_tree)?,
             gix_odb::find::Header::Loose {
@@ -588,7 +639,7 @@ mod find {
             0,
             "The basic_repo fixture contains an empty blob"
         );
-        assert!(repo.has_object(empty_blob));
+        assert!(repo.has_object(empty_blob)?);
         assert_eq!(
             repo.find_header(empty_blob)?,
             gix_odb::find::Header::Loose {
@@ -624,9 +675,9 @@ mod find {
         assert_eq!(empty_blob.id, repo.object_hash().empty_blob());
         assert_eq!(empty_blob.data.len(), 0);
 
-        assert!(!repo.has_object(empty_blob.id), "it doesn't exist by default");
+        assert!(!repo.has_object(empty_blob.id)?, "it doesn't exist by default");
         repo.write_blob(&empty_blob.data)?;
-        assert!(repo.has_object(empty_blob.id), "it exists after it was written");
+        assert!(repo.has_object(empty_blob.id)?, "it exists after it was written");
 
         Ok(())
     }
@@ -638,10 +689,10 @@ fn empty_objects_are_always_present_but_not_in_plumbing() -> TestResult {
     let empty_blob_id = repo.object_hash().empty_blob();
 
     assert!(
-        !repo.has_object(empty_blob_id),
+        !repo.has_object(empty_blob_id)?,
         "empty blob is not present unless it actually exists"
     );
-    assert!(!repo.objects.contains(&empty_blob_id));
+    assert!(!repo.objects.contains(&empty_blob_id)?);
 
     let err = repo
         .find_header(empty_blob_id)

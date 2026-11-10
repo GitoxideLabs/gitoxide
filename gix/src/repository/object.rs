@@ -134,7 +134,7 @@ impl crate::Repository {
         self.objects.header(id)
     }
 
-    /// Return `true` if `id` exists in the object database.
+    /// Return `true` if `id` exists in the object database, or an error if its indices could not be loaded.
     ///
     /// # Performance
     ///
@@ -150,13 +150,13 @@ impl crate::Repository {
     /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     /// # mod doctest { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doctest.rs")); }
     /// # let repo = doctest::open_repo(doctest::basic_repo_dir()?)?;
-    /// assert!(repo.has_object(repo.head_id()?));
+    /// assert!(repo.has_object(repo.head_id()?)?);
     /// # Ok(()) }
     /// ```
-    pub fn has_object(&self, id: impl AsRef<gix_hash::oid>) -> bool {
+    pub fn has_object(&self, id: impl AsRef<gix_hash::oid>) -> Result<bool> {
         let id = id.as_ref();
         if id.to_owned().is_empty_tree() {
-            true
+            Ok(true)
         } else {
             self.objects.exists(id)
         }
@@ -238,7 +238,7 @@ impl crate::Repository {
 
     fn write_object_inner(&self, buf: &[u8], kind: gix_object::Kind) -> Result<Id<'_>> {
         let oid = gix_object::compute_hash(self.object_hash(), kind, buf)?;
-        if self.objects.exists_without_refresh(&oid) {
+        if self.objects.exists_without_refresh(&oid)? {
             return Ok(oid.attach(self));
         }
 
@@ -267,7 +267,7 @@ impl crate::Repository {
     pub fn write_blob(&self, bytes: impl AsRef<[u8]>) -> Result<Id<'_>> {
         let bytes = bytes.as_ref();
         let oid = gix_object::compute_hash(self.object_hash(), gix_object::Kind::Blob, bytes)?;
-        if self.objects.exists_without_refresh(&oid) {
+        if self.objects.exists_without_refresh(&oid)? {
             return Ok(oid.attach(self));
         }
         self.objects
@@ -290,7 +290,7 @@ impl crate::Repository {
 
     fn write_blob_stream_inner(&self, buf: &[u8]) -> Result<Id<'_>> {
         let oid = gix_object::compute_hash(self.object_hash(), gix_object::Kind::Blob, buf)?;
-        if self.objects.exists_without_refresh(&oid) {
+        if self.objects.exists_without_refresh(&oid)? {
             return Ok(oid.attach(self));
         }
 

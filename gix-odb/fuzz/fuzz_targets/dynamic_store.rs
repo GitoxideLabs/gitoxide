@@ -318,11 +318,11 @@ impl Machine {
             return Outcome::Skipped(Skip::NoHandle);
         };
         let ids = self.fixture.manifest.object_ids().collect::<Vec<_>>();
-        Outcome::Query(if handle.value.exists(&ids[object_index % ids.len()]) {
-            Query::Found
-        } else {
-            Query::Missing
-        })
+        match handle.value.exists(&ids[object_index % ids.len()]) {
+            Ok(true) => Outcome::Query(Query::Found),
+            Ok(false) => Outcome::Query(Query::Missing),
+            Err(err) => query_error(err),
+        }
     }
 
     fn find_missing(&self, handle_index: usize) -> Outcome {

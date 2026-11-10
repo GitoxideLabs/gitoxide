@@ -465,7 +465,7 @@ fn multi_index_corrupt_reference_is_fallible(large_offset: bool) -> gix_error::T
     }
     let missing_id = gix_object::compute_hash(gix_testtools::object_hash(), Kind::Blob, b"not in the MIDX fixture")?;
     assert!(
-        !handle.contains(&missing_id),
+        !handle.contains(&missing_id)?,
         "the missing object is absent from both packs and loose storage"
     );
     assert!(
@@ -784,6 +784,7 @@ fn pack_lookup_unavailable_is_not_an_error() -> gix_testtools::TestResult {
     let cache = gix_odb::Cache::from(handle.clone());
     let missing_id = gix_testtools::object_hash().null();
     for db in [&handle as &dyn gix_pack::Find, &cache] {
+        assert!(!db.contains(&missing_id)?, "an empty store has no objects");
         assert!(
             db.location_by_oid(&missing_id, &mut Vec::new())?.is_none(),
             "an empty store has no packed object location"
@@ -847,7 +848,7 @@ fn healthy_indices_remain_searchable_after_index_load_failures() -> gix_error::T
         gix_odb::store::RefreshMode::Never,
         gix_odb::store::RefreshMode::AfterDuration(std::time::Duration::from_secs(60)),
     ] {
-        for lookup in 0..4 {
+        for lookup in 0..6 {
             let mut parent = crate::odb_at(fixture.join("objects"))?;
             parent.prevent_pack_unload();
             parent.refresh = refresh_mode;
@@ -865,13 +866,28 @@ fn healthy_indices_remain_searchable_after_index_load_failures() -> gix_error::T
                     }
                     1 => handle.try_header(&healthy_blob_id)?.is_some(),
                     2 => handle.location_by_oid(&healthy_blob_id, &mut buffer)?.is_some(),
-                    _ => gix_pack::Find::contains(&handle, &healthy_blob_id),
+                    3 => gix_pack::Find::contains(&handle, &healthy_blob_id)?,
+                    4 => gix_object::Exists::exists(&handle, &healthy_blob_id)?,
+                    _ => handle.exists_without_refresh(&healthy_blob_id)?,
                 };
                 assert!(
                     found,
                     "lookup {lookup} reaches the healthy index after larger malformed indices"
                 );
                 for err in [
+                    gix_pack::Find::contains(&handle, &missing_id)
+                        .expect_err("a presence check reports the deferred corruption"),
+                    gix_object::Exists::exists(&handle, &missing_id)
+                        .expect_err("the object existence trait forwards the corruption"),
+                    handle
+                        .exists_without_refresh(&missing_id)
+                        .expect_err("disabling refresh preserves index-loading failures"),
+                    handle
+                        .disambiguate_prefix(gix_odb::store::prefix::disambiguate::Candidate::new(
+                            missing_id,
+                            missing_id.kind().len_in_hex(),
+                        )?)
+                        .expect_err("a full-length prefix reports the presence-check failure"),
                     gix_object::Find::try_find(&handle, &missing_id, &mut buffer)
                         .expect_err("an object miss reports the deferred corruption"),
                     handle
@@ -888,6 +904,7 @@ fn healthy_indices_remain_searchable_after_index_load_failures() -> gix_error::T
                         .err()
                         .expect("full enumeration must report incomplete index coverage"),
                 ] {
+                    assert!(!err.is_not_found(), "index corruption is not object absence");
                     assert_eq!(
                         err.to_string(),
                         corruption,
@@ -896,6 +913,38 @@ fn healthy_indices_remain_searchable_after_index_load_failures() -> gix_error::T
                 }
             }
         }
+    }
+    Ok(())
+}
+
+#[test]
+fn memory_presence_checks_preserve_index_load_errors() -> gix_error::TestResult {
+    use gix_object::{Exists, Write};
+
+    let fixture = crate::scripted_fixture_read_only("make_odb_index_failure.sh")?;
+    let mut proxy = gix_odb::memory::Proxy::new(crate::odb_at(fixture.join("objects"))?, gix_testtools::object_hash());
+    let blob_id = proxy.write_buf(Kind::Blob, b"in memory")?;
+    assert!(
+        proxy.exists(&blob_id)?,
+        "in-memory objects bypass the corrupt disk indices"
+    );
+    assert!(
+        proxy.exists_without_refresh(&blob_id)?,
+        "the write check also uses memory"
+    );
+
+    proxy.take_object_memory();
+    let expected = gix_odb::Header::try_header(&proxy, &blob_id)
+        .expect_err("the disk indices cannot establish whether the blob exists")
+        .to_string();
+    for result in [proxy.exists(&blob_id), proxy.exists_without_refresh(&blob_id)] {
+        let err = result.expect_err("without memory, presence checks preserve the disk lookup error");
+        assert_eq!(
+            err.to_string(),
+            expected,
+            "presence checks preserve the index-loading diagnostic"
+        );
+        assert!(!err.is_not_found(), "index corruption is not object absence");
     }
     Ok(())
 }
@@ -1010,12 +1059,12 @@ fn newly_published_sources_are_discovered_after_index_load_failures() -> gix_err
 fn pack_lookup_preserves_index_load_errors() -> gix_testtools::TestResult {
     use gix_pack::Find as _;
 
-    for lookup_location in [false, true] {
+    for lookup in 0..3 {
         let dir = gix_testtools::tempfile::tempdir()?;
         let objects = dir.path();
         std::fs::create_dir(objects.join("info"))?;
         // A self-referencing alternate fails disk-state initialization before any
-        // index is available. Both packing APIs must propagate load_one_index errors.
+        // index is available. Presence and packing APIs must propagate load_one_index errors.
         std::fs::write(objects.join("info/alternates"), b".\n")?;
         let object_id = gix_testtools::object_hash().null();
         let mut handle = gix_odb::at_opts(
@@ -1028,14 +1077,16 @@ fn pack_lookup_preserves_index_load_errors() -> gix_testtools::TestResult {
             },
         )?;
         handle.prevent_pack_unload();
-        let err = if lookup_location {
-            handle
+        let err = match lookup {
+            0 => handle
                 .location_by_oid(&object_id, &mut Vec::new())
-                .expect_err("location lookup must propagate index loading failures")
-        } else {
-            handle
+                .expect_err("location lookup must propagate index loading failures"),
+            1 => handle
                 .pack_offsets_and_oid(0)
-                .expect_err("pack iteration must propagate index loading failures")
+                .expect_err("pack iteration must propagate index loading failures"),
+            _ => handle
+                .contains(&object_id)
+                .expect_err("presence checks must propagate index loading failures"),
         };
         assert!(
             err.is_corrupted(),
