@@ -412,3 +412,94 @@ fn test_response_no_tls_info_for_http() {
     let body = res.text().unwrap();
     assert_eq!(b"Hello", body.as_bytes());
 }
+
+#[test]
+fn test_response_before_streamed_body_is_sent() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    // This server responds without reading the request body, then waits for
+    // the client to close the connection before letting the body produce
+    // any bytes. This reproduces the case where the response is received
+    // before the body is fully sent, e.g. an HTTP 412 for a failed
+    // `If-None-Match: *` precondition.
+    let (closed_tx, closed_rx) = std::sync::mpsc::channel();
+    let server = server::low_level_with_response(move |_raw_request, client_socket| {
+        let closed_tx = closed_tx.clone();
+        Box::new(async move {
+            client_socket
+                .write_all(
+                    b"HTTP/1.1 412 Precondition Failed\r\n\
+                      Content-Length: 0\r\n\
+                      Connection: close\r\n\
+                      \r\n",
+                )
+                .await
+                .expect("response write_all failed");
+            client_socket.shutdown().await.expect("shutdown failed");
+            let _ = client_socket.read_to_end(&mut Vec::new()).await;
+            let _ = closed_tx.send(());
+        })
+    });
+
+    // Yields its bytes in two reads, once the server has seen the client close.
+    // Even if the first chunk slips into the body channel while hyper is
+    // tearing down the connection, the second send can't complete.
+    struct GatedReader {
+        closed_rx: Option<std::sync::mpsc::Receiver<()>>,
+        remaining: usize,
+    }
+
+    impl std::io::Read for GatedReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if let Some(closed_rx) = self.closed_rx.take() {
+                closed_rx
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .expect("client did not close the connection");
+            }
+            let n = self.remaining.min(16).min(buf.len());
+            buf[..n].fill(b'x');
+            self.remaining -= n;
+            Ok(n)
+        }
+    }
+
+    let url = format!("http://{}/object", server.addr());
+    let reader = GatedReader {
+        closed_rx: Some(closed_rx),
+        remaining: 32,
+    };
+    let res = gix_reqwest::blocking::Client::new()
+        .put(&url)
+        .body(gix_reqwest::blocking::Body::sized(reader, 32))
+        .send()
+        .unwrap();
+
+    assert_eq!(res.status(), gix_reqwest::StatusCode::PRECONDITION_FAILED);
+}
+
+#[test]
+fn test_streamed_body_read_error() {
+    struct FailingReader;
+
+    impl std::io::Read for FailingReader {
+        fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("read failed"))
+        }
+    }
+
+    let server = server::http(move |_req| async { http::Response::default() });
+
+    let url = format!("http://{}/object", server.addr());
+    let body = gix_reqwest::blocking::Body::sized(FailingReader, 16);
+    let err = gix_reqwest::blocking::Client::new()
+        .put(&url)
+        .body(body)
+        .send()
+        .unwrap_err();
+
+    assert!(err.is_body());
+    assert_eq!(
+        std::error::Error::source(&err).unwrap().to_string(),
+        "read failed"
+    );
+}

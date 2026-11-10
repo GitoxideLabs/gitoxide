@@ -16,6 +16,7 @@ use tokio::sync::{mpsc, oneshot};
 use tower::Layer;
 use tower::Service;
 
+use super::body::BodySendError;
 use super::request::{Request, RequestBuilder};
 use super::response::Response;
 use super::wait;
@@ -1528,7 +1529,12 @@ impl ClientHandle {
         let result: Result<crate::Result<async_impl::Response>, wait::Waited<crate::Error>> =
             if let Some(body) = body {
                 let f = async move {
-                    body.send().await?;
+                    match body.send().await {
+                        // If hyper stopped taking the body, it's done with the
+                        // request, and `rx` has the response or hyper's error.
+                        Ok(()) | Err(BodySendError::RequestFinished) => {}
+                        Err(BodySendError::Read(err)) => return Err(err),
+                    }
                     rx.await.map_err(|_canceled| event_loop_panicked())
                 };
                 wait::timeout(f, timeout)

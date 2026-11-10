@@ -271,7 +271,19 @@ impl fmt::Display for Abort {
 
 impl std::error::Error for Abort {}
 
-async fn send_future(sender: Sender) -> Result<(), crate::Error> {
+/// Internal type to track the status of sending the request body - we use
+/// this to differentiate between a body read error and the request being
+/// finished early, e.g. if a server responds before the entire body is sent.
+pub(crate) enum BodySendError {
+    /// hyper finished the request before the whole body was sent. Usually the
+    /// server responded early, which is valid HTTP, otherwise the request
+    /// failed. Either way, the response future has the outcome.
+    RequestFinished,
+    /// Reading the body failed.
+    Read(crate::Error),
+}
+
+async fn send_future(sender: Sender) -> Result<(), BodySendError> {
     use bytes::{BufMut, BytesMut};
     use futures_util::SinkExt;
     use std::cmp;
@@ -333,7 +345,7 @@ async fn send_future(sender: Sender) -> Result<(), crate::Error> {
                         .expect("tx only taken on error")
                         .clone()
                         .try_send(Err(Abort));
-                    return Err(crate::error::body(e));
+                    return Err(BodySendError::Read(crate::error::body(e)));
                 }
             }
         }
@@ -346,7 +358,7 @@ async fn send_future(sender: Sender) -> Result<(), crate::Error> {
             .expect("tx only taken on error")
             .send(Ok(buf.split().freeze()))
             .await
-            .map_err(crate::error::body)?;
+            .map_err(|_| BodySendError::RequestFinished)?;
 
         written += buf_len;
     }
@@ -355,7 +367,7 @@ async fn send_future(sender: Sender) -> Result<(), crate::Error> {
 impl Sender {
     // A `Future` that may do blocking read calls.
     // As a `Future`, this integrates easily with `wait::timeout`.
-    pub(crate) fn send(self) -> impl Future<Output = Result<(), crate::Error>> {
+    pub(crate) fn send(self) -> impl Future<Output = Result<(), BodySendError>> {
         send_future(self)
     }
 }
