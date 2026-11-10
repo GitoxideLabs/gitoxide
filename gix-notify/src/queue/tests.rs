@@ -14,6 +14,7 @@ fn overflow_is_latched_and_changes_generation() {
     let mut state = State::new(Options {
         max_events: 2,
         max_bytes: usize::MAX,
+        ..Options::default()
     });
     state.publish(vec![event("/one"), event("/two")]);
     state.publish(vec![event("/three")]);
@@ -44,6 +45,7 @@ fn byte_limit_rejects_whole_native_batch() {
     let mut state = State::new(Options {
         max_events: 10,
         max_bytes: event_bytes(&first) + event_bytes(&second) - 1,
+        ..Options::default()
     });
     state.publish(vec![first, second]);
     let batch = state.drain(Budget::default());
@@ -169,6 +171,9 @@ fn producer_disconnect_is_distinct_from_an_empty_queue() {
         state.needs_restart,
         "replacing the same desired set must retry a dead backend"
     );
+    let error = batch.error.expect("a stopped backend provides a diagnostic");
+    assert!(error.is_conflict(), "stopped coverage requires re-registration");
+    assert!(!error.can_retry(), "draining again cannot restore the stopped producer");
 }
 
 #[test]

@@ -33,6 +33,57 @@ fn event<'a>(stream: &Stream, name: Option<&'a str>, mask: EventMask) -> inotify
 }
 
 #[test]
+fn stopped_workers_report_conflicts_and_preserve_channel_causes() -> TestResult {
+    for disconnected in [false, true] {
+        let (commands, receive) = mpsc::sync_channel(1);
+        drop(receive);
+        let mut backend = Backend {
+            commands: disconnected.then_some(commands),
+            wake: OwnShared::new(eventfd(0, EventfdFlags::NONBLOCK | EventfdFlags::CLOEXEC)?),
+            worker: None,
+        };
+        let error = backend
+            .replace(&[])
+            .expect_err("a stopped worker cannot replace watches");
+        assert!(
+            error.is_conflict(),
+            "the backend must be recreated before replacing watches"
+        );
+        assert!(
+            !error.is_retryable(),
+            "retrying the same stopped worker cannot recover it"
+        );
+        if disconnected {
+            assert!(
+                error.downcast_any_ref::<mpsc::SendError<Command>>().is_some(),
+                "the original channel disconnection remains available"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn directory_aliases_are_unsupported() -> TestResult {
+    let (directory, mut stream, _state) = setup()?;
+    let before = directory.path().join("before");
+    let after = directory.path().join("after");
+    std::fs::create_dir(&before)?;
+    stream.add_tree(&before, false)?;
+    // Moving the watched inode produces a second path for the same native descriptor without a bind mount.
+    std::fs::rename(&before, &after)?;
+    let error = stream
+        .add_tree(&after, false)
+        .expect_err("one descriptor cannot map to two paths");
+    assert!(
+        error.is_unsupported(),
+        "directory aliases need an unsupported descriptor mapping"
+    );
+    assert!(!error.is_validation(), "both directory paths are valid");
+    Ok(())
+}
+
+#[test]
 fn kernel_overflow_after_marker_requires_reinstallation_even_after_draining() -> TestResult {
     let (directory, mut stream, state) = setup()?;
     let marker = directory.path().join("marker");
@@ -50,7 +101,19 @@ fn kernel_overflow_after_marker_requires_reinstallation_even_after_draining() ->
         Some(Loss::Rescan),
         "kernel overflow can lose watch topology"
     );
-    assert!(batch.error.is_some(), "recovery needs a diagnostic");
+    let error = batch.error.as_ref().expect("recovery needs a diagnostic");
+    assert!(
+        error.is_conflict(),
+        "kernel overflow invalidates recursive watch coverage"
+    );
+    assert!(
+        !error.is_retryable(),
+        "recovery requires reinstallation, not a blind retry"
+    );
+    assert!(
+        !error.is_resource_exhausted(),
+        "kernel event loss is not an application allocation limit or allocation failure"
+    );
     assert!(stream.failed, "the old directory map cannot continue delivering paths");
     assert_eq!(
         stream.sender.fence(batch.generation),
@@ -113,6 +176,15 @@ fn unknown_descriptors_and_removed_watches_invalidate_coverage() -> TestResult {
             batch.loss,
             Some(Loss::Rescan),
             "unusable descriptor mappings lose coverage"
+        );
+        let error = batch.error.as_ref().expect("lost coverage has a diagnostic");
+        assert!(
+            error.is_conflict(),
+            "the current watch topology cannot certify coverage"
+        );
+        assert!(
+            !error.is_corrupted(),
+            "unmapped descriptors do not prove malformed native data"
         );
         assert_eq!(
             stream.sender.fence(batch.generation),

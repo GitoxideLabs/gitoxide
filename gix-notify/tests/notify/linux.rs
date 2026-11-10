@@ -55,6 +55,41 @@ fn contains(events: &[Event], path: &Path) -> bool {
 }
 
 #[test]
+fn missing_watch_roots_preserve_native_errors() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let missing = directory.path().canonicalize()?.join("missing");
+    let mut watcher = Watcher::new(Options::default())?;
+    let error = watcher
+        .replace([Watch {
+            path: missing,
+            recursive: true,
+        }])
+        .expect_err("a missing root cannot be registered");
+    assert!(
+        error.is_not_found(),
+        "the native missing-path classification remains visible"
+    );
+    assert!(!error.is_validation(), "an absent root is not malformed caller input");
+    assert!(
+        !error.is_conflict(),
+        "initial lookup failure does not establish changed coverage"
+    );
+    assert!(
+        !error.is_retryable(),
+        "a lookup failure does not promise recovery by retrying"
+    );
+    assert_eq!(
+        error
+            .downcast_any_ref::<std::io::Error>()
+            .expect("native cause retained")
+            .raw_os_error(),
+        Some(rustix::io::Errno::NOENT.raw_os_error()),
+        "registration context preserves the original OS error"
+    );
+    Ok(())
+}
+
+#[test]
 fn immediate_writes_across_roots_are_covered_by_fences() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().canonicalize()?;
@@ -331,6 +366,14 @@ fn replacing_a_root_identity_invalidates_its_fence() -> TestResult {
         batch.generation > generation && batch.loss.is_some(),
         "root replacement invalidates the baseline"
     );
+    assert!(
+        batch
+            .error
+            .as_ref()
+            .expect("root replacement has a diagnostic")
+            .is_conflict(),
+        "replacing watched inodes requires re-registration, not an unconditional retry"
+    );
     watcher.replace([Watch {
         path: root.clone(),
         recursive: true,
@@ -364,9 +407,15 @@ fn moving_a_subtree_outside_latches_loss_until_registration_is_retried() -> Test
         Err(SynchronizeError::CoverageLost),
         "moving watched inodes outside the tree invalidates recursive coverage"
     );
+    let batch = watcher.drain(Budget::default());
+    assert!(batch.loss.is_some(), "coverage loss reaches the consumer");
     assert!(
-        watcher.drain(Budget::default()).loss.is_some(),
-        "coverage loss reaches the consumer"
+        batch
+            .error
+            .as_ref()
+            .expect("subtree move has a diagnostic")
+            .is_conflict(),
+        "moved watches conflict with the registered topology"
     );
     assert_eq!(
         watcher.synchronize_at(&watched, Instant::now() + Duration::from_secs(5)),
@@ -414,9 +463,18 @@ fn deleting_and_recreating_a_subtree_requires_fresh_registration() -> TestResult
         Err(SynchronizeError::CoverageLost),
         "deleted native watches invalidate recursive coverage"
     );
+    let batch = watcher.drain(Budget::default());
     assert!(
-        watcher.drain(Budget::default()).loss.is_some(),
+        batch.loss.is_some(),
         "deleted subtree coverage loss reaches the consumer"
+    );
+    assert!(
+        batch
+            .error
+            .as_ref()
+            .expect("subtree deletion has a diagnostic")
+            .is_conflict(),
+        "deleted watches require registration to be refreshed"
     );
     std::fs::create_dir_all(&subtree)?;
     assert_eq!(
@@ -449,6 +507,7 @@ fn bounded_queue_overflow_changes_generation_without_losing_native_coverage() ->
     let mut watcher = Watcher::new(Options {
         max_events: 8,
         max_bytes: usize::MAX,
+        ..Options::default()
     })?;
     watcher.replace([Watch {
         path: root.clone(),

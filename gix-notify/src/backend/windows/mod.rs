@@ -22,10 +22,6 @@ use crate::{Fence, Loss, SynchronizeError, Watch, queue};
 mod decode;
 mod native;
 
-// ReadDirectoryChangesW observes a directory's contents, not the directory itself. Reopening
-// each root also detects ancestor renames and replacement while the original handle stays valid.
-const IDENTITY_INTERVAL: Duration = Duration::from_secs(1);
-
 struct Replace {
     watches: Vec<Watch>,
     reply: SyncSender<Result>,
@@ -38,7 +34,7 @@ pub(crate) struct Backend {
 }
 
 impl Backend {
-    pub(crate) fn new(watches: &[Watch], sender: queue::Sender) -> Result<Self> {
+    pub(crate) fn new(watches: &[Watch], sender: queue::Sender, options: crate::Options) -> Result<Self> {
         // SAFETY: INVALID_HANDLE_VALUE creates a new port without associating a file.
         let port = unsafe { CreateIoCompletionPort(INVALID_HANDLE_VALUE, std::ptr::null_mut(), 0, 1) };
         if port.is_null() {
@@ -72,9 +68,16 @@ impl Backend {
                         Err(mpsc::TryRecvError::Disconnected) => break,
                         Err(mpsc::TryRecvError::Empty) => {}
                     }
-                    let result = streams.poll(IDENTITY_INTERVAL.saturating_sub(checked.elapsed()), &sender);
+                    // poll() caps the wait even when periodic checks are disabled or far away.
+                    let timeout = options
+                        .root_check_interval
+                        .map_or(Duration::MAX, |interval| interval.saturating_sub(checked.elapsed()));
+                    let result = streams.poll(timeout, &sender);
                     let result = result.and_then(|()| {
-                        if checked.elapsed() >= IDENTITY_INTERVAL {
+                        if options
+                            .root_check_interval
+                            .is_some_and(|interval| checked.elapsed() >= interval)
+                        {
                             checked = Instant::now();
                             streams.check_roots()?;
                         }
@@ -82,7 +85,14 @@ impl Backend {
                     });
                     if let Err(error) = result {
                         let _ = streams.clear();
-                        sender.publish(Vec::new(), Some(Loss::BackendError), Some(error));
+                        sender.publish(
+                            Vec::new(),
+                            Some(Loss::BackendError),
+                            Some(
+                                error
+                                    .and_raise(message("Windows filesystem notification coverage was lost").conflict()),
+                            ),
+                        );
                     }
                 }
             })
@@ -94,7 +104,7 @@ impl Backend {
         };
         initialized
             .recv()
-            .or_raise(|| message("Windows filesystem notifications stopped during initialization"))??;
+            .or_raise(|| message("Windows filesystem notifications stopped during initialization").conflict())??;
         Ok(out)
     }
 
@@ -102,17 +112,17 @@ impl Backend {
         let (reply, receive) = mpsc::sync_channel(1);
         self.commands
             .as_ref()
-            .ok_or_else(|| message("Windows filesystem notification worker has stopped").raise())?
+            .ok_or_else(|| message("Windows filesystem notification worker has stopped").conflict_error())?
             .send(Replace {
                 watches: watches.to_vec(),
                 reply,
             })
-            .or_raise(|| message("Windows filesystem notifications stopped before replacing watches"))?;
+            .or_raise(|| message("Windows filesystem notifications stopped before replacing watches").conflict())?;
         self.wake()
             .or_raise(|| message("could not wake Windows filesystem notification worker"))?;
         receive
             .recv()
-            .or_raise(|| message("Windows filesystem notifications stopped while replacing watches"))?
+            .or_raise(|| message("Windows filesystem notifications stopped while replacing watches").conflict())?
     }
 
     pub(crate) fn synchronize_at(
@@ -187,7 +197,7 @@ impl Streams {
             } else {
                 let parent = path
                     .parent()
-                    .ok_or_else(|| message("a watched file has no parent directory").raise())?;
+                    .ok_or_else(|| message("a watched file has no parent directory").validation_error())?;
                 directories.entry(parent.to_owned()).or_default().files.push(path);
             }
         }
@@ -245,6 +255,8 @@ impl Streams {
     }
 
     fn check_roots(&self) -> Result {
+        // ReadDirectoryChangesW observes a directory's contents, not the directory itself. Reopening
+        // each root also detects ancestor renames and replacement while the original handle stays valid.
         for read in self.reads.values() {
             read.check_root()
                 .or_raise(|| message!("lost watched directory {}", read.path.display()))?;
@@ -302,5 +314,141 @@ impl Streams {
 impl Drop for Streams {
     fn drop(&mut self) {
         let _ = self.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn backend() -> Result<Backend> {
+        let options = crate::Options::default();
+        let state = OwnShared::new(gix_parallel::Mutable::new(queue::State::new(options)));
+        Backend::new(&[], queue::Sender::new(state, 0), options)
+    }
+
+    #[test]
+    fn stopped_workers_require_new_registration_and_preserve_channel_causes() -> gix_error::TestResult {
+        let mut backend = backend()?;
+        backend.commands = None;
+        backend.wake()?;
+        backend
+            .worker
+            .take()
+            .expect("the worker was started")
+            .join()
+            .expect("the worker shuts down cleanly");
+        let error = backend
+            .replace(&[])
+            .expect_err("a stopped worker cannot replace watches");
+        assert!(error.is_conflict(), "registration requires a live worker");
+        assert!(
+            !error.is_retryable(),
+            "retrying the stopped worker does not restore coverage"
+        );
+
+        let (commands, receive) = mpsc::sync_channel(1);
+        drop(receive);
+        backend.commands = Some(commands);
+        let error = backend
+            .replace(&[])
+            .expect_err("a disconnected worker cannot accept commands");
+        assert!(
+            error.is_conflict(),
+            "a disconnected command channel requires a new worker"
+        );
+        assert!(
+            error.downcast_any_ref::<mpsc::SendError<Replace>>().is_some(),
+            "the original channel error is retained"
+        );
+
+        let (commands, receive) = mpsc::sync_channel::<Replace>(1);
+        backend.commands = Some(commands);
+        backend.worker = Some(std::thread::spawn(move || {
+            drop(receive.recv().expect("the replacement command is sent"));
+        }));
+        let error = backend.replace(&[]).expect_err("the worker stopped before replying");
+        assert!(
+            error.is_conflict(),
+            "an unacknowledged registration cannot certify coverage"
+        );
+        assert!(
+            error.downcast_any_ref::<mpsc::RecvError>().is_some(),
+            "the original reply channel error is retained"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn native_errors_distinguish_replaced_roots_malformed_counts_and_overflow() -> gix_error::TestResult {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().join("watched");
+        std::fs::create_dir(&root)?;
+        let backend = backend()?;
+        let read = native::Read::new(&backend.port, 1, &root, Scope::default())?;
+
+        let overflow = read
+            .events(0)
+            .expect_err("zero bytes signal native buffer loss")
+            .raise();
+        assert!(
+            !overflow.is_corrupted(),
+            "ordinary native overflow does not imply malformed data"
+        );
+        assert!(
+            !overflow.is_conflict(),
+            "overflow retains coverage and only needs a rescan"
+        );
+        assert!(
+            !overflow.is_resource_exhausted(),
+            "notification loss is not an allocation failure or configured allocation limit"
+        );
+        assert_eq!(
+            overflow
+                .downcast_any_ref::<io::Error>()
+                .expect("the native overflow error is retained")
+                .kind(),
+            io::ErrorKind::InvalidData,
+            "the overflow error kind is unchanged"
+        );
+
+        let malformed = read
+            .events(u32::MAX)
+            .expect_err("a completion cannot exceed its buffer")
+            .raise();
+        assert!(
+            malformed.is_corrupted(),
+            "an impossible byte count is malformed native data"
+        );
+        assert_eq!(
+            malformed
+                .downcast_any_ref::<io::Error>()
+                .expect("the native malformed-buffer error is retained")
+                .kind(),
+            io::ErrorKind::InvalidData,
+            "the malformed-buffer error kind is unchanged"
+        );
+
+        std::fs::rename(&root, directory.path().join("old-root"))?;
+        std::fs::create_dir(&root)?;
+        let replaced = read.check_root().expect_err("the directory has a new identity").raise();
+        assert!(replaced.is_conflict(), "the new directory requires re-registration");
+        assert!(
+            replaced.is_not_found(),
+            "the original missing-identity kind remains visible"
+        );
+        assert!(
+            !replaced.is_retryable(),
+            "rechecking the old handle cannot restore coverage"
+        );
+        assert_eq!(
+            replaced
+                .downcast_any_ref::<io::Error>()
+                .expect("the native identity error is retained")
+                .kind(),
+            io::ErrorKind::NotFound,
+            "the identity error kind is unchanged"
+        );
+        Ok(())
     }
 }
