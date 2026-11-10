@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, mem::size_of, panic::AssertUnwindSafe};
 
-use gix_error::{ErrorExt, message};
+use gix_error::{ErrorExt, conflict, message};
 use gix_parallel::{Mutable, OwnShared, lock};
 
 use crate::{Batch, Budget, Error, Event, Loss, Options};
@@ -176,7 +176,7 @@ impl Drop for Sender {
             state.invalidate(Loss::BackendStopped);
             state.needs_restart = true;
             if state.error.is_none() {
-                state.error = Some(message("filesystem notification backend stopped").raise());
+                state.error = Some(conflict("filesystem notification backend stopped").raise());
             }
         }
         wake(&self.state);

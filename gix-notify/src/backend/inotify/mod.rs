@@ -10,7 +10,7 @@ use std::{
     time::Instant,
 };
 
-use gix_error::{ErrorExt, Result, ResultExt, message};
+use gix_error::{ErrorExt, Result, ResultExt, conflict, message, validation};
 use gix_parallel::OwnShared;
 use inotify::{EventMask, Inotify, WatchDescriptor, WatchMask};
 use rustix::event::{EventfdFlags, PollFd, PollFlags, Timespec, eventfd, poll};
@@ -36,7 +36,7 @@ pub(crate) struct Backend {
 }
 
 impl Backend {
-    pub(crate) fn new(watches: &[Watch], sender: queue::Sender) -> Result<Self> {
+    pub(crate) fn new(watches: &[Watch], sender: queue::Sender, _options: crate::Options) -> Result<Self> {
         let wake = OwnShared::new(
             eventfd(0, EventfdFlags::NONBLOCK | EventfdFlags::CLOEXEC)
                 .or_raise(|| message("could not create inotify worker wakeup"))?,
@@ -71,7 +71,7 @@ impl Backend {
         };
         initialized
             .recv()
-            .or_raise(|| message("inotify stopped during initialization"))??;
+            .or_raise(|| conflict("inotify stopped during initialization"))??;
         Ok(out)
     }
 
@@ -90,14 +90,14 @@ impl Backend {
         let (reply, receive) = mpsc::sync_channel(1);
         self.commands
             .as_ref()
-            .ok_or_else(|| message("inotify worker stopped").raise())?
+            .ok_or_else(|| conflict("inotify worker stopped").raise())?
             .send(Command::Replace(watches.to_vec(), reply))
-            .or_raise(|| message("inotify stopped before replacing watches"))?;
+            .or_raise(|| conflict("inotify stopped before replacing watches"))?;
         self.wake()
             .or_raise(|| message("could not wake inotify to replace watches"))?;
         receive
             .recv()
-            .or_raise(|| message("inotify stopped while replacing watches"))?
+            .or_raise(|| conflict("inotify stopped while replacing watches"))?
     }
 
     pub(crate) fn synchronize_at(
@@ -175,7 +175,7 @@ impl Stream {
                 path.clone()
             } else {
                 path.parent()
-                    .ok_or_else(|| message("a watched file has no parent directory").raise())?
+                    .ok_or_else(|| validation("a watched file has no parent directory").raise())?
                     .to_owned()
             };
             logical
@@ -287,11 +287,14 @@ impl Stream {
                     )
                     .or_raise(|| message!("could not install inotify watch for {}", path.display()))?;
                 if self.directories.contains_key(&descriptor) {
-                    return Err(message!("inotify directory aliases are not supported: {}", path.display()).raise());
+                    return Err(
+                        message!("inotify directory aliases are not supported: {}", path.display()).unsupported_error(),
+                    );
                 }
                 if identity(&path)? != before {
                     return Err(
-                        message!("directory changed while installing inotify watch: {}", path.display()).raise(),
+                        message!("directory changed while installing inotify watch: {}", path.display())
+                            .conflict_error(),
                     );
                 }
                 self.paths.insert(path.clone(), descriptor.clone());
@@ -360,11 +363,11 @@ impl Stream {
         for event in native_events {
             if event.mask.contains(EventMask::Q_OVERFLOW) {
                 error =
-                    Some(message("inotify queue overflowed; reinstall watches to recover recursive coverage").raise());
+                    Some(conflict("inotify queue overflowed; reinstall watches to recover recursive coverage").raise());
                 continue;
             }
             let Some(directory) = self.directories.get(&event.wd) else {
-                error = Some(message("inotify reported an unknown watch descriptor").raise());
+                error = Some(conflict("inotify reported an unknown watch descriptor").raise());
                 continue;
             };
             let path = event
@@ -383,7 +386,7 @@ impl Stream {
                         "inotify directory coverage changed at {}; reinstall watches",
                         path.display()
                     )
-                    .raise(),
+                    .conflict_error(),
                 );
             }
             if Some(path.as_path()) == marker {
@@ -424,13 +427,13 @@ impl Stream {
                 .paths
                 .get(root)
                 .and_then(|descriptor| self.directories.get(descriptor))
-                .ok_or_else(|| message!("inotify root has no watch: {}", root.display()).raise())?;
+                .ok_or_else(|| message!("inotify root has no watch: {}", root.display()).conflict_error())?;
             if identity(root)? != directory.identity {
-                return Err(message!("inotify root identity changed: {}", root.display()).raise());
+                return Err(message!("inotify root identity changed: {}", root.display()).conflict_error());
             }
         }
         if mounts::snapshot(&self.roots)? != self.mounts {
-            return Err(message("mounts changed within inotify coverage; reinstall watches").raise());
+            return Err(conflict("mounts changed within inotify coverage; reinstall watches").raise());
         }
         Ok(())
     }
@@ -464,7 +467,7 @@ impl Stream {
         };
         let anchor = self.directories[descriptor].identity;
         if identity(&directory).map_err(|error| self.coverage_lost(error))? != anchor {
-            return Err(self.coverage_lost(message("inotify marker directory identity changed").raise()));
+            return Err(self.coverage_lost(conflict("inotify marker directory identity changed").raise()));
         }
         let cookie = tempfile::Builder::new()
             .prefix(".gix-notify-sync-")
@@ -485,7 +488,7 @@ impl Stream {
             {
                 self.verify().map_err(|error| self.coverage_lost(error))?;
                 if identity(&directory).map_err(|error| self.coverage_lost(error))? != anchor {
-                    return Err(self.coverage_lost(message("inotify marker directory identity changed").raise()));
+                    return Err(self.coverage_lost(conflict("inotify marker directory identity changed").raise()));
                 }
                 if Instant::now() >= deadline {
                     return Err(SynchronizeError::TimedOut);
@@ -512,7 +515,7 @@ fn identity(path: &Path) -> Result<(u64, u64)> {
     let metadata = std::fs::symlink_metadata(path)
         .or_raise(|| message!("could not verify watched directory {}", path.display()))?;
     if !metadata.is_dir() {
-        return Err(message!("watched directory is no longer a directory: {}", path.display()).raise());
+        return Err(message!("watched directory is no longer a directory: {}", path.display()).conflict_error());
     }
     Ok((metadata.dev(), metadata.ino()))
 }

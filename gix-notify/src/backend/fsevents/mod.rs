@@ -16,7 +16,7 @@ use std::{
 
 use dispatch2::{DispatchQueue, DispatchRetained};
 use fsevent_sys::{self as fs, core_foundation as cf};
-use gix_error::{ErrorExt, Result, ResultExt, message};
+use gix_error::{ErrorExt, Result, ResultExt, conflict, message, validation};
 use gix_parallel::{Mutable, OwnShared, lock};
 use std::io::Write;
 
@@ -48,7 +48,7 @@ pub(crate) struct Backend {
 }
 
 impl Backend {
-    pub(crate) fn new(watches: &[Watch], sender: queue::Sender) -> Result<Self> {
+    pub(crate) fn new(watches: &[Watch], sender: queue::Sender, options: crate::Options) -> Result<Self> {
         let (commands, receive) = mpsc::sync_channel(1);
         let (ready, initialized) = mpsc::sync_channel(1);
         let watches = watches.to_vec();
@@ -56,7 +56,7 @@ impl Backend {
             .name("gix-notify FSEvents".into())
             .spawn(move || {
                 let sender = OwnShared::new(sender);
-                let mut stream = match Stream::new(&watches, sender.clone()) {
+                let mut stream = Some(match Stream::new(&watches, sender.clone()) {
                     Ok(stream) => {
                         let _ = ready.send(Ok(()));
                         stream
@@ -65,16 +65,30 @@ impl Backend {
                         let _ = ready.send(Err(error));
                         return;
                     }
-                };
-                while let Ok(command) = receive.recv() {
+                });
+                let mut checked = Instant::now();
+                loop {
+                    // WatchRoot retains ancestor descriptors; instead inspect only native roots.
+                    // Check elapsed time even when commands keep the worker busy.
+                    if options
+                        .root_check_interval
+                        .is_some_and(|interval| checked.elapsed() >= interval)
+                    {
+                        let _ = check_roots(&mut stream, &sender);
+                        checked = Instant::now();
+                    }
+                    let command = match options.root_check_interval {
+                        Some(interval) => receive.recv_timeout(interval.saturating_sub(checked.elapsed())),
+                        None => receive.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected),
+                    };
                     match command {
-                        Command::Replace(watches, reply) => {
+                        Ok(Command::Replace(watches, reply)) => {
                             // Outer Watcher already invalidated coverage. Fully tear down the old
                             // stream before reusing callback state for the new registration.
-                            drop(stream);
+                            drop(stream.take());
                             match Stream::new(&watches, sender.clone()) {
                                 Ok(replacement) => {
-                                    stream = replacement;
+                                    stream = Some(replacement);
                                     let _ = reply.send(Ok(()));
                                 }
                                 Err(error) => {
@@ -83,14 +97,24 @@ impl Backend {
                                 }
                             }
                         }
-                        Command::Synchronize {
+                        Ok(Command::Synchronize {
                             directory,
                             generation,
                             deadline,
                             reply,
-                        } => {
-                            let _ = reply.send(stream.synchronize_at(&directory, generation, deadline));
+                        }) => {
+                            let result = check_roots(&mut stream, &sender).and_then(|()| {
+                                let result = stream
+                                    .as_ref()
+                                    .ok_or(SynchronizeError::CoverageLost)?
+                                    .synchronize_at(&directory, generation, deadline);
+                                check_roots(&mut stream, &sender)?;
+                                result
+                            });
+                            let _ = reply.send(result);
                         }
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     }
                 }
             })
@@ -101,21 +125,21 @@ impl Backend {
         };
         initialized
             .recv()
-            .or_raise(|| message("FSEvents stopped during initialization"))??;
+            .or_raise(|| conflict("FSEvents stopped during initialization"))??;
         Ok(out)
     }
 
     pub(crate) fn replace(&mut self, watches: &[Watch]) -> Result {
         let (reply, receive) = mpsc::sync_channel(1);
         let Some(commands) = self.commands.as_ref() else {
-            return Err(message("FSEvents control worker has stopped").raise());
+            return Err(conflict("FSEvents control worker has stopped").raise());
         };
         commands
             .send(Command::Replace(watches.to_vec(), reply))
-            .or_raise(|| message("FSEvents stopped before replacing its roots"))?;
+            .or_raise(|| conflict("FSEvents stopped before replacing its roots"))?;
         receive
             .recv()
-            .or_raise(|| message("FSEvents stopped while replacing its roots"))?
+            .or_raise(|| conflict("FSEvents stopped while replacing its roots"))?
     }
 
     pub(crate) fn synchronize_at(
@@ -158,6 +182,17 @@ impl Drop for Backend {
             let _ = worker.join();
         }
     }
+}
+
+fn check_roots(stream: &mut Option<Stream>, sender: &queue::Sender) -> std::result::Result<(), SynchronizeError> {
+    let current = stream.as_ref().ok_or(SynchronizeError::CoverageLost)?;
+    if let Err(error) = current.verify_roots() {
+        // Drain callbacks before reporting loss, and retain the worker's sender until replacement.
+        *stream = None;
+        sender.publish(Vec::new(), Some(Loss::BackendError), Some(error));
+        return Err(SynchronizeError::CoverageLost);
+    }
+    Ok(())
 }
 
 struct PendingFence {
@@ -215,7 +250,7 @@ impl Stream {
                 path.clone()
             } else {
                 path.parent()
-                    .ok_or_else(|| message("a watched file has no parent directory").raise())?
+                    .ok_or_else(|| validation("a watched file has no parent directory").raise())?
                     .to_owned()
             };
             logical
@@ -266,9 +301,7 @@ impl Stream {
                 paths.0.as_ptr(),
                 fs::kFSEventStreamEventIdSinceNow,
                 0.01,
-                fs::kFSEventStreamCreateFlagFileEvents
-                    | fs::kFSEventStreamCreateFlagNoDefer
-                    | fs::kFSEventStreamCreateFlagWatchRoot,
+                fs::kFSEventStreamCreateFlagFileEvents | fs::kFSEventStreamCreateFlagNoDefer,
             )
         };
         let stream = NonNull::new(stream).ok_or_else(|| message("could not create an FSEvents stream").raise())?;
@@ -311,7 +344,6 @@ impl Stream {
             return Err(SynchronizeError::TimedOut);
         }
         self.context.sender.fence(generation)?;
-        self.verify_roots()?;
         let directory = directory.canonicalize().map_err(|error| self.marker_error(error))?;
         if !self.roots.iter().any(|root| directory.starts_with(&root.path)) {
             return Err(SynchronizeError::Unsupported);
@@ -362,7 +394,6 @@ impl Stream {
         if Instant::now() >= deadline {
             return Err(SynchronizeError::TimedOut);
         }
-        self.verify_roots()?;
         if identity(&directory).ok() != Some(anchor_identity) {
             self.context.sender.publish(Vec::new(), Some(Loss::Rescan), None);
             return Err(SynchronizeError::CoverageLost);
@@ -380,17 +411,18 @@ impl Stream {
         SynchronizeError::CoverageLost
     }
 
-    fn verify_roots(&self) -> std::result::Result<(), SynchronizeError> {
+    fn verify_roots(&self) -> Result {
         for root in &self.roots {
             match identity(&root.path) {
                 Ok(identity) if identity == root.identity => {}
                 result => {
                     let error = match result {
                         Err(error) => error,
-                        Ok(_) => message!("watched directory identity changed: {}", root.path.display()).raise(),
+                        Ok(_) => {
+                            message!("watched directory identity changed: {}", root.path.display()).conflict_error()
+                        }
                     };
-                    self.context.sender.publish(Vec::new(), Some(Loss::Rescan), Some(error));
-                    return Err(SynchronizeError::CoverageLost);
+                    return Err(error);
                 }
             }
         }
@@ -436,7 +468,7 @@ impl Drop for CfOwned {
 
 fn path_string(path: &Path) -> Result<CfOwned> {
     let bytes = path.as_os_str().as_bytes();
-    let length = cf::CFIndex::try_from(bytes.len()).or_raise(|| message("FSEvents root path is too long"))?;
+    let length = cf::CFIndex::try_from(bytes.len()).or_raise(|| validation("FSEvents root path is too long"))?;
     let url = CfOwned::new(unsafe {
         // SAFETY: the slice is valid for length bytes; Core Foundation copies its filesystem representation.
         cf::CFURLCreateFromFileSystemRepresentation(cf::kCFAllocatorDefault, bytes.as_ptr().cast(), length, true)
@@ -448,13 +480,18 @@ fn path_string(path: &Path) -> Result<CfOwned> {
 }
 
 fn identity(path: &Path) -> Result<(u64, u64)> {
-    let metadata =
-        std::fs::metadata(path).or_raise(|| message!("could not verify watched directory {}", path.display()))?;
+    // Roots are canonicalized at registration; following a replacement symlink could hide a move.
+    let metadata = std::fs::symlink_metadata(path)
+        .or_raise(|| message!("could not verify watched directory {}", path.display()))?;
+    if !metadata.is_dir() {
+        return Err(message!("watched directory is no longer a directory: {}", path.display()).conflict_error());
+    }
     Ok((metadata.dev(), metadata.ino()))
 }
 
 fn is_local(path: &Path) -> Result<bool> {
-    let path = CString::new(path.as_os_str().as_bytes()).or_raise(|| message("filesystem path contains a NUL byte"))?;
+    let path =
+        CString::new(path.as_os_str().as_bytes()).or_raise(|| validation("filesystem path contains a NUL byte"))?;
     let mut stat = std::mem::MaybeUninit::<libc::statfs>::uninit();
     let result = unsafe {
         // SAFETY: path is NUL-terminated and stat points at writable storage of the required size.

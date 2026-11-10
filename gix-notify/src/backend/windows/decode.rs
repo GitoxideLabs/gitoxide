@@ -75,13 +75,15 @@ pub(super) fn events(directory: &Path, mut bytes: &[u8]) -> io::Result<Vec<Event
 fn invalid() -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,
-        "invalid Windows directory notification record",
+        gix_error::corruption("invalid Windows directory notification record"),
     )
 }
 
 #[cfg(test)]
 mod tests {
     use std::os::windows::ffi::OsStrExt;
+
+    use gix_error::ErrorExt;
 
     use super::*;
 
@@ -151,14 +153,39 @@ mod tests {
         Ok(())
     }
 
+    fn assert_corrupted(bytes: &[u8]) {
+        let error = events(Path::new(r"C:\watched"), bytes)
+            .expect_err("a malformed native record requires a rescan")
+            .raise();
+        assert!(
+            error.is_corrupted(),
+            "malformed native data is corruption, not caller input"
+        );
+        assert!(!error.is_validation(), "the caller does not supply native records");
+        assert!(
+            !error.is_retryable(),
+            "decoding the same malformed record cannot repair it"
+        );
+        let native = error
+            .downcast_any_ref::<io::Error>()
+            .expect("the native error is retained");
+        assert_eq!(
+            native.kind(),
+            io::ErrorKind::InvalidData,
+            "the native error kind is unchanged"
+        );
+        assert_eq!(
+            native.to_string(),
+            "invalid Windows directory notification record",
+            "the diagnostic is unchanged"
+        );
+    }
+
     #[test]
     fn rejects_truncated_or_inconsistent_records() -> gix_error::TestResult {
         let valid = record(FILE_ACTION_ADDED, &[b'a' as u16]);
         for length in 0..valid.len() {
-            assert!(
-                events(Path::new(r"C:\watched"), &valid[..length]).is_err(),
-                "a truncated header or name requires a rescan: {length} bytes"
-            );
+            assert_corrupted(&valid[..length]);
         }
         for (offset, value) in [
             (0, 1u32),
@@ -172,10 +199,7 @@ mod tests {
         ] {
             let mut malformed = valid.clone();
             malformed[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-            assert!(
-                events(Path::new(r"C:\watched"), &malformed).is_err(),
-                "invalid offsets, action codes and name lengths require a rescan: {offset}={value}"
-            );
+            assert_corrupted(&malformed);
         }
         Ok(())
     }
@@ -192,10 +216,7 @@ mod tests {
             "nul\0name",
         ] {
             let wide: Vec<_> = name.encode_utf16().collect();
-            assert!(
-                events(Path::new(r"C:\watched"), &record(FILE_ACTION_ADDED, &wide)).is_err(),
-                "a native record must provide a nonempty relative descendant: {name:?}"
-            );
+            assert_corrupted(&record(FILE_ACTION_ADDED, &wide));
         }
         Ok(())
     }

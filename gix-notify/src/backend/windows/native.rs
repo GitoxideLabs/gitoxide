@@ -131,10 +131,16 @@ impl Read {
         if self.pending {
             return Err(io::Error::other("a directory notification read is still pending"));
         }
-        if bytes == 0 || bytes as usize > size_of::<[u32; BUFFER_WORDS]>() {
+        if bytes == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "directory notification buffer overflow",
+            ));
+        }
+        if bytes as usize > size_of::<[u32; BUFFER_WORDS]>() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                gix_error::corruption("directory notification byte count exceeds its buffer"),
             ));
         }
         // SAFETY: The completed read no longer accesses this initialized allocation; the byte
@@ -167,7 +173,7 @@ impl Read {
         if identity(&open(&self.path, false)?)? != self.identity {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
-                "watched directory was replaced",
+                gix_error::conflict("watched directory was replaced"),
             ));
         }
         Ok(())

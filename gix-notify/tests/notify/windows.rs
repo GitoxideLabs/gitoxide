@@ -6,14 +6,18 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gix_error::TestResult;
+use gix_error::{ErrorExt, TestResult};
 use gix_notify::{Budget, Event, EventKind, Loss, Options, SynchronizeError, Watch, Watcher};
 use gix_parallel::{Mutable, OwnShared, lock};
 use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
 
 fn watch(path: &Path, recursive: bool) -> TestResult<(Watcher, mpsc::Receiver<()>)> {
+    watch_with_options(path, recursive, Options::default())
+}
+
+fn watch_with_options(path: &Path, recursive: bool, options: Options) -> TestResult<(Watcher, mpsc::Receiver<()>)> {
     let (send, receive) = mpsc::sync_channel(1);
-    let mut watcher = Watcher::new(Options::default())?;
+    let mut watcher = Watcher::new(options)?;
     watcher.set_waker(move || {
         let _ = send.try_send(());
     });
@@ -285,18 +289,63 @@ fn nonrecursive_directory_and_nested_file_keep_independent_scopes() -> TestResul
 
 #[test]
 fn replacing_a_directory_identity_invalidates_coverage_and_can_be_retried() -> TestResult {
+    replacing_directory_identity(Options::default().root_check_interval)
+}
+
+#[test]
+fn custom_interval_detects_idle_directory_identity_replacement() -> TestResult {
+    replacing_directory_identity(Some(Duration::from_millis(25)))
+}
+
+#[test]
+fn delivery_checks_root_identity_without_periodic_checks() -> TestResult {
+    replacing_directory_identity(None)
+}
+
+fn replacing_directory_identity(root_check_interval: Option<Duration>) -> TestResult {
     let directory = tempfile::tempdir()?;
     let parent = directory.path().canonicalize()?;
     let root = parent.join("watched");
     std::fs::create_dir(&root)?;
-    let (mut watcher, receive) = watch(&root, true)?;
+    let (mut watcher, receive) = watch_with_options(
+        &root,
+        true,
+        Options {
+            root_check_interval,
+            ..Options::default()
+        },
+    )?;
     let initial = watcher.drain(Budget::default());
-    std::fs::rename(&root, parent.join("old-root"))?;
+    let old_root = parent.join("old-root");
+    std::fs::rename(&root, &old_root)?;
     std::fs::create_dir(&root)?;
+    let stale_path = root.join("probe");
+    if root_check_interval.is_none() {
+        // Force a delivery on the still-open directory handle. Windows may also report root loss
+        // before this write; disabling periodic checks does not suppress native loss signals.
+        std::fs::write(
+            old_root.join("probe"),
+            "the original handle must not publish a stale path",
+        )?;
+    }
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let batch = watcher.drain(Budget::default());
+        assert!(
+            batch.events.iter().all(|event| !event.paths.contains(&stale_path)),
+            "delivery must check root identity before publishing paths under the replacement directory"
+        );
         if batch.loss.is_some() {
+            let error = batch.error.expect("lost native coverage retains its failure");
+            assert!(error.is_conflict(), "lost coverage requires re-registration");
+            assert!(
+                error.downcast_any_ref::<std::io::Error>().is_some(),
+                "the original native I/O failure is retained"
+            );
+            assert!(
+                !error.is_retryable(),
+                "re-registration is required instead of retrying the failed native operation"
+            );
             assert!(
                 batch.generation > initial.generation,
                 "a replacement directory needs a fresh baseline"
@@ -361,19 +410,28 @@ fn replacement_stops_old_coverage_and_starts_new_coverage_before_returning() -> 
 
 #[test]
 fn dropping_idle_watches_cancels_pending_native_io() -> TestResult {
-    let directory = tempfile::tempdir()?;
-    let root = directory.path().canonicalize()?;
-    let (watcher, _) = watch(&root, true)?;
-    let (send, receive) = mpsc::sync_channel(1);
-    let worker = std::thread::spawn(move || {
-        drop(watcher);
-        let _ = send.send(());
-    });
-    receive
-        .recv_timeout(Duration::from_secs(5))
-        .expect("dropping an idle watcher must cancel native I/O without waiting for filesystem changes");
-    worker.join().expect("watcher shutdown must not panic");
-    std::fs::remove_dir(&root)?;
+    for root_check_interval in [Options::default().root_check_interval, None, Some(Duration::MAX)] {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().canonicalize()?;
+        let (watcher, _) = watch_with_options(
+            &root,
+            true,
+            Options {
+                root_check_interval,
+                ..Options::default()
+            },
+        )?;
+        let (send, receive) = mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            drop(watcher);
+            let _ = send.send(());
+        });
+        receive
+            .recv_timeout(Duration::from_secs(5))
+            .expect("dropping an idle watcher must cancel native I/O regardless of the root check interval");
+        worker.join().expect("watcher shutdown must not panic");
+        std::fs::remove_dir(&root)?;
+    }
     Ok(())
 }
 
@@ -413,10 +471,27 @@ fn partial_registration_failure_closes_armed_roots_and_can_be_retried() -> TestR
             recursive: true,
         },
     ];
-    assert!(
-        watcher.replace(watches.clone()).is_err(),
-        "a sharing violation must fail the complete watch set"
+    let error = watcher
+        .replace(watches.clone())
+        .expect_err("a sharing violation must fail the complete watch set");
+    let native = error
+        .downcast_any_ref::<std::io::Error>()
+        .expect("the native registration failure is retained");
+    assert_eq!(
+        native.raw_os_error(),
+        Some(windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION as i32),
+        "the native sharing violation code is preserved"
     );
+    assert_eq!(
+        native.kind(),
+        std::io::Error::from_raw_os_error(windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION as i32).kind(),
+        "the native registration error kind is unchanged"
+    );
+    assert!(
+        !error.is_validation(),
+        "an OS registration failure is not invalid caller input"
+    );
+    assert!(!error.is_retryable(), "the backend does not guess native retryability");
     assert!(
         watcher.drain(Budget::default()).loss.is_some(),
         "failed replacement invalidates the previous coverage"
@@ -460,6 +535,7 @@ fn native_buffer_overflow_requests_rescan_and_keeps_delivering() -> TestResult {
     let mut watcher = Watcher::new(Options {
         max_events: 8192,
         max_bytes: 16 * 1024 * 1024,
+        ..Options::default()
     })?;
     let worker_gate = gate.clone();
     watcher.set_waker(move || {
@@ -535,10 +611,17 @@ fn unsupported_fences_do_not_create_marker_files() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().canonicalize()?;
     let (mut watcher, _) = watch(&root, true)?;
+    let error = watcher
+        .synchronize_at(&root, Instant::now() + Duration::from_secs(5))
+        .expect_err("Windows cannot certify delivery across independent native directory streams");
     assert_eq!(
-        watcher.synchronize_at(&root, Instant::now() + Duration::from_secs(5)),
-        Err(SynchronizeError::Unsupported),
-        "Windows cannot certify delivery across independent native directory streams"
+        error,
+        SynchronizeError::Unsupported,
+        "the typed recovery contract is unchanged"
+    );
+    assert!(
+        error.raise().is_unsupported(),
+        "the shared error classifies this known unsupported capability"
     );
     assert_eq!(
         std::fs::read_dir(&root)?.count(),

@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use gix_error::{ErrorExt, Result, ResultExt, message};
+use gix_error::{ErrorExt, Result, ResultExt, allocation_limit, corruption, message};
 
 #[derive(Debug, Eq, PartialEq)]
 pub(super) struct Snapshot {
@@ -27,7 +27,7 @@ pub(super) fn snapshot(watches: &BTreeMap<PathBuf, bool>) -> Result<Snapshot> {
         .and_then(|file| file.take(MAX_BYTES + 1).read_to_end(&mut data))
         .or_raise(|| message("could not read mount table for filesystem notification coverage"))?;
     if data.len() as u64 > MAX_BYTES {
-        return Err(message("mount table exceeds the certification budget").raise());
+        return Err(allocation_limit("mount table exceeds the certification budget").raise());
     }
     from_bytes(&data, watches).or_raise(|| message("could not parse mount table for filesystem notification coverage"))
 }
@@ -132,7 +132,7 @@ fn supports_notifications(filesystem: &[u8]) -> bool {
 }
 
 fn invalid(message: &'static str) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, message)
+    io::Error::new(io::ErrorKind::InvalidData, corruption(message))
 }
 
 #[cfg(test)]
@@ -150,9 +150,17 @@ mod tests {
             "mount paths use kernel escapes without Unicode conversion"
         );
         for invalid in [b"/incomplete\\".as_slice(), b"/short\\04", b"/unknown\\041"] {
-            assert!(
-                decode_path(invalid).is_err(),
-                "malformed escapes cannot certify coverage"
+            let error = decode_path(invalid)
+                .expect_err("malformed escapes cannot certify coverage")
+                .raise();
+            assert!(error.is_corrupted(), "invalid kernel escapes are malformed native data");
+            assert_eq!(
+                error
+                    .downcast_any_ref::<io::Error>()
+                    .expect("native error retained")
+                    .kind(),
+                io::ErrorKind::InvalidData,
+                "classification preserves the parser's native I/O error"
             );
         }
         Ok(())
@@ -237,10 +245,26 @@ mod tests {
             b"1 0 8:1 / / rw - ext4\n",
             b"1 0 8:1 / relative rw - ext4 /dev/root rw\n",
             b"1 0 8:1 / /bad\\0400\\999 rw - ext4 /dev/root rw\n",
+            b"invalid 0 8:1 / / rw - ext4 /dev/root rw\n",
+            b"1 0 8:1 / / rw - ext4 /dev/ro\0ot rw\n",
+            b"1 0 8:1 / / rw - ext4  rw\n",
+            b"1 0 8:1 / /unrelated rw - ext4 /dev/root rw\n",
         ] {
+            let error = from_bytes(table, &watches)
+                .or_raise(|| message("could not parse mount table for filesystem notification coverage"))
+                .expect_err("malformed mount tables fail closed");
             assert!(
-                from_bytes(table, &watches).is_err(),
-                "malformed mount tables fail closed"
+                error.is_corrupted(),
+                "malformed proc data is corruption, not caller input"
+            );
+            assert!(!error.is_validation(), "watch paths did not cause the malformed table");
+            assert_eq!(
+                error
+                    .downcast_any_ref::<io::Error>()
+                    .expect("native cause retained")
+                    .kind(),
+                io::ErrorKind::InvalidData,
+                "adding parse context preserves the native cause and its classification"
             );
         }
     }
