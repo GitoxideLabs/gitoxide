@@ -24,7 +24,10 @@ pub struct Args {
 
     /// The amount of threads to use for some operations.
     ///
-    /// If unset, or the value is 0, there is no limit and all logical cores can be used.
+    /// If unset, the operation's default is used: usually one per logical core,
+    /// but fewer for some operations on macOS. For worktree status, this cap can increase elapsed time
+    /// when many worktree files need to be read and hashed; a higher limit may help.
+    /// A value of 0 allows all logical cores to be used.
     #[clap(long)]
     pub threads: Option<usize>,
 

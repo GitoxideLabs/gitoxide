@@ -107,7 +107,7 @@ pub fn show(
                     }
                 });
             }
-            opts.thread_limit = thread_limit;
+            opts.thread_limit = thread_limit.or(opts.thread_limit);
             opts.sorting = Some(gix::status::plumbing::index_as_worktree_with_renames::Sorting::ByPathCaseSensitive);
         })
         .index_worktree_submodules(match submodules {

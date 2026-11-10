@@ -99,10 +99,8 @@ impl Repository {
             head_tree: Some(None),
             tree_index_renames: Default::default(),
             index_worktree_options: index_worktree::Options {
-                sorting: None,
                 dirwalk_options: Some(self.dirwalk_options()?),
-                rewrites: None,
-                thread_limit: None,
+                ..Default::default()
             },
         };
 

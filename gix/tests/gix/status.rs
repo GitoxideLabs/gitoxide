@@ -17,6 +17,25 @@ pub fn repo(name: &str) -> Result<gix::Repository> {
     )?)
 }
 
+#[test]
+fn default_thread_limit() -> gix_error::TestResult {
+    let expected = cfg!(target_os = "macos").then_some(3);
+    assert_eq!(
+        gix::status::index_worktree::Options::default().thread_limit,
+        expected,
+        "the default caps threads at three on macOS and leaves them unlimited elsewhere"
+    );
+    repo("untracked-only")?
+        .status(gix::progress::Discard)?
+        .index_worktree_options_mut(|opts| {
+            assert_eq!(
+                opts.thread_limit, expected,
+                "the status platform preserves the default thread limit"
+            );
+        });
+    Ok(())
+}
+
 mod into_iter {
     use gix::status::{Item, Submodule, tree_index::TrackRenames};
     use gix_diff::Rewrites;

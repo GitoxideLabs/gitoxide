@@ -10,7 +10,7 @@ use crate::{
 use gix_status::index_as_worktree::traits::{CompareBlobs, SubmoduleStatus};
 
 /// Options for use with [Repository::index_worktree_status()].
-#[derive(Default, Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Options {
     /// The way all output should be sorted.
     ///
@@ -35,10 +35,24 @@ pub struct Options {
     /// Note that there is no git-configuration specific to index-worktree rename tracking.
     /// When rewrite tracking is enabled, there will be a delay for some entries as they partake in the rename-analysis.
     pub rewrites: Option<gix_diff::Rewrites>,
-    /// If set, don't use more than this amount of threads for the tracked modification check.
-    /// Otherwise, usually use as many threads as there are logical cores.
-    /// A value of 0 is interpreted as no-limit
+    /// The maximum number of threads for the tracked modification check. `None` and `Some(0)` use
+    /// the available logical cores.
+    ///
+    /// Defaults to `Some(3)` on macOS, where more threads mostly add system time to `lstat` calls,
+    /// and `None` elsewhere. This cap can increase elapsed time when many worktree files need to be read
+    /// and hashed. In those cases, a higher limit or `None`/`Some(0)` can improve performance.
     pub thread_limit: Option<usize>,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Options {
+            sorting: None,
+            dirwalk_options: None,
+            rewrites: None,
+            thread_limit: gix_status::index_as_worktree::Options::default().thread_limit,
+        }
+    }
 }
 
 impl Repository {

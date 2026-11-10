@@ -4,13 +4,15 @@ use bstr::BStr;
 use gix_index::entry;
 
 /// Options that control how the index status with a worktree is computed.
-#[derive(Clone, Default, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Options {
     /// Capabilities of the file system which affect the status computation.
     pub fs: gix_fs::Capabilities,
-    /// If set, don't use more than this amount of threads.
-    /// Otherwise, usually use as many threads as there are logical cores.
-    /// A value of 0 is interpreted as no-limit
+    /// The maximum number of threads. `None` and `Some(0)` use the available logical cores.
+    ///
+    /// Defaults to `Some(3)` on macOS, where more threads mostly add system time to `lstat` calls,
+    /// and `None` elsewhere. This cap can increase elapsed time when many worktree files need to be read
+    /// and hashed. In those cases, a higher limit or `None`/`Some(0)` can improve performance.
     pub thread_limit: Option<usize>,
     /// Options that control how stat comparisons are made when checking if a file is fresh.
     pub stat: gix_index::entry::stat::Options,
@@ -19,6 +21,18 @@ pub struct Options {
     /// Misses fall through to a live `lstat`, so this only affects performance.
     /// Effective only on Windows.
     pub fscache: bool,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Options {
+            fs: Default::default(),
+            // TODO(perf): Make worktree status scale (like they do on Linux) with more threads on macOS instead of capping them.
+            thread_limit: cfg!(target_os = "macos").then_some(3),
+            stat: Default::default(),
+            fscache: false,
+        }
+    }
 }
 
 /// The context for [index_as_worktree()`](crate::index_as_worktree()).
