@@ -30,7 +30,8 @@ mod platform;
 /// Their core and configuration paths share a single cached conversion.
 /// On Unix, the first executable in `PATH` is resolved through symlinks. Known Homebrew Cellar
 /// layouts, Linux `/usr/bin/git` and `/bin/git`, and direct Apple developer binaries avoid the query
-/// when their expected configuration file exists. Apple's `/usr/bin/git` shim still queries Git,
+/// when their expected configuration file exists. Without `/etc/gitconfig`, Linux `/usr/bin/git` and
+/// `/bin/git` have no installation configuration, which also needs no query. Apple's `/usr/bin/git` shim still queries Git,
 /// leaving developer-directory and toolchain selection to the shim.
 /// Unknown layouts, relative `PATH` entries, and restricted execute bits also query Git.
 /// Indirect Apple Git invocations also query Git, as their config can differ from the symlink target's.
