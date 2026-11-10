@@ -18,7 +18,7 @@ impl Backend {
         Err(crate::SynchronizeError::Unsupported)
     }
 
-    pub(crate) fn new(watches: &[Watch], sender: queue::Sender) -> Result<Self> {
+    pub(crate) fn new(watches: &[Watch], sender: queue::Sender, _options: crate::Options) -> Result<Self> {
         let watcher = notify::recommended_watcher(move |event| receive(&sender, event))
             .or_raise(|| message("could not create filesystem notification backend"))?;
         let mut out = Self {
@@ -96,7 +96,7 @@ fn receive(sender: &queue::Sender, event: notify::Result<notify::Event>) {
         Err(error) => sender.publish(
             Vec::new(),
             Some(Loss::BackendError),
-            Some(error.and_raise(message("filesystem notification backend failed"))),
+            Some(error.and_raise(message("filesystem notification backend failed").conflict())),
         ),
     }
 }

@@ -71,6 +71,7 @@ fn loss_after_a_marker_and_queue_overflow_both_abort_its_fence() {
         let state = OwnShared::new(Mutable::new(queue::State::new(crate::Options {
             max_events: if overflow { 1 } else { 3 },
             max_bytes: usize::MAX,
+            ..crate::Options::default()
         })));
         let (reply, receive) = mpsc::sync_channel(1);
         let context = Context {
@@ -183,4 +184,80 @@ fn loss_is_processed_even_for_filtered_native_paths() {
         Some(Loss::Rescan),
         "loss is not subject to scope filtering"
     );
+}
+
+#[test]
+fn invalid_native_paths_are_validation_errors_with_the_original_cause() {
+    let error = is_local(Path::new("/invalid\0path")).expect_err("native paths cannot contain NUL bytes");
+    assert!(error.is_validation(), "NUL bytes are invalid input, not an I/O failure");
+    assert!(
+        error.downcast_any_ref::<std::ffi::NulError>().is_some(),
+        "validation context retains the concrete conversion error"
+    );
+}
+
+#[test]
+fn disconnected_control_workers_require_recovery() {
+    let (commands, receive) = mpsc::sync_channel(1);
+    drop(receive);
+    let mut backend = Backend {
+        commands: Some(commands),
+        worker: None,
+    };
+    let error = backend.replace(&[]).expect_err("the control receiver has stopped");
+    assert!(error.is_conflict(), "a stopped worker must be recreated");
+    assert!(
+        error.downcast_any_ref::<mpsc::SendError<Command>>().is_some(),
+        "coverage context retains the native channel failure"
+    );
+}
+
+#[test]
+fn identity_checks_cover_reduced_native_roots() -> gix_error::TestResult {
+    let directory = tempfile::tempdir()?;
+    let parent = directory.path().canonicalize()?;
+    let root = parent.join("root");
+    let child = root.join("child");
+    std::fs::create_dir_all(&child)?;
+    let alias = parent.join("alias");
+    std::os::unix::fs::symlink(&root, &alias)?;
+    let state = OwnShared::new(Mutable::new(queue::State::new(crate::Options::default())));
+    let sender = OwnShared::new(queue::Sender::new(state, 0));
+    let stream = Stream::new(
+        &[
+            Watch {
+                path: alias,
+                recursive: false,
+            },
+            Watch {
+                path: child.clone(),
+                recursive: true,
+            },
+        ],
+        sender,
+    )?;
+    assert_eq!(stream.roots.len(), 1, "nested logical watches share one native root");
+    assert_eq!(
+        stream.roots[0].path, root,
+        "aliased logical paths reduce to the canonical outer directory"
+    );
+    std::fs::rename(&child, root.join("old-child"))?;
+    std::fs::create_dir(&child)?;
+    stream.verify_roots()?;
+    std::fs::rename(&root, parent.join("old-root"))?;
+    std::fs::create_dir(&root)?;
+    let error = stream
+        .verify_roots()
+        .expect_err("replacing a native root loses coverage");
+    assert!(error.is_conflict(), "root replacement requires coverage reconciliation");
+    std::fs::remove_dir(&root)?;
+    std::os::unix::fs::symlink(parent.join("old-root"), &root)?;
+    let error = stream
+        .verify_roots()
+        .expect_err("a symlink to the moved original directory must not hide native root replacement");
+    assert!(
+        error.is_conflict(),
+        "replacement symlinks invalidate native root coverage"
+    );
+    Ok(())
 }

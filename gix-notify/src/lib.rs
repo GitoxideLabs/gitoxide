@@ -45,6 +45,15 @@
 //! marker-based delivery fences on the filesystems described by [`Watcher::synchronize_at()`];
 //! other backends return [`SynchronizeError::Unsupported`].
 //!
+//! macOS checks the identities of its reduced native roots periodically while the control worker
+//! is available, including while idle, and around delivery fences. [`Options::root_check_interval`]
+//! configures or disables the periodic checks, defaulting to once per second. These checks do not
+//! scan directory contents or retain ancestor-directory descriptors. A missing or replaced root stops
+//! its stream and reports [`Loss::BackendError`]; retry [`Watcher::replace()`] even if the desired paths
+//! are unchanged.
+//! A transient rename and restoration between checks can go undetected. Root checks do not replace
+//! application-level refreshes for silent notification blind spots.
+//!
 //! Linux installs one watch per directory without following descendant symlinks. Directory moves,
 //! removals, and native queue overflow can require re-registering the desired watches before a new
 //! baseline scan. Like inotify itself, notifications and fences cannot cover memory-mapped writes
@@ -53,19 +62,23 @@
 //! Windows retains a 64 KiB read buffer per native directory registration, in addition to the
 //! bounded application queue. File watches share their parent's registration and filter sibling
 //! events. Root identity checks detect moved or replaced directories before publishing their
-//! notifications and periodically while idle; losing a root requires registration to be retried.
+//! notifications and periodically while idle, using [`Options::root_check_interval`]; losing a root
+//! requires registration to be retried.
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use std::{path::PathBuf, time::Instant};
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
-use gix_error::{Error, ErrorExt, Result, message};
+use gix_error::{ClassificationMarker, Error, ErrorExt, Result, message, validation};
 use gix_parallel::{Mutable, OwnShared, lock};
 
 mod backend;
 mod queue;
 
-/// Limits on notifications retained while the application is busy.
+/// Notification queue limits and native coverage checks.
 #[derive(Clone, Copy, Debug)]
 pub struct Options {
     /// Maximum number of queued events. Must be nonzero.
@@ -75,6 +88,16 @@ pub struct Options {
     /// This excludes the native backend's buffers, an event currently being received, and the
     /// single retained error diagnostic. Crossing either limit drops pending events and latches loss.
     pub max_bytes: usize,
+    /// Interval between periodic native-root identity checks on macOS and Windows.
+    ///
+    /// Defaults to one second. `Some` must contain a nonzero duration; `None` disables periodic
+    /// checks. Other backends ignore this setting. Checks during registration, event delivery,
+    /// or synchronization remain active where supported.
+    ///
+    /// Disabling periodic checks can leave moved or replaced roots undetected while idle.
+    /// Applications must then verify coverage themselves or, where supported, synchronize before
+    /// relying on it. These checks never replace application-level refreshes of directory contents.
+    pub root_check_interval: Option<Duration>,
 }
 
 impl Default for Options {
@@ -82,6 +105,7 @@ impl Default for Options {
         Self {
             max_events: 4096,
             max_bytes: 4 * 1024 * 1024,
+            root_check_interval: Some(Duration::from_secs(1)),
         }
     }
 }
@@ -195,12 +219,15 @@ pub struct Fence {
 }
 
 /// Why notification delivery could not be synchronized.
+///
+/// Classifications distinguish unsupported capabilities, retryable timeouts or busy workers,
+/// and coverage conflicts requiring reconciliation or re-registration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum SynchronizeError {
     /// This backend provides no delivery barrier. Scanning is required for a complete answer.
     Unsupported,
-    /// The deadline elapsed before native delivery was certified.
+    /// The deadline elapsed before native delivery was certified. Retrying requires a fresh deadline.
     TimedOut,
     /// Coverage changed or failed while synchronizing.
     CoverageLost,
@@ -222,23 +249,39 @@ impl std::fmt::Display for SynchronizeError {
     }
 }
 
-impl std::error::Error for SynchronizeError {}
+impl std::error::Error for SynchronizeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(match self {
+            Self::Unsupported => const { &ClassificationMarker::UNSUPPORTED },
+            Self::TimedOut | Self::Busy => const { &ClassificationMarker::RETRYABLE },
+            Self::CoverageLost | Self::Stopped => const { &ClassificationMarker::CONFLICT },
+        })
+    }
+}
 
 /// A bounded stream of filesystem invalidations, with replaceable desired coverage.
 pub struct Watcher {
     state: OwnShared<Mutable<queue::State>>,
+    options: Options,
     desired: Vec<Watch>,
     backend: Option<backend::Backend>,
 }
 
 impl Watcher {
     /// Create an empty watcher. Native resources are acquired by [`replace()`](Self::replace).
+    /// Zero queue limits or a zero root-check interval return a [validation error](Error::is_validation).
     pub fn new(options: Options) -> Result<Self> {
         if options.max_events == 0 || options.max_bytes == 0 {
-            return Err(message("filesystem notification queue limits must be nonzero").raise());
+            return Err(validation("filesystem notification queue limits must be nonzero").raise());
+        }
+        if options.root_check_interval.is_some_and(|interval| interval.is_zero()) {
+            return Err(
+                validation("filesystem root check interval must be nonzero, or None to disable checks").raise(),
+            );
         }
         Ok(Self {
             state: OwnShared::new(Mutable::new(queue::State::new(options))),
+            options,
             desired: Vec::new(),
             backend: None,
         })
@@ -260,11 +303,12 @@ impl Watcher {
     /// A change invalidates the previous generation
     /// before any native registration changes. Success requires a new baseline scan; it does not
     /// promise gap-free replacement. Failed registration leaves no partial set installed.
+    /// Relative paths return a [validation error](Error::is_validation) without changing coverage.
     pub fn replace(&mut self, watches: impl IntoIterator<Item = Watch>) -> Result {
         let mut paths = std::collections::BTreeMap::new();
         for watch in watches {
             if !watch.path.is_absolute() {
-                return Err(message!("watched path must be absolute: {}", watch.path.display()).raise());
+                return Err(message!("watched path must be absolute: {}", watch.path.display()).validation_error());
             }
             paths
                 .entry(watch.path)
@@ -303,11 +347,14 @@ impl Watcher {
         if !self.desired.is_empty() {
             let result = match self.backend.as_mut() {
                 Some(backend) => backend.replace(&self.desired),
-                None => backend::Backend::new(&self.desired, queue::Sender::new(self.state.clone(), registration)).map(
-                    |backend| {
-                        self.backend = Some(backend);
-                    },
-                ),
+                None => backend::Backend::new(
+                    &self.desired,
+                    queue::Sender::new(self.state.clone(), registration),
+                    self.options,
+                )
+                .map(|backend| {
+                    self.backend = Some(backend);
+                }),
             };
             if let Err(error) = result {
                 {

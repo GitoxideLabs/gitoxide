@@ -9,6 +9,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use gix_error::{allocation_failure, allocation_limit, conflict, corruption};
+
 /// Reject nonlocal mounts intersecting logical coverage, before reducing native roots.
 ///
 /// `watches` must use physical absolute paths. Each watched path must additionally pass
@@ -21,7 +23,7 @@ pub(super) fn has_nonlocal_coverage(watches: &BTreeMap<PathBuf, bool>) -> io::Re
         let end = mount.f_mntonname.iter().position(|byte| *byte == 0).ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
-                "unterminated mount point in getfsstat result",
+                corruption("unterminated mount point in getfsstat result"),
             )
         })?;
         let path = PathBuf::from(OsString::from_vec(
@@ -67,11 +69,11 @@ fn mount_snapshot() -> io::Result<Vec<libc::statfs>> {
             .map_err(io::Error::other)?
             .checked_add(16)
             .filter(|capacity| *capacity <= 65_536)
-            .ok_or_else(|| io::Error::other("mount table exceeds the certification budget"))?;
+            .ok_or_else(|| io::Error::other(allocation_limit("mount table exceeds the certification budget")))?;
         let bytes = capacity
             .checked_mul(size_of::<libc::statfs>())
             .and_then(|bytes| libc::c_int::try_from(bytes).ok())
-            .ok_or_else(|| io::Error::other("mount table buffer size overflows getfsstat"))?;
+            .ok_or_else(|| io::Error::other(allocation_failure("mount table buffer size overflows getfsstat")))?;
         let mut buffer: Vec<MaybeUninit<libc::statfs>> = Vec::with_capacity(capacity);
         buffer.resize_with(capacity, MaybeUninit::uninit);
         let filled = unsafe {
@@ -95,9 +97,9 @@ fn mount_snapshot() -> io::Result<Vec<libc::statfs>> {
             })
             .collect());
     }
-    Err(io::Error::other(
+    Err(io::Error::other(conflict(
         "mount table kept changing while checking notification coverage",
-    ))
+    )))
 }
 
 #[cfg(test)]
