@@ -160,22 +160,21 @@ mod tests {
 
     #[test]
     fn absent_system_config_is_no_installation_config() -> gix_error::TestResult {
-        let root = tempfile::tempdir()?;
-        let system = root.path().join("etc/gitconfig");
+        let root = gix_testtools::scripted_fixture_read_only("unix-system-config.sh")?;
+        let system = root.join("missing/etc/gitconfig");
         assert_eq!(
             config_paths_at(system.clone(), true, &system),
             Some(ConfigPaths::default()),
             "Git reports no installation config when its system config doesn't exist"
         );
         assert_eq!(
-            config_paths_at(root.path().join("prefix/etc/gitconfig"), true, &system),
+            config_paths_at(root.join("prefix/etc/gitconfig"), true, &system),
             None,
             "a missing prefix config can mean a misidentified prefix, so Git is queried"
         );
 
-        std::fs::create_dir_all(root.path().join("etc"))?;
-        std::fs::write(&system, "")?;
-        let expected = crate::os_string_into_bstring(system.clone().into()).expect("temporary paths are valid UTF-8");
+        let system = root.join("existing/etc/gitconfig");
+        let expected = crate::os_string_into_bstring(system.clone().into())?;
         assert_eq!(
             config_paths_at(system.clone(), true, &system),
             Some(ConfigPaths {
