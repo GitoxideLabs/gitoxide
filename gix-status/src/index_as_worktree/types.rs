@@ -4,13 +4,15 @@ use bstr::BStr;
 use gix_index::entry;
 
 /// Options that control how the index status with a worktree is computed.
-#[derive(Clone, Default, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Options {
     /// Capabilities of the file system which affect the status computation.
     pub fs: gix_fs::Capabilities,
-    /// The maximum number of threads. `None` and `Some(0)` use the available logical cores,
-    /// capped at three on macOS, where more threads mostly add system time to `lstat` calls.
-    /// Positive limits override the cap, which helps when many files have to be read and hashed.
+    /// The maximum number of threads. `None` and `Some(0)` use the available logical cores.
+    ///
+    /// Defaults to `Some(3)` on macOS, where more threads mostly add system time to `lstat` calls,
+    /// and `None` elsewhere. This cap can increase elapsed time when many worktree files need to be read
+    /// and hashed. In those cases, a higher limit or `None`/`Some(0)` can improve performance.
     pub thread_limit: Option<usize>,
     /// Options that control how stat comparisons are made when checking if a file is fresh.
     pub stat: gix_index::entry::stat::Options,
@@ -21,13 +23,15 @@ pub struct Options {
     pub fscache: bool,
 }
 
-impl Options {
-    pub(super) fn thread_limit(&self) -> Option<usize> {
-        #[cfg(target_os = "macos")]
-        if self.thread_limit.is_none_or(|threads| threads == 0) {
-            return Some(gix_parallel::num_threads(None).min(3));
+impl Default for Options {
+    fn default() -> Self {
+        Options {
+            fs: Default::default(),
+            // TODO(perf): Make worktree status scale (like they do on Linux) with more threads on macOS instead of capping them.
+            thread_limit: cfg!(target_os = "macos").then_some(3),
+            stat: Default::default(),
+            fscache: false,
         }
-        self.thread_limit
     }
 }
 
@@ -245,39 +249,4 @@ pub trait VisitEntry<'index> {
         rela_path: &'index BStr,
         status: EntryStatus<Self::ContentChange, Self::SubmoduleStatus>,
     );
-}
-
-#[cfg(test)]
-mod tests {
-    use super::Options;
-
-    #[test]
-    fn thread_limit_resolution() {
-        for thread_limit in [None, Some(0)] {
-            #[cfg(target_os = "macos")]
-            let expected = Some(gix_parallel::num_threads(None).min(3));
-            #[cfg(not(target_os = "macos"))]
-            let expected = thread_limit;
-            assert_eq!(
-                Options {
-                    thread_limit,
-                    ..Default::default()
-                }
-                .thread_limit(),
-                expected,
-                "automatic thread counts are capped at three on macOS, and left to `gix-parallel` elsewhere"
-            );
-        }
-        for threads in [1, 2, 8, usize::MAX] {
-            assert_eq!(
-                Options {
-                    thread_limit: Some(threads),
-                    ..Default::default()
-                }
-                .thread_limit(),
-                Some(threads),
-                "positive limits override the automatic thread count"
-            );
-        }
-    }
 }
