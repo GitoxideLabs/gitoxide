@@ -243,6 +243,7 @@ fn validate_settings(package: &Value) -> Result<()> {
             "checks",
             "each-feature",
             "extra-inputs",
+            "extra-platforms",
             "isolated",
             "without-git",
             "journey",
@@ -260,6 +261,13 @@ fn validate_settings(package: &Value) -> Result<()> {
     }
     for key in ["isolated", "without-git", "journey", "auditable", "api-checker"] {
         flag(package, key)?;
+    }
+    if let Some(platforms) = settings.get("extra-platforms") {
+        for platform in strings(platforms, "QA extra-platforms")? {
+            if platform != "freebsd-x86_64" {
+                bail!("{}: unsupported QA extra platform {platform}", package["name"]);
+            }
+        }
     }
     if flag(package, "isolated")?
         && settings
@@ -762,6 +770,29 @@ mod tests {
             "isolated packages need a test configuration"
         );
         assert!(case_command(&["test"], &["sample"], &json!({"require":["xz"]})).is_err());
+    }
+
+    #[test]
+    fn extra_platform_metadata_is_validated_even_when_unselected() -> gix_error::TestResult {
+        let mut metadata = metadata();
+        for platforms in [json!([]), json!(["freebsd-x86_64"])] {
+            metadata["packages"][0]["metadata"]["qa"]["extra-platforms"] = platforms;
+            commands(&metadata, &plan("fast", &[]), &[])?;
+        }
+        for platforms in [
+            json!("freebsd-x86_64"),
+            json!([42]),
+            json!(["freebsd"]),
+            json!(["linux-x86_64"]),
+            json!(["freebsd-x86_64", "unknown"]),
+        ] {
+            metadata["packages"][0]["metadata"]["qa"]["extra-platforms"] = platforms;
+            assert!(
+                commands(&metadata, &plan("fast", &[]), &[]).is_err(),
+                "extra platform declarations require an array of supported extra platform labels"
+            );
+        }
+        Ok(())
     }
 
     #[test]
