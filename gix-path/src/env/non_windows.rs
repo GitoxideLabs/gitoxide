@@ -60,17 +60,22 @@ pub(super) fn config_paths_without_git() -> Option<ConfigPaths> {
         if !is_system && executable != resolved {
             return None;
         }
-        if !config.is_file() {
-            return None;
-        }
-        let config = crate::os_string_into_bstring(config.into()).ok()?;
-        return Some(ConfigPaths {
-            installation: Some(config.clone()),
-            installation_is_system: is_system,
-            system: is_system.then_some(config),
-        });
+        return config_paths_at(config, is_system, system_config()?);
     }
     None
+}
+
+#[cfg(unix)]
+fn config_paths_at(config: PathBuf, is_system: bool, system_config: &Path) -> Option<ConfigPaths> {
+    if !config.is_file() {
+        return (config == system_config).then(ConfigPaths::default);
+    }
+    let config = crate::os_string_into_bstring(config.into()).ok()?;
+    Some(ConfigPaths {
+        installation: Some(config.clone()),
+        installation_is_system: is_system,
+        system: is_system.then_some(config),
+    })
 }
 
 #[cfg(unix)]
@@ -129,13 +134,16 @@ pub(super) fn config_query_cwd() -> PathBuf {
     "/".into()
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, unix))]
 mod tests {
-    use super::config_path_from_executable;
-    use std::path::Path;
+    use super::{ConfigPaths, config_paths_at};
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn distribution_config_is_outside_usr() {
+        use super::config_path_from_executable;
+        use std::path::Path;
+
         for executable in ["/usr/bin/git", "/bin/git"] {
             assert_eq!(
                 config_path_from_executable(Path::new(executable)),
@@ -148,5 +156,35 @@ mod tests {
             None,
             "an arbitrary build prefix does not establish its config location"
         );
+    }
+
+    #[test]
+    fn absent_system_config_is_no_installation_config() -> gix_error::TestResult {
+        let root = tempfile::tempdir()?;
+        let system = root.path().join("etc/gitconfig");
+        assert_eq!(
+            config_paths_at(system.clone(), true, &system),
+            Some(ConfigPaths::default()),
+            "Git reports no installation config when its system config doesn't exist"
+        );
+        assert_eq!(
+            config_paths_at(root.path().join("prefix/etc/gitconfig"), true, &system),
+            None,
+            "a missing prefix config can mean a misidentified prefix, so Git is queried"
+        );
+
+        std::fs::create_dir_all(root.path().join("etc"))?;
+        std::fs::write(&system, "")?;
+        let expected = crate::os_string_into_bstring(system.clone().into()).expect("temporary paths are valid UTF-8");
+        assert_eq!(
+            config_paths_at(system.clone(), true, &system),
+            Some(ConfigPaths {
+                installation: Some(expected.clone()),
+                installation_is_system: true,
+                system: Some(expected),
+            }),
+            "an existing system config is the installation config"
+        );
+        Ok(())
     }
 }
