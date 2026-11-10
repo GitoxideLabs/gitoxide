@@ -23,6 +23,7 @@ pub const PLATFORMS: &[&str] = &[
     "macos-x86_64",
     "windows-x86_64",
     "windows-aarch64",
+    "freebsd-x86_64",
 ];
 const CI_PLATFORMS: &[&str] = &[
     "linux-x86_64",
@@ -32,6 +33,7 @@ const CI_PLATFORMS: &[&str] = &[
     "macos-aarch64",
     "windows-x86_64",
     "windows-aarch64",
+    "freebsd-x86_64",
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -90,13 +92,11 @@ pub fn tasks(metadata: &Value, selection: &Value, platform: &str) -> Result<Vec<
     // Validate even empty selections before adding mandatory policy checks.
     run::commands(metadata, selection, &[])?;
     let exhaustive = selection["mode"] == "exhaustive";
+    let packages = metadata["packages"]
+        .as_array()
+        .ok_or_raise(|| message("missing packages"))?;
     let selected: Vec<&str> = if exhaustive {
-        metadata["packages"]
-            .as_array()
-            .ok_or_raise(|| message("missing packages"))?
-            .iter()
-            .filter_map(|package| package["name"].as_str())
-            .collect()
+        packages.iter().filter_map(|package| package["name"].as_str()).collect()
     } else {
         selection["packages"]
             .as_array()
@@ -105,6 +105,33 @@ pub fn tasks(metadata: &Value, selection: &Value, platform: &str) -> Result<Vec<
             .filter_map(Value::as_str)
             .collect()
     };
+    let selected_packages: Vec<_> = packages
+        .iter()
+        .filter(|p| selected.contains(&p["name"].as_str().expect("validated package name")))
+        .collect();
+    if os == "freebsd" {
+        let packages: Vec<_> = selected_packages
+            .iter()
+            .filter(|package| {
+                package["metadata"]["qa"]["extra-platforms"]
+                    .as_array()
+                    .is_some_and(|platforms| platforms.iter().any(|label| label == platform))
+            })
+            .collect();
+        if packages.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut command = Command::new("cargo", &["test", "--locked", "--no-fail-fast"]);
+        for package in packages {
+            command.args.extend([
+                "-p".into(),
+                package["name"].as_str().expect("validated package name").into(),
+            ]);
+        }
+        let task = Task::new("platform-tests", "tests", &["tests", "default-tests"], vec![command]);
+        task.json(metadata)?;
+        return Ok(vec![task]);
+    }
     let has_work = !selected.is_empty();
     let core = |stage: &str| run::commands(metadata, selection, &[stage.into()]);
     let mut out = vec![
@@ -177,14 +204,6 @@ pub fn tasks(metadata: &Value, selection: &Value, platform: &str) -> Result<Vec<
         }
         return Ok(out);
     }
-    let packages = metadata["packages"]
-        .as_array()
-        .ok_or_raise(|| message("missing packages"))?;
-    let selected_packages: Vec<_> = packages
-        .iter()
-        .filter(|p| selected.contains(&p["name"].as_str().expect("validated package name")))
-        .collect();
-
     // Clippy performs the default compilation check too; do not schedule cargo check again.
     out.push(Task::new("lint", "lint", &["lint", "check"], core("lint")?));
     let checks = core("feature-checks")?;
@@ -435,6 +454,7 @@ fn assigned(task: &Task, platform: &str, exhaustive: bool) -> bool {
     match task.id {
         // The gate runs this task before it publishes a matrix.
         "self-test" => false,
+        "platform-tests" => platform == "freebsd-x86_64",
         "native-tests" | "native-bins" | "isolated-tests" | "without-git" | "size32" => {
             exhaustive || matches!(platform, "linux-x86_64" | "macos-aarch64" | "windows-x86_64")
         }
@@ -465,6 +485,7 @@ fn job(metadata: &Value, platform: &str, group: &str, tasks: &[Task]) -> Result<
         "macos-x86_64" => ("macos-15-intel", "", "", ""),
         "windows-x86_64" => ("windows-latest", "", "", ""),
         "windows-aarch64" => ("windows-11-arm", "", "", ""),
+        "freebsd-x86_64" => ("ubuntu-latest", "", "", ""),
         _ => unreachable!("validated platform"),
     };
     let mut requirements = Requirements::default();
@@ -474,6 +495,7 @@ fn job(metadata: &Value, platform: &str, group: &str, tasks: &[Task]) -> Result<
     let requirements = requirements.json(metadata)?;
     let mut row = json!({"id": format!("{group}@{platform}"), "platform": platform, "runner": runner, "container": container,
         "host": host, "runner_architecture": architecture, "cache": format!("ci-{group}-{platform}"),
+        "freebsd_release": if platform == "freebsd-x86_64" { "15.1" } else { "" },
         "blocking": tasks.iter().any(|task| task.blocking), "tasks": tasks.iter().map(|task| task.id).collect::<Vec<_>>()});
     row.as_object_mut()
         .expect("job row is an object")
@@ -768,6 +790,10 @@ mod tests {
         let selection = json!({"mode":"fast", "packages":[]});
         for platform in PLATFORMS {
             let tasks = tasks(&metadata(), &selection, platform)?;
+            if *platform == "freebsd-x86_64" {
+                assert!(tasks.is_empty(), "extra platforms only run opted-in package tests");
+                continue;
+            }
             assert!(
                 tasks.iter().any(|task| task.id == "policy" && task.blocking),
                 "licenses cannot be selected away"
@@ -775,6 +801,78 @@ mod tests {
             assert!(
                 !tasks.iter().any(|task| task.id == "native-tests"),
                 "empty selections do not run package tests"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn freebsd_only_tests_affected_opted_in_packages() -> gix_error::TestResult {
+        let mut metadata = metadata();
+        for package in &mut metadata["packages"].as_array_mut().expect("test packages")[..2] {
+            package["metadata"]["qa"]["extra-platforms"] = json!(["freebsd-x86_64"]);
+        }
+        for selected in [json!([]), json!(["gitoxide"])] {
+            let selection = json!({"mode":"fast", "packages":selected});
+            assert!(
+                tasks(&metadata, &selection, "freebsd-x86_64")?.is_empty(),
+                "unaffected extra platforms need no work"
+            );
+            let plan = plan(&metadata, &selection, "linux-x86_64", true)?;
+            assert!(
+                !plan["jobs"]
+                    .as_array()
+                    .expect("plan jobs")
+                    .iter()
+                    .any(|job| job["platform"] == "freebsd-x86_64"),
+                "unrelated edits must not start a FreeBSD VM"
+            );
+        }
+        for (mode, expected) in [
+            ("fast", vec!["gix-path"]),
+            ("exhaustive", vec!["gix-path", "internal-tools"]),
+        ] {
+            let selection = json!({"mode":mode, "packages":["gix-path", "gitoxide"]});
+            let tasks = tasks(&metadata, &selection, "freebsd-x86_64")?;
+            let [task] = tasks.as_slice() else {
+                panic!("FreeBSD needs exactly one baseline test task: {tasks:?}");
+            };
+            let mut args = vec!["test", "--locked", "--no-fail-fast"];
+            for name in expected {
+                args.extend(["-p", name]);
+            }
+            assert_eq!(task.id, "platform-tests");
+            assert_eq!(
+                task.commands,
+                [Command::new("cargo", &args)],
+                "both modes name only opted-in packages, without a workspace selection"
+            );
+            assert_eq!(
+                select(tasks.clone(), &["tests".into()])?,
+                tasks,
+                "extra platform tests use the ordinary tests stage"
+            );
+            let plan = plan(&metadata, &selection, "linux-x86_64", true)?;
+            let row = plan["jobs"]
+                .as_array()
+                .expect("plan jobs")
+                .iter()
+                .find(|job| job["platform"] == "freebsd-x86_64")
+                .expect("opted-in FreeBSD tests have a CI job");
+            assert_eq!(row["id"], "tests@freebsd-x86_64");
+            assert_eq!(row["runner"], "ubuntu-latest");
+            assert_eq!(row["freebsd_release"], "15.1");
+            assert_eq!(row["blocking"], true);
+            assert_eq!(row["tasks"], json!(["platform-tests"]));
+            assert_eq!(row["tools"], json!([]), "Cargo tests need no additional Rust tools");
+            assert!(
+                plan["jobs"]
+                    .as_array()
+                    .expect("plan jobs")
+                    .iter()
+                    .filter(|job| job["platform"] != "freebsd-x86_64")
+                    .all(|job| job["freebsd_release"] == ""),
+                "native runners do not request a FreeBSD VM"
             );
         }
         Ok(())
@@ -880,6 +978,7 @@ mod tests {
     #[test]
     fn ci_jobs_partition_the_same_local_tasks() -> gix_error::TestResult {
         let mut metadata = metadata();
+        metadata["packages"][0]["metadata"]["qa"]["extra-platforms"] = json!(["freebsd-x86_64"]);
         metadata["packages"][0]["metadata"]["qa"]["checks"] = json!([{"args":["--all-features"]}]);
         metadata["packages"][0]["metadata"]["qa"]["tests"] = json!([{"args":["--all-features"], "requires":["xz"]}]);
         metadata["packages"].as_array_mut().expect("test packages").push(json!({
@@ -920,6 +1019,9 @@ mod tests {
             } else {
                 &["linux-x86_64", "macos-aarch64", "windows-x86_64"]
             } {
+                if *platform == "freebsd-x86_64" {
+                    continue;
+                }
                 let isolated = jobs
                     .iter()
                     .find(|job| job["id"] == format!("isolated-tests@{platform}"))

@@ -370,6 +370,12 @@ Windows baseline doctests and MSRV builds. `--all-platforms` shows these exact a
 a local run never attempts another host's native checks. Isolated package tests and Windows binary
 checks have their own CI jobs to run concurrently with native tests, retaining their Cargo feature selections.
 
+FreeBSD x86-64 runs baseline Cargo tests for packages that opt in with `qa.extra-platforms`.
+Both fast and exhaustive plans restrict this job to opted-in packages; fast plans also require
+them to be affected. `gix-notify` opts in to exercise its `notify` kqueue backend. The job runs
+the shared QA runner inside a FreeBSD VM, with sources copied onto its local filesystem.
+Its result participates in the ordinary `Tests pass` gate.
+
 Linux feature compilation checks and feature tests run in separate jobs, retaining every
 selected configuration.
 
@@ -541,6 +547,17 @@ Cargo/nextest; the runner supplies package selection and the appropriate locked/
 Use `requires = ["xz"]` on a case that needs an extra system capability. Keep feature combinations
 separate when Cargo unification changes dependency features. Declare external crate input paths
 in `extra-inputs` (repository-relative files/directories, without globs).
+
+Opt into baseline tests on an additional platform by its catalogue label:
+
+```toml
+[package.metadata.qa]
+extra-platforms = ["freebsd-x86_64"]
+```
+
+Currently only `freebsd-x86_64` is supported here. Its runner and FreeBSD release are pinned
+centrally in `tests/it/src/qa/catalog.rs`. These jobs run `cargo test --locked --no-fail-fast`
+for the selected packages with default features; feature variants retain their usual assignments.
 
 For a small set of independent features, opt in to checking each declared feature separately.
 For example, a package such as `gix-parallel` can use:

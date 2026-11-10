@@ -102,7 +102,7 @@ jobs:
           # Automatic coverage compares with the base parent of GitHub's PR merge commit.
           fetch-depth: ${{ matrix.history && '0' || github.event_name == 'pull_request' && '2' || '1' }}
       - name: Install native Rust
-        if: matrix.container == ''
+        if: matrix.container == '' && matrix.freebsd_release == ''
         shell: bash
         run: |
           rustup update stable
@@ -153,6 +153,7 @@ jobs:
         with:
           tool: just@${{ matrix.just_version }} # zizmor: ignore[unpinned-tools] Exact version in Cargo.toml's workspace.metadata.qa.tool-versions.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: matrix.freebsd_release == ''
         with:
           shared-key: ${{ matrix.cache || matrix.id }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -195,8 +196,24 @@ jobs:
           gh run download "$coverage_run" --repo "$GITHUB_REPOSITORY" --name "$COVERAGE_ARTIFACT" \
             --dir target/qa-coverage/indexes
       - name: Run the selected checks
+        if: matrix.freebsd_release == ''
         # Keep Windows' native shell; the shared runner configures every task's environment.
         run: cargo run --profile qa --locked -p internal-tools --no-default-features --bin qa -- run --from-env
+      - name: Run the selected checks in FreeBSD
+        if: matrix.freebsd_release != ''
+        uses: vmactions/freebsd-vm@811efaaac0668df8bfb8308c3ec997b5ab50037b # v1.6.0
+        with:
+          release: ${{ matrix.freebsd_release }}
+          sync: rsync
+          copyback: false
+          envs: QA_PLAN QA_JOB CARGO_TERM_COLOR CLICOLOR CARGO_PROFILE_DEV_DEBUG CARGO_PROFILE_DEV_STRIP GIX_QA_COVERAGE
+          prepare: |
+            pkg install -y ca_root_nss curl
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+              sh -s -- -y --default-toolchain stable --profile minimal
+          run: |
+            export PATH="$HOME/.cargo/bin:$PATH"
+            cargo run --profile qa --locked -p internal-tools --no-default-features --bin qa -- run --from-env
       - name: Publish optional coverage indexes
         if: success() && env.GIX_QA_COVERAGE == 'collect'
         continue-on-error: true

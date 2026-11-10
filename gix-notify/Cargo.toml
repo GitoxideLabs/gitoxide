@@ -11,6 +11,9 @@ edition = "2024"
 rust-version = "1.88"
 include = ["/src/**/*", "/examples/**/*", "/LICENSE-*"]
 
+[package.metadata.qa]
+extra-platforms = ["freebsd-x86_64"]
+
 [dependencies]
 gix-error = { version = "^0.5.1", path = "../gix-error" }
 gix-parallel = { version = "^0.50.0", path = "../gix-parallel", features = ["parallel"] }
