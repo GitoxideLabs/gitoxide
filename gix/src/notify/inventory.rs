@@ -5,7 +5,7 @@ use std::{
 
 use gix_error::{ErrorExt, Result, ResultExt, message};
 
-use super::Layout;
+use super::{Layout, SourceKind, Watch};
 use crate::{Repository, bstr::BString};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -133,6 +133,31 @@ pub(super) fn metadata_watches(layout: &Layout) -> Result<BTreeMap<PathBuf, bool
     Ok(out)
 }
 
+/// Only the shallow administrative dependencies needed to keep ignore-aware coverage current.
+pub(super) fn dependency_watches(layout: &Layout) -> BTreeMap<PathBuf, bool> {
+    let mut out = BTreeMap::new();
+    for root in [&layout.git_dir, &layout.common_dir] {
+        watch_directory(layout, &mut out, root, false);
+    }
+    for source in &layout.sources {
+        if source.kind != SourceKind::Attributes {
+            watch_parent(layout, &mut out, &source.path);
+        }
+    }
+    watch_parent(layout, &mut out, &layout.index);
+    if let Some(root) = &layout.worktree {
+        watch_directory(layout, &mut out, root, false);
+    }
+    out
+}
+
+pub(super) fn recursive_root_watch(root: &Path) -> Result<Watch> {
+    let path = root
+        .canonicalize()
+        .or_raise(|| message!("could not resolve worktree notification root {}", root.display()))?;
+    Ok(Watch { path, recursive: true })
+}
+
 #[derive(Default)]
 pub(super) struct Directories {
     root: PathBuf,
@@ -162,7 +187,8 @@ impl gix_dir::walk::Delegate for Directories {
         let recurse = entry
             .status
             .can_recurse(entry.disk_kind, entry.pathspec_match, deletion, root_is_repo);
-        let repository_sentinel = entry.disk_kind == Some(gix_dir::entry::Kind::Repository)
+        let repository_sentinel = !entry.rela_path.is_empty()
+            && entry.disk_kind == Some(gix_dir::entry::Kind::Repository)
             && matches!(
                 entry.status,
                 gix_dir::entry::Status::Tracked | gix_dir::entry::Status::Untracked

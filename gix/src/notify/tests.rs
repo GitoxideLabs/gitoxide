@@ -1,6 +1,158 @@
-use gix_testtools::Result as TestResult;
+use gix_error::TestResult;
 
 use super::*;
+
+#[test]
+fn dependency_classifier_ignores_unrelated_metadata() {
+    let mut layout = layout();
+    layout.sources.push(Source {
+        path: "/repo/.git/includes/missing/config".into(),
+        kind: SourceKind::Configuration,
+    });
+    layout.sources.push(Source {
+        path: "/repo/.git/info/exclude".into(),
+        kind: SourceKind::Ignore,
+    });
+    for path in [
+        ".git/config",
+        ".git/config.worktree",
+        ".git/HEAD",
+        ".git/commondir",
+        ".git/gitdir",
+        ".git/includes",
+        ".git/includes/missing/config",
+        ".git/info/exclude",
+        ".git",
+    ] {
+        let (changes, refresh) = classify_dependencies(&Path::new("/repo").join(path), &layout, false);
+        assert!(refresh, "{path} can change ignore-aware directory coverage");
+        assert_eq!(changes.worktree, Scope::All, "{path} invalidates worktree selection");
+    }
+    for path in [
+        "refs",
+        "refs/heads/main",
+        "rebase-merge",
+        "worktrees",
+        "worktrees/other/HEAD",
+        "info/attributes",
+        "logs/HEAD",
+        "FETCH_HEAD",
+    ] {
+        assert_eq!(
+            classify_dependencies(&layout.git_dir.join(path), &layout, false),
+            (Changes::default(), false),
+            "{path} neither publishes metadata nor schedules an unrelated inventory refresh"
+        );
+    }
+}
+
+#[test]
+fn all_coverage_classifies_literal_paths_without_inventory() {
+    let mut monitor = monitor();
+    monitor.options.metadata = false;
+    monitor.options.worktree_coverage = WorktreeCoverage::All;
+    monitor.layout.common_dir = "/repo/admin".into();
+    monitor.layout.index = "/repo/selected-index".into();
+    let now = Instant::now();
+    let paths = [
+        "ignored/deep/file",
+        "nested/inside/file",
+        "src/.gitignore",
+        "src/.gitattributes",
+        ".gitmodules",
+        "selected-index",
+        "selected-index.lock",
+    ];
+    for path in paths {
+        monitor.observe(&modified(Path::new("/repo").join(path)), true, now);
+    }
+    for path in [
+        ".git/index",
+        ".git/config",
+        "nested/.git/HEAD",
+        "nested/.git",
+        "admin/refs/main",
+    ] {
+        monitor.observe(&modified(Path::new("/repo").join(path)), true, now);
+    }
+    monitor.observe(
+        &event("/repo/new-directory", EventKind::Create, PathKind::Directory),
+        true,
+        now,
+    );
+    let mut expected: Vec<_> = paths.into_iter().map(BString::from).collect();
+    expected.push("new-directory".into());
+    assert_eq!(
+        monitor.pending_worktree,
+        Changes {
+            worktree: Scope::Paths(expected),
+            ..Changes::default()
+        },
+        "all coverage includes ignored and nested content but excludes all administrative paths"
+    );
+    assert!(
+        !monitor.inventory_dirty && !monitor.index_dirty && monitor.maintenance.is_none(),
+        "recursive native coverage needs no index/ignore inventory for changed files or new directories"
+    );
+}
+
+#[test]
+fn worktree_only_failures_and_safety_publish_no_metadata() {
+    for safety in [false, true] {
+        let now = Instant::now();
+        let mut monitor = monitor();
+        monitor.options.metadata = false;
+        if safety {
+            monitor.options.safety_interval = Some(Duration::from_secs(60));
+            monitor.safety = Some(now);
+        } else {
+            monitor.coverage_lost(false, now);
+            monitor.coverage_lost(true, now);
+        }
+        let outcome = monitor.service(now, || Err(message("unavailable repository").raise()));
+        assert_eq!(
+            outcome.changes,
+            Changes {
+                worktree: Scope::All,
+                ..Changes::default()
+            },
+            "loss, safety and recovery errors never publish metadata in worktree-only mode"
+        );
+        assert_eq!(
+            outcome.errors.len(),
+            1,
+            "filtering metadata does not discard diagnostics"
+        );
+    }
+}
+
+#[test]
+fn disabling_worktree_only_releases_dependency_state() -> TestResult {
+    let mut monitor = monitor();
+    monitor.options.metadata = false;
+    monitor.metadata.watcher = Some(gix_notify::Watcher::new(gix_notify::Options::default())?);
+    monitor.worktree.watcher = Some(gix_notify::Watcher::new(gix_notify::Options::default())?);
+    monitor.set_worktree_enabled(false);
+    monitor.rescan();
+    let now = Instant::now();
+    assert!(
+        monitor
+            .service(now, || panic!("disabled monitoring must not reopen"))
+            .changes
+            .is_empty(),
+        "neither domain publishes when both selections are disabled"
+    );
+    assert!(
+        monitor.metadata.watcher.is_none() && monitor.worktree.watcher.is_none(),
+        "disabling worktree-only monitoring also releases internal dependencies"
+    );
+    assert_eq!(
+        monitor.next_timeout(now),
+        None,
+        "disabled monitoring needs no maintenance wakeups"
+    );
+    Ok(())
+}
 
 #[test]
 fn metadata_debounce_has_a_maximum_latency() {
@@ -55,6 +207,7 @@ fn monitor() -> RepositoryMonitor {
         maintenance: None,
         safety: None,
         backlog: false,
+        started: false,
         precompose_unicode: false,
         ignore_case: false,
     }
@@ -489,6 +642,15 @@ fn inventory_honors_nested_ignores_and_nested_repository_boundaries() -> TestRes
     let repo = open(root)?;
     let index = repo.index_or_empty()?;
     let inventory = inventory::worktree_directories(&repo, &index)?;
+    let recursive = inventory::recursive_root_watch(root)?;
+    assert_eq!(
+        recursive,
+        Watch {
+            path: root.canonicalize()?,
+            recursive: true,
+        },
+        "all coverage uses one native canonical root, not the ignore-aware directory inventory"
+    );
     let directories = inventory.paths;
     let root = Layout::from_repository(&repo)?
         .worktree
@@ -642,6 +804,21 @@ fn metadata_inventory_limits_linked_worktrees_to_administrative_roots() -> TestR
     for git_dir in [layout.common_dir.clone(), worktrees.join("current")] {
         layout.git_dir = git_dir;
         layout.index = layout.git_dir.join("index");
+        let dependencies = inventory::dependency_watches(&layout);
+        assert!(
+            dependencies.values().all(|recursive| !recursive),
+            "ignore-aware dependencies never recursively inventory refs or operation state"
+        );
+        for directory in [&layout.git_dir, &layout.common_dir] {
+            assert!(
+                dependencies.contains_key(directory),
+                "private and shared roots cover HEAD, configuration and layout dependencies"
+            );
+        }
+        assert!(
+            !dependencies.contains_key(&worktrees) && !dependencies.contains_key(&worktrees.join("other")),
+            "worktree-only coverage does not enumerate linked-worktree membership"
+        );
         let watches = inventory::metadata_watches(&layout)?;
         assert_eq!(
             watches.get(&worktrees),
@@ -750,11 +927,37 @@ fn linked_worktree_membership_reconciles_shallow_watches() -> TestResult {
 #[test]
 fn metadata_inventory_reports_unreadable_worktree_membership() -> TestResult {
     let fixture = fixture()?;
-    let layout = Layout::from_repository(&open(fixture.path())?)?;
+    let repo = open(fixture.path())?;
+    let layout = Layout::from_repository(&repo)?;
     std::fs::write(layout.common_dir.join("worktrees"), "not a directory\n")?;
+    assert!(
+        inventory::dependency_watches(&layout)
+            .values()
+            .all(|recursive| !recursive),
+        "worktree-only dependencies do not inspect unrelated linked-worktree membership"
+    );
     assert!(
         inventory::metadata_watches(&layout).is_err(),
         "an unreadable worktree inventory cannot silently certify incomplete coverage"
+    );
+    std::fs::write(&layout.index, "invalid index\n")?;
+    let mut monitor = monitor();
+    monitor.options.metadata = false;
+    monitor.options.worktree_coverage = WorktreeCoverage::All;
+    let mut statistics = Statistics::default();
+    let mut errors = Vec::new();
+    monitor.maintain(&repo, Instant::now(), &mut statistics, &mut errors)?;
+    assert!(
+        errors.is_empty(),
+        "all coverage needs neither the index nor metadata inventory"
+    );
+    assert!(
+        monitor.metadata.watcher.is_none() && monitor.layout.sources.is_empty() && monitor.projection.is_empty(),
+        "all coverage retains no ignore/config dependencies or index projection"
+    );
+    assert_eq!(
+        statistics.added, 1,
+        "classified all coverage shares the raw stream's single recursive root watch"
     );
     Ok(())
 }

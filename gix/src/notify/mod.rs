@@ -5,6 +5,12 @@
 //! opened repository only while updating its watch inventory. Call
 //! [`RepositoryMonitor::service()`](crate::notify::RepositoryMonitor::service) regularly and use
 //! [`RepositoryMonitor::next_timeout()`](crate::notify::RepositoryMonitor::next_timeout) in an event loop.
+//!
+//! For unfiltered native events instead, select worktree-only
+//! [`WorktreeCoverage::All`](crate::notify::WorktreeCoverage::All) and consume the monitor with
+//! [`RepositoryMonitor::into_worktree_stream()`](crate::notify::RepositoryMonitor::into_worktree_stream).
+//! [`WorktreeStream`](crate::notify::WorktreeStream) has explicit registration, bounded draining and
+//! same-stream delivery fences, without repository maintenance.
 
 use std::{
     collections::{BTreeMap, HashSet},
@@ -13,11 +19,13 @@ use std::{
 };
 
 use gix_error::{ErrorExt, ResultExt, message};
-use gix_notify::{Event, EventKind, PathKind};
+pub use gix_notify::{Batch, Budget, Event, EventKind, Fence, Loss, PathKind, SynchronizeError, Watch};
+pub use stream::WorktreeStream;
 
 use crate::{Error, Repository, Result, bstr::BString};
 
 mod inventory;
+mod stream;
 #[cfg(test)]
 mod tests;
 
@@ -57,16 +65,41 @@ pub struct Layout {
     /// The working directory, absent for bare repositories.
     pub worktree: Option<PathBuf>,
     /// The selected index, watched when it is within the repository or worktree.
+    /// Its absolute path is only resolved through symlinks when the selected monitoring needs it.
     pub index: PathBuf,
     /// Configuration, ignore and attribute dependencies within the repository or worktree.
     pub sources: Vec<Source>,
 }
 
-/// Scheduling and worktree-subscription options.
+/// Which worktree directories receive native notification coverage.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum WorktreeCoverage {
+    /// Use the index and ignore rules to select directories, stopping at nested repositories.
+    #[default]
+    IgnoreAware,
+    /// Recursively observe the entire worktree, including ignored paths and nested repositories.
+    ///
+    /// No index or ignore evaluation is needed to select directories. Classified worktree scopes
+    /// exclude administrative paths, including nested `.git` entries; raw streams do not filter them.
+    All,
+}
+
+/// Scheduling and subscription options.
 #[derive(Clone, Debug)]
 pub struct Options {
-    /// Observe the worktree and index when a worktree exists.
+    /// Publish repository metadata invalidations, including the index when `worktree` is enabled.
+    ///
+    /// Defaults to `true`. If disabled, outcomes contain only worktree scopes, even after errors or
+    /// coverage loss. Ignore-aware worktree coverage still watches configuration, `HEAD`, ignore,
+    /// index and layout dependencies internally, without enumerating refs or linked worktrees.
+    pub metadata: bool,
+    /// Observe the worktree when one exists, and its index if `metadata` is enabled.
+    ///
+    /// Defaults to `true`. If both this and `metadata` are disabled, servicing the monitor neither
+    /// opens a repository nor installs native subscriptions.
     pub worktree: bool,
+    /// Select worktree coverage independently of whether metadata invalidations are published.
+    pub worktree_coverage: WorktreeCoverage,
     /// Wait this long after a metadata event before publishing its invalidation.
     pub metadata_debounce: Duration,
     /// Publish a continuous metadata burst within this duration of its first observed event.
@@ -85,7 +118,9 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
+            metadata: true,
             worktree: true,
+            worktree_coverage: WorktreeCoverage::default(),
             metadata_debounce: Duration::from_millis(100),
             max_latency: Duration::from_millis(250),
             retry_interval: Duration::from_secs(5),
@@ -146,7 +181,7 @@ impl Scope {
 pub struct Changes {
     /// References or `HEAD` may have changed.
     pub references: bool,
-    /// The current worktree index may have changed.
+    /// The current worktree index may have changed (only with metadata and worktree enabled).
     pub index: bool,
     /// Configuration must be reloaded.
     pub configuration: bool,
@@ -363,7 +398,9 @@ impl Domain {
 /// call and requests inventory repair. Lost native root identities also require re-registration,
 /// even when the desired paths are unchanged. The independent [`Options::safety_interval`]
 /// refresh protects against silent notification gaps that neither mechanism can report.
-/// Linked-worktree removal by Git is observed through the shared administrative directories.
+/// With metadata enabled, linked-worktree removal by Git is observed through the shared
+/// administrative directories. Without it, only dependencies needed by ignore-aware coverage are
+/// watched; [`WorktreeCoverage::All`] needs only the recursive worktree root.
 pub struct RepositoryMonitor {
     layout: Layout,
     options: Options,
@@ -381,6 +418,7 @@ pub struct RepositoryMonitor {
     maintenance: Option<Instant>,
     safety: Option<Instant>,
     backlog: bool,
+    started: bool,
     precompose_unicode: bool,
     ignore_case: bool,
 }
@@ -391,7 +429,7 @@ impl Repository {
         if options.retry_interval.is_zero() || options.safety_interval.is_some_and(|interval| interval.is_zero()) {
             return Err(message("monitor retry and safety intervals must be positive").raise());
         }
-        let layout = Layout::from_repository(self)?;
+        let layout = Layout::for_options(self, &options)?;
         let filesystem = self
             .filesystem_options()
             .or_raise(|| message("could not read filesystem options"))?;
@@ -412,6 +450,7 @@ impl Repository {
             maintenance: Some(Instant::now()),
             safety: None,
             backlog: false,
+            started: false,
             precompose_unicode: filesystem.precompose_unicode,
             ignore_case: filesystem.ignore_case,
         })
@@ -419,20 +458,39 @@ impl Repository {
 }
 
 impl Layout {
+    #[cfg(test)]
     fn from_repository(repo: &Repository) -> Result<Self> {
+        Self::for_options(repo, &Options::default())
+    }
+
+    fn for_options(repo: &Repository, options: &Options) -> Result<Self> {
         let precompose = repo
             .filesystem_options()
             .or_raise(|| message("could not read filesystem options"))?
             .precompose_unicode;
         let absolute = |path: &Path| absolute_path(path, repo.current_dir(), precompose);
+        let dependencies =
+            options.metadata || options.worktree && options.worktree_coverage == WorktreeCoverage::IgnoreAware;
+        let index = if dependencies {
+            absolute(&repo.index_path())?
+        } else {
+            // Unfiltered coverage must also work with an inaccessible or cyclic index path.
+            repo.current_dir().join(repo.index_path())
+        };
         let mut layout = Self {
             git_dir: absolute(repo.git_dir())?,
             common_dir: absolute(repo.common_dir())?,
             worktree: repo.workdir().map(absolute).transpose()?,
-            index: absolute(&repo.index_path())?,
+            index,
             sources: Vec::new(),
         };
+        if !dependencies {
+            return Ok(layout);
+        }
         for source in repo.notification_sources() {
+            if !options.metadata && source.kind == SourceKind::Attributes {
+                continue;
+            }
             // Observe a symlink's target as well as replacement of the link itself.
             if let (Some(parent), Some(name)) = (source.path.parent(), source.path.file_name()) {
                 let parent = if parent.as_os_str().is_empty() {
@@ -509,7 +567,9 @@ impl RepositoryMonitor {
         &self.layout
     }
 
-    /// Enable or disable worktree and index monitoring while retaining metadata monitoring.
+    /// Enable or disable worktree monitoring, retaining the selected metadata and coverage options.
+    ///
+    /// Index invalidations remain tied to both worktree and metadata monitoring.
     pub fn set_worktree_enabled(&mut self, enabled: bool) {
         if self.options.worktree == enabled {
             return;
@@ -523,7 +583,14 @@ impl RepositoryMonitor {
         if !enabled {
             self.pending_metadata.changes.index = false;
             self.pending_metadata.changes.worktree = Scope::None;
+            if !self.options.metadata {
+                self.metadata = Domain::default();
+                self.pending_metadata = Pending::default();
+                self.pending_statistics = Statistics::default();
+                self.safety = None;
+            }
         }
+        self.metadata_dirty = true;
         self.inventory_dirty = true;
         self.index_dirty = true;
         self.maintenance = Some(Instant::now());
@@ -547,6 +614,14 @@ impl RepositoryMonitor {
         self.options.worktree && self.layout.worktree.is_some()
     }
 
+    fn ignore_aware(&self) -> bool {
+        self.options.worktree_coverage == WorktreeCoverage::IgnoreAware
+    }
+
+    fn active(&self) -> bool {
+        self.options.metadata || self.worktree_enabled()
+    }
+
     fn request_inventory(&mut self) {
         self.metadata_dirty = true;
         self.inventory_dirty = true;
@@ -558,8 +633,15 @@ impl RepositoryMonitor {
     ///
     /// `opener` must return a freshly opened repository using the caller's intended open options.
     /// It is called at most once, only when the watch inventory needs fresh repository data.
+    /// Worktree-only [`WorktreeCoverage::All`] does not call it: it retains its original root until
+    /// explicitly reconfigured. With metadata disabled, only worktree scopes are published; errors
+    /// are still returned. With both domains disabled, this is a no-op.
     pub fn service(&mut self, now: Instant, mut opener: impl FnMut() -> Result<Repository>) -> Outcome {
         let mut out = Outcome::default();
+        if !self.active() {
+            return out;
+        }
+        self.started = true;
         self.backlog = false;
         for worktree in [false, true] {
             let domain = if worktree {
@@ -620,10 +702,14 @@ impl RepositoryMonitor {
         }
         if self.maintenance.is_some_and(|deadline| deadline <= now) {
             self.maintenance = None;
-            match opener()
-                .or_raise(|| message("could not reopen repository for filesystem monitoring"))
-                .and_then(|repo| self.maintain(&repo, now, &mut out.statistics, &mut out.errors))
-            {
+            let result = if !self.options.metadata && !self.ignore_aware() {
+                self.maintain_all(now, &mut out.statistics).map(|_| ())
+            } else {
+                opener()
+                    .or_raise(|| message("could not reopen repository for filesystem monitoring"))
+                    .and_then(|repo| self.maintain(&repo, now, &mut out.statistics, &mut out.errors))
+            };
+            match result {
                 Ok(()) => {}
                 Err(err) => {
                     out.errors.push(err);
@@ -640,6 +726,12 @@ impl RepositoryMonitor {
         }
         out.changes.merge(self.pending_metadata.take_due(now));
         out.changes.merge(std::mem::take(&mut self.pending_worktree));
+        if !self.options.metadata {
+            out.changes = Changes {
+                worktree: out.changes.worktree,
+                ..Changes::default()
+            };
+        }
         if let Scope::Paths(paths) = &mut out.changes.worktree {
             paths.sort();
         }
@@ -652,6 +744,9 @@ impl RepositoryMonitor {
 
     /// The maximum interval before the next service call, including the native polling ceiling.
     pub fn next_timeout(&self, now: Instant) -> Option<Duration> {
+        if !self.active() {
+            return None;
+        }
         if self.backlog {
             return Some(Duration::ZERO);
         }
@@ -689,7 +784,7 @@ impl RepositoryMonitor {
         statistics: &mut Statistics,
         errors: &mut Vec<Error>,
     ) -> Result {
-        let layout = Layout::from_repository(repo)?;
+        let layout = Layout::for_options(repo, &self.options)?;
         if self.layout != layout {
             self.metadata_dirty = true;
             self.inventory_dirty = true;
@@ -715,11 +810,15 @@ impl RepositoryMonitor {
         self.precompose_unicode = filesystem.precompose_unicode;
         self.ignore_case = filesystem.ignore_case;
         let mut verify = false;
-        if self.metadata_dirty || self.metadata.watcher.is_none() || self.metadata.rebuild {
-            match self
-                .metadata
-                .replace(inventory::metadata_watches(&self.layout)?, statistics)
-            {
+        if (self.options.metadata || self.worktree_enabled() && self.ignore_aware())
+            && (self.metadata_dirty || self.metadata.watcher.is_none() || self.metadata.rebuild)
+        {
+            let watches = if self.options.metadata {
+                inventory::metadata_watches(&self.layout)?
+            } else {
+                inventory::dependency_watches(&self.layout)
+            };
+            match self.metadata.replace(watches, statistics) {
                 Ok(changed) => {
                     self.metadata_dirty = false;
                     if changed {
@@ -734,7 +833,9 @@ impl RepositoryMonitor {
                 Err(err) => errors.push(err),
             }
         }
-        if self.worktree_enabled()
+        if self.worktree_enabled() && !self.ignore_aware() {
+            verify |= self.maintain_all(now, statistics)?;
+        } else if self.worktree_enabled()
             && (self.inventory_dirty || self.index_dirty || self.worktree.watcher.is_none() || self.worktree.rebuild)
         {
             let index = repo
@@ -768,6 +869,29 @@ impl RepositoryMonitor {
         Ok(())
     }
 
+    fn maintain_all(&mut self, now: Instant, statistics: &mut Statistics) -> Result<bool> {
+        let Some(root) = self.layout.worktree.as_deref() else {
+            return Ok(false);
+        };
+        let watch = inventory::recursive_root_watch(root)?;
+        let mut watches = BTreeMap::from([(watch.path.clone(), watch.recursive)]);
+        if self.options.metadata {
+            inventory::watch_parent(&self.layout, &mut watches, &self.layout.index);
+        }
+        let changed = self.worktree.replace(watches, statistics)?;
+        self.directories = HashSet::from([root.to_owned()]);
+        self.nested_repositories.clear();
+        self.projection.clear();
+        self.inventory_dirty = false;
+        self.index_dirty = false;
+        if changed {
+            self.pending_worktree.merge(Changes::worktree_all());
+            // Verify registration without opening a repository or enumerating its inventory.
+            self.maintenance = Some(now);
+        }
+        Ok(changed)
+    }
+
     fn observe(&mut self, event: &Event, worktree: bool, now: Instant) {
         if event.paths.is_empty() || matches!(event.kind, EventKind::Any) {
             self.coverage_lost(worktree, now);
@@ -787,8 +911,10 @@ impl RepositoryMonitor {
                     name.push(".lock");
                     PathBuf::from(name)
                 };
-                if same_path(path, &self.layout.index, self.ignore_case)
-                    || event.kind == EventKind::Rename && same_path(path, &index_lock(), self.ignore_case)
+                let is_index = same_path(path, &self.layout.index, self.ignore_case);
+                let is_index_lock = same_path(path, &index_lock(), self.ignore_case);
+                if (self.options.metadata || self.ignore_aware())
+                    && (is_index || is_index_lock && event.kind == EventKind::Rename)
                 {
                     changes.merge(Changes::worktree_all());
                     self.index_dirty = true;
@@ -800,7 +926,15 @@ impl RepositoryMonitor {
                 };
                 if strip_prefix(path, root, self.ignore_case).is_none()
                     || strip_prefix(path, &self.layout.git_dir, self.ignore_case).is_some()
+                    || strip_prefix(root, &self.layout.common_dir, self.ignore_case).is_none()
+                        && strip_prefix(path, &self.layout.common_dir, self.ignore_case).is_some()
                     || strip_prefix(path, &root.join(".git"), self.ignore_case).is_some()
+                    || !self.ignore_aware()
+                        && strip_prefix(path, root, self.ignore_case).is_some_and(|relative| {
+                            relative.components().any(|component| {
+                                same_path(Path::new(component.as_os_str()), Path::new(".git"), self.ignore_case)
+                            })
+                        })
                 {
                     continue;
                 }
@@ -812,6 +946,7 @@ impl RepositoryMonitor {
                     || registered_directory
                     || std::fs::symlink_metadata(path).is_ok_and(|m| m.is_dir());
                 if is_directory
+                    && (self.ignore_aware() || registered_directory)
                     && matches!(
                         event.kind,
                         EventKind::Create | EventKind::Remove | EventKind::Rename | EventKind::Modify
@@ -832,7 +967,16 @@ impl RepositoryMonitor {
                     }
                 });
                 let name = name.as_deref();
-                let scope = if let Some(repository) = self
+                let scope = if !self.ignore_aware() {
+                    if self.options.metadata {
+                        match name {
+                            Some(b".gitignore") => changes.ignores = true,
+                            Some(b".gitattributes" | b".gitmodules") => changes.attributes = true,
+                            _ => {}
+                        }
+                    }
+                    path
+                } else if let Some(repository) = self
                     .nested_repositories
                     .iter()
                     .find(|repository| strip_prefix(path, repository, self.ignore_case).is_some())
@@ -903,7 +1047,11 @@ impl RepositoryMonitor {
                     self.metadata_dirty = true;
                     self.maintenance = Some(now);
                 }
-                let (classified, refresh) = classify_metadata(path, &self.layout, self.ignore_case);
+                let (classified, refresh) = if self.options.metadata {
+                    classify_metadata(path, &self.layout, self.ignore_case)
+                } else {
+                    classify_dependencies(path, &self.layout, self.ignore_case)
+                };
                 if refresh {
                     self.metadata_dirty = true;
                     if classified.configuration || classified.ignores || classified.attributes || classified.layout {
@@ -925,6 +1073,45 @@ impl RepositoryMonitor {
             self.pending_metadata.add(changes, now, &self.options, false);
         }
     }
+}
+
+fn classify_dependencies(path: &Path, layout: &Layout, ignore_case: bool) -> (Changes, bool) {
+    let equal = |a: &Path, b: &Path| same_path(a, b, ignore_case);
+    let beneath = |a: &Path, b: &Path| strip_prefix(a, b, ignore_case).is_some();
+    let mut changes = Changes::default();
+    for source in &layout.sources {
+        if beneath(&source.path, path) {
+            match source.kind {
+                SourceKind::Configuration => changes.configuration = true,
+                SourceKind::Ignore => changes.ignores = true,
+                SourceKind::Attributes => {}
+            }
+        }
+    }
+    for directory in [&layout.git_dir, &layout.common_dir] {
+        if beneath(directory, path) {
+            changes.layout = true;
+        }
+        // HEAD selects branch-conditioned configuration includes, not just reference views.
+        for name in ["config", "config.worktree", "HEAD"] {
+            changes.configuration |= equal(path, &directory.join(name));
+        }
+        for name in ["commondir", "gitdir"] {
+            changes.layout |= equal(path, &directory.join(name));
+        }
+    }
+    if layout
+        .worktree
+        .as_ref()
+        .is_some_and(|root| equal(path, root) || equal(path, &root.join(".git")))
+    {
+        changes.layout = true;
+    }
+    let refresh = changes.configuration || changes.ignores || changes.layout;
+    if refresh {
+        changes.worktree = Scope::All;
+    }
+    (changes, refresh)
 }
 
 fn classify_metadata(path: &Path, layout: &Layout, ignore_case: bool) -> (Changes, bool) {
