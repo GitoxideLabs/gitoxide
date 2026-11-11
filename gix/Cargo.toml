@@ -635,6 +635,7 @@ checks = [
     ] },
 ]
 tests = [
+    { args = ["--no-default-features", "--features", "sha1,sha256,fsmonitor-daemon", "-E", "test(repository::fsmonitor)"] },
     # Run notify once, independently of workspace feature unification. Keep the filter
     # aligned with its baseline exclusion in tests/it/src/qa/native_tests.rs.
     { args = [
