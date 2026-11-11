@@ -17,10 +17,13 @@ use windows_sys::Win32::{
     System::IO::{CreateIoCompletionPort, GetQueuedCompletionStatus, PostQueuedCompletionStatus},
 };
 
-use crate::{Fence, Loss, SynchronizeError, Watch, queue};
+use crate::{Event, Fence, Loss, SynchronizeError, Watch, queue};
 
 mod decode;
 mod native;
+
+const MAX_READY_COMPLETIONS: usize = 1024;
+const MAX_READY_DURATION: Duration = Duration::from_millis(20);
 
 struct Replace {
     watches: Vec<Watch>,
@@ -72,7 +75,7 @@ impl Backend {
                     let timeout = options
                         .root_check_interval
                         .map_or(Duration::MAX, |interval| interval.saturating_sub(checked.elapsed()));
-                    let result = streams.poll(timeout, &sender);
+                    let result = streams.poll(timeout, &sender, options);
                     let result = result.and_then(|()| {
                         if options
                             .root_check_interval
@@ -165,6 +168,52 @@ struct Streams {
     port: OwnShared<OwnedHandle>,
     reads: BTreeMap<usize, native::Read>,
     next_key: usize,
+}
+
+enum Completion {
+    Wake,
+    Events(Vec<Event>),
+    Rescan,
+}
+
+fn collect_ready(
+    timeout: Duration,
+    options: crate::Options,
+    mut receive: impl FnMut(Duration) -> Result<Option<Completion>>,
+) -> Result<(Vec<Event>, Option<Loss>)> {
+    let mut completion = receive(timeout)?;
+    let deadline = Instant::now() + MAX_READY_DURATION;
+    let mut events = Vec::new();
+    let mut bytes = 0usize;
+    for _ in 0..MAX_READY_COMPLETIONS {
+        match completion {
+            None => return Ok((events, None)),
+            Some(Completion::Wake) => {}
+            Some(Completion::Rescan) => return Ok((Vec::new(), Some(Loss::Rescan))),
+            Some(Completion::Events(next)) => {
+                bytes = next
+                    .iter()
+                    .fold(bytes, |sum, event| sum.saturating_add(queue::event_bytes(event)));
+                if next.len() > options.max_events.saturating_sub(events.len()) || bytes > options.max_bytes {
+                    return Ok((Vec::new(), Some(Loss::Overflow)));
+                }
+                events.extend(next);
+            }
+        }
+        // A marker from one directory must not be published ahead of older changes still
+        // buffered on another handle. Include the immediately ready completions from reads
+        // rearmed while draining, as Git's Windows listener does for its worktree watch.
+        completion = receive(Duration::ZERO)?;
+        if completion.is_some() && Instant::now() >= deadline {
+            return Ok((Vec::new(), Some(Loss::Rescan)));
+        }
+    }
+    if completion.is_none() {
+        Ok((events, None))
+    } else {
+        // Persistent activity must not delay commands indefinitely or certify a partial burst.
+        Ok((Vec::new(), Some(Loss::Rescan)))
+    }
 }
 
 impl Streams {
@@ -264,7 +313,15 @@ impl Streams {
         Ok(())
     }
 
-    fn poll(&mut self, timeout: Duration, sender: &queue::Sender) -> Result {
+    fn poll(&mut self, timeout: Duration, sender: &queue::Sender, options: crate::Options) -> Result {
+        let (events, loss) = collect_ready(timeout, options, |timeout| self.receive(timeout))?;
+        if !events.is_empty() || loss.is_some() {
+            sender.publish(events, loss, None);
+        }
+        Ok(())
+    }
+
+    fn receive(&mut self, timeout: Duration) -> Result<Option<Completion>> {
         let (mut bytes, mut key, mut overlapped) = (0, 0, std::ptr::null_mut());
         // SAFETY: The port and every outstanding read allocation are live; output pointers are
         // valid for this call. Control wakeups have a null OVERLAPPED and never refer to a read.
@@ -283,11 +340,12 @@ impl Streams {
                 Some(error) if error.raw_os_error() != Some(WAIT_TIMEOUT as i32) => {
                     Err(error.and_raise(message("could not receive Windows filesystem notifications")))
                 }
-                _ => Ok(()),
+                Some(_) => Ok(None),
+                None => Ok(Some(Completion::Wake)),
             };
         }
         let Some(read) = self.reads.get_mut(&key) else {
-            return Ok(());
+            return Ok(Some(Completion::Wake));
         };
         read.complete();
         if let Some(error) = error {
@@ -303,11 +361,10 @@ impl Streams {
             .or_raise(|| message!("could not rearm filesystem notifications for {}", read.path.display()))?;
         read.check_root()
             .or_raise(|| message!("lost watched directory {}", read.path.display()))?;
-        match events {
-            Ok(events) => sender.publish(events, None, None),
-            Err(_) => sender.publish(Vec::new(), Some(Loss::Rescan), None),
-        }
-        Ok(())
+        Ok(Some(match events {
+            Ok(events) => Completion::Events(events),
+            Err(_) => Completion::Rescan,
+        }))
     }
 }
 
@@ -320,6 +377,139 @@ impl Drop for Streams {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn change(path: &str) -> Event {
+        Event {
+            paths: vec![PathBuf::from(path)],
+            kind: crate::EventKind::Create,
+            path_kind: crate::PathKind::File,
+        }
+    }
+
+    #[test]
+    fn ready_burst_limits_and_native_loss_never_publish_partial_changes() -> gix_error::TestResult {
+        let events = vec![change("cookie"), change("buffered-worktree-change")];
+        let options = crate::Options {
+            max_events: events.len(),
+            max_bytes: events.iter().map(queue::event_bytes).sum(),
+            ..Default::default()
+        };
+        for (options, expected_loss) in [
+            (options, None),
+            (
+                crate::Options {
+                    max_events: options.max_events - 1,
+                    ..options
+                },
+                Some(Loss::Overflow),
+            ),
+            (
+                crate::Options {
+                    max_bytes: options.max_bytes - 1,
+                    ..options
+                },
+                Some(Loss::Overflow),
+            ),
+        ] {
+            let mut completions = events.iter().cloned();
+            let (published, loss) = collect_ready(Duration::ZERO, options, |timeout| {
+                assert_eq!(timeout, Duration::ZERO, "draining ready completions never blocks");
+                Ok(completions.next().map(|event| Completion::Events(vec![event])))
+            })?;
+            assert_eq!(loss, expected_loss, "only exceeding a configured limit loses coverage");
+            assert_eq!(
+                published,
+                if loss.is_none() { events.clone() } else { Vec::new() },
+                "a partial burst must not expose its cookie"
+            );
+        }
+
+        let mut completions = [Completion::Events(vec![events[0].clone()]), Completion::Rescan].into_iter();
+        let (published, loss) = collect_ready(Duration::ZERO, options, |_| Ok(completions.next()))?;
+        assert_eq!(
+            loss,
+            Some(Loss::Rescan),
+            "later native loss invalidates the whole burst"
+        );
+        assert!(
+            published.is_empty(),
+            "a cookie before native loss cannot certify delivery"
+        );
+
+        let mut received = 0;
+        let (published, loss) = collect_ready(Duration::ZERO, options, |_| {
+            received += 1;
+            Ok(Some(Completion::Wake))
+        })?;
+        assert_eq!(
+            loss,
+            Some(Loss::Rescan),
+            "continuous completions cannot certify an idle boundary"
+        );
+        assert!(published.is_empty(), "a bounded drain cannot publish a partial burst");
+        assert!(
+            received <= MAX_READY_COMPLETIONS + 1,
+            "control wakeups also obey the completion bound"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ready_completions_include_changes_buffered_before_a_cookie() -> gix_error::TestResult {
+        let directory = tempfile::tempdir()?;
+        let worktree = directory.path().join("worktree");
+        let cookies = directory.path().join("cookies");
+        std::fs::create_dir(&worktree)?;
+        std::fs::create_dir(&cookies)?;
+        // SAFETY: INVALID_HANDLE_VALUE creates a new, unassociated completion port.
+        let port = unsafe { CreateIoCompletionPort(INVALID_HANDLE_VALUE, std::ptr::null_mut(), 0, 1) };
+        if port.is_null() {
+            return Err(io::Error::last_os_error().into());
+        }
+        // SAFETY: The successful call transfers ownership of this unique handle.
+        let port = OwnShared::new(unsafe { OwnedHandle::from_raw_handle(port) });
+        let mut streams = Streams {
+            port,
+            reads: BTreeMap::new(),
+            next_key: 0,
+        };
+        streams.install(&[
+            Watch {
+                path: worktree.clone(),
+                recursive: true,
+            },
+            Watch {
+                path: cookies.clone(),
+                recursive: true,
+            },
+        ])?;
+        let options = crate::Options::default();
+        let state = OwnShared::new(gix_parallel::Mutable::new(queue::State::new(options)));
+        let sender = queue::Sender::new(state.clone(), 0);
+
+        // The first change completes the worktree read. The next remains in that handle's
+        // native buffer until rearming, behind the independently completed cookie read.
+        let first = worktree.join("first");
+        let second = worktree.join("second");
+        let cookie = cookies.join("cookie");
+        std::fs::write(&first, b"first")?;
+        std::fs::write(&second, b"second")?;
+        std::fs::write(&cookie, b"")?;
+        streams.poll(Duration::from_secs(1), &sender, options)?;
+        let batch = gix_parallel::lock(&state).drain(crate::Budget {
+            max_events: usize::MAX,
+            max_bytes: usize::MAX,
+        });
+        assert_eq!(batch.loss, None, "the native buffers retain all fixture events");
+        for expected in [first, second, cookie] {
+            let expected = expected.canonicalize()?;
+            assert!(
+                batch.events.iter().any(|event| event.paths.contains(&expected)),
+                "a publication containing a cookie must include all already buffered worktree changes: {expected:?}"
+            );
+        }
+        Ok(())
+    }
 
     fn backend() -> Result<Backend> {
         let options = crate::Options::default();

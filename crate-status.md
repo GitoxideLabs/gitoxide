@@ -255,6 +255,18 @@ The top-level crate that acts as hub to all functionality provided by the `gix-*
 * [x] Owned Windows `ReadDirectoryChangesW` backend with cancellable, bounded native reads
 * [ ] Windows delivery synchronization
 
+### gix-fsmonitor
+
+Clients for Git's filesystem monitor hooks and native daemon protocol.
+
+* [x] hook protocol 1 and 2, including automatic fallback
+* [x] native Simple IPC over Unix sockets and Windows named pipes
+* [x] Git daemon startup on macOS and Windows
+* [x] long Unix socket paths without changing the process working directory
+* [x] optional embeddable server with startup readiness and owned shutdown
+* [x] separate `daemon` feature for shared blocking control, native endpoint selection, and detached self-spawn
+* [x] independent watch lifetimes and IPC endpoints for linked worktrees
+
 ### gix-fs
 * Stable API limited to race-proof creation, public retry configuration, boundary cleanup, and permission application for tempfiles and locks.
 * Other filesystem APIs, including `serde` and `walkdir` support, require `unstable`.
