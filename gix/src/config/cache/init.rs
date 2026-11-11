@@ -68,7 +68,7 @@ impl Cache {
 
         use util::config_bool;
         let reflog = util::query_refupdates(&config, lenient_config)?;
-        let refs_namespace = util::query_refs_namespace(&config, lenient_config)?;
+        let refs_namespace = util::query_refs_namespace(&config, lenient_config, filter_config_section)?;
         let ignore_case = config_bool(&config, &Core::IGNORE_CASE, "core.ignoreCase", false, lenient_config)?;
         let use_multi_pack_index = config_bool(
             &config,
@@ -152,7 +152,7 @@ impl Cache {
             self.object_kind_hint = object_kind_hint;
         }
         let reflog = util::query_refupdates(config, self.lenient_config)?;
-        let refs_namespace = util::query_refs_namespace(config, self.lenient_config)?;
+        let refs_namespace = util::query_refs_namespace(config, self.lenient_config, self.filter_config_section)?;
 
         self.hex_len = hex_len;
         self.ignore_case = ignore_case;

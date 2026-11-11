@@ -188,7 +188,7 @@ impl Cache {
 
     pub(crate) fn personas(&self) -> &identity::Personas {
         self.personas
-            .get_or_init(|| identity::Personas::from_config_and_env(&self.resolved))
+            .get_or_init(|| identity::Personas::from_config_and_env(&self.resolved, self.filter_config_section))
     }
 
     pub(crate) fn url_rewrite(&self) -> &remote::url::Rewrite {
@@ -218,7 +218,10 @@ impl Cache {
             .expect("commit.gpgSign default is a valid boolean")
             .0;
         Ok(Commit::GPG_SIGN
-            .enrich_error(self.resolved.boolean(Commit::GPG_SIGN))
+            .enrich_error(
+                self.resolved
+                    .boolean_filter(Commit::GPG_SIGN, &mut self.filter_config_section.clone()),
+            )
             .with_lenient_default_value(self.lenient_config, Some(default))?
             .unwrap_or(default))
     }
@@ -505,7 +508,9 @@ impl Cache {
             .find(|key| key.environment_override().expect("set") == name)
             .expect("we must know all possible input variable names");
 
-            let value = self.resolved.string(key)?;
+            let value = self
+                .resolved
+                .string_filter(key, &mut self.filter_config_section.clone())?;
             match gix_path::from_bstr(value) {
                 Ok(value) => Some(value.into_owned().into()),
                 Err(err) => {

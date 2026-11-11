@@ -8,6 +8,89 @@ mod path_protection;
 mod remote;
 
 #[test]
+fn reference_namespace_uses_only_trusted_configuration() -> TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_basic_repo.sh")?;
+    let repo = gix::open_opts(
+        &fixture,
+        gix::open::Options::isolated()
+            .config_overrides(["gitoxide.core.refsNamespace=ignored"])
+            .filter_config_section(|_| false),
+    )?;
+    assert_eq!(repo.namespace(), None, "opening respects the configured section filter");
+
+    let mut repo = gix::open_opts(
+        fixture,
+        gix::open::Options::isolated().config_overrides(["gitoxide.core.refsNamespace=trusted"]),
+    )?;
+    let expected = repo.namespace().cloned().expect("the trusted namespace is configured");
+    for value in ["untrusted", "invalid..namespace"] {
+        let mut untrusted = gix_config::File::new(
+            gix_config::file::Metadata::from(gix_config::Source::Local).with(gix_sec::Trust::Reduced),
+        );
+        untrusted.set_raw_value("gitoxide.core.refsNamespace", value)?;
+        let mut config = repo.config_snapshot_mut();
+        config.append(untrusted)?;
+        config.commit()?;
+        assert_eq!(
+            repo.namespace(),
+            Some(&expected),
+            "refreshing configuration cannot redirect references through an untrusted namespace"
+        );
+        #[cfg(feature = "command")]
+        assert_eq!(
+            repo.command_context()?.ref_namespace,
+            Some(expected.as_bstr().to_owned()),
+            "subprocesses inherit the same trusted namespace"
+        );
+    }
+    Ok(())
+}
+
+#[cfg(feature = "attributes")]
+#[test]
+fn pathspec_defaults_use_only_trusted_configuration() -> TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_basic_repo.sh")?;
+    for name in ["literal", "glob", "noglob", "icase"] {
+        let key = format!("gitoxide.pathspec.{name}");
+        let mut repo = gix::open_opts(
+            &fixture,
+            gix::open::Options::isolated().config_overrides([format!("{key}=true")]),
+        )?;
+        let expected = repo.pathspec_defaults()?;
+        #[cfg(feature = "command")]
+        let expected_context = repo.command_context()?;
+        for value in ["false", "invalid"] {
+            let mut untrusted = gix_config::File::new(
+                gix_config::file::Metadata::from(gix_config::Source::Local).with(gix_sec::Trust::Reduced),
+            );
+            untrusted.set_raw_value(key.as_str(), value)?;
+            let mut config = repo.config_snapshot_mut();
+            config.append(untrusted)?;
+            config.commit()?;
+            assert_eq!(
+                repo.pathspec_defaults()?,
+                expected,
+                "untrusted {key} cannot change how caller-provided patterns match"
+            );
+            #[cfg(feature = "command")]
+            {
+                let actual = repo.command_context()?;
+                assert_eq!(
+                    (actual.literal_pathspecs, actual.glob_pathspecs, actual.icase_pathspecs),
+                    (
+                        expected_context.literal_pathspecs,
+                        expected_context.glob_pathspecs,
+                        expected_context.icase_pathspecs
+                    ),
+                    "subprocesses inherit the same trusted pathspec settings"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn config_path_for_repository_sources_matches_git() -> TestResult {
     use gix::config::Source;
 

@@ -70,10 +70,11 @@ pub(crate) fn query_refupdates(
 pub(crate) fn query_refs_namespace(
     config: &gix_config::File,
     lenient_config: bool,
+    mut filter_config_section: fn(&gix_config::file::Metadata) -> bool,
 ) -> Result<Option<gix_ref::Namespace>> {
     let key = "gitoxide.core.refsNamespace";
     config
-        .string(key)
+        .string_filter(key, &mut filter_config_section)
         .map(|ns| gitoxide::Core::REFS_NAMESPACE.try_into_refs_namespace(ns))
         .transpose()
         .with_leniency(lenient_config)

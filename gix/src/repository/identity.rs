@@ -1,3 +1,4 @@
+use crate::error::{OptionExt, validation};
 use crate::{
     Result,
     bstr::{BString, ByteSlice},
@@ -27,6 +28,8 @@ impl crate::Repository {
     ///
     /// # Note
     ///
+    /// Only configuration sections accepted by the repository's configuration filter contribute identity values,
+    /// including dates and fallbacks. Permitted environment overrides are subject to the same filter.
     /// The values are cached when the repository is instantiated.
     pub fn committer(&self) -> Option<Result<gix_actor::SignatureRef<'_>>> {
         let p = self.config.personas();
@@ -56,7 +59,8 @@ impl crate::Repository {
     /// return it as well.
     ///
     /// If either part of the committer is missing, both fallback values are installed. Environment, `committer.*`, and
-    /// `user.*` values still take precedence individually.
+    /// `user.*` values still take precedence individually. Returns an error if the configuration section filter rejects
+    /// the installed fallback.
     pub fn committer_or_set_fallback(
         &mut self,
         name: impl gix_utils::AsBStr,
@@ -69,7 +73,8 @@ impl crate::Repository {
             let mut repo_config = self.config_snapshot_mut();
             repo_config.append(config)?;
         }
-        self.committer().expect("committer was just set")
+        self.committer()
+            .ok_or_raise(|| validation("The configuration section filter rejected the committer fallback"))?
     }
 
     /// Return the configured committer or install a generic fallback in memory on this instance.
@@ -93,6 +98,8 @@ impl crate::Repository {
     ///
     /// # Note
     ///
+    /// Only configuration sections accepted by the repository's configuration filter contribute identity values,
+    /// including dates and fallbacks. Permitted environment overrides are subject to the same filter.
     /// The values are cached when the repository is instantiated.
     pub fn author(&self) -> Option<Result<gix_actor::SignatureRef<'_>>> {
         let p = self.config.personas();
@@ -135,15 +142,18 @@ pub(crate) struct Personas {
 }
 
 impl Personas {
-    pub fn from_config_and_env(config: &gix_config::File) -> Self {
-        let parse_date = |key: &str, date: &keys::Any| -> Option<String> {
+    pub fn from_config_and_env(
+        config: &gix_config::File,
+        mut filter_config_section: fn(&gix_config::file::Metadata) -> bool,
+    ) -> Self {
+        let mut parse_date = |key: &str, date: &keys::Any| -> Option<String> {
             debug_assert_eq!(
                 key,
                 date.logical_name(),
                 "BUG: drift of expected name and actual name of the key (we hardcode it to save an allocation)"
             );
             config
-                .string(key)
+                .string_filter(key, &mut filter_config_section)
                 .and_then(|config_date| {
                     config_date
                         .to_str()
@@ -159,30 +169,30 @@ impl Personas {
 
         Personas {
             user: Entity {
-                name: config.string(User::NAME),
+                name: config.string_filter(User::NAME, &mut filter_config_section),
                 email: config
-                    .string(User::EMAIL)
-                    .or_else(|| config.string(gitoxide::User::EMAIL_FALLBACK)),
+                    .string_filter(User::EMAIL, &mut filter_config_section)
+                    .or_else(|| config.string_filter(gitoxide::User::EMAIL_FALLBACK, &mut filter_config_section)),
                 time: None,
             },
             committer: Entity {
-                name: config.string(Committer::NAME),
-                email: config.string(Committer::EMAIL),
+                name: config.string_filter(Committer::NAME, &mut filter_config_section),
+                email: config.string_filter(Committer::EMAIL, &mut filter_config_section),
                 time: committer_date,
             },
             committer_fallback: Entity {
-                name: config.string(gitoxide::Committer::NAME_FALLBACK),
-                email: config.string(gitoxide::Committer::EMAIL_FALLBACK),
+                name: config.string_filter(gitoxide::Committer::NAME_FALLBACK, &mut filter_config_section),
+                email: config.string_filter(gitoxide::Committer::EMAIL_FALLBACK, &mut filter_config_section),
                 time: None,
             },
             author: Entity {
-                name: config.string(Author::NAME),
-                email: config.string(Author::EMAIL),
+                name: config.string_filter(Author::NAME, &mut filter_config_section),
+                email: config.string_filter(Author::EMAIL, &mut filter_config_section),
                 time: author_date,
             },
             author_fallback: Entity {
-                name: config.string(gitoxide::Author::NAME_FALLBACK),
-                email: config.string(gitoxide::Author::EMAIL_FALLBACK),
+                name: config.string_filter(gitoxide::Author::NAME_FALLBACK, &mut filter_config_section),
+                email: config.string_filter(gitoxide::Author::EMAIL_FALLBACK, &mut filter_config_section),
                 time: None,
             },
         }

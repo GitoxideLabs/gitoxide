@@ -17,7 +17,8 @@ pub(crate) fn verify(commit: &crate::Commit<'_>) -> Result<Option<Outcome>> {
     };
     let config = commit.repo.config_snapshot();
     let minimum_trust = config
-        .string(Gpg::MIN_TRUST_LEVEL)
+        .plumbing()
+        .string_filter(Gpg::MIN_TRUST_LEVEL, &mut commit.repo.filter_config_section())
         .map(|value| Gpg::MIN_TRUST_LEVEL.try_into_trust_level(value))
         .transpose()?
         .unwrap_or_default();
