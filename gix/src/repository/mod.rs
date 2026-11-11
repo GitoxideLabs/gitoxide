@@ -108,6 +108,8 @@ mod dirwalk;
 pub mod filter;
 ///
 pub mod freelist;
+#[cfg(feature = "fsmonitor-daemon")]
+mod fsmonitor;
 mod graph;
 pub(crate) mod identity;
 mod impls;

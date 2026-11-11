@@ -267,6 +267,15 @@ Clients for Git's filesystem monitor hooks and native daemon protocol.
 * [x] separate `daemon` feature for shared blocking control, native endpoint selection, and detached self-spawn
 * [x] independent watch lifetimes and IPC endpoints for linked worktrees
 
+### gix-fsmonitor-daemon
+
+* [x] Standalone daemon serving Git hook v2 and native Simple IPC clients
+* [x] Bounded multi-client token history, recovery, and complete worktree coverage
+* [x] Incremental macOS and Linux replies using administrative-marker synchronization on supported local filesystems
+* [x] Unix socket and Windows named-pipe transports
+* [x] Incremental Windows replies through ordered native-cookie observation
+* [x] Windows runtime validation (cross-compilation only)
+
 ### gix-fs
 * Stable API limited to race-proof creation, public retry configuration, boundary cleanup, and permission application for tempfiles and locks.
 * Other filesystem APIs, including `serde` and `walkdir` support, require `unstable`.

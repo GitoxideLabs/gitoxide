@@ -58,6 +58,13 @@ pub mod extensions;
 pub struct Fetch;
 pub mod fetch;
 
+/// The `fsmonitor` top-level section.
+///
+/// These keys describe Git configuration; they do not enable filesystem monitoring in `gix`.
+#[derive(Copy, Clone, Default)]
+pub struct FsMonitor;
+pub mod fsmonitor;
+
 /// The `gitoxide` top-level section.
 #[derive(Copy, Clone, Default)]
 pub struct Gitoxide;

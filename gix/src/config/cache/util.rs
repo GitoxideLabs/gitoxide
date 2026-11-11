@@ -14,6 +14,15 @@ pub(crate) fn interpolate_context<'a>(
     }
 }
 
+pub(crate) fn interpolate_path(
+    path: gix_config::Path,
+    environment: crate::open::permissions::Environment,
+) -> Result<std::path::PathBuf> {
+    let install_dir = crate::path::install_dir().ok();
+    let home = super::access::home_dir(environment);
+    path.interpolate(interpolate_context(install_dir.as_deref(), home.as_deref()))
+}
+
 pub(crate) fn base_options(lossy: bool, lenient: bool) -> gix_config::file::init::Options<'static> {
     gix_config::file::init::Options {
         lossy,

@@ -79,7 +79,7 @@ package(=gix-pack) & (
 test-group = 'pack-fixtures'
 
 [[profile.default.overrides]]
-filter = 'package(gix-fsmonitor)'
+filter = 'package(gix-fsmonitor) | package(gix-fsmonitor-daemon)'
 slow-timeout = { period = '30s', terminate-after = 4 }
 
 # `cargo nextest run --profile with-xml` inherits defaults and adds a JUnit report.

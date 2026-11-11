@@ -36,6 +36,158 @@ fn commit_auto_rollback() -> TestResult {
     Ok(())
 }
 
+mod interpolate_path {
+    use std::path::PathBuf;
+
+    use gix_testtools::TestResult;
+
+    #[test]
+    fn strings_and_config_paths() -> TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let repo = crate::named_repo("make_basic_repo.sh")?;
+        assert_eq!(
+            repo.interpolate_path("relative/sockets")?,
+            PathBuf::from("relative/sockets"),
+            "ordinary paths remain relative without filesystem checks"
+        );
+        assert_eq!(
+            repo.interpolate_path("%(prefix)/sockets")?,
+            repo.install_dir()?.join("sockets"),
+            "the prefix is the directory containing the running executable"
+        );
+        assert_eq!(
+            repo.interpolate_path(gix::config::Path::from(":(optional)does-not-exist"))?,
+            PathBuf::from("does-not-exist"),
+            "interpolation strips the optional marker without checking existence"
+        );
+        assert!(repo.interpolate_path("").is_err(), "empty paths cannot be interpolated");
+        Ok(())
+    }
+
+    #[test]
+    fn home_directory_respects_permissions() -> TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let home = gix_testtools::tempfile::TempDir::new()?;
+        let _environment = gix_testtools::isolate_git_environment()?.set("HOME", home.path().display().to_string());
+        let repo = crate::named_repo("make_basic_repo.sh")?;
+        assert!(
+            repo.interpolate_path("~/sockets").is_err(),
+            "isolated repository permissions deny use of the home directory"
+        );
+
+        let fixture = gix_testtools::scripted_fixture_read_only("make_basic_repo.sh")?;
+        let mut permissions = gix::open::Permissions::isolated();
+        permissions.env.home = gix_sec::Permission::Allow;
+        let mut repo = gix::open_opts(fixture, crate::util::restricted().permissions(permissions))?;
+        assert_eq!(
+            repo.interpolate_path("~")?,
+            home.path(),
+            "a bare tilde selects the home directory"
+        );
+        assert_eq!(
+            repo.interpolate_path("~/sockets")?,
+            home.path().join("sockets"),
+            "permitted home-directory expansion uses the isolated environment"
+        );
+        repo.config_snapshot_mut()
+            .set_value(&gix::config::tree::FsMonitor::SOCKET_DIR, "~/sockets")?;
+        assert_eq!(
+            repo.config_snapshot()
+                .trusted_path(gix::config::tree::FsMonitor::SOCKET_DIR)?,
+            Some(repo.interpolate_path("~/sockets")?),
+            "trusted configuration paths share the same interpolation context"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn byte_paths() -> TestResult {
+        use std::os::unix::ffi::OsStrExt;
+
+        use gix::bstr::ByteSlice;
+
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let repo = crate::named_repo("make_basic_repo.sh")?;
+        let input = b"sockets-\xff".as_bstr();
+        assert_eq!(
+            repo.interpolate_path(input)?.as_os_str().as_bytes(),
+            input.as_bytes(),
+            "native Unix paths retain non-UTF-8 bytes"
+        );
+        Ok(())
+    }
+}
+
+#[test]
+#[cfg(feature = "fsmonitor-daemon")]
+fn fsmonitor_daemon_options_from_config() -> TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_basic_repo.sh")?;
+    for (overrides, allow_remote, start_timeout) in [
+        (&[][..], false, 60),
+        (
+            &["fsmonitor.allowRemote=true", "fsmonitor.startTimeout=12"][..],
+            true,
+            12,
+        ),
+        (
+            &["fsmonitor.allowRemote=false", "fsmonitor.startTimeout=0"][..],
+            false,
+            0,
+        ),
+        (&["fsmonitor.startTimeout=1k"][..], false, 1024),
+    ] {
+        let mut repo = gix::open_opts(
+            &fixture,
+            gix::open::Options::isolated().config_overrides(overrides.iter().copied()),
+        )?;
+        let options = repo.fsmonitor_daemon_options()?;
+        assert_eq!(options.allow_remote, allow_remote, "remote monitoring is opt-in");
+        assert_eq!(
+            options.start_timeout,
+            std::time::Duration::from_secs(start_timeout),
+            "startup uses configured seconds, including zero and Git's integer suffixes"
+        );
+        repo.config_snapshot_mut()
+            .set_raw_value("fsmonitor.startTimeout", "27")?;
+        assert_eq!(
+            repo.fsmonitor_daemon_options()?.start_timeout,
+            std::time::Duration::from_secs(27),
+            "in-memory configuration overrides are resolved before daemon startup"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "fsmonitor-daemon")]
+fn fsmonitor_daemon_options_respect_the_configuration_filter() -> TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_basic_repo.sh")?;
+    let repo = gix::open_opts(
+        &fixture,
+        gix::open::Options::isolated()
+            .config_overrides(["fsmonitor.allowRemote=true", "fsmonitor.startTimeout=-1"])
+            .filter_config_section(|_| false),
+    )?;
+    let options = repo.fsmonitor_daemon_options()?;
+    assert!(
+        !options.allow_remote,
+        "rejected configuration cannot enable remote monitoring"
+    );
+    assert_eq!(
+        options.start_timeout,
+        std::time::Duration::from_secs(60),
+        "rejected startup settings cannot replace the default or cause validation errors"
+    );
+    Ok(())
+}
+
 mod trusted_path {
     use crate::util::named_repo;
     use gix_testtools::TestResult;
