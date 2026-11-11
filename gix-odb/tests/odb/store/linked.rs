@@ -20,7 +20,7 @@ mod iter {
         assert_eq!(iter.count(), 146, "it sees the correct amount of objects");
         for id in db.iter()? {
             let id = id?;
-            assert!(db.contains(&id), "each object exists");
+            assert!(db.contains(&id)?, "each object exists");
             assert!(db.try_header(&id)?.is_some(), "header is readable");
         }
         Ok(())
@@ -67,7 +67,7 @@ mod init {
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let (object_path, _linked_object_path) = alternate(tmp.path().join("a"), tmp.path().join("b"))?;
         let db = odb_at(object_path.clone())?;
-        db.exists(&ObjectId::null(gix_testtools::object_hash())); // trigger load
+        db.exists(&ObjectId::null(gix_testtools::object_hash()))?; // trigger load
 
         assert_eq!(db.store_ref().metrics().loose_dbs, 2);
         assert_eq!(db.iter()?.count(), 0, "the test locations are actually empty");
@@ -79,16 +79,17 @@ mod init {
     fn a_db_without_alternates() -> gix_testtools::TestResult {
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let db = odb_at(tmp.path())?;
-        db.exists(&ObjectId::null(gix_testtools::object_hash())); // trigger load
+        db.exists(&ObjectId::null(gix_testtools::object_hash()))?; // trigger load
         assert_eq!(db.store_ref().metrics().loose_dbs, 1);
         assert_eq!(db.store_ref().path(), tmp.path());
         Ok(())
     }
 
     #[test]
-    fn has_packs() {
+    fn has_packs() -> gix_error::TestResult {
         let db = db();
-        db.exists(&ObjectId::null(gix_hash::Kind::Sha1)); // trigger load
+        db.exists(&ObjectId::null(gix_hash::Kind::Sha1))?; // trigger load
         assert_eq!(db.store_ref().metrics().known_packs, 3);
+        Ok(())
     }
 }

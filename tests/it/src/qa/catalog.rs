@@ -260,6 +260,14 @@ pub fn tasks(metadata: &Value, selection: &Value, platform: &str) -> Result<Vec<
             vec![command],
         ));
     }
+    if selected.contains(&"gix-odb") && platform == "linux-x86_64" {
+        out.push(Task::new(
+            "odb-threaded-scenarios",
+            "odb-threaded-scenarios",
+            &["tests"],
+            vec![Command::new("just", &["test-odb-threaded-scenarios"])],
+        ));
+    }
     let isolated_tests = core("isolated-tests")?;
     if !isolated_tests.is_empty() {
         out.push(Task::new(
@@ -790,6 +798,57 @@ mod tests {
             select(all, &["tests".into(), "default-tests".into(), "tests".into()])?,
             "stage union cannot repeat native tests"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn contending_odb_scenarios_follow_selection_and_run_once_in_ci() -> gix_error::TestResult {
+        let mut metadata = metadata();
+        metadata["packages"].as_array_mut().expect("test packages").push(json!({
+            "name":"gix-odb", "targets":[{"kind":["lib"],"test":true}]
+        }));
+        for (selection, expected) in [
+            (json!({"mode":"fast", "packages":[]}), false),
+            (json!({"mode":"fast", "packages":["gix-path"]}), false),
+            (json!({"mode":"fast", "packages":["gix-odb"]}), true),
+            (json!({"mode":"exhaustive", "packages":[]}), true),
+        ] {
+            let plan = plan(&metadata, &selection, "linux-x86_64", true)?;
+            let jobs: Vec<_> = plan["jobs"]
+                .as_array()
+                .expect("plan jobs")
+                .iter()
+                .filter(|job| {
+                    job["tasks"]
+                        .as_array()
+                        .expect("job tasks")
+                        .contains(&json!("odb-threaded-scenarios"))
+                })
+                .collect();
+            assert_eq!(
+                jobs.len(),
+                usize::from(expected),
+                "selected ODB scenarios have exactly one CI owner"
+            );
+            if let Some(job) = jobs.first() {
+                assert_eq!(
+                    job["platform"], "linux-x86_64",
+                    "contention runs on the original CI platform"
+                );
+                assert_eq!(job["just"], true, "the recipe requires Just to be installed");
+                assert_eq!(job["blocking"], true, "contention failures must block merging");
+                let tasks = tasks(&metadata, &selection, "linux-x86_64")?;
+                let task = tasks
+                    .iter()
+                    .find(|task| task.id == "odb-threaded-scenarios")
+                    .expect("contention task");
+                assert_eq!(
+                    task.commands,
+                    vec![Command::new("just", &["test-odb-threaded-scenarios"])],
+                    "CI and local QA run the same contention recipe"
+                );
+            }
+        }
         Ok(())
     }
 

@@ -272,7 +272,7 @@ fn write_cursor<'repo>(cursor: &mut Cursor<'_, 'repo>) -> Result<Id<'repo>> {
                         entry.filename
                     )
                 })?;
-                if !entry.mode.is_commit() && !cursor.repo.has_object(entry.oid) {
+                if !entry.mode.is_commit() && !cursor.repo.has_object(entry.oid)? {
                     bail!(
                         "The object {} ({}) at \"{}\" could not be found",
                         entry.oid,
