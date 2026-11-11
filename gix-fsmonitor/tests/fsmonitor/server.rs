@@ -94,6 +94,50 @@ fn default_options_preserve_server_timings() -> TestResult {
     Ok(())
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
+#[test]
+fn native_endpoint_selection_ignores_socket_directory_on_local_filesystems() -> TestResult {
+    let fixture = Fixture::new()?;
+    let git_dir = fixture.worktree.join(".git/.");
+    let missing_worktree = fixture.worktree.join("missing-worktree");
+    let endpoint = server::endpoint(&git_dir, &missing_worktree, || {
+        panic!("local native endpoints do not require trusted or interpolated socketDir configuration")
+    })?;
+    assert_eq!(
+        endpoint,
+        fixture.context().endpoint,
+        "server-only builds select the canonical Git directory's native endpoint"
+    );
+    assert!(!endpoint.exists(), "endpoint discovery does not bind or create it");
+    #[cfg(feature = "daemon")]
+    assert_eq!(
+        gix_fsmonitor::daemon::endpoint(&git_dir, &missing_worktree, || {
+            panic!("the compatibility re-export also ignores local socketDir configuration")
+        })?,
+        endpoint,
+        "daemon endpoint selection remains a compatibility re-export of the server API"
+    );
+    Ok(())
+}
+
+#[test]
+fn native_endpoint_selection_reports_git_directory_errors_before_socket_directory() -> TestResult {
+    let fixture = Fixture::new()?;
+    let error = server::endpoint(&fixture.worktree.join("missing-git-dir"), &fixture.worktree, || {
+        panic!("an invalid Git directory must fail before socketDir resolution")
+    })
+    .expect_err("endpoint discovery requires an existing Git directory");
+    assert_eq!(
+        error
+            .downcast_any_ref::<std::io::Error>()
+            .expect("discovery preserves the native path error")
+            .kind(),
+        std::io::ErrorKind::NotFound,
+        "endpoint discovery propagates canonicalization errors"
+    );
+    Ok(())
+}
+
 #[test]
 fn clients_resolve_endpoint_directory_aliases() -> TestResult {
     let fixture = Fixture::new()?;
@@ -126,6 +170,13 @@ fn clients_resolve_endpoint_directory_aliases() -> TestResult {
     #[cfg(windows)]
     assert!(!handle.endpoint().exists(), "named pipes have no filesystem endpoint");
     for alias in aliases {
+        assert_eq!(
+            server::endpoint(&alias.join(".git"), &alias, || {
+                panic!("local aliases do not change native endpoint placement")
+            })?,
+            fixture.context().endpoint,
+            "public endpoint discovery resolves directory aliases to the same native path"
+        );
         let endpoint = alias.join(".git/fsmonitor--daemon.ipc");
         let response = client::daemon::query(
             &endpoint,

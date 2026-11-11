@@ -1,6 +1,6 @@
 //! Shared blocking daemon control for Git's hook v2 and native Simple IPC protocols.
 //!
-//! [`endpoint()`](crate::daemon::endpoint) selects a native IPC endpoint from caller-resolved repository paths.
+//! [`server::endpoint()`](crate::server::endpoint) selects a native IPC endpoint from caller-resolved repository paths.
 //! [`execute()`](crate::daemon::execute) runs foreground serving, detached startup, and client commands from a server context.
 //! Detached children run the current executable with the foreground argument prefix supplied by the
 //! caller; they do not require the standalone `gix-fsmonitor` binary to be installed.
@@ -17,10 +17,10 @@ use gix_error::{ErrorExt, Result, ResultExt, bail, message, validation};
 
 use crate::server::{self, ipc};
 
-mod endpoint;
 mod launch;
 
-pub use endpoint::endpoint;
+/// Compatibility re-export of shared server endpoint selection.
+pub use crate::server::endpoint;
 
 /// A foreground, detached-startup, or client command for a repository's filesystem monitor.
 pub enum Command {

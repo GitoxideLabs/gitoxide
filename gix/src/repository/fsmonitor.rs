@@ -5,43 +5,6 @@ use crate::{
 };
 
 impl Repository {
-    /// Resolve canonical repository paths, filesystem capabilities, and Git's native daemon endpoint.
-    ///
-    /// Local Git directories use `fsmonitor--daemon.ipc`, ignoring `fsmonitor.socketDir`. On
-    /// supported Unix platforms, remote Git directories use the trusted, interpolated socket
-    /// directory or the permitted home directory. Bare repositories and path/configuration errors
-    /// are rejected. No server is started and no repository handle is retained in the context.
-    #[cfg(feature = "fsmonitor-daemon")]
-    pub fn fsmonitor_daemon_context(&self) -> Result<server::Context> {
-        let worktree = self
-            .workdir()
-            .ok_or_raise(|| message("filesystem monitoring requires a worktree"))?;
-        let worktree = self
-            .current_dir()
-            .join(worktree)
-            .canonicalize()
-            .or_raise(|| message("resolving the filesystem monitor worktree"))?;
-        let git_dir = self.current_dir().join(self.git_dir()).canonicalize().or_error()?;
-        let endpoint = crate::fsmonitor::daemon::endpoint(&git_dir, &worktree, || {
-            match self
-                .config_snapshot()
-                .trusted_path(crate::config::tree::FsMonitor::SOCKET_DIR)?
-            {
-                Some(path) => Ok(path),
-                None => self.interpolate_path("~"),
-            }
-        })?;
-        let capabilities = self.filesystem_options()?;
-        Ok(server::Context {
-            worktree,
-            git_dir,
-            common_dir: self.current_dir().join(self.common_dir()).canonicalize().or_error()?,
-            endpoint,
-            precompose_unicode: capabilities.precompose_unicode,
-            ignore_case: capabilities.ignore_case,
-        })
-    }
-
     /// Resolve daemon policy and startup timing from repository configuration.
     ///
     /// `fsmonitor.allowRemote` defaults to false. `fsmonitor.startTimeout` is a nonnegative
@@ -74,7 +37,7 @@ impl Repository {
 
     /// Execute a foreground, detached-startup, or client filesystem-monitor command.
     ///
-    /// Captures [`fsmonitor_daemon_context()`](Self::fsmonitor_daemon_context) and
+    /// Captures [`fsmonitor_server_context()`](Self::fsmonitor_server_context) and
     /// [`fsmonitor_daemon_options()`](Self::fsmonitor_daemon_options), then drops this repository
     /// before serving or launching a child, retaining no repository caches.
     /// `should_interrupt` supplies cancellation during serving and startup.
@@ -128,7 +91,7 @@ impl Repository {
         child_arguments: impl FnOnce(&server::Context) -> Result<Vec<std::ffi::OsString>>,
     ) -> Result<()> {
         let reopen_git_dir = self.current_dir().join(self.git_dir());
-        let context = self.fsmonitor_daemon_context()?;
+        let context = self.fsmonitor_server_context()?;
         let options = if matches!(command, crate::fsmonitor::daemon::Command::Path) {
             Default::default()
         } else {
@@ -144,5 +107,55 @@ impl Repository {
             should_interrupt,
             child_arguments,
         )
+    }
+
+    /// Resolve canonical repository paths, filesystem capabilities, and Git's native server endpoint.
+    ///
+    /// Local Git directories use `fsmonitor--daemon.ipc`, ignoring `fsmonitor.socketDir`. On
+    /// supported Unix platforms, remote Git directories use the trusted, interpolated socket
+    /// directory or the permitted home directory. Relative socket directories use [`Self::current_dir()`].
+    /// Bare repositories and path/configuration errors are rejected. No server is started and no
+    /// repository handle is retained in the context.
+    pub fn fsmonitor_server_context(&self) -> Result<server::Context> {
+        let worktree = self
+            .workdir()
+            .ok_or_raise(|| message("filesystem monitoring requires a worktree"))?;
+        let worktree = self
+            .current_dir()
+            .join(worktree)
+            .canonicalize()
+            .or_raise(|| message("resolving the filesystem monitor worktree"))?;
+        let git_dir = self.current_dir().join(self.git_dir()).canonicalize().or_error()?;
+        let endpoint = server::endpoint(&git_dir, &worktree, || {
+            match self
+                .config_snapshot()
+                .trusted_path(crate::config::tree::FsMonitor::SOCKET_DIR)?
+            {
+                Some(path) => Ok(self.current_dir().join(path)),
+                None => self.interpolate_path("~"),
+            }
+        })?;
+        let capabilities = self.filesystem_options()?;
+        Ok(server::Context {
+            worktree,
+            git_dir,
+            common_dir: self.current_dir().join(self.common_dir()).canonicalize().or_error()?,
+            endpoint,
+            precompose_unicode: capabilities.precompose_unicode,
+            ignore_case: capabilities.ignore_case,
+        })
+    }
+
+    /// Start an application-owned (embedded) filesystem monitor serving this worktree to Git clients.
+    ///
+    /// The server registers its native watches before returning and retains no repository handle.
+    /// Dropping the returned handle stops it; `options` can also configure shutdown after client
+    /// inactivity. An occupied endpoint or a repository without a worktree is an error.
+    ///
+    /// Uses [`fsmonitor_server_context()`](Self::fsmonitor_server_context) to select the same native
+    /// endpoint that Git clients resolve, including alternate socket locations for remote Git directories.
+    pub fn fsmonitor_server(&self, options: server::Options) -> Result<server::Handle> {
+        server::spawn(self.fsmonitor_server_context()?, options)
+            .or_raise(|| message("starting the repository's filesystem monitor"))
     }
 }

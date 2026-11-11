@@ -8,7 +8,7 @@
 #[forbid(unsafe_code)]
 pub mod client;
 
-/// Serve Git's native filesystem monitor protocol with application-owned watches and shutdown.
+/// Select native IPC endpoints and serve Git's filesystem monitor protocol with application-owned watches and shutdown.
 #[cfg(feature = "server")]
 pub mod server;
 

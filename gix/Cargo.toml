@@ -163,7 +163,7 @@ notify = ["dep:gix-notify", "dirwalk"]
 ## Repository configuration, index checkpoints, and status policy remain the caller's responsibility.
 fsmonitor = ["dep:gix-fsmonitor"]
 
-## Expose an embeddable filesystem monitor server as `gix::fsmonitor::server`.
+## Expose native endpoint selection and an embeddable filesystem monitor server as `gix::fsmonitor::server`.
 ## Enables `parallel` to keep shared types and locally gated parallel code paths consistent with the server's background thread.
 fsmonitor-server = ["fsmonitor", "gix-fsmonitor/server", "parallel"]
 
@@ -634,6 +634,7 @@ checks = [
     ] },
 ]
 tests = [
+    { args = ["--no-default-features", "--features", "sha1,sha256,fsmonitor-daemon", "-E", "test(repository::fsmonitor)"] },
     # Run notify once, independently of workspace feature unification. Keep the filter
     # aligned with its baseline exclusion in tests/it/src/qa/native_tests.rs.
     { args = [

@@ -1,5 +1,6 @@
 //! An application-owned filesystem monitor serving Git's native IPC protocol.
 //!
+//! [`endpoint()`](crate::server::endpoint) selects Git's native IPC endpoint from caller-resolved repository paths.
 //! [`spawn()`](crate::server::spawn) registers watches before returning. Keep the returned
 //! [`Handle`](crate::server::Handle) alive while
 //! clients use `core.fsmonitor=true`; each worktree has its own endpoint and token history.
@@ -22,6 +23,7 @@ use gix_notify::{Batch, Budget, Event, Fence, PathKind, SynchronizeError, Watch,
 use gix_parallel::OwnShared;
 
 mod cookie;
+mod endpoint;
 pub(crate) mod filesystem;
 /// Probe and control an existing native IPC service, without starting another process.
 pub mod ipc;
@@ -29,6 +31,8 @@ mod journal;
 mod protocol;
 #[allow(unsafe_code)]
 mod transport;
+
+pub use endpoint::endpoint;
 
 /// One stream of raw filesystem notifications and same-stream delivery fences.
 ///
@@ -110,7 +114,7 @@ pub struct Context {
     pub git_dir: PathBuf,
     /// The shared Git directory, which may differ from `git_dir` for linked worktrees.
     pub common_dir: PathBuf,
-    /// The native IPC endpoint, normally `<git_dir>/fsmonitor--daemon.ipc`.
+    /// The native IPC endpoint selected by [`endpoint()`], normally `<git_dir>/fsmonitor--daemon.ipc`.
     /// Windows derives Git's named-pipe name from this path.
     pub endpoint: PathBuf,
     /// Whether reported Git paths use composed Unicode, from `core.precomposeUnicode`.

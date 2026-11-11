@@ -3,15 +3,14 @@
 Clients for Git's filesystem monitor hook protocols (versions 1 and 2) and native
 Simple IPC protocol over Unix sockets or Windows named pipes. Missing native
 daemons can be started through a caller-provided callback, or through Git by
-default on macOS and Windows. The optional `server` feature provides an in-process
-monitor server. The separate `daemon` feature adds shared blocking daemon control,
-native endpoint selection, and detached self-spawn with startup readiness. It
-includes `server`, while keeping daemon-only dependencies out of server-only builds.
+default on macOS and Windows. The optional `server` feature provides native endpoint
+selection and an in-process monitor server. The separate `daemon` feature adds shared
+blocking daemon control and detached self-spawn with startup readiness. It includes
+`server`, while keeping daemon-only dependencies out of server-only builds.
 
 ## Daemon (`daemon` feature)
 
-`daemon::endpoint()` selects the native endpoint from repository paths, requesting
-an interpolated socket directory from the caller only for remote Git directories.
+`daemon::endpoint()` remains a compatibility re-export of `server::endpoint()`.
 `daemon::execute()` handles foreground serving, detached startup, hook autostart,
 and native control commands through `daemon::Command::{Run, Start, Stop, Status,
 Flush, Query, Hook, Path}`. The caller supplies a `server::Context`, the logical
@@ -113,8 +112,15 @@ No pause/resume API is provided.
 
 ### Endpoints and ownership
 
-There is normally one endpoint per **worktree**, at its private Git directory's
-`fsmonitor--daemon.ipc`; Windows derives a named-pipe name from that path.
+`server::endpoint()` selects the native endpoint without creating directories or
+binding it, and is available without the `daemon` feature. It canonicalizes the
+Git directory and, on Unix, classifies that directory's filesystem. Local Git
+directories use `<git_dir>/fsmonitor--daemon.ipc` without consulting the socket
+directory callback. Remote Git directories use the canonical worktree pathname
+bytes to construct `.git-fsmonitor-<SHA1>` in the caller's trusted, already-interpolated
+socket directory, requesting it exactly once. This SHA-1 is independent of Git
+object formats. Windows always uses the canonical Git directory's
+`fsmonitor--daemon.ipc` path and derives a named-pipe name from it.
 Linked worktrees therefore have separate endpoints and watch lifetimes.
 Starting a second owner of an occupied endpoint fails, allowing applications to
 use the existing service. Restarting establishes a new token epoch and requires
