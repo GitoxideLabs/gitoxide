@@ -159,6 +159,9 @@ dirwalk = ["dep:gix-dir", "attributes", "excludes"]
 ## Observe repository and worktree changes without retaining a repository handle.
 notify = ["dep:gix-notify", "dirwalk"]
 
+## Serve Git's filesystem monitor protocol with application-owned watches and shutdown.
+fsmonitor-server = ["dep:gix-fsmonitor", "gix-fsmonitor/server"]
+
 ## Access to credential helpers, which provide credentials for URLs.
 # Note that `gix-negotiate` just piggibacks here, as 'credentials' is equivalent to 'fetch & push' right now.
 credentials = ["dep:gix-credentials", "dep:gix-prompt", "dep:gix-negotiate"]
@@ -395,6 +398,7 @@ gix-refspec = { version = "^0.47.1", path = "../gix-refspec" }
 gix-filter = { version = "^0.36.1", path = "../gix-filter", optional = true }
 gix-dir = { version = "^0.32.0", path = "../gix-dir", optional = true }
 gix-notify = { version = "^0.1.0", path = "../gix-notify", optional = true }
+gix-fsmonitor = { version = "^0.1.0", path = "../gix-fsmonitor", optional = true }
 
 gix-config = { version = "^0.62.2", path = "../gix-config" }
 gix-odb = { version = "^0.87.0", path = "../gix-odb" }

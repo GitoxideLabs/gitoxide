@@ -5,8 +5,8 @@ protocols. This executable wraps the embeddable server in
 [`gix-fsmonitor`](../gix-fsmonitor), supplying its filesystem events through
 `gix::Repository::monitor()` and `RepositoryMonitor::into_worktree_stream()`.
 The detached stream keeps no repository handle open while idle. Applications can
-enable the server crate's `server` feature to own its lifetime without launching
-an executable.
+enable the server crate's `server` feature, or `gix`'s `fsmonitor-server` feature,
+to own the server and watch lifetime without launching an executable.
 
 Build and install it from this workspace:
 

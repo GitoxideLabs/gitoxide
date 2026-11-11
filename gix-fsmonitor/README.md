@@ -72,6 +72,25 @@ Starting a second owner of an occupied endpoint fails, allowing applications to
 use the existing service. Restarting establishes a new token epoch and requires
 a fresh client baseline.
 
+Applications using `gix` can enable its `fsmonitor-server` feature and use:
+
+```rust,ignore
+let repo = gix::open(worktree)?;
+let server = repo.fsmonitor_server(gix::fsmonitor::server::Options {
+    idle_timeout: Some(std::time::Duration::from_secs(300)),
+})?;
+// External Git clients can now use this server with core.fsmonitor=true.
+// Idle shutdown also releases the server without an explicit shutdown request.
+server.shutdown()?;
+```
+
+The helper leaves repository configuration unchanged and retains no repository
+handle. It uses the private Git directory's endpoint; alternate socket locations
+for remote Git directories are not selected. This API serves external Git
+clients and does not enable filesystem-monitor acceleration in `gix` status
+operations. Git queries after shutdown can start Git's own daemon on macOS/Windows
+while `core.fsmonitor=true` remains enabled.
+
 The standalone `gix-fsmonitor` executable is provided by the
 [`gix-fsmonitor-daemon`](../gix-fsmonitor-daemon) package. It handles discovery,
 configuration and process launching around this server runtime. The optional
