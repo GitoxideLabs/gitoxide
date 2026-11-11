@@ -46,6 +46,14 @@ and lost coverage cannot certify incremental results. The server retains path
 conversion, journal, recovery, and root-loss handling, and never creates a second
 watcher alongside an injected source.
 
+Windows uses Git-style cookie observation when native synchronization is
+unsupported. Sources opt in with `supports_cookie_synchronization()` only when
+they preserve the required native completion ordering. The Windows watcher
+publishes ready worktree completions before exposing cookies, including when a
+linked worktree's cookie directory has a separate native watch. The server waits
+up to one second for its unique cookie and consumes the complete queued batch;
+missing cookies, notification loss, or changed coverage require a full scan.
+
 `gix_notify::Watcher` implements the trait and remains the default for `spawn`
 and `spawn_with_options`. An application or daemon depending on `gix` can instead
 adapt `gix::notify::WorktreeStream`, using the native types re-exported through
@@ -95,5 +103,5 @@ The standalone `gix-fsmonitor` executable is provided by the
 [`gix-fsmonitor-daemon`](../gix-fsmonitor-daemon) package. It handles discovery,
 configuration and process launching around this server runtime. The optional
 server uses plumbing dependencies and `gix-notify`, keeping the library free of
-a dependency on `gix`. Native macOS/Linux synchronization permits incremental
-replies; Windows currently conservatively requests full scans.
+a dependency on `gix`. Native macOS/Linux synchronization and Windows cookie
+observation permit incremental replies.

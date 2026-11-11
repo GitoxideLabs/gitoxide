@@ -31,6 +31,10 @@ impl gix_fsmonitor::server::EventSource for Source {
         self.0.synchronize_at(directory, deadline)
     }
 
+    fn supports_cookie_synchronization(&self) -> bool {
+        cfg!(windows)
+    }
+
     fn set_waker(&mut self, wake: Box<dyn Fn() + Send + Sync + 'static>) {
         self.0.set_waker(wake);
     }

@@ -68,13 +68,13 @@ worktree's Git directory, including linked worktrees with an external administra
 directory. This provides useful incremental replies, including changes made
 immediately before a query, on supported local filesystems. Linux uses inotify;
 directory moves or lost native coverage require registration recovery and full
-verification. Filesystems without synchronization support and the Windows
-backend return Git's full-invalidation marker. Windows protocol
-and lifecycle support is functional, but it does not accelerate Git status until
-native synchronization is available.
+verification. Windows uses Git's cookie-observation approach: it creates a unique
+marker in the same administrative directory and waits for its notification before
+replying. Ready worktree notifications are published before external cookies, so
+linked worktrees also receive incremental results. Missing cookies, notification
+loss, and filesystems without supported synchronization require full verification.
 Windows clients and the daemon should run at the same elevation; Git's custom
-ACL for crossing elevation levels is not implemented. Windows builds and tests
-are cross-compiled, with runtime validation still outstanding.
+ACL for crossing elevation levels is not implemented.
 
 The daemon selects `gix::notify::Options` with `metadata: false` and
 `worktree_coverage: WorktreeCoverage::All`. Coverage includes every worktree path

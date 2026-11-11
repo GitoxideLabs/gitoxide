@@ -268,12 +268,20 @@ mod tests {
         server.finish()?;
         drop(server);
 
+        assert!(
+            listener.accept()?.is_none(),
+            "disconnecting rearms the listener before another client connects"
+        );
         drop(connect(&path)?);
         let mut probe = listener
             .accept()?
             .expect("closed probes still count as client activity");
         assert_eq!(probe.read(&mut [0])?, 0, "an already-closed status probe produces EOF");
         drop(probe);
+        assert!(
+            listener.accept()?.is_none(),
+            "the listener is rearmed after a status probe"
+        );
         let _client = connect(&path)?;
         assert!(
             listener.accept()?.is_some(),

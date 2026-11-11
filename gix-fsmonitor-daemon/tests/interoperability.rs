@@ -179,8 +179,12 @@ fn token(payload: &[u8]) -> TestResult<&OsStr> {
 
 fn client_query(root: &Path, token: &OsStr) -> TestResult<Vec<u8>> {
     let endpoint = root.join(".git").canonicalize()?.join("fsmonitor--daemon.ipc");
+    client_query_endpoint(&endpoint, token)
+}
+
+fn client_query_endpoint(endpoint: &Path, token: &OsStr) -> TestResult<Vec<u8>> {
     Ok(gix_fsmonitor::client::daemon::query(
-        &endpoint,
+        endpoint,
         gix::bstr::BStr::new(token.as_encoded_bytes()),
         || panic!("a running daemon does not need startup context"),
         &Default::default(),
@@ -402,7 +406,7 @@ fn idle_timeout_rejects_invalid_values_and_unrelated_commands() -> gix_testtools
     Ok(())
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 #[test]
 fn native_fence_gives_useful_empty_queries_and_immediate_write_coverage() -> TestResult {
     let dir = fixture()?;
@@ -420,19 +424,37 @@ fn native_fence_gives_useful_empty_queries_and_immediate_write_coverage() -> Tes
         Some(&b""[..]),
         "no filesystem writes yield an empty change list"
     );
-    std::fs::write(dir.path().join("tracked"), "immediate\n")?;
-    std::fs::write(dir.path().join("ignored/untracked"), "also covered\n")?;
-    let changed = client_query(dir.path(), token(&warmed)?)?;
-    assert!(
-        !changed.ends_with(b"\0/\0"),
-        "ordinary changes should not require full scans"
-    );
-    for expected in [b"tracked".as_slice(), b"ignored/untracked"] {
+    let mut previous = warmed;
+    for iteration in 0..16 {
+        std::fs::write(dir.path().join("tracked"), format!("immediate {iteration}\n"))?;
+        std::fs::write(
+            dir.path().join("ignored/untracked"),
+            format!("also covered {iteration}\n"),
+        )?;
+        let changed = client_query(dir.path(), token(&previous)?)?;
         assert!(
-            changed.split(|byte| *byte == 0).any(|path| path == expected),
-            "the gix worktree stream fences every immediate write, including ignored paths: {expected:?}"
+            !changed.ends_with(b"\0/\0"),
+            "ordinary changes should not require full scans, iteration {iteration}"
         );
+        for expected in [b"tracked".as_slice(), b"ignored/untracked"] {
+            assert!(
+                changed.split(|byte| *byte == 0).any(|path| path == expected),
+                "the gix worktree stream observes every immediate write, including ignored paths: {expected:?}"
+            );
+        }
+        assert!(
+            changed.split(|byte| *byte == 0).all(|path| !path.starts_with(b".git/")),
+            "synchronization cookies and administrative paths stay out of client replies"
+        );
+        previous = changed;
     }
+    assert!(
+        std::fs::read_dir(dir.path().join(".git/fsmonitor--daemon/cookies"))?
+            .next()
+            .transpose()?
+            .is_none(),
+        "completed queries remove their synchronization cookies"
+    );
     Ok(())
 }
 
@@ -453,24 +475,37 @@ fn linked_worktree_uses_external_cookie_coverage() -> TestResult {
             .output()?,
     )?;
     let _daemon = Daemon::start(&linked)?;
-    let initial = successful(command(&linked).arg("query").output()?)?;
-    let warmed = successful(command(&linked).arg("query").arg(token(&initial)?).output()?)?;
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    let git_dir = primary.path().join(".git/worktrees/linked").canonicalize()?;
+    let endpoint = git_dir.join("fsmonitor--daemon.ipc");
+    let initial = client_query_endpoint(&endpoint, OsStr::new(""))?;
+    let warmed = client_query_endpoint(&endpoint, token(&initial)?)?;
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     assert!(
         !warmed.ends_with(b"\0/\0"),
-        "the external gitdir cookie shares the worktree's native stream"
+        "synchronization also produces incremental replies with an external Git directory"
     );
-    std::fs::write(linked.join("tracked"), "linked worktree write\n")?;
-    let changed = successful(command(&linked).arg("query").arg(token(&warmed)?).output()?)?;
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    let mut previous = warmed;
+    for iteration in 0..16 {
+        std::fs::write(linked.join("tracked"), format!("linked worktree write {iteration}\n"))?;
+        let changed = client_query_endpoint(&endpoint, token(&previous)?)?;
+        #[cfg(any(target_os = "macos", target_os = "linux", windows))]
+        assert!(
+            changed.split(|byte| *byte == 0).any(|path| path == b"tracked"),
+            "synchronization observes immediate worktree writes with an external Git directory, iteration {iteration}"
+        );
+        #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+        assert!(
+            changed.ends_with(b"\0/\0"),
+            "compatibility backends remain conservative"
+        );
+        previous = changed;
+    }
     assert!(
-        changed.split(|byte| *byte == 0).any(|path| path == b"tracked"),
-        "the external cookie certifies immediate worktree writes"
-    );
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    assert!(
-        changed.ends_with(b"\0/\0"),
-        "compatibility backends remain conservative"
+        std::fs::read_dir(git_dir.join("fsmonitor--daemon/cookies"))?
+            .next()
+            .transpose()?
+            .is_none(),
+        "queries also clean up cookies in external Git directories"
     );
     assert_eq!(
         status(&linked, &hook(), None)?,

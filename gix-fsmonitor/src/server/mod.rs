@@ -21,6 +21,7 @@ use gix_error::{ErrorExt, Result, ResultExt, bail, message};
 use gix_notify::{Batch, Budget, Event, Fence, PathKind, SynchronizeError, Watch, Watcher};
 use gix_parallel::OwnShared;
 
+mod cookie;
 /// Probe and control an existing native IPC service, without starting another process.
 pub mod ipc;
 mod journal;
@@ -58,8 +59,21 @@ pub trait EventSource {
     ///
     /// A successful fence must certify publication of the complete native batch containing the marker.
     /// The server drains through its sequence in the same generation; failures, intervening loss, or
-    /// unsupported synchronization require full verification. Never certify using a separate watcher.
+    /// unsupported synchronization require full verification unless the source supports the
+    /// server's cookie fallback. Never certify using a separate watcher.
     fn synchronize_at(&mut self, directory: &Path, deadline: Instant) -> std::result::Result<Fence, SynchronizeError>;
+
+    /// Whether observing a server-created cookie can synchronize worktree notifications when
+    /// [`synchronize_at()`](Self::synchronize_at) returns [`SynchronizeError::Unsupported`].
+    ///
+    /// This is an opt-in for Git-style cookie synchronization, used by the native Windows source.
+    /// The recursive worktree watch must include cookies within the worktree. For external cookie
+    /// directories, publish all ready worktree completions, including those obtained by rearming
+    /// native reads, before exposing a cookie. Publish complete native batches atomically and report
+    /// loss if that ordering cannot be maintained. Arbitrary unordered sources must leave this false.
+    fn supports_cookie_synchronization(&self) -> bool {
+        false
+    }
 
     /// Install a lightweight callback to wake the server when events, loss, or diagnostics arrive.
     /// It may run on a backend thread and may be called spuriously; it must not run under a queue lock.
@@ -77,6 +91,10 @@ impl EventSource for Watcher {
 
     fn synchronize_at(&mut self, directory: &Path, deadline: Instant) -> std::result::Result<Fence, SynchronizeError> {
         Watcher::synchronize_at(self, directory, deadline)
+    }
+
+    fn supports_cookie_synchronization(&self) -> bool {
+        cfg!(windows)
     }
 
     fn set_waker(&mut self, wake: Box<dyn Fn() + Send + Sync + 'static>) {
@@ -507,10 +525,13 @@ impl<S: EventSource> Monitor<S> {
                 self.journal.reset();
                 continue;
             }
-            if event
-                .paths
-                .iter()
-                .any(|path| self.layout.relative_to(&self.layout.cookie_dir, path).is_some())
+            // Creating a cookie can change its directory's metadata on Windows without losing
+            // coverage. Creation, removal, rename, or an unknown change can replace that directory.
+            if event.kind != gix_notify::EventKind::Modify
+                && event
+                    .paths
+                    .iter()
+                    .any(|path| self.layout.relative_to(&self.layout.cookie_dir, path).is_some())
             {
                 self.journal.reset();
                 self.healthy = false;
@@ -560,7 +581,18 @@ impl<S: EventSource> Monitor<S> {
                         break;
                     }
                 },
-                Err(gix_notify::SynchronizeError::Unsupported) => {}
+                Err(gix_notify::SynchronizeError::Unsupported) => {
+                    if self.watcher.supports_cookie_synchronization() {
+                        match self.synchronize_cookie(now, deadline) {
+                            Ok(synchronized) => complete = synchronized,
+                            Err(_error) => {
+                                gix_trace::warn!(error = %_error, "filesystem cookie synchronization requires a full response");
+                                self.healthy = false;
+                                self.retry.get_or_insert(now + RETRY_INTERVAL);
+                            }
+                        }
+                    }
+                }
                 Err(_error) => {
                     gix_trace::warn!(error = %_error, "filesystem synchronization requires a full response");
                     self.healthy = false;
@@ -572,6 +604,34 @@ impl<S: EventSource> Monitor<S> {
             self.journal.reset();
         }
         self.journal.response(requested, complete, now)
+    }
+
+    fn synchronize_cookie(&mut self, now: Instant, deadline: Instant) -> io::Result<bool> {
+        let cookie = cookie::Cookie::create(&self.layout.cookie_dir)?;
+        let generation = self.generation;
+        let mut seen = false;
+        loop {
+            let batch = self.watcher.drain(Budget::default());
+            let lost = batch.loss.is_some() || batch.error.is_some() || Some(batch.generation) != generation;
+            let more = batch.more;
+            seen |= batch.events.iter().any(|event| event.paths.contains(&cookie.path));
+            // Ingest the entire batch and any queued remainder before acknowledging the cookie.
+            // A marker near a drain budget boundary must not hide later paths in its native batch.
+            self.ingest(batch, now);
+            if lost || !self.healthy || self.root_lost {
+                return Ok(false);
+            }
+            if seen && !more {
+                return Ok(true);
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Ok(false);
+            }
+            if !more {
+                std::thread::park_timeout(remaining.min(IDLE_INTERVAL));
+            }
+        }
     }
 
     fn close(self) {
