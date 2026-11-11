@@ -116,7 +116,7 @@ impl State {
     }
 }
 
-fn event_bytes(event: &Event) -> usize {
+pub(crate) fn event_bytes(event: &Event) -> usize {
     size_of::<Entry>()
         .saturating_add(event.paths.capacity().saturating_mul(size_of::<std::path::PathBuf>()))
         .saturating_add(
