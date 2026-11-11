@@ -13,10 +13,31 @@ includes `server`, while keeping daemon-only dependencies out of server-only bui
 `daemon::endpoint()` selects the native endpoint from repository paths, requesting
 an interpolated socket directory from the caller only for remote Git directories.
 `daemon::execute()` handles foreground serving, detached startup, hook autostart,
-and native control commands. The caller supplies a server context, the logical
-Git directory for reopening, output/cancellation handlers, and arguments for its
-own executable's foreground `run` command. Startup appends idle-timeout/readiness
-options, waits for the child's PID notification, and cleans up unsuccessful children.
+and native control commands through `daemon::Command::{Run, Start, Stop, Status,
+Flush, Query, Hook, Path}`. The caller supplies a `server::Context`, the logical
+Git directory for reopening, `daemon::Options`, output/cancellation handlers, and
+a `child_arguments` callback. Repository discovery and configuration resolution
+remain the caller's responsibility.
+
+`child_arguments` returns an **argument prefix**, not an executable path: startup
+reexecutes the **current executable** in its foreground `run` mode. The prefix
+must preserve application-specific options and configuration. Do not include
+`--idle-timeout` or `--ready-file`; the launcher appends both. The child must pass
+them to `daemon::Command::Run`, which reports its PID only after server startup
+succeeds. Startup waits for that child's readiness notification and cleans up
+unsuccessful children. The callback is invoked only when starting a child.
+`Options::start_timeout` defaults to 60 seconds, matching `fsmonitor.startTimeout`;
+zero checks readiness once without waiting. Foreground serving and idle shutdown
+are unaffected by this timeout.
+
+`Options::allow_remote` defaults to false, matching `fsmonitor.allowRemote`.
+Daemon commands check the worktree's filesystem independently of Git-directory
+endpoint placement. `Command::Path` only resolves the endpoint. Filesystem-probe
+errors remain failures even when remote monitoring is allowed. Detached children
+receive both resolved settings through appended `GIT_CONFIG_COUNT` entries, so
+in-memory policy overrides survive reopening. The foreground entrypoint must
+honor Git's configuration environment; other configuration overrides remain the
+caller's responsibility.
 
 ## Client
 
@@ -40,6 +61,11 @@ runs, including between queries. Initial registration failures are returned
 to the caller; failures after startup invalidate client baselines and trigger
 recovery.
 
+Remote worktrees require `Options::allow_remote=true`. Classification uses Git's
+native macOS, Linux, and Windows rules; Linux includes all FUSE filesystems.
+The permission does not guarantee reliable notifications or override full-scan
+fallbacks. It does not change IPC endpoint placement.
+
 The server waits for IPC connections, source notifications, or shutdown through
 socket readiness on Unix and overlapped named-pipe connections and native events
 on Windows. Recovery and idle shutdown use their own deadlines; an otherwise idle
@@ -55,6 +81,9 @@ Expiry releases watches and the endpoint, just like explicit shutdown.
 
 ### Consistency guarantees
 
+Native macOS/Linux synchronization and Windows cookie observation permit
+incremental replies.
+
 On Windows, the server uses Git-style cookie observation when native
 synchronization is unsupported. The native watcher publishes ready worktree
 completions before exposing cookies, including when a linked worktree's cookie
@@ -62,10 +91,10 @@ directory has a separate native watch. The server waits up to one second for its
 unique cookie and consumes the complete queued batch; missing cookies,
 notification loss, or changed watch coverage require a full scan.
 
-Reported event loss, incomplete delivery fences, and tokens outside the retained journal history 
-require full scans. Native root checks and delivery fences do not detect every
-silent notification gap. Applications that need protection against those gaps
-must arrange independent full verification.
+Reported event loss, incomplete delivery fences, and tokens outside the retained
+journal history require full scans. Native root checks and delivery fences do not
+detect every silent notification gap. Applications that need protection against
+those gaps must arrange independent full verification.
 
 ### Explicit shutdown
 

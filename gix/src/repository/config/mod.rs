@@ -24,6 +24,21 @@ impl crate::Repository {
         config::Snapshot { repo: self }
     }
 
+    /// Interpolate a Git configuration path supplied as a string, byte string, or [`config::Path`].
+    ///
+    /// Expand `~` and `~/` using the home directory permitted by this repository's environment
+    /// permissions, `~user` using the platform's user lookup, and `%(prefix)/` using
+    /// [`install_dir()`](Self::install_dir). Return an error for empty paths or unavailable expansion
+    /// inputs, or if the resulting path cannot be represented natively.
+    ///
+    /// Relative paths remain relative; no canonicalization or filesystem existence checks are
+    /// performed. A `:(optional)` prefix is stripped, but does not suppress errors or missing paths.
+    /// To read a trusted configuration value and honor optional paths, use
+    /// [`config_snapshot()`](Self::config_snapshot) and [`trusted_path()`](config::Snapshot::trusted_path).
+    pub fn interpolate_path(&self, path: impl Into<config::Path>) -> Result<std::path::PathBuf> {
+        config::cache::util::interpolate_path(path.into(), self.options.permissions.env)
+    }
+
     /// Return the path at which a configuration file is expected, selected by its source.
     ///
     /// [`Local`](config::Source::Local) selects `config` in the [`common_dir()`](Self::common_dir), and

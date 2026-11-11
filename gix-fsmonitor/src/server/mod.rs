@@ -22,6 +22,7 @@ use gix_notify::{Batch, Budget, Event, Fence, PathKind, SynchronizeError, Watch,
 use gix_parallel::OwnShared;
 
 mod cookie;
+pub(crate) mod filesystem;
 /// Probe and control an existing native IPC service, without starting another process.
 pub mod ipc;
 mod journal;
@@ -118,9 +119,12 @@ pub struct Context {
     pub ignore_case: bool,
 }
 
-/// Configure the lifetime and operation timings of an application-owned server.
+/// Configure filesystem eligibility, lifetime, and operation timings of an application-owned server.
 #[derive(Debug, Clone, Copy)]
 pub struct Options {
+    /// Permit monitoring remote worktrees. Defaults to false, like `fsmonitor.allowRemote`.
+    /// Filesystem-probe errors still fail startup, and incomplete notifications still require full verification.
+    pub allow_remote: bool,
     /// Stop after this much time without a client connection, or stay running with `None` (the default).
     /// The duration must be positive. Completed connections, including status probes, restart the timer;
     /// filesystem events do not. An active exchange finishes before idle shutdown is considered.
@@ -138,6 +142,7 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
+            allow_remote: false,
             idle_timeout: None,
             fence_timeout: Duration::from_secs(1),
             retry_interval: Duration::from_secs(5),
@@ -249,6 +254,7 @@ fn spawn_with_source<S: EventSource + 'static>(
         .name("gix-fsmonitor".into())
         .spawn(gix_trace::in_thread(move || {
             let context = context.normalize()?;
+            context.check_worktree(options.allow_remote)?;
             let listener = transport::Listener::bind(&context.endpoint)
                 .or_raise(|| message("acquiring the native IPC endpoint"))?;
             let mut source = make_source(&context)?;
@@ -291,6 +297,10 @@ struct Layout {
 }
 
 impl Context {
+    pub(crate) fn check_worktree(&self, allow_remote: bool) -> Result<()> {
+        check_worktree(&self.worktree, allow_remote, filesystem::is_remote)
+    }
+
     fn normalize(self) -> Result<Self> {
         for (field, path) in [
             ("worktree", &self.worktree),
@@ -336,6 +346,26 @@ impl Context {
             ..self
         })
     }
+}
+
+fn check_worktree(
+    worktree: &Path,
+    allow_remote: bool,
+    is_remote: impl FnOnce(&Path) -> io::Result<bool>,
+) -> Result<()> {
+    if is_remote(worktree).or_raise(|| {
+        message!(
+            "determining whether worktree '{}' is on a remote filesystem",
+            worktree.display()
+        )
+    })? && !allow_remote
+    {
+        bail!(message!(
+            "remote worktree '{}' requires fsmonitor.allowRemote=true",
+            worktree.display()
+        ));
+    }
+    Ok(())
 }
 
 impl Layout {
@@ -738,6 +768,32 @@ mod tests {
 
     use super::*;
     use gix_notify::EventKind;
+
+    #[test]
+    fn remote_worktree_permission_does_not_override_probe_errors() -> gix_error::TestResult {
+        let worktree = Path::new("worktree");
+        for allow_remote in [false, true] {
+            check_worktree(worktree, allow_remote, |path| {
+                assert_eq!(
+                    path, worktree,
+                    "eligibility probes the worktree, not an administrative directory"
+                );
+                Ok(false)
+            })?;
+            assert!(
+                check_worktree(worktree, allow_remote, |_| Err(io::Error::other("probe failed"))).is_err(),
+                "filesystem errors remain failures even when remote monitoring is allowed"
+            );
+        }
+        check_worktree(worktree, true, |_| Ok(true))?;
+        let error =
+            check_worktree(worktree, false, |_| Ok(true)).expect_err("remote worktrees require explicit permission");
+        assert!(
+            error.to_string().contains("fsmonitor.allowRemote=true"),
+            "remote rejection explains how to opt in: {error}"
+        );
+        Ok(())
+    }
 
     #[test]
     fn idle_maintenance_preserves_history_until_loss_is_reported() -> gix_error::TestResult {

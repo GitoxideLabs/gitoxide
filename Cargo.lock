@@ -1566,6 +1566,7 @@ dependencies = [
  "gix-error",
  "gix-filter",
  "gix-fs",
+ "gix-fsmonitor",
  "gix-glob",
  "gix-hash",
  "gix-hashtable",
@@ -2011,6 +2012,16 @@ dependencies = [
  "sha1dc",
  "tempfile",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "gix-fsmonitor-daemon"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "gix",
+ "gix-fsmonitor-daemon",
+ "gix-testtools",
 ]
 
 [[package]]

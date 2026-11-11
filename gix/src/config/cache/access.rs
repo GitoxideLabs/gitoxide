@@ -585,18 +585,6 @@ impl Cache {
             })
             .transpose()
     }
-
-    /// Return the home directory if we are allowed to read it and if it is set in the environment.
-    ///
-    /// We never fail for here even if the permission is set to deny as we `gix-config` will fail later
-    /// if it actually wants to use the home directory - we don't want to fail prematurely.
-    #[cfg(any(
-        feature = "blocking-http-transport-reqwest",
-        feature = "blocking-http-transport-curl"
-    ))]
-    pub(crate) fn home_dir(&self) -> Option<PathBuf> {
-        home_dir(self.environment)
-    }
 }
 
 pub(crate) fn config_lock_timeout(
@@ -706,12 +694,8 @@ fn trusted_file_path_with_observer(
         return Ok(None);
     }
 
-    let install_dir = crate::path::install_dir().ok();
-    let home = home_dir(environment);
-    let ctx = config::cache::interpolate_context(install_dir.as_deref(), home.as_deref());
-
     let is_optional = path.is_optional;
-    let path = path.interpolate(ctx)?;
+    let path = super::util::interpolate_path(path, environment)?;
     let path = match current_dir {
         Some(base) => base.join(path),
         None => path,

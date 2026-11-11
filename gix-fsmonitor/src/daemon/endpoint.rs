@@ -4,6 +4,9 @@ use std::path::{Path, PathBuf};
 use gix_error::message;
 use gix_error::{Result, ResultExt};
 
+#[cfg(unix)]
+use crate::server::filesystem::is_remote;
+
 /// Select Git's native IPC endpoint without creating a directory or binding the endpoint.
 ///
 /// Canonicalize `git_dir` and, for local filesystems, return its `fsmonitor--daemon.ipc` path
@@ -39,56 +42,9 @@ fn remote(worktree: &Path, socket_dir: &Path) -> Result<PathBuf> {
     Ok(socket_dir.join(format!(".git-fsmonitor-{digest}")))
 }
 
-/// Return whether the filesystem containing `path` is classified as remote for IPC endpoint placement.
-///
-/// On macOS, this means the filesystem lacks `MNT_LOCAL`. On Linux, this means its type is
-/// SMB, CIFS, SMB2, NFS, AFS, Coda, or FUSE; FUSE is included even when locally backed.
-/// Other Linux filesystem types are classified as local.
-///
-/// Return an error if `path` contains a NUL byte or `statfs` fails.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-fn is_remote(path: &Path) -> std::io::Result<bool> {
-    let info = rustix::fs::statfs(path)?;
-    #[cfg(target_os = "macos")]
-    return Ok(info.f_flags & libc::MNT_LOCAL as u32 == 0);
-    #[cfg(target_os = "linux")]
-    return Ok(matches!(
-        (info.f_type as u64) & 0xffff_ffff,
-        0xff534d42 | 0x517b | 0xfe534d42 | 0x6969 | 0x5346414f | 0x73757245 | 0x65735546
-    ));
-}
-
-#[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
-fn is_remote(_path: &Path) -> std::io::Result<bool> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "native Git endpoint filesystem classification is supported on macOS and Linux",
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    #[test]
-    fn filesystem_classification_reports_path_errors() -> gix_testtools::TestResult {
-        assert_eq!(
-            is_remote(Path::new("invalid\0path"))
-                .expect_err("a path containing a NUL byte cannot be passed to statfs")
-                .kind(),
-            std::io::ErrorKind::InvalidInput,
-            "filesystem classification rejects NUL bytes in paths"
-        );
-        assert_eq!(
-            is_remote(Path::new(""))
-                .expect_err("an empty path does not name a filesystem")
-                .kind(),
-            std::io::ErrorKind::NotFound,
-            "filesystem classification propagates statfs errors"
-        );
-        Ok(())
-    }
 
     #[test]
     fn remote_endpoint_hashes_path_with_sha1_independently_of_repository_format() -> gix_testtools::TestResult {

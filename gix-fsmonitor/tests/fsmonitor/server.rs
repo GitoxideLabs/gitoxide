@@ -61,6 +61,20 @@ fn token(response: &[u8]) -> TestResult<&[u8]> {
 #[test]
 fn default_options_preserve_server_timings() -> TestResult {
     let options = server::Options::default();
+    assert!(!options.allow_remote, "remote monitoring remains opt-in");
+    #[cfg(feature = "daemon")]
+    {
+        let daemon_options = gix_fsmonitor::daemon::Options::default();
+        assert!(
+            !daemon_options.allow_remote,
+            "daemon commands reject remote worktrees by default"
+        );
+        assert_eq!(
+            daemon_options.start_timeout,
+            Duration::from_secs(60),
+            "daemon startup uses Git's default sixty-second readiness timeout"
+        );
+    }
     assert!(options.idle_timeout.is_none(), "idle shutdown remains opt-in");
     assert_eq!(
         options.fence_timeout,

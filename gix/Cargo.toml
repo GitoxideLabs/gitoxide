@@ -159,6 +159,17 @@ dirwalk = ["dep:gix-dir", "attributes", "excludes"]
 ## Observe repository and worktree changes without retaining a repository handle.
 notify = ["dep:gix-notify", "dirwalk"]
 
+## Expose filesystem monitor hook and native daemon clients as `gix::fsmonitor::client`.
+## Repository configuration, index checkpoints, and status policy remain the caller's responsibility.
+fsmonitor = ["dep:gix-fsmonitor"]
+
+## Expose an embeddable filesystem monitor server as `gix::fsmonitor::server`.
+## Enables `parallel` to keep shared types and locally gated parallel code paths consistent with the server's background thread.
+fsmonitor-server = ["fsmonitor", "gix-fsmonitor/server", "parallel"]
+
+## Blocking daemon control and self-spawned startup as `gix::fsmonitor::daemon`.
+fsmonitor-daemon = ["fsmonitor-server", "gix-fsmonitor/daemon"]
+
 ## Access to credential helpers, which provide credentials for URLs.
 # Note that `gix-negotiate` just piggibacks here, as 'credentials' is equivalent to 'fetch & push' right now.
 credentials = ["dep:gix-credentials", "dep:gix-prompt", "dep:gix-negotiate"]
@@ -395,6 +406,7 @@ gix-refspec = { version = "^0.47.1", path = "../gix-refspec" }
 gix-filter = { version = "^0.36.1", path = "../gix-filter", optional = true }
 gix-dir = { version = "^0.32.0", path = "../gix-dir", optional = true }
 gix-notify = { version = "^0.1.0", path = "../gix-notify", optional = true }
+gix-fsmonitor = { version = "^0.1.0", path = "../gix-fsmonitor", optional = true }
 
 gix-config = { version = "^0.62.2", path = "../gix-config" }
 gix-odb = { version = "^0.87.0", path = "../gix-odb" }
@@ -498,6 +510,7 @@ features = [
     "max-performance",
     "blocking-network-client",
     "blocking-http-transport-curl",
+    "fsmonitor-daemon",
     "serde",
 ]
 
@@ -573,6 +586,7 @@ msrv = { checks = [
     ] },
 ] }
 checks = [
+    { args = ["--no-default-features", "--features", "sha1,fsmonitor-daemon"] },
     { args = [
         "--no-default-features",
         "--features",
