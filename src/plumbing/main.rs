@@ -137,9 +137,10 @@ pub fn main() -> Result<()> {
 
     match cmd {
         #[cfg(feature = "tix")]
-        Subcommands::Tix(command) => command.run_as(
-            repository(Mode::Lenient)?.into_sync(),
+        Subcommands::Tix(command) => command.run_with_repository_as_with_trace(
+            || repository(Mode::Lenient).map(gix::Repository::into_sync),
             gix_tix::command::Invocation::GixTix,
+            0,
         ),
         Subcommands::Env => prepare_and_run("env", verbose, None, move |_progress, out, _err| core::env(out, format)),
         Subcommands::Editor { paths } => core::repository::editor(repository(Mode::Lenient)?, paths),
