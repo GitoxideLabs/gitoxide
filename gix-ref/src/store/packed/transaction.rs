@@ -150,18 +150,17 @@ impl packed::Transaction {
             return Ok(());
         }
 
-        let mut file = self.lock.expect("a write lock for applying changes");
-        let refs_sorted: Box<dyn Iterator<Item = Result<packed::Reference<'_>>>> = match self.buffer.as_ref() {
-            Some(buffer) => Box::new(buffer.iter()?),
-            None => Box::new(std::iter::empty()),
-        };
-
-        let mut refs_sorted = refs_sorted.peekable();
+        // Buffer writes to avoid a syscall (and tempfile registry round-trip) per record.
+        let mut out =
+            std::io::BufWriter::with_capacity(64 * 1024, self.lock.expect("a write lock for applying changes"));
+        let mut packed_iter = self.buffer.as_ref().map(|buffer| buffer.iter()).transpose()?;
+        // Unchanged LF records are copied verbatim, which avoids re-encoding them.
+        let mut refs_sorted = std::iter::from_fn(|| packed_iter.as_mut()?.next_with_record()).peekable();
 
         edits.sort_by(|l, r| l.inner.name.as_bstr().cmp(r.inner.name.as_bstr()));
         let mut peekable_sorted_edits = edits.iter().peekable();
 
-        file.with_mut(|f| f.write_all(HEADER_LINE))
+        out.write_all(HEADER_LINE)
             .or_raise(|| message("Could not write packed refs header"))?;
 
         let mut num_written_lines = 0;
@@ -175,45 +174,50 @@ impl packed::Transaction {
                     break;
                 }
                 (Some(Ok(_)), None) => {
-                    let pref = refs_sorted.next().expect("next").expect("no err");
+                    let (pref, record) = refs_sorted.next().expect("next").expect("no err");
                     num_written_lines += 1;
-                    file.with_mut(|out| write_packed_ref(out, pref))
+                    write_packed_ref(&mut out, pref, record)
                         .or_raise(|| message("Could not write packed reference"))?;
                 }
-                (Some(Ok(pref)), Some(edit)) => {
+                (Some(Ok((pref, _))), Some(edit)) => {
                     use std::cmp::Ordering::*;
                     match pref.name.as_bstr().cmp(edit.inner.name.as_bstr()) {
                         Less => {
-                            let pref = refs_sorted.next().expect("next").expect("valid");
+                            let (pref, record) = refs_sorted.next().expect("next").expect("valid");
                             num_written_lines += 1;
-                            file.with_mut(|out| write_packed_ref(out, pref))
+                            write_packed_ref(&mut out, pref, record)
                                 .or_raise(|| message("Could not write packed reference"))?;
                         }
                         Greater => {
                             let edit = peekable_sorted_edits.next().expect("next");
-                            file.with_mut(|out| write_edit(out, edit, &mut num_written_lines))
+                            write_edit(&mut out, edit, &mut num_written_lines)
                                 .or_raise(|| message("Could not write packed reference edit"))?;
                         }
                         Equal => {
                             let _pref = refs_sorted.next().expect("next").expect("valid");
                             let edit = peekable_sorted_edits.next().expect("next");
-                            file.with_mut(|out| write_edit(out, edit, &mut num_written_lines))
+                            write_edit(&mut out, edit, &mut num_written_lines)
                                 .or_raise(|| message("Could not write packed reference edit"))?;
                         }
                     }
                 }
                 (None, Some(_)) => {
                     let edit = peekable_sorted_edits.next().expect("next");
-                    file.with_mut(|out| write_edit(out, edit, &mut num_written_lines))
+                    write_edit(&mut out, edit, &mut num_written_lines)
                         .or_raise(|| message("Could not write packed reference edit"))?;
                 }
             }
         }
 
         if num_written_lines == 0 {
-            std::fs::remove_file(file.resource_path()).or_raise(|| message("Could not delete empty packed refs"))?;
+            std::fs::remove_file(out.get_ref().resource_path())
+                .or_raise(|| message("Could not delete empty packed refs"))?;
         } else {
-            file.commit().or_raise(|| message("Could not commit packed refs"))?;
+            out.into_inner()
+                .map_err(std::io::IntoInnerError::into_error)
+                .or_raise(|| message("Could not flush packed refs"))?
+                .commit()
+                .or_raise(|| message("Could not commit packed refs"))?;
         }
         drop(refs_sorted);
         Ok(())
@@ -228,7 +232,11 @@ fn peel_reference_error(object_id: &gix_hash::oid, reference: &FullNameRef) -> M
         .with("reference", reference.as_bstr())
 }
 
-fn write_packed_ref(out: &mut dyn std::io::Write, pref: packed::Reference<'_>) -> std::io::Result<()> {
+fn write_packed_ref(out: &mut dyn std::io::Write, pref: packed::Reference<'_>, record: &[u8]) -> std::io::Result<()> {
+    if !record.contains(&b'\r') {
+        return out.write_all(record);
+    }
+    // Git requires LF endings for both reference and peeled lines.
     write!(out, "{} ", pref.target)?;
     out.write_all(pref.name.as_bstr())?;
     out.write_all(b"\n")?;
