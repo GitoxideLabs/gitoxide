@@ -1,0 +1,4 @@
+interface:
+  display_name: "GH Advisories to RustSec"
+  short_description: "Review missing GHSAs and prepare local RustSec commits"
+  default_prompt: "Use $gh-advisories-to-rustsec to review and integrate this repository's missing public advisories into my pristine, updated RustSec advisory-db worktree, leaving local commits and comparisons for my review, reauthoring, and submission."
