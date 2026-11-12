@@ -80,7 +80,10 @@ mod impl_ {
     use std::{
         io, mem,
         mem::MaybeUninit,
-        os::windows::io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle},
+        os::windows::{
+            fs::OpenOptionsExt as _,
+            io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle},
+        },
         path::Path,
         ptr,
     };
@@ -170,38 +173,64 @@ mod impl_ {
     }
 
     pub fn is_path_owned_by_current_user(path: &Path) -> io::Result<bool> {
+        if !path.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("\"{}\" does not exist.", path.display()),
+            ));
+        }
+
+        let ownership = is_path_owned_by_current_token(path);
+        if matches!(ownership, Ok(true)) {
+            return ownership;
+        }
+
+        // Home may be owned by someone else but is considered de-facto owned by the user.
+        // Resolve aliases only as a fallback, avoiding a component-by-component filesystem scan
+        // for the usual case of paths already owned by the current token.
+        if let Some(home) = gix_path::env::home_dir()
+            && gix_path::realpath(path).is_ok_and(|resolved| resolved == home)
+        {
+            return Ok(true);
+        }
+        ownership
+    }
+
+    fn is_path_owned_by_current_token(path: &Path) -> io::Result<bool> {
         use windows_sys::Win32::{
             Foundation::{ERROR_INVALID_FUNCTION, ERROR_SUCCESS, LocalFree},
             Security::{
-                Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT},
+                Authorization::{GetSecurityInfo, SE_FILE_OBJECT},
                 CheckTokenMembership, EqualSid, IsWellKnownSid, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
                 TOKEN_ELEVATION_TYPE, TOKEN_LINKED_TOKEN, TOKEN_QUERY, TOKEN_USER, TokenElevationType,
                 TokenElevationTypeLimited, TokenLinkedToken, TokenUser, WinBuiltinAdministratorsSid,
             },
+            Storage::FileSystem::{FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, READ_CONTROL},
             System::Threading::{GetCurrentProcess, GetCurrentThread, OpenProcessToken, OpenThreadToken},
         };
 
-        if !path.exists() {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("{path:?} does not exist."),
-            ));
-        }
-
-        // Home is not actually owned by the corresponding user
-        // but it can be considered de-facto owned by the user
-        // Ignore errors here and just do the regular checks below
-        if gix_path::realpath(path).ok() == gix_path::env::home_dir() {
-            return Ok(true);
-        }
+        // Let Rust handle Windows path normalization and extended-length prefixes. Inspect the
+        // final symlink itself, like GetNamedSecurityInfoW, and allow opening directories too.
+        let file = match std::fs::OpenOptions::new()
+            .access_mode(READ_CONTROL)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)
+        {
+            Ok(file) => file,
+            Err(err) if err.raw_os_error() == Some(ERROR_INVALID_FUNCTION as _) => return Ok(false),
+            Err(err) => error!(
+                err,
+                format!("Couldn't open path \"{}\" to check ownership", path.display())
+            ),
+        };
 
         #[expect(unsafe_code)]
         unsafe {
             let (folder_owner, descriptor) = {
                 let mut folder_owner = MaybeUninit::uninit();
                 let mut pdescriptor = MaybeUninit::uninit();
-                let result = GetNamedSecurityInfoW(
-                    to_wide_path(path).as_ptr(),
+                let result = GetSecurityInfo(
+                    file.as_raw_handle(),
                     SE_FILE_OBJECT,
                     OWNER_SECURITY_INFORMATION,
                     folder_owner.as_mut_ptr(),
@@ -234,7 +263,7 @@ mod impl_ {
                     #[expect(unsafe_code)]
                     // SAFETY: syscall only invoked if we have a valid descriptor
                     unsafe {
-                        LocalFree(self.0 as _);
+                        LocalFree(self.0.cast());
                     }
                 }
             }
@@ -256,7 +285,7 @@ mod impl_ {
                 token.assume_init()
             };
 
-            let _owned_token = OwnedHandle::from_raw_handle(token as _);
+            let _owned_token = OwnedHandle::from_raw_handle(token.cast());
 
             let user_info_buf = token_information(token, TokenUser, "TokenUser", "current token", path)?;
             let token_user_info = ptr::read_unaligned(user_info_buf.as_ptr().cast::<TOKEN_USER>());
@@ -302,10 +331,10 @@ mod impl_ {
                 path,
             )?;
             let linked_token = linked_token_info.LinkedToken;
-            let linked_token = OwnedHandle::from_raw_handle(linked_token as _);
+            let linked_token = OwnedHandle::from_raw_handle(linked_token.cast());
 
             let mut is_member = 0;
-            if CheckTokenMembership(linked_token.as_raw_handle() as _, folder_owner, &mut is_member) == 0 {
+            if CheckTokenMembership(linked_token.as_raw_handle(), folder_owner, &mut is_member) == 0 {
                 error!(format!(
                     "Couldn't check whether the linked elevated token is in the Administrators group while checking ownership of \"{}\"",
                     path.display()
@@ -314,12 +343,5 @@ mod impl_ {
 
             Ok(is_member != 0)
         }
-    }
-
-    fn to_wide_path(path: impl AsRef<Path>) -> Vec<u16> {
-        use std::os::windows::ffi::OsStrExt;
-        let mut wide_path: Vec<_> = path.as_ref().as_os_str().encode_wide().collect();
-        wide_path.push(0);
-        wide_path
     }
 }

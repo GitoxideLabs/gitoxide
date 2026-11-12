@@ -41,6 +41,7 @@ windows-sys = { version = "0.61.1", features = [
 ] }
 
 [dev-dependencies]
+gix-error = { version = "^0.5.2", path = "../gix-error" }
 tempfile = "3.26.0"
 
 [package.metadata.docs.rs]
