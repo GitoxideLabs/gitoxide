@@ -154,7 +154,7 @@ impl packed::Transaction {
         let mut out =
             std::io::BufWriter::with_capacity(64 * 1024, self.lock.expect("a write lock for applying changes"));
         let mut packed_iter = self.buffer.as_ref().map(|buffer| buffer.iter()).transpose()?;
-        // Unchanged records are copied verbatim, which avoids re-encoding them.
+        // Unchanged LF records are copied verbatim, which avoids re-encoding them.
         let mut refs_sorted = std::iter::from_fn(|| packed_iter.as_mut()?.next_with_record()).peekable();
 
         edits.sort_by(|l, r| l.inner.name.as_bstr().cmp(r.inner.name.as_bstr()));
@@ -174,18 +174,18 @@ impl packed::Transaction {
                     break;
                 }
                 (Some(Ok(_)), None) => {
-                    let (_, record) = refs_sorted.next().expect("next").expect("no err");
+                    let (pref, record) = refs_sorted.next().expect("next").expect("no err");
                     num_written_lines += 1;
-                    out.write_all(record)
+                    write_packed_ref(&mut out, pref, record)
                         .or_raise(|| message("Could not write packed reference"))?;
                 }
                 (Some(Ok((pref, _))), Some(edit)) => {
                     use std::cmp::Ordering::*;
                     match pref.name.as_bstr().cmp(edit.inner.name.as_bstr()) {
                         Less => {
-                            let (_, record) = refs_sorted.next().expect("next").expect("valid");
+                            let (pref, record) = refs_sorted.next().expect("next").expect("valid");
                             num_written_lines += 1;
-                            out.write_all(record)
+                            write_packed_ref(&mut out, pref, record)
                                 .or_raise(|| message("Could not write packed reference"))?;
                         }
                         Greater => {
@@ -230,6 +230,20 @@ fn peel_reference_error(object_id: &gix_hash::oid, reference: &FullNameRef) -> M
     Message::new("Could not peel packed reference")
         .with("object_id", object_id.to_string())
         .with("reference", reference.as_bstr())
+}
+
+fn write_packed_ref(out: &mut dyn std::io::Write, pref: packed::Reference<'_>, record: &[u8]) -> std::io::Result<()> {
+    if !record.contains(&b'\r') {
+        return out.write_all(record);
+    }
+    // Git requires LF endings for both reference and peeled lines.
+    write!(out, "{} ", pref.target)?;
+    out.write_all(pref.name.as_bstr())?;
+    out.write_all(b"\n")?;
+    if let Some(object) = pref.object {
+        writeln!(out, "^{object}")?;
+    }
+    Ok(())
 }
 
 fn write_edit(out: &mut dyn std::io::Write, edit: &Edit, lines_written: &mut i32) -> std::io::Result<()> {

@@ -428,6 +428,72 @@ fn packed_refs_are_consulted_when_determining_previous_value_of_ref_to_be_delete
 }
 
 #[test]
+fn deleting_packed_refs_normalizes_crlf_records_for_git() -> TestResult {
+    for name in ["refs/heads/main", "refs/remotes/origin/main"] {
+        for (ref_ending, peeled_ending) in [
+            (b"\r\n".as_slice(), b"\r\n".as_slice()),
+            (b"\r\n".as_slice(), b"\n".as_slice()),
+            (b"\n".as_slice(), b"\r\n".as_slice()),
+        ] {
+            let (_keep, store) = store_writable("make_packed_ref_repository.sh")?;
+            let show_refs = "show-ref --verify --dereference refs/heads/A refs/tags/dt1";
+            let git_before = gix_testtools::git(store.git_dir(), show_refs)?;
+            let packed_before = std::fs::read(store.packed_refs_path())?;
+            let with_crlf: Vec<u8> = packed_before
+                .split_inclusive(|b| *b == b'\n')
+                .flat_map(|line| {
+                    line.replace(
+                        b"\n",
+                        if line.starts_with(b"^") {
+                            peeled_ending
+                        } else {
+                            ref_ending
+                        },
+                    )
+                })
+                .collect();
+            std::fs::write(store.packed_refs_path(), with_crlf)?;
+
+            store
+                .transaction()
+                .prepare(
+                    [RefEdit::delete(name.try_into()?, PreviousValue::MustExist)],
+                    Fail::Immediately,
+                    Fail::Immediately,
+                )?
+                .commit(None)?;
+
+            let git_after = gix_testtools::git_command(store.git_dir())
+                .args(["show-ref", "--verify", "--dereference", "refs/heads/A", "refs/tags/dt1"])
+                .output()?;
+            assert!(
+                git_after.status.success(),
+                "Git can read retained refs and their peeled targets after deleting {name}: {}",
+                git_after.stderr.as_bstr()
+            );
+            assert_eq!(
+                git_after.stdout.as_bstr(),
+                git_before.as_bytes().as_bstr(),
+                "retained targets match"
+            );
+            let deleted_suffix = format!(" {name}\n");
+            let expected: Vec<u8> = packed_before
+                .split_inclusive(|b| *b == b'\n')
+                .filter(|line| !line.ends_with(deleted_suffix.as_bytes()))
+                .flatten()
+                .copied()
+                .collect();
+            assert_eq!(
+                std::fs::read(store.packed_refs_path())?.as_bstr(),
+                expected.as_bstr(),
+                "retained records and peeled lines use LF after deleting {name}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn a_loose_ref_with_old_value_check_and_outdated_packed_refs_value_deletes_both_refs() -> TestResult {
     let (_keep, store) = store_writable("make_packed_ref_repository_for_overlay.sh")?;
     let packed = store.open_packed_buffer()?.expect("packed-refs");
