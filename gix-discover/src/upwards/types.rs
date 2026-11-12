@@ -256,7 +256,7 @@ mod tests {
 
         // Parse & build ceiling dirs string
         let symlink_str = symlink_path.to_str().expect("symlink path is valid utf8");
-        let ceiling_dir_string = format!("{};relative;;{}", symlink_str, symlink_str);
+        let ceiling_dir_string = format!("{symlink_str};relative;;{symlink_str}");
         let ceiling_dirs = parse_ceiling_dirs(OsStr::new(ceiling_dir_string.as_str()));
 
         assert_eq!(ceiling_dirs.len(), 2, "Relative path is discarded");
