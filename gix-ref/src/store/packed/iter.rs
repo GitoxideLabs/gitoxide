@@ -121,4 +121,13 @@ impl<'a> packed::Iter<'a> {
             })
         }
     }
+
+    /// Like [`Iterator::next()`], but also return the record's raw bytes, including its optional peeled line and line endings.
+    pub(in crate::store_impl::packed) fn next_with_record(
+        &mut self,
+    ) -> Option<Result<(packed::Reference<'a>, &'a [u8])>> {
+        let start = self.cursor;
+        let item = self.next()?;
+        Some(item.map(|reference| (reference, &start[..start.len() - self.cursor.len()])))
+    }
 }

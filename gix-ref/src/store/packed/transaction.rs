@@ -153,12 +153,9 @@ impl packed::Transaction {
         // Buffer writes to avoid a syscall (and tempfile registry round-trip) per record.
         let mut out =
             std::io::BufWriter::with_capacity(64 * 1024, self.lock.expect("a write lock for applying changes"));
-        let refs_sorted: Box<dyn Iterator<Item = Result<packed::Reference<'_>>>> = match self.buffer.as_ref() {
-            Some(buffer) => Box::new(buffer.iter()?),
-            None => Box::new(std::iter::empty()),
-        };
-
-        let mut refs_sorted = refs_sorted.peekable();
+        let mut packed_iter = self.buffer.as_ref().map(|buffer| buffer.iter()).transpose()?;
+        // Unchanged records are copied verbatim, which avoids re-encoding them.
+        let mut refs_sorted = std::iter::from_fn(|| packed_iter.as_mut()?.next_with_record()).peekable();
 
         edits.sort_by(|l, r| l.inner.name.as_bstr().cmp(r.inner.name.as_bstr()));
         let mut peekable_sorted_edits = edits.iter().peekable();
@@ -177,17 +174,18 @@ impl packed::Transaction {
                     break;
                 }
                 (Some(Ok(_)), None) => {
-                    let pref = refs_sorted.next().expect("next").expect("no err");
+                    let (_, record) = refs_sorted.next().expect("next").expect("no err");
                     num_written_lines += 1;
-                    write_packed_ref(&mut out, pref).or_raise(|| message("Could not write packed reference"))?;
+                    out.write_all(record)
+                        .or_raise(|| message("Could not write packed reference"))?;
                 }
-                (Some(Ok(pref)), Some(edit)) => {
+                (Some(Ok((pref, _))), Some(edit)) => {
                     use std::cmp::Ordering::*;
                     match pref.name.as_bstr().cmp(edit.inner.name.as_bstr()) {
                         Less => {
-                            let pref = refs_sorted.next().expect("next").expect("valid");
+                            let (_, record) = refs_sorted.next().expect("next").expect("valid");
                             num_written_lines += 1;
-                            write_packed_ref(&mut out, pref)
+                            out.write_all(record)
                                 .or_raise(|| message("Could not write packed reference"))?;
                         }
                         Greater => {
@@ -232,16 +230,6 @@ fn peel_reference_error(object_id: &gix_hash::oid, reference: &FullNameRef) -> M
     Message::new("Could not peel packed reference")
         .with("object_id", object_id.to_string())
         .with("reference", reference.as_bstr())
-}
-
-fn write_packed_ref(out: &mut dyn std::io::Write, pref: packed::Reference<'_>) -> std::io::Result<()> {
-    write!(out, "{} ", pref.target)?;
-    out.write_all(pref.name.as_bstr())?;
-    out.write_all(b"\n")?;
-    if let Some(object) = pref.object {
-        writeln!(out, "^{object}")?;
-    }
-    Ok(())
 }
 
 fn write_edit(out: &mut dyn std::io::Write, edit: &Edit, lines_written: &mut i32) -> std::io::Result<()> {
