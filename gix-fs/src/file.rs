@@ -20,11 +20,22 @@ pub fn clear_readonly_attribute(path: &std::path::Path) -> std::io::Result<()> {
 
 /// Prepare open options which won't follow a symlink in the final path component on Unix or Windows.
 ///
-/// On Unix, opening a symlink fails. On Windows, opening can succeed with a handle to the reparse point
-/// itself. Callers must inspect its metadata before I/O. In particular, avoid requesting truncation
-/// while opening: validate the handle before calling [`std::fs::File::set_len()`].
-/// For reading, prefer [`open_read_only_no_follow()`], which performs the classification for the caller.
+/// These options do not guarantee that opening a symlink fails: Unix uses `O_NOFOLLOW` and rejects it,
+/// while Windows uses `FILE_FLAG_OPEN_REPARSE_POINT` and may return a handle to the symlink itself.
+/// On Windows, inspect [`File::metadata()`](std::fs::File::metadata) and reject the handle if
+/// `file_type().is_symlink()` is true before any I/O. A metadata lookup by path does not validate the
+/// opened handle.
 ///
+/// For reading, prefer [`open_read_only_no_follow()`], which returns [`FileOrSymlink`] after checking
+/// the handle. Its [`FileOrSymlink::File`] variant can be read without a separate symlink check.
+///
+/// For writing, leave [`OpenOptions::truncate()`](std::fs::OpenOptions::truncate) disabled while opening,
+/// then validate the handle before calling [`File::set_len()`](std::fs::File::set_len). Truncation while
+/// opening happens before callers can inspect the handle.
+/// [`OpenOptions::create_new()`](std::fs::OpenOptions::create_new) atomically rejects existing final entries,
+/// including dangling symlinks.
+///
+/// Calling a platform-specific `custom_flags()` setter again replaces the no-follow flags.
 /// Symlinks in parent components are still followed. On other platforms, these options do not prevent following symlinks.
 pub fn open_options_no_follow() -> std::fs::OpenOptions {
     #[cfg_attr(not(any(unix, windows)), allow(unused_mut))]
@@ -58,12 +69,34 @@ pub enum FileOrSymlink {
 
 /// Open `path` for reading without following a symlink in its final component on Unix or Windows.
 ///
-/// Return [`FileOrSymlink::Symlink`] for a live or dangling symlink, or [`FileOrSymlink::File`] for an
-/// opened non-symlink handle. Missing paths and other I/O errors are returned as errors.
+/// Prefer this to opening directly with [`open_options_no_follow()`] for read-only access. That helper
+/// can return a symlink handle on Windows; this function checks the opened handle before exposing it
+/// as [`FileOrSymlink::File`].
 ///
-/// Opened handles are inspected before being returned. If opening fails, the path may be checked for
-/// a symlink, but the open is never retried. This lets callers choose how to handle symlinks without
-/// depending on platform-specific open errors or accidentally reading through a link.
+/// Return [`FileOrSymlink::Symlink`] for a live or dangling symlink, which callers must handle explicitly,
+/// or [`FileOrSymlink::File`] for an opened non-symlink handle ready for reading. Missing paths and other
+/// I/O errors are returned as errors.
+///
+/// If opening fails, the path may be checked for a symlink, but the open is never retried. The enum
+/// lets callers choose how to handle symlinks without depending on platform-specific open errors.
+///
+/// # Example
+///
+/// ```no_run
+/// # fn read(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+/// use std::io::Read;
+///
+/// let mut file = match gix_fs::open_read_only_no_follow(path)? {
+///     gix_fs::FileOrSymlink::File(file) => file,
+///     gix_fs::FileOrSymlink::Symlink => {
+///         return Err(std::io::ErrorKind::InvalidInput.into());
+///     }
+/// };
+/// let mut contents = Vec::new();
+/// file.read_to_end(&mut contents)?;
+/// # Ok(contents)
+/// # }
+/// ```
 ///
 /// Symlinks in parent components are still followed. No-follow protection is only provided on Unix and Windows.
 pub fn open_read_only_no_follow(path: &std::path::Path) -> std::io::Result<FileOrSymlink> {
