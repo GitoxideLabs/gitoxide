@@ -1361,7 +1361,7 @@ mod tests {
 
     #[test]
     fn creation_reuses_paths_and_claimed_branches_and_inventory_order_is_stable() -> gix_testtools::Result {
-        let (temp, repository) = fixture()?;
+        let (_temp, repository) = fixture()?;
         for branch in ["zeta", "topic", "alpha", "gone"] {
             create_branch(&repository, branch)?;
         }
@@ -1469,8 +1469,8 @@ mod tests {
         #[cfg(unix)]
         {
             create_branch(&repository, "symlinked")?;
-            let actual_parent = temp.path().join("actual");
-            let linked_parent = temp.path().join("linked");
+            let actual_parent = _temp.path().join("actual");
+            let linked_parent = _temp.path().join("linked");
             std::fs::create_dir(&actual_parent)?;
             std::os::unix::fs::symlink(&actual_parent, &linked_parent)?;
             let requested = linked_parent.join("worktree");

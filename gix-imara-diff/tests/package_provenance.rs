@@ -3,18 +3,18 @@
 //! `UPSTREAM-PROVENANCE.tsv` manifest.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::env;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 #[derive(Debug)]
 struct Provenance {
+    #[cfg_attr(not(unix), allow(dead_code))]
     upstream_commit: String,
     entries: BTreeMap<String, Entry>,
 }
 
 #[derive(Debug)]
+#[cfg_attr(not(unix), allow(dead_code))]
 struct Entry {
     origin: String,
     status: String,
@@ -244,7 +244,10 @@ fn parse_provenance(tsv_path: &Path) -> Provenance {
     }
 }
 
+#[cfg(unix)]
 fn cargo_package_list(workspace_root: &Path) -> Vec<String> {
+    use std::{env, process::Command};
+
     let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
     let output = Command::new(cargo)
         .arg("package")
@@ -269,17 +272,20 @@ fn cargo_package_list(workspace_root: &Path) -> Vec<String> {
         .collect()
 }
 
+#[cfg(unix)]
 fn is_modified_from_upstream(path: &Path, upstream_blob: &str) -> bool {
     let current = fs::read(path).expect("file content to be readable");
     git_blob(&current) != upstream_blob
 }
 
+#[cfg(unix)]
 fn git_blob(input: &[u8]) -> String {
     gix_object::compute_hash(gix_hash::Kind::Sha1, gix_object::Kind::Blob, input)
         .expect("blob hash to be computable")
         .to_string()
 }
 
+#[cfg(unix)]
 fn assert_has_notice(path: &Path, cat_file: &str) {
     let content = fs::read_to_string(path).expect("modified text file to be readable as utf8");
     assert!(

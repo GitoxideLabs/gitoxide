@@ -444,6 +444,7 @@ fn delayed_driver_process() -> TestResult {
     let mut opts = opts_from_probe();
     opts.filter_process_delay = gix_filter::driver::apply::Delay::Allow;
     setup_filter_pipeline(opts.filters.options_mut());
+    #[cfg(unix)]
     let fs_supports_executable_bit = opts.fs.executable_bit;
     let (_source, destination, _index, outcome) = checkout_index_in_tmp_dir_opts(
         opts,

@@ -266,7 +266,7 @@ fn bash_program_ok_for_platform() -> TestResult {
     for_version
         .stdout
         .lines()
-        .nth(0)
+        .next()
         .expect("`--version` output has first line");
 
     let for_uname_os = std::process::Command::new(path).args(["-c", "uname -o"]).output()?;
