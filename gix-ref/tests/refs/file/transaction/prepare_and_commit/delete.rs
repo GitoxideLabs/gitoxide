@@ -7,6 +7,7 @@ use crate::{
 };
 use gix_date::parse::TimeBuf;
 use gix_lock::acquire::Fail;
+use gix_object::bstr::ByteSlice;
 use gix_ref::{
     FullName, Reference, Target,
     file::ReferenceExt,
@@ -393,6 +394,7 @@ fn packed_refs_are_consulted_when_determining_previous_value_of_ref_to_be_delete
         store.open_packed_buffer()?.expect("packed").try_find("main")?.is_some(),
         "packed main is available"
     );
+    let packed_before = std::fs::read(store.packed_refs_path())?;
 
     let old_id = hex_to_id("134385f6d781b7e97062102c6a483440bfda2a03");
     let edits = store
@@ -410,6 +412,18 @@ fn packed_refs_are_consulted_when_determining_previous_value_of_ref_to_be_delete
     assert_eq!(edits.len(), 1, "an edit was performed in the packed refs store");
     let packed = store.open_packed_buffer()?.expect("packed ref present");
     assert!(packed.try_find("main")?.is_none(), "no main present after deletion");
+
+    let expected: Vec<u8> = packed_before
+        .split_inclusive(|b| *b == b'\n')
+        .filter(|line| !line.ends_with(b" refs/heads/main\n"))
+        .flatten()
+        .copied()
+        .collect();
+    assert_eq!(
+        std::fs::read(store.packed_refs_path())?.as_bstr(),
+        expected.as_bstr(),
+        "all other records, including peeled tag lines, are preserved byte for byte"
+    );
     Ok(())
 }
 
