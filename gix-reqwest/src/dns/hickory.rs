@@ -1,7 +1,7 @@
 //! DNS resolution via the [hickory-resolver](https://github.com/hickory-dns/hickory-dns) crate
 
 use hickory_resolver::{
-    config::{LookupIpStrategy, ResolverConfig, GOOGLE},
+    config::{LookupIpStrategy, NameServerConfig, ResolverConfig, GOOGLE},
     net::{runtime::TokioRuntimeProvider, NetError},
     TokioResolver,
 };
@@ -49,9 +49,50 @@ impl Iterator for SocketAddrs {
     }
 }
 
+/// Interleave IPv4 and IPv6 addresses so the first two nameservers
+/// (the default `num_concurrent_reqs`) cover both families.
+///
+/// `ResolverConfig::udp_and_tcp(&GOOGLE)` lists both IPv4 addresses first.
+/// On an IPv6-only host those queries time out (~5s) before IPv6 Google
+/// DNS is tried.
+fn interleave_ip_families(ips: &[IpAddr]) -> Vec<IpAddr> {
+    let mut v4 = ips.iter().copied().filter(IpAddr::is_ipv4);
+    let mut v6 = ips.iter().copied().filter(IpAddr::is_ipv6);
+    let mut out = Vec::with_capacity(ips.len());
+    loop {
+        match (v4.next(), v6.next()) {
+            (Some(a), Some(b)) => {
+                out.push(a);
+                out.push(b);
+            }
+            (Some(a), None) => {
+                out.push(a);
+                out.extend(v4);
+                break;
+            }
+            (None, Some(b)) => {
+                out.push(b);
+                out.extend(v6);
+                break;
+            }
+            (None, None) => break,
+        }
+    }
+    out
+}
+
+fn google_fallback_config() -> ResolverConfig {
+    let name_servers = interleave_ip_families(GOOGLE.ips)
+        .into_iter()
+        .map(NameServerConfig::udp_and_tcp)
+        .collect();
+    ResolverConfig::from_parts(None, Vec::new(), name_servers)
+}
+
 /// Create a new resolver with the default configuration,
 /// which reads from `/etc/resolve.conf`. If reading `/etc/resolv.conf` fails,
-/// it fallbacks to hickory_resolver's default config.
+/// it fallbacks to Google Public DNS, with IPv4 and IPv6 nameservers
+/// interleaved so a single-family host does not wait on the other family.
 /// The options are overridden to look up for both IPv4 and IPv6 addresses
 /// to work with "happy eyeballs" algorithm.
 fn new_resolver() -> Result<TokioResolver, NetError> {
@@ -61,10 +102,28 @@ fn new_resolver() -> Result<TokioResolver, NetError> {
             err
         );
         TokioResolver::builder_with_config(
-            ResolverConfig::udp_and_tcp(&GOOGLE),
+            google_fallback_config(),
             TokioRuntimeProvider::default(),
         )
     });
     builder.options_mut().ip_strategy = LookupIpStrategy::Ipv6AndIpv4;
     builder.build()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn google_fallback_nameservers_interleave_families() {
+        let ips = interleave_ip_families(GOOGLE.ips);
+        assert_eq!(ips.len(), GOOGLE.ips.len());
+        assert!(ips[0].is_ipv4(), "first nameserver should stay IPv4");
+        assert!(ips[1].is_ipv6(), "second nameserver should be IPv6");
+        let mut expected = GOOGLE.ips.to_vec();
+        let mut actual = ips.clone();
+        expected.sort();
+        actual.sort();
+        assert_eq!(actual, expected);
+    }
 }
