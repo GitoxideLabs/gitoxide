@@ -12,6 +12,7 @@ impl crate::Repository {
     /// Open a new copy of the index file and decode it entirely.
     ///
     /// It will use the `index.threads` configuration key to learn how many threads to use.
+    /// Checksum verification can be disabled with `index.skipHash` from a trusted configuration section.
     /// Note that it may fail if there is no index.
     ///
     /// # Examples
@@ -34,7 +35,11 @@ impl crate::Repository {
             .transpose()
             .with_lenient_default(self.config.lenient_config)?;
         let skip_hash = crate::config::tree::Index::SKIP_HASH
-            .enrich_error(self.config.resolved.boolean(Index::SKIP_HASH))
+            .enrich_error(
+                self.config
+                    .resolved
+                    .boolean_filter(Index::SKIP_HASH, &mut self.filter_config_section()),
+            )
             .with_lenient_default(self.config.lenient_config)?
             .unwrap_or_default();
 

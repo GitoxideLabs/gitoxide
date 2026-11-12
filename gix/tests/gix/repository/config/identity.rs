@@ -86,6 +86,121 @@ fn configured_identity_fallbacks_follow_user_identity() -> TestResult {
 }
 
 #[test]
+fn identity_configuration_respects_the_section_filter() -> TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_basic_repo.sh")?;
+    for (author_name, author_email, committer_name, committer_email) in [
+        ("user.name", "user.email", "user.name", "user.email"),
+        ("author.name", "author.email", "committer.name", "committer.email"),
+        (
+            "user.name",
+            "gitoxide.user.emailFallback",
+            "user.name",
+            "gitoxide.user.emailFallback",
+        ),
+        (
+            "gitoxide.author.nameFallback",
+            "gitoxide.author.emailFallback",
+            "gitoxide.committer.nameFallback",
+            "gitoxide.committer.emailFallback",
+        ),
+    ] {
+        let mut repo = gix::open_opts(
+            &fixture,
+            gix::open::Options::isolated()
+                .filter_config_section(|meta| meta.source != gix_config::Source::Local)
+                .config_overrides([
+                    format!("{author_name}=Trusted Identity"),
+                    format!("{author_email}=trusted@example.com"),
+                    format!("{committer_name}=Trusted Identity"),
+                    format!("{committer_email}=trusted@example.com"),
+                    "gitoxide.commit.authorDate=48 +0030".into(),
+                    "gitoxide.commit.committerDate=48 +0030".into(),
+                ]),
+        )?;
+        let expected = gix_actor::SignatureRef {
+            name: "Trusted Identity".into(),
+            email: "trusted@example.com".into(),
+            time: "48 +0030",
+        };
+        assert_eq!(
+            repo.author().transpose()?,
+            Some(expected),
+            "the trusted author is cached"
+        );
+        assert_eq!(
+            repo.committer().transpose()?,
+            Some(expected),
+            "the trusted committer is cached"
+        );
+        for date in ["42 +0030", "invalid"] {
+            let mut untrusted = gix_config::File::new(gix_config::file::Metadata::from(gix_config::Source::Local));
+            for key in [
+                "user.name",
+                "author.name",
+                "committer.name",
+                "gitoxide.author.nameFallback",
+                "gitoxide.committer.nameFallback",
+            ] {
+                untrusted.set_raw_value(key, "Untrusted Identity")?;
+            }
+            for key in [
+                "user.email",
+                "author.email",
+                "committer.email",
+                "gitoxide.user.emailFallback",
+                "gitoxide.author.emailFallback",
+                "gitoxide.committer.emailFallback",
+            ] {
+                untrusted.set_raw_value(key, "untrusted@example.com")?;
+            }
+            for key in ["gitoxide.commit.authorDate", "gitoxide.commit.committerDate"] {
+                untrusted.set_raw_value(key, date)?;
+            }
+            let mut config = repo.config_snapshot_mut();
+            config.append(untrusted)?;
+            config.commit()?;
+            assert_eq!(
+                repo.author().transpose()?,
+                Some(expected),
+                "untrusted values cannot override the author, its fallbacks, or its date after a cache refresh"
+            );
+            assert_eq!(
+                repo.committer().transpose()?,
+                Some(expected),
+                "untrusted values cannot override the committer, its fallbacks, or its date after a cache refresh"
+            );
+        }
+    }
+    let mut repo = gix::open_opts(
+        fixture,
+        gix::open::Options::isolated()
+            .filter_config_section(|_| false)
+            .config_overrides(["user.name=Ignored Identity", "user.email=ignored@example.com"]),
+    )?;
+    assert!(
+        repo.author().is_none(),
+        "rejected configuration cannot supply an author"
+    );
+    assert!(
+        repo.committer().is_none(),
+        "rejected configuration cannot supply a committer"
+    );
+    let err = repo
+        .committer_or_set_fallback("Fallback", "fallback@example.com")
+        .expect_err("a filter that rejects API configuration also rejects the installed fallback");
+    assert_eq!(
+        err.to_string(),
+        "The configuration section filter rejected the committer fallback",
+        "a rejected fallback returns an error instead of panicking"
+    );
+    assert!(
+        err.is_validation(),
+        "a filter-rejected fallback is a validation failure"
+    );
+    Ok(())
+}
+
+#[test]
 #[serial]
 fn author_included_by_hasconfig() -> TestResult {
     let _environment = gix_testtools::isolate_git_environment()?;
@@ -235,6 +350,26 @@ fn author_from_different_config_sections() -> TestResult {
         }),
         "committer name comes from repository-local config, \
          but committer email comes from global config"
+    );
+
+    repo.reload_with(|options| options.with_trust(gix_sec::Trust::Reduced))?;
+    assert_eq!(
+        repo.author().transpose()?,
+        Some(gix_actor::SignatureRef {
+            name: "global name".into(),
+            email: "global@example.com".into(),
+            time: "42 +0030",
+        }),
+        "an untrusted repository cannot override the globally configured author email"
+    );
+    assert_eq!(
+        repo.committer().transpose()?,
+        Some(gix_actor::SignatureRef {
+            name: "global name".into(),
+            email: "global-committer@example.com".into(),
+            time: "320437800 +0000",
+        }),
+        "an untrusted repository cannot override the globally configured committer name"
     );
     Ok(())
 }

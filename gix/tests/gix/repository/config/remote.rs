@@ -85,6 +85,96 @@ mod branch_remote {
 
     use crate::util::named_subrepo_opts;
 
+    #[test]
+    fn remote_urls_respect_config_trust() -> TestResult {
+        use gix_sec::Trust;
+
+        for (key, direction) in [
+            ("branch.main.remote", remote::Direction::Fetch),
+            ("branch.main.remote", remote::Direction::Push),
+            ("branch.main.pushRemote", remote::Direction::Push),
+            ("remote.pushDefault", remote::Direction::Push),
+        ] {
+            for (trust, reject_worktree, expected) in [
+                (Trust::Reduced, false, "https://trusted.example/repo"),
+                (Trust::Full, false, "https://override.example/repo"),
+                (Trust::Full, true, "https://trusted.example/repo"),
+            ] {
+                let mut options = gix::open::Options::isolated();
+                if reject_worktree {
+                    options = options.filter_config_section(|meta| meta.source != gix_config::Source::Worktree);
+                }
+                let mut repo = named_subrepo_opts("make_remote_config_repos.sh", "fetch", options)?;
+                let mut config = repo.config_snapshot_mut();
+                config.append_config([format!("{key}=https://trusted.example/repo")], gix_config::Source::Api)?;
+                let mut untrusted = gix_config::File::new(gix_config::file::Metadata {
+                    trust,
+                    ..gix_config::file::Metadata::from(gix_config::Source::Worktree)
+                });
+                untrusted.set_raw_value(key, "https://override.example/repo")?;
+                config.append(untrusted)?;
+                config.commit()?;
+
+                assert_eq!(
+                    repo.branch_remote_name("main", direction)
+                        .expect("the trusted URL is configured")
+                        .as_bstr(),
+                    expected,
+                    "{key}: only eligible configuration can select the destination"
+                );
+                assert_eq!(
+                    repo.branch_remote("main", direction)
+                        .expect("a URL can be used without a remote section")?
+                        .url(direction)
+                        .expect("the remote has a URL")
+                        .to_bstring(),
+                    expected,
+                    "{key}: resolving a branch must not turn rejected configuration into a remote"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn upstream_and_push_policy_respect_config_trust() -> TestResult {
+        for trust in [gix_sec::Trust::Reduced, gix_sec::Trust::Full] {
+            let mut repo = repo("push-default-current")?;
+            let mut config = repo.config_snapshot_mut();
+            config.append_config(["push.default=nothing"], gix_config::Source::Api)?;
+            let mut untrusted = gix_config::File::new(gix_config::file::Metadata {
+                trust,
+                ..gix_config::file::Metadata::from(gix_config::Source::Local)
+            });
+            untrusted.set_raw_value("branch.main.merge", "refs/heads/override")?;
+            untrusted.set_raw_value("push.default", "upstream")?;
+            config.append(untrusted)?;
+            config.commit()?;
+
+            let branch = "refs/heads/main".try_into()?;
+            let trusted = trust == gix_sec::Trust::Full;
+            assert_eq!(
+                repo.branch_remote_ref_name(branch, remote::Direction::Fetch)
+                    .expect("the upstream is configured")?
+                    .as_bstr(),
+                if trusted {
+                    "refs/heads/override"
+                } else {
+                    "refs/heads/other"
+                },
+                "untrusted configuration cannot change the upstream branch"
+            );
+            assert_eq!(
+                repo.branch_remote_ref_name(branch, remote::Direction::Push)
+                    .transpose()?
+                    .is_some(),
+                trusted,
+                "untrusted configuration cannot override push.default=nothing"
+            );
+        }
+        Ok(())
+    }
+
     mod name {
         use gix::remote;
         use gix_testtools::TestResult;

@@ -154,12 +154,14 @@ impl crate::Repository {
     ///
     /// The returned plumbing options may be adjusted before use, for example to disable GPG pinentry by adding
     /// `--pinentry-mode=error` to `program_arguments`.
+    /// `gpg.format`, `user.signingKey`, signing programs, and the fallback committer identity are read only from sections
+    /// accepted by the configuration filter.
     #[cfg(feature = "command")]
     pub fn commit_signing_options(&self) -> Result<gix_object::signature::sign::Options> {
         crate::commit::sign::signing_options(self)
     }
 
-    /// Resolve all Git configuration needed to sign a commit if `commit.gpgSign` enables signing.
+    /// Resolve all Git configuration needed to sign a commit if trusted `commit.gpgSign` enables signing.
     ///
     /// If signing is disabled, signer-specific configuration isn't resolved or validated.
     #[cfg(feature = "command")]
@@ -260,8 +262,12 @@ impl crate::Repository {
         use crate::config::{cache::util::ApplyLeniency, tree::gitoxide};
 
         let pathspec_boolean = |key: &'static config::tree::keys::Boolean| {
-            key.enrich_error(self.config.resolved.boolean(key))
-                .with_leniency(self.config.lenient_config)
+            key.enrich_error(
+                self.config
+                    .resolved
+                    .boolean_filter(key, &mut self.filter_config_section()),
+            )
+            .with_leniency(self.config.lenient_config)
         };
 
         Ok(gix_command::Context {

@@ -118,6 +118,53 @@ mod index {
     use gix_testtools::TestResult;
 
     #[test]
+    fn checksum_verification_respects_configuration_trust() -> TestResult {
+        use gix_sec::Trust;
+
+        let (fixture, ()) = gix_testtools::scripted_fixture_read_only_with_post("make_basic_repo.sh", 1, |fixture| {
+            if let gix_testtools::FixtureState::Uninitialized(path) = fixture {
+                let index_path = path.join(".git/index");
+                let mut index = std::fs::read(&index_path)?;
+                *index.last_mut().expect("the index has a checksum") ^= 1;
+                std::fs::write(index_path, index)?;
+            }
+            Ok(())
+        })?;
+        for (trust, options, use_config) in [
+            (Trust::Reduced, crate::restricted(), false),
+            (Trust::Full, crate::restricted(), true),
+            (
+                Trust::Full,
+                crate::restricted().filter_config_section(|meta| meta.source != gix_config::Source::Local),
+                false,
+            ),
+            (
+                Trust::Reduced,
+                crate::restricted().filter_config_section(|_| true),
+                true,
+            ),
+        ] {
+            let mut repo = gix::open_opts(&fixture, options.strict_config(true))?;
+            repo.config_snapshot_mut()
+                .append_config(["index.skipHash=false"], gix_config::Source::User)?;
+            repo.config_snapshot_mut()
+                .append(gix_config::File::from_bytes_no_includes(
+                    b"[index]
+                        skipHash = true
+                    ",
+                    gix_config::file::Metadata::from(gix_config::Source::Local).with(trust),
+                    Default::default(),
+                )?)?;
+            assert_eq!(
+                repo.open_index().is_ok(),
+                use_config,
+                "only eligible configuration can disable index checksum verification"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn missing_shared_index_is_an_error() -> TestResult {
         let (repo, _tmp) = crate::basic_rw_repo()?;
         let workdir = repo.workdir().expect("the fixture has a worktree");

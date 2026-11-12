@@ -45,6 +45,41 @@ mod into_iter {
     use crate::status::{repo, submodule_repo};
 
     #[test]
+    fn index_writes_respect_checksum_configuration_trust() -> TestResult {
+        for trust in [gix_sec::Trust::Reduced, gix_sec::Trust::Full] {
+            let (mut repo, _fixture) = crate::basic_rw_repo()?;
+            repo.config_snapshot_mut()
+                .append_config(["index.skipHash=false"], gix_config::Source::User)?;
+            repo.config_snapshot_mut()
+                .append(gix_config::File::from_bytes_no_includes(
+                    b"[index]
+                        skipHash = true
+                    ",
+                    gix_config::file::Metadata::from(gix_config::Source::Local).with(trust),
+                    Default::default(),
+                )?)?;
+            let mut index = repo.open_index()?;
+            index.entries_mut()[0].stat = Default::default();
+            let mut status = repo
+                .status(gix::progress::Discard)?
+                .index(gix::worktree::IndexPersistedOrInMemory::InMemory(index))
+                .into_iter(None)?;
+            for item in status.by_ref() {
+                item?;
+            }
+            let mut outcome = status.into_outcome().expect("status completed");
+            assert!(outcome.has_changes(), "status refreshes the cleared index stat");
+            outcome.write_changes().expect("the refreshed index can be written")?;
+            assert_eq!(
+                repo.open_index()?.checksum().is_none(),
+                trust == gix_sec::Trust::Full,
+                "only trusted configuration can omit checksums from refreshed indexes"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn conflict_paths_are_reported_once_like_git() -> TestResult {
         use gix::status::{
             UntrackedFiles, index_worktree::Item as WorktreeItem, plumbing::index_as_worktree::EntryStatus,

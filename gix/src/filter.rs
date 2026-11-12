@@ -26,12 +26,14 @@ pub struct Pipeline<'repo> {
 /// Lifecycle
 impl<'repo> Pipeline<'repo> {
     /// Extract options from `repo` that are needed to properly drive a standard git filter pipeline.
+    /// Round-trip safety checks and external drivers only use configuration accepted by the repository's section filter.
     pub fn options(repo: &'repo Repository) -> Result<gix_filter::pipeline::Options> {
         let config = &repo.config.resolved;
-        let encodings =
-            Core::CHECK_ROUND_TRIP_ENCODING.try_into_encodings(config.string("core.checkRoundtripEncoding"))?;
+        let encodings = Core::CHECK_ROUND_TRIP_ENCODING.try_into_encodings(
+            config.string_filter("core.checkRoundtripEncoding", &mut repo.filter_config_section()),
+        )?;
         let safe_crlf = config
-            .string("core.safecrlf")
+            .string_filter("core.safecrlf", &mut repo.filter_config_section())
             .map(|value| Core::SAFE_CRLF.try_into_safecrlf(value))
             .transpose()
             .map(Option::unwrap_or_default)
