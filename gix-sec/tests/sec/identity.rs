@@ -9,6 +9,76 @@ fn is_path_owned_by_current_user() -> Result {
     Ok(())
 }
 
+#[test]
+#[cfg(windows)]
+fn windows_ownership_of_long_paths() -> gix_error::TestResult {
+    use std::os::windows::ffi::OsStrExt;
+
+    let dir = tempfile::tempdir()?;
+    let child = dir.path().join("child");
+    std::fs::create_dir(&child)?;
+    let joined = dir.path().join("child/../".repeat(40));
+    assert!(
+        joined.as_os_str().encode_wide().count() > 260,
+        "unresolved parent components exceed the Win32 path limit"
+    );
+    assert_eq!(
+        std::path::absolute(&joined)?,
+        std::path::absolute(dir.path())?,
+        "the long spelling still identifies the short temporary directory"
+    );
+    assert!(
+        gix_sec::identity::is_path_owned_by_current_user(&joined)?,
+        "ownership checks accept long paths that become short after normalization"
+    );
+
+    let mut long = child;
+    while long.as_os_str().encode_wide().count() <= 300 {
+        long.push("a-directory-with-a-long-name");
+    }
+    std::fs::create_dir_all(&long)?;
+    assert!(
+        gix_sec::identity::is_path_owned_by_current_user(&long)?,
+        "paths that remain longer than MAX_PATH work without OS or manifest opt-ins"
+    );
+    let file = long.join("file");
+    std::fs::write(&file, [])?;
+    assert!(
+        gix_sec::identity::is_path_owned_by_current_user(&file)?,
+        "long file paths use the same ownership checks as directories"
+    );
+    assert_eq!(
+        gix_sec::identity::is_path_owned_by_current_user(&long.join("missing"))
+            .expect_err("a nonexistent path has no owner")
+            .kind(),
+        std::io::ErrorKind::NotFound,
+        "long-path support does not hide missing paths"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg(windows)]
+fn windows_dangling_symlink_has_no_owner() -> gix_error::TestResult {
+    let dir = tempfile::tempdir()?;
+    let symlink = dir.path().join("dangling-link");
+    match std::os::windows::fs::symlink_dir(dir.path().join("missing"), &symlink) {
+        Err(err) if err.raw_os_error() == Some(1314) => {
+            eprintln!("creating symlinks requires Developer Mode or the symbolic-link privilege");
+            return Ok(());
+        }
+        result => result?,
+    }
+    assert_eq!(
+        gix_sec::identity::is_path_owned_by_current_user(&symlink)
+            .expect_err("a dangling symlink must fail the existence check")
+            .kind(),
+        std::io::ErrorKind::NotFound,
+        "Windows ownership checks retain their missing-target behavior"
+    );
+    Ok(())
+}
+
 /// Ownership checks intentionally inspect the symlink itself rather than following the target.
 /// This matches Git's longstanding `lstat()`-based behavior, which treats a user-owned symlink as
 /// owned by that user even if its target is owned by someone else.
@@ -145,6 +215,25 @@ fn windows_foreign_owned_path_is_not_owned_by_current_user() -> Result {
         assert!(
             !gix_sec::identity::is_path_owned_by_current_user(path)?,
             "a path owned by neither the current user nor Administrators must receive reduced trust: {path:?}"
+        );
+
+        let dir = tempfile::tempdir()?;
+        let symlink = dir.path().join("trusted-link");
+        let result = if path.is_dir() {
+            std::os::windows::fs::symlink_dir(path, &symlink)
+        } else {
+            std::os::windows::fs::symlink_file(path, &symlink)
+        };
+        match result {
+            Err(err) if err.raw_os_error() == Some(1314) => {
+                eprintln!("creating symlinks requires Developer Mode or the symbolic-link privilege");
+                return Ok(());
+            }
+            result => result?,
+        }
+        assert!(
+            gix_sec::identity::is_path_owned_by_current_user(&symlink)?,
+            "ownership checks inspect the user-owned link instead of its independently verified foreign-owned target"
         );
         Ok(())
     }

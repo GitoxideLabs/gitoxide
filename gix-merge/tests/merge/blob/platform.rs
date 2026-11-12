@@ -3,7 +3,7 @@ use gix_worktree::stack::state::attributes;
 
 mod merge {
     use gix_testtools::TestResult;
-    use std::{convert::Infallible, path::Path, process::Stdio};
+    use std::{convert::Infallible, process::Stdio};
 
     use bstr::{BStr, ByteSlice};
     use gix_merge::blob::{
@@ -569,6 +569,8 @@ field: theirs
     #[cfg(not(windows))] // assertions aren't handling Windows paths, and there is no need.
     /// This test is a complex behavioural test for an external merge driver similar to `mergiraf`.
     fn with_external_mergiraf_like_driver_uses_worktree_tempfiles_from_context() -> TestResult {
+        use std::path::Path;
+
         let mut platform = new_platform(
             [gix_merge::blob::Driver {
                 name: "b".into(),

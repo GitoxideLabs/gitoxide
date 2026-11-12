@@ -1,6 +1,5 @@
 use gix_testtools::Result;
 pub use gix_testtools::{normalize_debug_snapshot, scripted_fixture_read_only, scripted_fixture_read_only_with_args};
-use std::collections::HashMap;
 
 fn hex_to_id(hex_sha1: &str, hex_sha256: &str) -> gix_hash::ObjectId {
     match gix_testtools::object_hash() {
@@ -18,7 +17,10 @@ fn open_odb(objects_dir: impl Into<std::path::PathBuf>) -> std::io::Result<gix_o
     gix_odb::at(objects_dir, fixture_hash_kind())
 }
 
+#[cfg(not(windows))]
 fn normalize_patch_snapshot(input: &str) -> String {
+    use std::collections::HashMap;
+
     fn normalize_hex_token<'a>(token: &'a str, seen: &mut HashMap<&'a str, usize>, next_id: &mut usize) -> String {
         if token == "0000000" || !token.bytes().all(|b| b.is_ascii_hexdigit()) {
             return token.to_owned();
@@ -63,6 +65,7 @@ fn normalize_patch_snapshot(input: &str) -> String {
         .to_owned()
 }
 
+#[cfg(not(windows))]
 fn assert_hash_agnostic_patch_eq(actual: &str, expected: &str) {
     pretty_assertions::assert_eq!(normalize_patch_snapshot(expected), normalize_patch_snapshot(actual));
 }

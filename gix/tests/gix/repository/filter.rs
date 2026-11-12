@@ -1,4 +1,4 @@
-use gix_testtools::{Result, TestResult};
+use gix_testtools::TestResult;
 use std::path::Path;
 
 #[test]
@@ -46,7 +46,6 @@ fn pipeline_in_nonbare_repo_without_index() -> TestResult {
 use gix::bstr::ByteSlice;
 use gix_filter::pipeline::convert::to_worktree;
 
-use super::blob_id;
 use crate::util::{named_repo, named_subrepo_opts};
 
 #[test]
@@ -250,6 +249,8 @@ fn legacy_driver_names_are_canonical() -> TestResult {
 #[test]
 #[cfg(unix)]
 fn pipeline_worktree_file_to_object() -> TestResult {
+    use super::blob_id;
+
     let repo = named_repo("repo_with_untracked_files.sh")?.with_object_memory();
     let work_dir = repo.workdir().expect("non-bare");
     let (mut pipe, index) = repo.filter_pipeline(None)?;
@@ -375,6 +376,8 @@ fn worktree_file_to_object_recomputes_submodule_trust() -> TestResult {
 #[test]
 #[cfg(unix)]
 fn worktree_file_to_object_opens_submodules_after_path_options_were_consumed() -> TestResult {
+    use gix_testtools::Result;
+
     let repo = named_repo("repo_with_untracked_files.sh")?;
     let submodule = gix::open_opts(
         repo.workdir().expect("non-bare").join("submodule"),

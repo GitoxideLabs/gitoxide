@@ -278,6 +278,63 @@ mod open {
     use crate::{submodule::repo, util::named_subrepo_opts};
 
     #[test]
+    #[cfg(all(windows, feature = "status"))]
+    fn long_gitdir_paths_support_open_discovery_and_status() -> TestResult {
+        use std::os::windows::ffi::OsStrExt;
+
+        let fixture = gix_testtools::scripted_fixture_read_only("make_submodule_long_paths.sh")?;
+        let worktree = fixture.join("parent");
+        let repo = gix::open_opts(&worktree, gix::open::Options::isolated())?;
+        let sm = repo
+            .submodules()?
+            .expect("fixture configures a submodule")
+            .next()
+            .expect("fixture contains one submodule");
+        let joined_git_dir = sm.git_dir_try_old_form()?;
+        assert!(
+            joined_git_dir.as_os_str().encode_wide().count() > 260,
+            "the gitdir spelling exceeds Windows MAX_PATH"
+        );
+        assert!(
+            std::path::absolute(&joined_git_dir)?.as_os_str().encode_wide().count() < 260,
+            "the actual Git directory fits within Windows MAX_PATH"
+        );
+        let submodule_repo = sm.open()?.expect("the initialized submodule opens");
+        let discovered = gix::discover_opts(
+            worktree.join("module"),
+            Default::default(),
+            gix::open::Options::isolated(),
+        )?;
+        assert_eq!(
+            submodule_repo.head_id()?,
+            discovered.head_id()?,
+            "opening and discovery reach the same submodule"
+        );
+        assert_eq!(
+            std::fs::read_to_string(fixture.join("git-status"))?,
+            " M module\n",
+            "Git reports the submodule's modified worktree"
+        );
+        let items = repo
+            .status(gix::progress::Discard)?
+            .index_worktree_submodules(gix::status::Submodule::AsConfigured { check_dirty: true })
+            .into_index_worktree_iter(None)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        assert_eq!(items.len(), 1, "the modified submodule is the only status entry");
+        assert_eq!(
+            items[0].rela_path(),
+            "module",
+            "status identifies the modified submodule"
+        );
+        assert_eq!(
+            sm.status(gix::submodule::config::Ignore::None, true)?.is_dirty(),
+            Some(true),
+            "the submodule's worktree modification is detected"
+        );
+        Ok(())
+    }
+
+    #[test]
     #[cfg(unix)]
     fn configured_paths_reject_symlinks() -> TestResult {
         let fixture = gix_testtools::scripted_fixture_read_only("make_submodule_symlink_paths.sh")?;

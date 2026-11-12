@@ -41,6 +41,13 @@ pub fn git(git_dir: &Path) -> Result<crate::repository::Kind> {
     git_with_metadata(git_dir, &git_dir_metadata, &cwd)
 }
 
+pub(crate) fn git_with_cwd(git_dir: &Path, cwd: &Path) -> Result<crate::repository::Kind> {
+    let git_dir_metadata = git_dir
+        .metadata()
+        .or_raise(|| message!("Could not retrieve metadata of \"{}\"", git_dir.display()))?;
+    git_with_metadata(git_dir, &git_dir_metadata, cwd)
+}
+
 pub(crate) fn git_with_metadata(
     git_dir: &Path,
     git_dir_metadata: &std::fs::Metadata,
