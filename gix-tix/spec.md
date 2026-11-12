@@ -118,7 +118,17 @@ without trading responsiveness for metadata that is not visible.
   calling shell's directory and returns to its prompt, allowing the shell's
   terminal CWD integration to run before the user opens Tix again. Setup output
   never edits shell profiles. `gix tix` emits a wrapper
-  which consistently invokes `gix tix` instead. Handoff rejects non-Unicode
+  which consistently invokes `gix tix` instead. During each invocation, Bash,
+  Zsh, Fish, and PowerShell wait at the filesystem root so the calling shell's
+  current-directory handle cannot prevent worktree removal on Windows.
+  PowerShell moves both its shell location and native process directory.
+  `TIX_WORKTRUNK_CWD` preserves the launch directory for repository discovery and
+  relative arguments in both `tix` and `gix tix`. A handoff selects the
+  final shell directory even after command failure; without a handoff, the
+  wrapper restores the launch directory, including on picker cancellation.
+  Nushell's virtual directory changes cannot release the native process handle;
+  on Windows it must be started outside a worktree that will be removed.
+  Handoff rejects non-Unicode
   worktree paths rather than passing a corrupted path to the shell.
 - `tix show [-x HIDDEN...] [--no-auto-hide] [TIP...]`, also available through
   the visible `tix status` alias, prints the complete
