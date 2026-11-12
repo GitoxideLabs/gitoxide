@@ -344,6 +344,16 @@ impl Platform {
         trace: u8,
     ) -> Result<()> {
         self.validate_command_options()?;
+        if matches!(&self.command, Some(Command::Worktrunk { .. }))
+            && let Some(cwd) = std::env::var_os(crate::worktrunk::shell::CWD_ENV)
+        {
+            std::env::set_current_dir(&cwd).or_raise(|| {
+                message!(
+                    "could not return to worktrunk launch directory {}",
+                    PathBuf::from(cwd).display()
+                )
+            })?;
+        }
         let _log_guard = crate::logging::init(trace)?;
         self.run_as_initialized(repository()?, invocation)
     }
@@ -1339,6 +1349,44 @@ mod tests {
             "the trace error is retained: {err:#}"
         );
         assert!(!discovered, "tracing is initialized before repository discovery");
+    }
+
+    #[test]
+    fn worktrunk_restores_its_launch_directory_before_repository_discovery() -> gix_testtools::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let temp = gix_testtools::tempfile::TempDir::new()?;
+        let original = temp.path().canonicalize()?;
+        let root = original.ancestors().last().expect("an absolute path has a root");
+        let _env = gix_testtools::Env::new().set(
+            crate::worktrunk::shell::CWD_ENV,
+            original.to_str().expect("temporary paths are Unicode"),
+        );
+        for (args, expected) in [
+            (vec!["tix", "worktrunk", "show"], original.as_path()),
+            (vec!["tix", "show"], root),
+        ] {
+            let _cwd = gix_testtools::set_current_dir(root)?;
+            let err = Cli::try_parse_from(args)?
+                .platform
+                .run_with_repository_as_with_trace(
+                    || {
+                        assert_eq!(
+                            std::env::current_dir()
+                                .or_raise(|| message("could not read the test working directory"))?,
+                            *expected,
+                            "only worktrunk uses the shell launch directory"
+                        );
+                        bail!("stop before opening a repository")
+                    },
+                    Invocation::Tix,
+                    0,
+                )
+                .expect_err("the test stops at repository discovery");
+            assert!(err.to_string().contains("stop before opening a repository"));
+        }
+        Ok(())
     }
 
     #[test]
