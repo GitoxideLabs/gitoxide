@@ -56,6 +56,25 @@ fn daemon_context_and_commands_are_available_through_gix() -> gix_error::TestRes
         repo.git_dir().canonicalize()?.join("fsmonitor--daemon.ipc"),
         "the gix facade resolves the worktree's native daemon endpoint"
     );
+    assert_eq!(
+        context.worktree,
+        repo.workdir().expect("the fixture has a worktree").canonicalize()?,
+        "the daemon context contains canonical worktree paths"
+    );
+    assert_eq!(
+        gix::fsmonitor::daemon::endpoint_for_canonical_paths(&context.git_dir, &context.worktree, || {
+            panic!("local Git directories do not query the socket directory")
+        })?,
+        context.endpoint,
+        "already-canonical paths select the same native endpoint"
+    );
+    assert_eq!(
+        gix::fsmonitor::daemon::endpoint(&repo.git_dir().join("."), std::path::Path::new(""), || {
+            panic!("local Git directories do not query the socket directory")
+        })?,
+        context.endpoint,
+        "unresolved Git paths are canonicalized without requiring a worktree for local endpoints"
+    );
     let mut out = Vec::new();
     repo.fsmonitor_daemon_execute(
         Command::Path,

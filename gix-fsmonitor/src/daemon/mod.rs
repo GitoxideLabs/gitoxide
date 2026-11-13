@@ -20,7 +20,7 @@ use crate::server::{self, ipc};
 mod endpoint;
 mod launch;
 
-pub use endpoint::endpoint;
+pub use endpoint::{endpoint, endpoint_for_canonical_paths};
 
 /// A foreground, detached-startup, or client command for a repository's filesystem monitor.
 pub enum Command {

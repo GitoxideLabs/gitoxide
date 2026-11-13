@@ -22,7 +22,7 @@ impl Repository {
             .canonicalize()
             .or_raise(|| message("resolving the filesystem monitor worktree"))?;
         let git_dir = self.current_dir().join(self.git_dir()).canonicalize().or_error()?;
-        let endpoint = crate::fsmonitor::daemon::endpoint(&git_dir, &worktree, || {
+        let endpoint = crate::fsmonitor::daemon::endpoint_for_canonical_paths(&git_dir, &worktree, || {
             match self
                 .config_snapshot()
                 .trusted_path(crate::config::tree::FsMonitor::SOCKET_DIR)?

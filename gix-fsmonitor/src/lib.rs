@@ -8,6 +8,10 @@
 #[forbid(unsafe_code)]
 pub mod client;
 
+#[cfg(any(windows, test))]
+mod pipe;
+mod protocol;
+
 #[cfg(feature = "async")]
 mod asynchronous;
 

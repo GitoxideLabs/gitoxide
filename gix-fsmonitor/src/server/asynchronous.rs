@@ -399,7 +399,7 @@ impl Listener {
         }
         #[cfg(windows)]
         {
-            let name = crate::client::daemon::pipe_name(path)?;
+            let name = crate::pipe::name(path)?;
             let pipe = tokio::task::spawn_blocking(move || transport::create_async_pipe(&name))
                 .await
                 .map_err(io::Error::other)??;

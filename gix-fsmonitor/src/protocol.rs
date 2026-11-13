@@ -5,8 +5,6 @@ use gix_packetline::{
     decode::{self, PacketLineOrWantedSize},
 };
 
-const MAX_PACKET_DATA: usize = 65_516;
-
 use gix_macros::sync as maybe_async;
 fn write_packet(output: &mut impl Write, data: Option<&[u8]>) -> io::Result<()> {
     match data {
@@ -14,14 +12,14 @@ fn write_packet(output: &mut impl Write, data: Option<&[u8]>) -> io::Result<()> 
         None => gix_packetline::blocking_io::encode::flush_to_write(output).map(|_| ()),
     }
 }
-include!("../message.rs");
+include!("message.rs");
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn binary_payloads_and_large_replies_roundtrip() -> io::Result<()> {
+    fn binary_payloads_and_large_replies_roundtrip() -> gix_error::TestResult {
         for payload in [
             b"gix:epoch:1\0a\0b/\0".to_vec(),
             vec![b'x'; MAX_PACKET_DATA * 2 + 1],
@@ -40,7 +38,7 @@ mod tests {
     }
 
     #[test]
-    fn probes_incomplete_frames_and_oversized_requests_are_distinct() -> io::Result<()> {
+    fn probes_incomplete_frames_and_oversized_requests_are_distinct() -> gix_error::TestResult {
         assert_eq!(
             read_message(&mut &b""[..], 100)?,
             None,

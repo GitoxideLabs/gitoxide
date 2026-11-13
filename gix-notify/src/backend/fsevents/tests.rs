@@ -187,6 +187,36 @@ fn loss_is_processed_even_for_filtered_native_paths() {
 }
 
 #[test]
+fn local_filesystem_classification_preserves_io_errors() -> gix_error::TestResult {
+    let directory = tempfile::tempdir()?;
+    assert!(
+        is_local(directory.path())?,
+        "the native test fixture resides on a local filesystem"
+    );
+
+    let error =
+        is_local(&directory.path().join("missing")).expect_err("statfs must fail for a nonexistent fixture path");
+    assert!(
+        error.is_not_found(),
+        "filesystem inspection retains the native classification"
+    );
+    assert!(!error.is_validation(), "a missing path is not malformed input");
+    assert!(
+        error.to_string().contains("could not inspect watched filesystem"),
+        "statfs failures retain the filesystem inspection context"
+    );
+    assert_eq!(
+        error
+            .downcast_any_ref::<std::io::Error>()
+            .expect("the native I/O cause is retained")
+            .raw_os_error(),
+        Some(libc::ENOENT),
+        "statfs preserves the missing-path errno"
+    );
+    Ok(())
+}
+
+#[test]
 fn invalid_native_paths_are_validation_errors_with_the_original_cause() {
     let error = is_local(Path::new("/invalid\0path")).expect_err("native paths cannot contain NUL bytes");
     assert!(error.is_validation(), "NUL bytes are invalid input, not an I/O failure");
@@ -194,6 +224,25 @@ fn invalid_native_paths_are_validation_errors_with_the_original_cause() {
         error.downcast_any_ref::<std::ffi::NulError>().is_some(),
         "validation context retains the concrete conversion error"
     );
+}
+
+#[test]
+fn trailing_nul_paths_remain_validation_errors() -> gix_error::TestResult {
+    let directory = tempfile::tempdir()?;
+    let mut bytes = directory.path().as_os_str().as_bytes().to_vec();
+    bytes.push(0);
+    let path = PathBuf::from(OsString::from_vec(bytes));
+    let error = is_local(&path).expect_err("a trailing NUL must not be treated as a path terminator");
+    assert!(error.is_validation(), "NUL bytes remain invalid caller input");
+    assert!(
+        error.to_string().contains("filesystem path contains a NUL byte"),
+        "invalid paths retain their validation context"
+    );
+    assert!(
+        error.downcast_any_ref::<std::ffi::NulError>().is_some(),
+        "validation retains the concrete conversion error"
+    );
+    Ok(())
 }
 
 #[test]

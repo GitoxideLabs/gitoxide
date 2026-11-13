@@ -1,9 +1,10 @@
 use std::{
     cell::UnsafeCell,
-    fs::File,
+    fs::{File, OpenOptions},
     io::{self, Read, Write},
     os::windows::{
         ffi::OsStrExt,
+        fs::OpenOptionsExt,
         io::{AsRawHandle, FromRawHandle, OwnedHandle},
     },
     path::Path,
@@ -12,13 +13,13 @@ use std::{
 
 use windows_sys::Win32::{
     Foundation::{
-        ERROR_BROKEN_PIPE, ERROR_FILE_NOT_FOUND, ERROR_IO_INCOMPLETE, ERROR_IO_PENDING, ERROR_NO_DATA, ERROR_NOT_FOUND,
+        ERROR_BROKEN_PIPE, ERROR_IO_INCOMPLETE, ERROR_IO_PENDING, ERROR_NO_DATA, ERROR_NOT_FOUND,
         ERROR_OPERATION_ABORTED, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, INVALID_HANDLE_VALUE, WAIT_FAILED,
         WAIT_OBJECT_0, WAIT_TIMEOUT,
     },
     Storage::FileSystem::{
-        CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
-        OPEN_EXISTING, PIPE_ACCESS_DUPLEX, ReadFile, WriteFile,
+        FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, FILE_GENERIC_READ, FILE_GENERIC_WRITE, PIPE_ACCESS_DUPLEX,
+        ReadFile, WriteFile,
     },
     System::{
         IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED},
@@ -173,14 +174,6 @@ impl Operation {
     }
 }
 
-fn name(path: &Path) -> io::Result<Vec<u16>> {
-    let path: Vec<_> = path.as_os_str().encode_wide().collect();
-    if path.contains(&0) {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "NUL in pipe name"));
-    }
-    Ok(super::pipe_name(path))
-}
-
 fn mode(file: &File, value: u32) -> io::Result<()> {
     // SAFETY: The handle remains owned by file and the mode pointer is valid for this call.
     if unsafe { SetNamedPipeHandleState(file.as_raw_handle(), &value, std::ptr::null(), std::ptr::null()) } == 0 {
@@ -195,7 +188,7 @@ pub(crate) struct Listener {
 }
 impl Listener {
     pub fn bind(path: &Path) -> io::Result<Self> {
-        let name = name(path)?;
+        let name: Vec<_> = crate::pipe::name(path)?.encode_wide().chain(Some(0)).collect();
         let security = super::windows_security::Security::new().map_err(io::Error::other)?;
         // SAFETY: name is terminated; security and its descriptor allocations remain alive for the
         // call. FIRST_PIPE_INSTANCE enforces singleton ownership, and remote clients are rejected.
@@ -278,41 +271,29 @@ impl Drop for Listener {
 }
 
 pub(crate) fn connect(path: &Path) -> io::Result<Stream> {
-    let name = name(&crate::normalize_endpoint(path)?)?;
+    let name = crate::pipe::name(&crate::normalize_endpoint(path)?)?;
     let deadline = Instant::now() + TIMEOUT;
     loop {
-        // SAFETY: name is terminated and alive; no handle is inherited by child processes.
-        let handle = unsafe {
-            CreateFileW(
-                name.as_ptr(),
-                FILE_GENERIC_READ | FILE_GENERIC_WRITE,
-                0,
-                std::ptr::null(),
-                OPEN_EXISTING,
-                0,
-                std::ptr::null_mut(),
-            )
-        };
-        if handle != INVALID_HANDLE_VALUE {
-            // SAFETY: The successful open transfers this unique handle to File.
-            let file = unsafe { File::from_raw_handle(handle) };
-            mode(&file, PIPE_READMODE_BYTE | PIPE_NOWAIT)?;
-            return Ok(Stream {
-                file,
-                deadline,
-                operation: None,
-            });
-        }
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() == Some(ERROR_FILE_NOT_FOUND as i32) {
-            return Err(error);
-        }
-        if error.raw_os_error() != Some(ERROR_PIPE_BUSY as i32) {
-            return Err(error);
+        match OpenOptions::new()
+            .share_mode(0)
+            .access_mode(FILE_GENERIC_READ | FILE_GENERIC_WRITE)
+            .open(&name)
+        {
+            Ok(file) => {
+                mode(&file, PIPE_READMODE_BYTE | PIPE_NOWAIT)?;
+                return Ok(Stream {
+                    file,
+                    deadline,
+                    operation: None,
+                });
+            }
+            Err(error) if error.raw_os_error() == Some(ERROR_PIPE_BUSY as i32) => {}
+            Err(error) => return Err(error),
         }
         let remaining = deadline
             .checked_duration_since(Instant::now())
             .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "named pipe stayed busy"))?;
+        let name: Vec<_> = name.encode_wide().chain(Some(0)).collect();
         // SAFETY: name is terminated and remains alive for the bounded wait.
         unsafe {
             WaitNamedPipeW(name.as_ptr(), remaining.as_millis().clamp(1, 5000) as u32);

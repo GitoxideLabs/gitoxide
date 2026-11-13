@@ -1340,15 +1340,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fs-err"
-version = "3.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5c95b673b8f6f7235229ae11c5642d81b04c2e64c1e2fb417bc0cf73ca45f29"
-dependencies = [
- "autocfg",
-]
-
-[[package]]
 name = "fs_extra"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1497,6 +1488,7 @@ dependencies = [
  "futures-lite",
  "gitoxide-core",
  "gix",
+ "gix-testtools",
  "gix-tix",
  "prodash",
  "serde_derive",
@@ -1516,7 +1508,6 @@ dependencies = [
  "crossbeam-channel",
  "document-features",
  "dua-core",
- "fs-err",
  "futures-io",
  "futures-lite",
  "gitoxide-core",

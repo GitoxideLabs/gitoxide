@@ -100,15 +100,15 @@ fn with_everyone_restricted_token<T>(access: impl FnOnce() -> io::Result<T>) -> 
     access()
 }
 
-fn name(path: &Path) -> Vec<u16> {
-    super::pipe_name(path.as_os_str().encode_wide().collect())
+fn name(path: &Path) -> io::Result<Vec<u16>> {
+    Ok(crate::pipe::name(path)?.encode_wide().chain(Some(0)).collect())
 }
 
 fn open_restricted_client(path: &Path) -> io::Result<File> {
     let path = path.to_owned();
     std::thread::spawn(move || {
         with_everyone_restricted_token(|| {
-            let name = name(&path);
+            let name = name(&path)?;
             // SAFETY: The terminated name is live; successful opening transfers a new pipe handle.
             let handle = unsafe {
                 CreateFileW(
@@ -150,7 +150,7 @@ fn native_clients_need_gits_everyone_read_write_policy() -> gix_testtools::TestR
     let directory = gix_testtools::tempfile::tempdir()?;
     let root = directory.path().canonicalize()?;
     let control_path = root.join("default-ipc");
-    let control_name = name(&control_path);
+    let control_name = name(&control_path)?;
     // The restricting-SID pass requires permission through Everyone, independently of the user's
     // owner/admin grants. It exposes the default Everyone read-only ACL without an elevated login.
     // SAFETY: The terminated name is valid; null attributes select Windows' default pipe security.
@@ -231,7 +231,7 @@ fn native_async_clients_need_gits_everyone_read_write_policy() -> gix_testtools:
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
-        let pipe_name = crate::client::daemon::pipe_name(&worker_path)?;
+        let pipe_name = crate::pipe::name(&worker_path)?;
         let mut stream = {
             let _entered = runtime.enter();
             super::create_async_pipe(&pipe_name)?

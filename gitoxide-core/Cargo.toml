@@ -22,7 +22,7 @@ default = []
 ## Discover all git repositories within a directory. Particularly useful with [skim](https://github.com/lotabout/skim).
 organize = ["dep:dua-core", "dep:gix-url", "dep:parking_lot"]
 ## Derive the amount of time invested into a git repository akin to [git-hours](https://github.com/kimmobrunfeldt/git-hours).
-estimate-hours = ["dep:fs-err", "dep:crossbeam-channel", "dep:smallvec"]
+estimate-hours = ["dep:crossbeam-channel", "dep:smallvec"]
 ## Gather information about repositories and store it in a database for easy querying.
 query = ["dep:rusqlite"]
 ## Run algorithms on a corpus of repositories and store their results for later comparison and intelligence gathering.
@@ -56,7 +56,7 @@ serde = ["gix/serde", "dep:serde_json", "dep:serde", "bytesize/serde"]
 
 [dependencies]
 # deselect everything else (like "performance") as this should be controllable by the parent application.
-gix = { version = "^0.90.0", path = "../gix", default-features = false, features = ["merge", "blob-diff", "blame", "revision", "mailmap", "excludes", "attributes", "worktree-mutation", "credentials", "interrupt", "status", "dirwalk", "command"] }
+gix = { version = "^0.90.0", path = "../gix", default-features = false, features = ["merge", "blob-diff", "blame", "revision", "mailmap", "excludes", "attributes", "worktree-mutation", "credentials", "interrupt", "status", "dirwalk", "command", "notify", "fsmonitor-daemon"] }
 gix-pack-for-configuration-only = { package = "gix-pack", version = "^0.77.0", path = "../gix-pack", default-features = false, features = ["pack-cache-lru-dynamic", "pack-cache-lru-static", "generate", "streaming-input"] }
 gix-transport-configuration-only = { package = "gix-transport", version = "^0.62.0", path = "../gix-transport", default-features = false }
 gix-archive-for-configuration-only = { package = "gix-archive", version = "^0.39.0", path = "../gix-archive", optional = true, features = ["tar", "tar_gz"] }
@@ -80,7 +80,6 @@ dua-core = { version = "4.1.0", optional = true }
 gix-url = { version = "^0.40.1", path = "../gix-url", optional = true }
 
 # for 'hours'
-fs-err = { version = "3.3.0", optional = true }
 crossbeam-channel = { version = "0.5.15", optional = true }
 smallvec = { version = "1.15.1", optional = true }
 
@@ -126,8 +125,6 @@ ignored = [
     "async-trait",
     # Enabled through `async-client` feature wiring only.
     "blocking",
-    # Enabled through `estimate-hours` feature wiring only.
-    "fs-err",
     # Enabled through `async-client` feature wiring only.
     "futures-io",
     # Enabled through `async-client` feature wiring only.

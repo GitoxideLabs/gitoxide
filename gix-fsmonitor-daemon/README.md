@@ -4,9 +4,14 @@ A standalone filesystem monitor for Git's hook v2 and native Simple IPC
 protocols. This executable-only package provides the `gix-fsmonitor` binary.
 The daemon retains no repository handle or caches.
 
-Detached startup executes the running `gix-fsmonitor` binary in foreground
-`run` mode. The executable and shared implementation remain blocking and
-Tokio-free in normal builds.
+The standalone `gix-fsmonitor` executable and the main executable's
+`gix fsmonitor` commands are adapters to the shared daemon APIs. Each starts
+children by executing its own binary in foreground `run` mode; the `gix` CLI
+does not depend on an installed standalone tool. Select repositories with
+`gix -r PATH fsmonitor ...`, or configure autostart with
+`core.fsmonitor='gix fsmonitor hook'` and `core.fsmonitorHookVersion=2`.
+Both adapters and the shared implementation remain blocking and Tokio-free in
+normal builds.
 
 To embed a monitor in an application instead of using this executable, see the
 [`gix` repository API](../gix/src/repository/fsmonitor.rs).

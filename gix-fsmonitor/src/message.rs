@@ -1,3 +1,5 @@
+const MAX_PACKET_DATA: usize = 65_516;
+
 /// Read one Simple IPC message from `input`, accepting at most `limit` payload bytes.
 /// A connect-and-close probe has no message at all.
 #[maybe_async]
@@ -6,17 +8,19 @@ pub(crate) async fn read_message(input: &mut (impl Read + Unpin), limit: usize) 
     let mut received_packet = false;
     loop {
         let mut header = [0; 4];
-        match input.read(&mut header[..1]).await? {
-            0 if !received_packet => return Ok(None),
-            0 => {
+        match input.read(&mut header[..1]).await {
+            Ok(0) if !received_packet => return Ok(None),
+            Ok(0) => {
                 return Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
                     "IPC message ended before flush",
                 ));
             }
-            _ => {
+            Ok(_) => {
                 input.read_exact(&mut header[1..]).await?;
             }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
         }
         received_packet = true;
         match decode::hex_prefix(&header).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))? {

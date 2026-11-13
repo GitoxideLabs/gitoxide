@@ -7,8 +7,6 @@ use gix_packetline::{
 };
 use tokio::io::{AsyncRead as Read, AsyncReadExt, AsyncWrite as Write, AsyncWriteExt};
 
-const MAX_PACKET_DATA: usize = 65_516;
-
 async fn write_packet(output: &mut (impl Write + Unpin), data: Option<&[u8]>) -> io::Result<()> {
     match data {
         Some(data) => {
@@ -79,7 +77,7 @@ pub(crate) async fn connect(path: &Path) -> io::Result<Stream> {
     let path = tokio::task::spawn_blocking(move || crate::normalize_endpoint(&path))
         .await
         .map_err(io::Error::other)??;
-    tokio::net::windows::named_pipe::ClientOptions::new().open(crate::client::daemon::pipe_name(&path)?)
+    tokio::net::windows::named_pipe::ClientOptions::new().open(crate::pipe::name(&path)?)
 }
 
 #[cfg(not(any(unix, windows)))]

@@ -490,20 +490,14 @@ fn identity(path: &Path) -> Result<(u64, u64)> {
 }
 
 fn is_local(path: &Path) -> Result<bool> {
-    let path =
-        CString::new(path.as_os_str().as_bytes()).or_raise(|| validation("filesystem path contains a NUL byte"))?;
-    let mut stat = std::mem::MaybeUninit::<libc::statfs>::uninit();
-    let result = unsafe {
-        // SAFETY: path is NUL-terminated and stat points at writable storage of the required size.
-        libc::statfs(path.as_ptr(), stat.as_mut_ptr())
-    };
-    if result != 0 {
-        return Err(std::io::Error::last_os_error().and_raise(message("could not inspect watched filesystem")));
+    let bytes = path.as_os_str().as_bytes();
+    if bytes.contains(&0) {
+        // Retain the concrete NulError without converting valid paths to CString.
+        CString::new(bytes).or_raise(|| validation("filesystem path contains a NUL byte"))?;
     }
-    let stat = unsafe {
-        // SAFETY: successful statfs initialized the output.
-        stat.assume_init()
-    };
+    let stat = rustix::fs::statfs(path)
+        .map_err(std::io::Error::from)
+        .or_raise(|| message("could not inspect watched filesystem"))?;
     Ok(stat.f_flags & libc::MNT_LOCAL as u32 != 0)
 }
 

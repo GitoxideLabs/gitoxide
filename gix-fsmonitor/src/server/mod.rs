@@ -21,12 +21,13 @@ use gix_error::{ErrorExt, Result, ResultExt, bail, message};
 use gix_notify::{Batch, Budget, Event, Fence, PathKind, SynchronizeError, Watch, Watcher};
 use gix_parallel::OwnShared;
 
+use crate::protocol;
+
 mod cookie;
 pub(crate) mod filesystem;
 /// Probe and control an existing native IPC service, without starting another process.
 pub mod ipc;
 mod journal;
-mod protocol;
 #[allow(unsafe_code)]
 mod transport;
 

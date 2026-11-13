@@ -7,11 +7,6 @@ use std::{
 
 use bstr::BStr;
 use gix_error::{ErrorExt, Result, ResultExt, bail, message, unsupported};
-use gix_packetline::{
-    PacketLineRef,
-    blocking_io::encode,
-    decode::{self, PacketLineOrWantedSize},
-};
 
 /// Limits for native filesystem monitor connections and responses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -243,7 +238,7 @@ fn connect(path: &Path, options: &Options) -> io::Result<std::os::unix::net::Uni
 #[cfg(windows)]
 fn connect(path: &Path, options: &Options) -> io::Result<std::fs::File> {
     // shortcut: synchronous reads match Git; add cancellable I/O if stalled-daemon deadlines are required.
-    let pipe = pipe_name(&crate::normalize_endpoint(path)?)?;
+    let pipe = crate::pipe::name(&crate::normalize_endpoint(path)?)?;
     for attempt in 0..=options.connect_retries {
         match std::fs::OpenOptions::new().read(true).write(true).open(&pipe) {
             Err(err) if err.raw_os_error() == Some(231) && attempt < options.connect_retries => {
@@ -255,29 +250,6 @@ fn connect(path: &Path, options: &Options) -> io::Result<std::fs::File> {
     unreachable!("the final connection attempt returns its result")
 }
 
-#[cfg(windows)]
-pub(crate) fn pipe_name(path: &Path) -> io::Result<std::ffi::OsString> {
-    use std::os::windows::ffi::{OsStrExt, OsStringExt};
-
-    let path: Vec<_> = path.as_os_str().encode_wide().collect();
-    if path.contains(&0) {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "NUL in pipe name"));
-    }
-    let verbatim: Vec<_> = "\\\\?\\".encode_utf16().collect();
-    let mut path = path.strip_prefix(verbatim.as_slice()).unwrap_or(&path).to_vec();
-    let unc: Vec<_> = "UNC\\".encode_utf16().collect();
-    if path.starts_with(&unc) {
-        path.splice(..unc.len(), "\\\\".encode_utf16());
-    }
-    let mut pipe: Vec<_> = "\\\\.\\pipe\\".encode_utf16().collect();
-    pipe.extend(path.iter().enumerate().map(|(idx, &ch)| match ch {
-        ch if ch == u16::from(b':') && idx == 1 => u16::from(b'_'),
-        ch if ch == u16::from(b'/') => u16::from(b'\\'),
-        ch => ch,
-    }));
-    Ok(std::ffi::OsString::from_wide(&pipe))
-}
-
 #[cfg(not(any(unix, windows)))]
 fn connect(_path: &Path, _options: &Options) -> io::Result<io::Cursor<Vec<u8>>> {
     Err(io::Error::new(
@@ -286,42 +258,14 @@ fn connect(_path: &Path, _options: &Options) -> io::Result<io::Cursor<Vec<u8>>> 
     ))
 }
 
-const MAX_PACKET_SIZE: usize = 65520;
-
-fn exchange(stream: &mut (impl Read + Write), token: &[u8], max_response_size: usize) -> io::Result<Vec<u8>> {
-    for chunk in token.chunks(MAX_PACKET_SIZE - 4) {
-        encode::data_to_write(chunk, &mut *stream)?;
-    }
-    encode::flush_to_write(&mut *stream)?;
-    stream.flush()?;
-
-    let mut response = Vec::new();
-    loop {
-        let mut header = [0; 4];
-        stream.read_exact(&mut header)?;
-        // Decode only the prefix so limits are enforced before reading or allocating payload data.
-        match decode::hex_prefix(&header).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))? {
-            PacketLineOrWantedSize::Line(PacketLineRef::Flush) => return Ok(response),
-            PacketLineOrWantedSize::Line(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Unsupported filesystem monitor packet delimiter",
-                ));
-            }
-            PacketLineOrWantedSize::Wanted(len) => {
-                let len = usize::from(len);
-                if len > MAX_PACKET_SIZE - 4 || len > max_response_size - response.len() {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "Filesystem monitor response is too large",
-                    ));
-                }
-                let offset = response.len();
-                response.resize(offset + len, 0);
-                stream.read_exact(&mut response[offset..])?;
-            }
-        }
-    }
+fn exchange(stream: &mut (impl Read + Write + Unpin), token: &[u8], max_response_size: usize) -> io::Result<Vec<u8>> {
+    crate::protocol::write_message(stream, token)?;
+    crate::protocol::read_message(stream, max_response_size)?.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "filesystem monitor closed without a response",
+        )
+    })
 }
 
 #[cfg(test)]
@@ -330,9 +274,12 @@ mod tests {
 
     use super::*;
 
+    const MAX_PACKET_SIZE: usize = 65_520;
+
     struct Connection {
         input: Cursor<Vec<u8>>,
         written: Vec<u8>,
+        read_error: Option<io::ErrorKind>,
     }
 
     impl Connection {
@@ -340,12 +287,16 @@ mod tests {
             Self {
                 input: Cursor::new(input.to_owned()),
                 written: Vec::new(),
+                read_error: None,
             }
         }
     }
 
     impl Read for Connection {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if let Some(kind) = self.read_error.take() {
+                return Err(kind.into());
+            }
             let len = buf.len().min(1);
             self.input.read(&mut buf[..len])
         }
@@ -401,19 +352,28 @@ mod tests {
             );
         }
         assert!(exchange(&mut Connection::new(b"0000"), b"", 0)?.is_empty());
-        assert_eq!(
-            exchange(&mut Connection::new(b"000d"), b"old-token", 8)
-                .expect_err("response limits must be checked before reading the payload")
-                .kind(),
-            io::ErrorKind::InvalidData,
-            "an oversized payload is rejected even when its data has not arrived"
-        );
+        for input in [b"000d".as_slice(), b"0005x000d"] {
+            let mut connection = Connection::new(input);
+            assert_eq!(
+                exchange(&mut connection, b"old-token", 8)
+                    .expect_err("response limits must be checked before reading the payload")
+                    .kind(),
+                io::ErrorKind::InvalidData,
+                "initial and cumulative limits reject payloads even before their data arrives"
+            );
+            assert_eq!(
+                connection.input.position(),
+                input.len() as u64,
+                "an oversized packet is rejected after its header without reading its payload"
+            );
+        }
         Ok(())
     }
 
     #[test]
     fn fragmented_packets_preserve_binary_response() -> gix_testtools::TestResult {
         let mut connection = Connection::new(b"0009token0008\x00a\x00b0000");
+        connection.read_error = Some(io::ErrorKind::Interrupted);
         assert_eq!(
             exchange(&mut connection, b"old-token", Options::default().max_response_size)?,
             b"token\x00a\x00b"
@@ -458,23 +418,36 @@ mod tests {
     #[test]
     #[cfg(windows)]
     fn windows_pipe_names_follow_git() -> gix_testtools::TestResult {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+        let mut path: Vec<_> = r"C:/".encode_utf16().collect();
+        path.extend([0xd800, u16::from(b'/'), 0xdc00]);
+        let mut expected: Vec<_> = r"\\.\pipe\C_\".encode_utf16().collect();
+        expected.extend([0xd800, u16::from(b'\\'), 0xdc00]);
+        assert_eq!(
+            crate::pipe::name(Path::new(&std::ffi::OsString::from_wide(&path)))?
+                .encode_wide()
+                .collect::<Vec<_>>(),
+            expected,
+            "native pipe names preserve unpaired surrogates without appending NUL"
+        );
         for path in [
             r"C:\work\.git\fsmonitor--daemon.ipc",
             r"C:/work/.git/fsmonitor--daemon.ipc",
             r"\\?\C:\work\.git\fsmonitor--daemon.ipc",
         ] {
             assert_eq!(
-                pipe_name(Path::new(path))?,
+                crate::pipe::name(Path::new(path))?,
                 std::ffi::OsStr::new(r"\\.\pipe\C_\work\.git\fsmonitor--daemon.ipc")
             );
         }
         assert_eq!(
-            pipe_name(Path::new(r"\\?\UNC\server\share\fsmonitor--daemon.ipc"))?,
-            pipe_name(Path::new(r"\\server\share\fsmonitor--daemon.ipc"))?,
+            crate::pipe::name(Path::new(r"\\?\UNC\server\share\fsmonitor--daemon.ipc"))?,
+            crate::pipe::name(Path::new(r"\\server\share\fsmonitor--daemon.ipc"))?,
             "verbatim paths name the same pipe as regular UNC paths"
         );
         assert_eq!(
-            pipe_name(Path::new("C:/pipe\0suffix"))
+            crate::pipe::name(Path::new("C:/pipe\0suffix"))
                 .expect_err("native pipe names cannot contain NUL")
                 .kind(),
             io::ErrorKind::InvalidInput
@@ -501,6 +474,25 @@ mod tests {
         expected.extend_from_slice(b"0005x0000");
         assert_eq!(connection.written, expected, "oversized tokens span multiple packets");
         Ok(())
+    }
+
+    #[test]
+    fn exchange_preserves_read_errors() {
+        for kind in [
+            io::ErrorKind::TimedOut,
+            io::ErrorKind::WouldBlock,
+            io::ErrorKind::ConnectionReset,
+        ] {
+            let mut connection = Connection::new(b"0000");
+            connection.read_error = Some(kind);
+            assert_eq!(
+                exchange(&mut connection, b"token", 0)
+                    .expect_err("timeouts and connection errors must propagate without retrying")
+                    .kind(),
+                kind,
+                "only interrupted reads may be retried"
+            );
+        }
     }
 
     #[test]

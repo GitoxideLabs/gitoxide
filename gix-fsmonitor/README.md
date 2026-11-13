@@ -12,6 +12,8 @@ includes `server`, while keeping daemon-only dependencies out of server-only bui
 
 `daemon::endpoint()` selects the native endpoint from repository paths, requesting
 an interpolated socket directory from the caller only for remote Git directories.
+Callers that have already resolved their paths can use
+`daemon::endpoint_for_canonical_paths()` to avoid canonicalizing them again.
 `daemon::execute()` handles foreground serving, detached startup, hook autostart,
 and native control commands through `daemon::Command::{Run, Start, Stop, Status,
 Flush, Query, Hook, Path}`. The caller supplies a `server::Context`, the logical
@@ -38,6 +40,11 @@ receive both resolved settings through appended `GIT_CONFIG_COUNT` entries, so
 in-memory policy overrides survive reopening. The foreground entrypoint must
 honor Git's configuration environment; other configuration overrides remain the
 caller's responsibility.
+
+Applications using `gix` can enable `fsmonitor-daemon` and use
+`Repository::fsmonitor_daemon_context()` and `Repository::fsmonitor_daemon_execute()`.
+Both `gix fsmonitor` and the [`gix-fsmonitor-daemon`](../gix-fsmonitor-daemon)
+standalone executable share these APIs and reexecute themselves, not an external tool.
 
 ## Client
 
@@ -144,6 +151,41 @@ clients and does not enable filesystem-monitor acceleration in `gix` status
 operations. Git queries after shutdown can start Git's own daemon on macOS/Windows
 while `core.fsmonitor=true` remains enabled.
 
+## Command-line tools
+
+The main `gix` binary provides a blocking `fsmonitor` subcommand with `run`,
+`start`, `stop`, `status`, `flush`, `query [TOKEN]`, `hook 2 TOKEN`, and `path`.
+The daemon commands support macOS, Linux, and Windows.
+It uses this library to implement a self-spawning daemon: `start` and hook
+autostart execute the running `gix` binary as `gix fsmonitor run`, preserving the
+selected private Git directory, configuration overrides, and idle timeout.
+The daemon retains owned paths rather than an open repository. Native watches
+and token history remain owned by the embeddable server.
+
+```sh
+gix -r /path/to/worktree fsmonitor start --idle-timeout 300
+gix -r /path/to/worktree fsmonitor status
+gix -r /path/to/worktree fsmonitor stop
+git config core.fsmonitor 'gix fsmonitor hook --idle-timeout 300'
+git config core.fsmonitorHookVersion 2
+```
+
+`run` serves in the foreground; `start` detaches from its parent. A positive
+`--idle-timeout` exits after client inactivity, and `0` disables idle expiry.
+`query` and `hook` write binary protocol responses, so diagnostics use stderr.
+Both native clients and hooks can communicate with compatible services at the
+same endpoint. Hook configuration chooses this binary for autostart; the native
+`core.fsmonitor=true` setting lets Git launch its own daemon when none is running.
+
+The standalone `gix-fsmonitor` executable remains available from the
+[`gix-fsmonitor-daemon`](../gix-fsmonitor-daemon) package. It has its own command-line
+adapter, sharing repository context resolution and daemon control with the main CLI.
+Neither command invokes the other.
+The optional server uses plumbing dependencies and `gix-notify`, keeping this
+library free of a dependency on `gix`. Native macOS/Linux synchronization and
+Windows cookie observation permit incremental replies. Both CLI implementations
+remain blocking even when async library features are enabled.
+
 ## Async libraries
 
 Async execution is opt-in and coexists with blocking execution. None of the new
@@ -198,7 +240,7 @@ Run the executable examples with:
 ```sh
 cargo run -p gix --features fsmonitor-server --example fsmonitor-blocking -- /path/to/worktree
 cargo run -p gix --features async-fsmonitor-server --example fsmonitor-async -- /path/to/worktree
-cargo run -p gix --features notify --example notify -- /path/to/repository
+cargo run -p gitoxide --bin gix -- -r /path/to/repository watch
 cargo run -p gix --features async-notify --example notify-async -- /path/to/repository
 ```
 

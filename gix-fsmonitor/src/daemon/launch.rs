@@ -124,7 +124,6 @@ fn environment(
 #[expect(unsafe_code)]
 fn native_spawn(arguments: &[OsString], environment: &[(OsString, OsString)]) -> std::io::Result<Child> {
     use std::{
-        io,
         os::unix::process::CommandExt,
         process::{Command, Stdio},
     };
@@ -138,13 +137,7 @@ fn native_spawn(arguments: &[OsString], environment: &[(OsString, OsString)]) ->
         .stderr(Stdio::null());
     // SAFETY: Only async-signal-safe setsid runs between fork and exec.
     unsafe {
-        command.pre_exec(|| {
-            if libc::setsid() == -1 {
-                Err(io::Error::last_os_error())
-            } else {
-                Ok(())
-            }
-        });
+        command.pre_exec(|| rustix::process::setsid().map(|_| ()).map_err(Into::into));
     }
     command.spawn()
 }
