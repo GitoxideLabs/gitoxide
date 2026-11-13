@@ -141,6 +141,14 @@ pub fn perform_blob_merge(
         return Ok((their_id, crate::blob::Resolution::Complete));
     }
     if matches!(our_mode.kind(), EntryKind::Link) && matches!(their_mode.kind(), EntryKind::Link) {
+        // A target unchanged from the ancestor yields to the other target,
+        // even when the ancestor entry was a regular file rather than a link.
+        if our_id == previous_id {
+            return Ok((their_id, crate::blob::Resolution::Complete));
+        }
+        if their_id == previous_id {
+            return Ok((our_id, crate::blob::Resolution::Complete));
+        }
         let (pick, resolution) = crate::blob::builtin_driver::binary(options.symlink_conflicts);
         let (our_id, their_id) = match outer_side {
             ConflictMapping::Original => (our_id, their_id),

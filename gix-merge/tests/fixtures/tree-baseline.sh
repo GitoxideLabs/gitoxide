@@ -2122,6 +2122,71 @@ git init type-change-to-symlink
   git commit -m "new link to point to 'b'"
 )
 
+# The ancestor `a` is executable. `A` renames it to `b` and removes the
+# executable bit, while `B` only edits its content and keeps the bit.
+# Only `A` changed the mode relative to the ancestor, so the merged `b` must
+# not be executable. Comparing just the two sides would restore the bit.
+git init rename-removes-exe-bit-vs-modification
+(cd rename-removes-exe-bit-vs-modification
+  write_lines 1 2 3 4 5 >a
+  chmod +x a
+  git add a && git commit -m "original executable 'a'"
+
+  git branch A
+  git branch B
+
+  git checkout A
+  git mv a b
+  chmod -x b
+  git commit -am "rename 'a' to 'b' and remove the executable bit"
+
+  git checkout B
+  write_lines 1 2 3 4 5 6 >a
+  git commit -am "modify 'a', keeping the executable bit"
+)
+
+# The ancestor `a` is a symlink whose target bytes are `content`. Both sides
+# replace it with a regular file, but `A` writes exactly the ancestor's target
+# bytes, so its blob id equals the ancestor's. Only `B` changed the content,
+# so `B`'s file wins without an add/add conflict.
+git init symlink-to-files-one-keeps-ancestor-bytes
+(cd symlink-to-files-one-keeps-ancestor-bytes
+  ln -s content a
+  git add a && git commit -m "original symlink 'a'"
+
+  git branch A
+  git branch B
+
+  git checkout A
+  rm a && printf content >a
+  git add a && git commit -m "replace symlink with a file holding the same bytes"
+
+  git checkout B
+  rm a && write_lines other >a
+  git add a && git commit -m "replace symlink with a file holding other bytes"
+)
+
+# The ancestor `a` is a regular file holding `target1`. Both sides replace it
+# with a symlink, but `A` points to `target1`, so its blob id equals the
+# ancestor's. Only `B` changed the target, so `B`'s symlink wins without a
+# symlink conflict.
+git init file-to-symlinks-one-keeps-ancestor-bytes
+(cd file-to-symlinks-one-keeps-ancestor-bytes
+  printf target1 >a
+  git add a && git commit -m "original file 'a'"
+
+  git branch A
+  git branch B
+
+  git checkout A
+  rm a && ln -s target1 a
+  git add a && git commit -m "replace file with a symlink to the same bytes"
+
+  git checkout B
+  rm a && ln -s target2 a
+  git add a && git commit -m "replace file with a symlink to 'target2'"
+)
+
 
 
 baseline non-tree-to-tree A-B A B
@@ -2235,6 +2300,9 @@ baseline identical-additions-with-different-relations A-B A B
 baseline identical-deletions-with-different-relations A-B A B
 baseline identical-rewrites-with-different-relations A-B A B
 baseline type-change-to-symlink A-B A B
+baseline rename-removes-exe-bit-vs-modification A-B A B
+baseline symlink-to-files-one-keeps-ancestor-bytes A-B A B
+baseline file-to-symlinks-one-keeps-ancestor-bytes A-B A B
 
 ##
 ## Only once the tree-merges were performed can we refer to their objects
