@@ -151,6 +151,29 @@ fn noncanonical_modes_in_modify_modify_merge() -> TestResult {
 }
 
 #[test]
+fn replacing_a_file_with_links_to_its_content_keeps_a_link() -> TestResult {
+    let repo = Repo::new()?;
+    let link = EntryKind::Link.into();
+    let noncanonical_link = EntryMode::from_bytes(b"120777").expect("valid octal mode");
+    assert_eq!(
+        noncanonical_link.kind(),
+        EntryKind::Link,
+        "the raw mode is still a symlink"
+    );
+    let target_id = repo.blob("target")?;
+    let base = repo.tree("a", EntryKind::Blob.into(), target_id)?;
+    let ours = repo.tree("a", link, target_id)?;
+    let theirs = repo.tree("a", noncanonical_link, target_id)?;
+
+    repo.assert_merges_to(
+        (base, ours, theirs),
+        None,
+        ("a", link, target_id),
+        "both sides turned the file into a link, so reusing its bytes as the target is not an ancestor pick",
+    )
+}
+
+#[test]
 fn noncanonical_executable_mode_in_add_add_merge_keeps_side_orientation() -> TestResult {
     let repo = Repo::new()?;
     let executable = EntryKind::BlobExecutable.into();

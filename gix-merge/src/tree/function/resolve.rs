@@ -614,10 +614,12 @@ pub fn tree<'objects>(
                                     )?
                                 };
 
-                                // Both targets differ from the ancestor's, so the result equals the ancestor id only
-                                // if `symlink_conflicts` picked the ancestor. Restore its entry as a whole: its id may
-                                // be a gitlink's commit or a regular file's content, neither of which is a link target.
-                                let merged_mode = if merging_links && merged_blob_id == *previous_id {
+                                // If both targets differ from the ancestor's, the result equals the ancestor id only if
+                                // `symlink_conflicts` picked the ancestor. Restore its entry as a whole: its id may be a
+                                // gitlink's commit or a regular file's content, neither of which is a link target.
+                                let picked_ancestor =
+                                    our_id != previous_id && their_id != previous_id && merged_blob_id == *previous_id;
+                                let merged_mode = if merging_links && picked_ancestor {
                                     *previous_entry_mode
                                 } else {
                                     merged_mode
