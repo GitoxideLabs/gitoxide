@@ -7,6 +7,10 @@ use bstr::ByteSlice;
 use gix_fsmonitor::{client, server};
 use gix_testtools::{TestResult, tempfile::TempDir};
 
+#[cfg(feature = "async")]
+#[path = "asynchronous.rs"]
+mod asynchronous;
+
 struct Fixture {
     _parent: TempDir,
     worktree: PathBuf,

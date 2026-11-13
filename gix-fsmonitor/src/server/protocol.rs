@@ -7,52 +7,14 @@ use gix_packetline::{
 
 const MAX_PACKET_DATA: usize = 65_516;
 
-/// Read one Simple IPC message from `input`, accepting at most `limit` payload bytes.
-/// A connect-and-close probe has no message at all.
-pub(crate) fn read_message(input: &mut impl Read, limit: usize) -> io::Result<Option<Vec<u8>>> {
-    let mut message = Vec::new();
-    let mut received_packet = false;
-    loop {
-        let mut header = [0; 4];
-        match input.read(&mut header[..1])? {
-            0 if !received_packet => return Ok(None),
-            0 => {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "IPC message ended before flush",
-                ));
-            }
-            _ => input.read_exact(&mut header[1..])?,
-        }
-        received_packet = true;
-        match decode::hex_prefix(&header).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))? {
-            PacketLineOrWantedSize::Line(PacketLineRef::Flush) => return Ok(Some(message)),
-            PacketLineOrWantedSize::Line(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "unsupported IPC packet delimiter",
-                ));
-            }
-            PacketLineOrWantedSize::Wanted(length) => {
-                let length = usize::from(length);
-                if length > MAX_PACKET_DATA || message.len().saturating_add(length) > limit {
-                    return Err(io::Error::new(io::ErrorKind::InvalidData, "IPC message exceeds limit"));
-                }
-                let offset = message.len();
-                message.resize(offset + length, 0);
-                input.read_exact(&mut message[offset..])?;
-            }
-        }
+use gix_macros::sync as maybe_async;
+fn write_packet(output: &mut impl Write, data: Option<&[u8]>) -> io::Result<()> {
+    match data {
+        Some(data) => gix_packetline::blocking_io::encode::data_to_write(data, output).map(|_| ()),
+        None => gix_packetline::blocking_io::encode::flush_to_write(output).map(|_| ()),
     }
 }
-
-pub(crate) fn write_message(output: &mut impl Write, message: &[u8]) -> io::Result<()> {
-    for chunk in message.chunks(MAX_PACKET_DATA) {
-        gix_packetline::blocking_io::encode::data_to_write(chunk, &mut *output)?;
-    }
-    gix_packetline::blocking_io::encode::flush_to_write(&mut *output)?;
-    output.flush()
-}
+include!("../message.rs");
 
 #[cfg(test)]
 mod tests {

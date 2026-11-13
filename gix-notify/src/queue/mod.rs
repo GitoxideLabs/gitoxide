@@ -18,13 +18,15 @@ pub(crate) struct State {
     events: VecDeque<Entry>,
     bytes: usize,
     loss: Option<(Loss, u64)>,
-    error: Option<Error>,
+    pub(crate) error: Option<Error>,
     generation: u64,
     published: u64,
     consumed: u64,
     pub(crate) registration: u64,
     pub(crate) needs_restart: bool,
     pub(crate) waker: Option<Wake>,
+    #[cfg(feature = "async")]
+    pub(crate) ready: OwnShared<event_listener::Event>,
 }
 
 impl State {
@@ -41,6 +43,8 @@ impl State {
             registration: 0,
             needs_restart: false,
             waker: None,
+            #[cfg(feature = "async")]
+            ready: OwnShared::new(event_listener::Event::new()),
         }
     }
 
@@ -50,6 +54,11 @@ impl State {
         self.generation = self.generation.wrapping_add(1);
         self.published = self.published.wrapping_add(1);
         self.loss = Some((reason, self.published));
+    }
+
+    #[cfg(feature = "async")]
+    pub(crate) fn is_ready(&self) -> bool {
+        !self.events.is_empty() || self.loss.is_some() || self.error.is_some()
     }
 
     fn publish(&mut self, events: Vec<Event>) {
@@ -191,6 +200,11 @@ pub(crate) fn wake(state: &OwnShared<Mutable<State>>) {
         let mut state = lock(state);
         state.waker = None;
         state.error = Some(message("filesystem notification wake callback panicked and was disabled").raise());
+    }
+    #[cfg(feature = "async")]
+    {
+        let ready = lock(state).ready.clone();
+        ready.notify(usize::MAX);
     }
 }
 

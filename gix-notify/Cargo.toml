@@ -13,13 +13,22 @@ include = ["/src/**/*", "/examples/**/*", "/LICENSE-*"]
 
 [package.metadata.qa]
 extra-platforms = ["freebsd-x86_64"]
+checks = [{ args = [] }, { args = ["--features", "async"] }]
+tests = [{ args = [] }, { args = ["--features", "async"] }]
+
+[features]
+## Runtime-independent futures for registration, readiness, fences, and shutdown.
+async = ["dep:async-channel", "dep:event-listener"]
 
 [dependencies]
 gix-error = { version = "^0.5.1", path = "../gix-error" }
 gix-parallel = { version = "^0.50.0", path = "../gix-parallel", features = ["parallel"] }
+async-channel = { version = "2.5.0", optional = true }
+event-listener = { version = "5.4.2", optional = true }
 
 [dev-dependencies]
 tempfile = "3.26.0"
+futures-lite = "2.6.1"
 
 [target.'cfg(not(any(target_os = "macos", target_os = "linux", windows)))'.dependencies]
 notify = "8.2.0"

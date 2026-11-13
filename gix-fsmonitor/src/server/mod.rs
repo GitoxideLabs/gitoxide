@@ -35,6 +35,14 @@ mod transport;
 /// Sources stay on the server thread and need not be [`Send`].
 /// Source failures, unknown event locations, and lost coverage cannot certify incremental results.
 trait EventSource {
+    fn close(self) -> Result
+    where
+        Self: Sized,
+    {
+        drop(self);
+        Ok(())
+    }
+
     /// Install all `watches` on this source's single stream before reporting success.
     ///
     /// The set includes the worktree root, synchronization cookies, and parent sentinels. It may
@@ -287,6 +295,7 @@ fn spawn_with_source<S: EventSource + 'static>(
     Ok(handle)
 }
 
+#[derive(Clone)]
 struct Layout {
     worktree: PathBuf,
     administrative: Vec<PathBuf>,
@@ -500,199 +509,30 @@ impl Layout {
     }
 }
 
-struct Monitor<S> {
-    watcher: S,
-    layout: Layout,
-    options: Options,
-    journal: journal::Journal,
-    generation: Option<u64>,
-    retry: Option<Instant>,
-    healthy: bool,
-    root_lost: bool,
+mod blocking {
+    use super::*;
+    use gix_macros::sync as maybe_async;
+
+    fn prepare_cookies<S>(_source: &S, layout: &Layout) -> io::Result<()> {
+        layout.prepare_cookies()
+    }
+    fn create_cookie<S>(_source: &S, directory: &Path) -> io::Result<cookie::Cookie> {
+        cookie::Cookie::create(directory)
+    }
+    fn roots_lost<S>(_source: &S, layout: &Layout) -> io::Result<bool> {
+        Ok(layout.roots().any(|root| !root.exists()))
+    }
+    fn wait_for_cookie<S>(_source: &S, remaining: Duration, interval: Duration) {
+        std::thread::park_timeout(remaining.min(interval));
+    }
+    include!("monitor.rs");
 }
+use blocking::Monitor;
 
-impl<S: EventSource> Monitor<S> {
-    fn new(layout: Layout, watcher: S, options: Options) -> Result<Self> {
-        let mut monitor = Self {
-            watcher,
-            layout,
-            options,
-            journal: journal::Journal::new(16384, 16 * 1024 * 1024, Duration::from_secs(300))
-                .or_raise(|| message("generating a fresh filesystem monitor token epoch"))?,
-            generation: None,
-            retry: None,
-            healthy: false,
-            root_lost: false,
-        };
-        monitor.register()?;
-        monitor.healthy = true;
-        Ok(monitor)
-    }
-
-    fn register(&mut self) -> Result<()> {
-        self.layout
-            .prepare_cookies()
-            .or_raise(|| message("preparing the native synchronization directory"))?;
-        self.watcher
-            .register(&self.layout.watches())
-            .or_raise(|| message("registering complete worktree coverage"))
-    }
-
-    fn repair(&mut self, now: Instant) {
-        let result = self.register();
-        match result {
-            Ok(()) => {
-                self.healthy = true;
-                self.retry = None;
-            }
-            Err(_err) => {
-                gix_trace::warn!(error = %_err, "filesystem monitoring will retry");
-                self.healthy = false;
-                self.retry = Some(now + self.options.retry_interval);
-                self.journal.reset();
-            }
-        }
-    }
-
-    fn ingest(&mut self, batch: gix_notify::Batch, now: Instant) {
-        if batch.loss.is_some() || batch.error.is_some() {
-            self.root_lost |= self.layout.roots().any(|root| !root.exists());
-        }
-        if self.generation != Some(batch.generation) || batch.loss.is_some() {
-            self.journal.reset();
-            self.generation = Some(batch.generation);
-        }
-        if matches!(
-            batch.loss,
-            Some(gix_notify::Loss::BackendError | gix_notify::Loss::BackendStopped)
-        ) {
-            self.healthy = false;
-            self.retry.get_or_insert(now + self.options.retry_interval);
-        }
-        if let Some(_error) = batch.error {
-            gix_trace::warn!(error = %_error, "filesystem notification error");
-            self.healthy = false;
-            self.retry.get_or_insert(now + self.options.retry_interval);
-        }
-        for event in batch.events {
-            if self.layout.root_lost(&event) {
-                self.root_lost = true;
-                self.journal.reset();
-                continue;
-            }
-            // Creating a cookie can change its directory's metadata on Windows without losing
-            // coverage. Creation, removal, rename, or an unknown change can replace that directory.
-            if event.kind != gix_notify::EventKind::Modify
-                && event
-                    .paths
-                    .iter()
-                    .any(|path| self.layout.relative_to(&self.layout.cookie_dir, path).is_some())
-            {
-                self.journal.reset();
-                self.healthy = false;
-                self.retry.get_or_insert(now);
-            }
-            match self.layout.paths(event) {
-                Some(paths) => {
-                    for path in paths {
-                        self.journal.record(path, now);
-                    }
-                }
-                None => self.journal.reset(),
-            }
-        }
-    }
-
-    fn maintenance(&mut self, now: Instant) -> bool {
-        let batch = self.watcher.drain(Budget::default());
-        let more = batch.more;
-        self.ingest(batch, now);
-        self.journal.expire(now);
-        if !self.root_lost && self.retry.is_some_and(|retry| now >= retry) {
-            self.repair(now);
-        }
-        more
-    }
-
-    fn response(&mut self, requested: &[u8], now: Instant) -> Vec<u8> {
-        self.maintenance(now);
-        let deadline = Instant::now() + self.options.fence_timeout;
-        let mut complete = false;
-        if self.healthy && !self.root_lost {
-            match self.watcher.synchronize_at(&self.layout.cookie_dir, deadline) {
-                Ok(fence) => loop {
-                    let batch = self.watcher.drain(Budget::default());
-                    let generation = batch.generation;
-                    let sequence = batch.sequence;
-                    self.ingest(batch, now);
-                    if generation != fence.generation || !self.healthy || self.root_lost {
-                        break;
-                    }
-                    if sequence >= fence.sequence {
-                        complete = true;
-                        break;
-                    }
-                    if Instant::now() >= deadline {
-                        break;
-                    }
-                },
-                Err(gix_notify::SynchronizeError::Unsupported) => {
-                    if self.watcher.supports_cookie_synchronization() {
-                        match self.synchronize_cookie(now, deadline) {
-                            Ok(synchronized) => complete = synchronized,
-                            Err(_error) => {
-                                gix_trace::warn!(error = %_error, "filesystem cookie synchronization requires a full response");
-                                self.healthy = false;
-                                self.retry.get_or_insert(now + self.options.retry_interval);
-                            }
-                        }
-                    }
-                }
-                Err(_error) => {
-                    gix_trace::warn!(error = %_error, "filesystem synchronization requires a full response");
-                    self.healthy = false;
-                    self.retry.get_or_insert(now + self.options.retry_interval);
-                }
-            }
-        }
-        if !complete {
-            self.journal.reset();
-        }
-        self.journal.response(requested, complete, now)
-    }
-
-    fn synchronize_cookie(&mut self, now: Instant, deadline: Instant) -> io::Result<bool> {
-        let cookie = cookie::Cookie::create(&self.layout.cookie_dir)?;
-        let generation = self.generation;
-        let mut seen = false;
-        loop {
-            let batch = self.watcher.drain(Budget::default());
-            let lost = batch.loss.is_some() || batch.error.is_some() || Some(batch.generation) != generation;
-            let more = batch.more;
-            seen |= batch.events.iter().any(|event| event.paths.contains(&cookie.path));
-            // Ingest the entire batch and any queued remainder before acknowledging the cookie.
-            // A marker near a drain budget boundary must not hide later paths in its native batch.
-            self.ingest(batch, now);
-            if lost || !self.healthy || self.root_lost {
-                return Ok(false);
-            }
-            if seen && !more {
-                return Ok(true);
-            }
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Ok(false);
-            }
-            if !more {
-                std::thread::park_timeout(remaining.min(self.options.idle_interval));
-            }
-        }
-    }
-
-    fn close(self) {
-        drop(self);
-    }
-}
+#[cfg(feature = "async")]
+/// Tokio orchestration using the shared notification interpretation and token journal.
+pub mod asynchronous;
+mod state;
 
 fn run<S: EventSource>(
     mut listener: transport::Listener,
@@ -744,7 +584,7 @@ fn run<S: EventSource>(
             Ok(Some(_)) | Err(_) => continue,
         };
         if request == b"quit" {
-            monitor.close();
+            monitor.close()?;
             let _ = protocol::write_message(&mut stream, &[]);
             let _ = stream.finish();
             return Ok(());

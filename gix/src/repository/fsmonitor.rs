@@ -157,22 +157,42 @@ impl Repository {
     /// Repository configuration is unchanged. Configure external Git clients separately to use
     /// the server; this does not enable filesystem-monitor acceleration in `gix` status operations.
     pub fn fsmonitor_server(&self, options: server::Options) -> Result<server::Handle> {
+        server::spawn(self.fsmonitor_context()?, options)
+            .or_raise(|| message("starting the repository's filesystem monitor"))
+    }
+
+    /// Start a Tokio filesystem monitor and await complete native registration.
+    ///
+    /// Requires `async-fsmonitor-server` and a Tokio runtime with I/O and timers enabled through
+    /// shutdown. The blocking [`Self::fsmonitor_server()`] remains available. Cancelling startup
+    /// requests safe cleanup; dropping the handle requests shutdown without joining this thread.
+    /// Await its `shutdown()` method to observe release of all watches and the endpoint.
+    #[cfg(feature = "async-fsmonitor-server")]
+    pub fn fsmonitor_server_async(
+        &self,
+        options: server::Options,
+    ) -> impl std::future::Future<Output = Result<server::asynchronous::Handle>> + Send + 'static {
+        let context = self.fsmonitor_context();
+        async move {
+            server::asynchronous::spawn(context?, options)
+                .await
+                .or_raise(|| message("starting the repository's asynchronous filesystem monitor"))
+        }
+    }
+
+    fn fsmonitor_context(&self) -> Result<server::Context> {
         let worktree = self
             .workdir()
             .ok_or_raise(|| message("filesystem monitoring requires a worktree"))?;
         let git_dir = self.current_dir().join(self.git_dir());
         let capabilities = self.filesystem_options()?;
-        server::spawn(
-            server::Context {
-                worktree: self.current_dir().join(worktree),
-                endpoint: git_dir.join("fsmonitor--daemon.ipc"),
-                git_dir,
-                common_dir: self.current_dir().join(self.common_dir()),
-                precompose_unicode: capabilities.precompose_unicode,
-                ignore_case: capabilities.ignore_case,
-            },
-            options,
-        )
-        .or_raise(|| message("starting the repository's filesystem monitor"))
+        Ok(server::Context {
+            worktree: self.current_dir().join(worktree),
+            endpoint: git_dir.join("fsmonitor--daemon.ipc"),
+            git_dir,
+            common_dir: self.current_dir().join(self.common_dir()),
+            precompose_unicode: capabilities.precompose_unicode,
+            ignore_case: capabilities.ignore_case,
+        })
     }
 }

@@ -25,6 +25,14 @@
 //! directories, preserving coverage for tracked
 //! paths. Individual file invalidations are not filtered; callers check their current ignore rules.
 //! Directory scopes and full invalidations still require reconciliation using current repository state.
+//!
+//! With `async-notify`, keep constructing monitors synchronously with [`Repository::monitor()`].
+//! Use `RepositoryMonitor::service_async()` to move native registration and inventory work to a
+//! Tokio blocking worker, and `RepositoryMonitor::ready_async()` to await notifications or shared
+//! publication/recovery deadlines without polling. Service returns the owned monitor and the full
+//! outcome; cancellation shuts down that stream after active work completes. Await
+//! `RepositoryMonitor::shutdown_async()` for explicit cleanup. The raw
+//! `plumbing::asynchronous::Watcher` remains runtime independent. Blocking APIs coexist.
 
 use std::{
     collections::{BTreeMap, HashSet},
@@ -41,6 +49,8 @@ use plumbing::{Event, EventKind, PathKind};
 
 use crate::{Error, Repository, Result, bstr::BString};
 
+#[cfg(feature = "async-notify")]
+mod asynchronous;
 mod classify;
 mod inventory;
 #[cfg(test)]
@@ -462,6 +472,8 @@ impl Domain {
 /// administrative directories. Without it, only dependencies needed by ignore-aware coverage are
 /// watched; [`WorktreeCoverage::All`] needs only the recursive worktree root.
 pub struct RepositoryMonitor {
+    #[cfg(feature = "async-notify")]
+    wake: gix_parallel::OwnShared<tokio::sync::Notify>,
     layout: Layout,
     options: Options,
     metadata: Domain,
@@ -511,6 +523,8 @@ impl Repository {
             .filesystem_options()
             .or_raise(|| message("could not read filesystem options"))?;
         Ok(RepositoryMonitor {
+            #[cfg(feature = "async-notify")]
+            wake: gix_parallel::OwnShared::new(tokio::sync::Notify::new()),
             layout,
             options,
             metadata: Domain::default(),
@@ -886,6 +900,8 @@ impl RepositoryMonitor {
         if !out.changes.is_empty() || !out.other_worktrees.is_empty() || !out.errors.is_empty() {
             out.statistics = std::mem::take(&mut self.pending_statistics);
         }
+        #[cfg(feature = "async-notify")]
+        self.install_async_wakers();
         out
     }
 

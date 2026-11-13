@@ -109,7 +109,19 @@ impl Listener {
     }
 
     pub fn owns_endpoint(&self) -> bool {
-        fs::symlink_metadata(&self.path).is_ok_and(|meta| (meta.dev(), meta.ino()) == self.identity)
+        owns_endpoint(&self.path, self.identity)
+    }
+
+    #[cfg(feature = "async")]
+    pub(crate) fn ownership_check(&self) -> impl FnOnce() -> io::Result<bool> + Send + 'static {
+        let path = self.path.clone();
+        let identity = self.identity;
+        move || Ok(owns_endpoint(&path, identity))
+    }
+
+    #[cfg(feature = "async")]
+    pub(crate) fn async_socket(&self) -> io::Result<tokio::net::UnixListener> {
+        tokio::net::UnixListener::from_std(self.socket.try_clone()?)
     }
 
     pub fn wait(&self, wake: &Wake, timeout: Duration) -> io::Result<()> {
@@ -146,6 +158,10 @@ impl Listener {
         }
         Ok(())
     }
+}
+
+fn owns_endpoint(path: &Path, identity: (u64, u64)) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| (meta.dev(), meta.ino()) == identity)
 }
 
 impl Drop for Listener {

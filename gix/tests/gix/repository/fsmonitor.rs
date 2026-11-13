@@ -85,3 +85,33 @@ fn bare_repositories_cannot_start_a_worktree_monitor() -> gix_error::TestResult 
     );
     Ok(())
 }
+
+#[cfg(feature = "async-fsmonitor-server")]
+#[tokio::test(flavor = "current_thread")]
+async fn async_repository_server_preserves_linked_worktree_context_and_shutdown() -> gix_error::TestResult {
+    let (main, _fixture) = crate::basic_rw_repo()?;
+    let root = main.workdir().expect("the fixture has a worktree");
+    gix_testtools::git(root, "worktree add --detach linked")?;
+    let linked = gix::open_opts(root.join("linked"), gix::open::Options::isolated())?;
+    let endpoint = linked.git_dir().canonicalize()?.join("fsmonitor--daemon.ipc");
+    let startup = linked.fsmonitor_server_async(Options::default());
+    drop(linked);
+    let server = tokio::spawn(startup).await??;
+    assert_eq!(
+        server.endpoint(),
+        endpoint,
+        "async startup uses the private Git directory too"
+    );
+    assert!(
+        ipc::query_async(&endpoint, ipc::Request::Message(b""))
+            .await?
+            .ends_with(b"\0/\0"),
+        "the server retains no repository handle"
+    );
+    server.shutdown().await?;
+    assert!(
+        !ipc::is_running_async(&endpoint).await?,
+        "awaited shutdown releases the native endpoint"
+    );
+    Ok(())
+}

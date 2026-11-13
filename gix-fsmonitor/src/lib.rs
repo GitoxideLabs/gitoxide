@@ -8,6 +8,9 @@
 #[forbid(unsafe_code)]
 pub mod client;
 
+#[cfg(feature = "async")]
+mod asynchronous;
+
 /// Serve Git's native filesystem monitor protocol with application-owned watches and shutdown.
 #[cfg(feature = "server")]
 pub mod server;

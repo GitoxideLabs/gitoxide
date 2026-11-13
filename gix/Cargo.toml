@@ -25,6 +25,18 @@ name = "gix-notes-bench"
 path = "examples/gix-notes-bench.rs"
 required-features = ["notes"]
 
+[[example]]
+name = "fsmonitor-blocking"
+required-features = ["fsmonitor-server"]
+
+[[example]]
+name = "fsmonitor-async"
+required-features = ["async-fsmonitor-server"]
+
+[[example]]
+name = "notify-async"
+required-features = ["async-notify"]
+
 [features]
 
 default = [
@@ -159,9 +171,16 @@ dirwalk = ["dep:gix-dir", "attributes", "excludes"]
 ## Observe repository and worktree changes without retaining a repository handle.
 notify = ["dep:gix-notify", "dirwalk"]
 
+## Tokio orchestration for repository notifications and runtime-independent raw watcher futures.
+## Blocking notification APIs remain available. Not included in binary feature bundles.
+async-notify = ["notify", "gix-notify/async", "parallel", "dep:tokio"]
+
 ## Expose filesystem monitor hook and native daemon clients as `gix::fsmonitor::client`.
 ## Repository configuration, index checkpoints, and status policy remain the caller's responsibility.
 fsmonitor = ["dep:gix-fsmonitor"]
+
+## Tokio filesystem monitor clients, alongside blocking clients.
+async-fsmonitor = ["fsmonitor", "gix-fsmonitor/async", "dep:tokio"]
 
 ## Expose an embeddable filesystem monitor server as `gix::fsmonitor::server`.
 ## Enables `parallel` to keep shared types and locally gated parallel code paths consistent with the server's background thread.
@@ -169,6 +188,9 @@ fsmonitor-server = ["fsmonitor", "gix-fsmonitor/server", "parallel"]
 
 ## Blocking daemon control and self-spawned startup as `gix::fsmonitor::daemon`.
 fsmonitor-daemon = ["fsmonitor-server", "gix-fsmonitor/daemon"]
+
+## Tokio filesystem monitor server, alongside the blocking server.
+async-fsmonitor-server = ["fsmonitor-server", "async-fsmonitor"]
 
 ## Access to credential helpers, which provide credentials for URLs.
 # Note that `gix-negotiate` just piggibacks here, as 'credentials' is equivalent to 'fetch & push' right now.
@@ -407,6 +429,7 @@ gix-filter = { version = "^0.36.1", path = "../gix-filter", optional = true }
 gix-dir = { version = "^0.32.0", path = "../gix-dir", optional = true }
 gix-notify = { version = "^0.1.0", path = "../gix-notify", optional = true }
 gix-fsmonitor = { version = "^0.1.0", path = "../gix-fsmonitor", optional = true }
+tokio = { version = "1.54.1", features = ["rt", "sync", "time", "macros"], optional = true }
 
 gix-config = { version = "^0.62.2", path = "../gix-config" }
 gix-odb = { version = "^0.87.0", path = "../gix-odb" }
@@ -587,6 +610,7 @@ msrv = { checks = [
 ] }
 checks = [
     { args = ["--no-default-features", "--features", "sha1,fsmonitor-daemon"] },
+    { args = ["--no-default-features", "--features", "sha1,async-notify,async-fsmonitor-server"] },
     { args = [
         "--no-default-features",
         "--features",
@@ -636,6 +660,7 @@ checks = [
 ]
 tests = [
     { args = ["--no-default-features", "--features", "sha1,sha256,fsmonitor-daemon", "-E", "test(repository::fsmonitor)"] },
+    { args = ["--no-default-features", "--features", "sha1,sha256,async-notify,async-fsmonitor-server", "-E", "test(notify::) | test(repository::fsmonitor)"] },
     # Run notify once, independently of workspace feature unification. Keep the filter
     # aligned with its baseline exclusion in tests/it/src/qa/native_tests.rs.
     { args = [

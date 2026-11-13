@@ -14,6 +14,68 @@ fn worktree_only(coverage: WorktreeCoverage) -> Options {
     }
 }
 
+#[cfg(feature = "async-notify")]
+#[tokio::test(flavor = "current_thread")]
+async fn async_service_readiness_and_shutdown_keep_the_shared_repository_behavior() -> TestResult {
+    let (repo, _fixture) = crate::basic_rw_repo()?;
+    let root = repo.workdir().expect("the fixture has a worktree").to_owned();
+    let git_dir = repo.git_dir().to_owned();
+    let mut monitor = repo.monitor(worktree_only(WorktreeCoverage::All))?;
+    let open_at = git_dir.clone();
+    let (next, baseline) = monitor
+        .service_async(Instant::now(), move || gix::open_opts(&open_at, crate::restricted()))
+        .await?;
+    monitor = next;
+    assert!(
+        baseline.errors.is_empty(),
+        "async inventory and native registration succeed: {:?}",
+        baseline.errors
+    );
+    assert_worktree_only(&baseline.changes);
+    monitor.rescan();
+    let baseline = monitor.service(Instant::now(), || gix::open_opts(&git_dir, crate::restricted()));
+    assert!(
+        baseline.errors.is_empty(),
+        "blocking service preserves async readiness after rebuilding coverage"
+    );
+    let open_at = git_dir.clone();
+    let (next, verified) = monitor
+        .service_async(Instant::now(), move || gix::open_opts(&open_at, crate::restricted()))
+        .await?;
+    monitor = next;
+    assert!(
+        verified.errors.is_empty(),
+        "rebuilt coverage completes its startup verification"
+    );
+    std::fs::write(root.join("async-change"), b"data")?;
+    let monitor = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            monitor.ready_async().await;
+            let open_at = git_dir.clone();
+            let (next, outcome) = monitor
+                .service_async(Instant::now(), move || gix::open_opts(&open_at, crate::restricted()))
+                .await?;
+            monitor = next;
+            assert!(
+                outcome.errors.is_empty(),
+                "async service preserves monitor diagnostics: {:?}",
+                outcome.errors
+            );
+            assert_worktree_only(&outcome.changes);
+            if outcome.changes.worktree.as_ref().is_some_and(|scope| match scope {
+                Scope::All => true,
+                Scope::Paths(paths) => paths.iter().any(|path| path.path == b"async-change".as_slice()),
+            }) {
+                break;
+            }
+        }
+        Ok::<_, gix::Error>(monitor)
+    })
+    .await??;
+    monitor.shutdown_async().await?;
+    Ok(())
+}
+
 fn subtree_watch_count() -> usize {
     // These fixtures expose a subtree with its root and one subdirectory.
     if gix_notify::Watcher::supports_native_recursive_watches() {

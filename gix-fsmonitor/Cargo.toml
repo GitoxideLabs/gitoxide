@@ -16,6 +16,8 @@ include = ["/src/**/*", "/LICENSE-*", "/README.md"]
 server = ["dep:getrandom", "dep:gix-lock", "dep:gix-notify", "dep:gix-parallel", "dep:gix-utils", "dep:libc", "dep:rustix", "dep:windows-sys"]
 ## Control foreground and detached daemons; includes the embeddable server.
 daemon = ["server", "dep:sha1dc", "dep:tempfile"]
+## Opt in to Tokio clients and server orchestration. Blocking APIs remain available.
+async = ["dep:tokio", "gix-notify?/async"]
 
 [dependencies]
 gix-command = { version = "^0.12.1", path = "../gix-command" }
@@ -23,6 +25,8 @@ gix-trace = { version = "^0.3.1", path = "../gix-trace" }
 gix-error = { version = "^0.5.2", path = "../gix-error" }
 gix-path = { version = "^0.14.1", path = "../gix-path" }
 gix-packetline = { version = "^0.24.0", path = "../gix-packetline", features = ["blocking-io"] }
+gix-macros = { version = "^0.2.1", path = "../gix-macros" }
+tokio = { version = "1.54.1", features = ["rt", "net", "time", "sync", "io-util", "macros", "process"], optional = true }
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
 
 getrandom = { version = "0.4", features = ["std"], optional = true }

@@ -254,3 +254,77 @@ fn hook_negotiates_versions_and_preserves_arguments_context_and_binary_output() 
     );
     Ok(())
 }
+
+#[cfg(feature = "async")]
+#[tokio::test(flavor = "current_thread")]
+async fn async_hooks_share_negotiation_and_binary_arguments() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let directory = gix_testtools::tempfile::tempdir()?;
+    let command = br#"query() {
+        test "$1" = 1 || exit 5
+        printf '%s\0%s\0' "$1" "$2"
+    }
+    query "$@""#
+        .as_bstr();
+    let previous = b"previous token '$;".as_bstr();
+    let context = gix_command::Context {
+        worktree_dir: Some(directory.path().to_owned()),
+        ..Default::default()
+    };
+    assert_eq!(
+        client::hook::query_async(command, previous, None, context.clone()).await?,
+        Some((client::hook::Version::One, b"1\0previous token '$;\0".to_vec())),
+        "async negotiation preserves literal checkpoint arguments"
+    );
+    assert!(
+        client::hook::query_async(command, previous, Some(client::hook::Version::Two), context)
+            .await?
+            .is_none(),
+        "explicit protocols do not fall back"
+    );
+    Ok(())
+}
+
+#[cfg(all(feature = "async", unix))]
+#[tokio::test(flavor = "current_thread")]
+async fn async_daemon_exchange_deadline_does_not_block_the_executor() -> TestResult {
+    use std::{
+        io,
+        time::{Duration, Instant},
+    };
+    let directory = gix_testtools::tempfile::tempdir_in("/tmp")?;
+    let endpoint = directory.path().join("socket");
+    let listener = tokio::net::UnixListener::bind(&endpoint)?;
+    let server = tokio::spawn(async move {
+        let (_stream, _) = listener.accept().await?;
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        Ok::<_, io::Error>(())
+    });
+    let now = Instant::now();
+    let result = client::daemon::query_async(
+        &endpoint,
+        b"token".as_bstr(),
+        async || panic!("the endpoint is present"),
+        client::daemon::Options {
+            socket_timeout: Some(Duration::from_millis(20)),
+            ..Default::default()
+        },
+    )
+    .await;
+    server.abort();
+    let error = result.expect_err("a daemon that sends no response must time out");
+    assert_eq!(
+        error
+            .downcast_any_ref::<io::Error>()
+            .expect("the timeout retains its I/O error")
+            .kind(),
+        io::ErrorKind::TimedOut
+    );
+    assert!(
+        now.elapsed() < Duration::from_secs(1),
+        "the current-thread runtime runs the deadline timer while waiting for I/O"
+    );
+    Ok(())
+}

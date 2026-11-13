@@ -20,7 +20,8 @@ pub struct Options {
     pub connect_retries: usize,
     /// Delay between connection retries. Defaults to 50 milliseconds.
     pub connect_retry_delay: Duration,
-    /// Unix read/write timeout; `None` disables it. Ignored on other platforms. Defaults to 30 seconds.
+    /// Blocking Unix read/write timeout; `None` disables it. Defaults to 30 seconds.
+    /// The async client uses this deadline for each connection attempt and the full exchange on all platforms.
     pub socket_timeout: Option<Duration>,
     /// Maximum combined response payload in bytes. Zero accepts only empty payloads. Defaults to 64 MiB.
     pub max_response_size: usize,
@@ -128,6 +129,93 @@ pub fn query(
     Ok(response)
 }
 
+/// Query a native daemon using Tokio I/O and timers, with an asynchronous startup callback.
+///
+/// Like [`query()`], missing endpoints invoke `start` once; returning a command context requests
+/// Git startup on macOS or Windows. `socket_timeout` bounds the entire exchange on all platforms,
+/// including Windows. Dropping the future closes its connection; a started daemon is not stopped.
+/// Requires a Tokio runtime with I/O, timers, and process support enabled.
+#[cfg(feature = "async")]
+pub async fn query_async(
+    socket_path: &Path,
+    token: &BStr,
+    start: impl AsyncFnOnce() -> Result<std::result::Result<(), gix_command::Context>>,
+    options: Options,
+) -> Result<Vec<u8>> {
+    async fn connect(path: &Path, options: &Options) -> io::Result<crate::asynchronous::Stream> {
+        for attempt in 0..=options.connect_retries {
+            let result = match options.socket_timeout {
+                Some(timeout) => tokio::time::timeout(timeout, crate::asynchronous::connect(path))
+                    .await
+                    .unwrap_or_else(|_| {
+                        Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "filesystem monitor connection timed out",
+                        ))
+                    }),
+                None => crate::asynchronous::connect(path).await,
+            };
+            if cfg!(windows)
+                && result.as_ref().is_err_and(|err| err.raw_os_error() == Some(231))
+                && attempt < options.connect_retries
+            {
+                tokio::time::sleep(options.connect_retry_delay).await;
+            } else {
+                return result;
+            }
+        }
+        unreachable!("the last connection attempt returns")
+    }
+    let mut stream = match connect(socket_path, &options).await {
+        Ok(stream) => stream,
+        Err(error) if matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused) => {
+            if let Err(context) = start()
+                .await
+                .or_raise(|| message("Could not start the filesystem monitor"))?
+            {
+                if !cfg!(any(target_os = "macos", windows)) {
+                    return Err(error.and_raise(unsupported(
+                        "Git's filesystem monitor daemon is unavailable on this platform",
+                    )));
+                }
+                let Some(workdir) = context.worktree_dir.clone() else {
+                    bail!(message("Cannot start a filesystem monitor without a worktree"));
+                };
+                let command = std::process::Command::try_from(
+                    gix_command::prepare("git")
+                        .args(["fsmonitor--daemon", "start"])
+                        .with_context(context)
+                        .stdout(Stdio::null()),
+                )?;
+                let status = tokio::process::Command::from(command)
+                    .current_dir(workdir)
+                    .status()
+                    .await
+                    .or_raise(|| message("Could not start Git's filesystem monitor"))?;
+                if !status.success() {
+                    bail!(message("Git's filesystem monitor could not be started"));
+                }
+            }
+            let mut result = connect(socket_path, &options).await;
+            for _ in 0..options.connect_retries {
+                if !result
+                    .as_ref()
+                    .is_err_and(|err| matches!(err.kind(), io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused))
+                {
+                    break;
+                }
+                tokio::time::sleep(options.connect_retry_delay).await;
+                result = connect(socket_path, &options).await;
+            }
+            result.or_raise(|| message("Could not connect to the filesystem monitor after starting it"))?
+        }
+        Err(error) => return Err(error).or_raise(|| message("Could not connect to the filesystem monitor")),
+    };
+    crate::asynchronous::exchange(&mut stream, token, options.max_response_size, options.socket_timeout)
+        .await
+        .or_raise(|| message("Could not query the filesystem monitor"))
+}
+
 #[cfg(unix)]
 fn connect(path: &Path, options: &Options) -> io::Result<std::os::unix::net::UnixStream> {
     use std::os::unix::{fs::PermissionsExt, net::UnixStream};
@@ -155,7 +243,7 @@ fn connect(path: &Path, options: &Options) -> io::Result<std::os::unix::net::Uni
 #[cfg(windows)]
 fn connect(path: &Path, options: &Options) -> io::Result<std::fs::File> {
     // shortcut: synchronous reads match Git; add cancellable I/O if stalled-daemon deadlines are required.
-    let pipe = pipe_name(&crate::normalize_endpoint(path)?);
+    let pipe = pipe_name(&crate::normalize_endpoint(path)?)?;
     for attempt in 0..=options.connect_retries {
         match std::fs::OpenOptions::new().read(true).write(true).open(&pipe) {
             Err(err) if err.raw_os_error() == Some(231) && attempt < options.connect_retries => {
@@ -168,10 +256,13 @@ fn connect(path: &Path, options: &Options) -> io::Result<std::fs::File> {
 }
 
 #[cfg(windows)]
-fn pipe_name(path: &Path) -> std::ffi::OsString {
+pub(crate) fn pipe_name(path: &Path) -> io::Result<std::ffi::OsString> {
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
 
     let path: Vec<_> = path.as_os_str().encode_wide().collect();
+    if path.contains(&0) {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "NUL in pipe name"));
+    }
     let verbatim: Vec<_> = "\\\\?\\".encode_utf16().collect();
     let mut path = path.strip_prefix(verbatim.as_slice()).unwrap_or(&path).to_vec();
     let unc: Vec<_> = "UNC\\".encode_utf16().collect();
@@ -184,7 +275,7 @@ fn pipe_name(path: &Path) -> std::ffi::OsString {
         ch if ch == u16::from(b'/') => u16::from(b'\\'),
         ch => ch,
     }));
-    std::ffi::OsString::from_wide(&pipe)
+    Ok(std::ffi::OsString::from_wide(&pipe))
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -366,22 +457,29 @@ mod tests {
 
     #[test]
     #[cfg(windows)]
-    fn windows_pipe_names_follow_git() {
+    fn windows_pipe_names_follow_git() -> gix_testtools::TestResult {
         for path in [
             r"C:\work\.git\fsmonitor--daemon.ipc",
             r"C:/work/.git/fsmonitor--daemon.ipc",
             r"\\?\C:\work\.git\fsmonitor--daemon.ipc",
         ] {
             assert_eq!(
-                pipe_name(Path::new(path)),
+                pipe_name(Path::new(path))?,
                 std::ffi::OsStr::new(r"\\.\pipe\C_\work\.git\fsmonitor--daemon.ipc")
             );
         }
         assert_eq!(
-            pipe_name(Path::new(r"\\?\UNC\server\share\fsmonitor--daemon.ipc")),
-            pipe_name(Path::new(r"\\server\share\fsmonitor--daemon.ipc")),
+            pipe_name(Path::new(r"\\?\UNC\server\share\fsmonitor--daemon.ipc"))?,
+            pipe_name(Path::new(r"\\server\share\fsmonitor--daemon.ipc"))?,
             "verbatim paths name the same pipe as regular UNC paths"
         );
+        assert_eq!(
+            pipe_name(Path::new("C:/pipe\0suffix"))
+                .expect_err("native pipe names cannot contain NUL")
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        Ok(())
     }
 
     #[test]

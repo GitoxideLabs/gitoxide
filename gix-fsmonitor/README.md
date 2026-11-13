@@ -139,3 +139,113 @@ for remote Git directories are not selected. This API serves external Git
 clients and does not enable filesystem-monitor acceleration in `gix` status
 operations. Git queries after shutdown can start Git's own daemon on macOS/Windows
 while `core.fsmonitor=true` remains enabled.
+
+## Async libraries
+
+Async execution is opt-in and coexists with blocking execution. None of the new
+features is enabled by normal `gix` CLI or daemon feature bundles. Both binaries
+continue calling blocking APIs even when workspace feature unification exposes
+async library APIs.
+
+| Layer | Opt-in feature | API and runtime |
+| --- | --- | --- |
+| `gix-notify` | `async` | `asynchronous::Watcher`; runtime-independent operations, readiness, fences and shutdown |
+| `gix-fsmonitor` | `async` | `client::daemon::query_async`, `client::hook::query_async`; Tokio |
+| `gix-fsmonitor` | `server,async` | `server::asynchronous::spawn`, `server::ipc::{query_async,is_running_async}`; Tokio |
+| `gix` | `async-notify` | `RepositoryMonitor::{service_async,ready_async,shutdown_async}` and raw watcher futures |
+| `gix` | `async-fsmonitor` | Async clients via `gix::fsmonitor` |
+| `gix` | `async-fsmonitor-server` | `Repository::fsmonitor_server_async` and async server IPC |
+
+Tokio integrations require an entered runtime with I/O and timers enabled, kept
+alive through shutdown. Hooks and default Git startup also require Tokio process
+support. A current-thread runtime is supported. Applications supply their own
+Tokio runtime; blocking-only library and binary builds do not depend on Tokio.
+The existing networking feature selection is independent of these features.
+
+### End-to-end examples through `gix`
+
+Blocking use requires `fsmonitor-server` and no async runtime:
+
+```rust,ignore
+use gix::fsmonitor::server::{Options, ipc::{self, Request}};
+let server = gix::open(worktree)?.fsmonitor_server(Options::default())?;
+let response = ipc::query(server.endpoint(), Request::Message(b""))?;
+server.shutdown()?;
+```
+
+Async use requires `async-fsmonitor-server`, within a Tokio runtime:
+
+```rust,ignore
+use gix::fsmonitor::server::{Options, ipc::{self, Request}};
+let server = gix::open(worktree)?.fsmonitor_server_async(Options::default()).await?;
+let response = ipc::query_async(server.endpoint(), Request::Message(b"")).await?;
+server.shutdown().await?;
+```
+
+Both clients receive identical raw token/path responses and can query either
+server frontend. Unknown tokens, loss, incompatible generations, or incomplete
+fences require a full baseline. Async exchanges enforce response limits before
+payload allocation and use one deadline across their request and response, on
+Unix and Windows. Daemon client `Options::socket_timeout=None` explicitly disables
+that exchange deadline. IPC control exchanges always have a five-second deadline.
+
+Run the executable examples with:
+
+```sh
+cargo run -p gix --features fsmonitor-server --example fsmonitor-blocking -- /path/to/worktree
+cargo run -p gix --features async-fsmonitor-server --example fsmonitor-async -- /path/to/worktree
+cargo run -p gix --features notify --example notify -- /path/to/repository
+cargo run -p gix --features async-notify --example notify-async -- /path/to/repository
+```
+
+For repository-aware notifications, construction remains synchronous: it prepares
+the detached layout, without installing native watches. Async service moves the
+monitor into an already-started worker operation and returns it together with the
+complete outcome. Keep both values, process errors and invalidations, then await
+readiness for native events or metadata-publication/recovery deadlines:
+
+```rust,ignore
+let mut monitor = repo.monitor(gix::notify::Options::default())?;
+let git_dir = repo.git_dir().to_owned();
+loop {
+    let path = git_dir.clone();
+    let (next, outcome) = monitor.service_async(std::time::Instant::now(), move || gix::open(&path)).await?;
+    monitor = next;
+    // Process the complete outcome, including loss-driven invalidations and errors.
+    monitor.ready_async().await;
+}
+```
+
+The raw watcher is available as `gix::notify::plumbing::asynchronous::Watcher`.
+Its synchronous `replace()` and `synchronize_at()` initiate native work and
+return operations supporting either `.await` or `.wait()`. `ready().await` only
+observes readiness; `drain()` synchronously consumes the bounded batch.
+
+### Cancellation and ownership
+
+Dropping a raw watcher operation abandons its reply and does not cancel native
+work. Watch invalidations stay in the shared queue; unobserved registration
+errors become queue diagnostics, including replies completed before abandonment.
+Only one control operation may be outstanding. `idle().await` waits for that
+control operation to finish, but a timed-out native flush can still be active:
+further operations may report `Busy`. Deadlines never imply native cancellation.
+The control owner retains streams, callbacks and marker state until safe teardown.
+Filesystem housekeeping also runs on bounded workers. Their permits remain held
+through completion and cookie cleanup when waits are cancelled. Batches are
+ingested before asynchronous root checks; interrupted checks retain conservative
+recovery state. Server shutdown awaits housekeeping and endpoint cleanup.
+
+Dropping raw async watchers or async server handles requests shutdown without
+joining on the caller thread. Await `shutdown()` to observe safe resource release.
+Cancelling server startup also requests cleanup. Cancelling repository async
+service disposes that stream after active work finishes; it never returns a
+monitor with an unobserved outcome. Start a fresh monitor and baseline to resume.
+Cancelled readiness waits preserve notifications. Cancelling a client closes its
+connection; a daemon startup or a transmitted control request may still execute.
+Cancelling an async hook query kills its active child process.
+
+The server's event interpretation, bounded journal, generation/token invalidation,
+fence consumption and response construction are shared. Its blocking and Tokio
+loops use their own transport and deadline adapters. Async cookie waits are
+notification-driven, bounded by the fence deadline; they do not poll every 20 ms.
+Native watcher root checks and the server's ownership check remain unchanged.

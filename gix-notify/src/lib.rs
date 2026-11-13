@@ -70,6 +70,18 @@
 //! events. Root identity checks detect moved or replaced directories before publishing their
 //! notifications and periodically while idle, using [`Options::root_check_interval`]; losing a root
 //! requires registration to be retried.
+//!
+//! # Async integration (`async` feature)
+//!
+//! `asynchronous::Watcher` uses the same native backends and queue with a control owner that
+//! keeps registration, native waits, and teardown off executor threads. Starting an operation
+//! is synchronous; its `Operation` can be awaited or waited for on a blocking thread. Readiness
+//! futures do not drain the queue, and draining remains synchronous. This feature is runtime
+//! independent and does not depend on Tokio. Blocking [`Watcher`] remains available.
+//!
+//! Abandoning a reply does not cancel native work. Unobserved registration errors remain queued;
+//! deadlines do not cancel an active native flush. Async watcher drop requests cleanup without
+//! joining; await its `shutdown()` operation to observe safe native resource release.
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
@@ -83,6 +95,10 @@ use gix_parallel::{Mutable, OwnShared, lock};
 
 mod backend;
 mod queue;
+
+/// Runtime-independent asynchronous operations using the same native backends and bounded queue.
+#[cfg(feature = "async")]
+pub mod asynchronous;
 
 /// Notification queue limits and native coverage checks.
 #[derive(Clone, Copy, Debug)]
@@ -403,6 +419,12 @@ impl Watcher {
         lock(&self.state).drain(budget)
     }
 
+    /// Inspect readiness without consuming events, loss or diagnostics.
+    #[cfg(feature = "async")]
+    pub fn is_ready(&self) -> bool {
+        lock(&self.state).is_ready()
+    }
+
     /// Request a delivery barrier without writing a filesystem marker.
     ///
     /// Current backends cannot certify preceding filesystem writes this way, and return
@@ -432,6 +454,15 @@ impl Watcher {
         deadline: Instant,
     ) -> std::result::Result<Fence, SynchronizeError> {
         let generation = lock(&self.state).fence()?.generation;
+        self.synchronize_at_generation(directory, deadline, generation)
+    }
+
+    fn synchronize_at_generation(
+        &mut self,
+        directory: &std::path::Path,
+        deadline: Instant,
+        generation: u64,
+    ) -> std::result::Result<Fence, SynchronizeError> {
         match self.backend.as_mut() {
             Some(backend) => backend.synchronize_at(directory, deadline, generation),
             None => Err(SynchronizeError::Unsupported),

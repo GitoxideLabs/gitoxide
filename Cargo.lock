@@ -1619,6 +1619,7 @@ dependencies = [
  "signal-hook 0.4.6",
  "smallvec",
  "termtree",
+ "tokio",
 ]
 
 [[package]]
@@ -2000,6 +2001,7 @@ dependencies = [
  "gix-command",
  "gix-error",
  "gix-lock",
+ "gix-macros",
  "gix-notify",
  "gix-packetline",
  "gix-parallel",
@@ -2011,6 +2013,7 @@ dependencies = [
  "rustix",
  "sha1dc",
  "tempfile",
+ "tokio",
  "windows-sys 0.61.2",
 ]
 
@@ -2243,8 +2246,11 @@ dependencies = [
 name = "gix-notify"
 version = "0.1.0"
 dependencies = [
+ "async-channel 2.5.0",
  "dispatch2",
+ "event-listener 5.4.2",
  "fsevent-sys",
+ "futures-lite",
  "gix-error",
  "gix-parallel",
  "inotify",
@@ -5459,6 +5465,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",
