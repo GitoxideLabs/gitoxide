@@ -427,14 +427,9 @@ pub fn tree<'objects>(
                                 } else {
                                     Swapped
                                 };
-                                let previous_is_compatible = merge_modes(*our_mode, *previous_entry_mode).is_some()
-                                    && merge_modes(*their_mode, *previous_entry_mode).is_some();
-                                let merged_mode = if previous_is_compatible {
+                                if let Some(merged_mode) =
                                     merge_modes_prev(*our_mode, *their_mode, *previous_entry_mode)
-                                } else {
-                                    merge_modes(*our_mode, *their_mode)
-                                };
-                                if let Some(merged_mode) = merged_mode {
+                                {
                                     let their_rewritten_location = possibly_rewritten_location(
                                         pick(side, our_tree, their_tree),
                                         their_location.as_ref(),
@@ -588,38 +583,22 @@ pub fn tree<'objects>(
                             {
                                 let previous_is_compatible = merge_modes(*our_mode, *previous_entry_mode).is_some()
                                     && merge_modes(*their_mode, *previous_entry_mode).is_some();
-                                let merged_mode = if previous_is_compatible {
-                                    merge_modes_prev(*our_mode, *their_mode, *previous_entry_mode)
-                                } else {
-                                    merge_modes(*our_mode, *their_mode)
-                                }
-                                .expect("the match guard assures compatible current modes");
+                                let merged_mode = merge_modes_prev(*our_mode, *their_mode, *previous_entry_mode)
+                                    .expect("the match guard assures compatible current modes");
                                 // Symlink merging compares target identities without loading a blob-platform base.
-                                let merging_links = matches!(our_mode.kind(), EntryKind::Link)
-                                    && matches!(their_mode.kind(), EntryKind::Link);
+                                let merging_links = our_mode.is_link() && their_mode.is_link();
                                 let (merge_base_id, merge_base_mode) = if previous_is_compatible || merging_links {
                                     (*previous_id, *previous_entry_mode)
                                 } else {
                                     (previous_id.kind().null(), merged_mode)
                                 };
-                                // A type replacement can retain the ancestor bytes. Resolve that identity before
-                                // the empty compatible base turns the pair into an artificial add/add conflict.
-                                let unchanged_regular_content = if !previous_is_compatible
-                                    && matches!(our_mode.kind(), EntryKind::Blob | EntryKind::BlobExecutable)
-                                    && matches!(their_mode.kind(), EntryKind::Blob | EntryKind::BlobExecutable)
-                                {
-                                    if our_id == previous_id {
-                                        Some(*their_id)
-                                    } else if their_id == previous_id {
-                                        Some(*our_id)
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                };
-                                let (merged_blob_id, resolution) = if let Some(id) = unchanged_regular_content {
-                                    (id, crate::blob::Resolution::Complete)
+                                // A type replacement can retain the ancestor bytes, which the empty base used for
+                                // incompatible ancestors would turn into an artificial add/add conflict.
+                                let side_kept_ancestor = !previous_is_compatible && our_mode.is_blob_or_symlink();
+                                let (merged_blob_id, resolution) = if side_kept_ancestor && our_id == previous_id {
+                                    (*their_id, crate::blob::Resolution::Complete)
+                                } else if side_kept_ancestor && their_id == previous_id {
+                                    (*our_id, crate::blob::Resolution::Complete)
                                 } else {
                                     perform_blob_merge(
                                         labels,
@@ -2498,35 +2477,26 @@ fn merge_modes(a: EntryMode, b: EntryMode) -> Option<EntryMode> {
         (_, _) if a == b => Some(a),
         // Noncanonical modes like `100775` parse to the same kind as `100755`; merge them to the canonical mode.
         (a, b) if a == b => Some(a.into()),
-        (EntryKind::BlobExecutable, EntryKind::BlobExecutable | EntryKind::Blob)
-        | (EntryKind::Blob, EntryKind::BlobExecutable) => Some(EntryKind::BlobExecutable.into()),
+        (EntryKind::BlobExecutable, EntryKind::Blob) | (EntryKind::Blob, EntryKind::BlobExecutable) => {
+            Some(EntryKind::BlobExecutable.into())
+        }
         _ => None,
     }
 }
 
 /// Merge modes derived from the same ancestor mode, `prev`.
 ///
-/// Equal modes are retained. If blob modes differ only in their executable bit, the side that differs from `prev` wins,
-/// preserving either a one-sided enable or disable of that bit.
+/// If blob modes differ only in their executable bit and `prev` is a blob, the side that differs from `prev` wins,
+/// preserving either a one-sided enable or disable of that bit. Otherwise, this is [`merge_modes()`].
 fn merge_modes_prev(a: EntryMode, b: EntryMode, prev: EntryMode) -> Option<EntryMode> {
     match (a.kind(), b.kind()) {
-        (_, _) if a == b => Some(a),
-        // Noncanonical modes like `100775` parse to the same kind as `100755`; merge them to the canonical mode.
-        (a, b) if a == b => Some(a.into()),
-        (a @ EntryKind::BlobExecutable, b @ (EntryKind::BlobExecutable | EntryKind::Blob))
-        | (a @ EntryKind::Blob, b @ EntryKind::BlobExecutable) => {
-            let prev = prev.kind();
-            let changed = if a == prev { b } else { a };
-            Some(
-                match (prev, changed) {
-                    (EntryKind::Blob, EntryKind::BlobExecutable) => EntryKind::BlobExecutable,
-                    (EntryKind::BlobExecutable, EntryKind::Blob) => EntryKind::Blob,
-                    _ => unreachable!("upper match already assured we only deal with blobs"),
-                }
-                .into(),
-            )
+        (EntryKind::BlobExecutable, EntryKind::Blob) | (EntryKind::Blob, EntryKind::BlobExecutable)
+            if prev.is_blob() =>
+        {
+            let changed = if a.kind() == prev.kind() { b } else { a };
+            Some(changed.kind().into())
         }
-        _ => None,
+        _ => merge_modes(a, b),
     }
 }
 
