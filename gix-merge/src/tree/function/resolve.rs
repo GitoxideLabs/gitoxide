@@ -594,7 +594,10 @@ pub fn tree<'objects>(
                                     merge_modes(*our_mode, *their_mode)
                                 }
                                 .expect("the match guard assures compatible current modes");
-                                let (merge_base_id, merge_base_mode) = if previous_is_compatible {
+                                // Symlink merging compares target identities without loading a blob-platform base.
+                                let merging_links = matches!(our_mode.kind(), EntryKind::Link)
+                                    && matches!(their_mode.kind(), EntryKind::Link);
+                                let (merge_base_id, merge_base_mode) = if previous_is_compatible || merging_links {
                                     (*previous_id, *previous_entry_mode)
                                 } else {
                                     (previous_id.kind().null(), merged_mode)
