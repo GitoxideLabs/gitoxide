@@ -1049,7 +1049,9 @@ pub fn tree<'objects>(
                                 },
                             ) if !involves_submodule(our_mode, their_mode) => {
                                 let conflict = if let Some(merged_mode) = merge_modes(*our_mode, *their_mode) {
-                                    let side = if our_mode == their_mode || matches!(our_mode.kind(), EntryKind::Blob) {
+                                    let side = if our_mode.kind() == their_mode.kind()
+                                        || matches!(our_mode.kind(), EntryKind::Blob)
+                                    {
                                         outer_side
                                     } else {
                                         outer_side.swapped()

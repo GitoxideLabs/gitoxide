@@ -38,6 +38,42 @@ impl Repo {
         Ok(self.objects.write(&gix_object::Tree { entries: vec![entry] })?)
     }
 
+    fn blob_data(&self, blob_id: ObjectId) -> TestResult<String> {
+        let mut buf = Vec::new();
+        let blob = self.objects.find_blob(&blob_id, &mut buf)?;
+        Ok(String::from_utf8(blob.data.to_vec())?)
+    }
+
+    /// Merge `other` into `current` and return the entries of the merged tree.
+    fn merge(
+        &self,
+        (base, current, other): (ObjectId, ObjectId, ObjectId),
+        symlink_conflicts: Option<ResolveWith>,
+    ) -> TestResult<Vec<(String, EntryMode, ObjectId)>> {
+        let mut options = basic_merge_options().tree_merge;
+        options.symlink_conflicts = symlink_conflicts;
+        let mut outcome = gix_merge::tree(
+            &base,
+            &current,
+            &other,
+            Default::default(),
+            &self.objects,
+            |buf| self.objects.write_buf(gix_object::Kind::Blob, buf),
+            &mut gix_diff::tree::State::default(),
+            &mut new_diff_resource_cache(self.root.path()),
+            &mut new_blob_merge_platform(self.root.path(), None),
+            options,
+        )?;
+        let merged_tree_id = outcome.tree.write(|tree| self.objects.write(tree))?;
+        let mut buf = Vec::new();
+        let merged = self.objects.find_tree(&merged_tree_id, &mut buf)?;
+        Ok(merged
+            .entries
+            .iter()
+            .map(|entry| (entry.filename.to_string(), entry.mode, entry.oid.to_owned()))
+            .collect())
+    }
+
     /// Merge `ours` and `theirs` in both directions and assert that each result has the single `expected` entry.
     fn assert_merges_to(
         &self,
@@ -47,28 +83,7 @@ impl Repo {
         message: &str,
     ) -> TestResult {
         for (current, other) in [(ours, theirs), (theirs, ours)] {
-            let mut options = basic_merge_options().tree_merge;
-            options.symlink_conflicts = symlink_conflicts;
-            let mut outcome = gix_merge::tree(
-                &base,
-                &current,
-                &other,
-                Default::default(),
-                &self.objects,
-                |buf| self.objects.write_buf(gix_object::Kind::Blob, buf),
-                &mut gix_diff::tree::State::default(),
-                &mut new_diff_resource_cache(self.root.path()),
-                &mut new_blob_merge_platform(self.root.path(), None),
-                options,
-            )?;
-            let merged_tree_id = outcome.tree.write(|tree| self.objects.write(tree))?;
-            let mut buf = Vec::new();
-            let merged = self.objects.find_tree(&merged_tree_id, &mut buf)?;
-            let actual: Vec<_> = merged
-                .entries
-                .iter()
-                .map(|entry| (entry.filename.to_string(), entry.mode, entry.oid.to_owned()))
-                .collect();
+            let actual = self.merge((base, current, other), symlink_conflicts)?;
             assert_eq!(actual, [(filename.to_owned(), mode, oid)], "{message}");
         }
         Ok(())
@@ -131,6 +146,40 @@ fn noncanonical_modes_in_modify_modify_merge() -> TestResult {
             ("a", canonical, merged_blob_id),
             "two modes that differ only in permission bits merge their content to the canonical mode",
         )?;
+    }
+    Ok(())
+}
+
+#[test]
+fn noncanonical_executable_mode_in_add_add_merge_keeps_side_orientation() -> TestResult {
+    let repo = Repo::new()?;
+    let executable = EntryKind::BlobExecutable.into();
+    let noncanonical_executable = EntryMode::from_bytes(b"100775").expect("valid octal mode");
+    let base = repo.objects.write(&gix_object::Tree::empty())?;
+    let ours = repo.tree("a", noncanonical_executable, repo.blob("ours\n")?)?;
+    let theirs = repo.tree("a", executable, repo.blob("theirs\n")?)?;
+
+    for (current, other, current_data, other_data) in
+        [(ours, theirs, "ours", "theirs"), (theirs, ours, "theirs", "ours")]
+    {
+        let entries = repo.merge((base, current, other), None)?;
+        let [(filename, mode, merged_blob_id)] = entries.as_slice() else {
+            panic!("expected exactly one merged entry, got {entries:?}");
+        };
+        assert_eq!(
+            (filename.as_str(), *mode),
+            ("a", executable),
+            "modes of one kind merge to the canonical mode"
+        );
+        let merged = repo.blob_data(*merged_blob_id)?;
+        let current_pos = merged.find(current_data).expect("the current side is in the conflict");
+        let other_pos = merged
+            .find(&format!("\n{other_data}\n"))
+            .expect("the other side is in the conflict");
+        assert!(
+            current_pos < other_pos,
+            "the current side comes first in the conflict, as for byte-identical modes:\n{merged}"
+        );
     }
     Ok(())
 }
