@@ -635,6 +635,14 @@ pub fn tree<'objects>(
                                     )?
                                 };
 
+                                // Both targets differ from the ancestor's, so the result equals the ancestor id only
+                                // if `symlink_conflicts` picked the ancestor. Restore its entry as a whole: its id may
+                                // be a gitlink's commit or a regular file's content, neither of which is a link target.
+                                let merged_mode = if merging_links && merged_blob_id == *previous_id {
+                                    *previous_entry_mode
+                                } else {
+                                    merged_mode
+                                };
                                 editor.upsert(toc(location), merged_mode.kind(), merged_blob_id)?;
                                 if should_fail_on_conflict(Conflict::with_resolution(
                                     Resolution::OursModifiedTheirsModifiedThenBlobContentMerge {
