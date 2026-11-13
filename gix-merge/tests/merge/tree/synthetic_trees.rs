@@ -71,6 +71,25 @@ impl Repo {
     }
 }
 
+fn executable() -> EntryMode {
+    EntryKind::BlobExecutable.into()
+}
+
+fn noncanonical_executable() -> EntryMode {
+    let mode = EntryMode::from_bytes(b"100775").expect("valid octal mode");
+    assert_eq!(
+        mode.kind(),
+        EntryKind::BlobExecutable,
+        "group-writable modes are still executable blobs"
+    );
+    assert_ne!(
+        mode,
+        executable(),
+        "the raw mode differs from the canonical executable mode"
+    );
+    mode
+}
+
 #[test]
 fn symlink_ancestor_resolution_restores_a_gitlink_ancestor() -> TestResult {
     let repo = Repo::new()?;
@@ -106,6 +125,73 @@ fn symlink_ancestor_resolution_restores_a_regular_file_ancestor() -> TestResult 
             (entry.mode.kind(), entry.oid),
             (EntryKind::Blob, ancestor_blob_id),
             "choosing the ancestor restores the regular file instead of turning its content into a symlink target"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn noncanonical_executable_mode_in_rename_edit_merge() -> TestResult {
+    let repo = Repo::new()?;
+    let base = repo.tree(&[("a", executable(), repo.blob("1\n2\n3\n4\n5\n")?)])?;
+    let renamed = repo.tree(&[("b", noncanonical_executable(), repo.blob("1\n2\n3\n4\n5\n")?)])?;
+    let edited_blob_id = repo.blob("1\n2\n3\n4\n5\n6\n")?;
+    let edited = repo.tree(&[("a", executable(), edited_blob_id)])?;
+
+    for (current, other) in [(renamed, edited), (edited, renamed)] {
+        let merged = repo.merge((base, current, other), None)?;
+        let entry = &merged.entries[0];
+        assert_eq!(
+            (entry.filename.as_slice(), entry.mode, entry.oid),
+            (b"b".as_slice(), executable(), edited_blob_id),
+            "two executable modes that differ only in permission bits merge to the canonical executable mode"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn noncanonical_executable_mode_in_modify_modify_merge() -> TestResult {
+    let repo = Repo::new()?;
+    let base = repo.tree(&[("a", executable(), repo.blob("1\n2\n3\n4\n5\n")?)])?;
+    let ours = repo.tree(&[("a", noncanonical_executable(), repo.blob("0\n1\n2\n3\n4\n5\n")?)])?;
+    let theirs = repo.tree(&[("a", executable(), repo.blob("1\n2\n3\n4\n5\n6\n")?)])?;
+    let merged_blob_id = repo.blob("0\n1\n2\n3\n4\n5\n6\n")?;
+
+    for (current, other) in [(ours, theirs), (theirs, ours)] {
+        let merged = repo.merge((base, current, other), None)?;
+        let entry = &merged.entries[0];
+        assert_eq!(
+            (entry.mode, entry.oid),
+            (executable(), merged_blob_id),
+            "two executable modes that differ only in permission bits merge to the canonical executable mode"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn noncanonical_regular_mode_in_modify_modify_merge() -> TestResult {
+    let repo = Repo::new()?;
+    let regular: EntryMode = EntryKind::Blob.into();
+    let noncanonical_regular = EntryMode::from_bytes(b"100664").expect("valid octal mode");
+    assert_eq!(
+        noncanonical_regular.kind(),
+        EntryKind::Blob,
+        "group-writable modes are still regular blobs"
+    );
+    let base = repo.tree(&[("a", regular, repo.blob("1\n2\n3\n4\n5\n")?)])?;
+    let ours = repo.tree(&[("a", noncanonical_regular, repo.blob("0\n1\n2\n3\n4\n5\n")?)])?;
+    let theirs = repo.tree(&[("a", regular, repo.blob("1\n2\n3\n4\n5\n6\n")?)])?;
+    let merged_blob_id = repo.blob("0\n1\n2\n3\n4\n5\n6\n")?;
+
+    for (current, other) in [(ours, theirs), (theirs, ours)] {
+        let merged = repo.merge((base, current, other), None)?;
+        let entry = &merged.entries[0];
+        assert_eq!(
+            (entry.mode, entry.oid),
+            (regular, merged_blob_id),
+            "two regular modes that differ only in permission bits merge their content to the canonical regular mode"
         );
     }
     Ok(())

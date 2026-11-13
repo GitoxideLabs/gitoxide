@@ -2496,6 +2496,8 @@ fn involves_submodule(a: &EntryMode, b: &EntryMode) -> bool {
 fn merge_modes(a: EntryMode, b: EntryMode) -> Option<EntryMode> {
     match (a.kind(), b.kind()) {
         (_, _) if a == b => Some(a),
+        // Noncanonical modes like `100775` parse to the same kind as `100755`; merge them to the canonical mode.
+        (a, b) if a == b => Some(a.into()),
         (EntryKind::BlobExecutable, EntryKind::BlobExecutable | EntryKind::Blob)
         | (EntryKind::Blob, EntryKind::BlobExecutable) => Some(EntryKind::BlobExecutable.into()),
         _ => None,
@@ -2509,6 +2511,8 @@ fn merge_modes(a: EntryMode, b: EntryMode) -> Option<EntryMode> {
 fn merge_modes_prev(a: EntryMode, b: EntryMode, prev: EntryMode) -> Option<EntryMode> {
     match (a.kind(), b.kind()) {
         (_, _) if a == b => Some(a),
+        // Noncanonical modes like `100775` parse to the same kind as `100755`; merge them to the canonical mode.
+        (a, b) if a == b => Some(a.into()),
         (a @ EntryKind::BlobExecutable, b @ (EntryKind::BlobExecutable | EntryKind::Blob))
         | (a @ EntryKind::Blob, b @ EntryKind::BlobExecutable) => {
             let prev = prev.kind();
