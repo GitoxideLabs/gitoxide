@@ -599,18 +599,38 @@ pub fn tree<'objects>(
                                 } else {
                                     (previous_id.kind().null(), merged_mode)
                                 };
-                                let (merged_blob_id, resolution) = perform_blob_merge(
-                                    labels,
-                                    objects,
-                                    blob_merge,
-                                    &mut diff_state.buf1,
-                                    &mut write_blob_to_odb,
-                                    (location, *our_id, *our_mode),
-                                    (location, *their_id, *their_mode),
-                                    (location, merge_base_id, merge_base_mode),
-                                    (0, outer_side),
-                                    &options,
-                                )?;
+                                // A type replacement can retain the ancestor bytes. Resolve that identity before
+                                // the empty compatible base turns the pair into an artificial add/add conflict.
+                                let unchanged_regular_content = if !previous_is_compatible
+                                    && matches!(our_mode.kind(), EntryKind::Blob | EntryKind::BlobExecutable)
+                                    && matches!(their_mode.kind(), EntryKind::Blob | EntryKind::BlobExecutable)
+                                {
+                                    if our_id == previous_id {
+                                        Some(*their_id)
+                                    } else if their_id == previous_id {
+                                        Some(*our_id)
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                };
+                                let (merged_blob_id, resolution) = if let Some(id) = unchanged_regular_content {
+                                    (id, crate::blob::Resolution::Complete)
+                                } else {
+                                    perform_blob_merge(
+                                        labels,
+                                        objects,
+                                        blob_merge,
+                                        &mut diff_state.buf1,
+                                        &mut write_blob_to_odb,
+                                        (location, *our_id, *our_mode),
+                                        (location, *their_id, *their_mode),
+                                        (location, merge_base_id, merge_base_mode),
+                                        (0, outer_side),
+                                        &options,
+                                    )?
+                                };
 
                                 editor.upsert(toc(location), merged_mode.kind(), merged_blob_id)?;
                                 if should_fail_on_conflict(Conflict::with_resolution(
