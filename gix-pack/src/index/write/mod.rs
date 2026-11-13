@@ -85,8 +85,9 @@ pub(super) mod function {
     /// * `root_progress` is the top-level progress to stay informed about the progress of this potentially long-running
     ///   computation.
     /// * `object_hash` defines what kind of object hash we write into the index file.
-    /// * `alloc_limit_bytes` limits the maximum size of individual allocations for the delta tree and while resolving pack
-    ///   entries to compute object ids. `None` means no limit is applied.
+    /// * `alloc_limit_bytes` limits decoded-object and delta buffers while computing object IDs. Delta-tree item buffers
+    ///   may grow to 64 times this limit, while speculative preallocation stays within it. This is a defensive
+    ///   per-buffer heuristic to tune for the input, not a total memory budget. `None` disables the limit.
     /// * `pack_version` is the version of the underlying pack for which `entries` are read. It's used in case none of these objects are provided
     ///   to compute a pack-hash.
     ///

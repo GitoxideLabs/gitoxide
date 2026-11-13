@@ -52,7 +52,7 @@ fn allocation_error(kind: ResourceExhaustionKind) -> Message {
 }
 
 impl<T> Tree<T> {
-    /// Instantiate an empty tree with capacity estimated from `num_objects`, capped by the allocation limit.
+    /// Cap speculative capacity by the allocation limit; actual entries may grow metadata up to 64 times that limit.
     pub(crate) fn with_capacity(num_objects: usize, alloc_limit_bytes: Option<usize>) -> Result<Self> {
         let capped_capacity = match alloc_limit_bytes {
             Some(limit) => (num_objects / 2).min(limit / std::mem::size_of::<Item<T>>()),
@@ -73,7 +73,7 @@ impl<T> Tree<T> {
             last_seen: None,
             future_child_offsets: Vec::new(),
             ref_child_indices: BTreeMap::new(),
-            alloc_limit_bytes,
+            item_alloc_limit_bytes: crate::metadata_alloc_limit(alloc_limit_bytes),
         })
     }
 
@@ -136,7 +136,7 @@ impl<T> Tree<T> {
     /// custom `data` with it.
     pub(crate) fn add_root(&mut self, offset: crate::data::Offset, data: T) -> Result {
         self.assert_is_incrementing_and_update_next_offset(offset)?;
-        Self::reserve_item(&mut self.root_items, self.alloc_limit_bytes)?;
+        Self::reserve_item(&mut self.root_items, self.item_alloc_limit_bytes)?;
         self.last_seen = NodeKind::Root.into();
         self.root_items.push(Item {
             offset,
@@ -157,7 +157,7 @@ impl<T> Tree<T> {
         data: T,
     ) -> Result {
         self.assert_is_incrementing_and_update_next_offset(offset)?;
-        Self::reserve_item(&mut self.child_items, self.alloc_limit_bytes)?;
+        Self::reserve_item(&mut self.child_items, self.item_alloc_limit_bytes)?;
 
         let next_child_index = self.child_items.len();
         // SAFETY INVARIANT upheld:
@@ -202,7 +202,7 @@ impl<T> Tree<T> {
         data: T,
     ) -> Result {
         self.assert_is_incrementing_and_update_next_offset(offset)?;
-        Self::reserve_item(&mut self.child_items, self.alloc_limit_bytes)?;
+        Self::reserve_item(&mut self.child_items, self.item_alloc_limit_bytes)?;
 
         let child_index = self.child_items.len() as u32;
         self.ref_child_indices.entry(base_id).or_default().push(child_index);
@@ -246,9 +246,20 @@ mod tests {
     #[test]
     fn tree_growth_respects_alloc_limit() -> gix_testtools::TestResult {
         let item_bytes = std::mem::size_of::<super::Item<()>>();
+        let max_items = 2 * 64;
         for roots in [false, true] {
             let mut tree = super::Tree::with_capacity(2, Some(item_bytes * 2))?;
-            for index in 0..2 {
+            assert_eq!(
+                tree.root_items.capacity(),
+                1,
+                "speculative roots use the original limit"
+            );
+            assert_eq!(
+                tree.child_items.capacity(),
+                1,
+                "speculative children use the original limit"
+            );
+            for index in 0..max_items {
                 let offset = 12 + index;
                 if roots {
                     tree.add_root(offset, ())?;
@@ -257,9 +268,9 @@ mod tests {
                 }
             }
             let err = if roots {
-                tree.add_root(14, ())
+                tree.add_root(12 + max_items, ())
             } else {
-                tree.add_child(24, 14, ())
+                tree.add_child(24, 12 + max_items, ())
             }
             .expect_err("growing either item vector past its limit must fail");
             assert!(
