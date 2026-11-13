@@ -1,16 +1,4 @@
-use std::process::Stdio;
-
-use bstr::BStr;
-use gix_error::{Result, ResultExt, bail, message};
-
-/// A filesystem monitor hook protocol version.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Version {
-    /// Timestamp-based requests with NUL-separated paths in the response.
-    One,
-    /// Opaque-token requests with a token followed by NUL-separated paths in the response.
-    Two,
-}
+// Shared hook negotiation for the blocking and async adapters in `mod.rs`.
 
 /// Invoke `command` with `previous` as its checkpoint, returning the successful protocol and raw response.
 ///
@@ -18,7 +6,8 @@ pub enum Version {
 /// A successful response is returned without validation. If the selected protocols all fail,
 /// return `None`, or an error if the final protocol-one invocation cannot be launched.
 /// The hook runs in the absolute `worktree_dir` required by `context`.
-pub fn query(
+#[maybe_async]
+pub async fn query(
     command: &BStr,
     previous: &BStr,
     version: Option<Version>,
@@ -30,7 +19,7 @@ pub fn query(
             "Filesystem monitor hooks require an absolute worktree directory"
         ));
     };
-    let run = |version: &str| -> Result<std::process::Output> {
+    let run = async |version: &str| -> Result<std::process::Output> {
         let _span = gix_trace::coarse!("gix_fsmonitor::client::hook::query", protocol = version);
         let command = gix_command::prepare(gix_path::from_bstr(command)?.into_owned())
             .command_may_be_shell_script()
@@ -40,10 +29,11 @@ pub fn query(
             .stdin(Stdio::null())
             .stdout(Stdio::piped());
         // Resolve relative scripts and their interpreters after entering the worktree on Windows.
-        let mut command = std::process::Command::try_from(if cfg!(windows) { command.with_shell() } else { command })?;
+        let mut command = prepare_command(if cfg!(windows) { command.with_shell() } else { command })?;
         let out = command
             .current_dir(workdir)
             .output()
+            .await
             .inspect_err(|_err| {
                 gix_trace::debug!(error_kind = ?_err.kind(), "filesystem monitor hook could not be run");
             })
@@ -52,7 +42,7 @@ pub fn query(
         Ok(out)
     };
     if version != Some(Version::One) {
-        if let Ok(out) = run("2")
+        if let Ok(out) = run("2").await
             && out.status.success()
         {
             return Ok(Some((Version::Two, out.stdout)));
@@ -62,6 +52,6 @@ pub fn query(
         }
         gix_trace::debug!("retrying filesystem monitor hook with protocol v1");
     }
-    let out = run("1")?;
+    let out = run("1").await?;
     Ok(out.status.success().then_some((Version::One, out.stdout)))
 }

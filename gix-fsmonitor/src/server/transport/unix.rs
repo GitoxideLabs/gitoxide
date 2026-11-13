@@ -109,7 +109,19 @@ impl Listener {
     }
 
     pub fn owns_endpoint(&self) -> bool {
-        fs::symlink_metadata(&self.path).is_ok_and(|meta| (meta.dev(), meta.ino()) == self.identity)
+        owns_endpoint(&self.path, self.identity)
+    }
+
+    #[cfg(feature = "async-tokio")]
+    pub(crate) fn ownership_check(&self) -> impl FnOnce() -> io::Result<bool> + Send + 'static {
+        let path = self.path.clone();
+        let identity = self.identity;
+        move || Ok(owns_endpoint(&path, identity))
+    }
+
+    #[cfg(feature = "async-tokio")]
+    pub(crate) fn async_socket(&self) -> io::Result<tokio::net::UnixListener> {
+        tokio::net::UnixListener::from_std(self.socket.try_clone()?)
     }
 
     pub fn wait(&self, wake: &Wake, timeout: Duration) -> io::Result<()> {
@@ -146,6 +158,10 @@ impl Listener {
         }
         Ok(())
     }
+}
+
+fn owns_endpoint(path: &Path, identity: (u64, u64)) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| (meta.dev(), meta.ino()) == identity)
 }
 
 impl Drop for Listener {
@@ -223,15 +239,26 @@ impl Stream {
     pub fn finish(&mut self) -> io::Result<()> {
         Ok(())
     }
+
+    fn check_deadline(&self) -> io::Result<()> {
+        if Instant::now() >= self.deadline {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "IPC exchange timed out"));
+        }
+        Ok(())
+    }
 }
 impl Read for Stream {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         loop {
+            self.check_deadline()?;
             match self.socket.read(buf) {
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
                     ready(&self.socket, PollFlags::IN, self.deadline)?;
                 }
-                result => return result,
+                result => {
+                    self.check_deadline()?;
+                    return result;
+                }
             }
         }
     }
@@ -239,11 +266,15 @@ impl Read for Stream {
 impl Write for Stream {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         loop {
+            self.check_deadline()?;
             match self.socket.write(buf) {
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
                     ready(&self.socket, PollFlags::OUT, self.deadline)?;
                 }
-                result => return result,
+                result => {
+                    self.check_deadline()?;
+                    return result;
+                }
             }
         }
     }
@@ -313,8 +344,8 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_clients_have_a_bounded_deadline() -> io::Result<()> {
-        let (socket, _client) = UnixStream::pair()?;
+    fn incomplete_clients_have_a_bounded_deadline() -> gix_testtools::TestResult {
+        let (socket, mut client) = UnixStream::pair()?;
         socket.set_nonblocking(true)?;
         let mut stream = Stream {
             socket,
@@ -327,6 +358,23 @@ mod tests {
             error.kind(),
             io::ErrorKind::TimedOut,
             "nonblocking polling bounds the whole exchange"
+        );
+        client.write_all(b"ready")?;
+        assert_eq!(
+            stream
+                .read(&mut [0])
+                .expect_err("ready data cannot bypass an expired deadline")
+                .kind(),
+            io::ErrorKind::TimedOut,
+            "immediately-ready reads still enforce the deadline"
+        );
+        assert_eq!(
+            stream
+                .write(b"ready")
+                .expect_err("an expired deadline prevents even unblocked writes")
+                .kind(),
+            io::ErrorKind::TimedOut,
+            "immediately-ready writes share the same deadline"
         );
         Ok(())
     }

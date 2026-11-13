@@ -22,23 +22,32 @@ use gix_error::{ErrorExt, Result, ResultExt, bail, message};
 use gix_notify::{Batch, Budget, Event, Fence, PathKind, SynchronizeError, Watch, Watcher};
 use gix_parallel::OwnShared;
 
+use crate::protocol;
+
 mod cookie;
 mod endpoint;
 pub(crate) mod filesystem;
 /// Probe and control an existing native IPC service, without starting another process.
 pub mod ipc;
 mod journal;
-mod protocol;
 #[allow(unsafe_code)]
 mod transport;
 
-pub use endpoint::endpoint;
+pub use endpoint::{endpoint, endpoint_for_canonical_paths};
 
 /// One stream of raw filesystem notifications and same-stream delivery fences.
 ///
 /// Sources stay on the server thread and need not be [`Send`].
 /// Source failures, unknown event locations, and lost coverage cannot certify incremental results.
 trait EventSource {
+    fn close(self) -> Result
+    where
+        Self: Sized,
+    {
+        drop(self);
+        Ok(())
+    }
+
     /// Install all `watches` on this source's single stream before reporting success.
     ///
     /// The set includes the worktree root, synchronization cookies, and parent sentinels. It may
@@ -189,6 +198,7 @@ pub struct Handle {
 
 impl Handle {
     /// The endpoint owned by this server, typically `<git_dir>/fsmonitor--daemon.ipc`.
+    /// Use it with [`ipc::query()`] to query or control this server.
     pub fn endpoint(&self) -> &Path {
         &self.endpoint
     }
@@ -308,6 +318,7 @@ fn spawn_with_source<S: EventSource + 'static>(
     Ok(handle)
 }
 
+#[derive(Clone)]
 struct Layout {
     worktree: PathBuf,
     administrative: Vec<PathBuf>,
@@ -524,199 +535,13 @@ impl Layout {
     }
 }
 
-struct Monitor<S> {
-    watcher: S,
-    layout: Layout,
-    options: Options,
-    journal: journal::Journal,
-    generation: Option<u64>,
-    retry: Option<Instant>,
-    healthy: bool,
-    root_lost: bool,
-}
+mod blocking;
+use blocking::Monitor;
 
-impl<S: EventSource> Monitor<S> {
-    fn new(layout: Layout, watcher: S, options: Options) -> Result<Self> {
-        let mut monitor = Self {
-            watcher,
-            layout,
-            options,
-            journal: journal::Journal::new(16384, 16 * 1024 * 1024, Duration::from_secs(300))
-                .or_raise(|| message("generating a fresh filesystem monitor token epoch"))?,
-            generation: None,
-            retry: None,
-            healthy: false,
-            root_lost: false,
-        };
-        monitor.register()?;
-        monitor.healthy = true;
-        Ok(monitor)
-    }
-
-    fn register(&mut self) -> Result<()> {
-        self.layout
-            .prepare_cookies()
-            .or_raise(|| message("preparing the native synchronization directory"))?;
-        self.watcher
-            .register(&self.layout.watches())
-            .or_raise(|| message("registering complete worktree coverage"))
-    }
-
-    fn repair(&mut self, now: Instant) {
-        let result = self.register();
-        match result {
-            Ok(()) => {
-                self.healthy = true;
-                self.retry = None;
-            }
-            Err(_err) => {
-                gix_trace::warn!(error = %_err, "filesystem monitoring will retry");
-                self.healthy = false;
-                self.retry = Some(now + self.options.retry_interval);
-                self.journal.reset();
-            }
-        }
-    }
-
-    fn ingest(&mut self, batch: gix_notify::Batch, now: Instant) {
-        if batch.loss.is_some() || batch.error.is_some() {
-            self.root_lost |= self.layout.roots().any(|root| !root.exists());
-        }
-        if self.generation != Some(batch.generation) || batch.loss.is_some() {
-            self.journal.reset();
-            self.generation = Some(batch.generation);
-        }
-        if matches!(
-            batch.loss,
-            Some(gix_notify::Loss::BackendError | gix_notify::Loss::BackendStopped)
-        ) {
-            self.healthy = false;
-            self.retry.get_or_insert(now + self.options.retry_interval);
-        }
-        if let Some(_error) = batch.error {
-            gix_trace::warn!(error = %_error, "filesystem notification error");
-            self.healthy = false;
-            self.retry.get_or_insert(now + self.options.retry_interval);
-        }
-        for event in batch.events {
-            if self.layout.root_lost(&event) {
-                self.root_lost = true;
-                self.journal.reset();
-                continue;
-            }
-            // Creating a cookie can change its directory's metadata on Windows without losing
-            // coverage. Creation, removal, rename, or an unknown change can replace that directory.
-            if event.kind != gix_notify::EventKind::Modify
-                && event
-                    .paths
-                    .iter()
-                    .any(|path| self.layout.relative_to(&self.layout.cookie_dir, path).is_some())
-            {
-                self.journal.reset();
-                self.healthy = false;
-                self.retry.get_or_insert(now);
-            }
-            match self.layout.paths(event) {
-                Some(paths) => {
-                    for path in paths {
-                        self.journal.record(path, now);
-                    }
-                }
-                None => self.journal.reset(),
-            }
-        }
-    }
-
-    fn maintenance(&mut self, now: Instant) -> bool {
-        let batch = self.watcher.drain(Budget::default());
-        let more = batch.more;
-        self.ingest(batch, now);
-        self.journal.expire(now);
-        if !self.root_lost && self.retry.is_some_and(|retry| now >= retry) {
-            self.repair(now);
-        }
-        more
-    }
-
-    fn response(&mut self, requested: &[u8], now: Instant) -> Vec<u8> {
-        self.maintenance(now);
-        let deadline = Instant::now() + self.options.fence_timeout;
-        let mut complete = false;
-        if self.healthy && !self.root_lost {
-            match self.watcher.synchronize_at(&self.layout.cookie_dir, deadline) {
-                Ok(fence) => loop {
-                    let batch = self.watcher.drain(Budget::default());
-                    let generation = batch.generation;
-                    let sequence = batch.sequence;
-                    self.ingest(batch, now);
-                    if generation != fence.generation || !self.healthy || self.root_lost {
-                        break;
-                    }
-                    if sequence >= fence.sequence {
-                        complete = true;
-                        break;
-                    }
-                    if Instant::now() >= deadline {
-                        break;
-                    }
-                },
-                Err(gix_notify::SynchronizeError::Unsupported) => {
-                    if self.watcher.supports_cookie_synchronization() {
-                        match self.synchronize_cookie(now, deadline) {
-                            Ok(synchronized) => complete = synchronized,
-                            Err(_error) => {
-                                gix_trace::warn!(error = %_error, "filesystem cookie synchronization requires a full response");
-                                self.healthy = false;
-                                self.retry.get_or_insert(now + self.options.retry_interval);
-                            }
-                        }
-                    }
-                }
-                Err(_error) => {
-                    gix_trace::warn!(error = %_error, "filesystem synchronization requires a full response");
-                    self.healthy = false;
-                    self.retry.get_or_insert(now + self.options.retry_interval);
-                }
-            }
-        }
-        if !complete {
-            self.journal.reset();
-        }
-        self.journal.response(requested, complete, now)
-    }
-
-    fn synchronize_cookie(&mut self, now: Instant, deadline: Instant) -> io::Result<bool> {
-        let cookie = cookie::Cookie::create(&self.layout.cookie_dir)?;
-        let generation = self.generation;
-        let mut seen = false;
-        loop {
-            let batch = self.watcher.drain(Budget::default());
-            let lost = batch.loss.is_some() || batch.error.is_some() || Some(batch.generation) != generation;
-            let more = batch.more;
-            seen |= batch.events.iter().any(|event| event.paths.contains(&cookie.path));
-            // Ingest the entire batch and any queued remainder before acknowledging the cookie.
-            // A marker near a drain budget boundary must not hide later paths in its native batch.
-            self.ingest(batch, now);
-            if lost || !self.healthy || self.root_lost {
-                return Ok(false);
-            }
-            if seen && !more {
-                return Ok(true);
-            }
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Ok(false);
-            }
-            if !more {
-                std::thread::park_timeout(remaining.min(self.options.idle_interval));
-            }
-        }
-    }
-
-    fn close(self) {
-        drop(self);
-    }
-}
+#[cfg(feature = "async-tokio")]
+/// Tokio orchestration using the shared notification interpretation and token journal.
+pub mod asynchronous;
+mod state;
 
 fn run<S: EventSource>(
     mut listener: transport::Listener,
@@ -768,7 +593,7 @@ fn run<S: EventSource>(
             Ok(Some(_)) | Err(_) => continue,
         };
         if request == b"quit" {
-            monitor.close();
+            monitor.close()?;
             let _ = protocol::write_message(&mut stream, &[]);
             let _ = stream.finish();
             return Ok(());
@@ -786,198 +611,4 @@ fn run<S: EventSource>(
 }
 
 #[cfg(test)]
-mod tests {
-    mod cookies;
-    mod source;
-
-    use super::*;
-    use gix_notify::EventKind;
-
-    #[test]
-    fn remote_worktree_permission_does_not_override_probe_errors() -> gix_error::TestResult {
-        let worktree = Path::new("worktree");
-        for allow_remote in [false, true] {
-            check_worktree(worktree, allow_remote, |path| {
-                assert_eq!(
-                    path, worktree,
-                    "eligibility probes the worktree, not an administrative directory"
-                );
-                Ok(false)
-            })?;
-            assert!(
-                check_worktree(worktree, allow_remote, |_| Err(io::Error::other("probe failed"))).is_err(),
-                "filesystem errors remain failures even when remote monitoring is allowed"
-            );
-        }
-        check_worktree(worktree, true, |_| Ok(true))?;
-        let error =
-            check_worktree(worktree, false, |_| Ok(true)).expect_err("remote worktrees require explicit permission");
-        assert!(
-            error.to_string().contains("fsmonitor.allowRemote=true"),
-            "remote rejection explains how to opt in: {error}"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn idle_maintenance_preserves_history_until_loss_is_reported() -> gix_error::TestResult {
-        let directory = gix_testtools::tempfile::tempdir()?;
-        let root = directory.path().canonicalize()?.join("worktree");
-        let git_dir = root.join(".git");
-        std::fs::create_dir_all(&git_dir)?;
-        let options = Options {
-            retry_interval: Duration::from_secs(7),
-            ..Default::default()
-        };
-        let mut monitor = Monitor::new(
-            Layout {
-                administrative: vec![git_dir.clone()],
-                endpoint: git_dir.join("socket"),
-                cookie_dir: git_dir.join("fsmonitor--daemon/cookies"),
-                worktree: root.clone(),
-                precompose_unicode: false,
-                ignore_case: false,
-            },
-            Watcher::new(Default::default())?,
-            options,
-        )?;
-        // Control time and loss directly, without racing native callbacks from fixture setup.
-        monitor.watcher = Watcher::new(Default::default())?;
-        let now = Instant::now();
-        monitor.maintenance(now);
-        let initial = monitor.journal.response(b"", true, now);
-        let token = initial
-            .split(|byte| *byte == 0)
-            .next()
-            .expect("responses begin with a token");
-        monitor.journal.record(b"changed".to_vec(), now);
-        let later = now + Duration::from_secs(120);
-        monitor.maintenance(later);
-        assert_eq!(
-            monitor
-                .journal
-                .response(token, true, later)
-                .splitn(2, |byte| *byte == 0)
-                .nth(1),
-            Some(b"changed\0".as_slice()),
-            "retained changes remain available to the client while idle"
-        );
-        assert!(monitor.retry.is_none(), "idle time does not request watch registration");
-
-        std::fs::remove_dir_all(root)?;
-        let mut failure = monitor.watcher.drain(Budget::default());
-        failure.error = Some(message("native root identity check failed").raise());
-        monitor.ingest(failure, later);
-        assert!(
-            monitor.root_lost && !monitor.healthy,
-            "a pathless native error rechecks roots so an obsolete server can stop"
-        );
-        assert_eq!(
-            monitor.retry,
-            Some(later + options.retry_interval),
-            "native failures schedule recovery with the configured retry interval"
-        );
-        assert!(
-            monitor.response(token, later).ends_with(b"\0/\0"),
-            "native failure still requires full verification"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn complete_coverage_keeps_ignored_candidates_and_directory_ambiguity() {
-        let root = PathBuf::from(if cfg!(windows) { "C:/work" } else { "/work" });
-        let layout = Layout {
-            administrative: vec![root.join(".git")],
-            endpoint: root.join(".git/socket"),
-            cookie_dir: root.join(".git/fsmonitor--daemon/cookies"),
-            worktree: root.clone(),
-            precompose_unicode: false,
-            ignore_case: true,
-        };
-        let paths = layout.paths(Event {
-            paths: vec![root.join("ignored/target/file"), root.join(".git/index")],
-            kind: EventKind::Modify,
-            path_kind: PathKind::Any,
-        });
-        assert_eq!(
-            paths,
-            Some(vec![b"ignored/target/file".to_vec(), b"ignored/target/file/".to_vec()]),
-            "provider coverage ignores Git ignore rules and excludes only administrative files"
-        );
-        #[cfg(windows)]
-        assert_eq!(
-            layout.paths(Event {
-                paths: vec![root.clone(), root.join("created")],
-                kind: EventKind::Modify,
-                path_kind: PathKind::Any,
-            }),
-            Some(vec![b"created".to_vec(), b"created/".to_vec()]),
-            "Windows root metadata changes preserve the incremental child candidates"
-        );
-        for kind in [EventKind::Any, EventKind::Modify] {
-            assert!(
-                layout
-                    .paths(Event {
-                        paths: vec![root.clone()],
-                        kind,
-                        path_kind: PathKind::Directory
-                    })
-                    .is_none(),
-                "root-level directory scopes require full invalidation even for vanished Windows names"
-            );
-        }
-    }
-    #[cfg(unix)]
-    #[test]
-    fn git_path_conversion_preserves_non_utf8_bytes_and_rejects_unknown_paths() {
-        use std::os::unix::ffi::OsStrExt;
-        let root = PathBuf::from("/work");
-        let layout = Layout {
-            administrative: vec![root.join(".git")],
-            endpoint: root.join(".git/socket"),
-            cookie_dir: root.join(".git/fsmonitor--daemon/cookies"),
-            worktree: root.clone(),
-            precompose_unicode: true,
-            ignore_case: false,
-        };
-        let path = std::ffi::OsStr::from_bytes(b"raw-\xff");
-        assert_eq!(
-            layout.paths(Event {
-                paths: vec![root.join(path)],
-                kind: EventKind::Modify,
-                path_kind: PathKind::File
-            }),
-            Some(vec![b"raw-\xff".to_vec()]),
-            "Git's Unix path conversion preserves non-UTF-8 names"
-        );
-        for paths in [Vec::new(), vec![PathBuf::new()]] {
-            assert!(
-                layout
-                    .paths(Event {
-                        paths,
-                        kind: EventKind::Any,
-                        path_kind: PathKind::Any
-                    })
-                    .is_none(),
-                "an unlocated event cannot certify an empty change list"
-            );
-        }
-        #[cfg(target_os = "macos")]
-        {
-            let mut layout = layout;
-            for (precompose_unicode, expected) in [(true, "ä"), (false, "a\u{308}")] {
-                layout.precompose_unicode = precompose_unicode;
-                assert_eq!(
-                    layout.paths(Event {
-                        paths: vec![root.join("a\u{308}")],
-                        kind: EventKind::Modify,
-                        path_kind: PathKind::File
-                    }),
-                    Some(vec![expected.as_bytes().to_vec()]),
-                    "Unicode composition follows repository configuration independently of native event delivery"
-                );
-            }
-        }
-    }
-}
+mod tests;

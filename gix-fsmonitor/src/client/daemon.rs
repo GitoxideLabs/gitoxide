@@ -7,11 +7,6 @@ use std::{
 
 use bstr::BStr;
 use gix_error::{ErrorExt, Result, ResultExt, bail, message, unsupported};
-use gix_packetline::{
-    PacketLineRef,
-    blocking_io::encode,
-    decode::{self, PacketLineOrWantedSize},
-};
 
 /// Limits for native filesystem monitor connections and responses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,7 +15,9 @@ pub struct Options {
     pub connect_retries: usize,
     /// Delay between connection retries. Defaults to 50 milliseconds.
     pub connect_retry_delay: Duration,
-    /// Unix read/write timeout; `None` disables it. Ignored on other platforms. Defaults to 30 seconds.
+    /// I/O deadline for each connection attempt and, separately, the complete request/response exchange.
+    /// Applies to blocking and async clients on Unix and Windows. Defaults to 30 seconds;
+    /// `None` disables the deadline and zero expires immediately. Startup and retry delays are excluded.
     pub socket_timeout: Option<Duration>,
     /// Maximum combined response payload in bytes. Zero accepts only empty payloads. Defaults to 64 MiB.
     pub max_response_size: usize,
@@ -45,8 +42,9 @@ impl Default for Options {
 /// An outer callback error is returned without falling back to Git.
 /// Custom startup must keep the server alive through the query.
 /// Windows resolves the endpoint's parent directory before deriving Git's named-pipe name.
-/// `options` bound connection retries and response payloads. Unix exchanges support timeouts;
-/// Windows response reads are synchronous and may block.
+/// `options` bound connection retries, I/O, and response payloads. `socket_timeout` bounds each
+/// connection attempt and, separately, the entire exchange on Unix and Windows. Startup and retry
+/// delays are not included. No async runtime is required.
 pub fn query(
     socket_path: &Path,
     token: &BStr,
@@ -116,6 +114,10 @@ pub fn query(
             return Err(err).or_raise(|| message("Could not connect to the filesystem monitor"));
         }
     };
+    #[cfg(any(unix, windows))]
+    stream
+        .set_timeout(options.socket_timeout)
+        .or_raise(|| message("Could not configure the filesystem monitor exchange deadline"))?;
     let response = exchange(&mut stream, token, options.max_response_size)
         .inspect_err(|_err| {
             gix_trace::debug!(error_kind = ?_err.kind(), error = %_err, "filesystem monitor daemon exchange failed");
@@ -128,36 +130,110 @@ pub fn query(
     Ok(response)
 }
 
-#[cfg(unix)]
-fn connect(path: &Path, options: &Options) -> io::Result<std::os::unix::net::UnixStream> {
-    use std::os::unix::{fs::PermissionsExt, net::UnixStream};
-
-    let stream = match UnixStream::connect(path) {
-        Ok(stream) => stream,
-        Err(err) if err.kind() == io::ErrorKind::InvalidInput => {
-            gix_trace::debug!("using a short filesystem monitor socket alias");
-            // Shorten overlong socket addresses without changing the process-wide working directory.
-            let directory = tempfile::Builder::new()
-                .prefix("gix-fsm-")
-                .permissions(std::fs::Permissions::from_mode(0o700))
-                .tempdir_in("/tmp")?;
-            let alias = directory.path().join("socket");
-            std::os::unix::fs::symlink(path, &alias)?;
-            UnixStream::connect(alias)?
+/// Query a native daemon using Tokio I/O and timers, with an asynchronous startup callback.
+///
+/// Like [`query()`], missing endpoints invoke `start` once; returning a command context requests
+/// Git startup on macOS or Windows. Like the blocking client, `socket_timeout` bounds each connection
+/// attempt and, separately, the entire exchange; startup and retry delays are excluded.
+/// Dropping the future closes its connection; a started daemon is not stopped.
+/// Requires a Tokio runtime with I/O, timers, and process support enabled.
+#[cfg(feature = "async-tokio")]
+pub async fn query_async(
+    socket_path: &Path,
+    token: &BStr,
+    start: impl AsyncFnOnce() -> Result<std::result::Result<(), gix_command::Context>>,
+    options: Options,
+) -> Result<Vec<u8>> {
+    async fn connect(path: &Path, options: &Options) -> io::Result<crate::asynchronous::Stream> {
+        if options.socket_timeout == Some(Duration::ZERO) {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "filesystem monitor connection timed out",
+            ));
         }
-        Err(err) => return Err(err),
+        for attempt in 0..=options.connect_retries {
+            let result = match options.socket_timeout {
+                Some(timeout) => tokio::time::timeout(timeout, crate::asynchronous::connect(path))
+                    .await
+                    .unwrap_or_else(|_| {
+                        Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "filesystem monitor connection timed out",
+                        ))
+                    }),
+                None => crate::asynchronous::connect(path).await,
+            };
+            if cfg!(windows)
+                && result.as_ref().is_err_and(|err| err.raw_os_error() == Some(231))
+                && attempt < options.connect_retries
+            {
+                tokio::time::sleep(options.connect_retry_delay).await;
+            } else {
+                return result;
+            }
+        }
+        unreachable!("the last connection attempt returns")
+    }
+    let mut stream = match connect(socket_path, &options).await {
+        Ok(stream) => stream,
+        Err(error) if matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused) => {
+            if let Err(context) = start()
+                .await
+                .or_raise(|| message("Could not start the filesystem monitor"))?
+            {
+                if !cfg!(any(target_os = "macos", windows)) {
+                    return Err(error.and_raise(unsupported(
+                        "Git's filesystem monitor daemon is unavailable on this platform",
+                    )));
+                }
+                let Some(workdir) = context.worktree_dir.clone() else {
+                    bail!(message("Cannot start a filesystem monitor without a worktree"));
+                };
+                let command = std::process::Command::try_from(
+                    gix_command::prepare("git")
+                        .args(["fsmonitor--daemon", "start"])
+                        .with_context(context)
+                        .stdout(Stdio::null()),
+                )?;
+                let status = tokio::process::Command::from(command)
+                    .current_dir(workdir)
+                    .status()
+                    .await
+                    .or_raise(|| message("Could not start Git's filesystem monitor"))?;
+                if !status.success() {
+                    bail!(message("Git's filesystem monitor could not be started"));
+                }
+            }
+            let mut result = connect(socket_path, &options).await;
+            for _ in 0..options.connect_retries {
+                if !result
+                    .as_ref()
+                    .is_err_and(|err| matches!(err.kind(), io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused))
+                {
+                    break;
+                }
+                tokio::time::sleep(options.connect_retry_delay).await;
+                result = connect(socket_path, &options).await;
+            }
+            result.or_raise(|| message("Could not connect to the filesystem monitor after starting it"))?
+        }
+        Err(error) => return Err(error).or_raise(|| message("Could not connect to the filesystem monitor")),
     };
-    stream.set_read_timeout(options.socket_timeout)?;
-    stream.set_write_timeout(options.socket_timeout)?;
-    Ok(stream)
+    crate::asynchronous::exchange(&mut stream, token, options.max_response_size, options.socket_timeout)
+        .await
+        .or_raise(|| message("Could not query the filesystem monitor"))
+}
+
+#[cfg(unix)]
+fn connect(path: &Path, options: &Options) -> io::Result<super::transport::Stream> {
+    super::transport::Stream::connect(path, options.socket_timeout)
 }
 
 #[cfg(windows)]
-fn connect(path: &Path, options: &Options) -> io::Result<std::fs::File> {
-    // shortcut: synchronous reads match Git; add cancellable I/O if stalled-daemon deadlines are required.
-    let pipe = pipe_name(&crate::normalize_endpoint(path)?);
+fn connect(path: &Path, options: &Options) -> io::Result<crate::named_pipe::Stream> {
+    let pipe = crate::pipe::name(&crate::normalize_endpoint(path)?)?;
     for attempt in 0..=options.connect_retries {
-        match std::fs::OpenOptions::new().read(true).write(true).open(&pipe) {
+        match crate::named_pipe::Stream::connect(&pipe, options.socket_timeout) {
             Err(err) if err.raw_os_error() == Some(231) && attempt < options.connect_retries => {
                 std::thread::sleep(options.connect_retry_delay);
             }
@@ -165,26 +241,6 @@ fn connect(path: &Path, options: &Options) -> io::Result<std::fs::File> {
         }
     }
     unreachable!("the final connection attempt returns its result")
-}
-
-#[cfg(windows)]
-fn pipe_name(path: &Path) -> std::ffi::OsString {
-    use std::os::windows::ffi::{OsStrExt, OsStringExt};
-
-    let path: Vec<_> = path.as_os_str().encode_wide().collect();
-    let verbatim: Vec<_> = "\\\\?\\".encode_utf16().collect();
-    let mut path = path.strip_prefix(verbatim.as_slice()).unwrap_or(&path).to_vec();
-    let unc: Vec<_> = "UNC\\".encode_utf16().collect();
-    if path.starts_with(&unc) {
-        path.splice(..unc.len(), "\\\\".encode_utf16());
-    }
-    let mut pipe: Vec<_> = "\\\\.\\pipe\\".encode_utf16().collect();
-    pipe.extend(path.iter().enumerate().map(|(idx, &ch)| match ch {
-        ch if ch == u16::from(b':') && idx == 1 => u16::from(b'_'),
-        ch if ch == u16::from(b'/') => u16::from(b'\\'),
-        ch => ch,
-    }));
-    std::ffi::OsString::from_wide(&pipe)
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -195,42 +251,14 @@ fn connect(_path: &Path, _options: &Options) -> io::Result<io::Cursor<Vec<u8>>> 
     ))
 }
 
-const MAX_PACKET_SIZE: usize = 65520;
-
-fn exchange(stream: &mut (impl Read + Write), token: &[u8], max_response_size: usize) -> io::Result<Vec<u8>> {
-    for chunk in token.chunks(MAX_PACKET_SIZE - 4) {
-        encode::data_to_write(chunk, &mut *stream)?;
-    }
-    encode::flush_to_write(&mut *stream)?;
-    stream.flush()?;
-
-    let mut response = Vec::new();
-    loop {
-        let mut header = [0; 4];
-        stream.read_exact(&mut header)?;
-        // Decode only the prefix so limits are enforced before reading or allocating payload data.
-        match decode::hex_prefix(&header).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))? {
-            PacketLineOrWantedSize::Line(PacketLineRef::Flush) => return Ok(response),
-            PacketLineOrWantedSize::Line(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Unsupported filesystem monitor packet delimiter",
-                ));
-            }
-            PacketLineOrWantedSize::Wanted(len) => {
-                let len = usize::from(len);
-                if len > MAX_PACKET_SIZE - 4 || len > max_response_size - response.len() {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "Filesystem monitor response is too large",
-                    ));
-                }
-                let offset = response.len();
-                response.resize(offset + len, 0);
-                stream.read_exact(&mut response[offset..])?;
-            }
-        }
-    }
+fn exchange(stream: &mut (impl Read + Write + Unpin), token: &[u8], max_response_size: usize) -> io::Result<Vec<u8>> {
+    crate::protocol::write_message(stream, token)?;
+    crate::protocol::read_message(stream, max_response_size)?.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "filesystem monitor closed without a response",
+        )
+    })
 }
 
 #[cfg(test)]
@@ -239,9 +267,12 @@ mod tests {
 
     use super::*;
 
+    const MAX_PACKET_SIZE: usize = 65_520;
+
     struct Connection {
         input: Cursor<Vec<u8>>,
         written: Vec<u8>,
+        read_error: Option<io::ErrorKind>,
     }
 
     impl Connection {
@@ -249,12 +280,16 @@ mod tests {
             Self {
                 input: Cursor::new(input.to_owned()),
                 written: Vec::new(),
+                read_error: None,
             }
         }
     }
 
     impl Read for Connection {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if let Some(kind) = self.read_error.take() {
+                return Err(kind.into());
+            }
             let len = buf.len().min(1);
             self.input.read(&mut buf[..len])
         }
@@ -272,7 +307,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn configured_socket_timeouts_are_applied() -> gix_testtools::TestResult {
+    fn configured_socket_deadlines_can_be_reset() -> gix_testtools::TestResult {
         let directory = gix_testtools::tempfile::tempdir_in("/tmp")?;
         let path = directory.path().join("socket");
         let _listener = std::os::unix::net::UnixListener::bind(&path)?;
@@ -283,13 +318,26 @@ mod tests {
                 socket_timeout: timeout,
                 max_response_size: 0,
             };
-            let stream = connect(&path, &options)?;
-            assert_eq!(stream.read_timeout()?, timeout, "the configured timeout controls reads");
+            let mut stream = connect(&path, &options)?;
+            stream.set_timeout(Some(Duration::ZERO))?;
             assert_eq!(
-                stream.write_timeout()?,
-                timeout,
-                "the configured timeout controls writes"
+                stream
+                    .read(&mut [0])
+                    .expect_err("an expired deadline prevents reads")
+                    .kind(),
+                io::ErrorKind::TimedOut,
+                "reads check the cumulative deadline"
             );
+            assert_eq!(
+                stream
+                    .write(b"x")
+                    .expect_err("an expired deadline prevents writes")
+                    .kind(),
+                io::ErrorKind::TimedOut,
+                "writes share the same deadline"
+            );
+            stream.set_timeout(timeout)?;
+            assert_eq!(stream.write(b"")?, 0, "a fresh or disabled deadline permits I/O again");
         }
         Ok(())
     }
@@ -310,19 +358,28 @@ mod tests {
             );
         }
         assert!(exchange(&mut Connection::new(b"0000"), b"", 0)?.is_empty());
-        assert_eq!(
-            exchange(&mut Connection::new(b"000d"), b"old-token", 8)
-                .expect_err("response limits must be checked before reading the payload")
-                .kind(),
-            io::ErrorKind::InvalidData,
-            "an oversized payload is rejected even when its data has not arrived"
-        );
+        for input in [b"000d".as_slice(), b"0005x000d"] {
+            let mut connection = Connection::new(input);
+            assert_eq!(
+                exchange(&mut connection, b"old-token", 8)
+                    .expect_err("response limits must be checked before reading the payload")
+                    .kind(),
+                io::ErrorKind::InvalidData,
+                "initial and cumulative limits reject payloads even before their data arrives"
+            );
+            assert_eq!(
+                connection.input.position(),
+                input.len() as u64,
+                "an oversized packet is rejected after its header without reading its payload"
+            );
+        }
         Ok(())
     }
 
     #[test]
     fn fragmented_packets_preserve_binary_response() -> gix_testtools::TestResult {
         let mut connection = Connection::new(b"0009token0008\x00a\x00b0000");
+        connection.read_error = Some(io::ErrorKind::Interrupted);
         assert_eq!(
             exchange(&mut connection, b"old-token", Options::default().max_response_size)?,
             b"token\x00a\x00b"
@@ -366,22 +423,42 @@ mod tests {
 
     #[test]
     #[cfg(windows)]
-    fn windows_pipe_names_follow_git() {
+    fn windows_pipe_names_follow_git() -> gix_testtools::TestResult {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+        let mut path: Vec<_> = r"C:/".encode_utf16().collect();
+        path.extend([0xd800, u16::from(b'/'), 0xdc00]);
+        let mut expected: Vec<_> = r"\\.\pipe\C_\".encode_utf16().collect();
+        expected.extend([0xd800, u16::from(b'\\'), 0xdc00]);
+        assert_eq!(
+            crate::pipe::name(Path::new(&std::ffi::OsString::from_wide(&path)))?
+                .encode_wide()
+                .collect::<Vec<_>>(),
+            expected,
+            "native pipe names preserve unpaired surrogates without appending NUL"
+        );
         for path in [
             r"C:\work\.git\fsmonitor--daemon.ipc",
             r"C:/work/.git/fsmonitor--daemon.ipc",
             r"\\?\C:\work\.git\fsmonitor--daemon.ipc",
         ] {
             assert_eq!(
-                pipe_name(Path::new(path)),
+                crate::pipe::name(Path::new(path))?,
                 std::ffi::OsStr::new(r"\\.\pipe\C_\work\.git\fsmonitor--daemon.ipc")
             );
         }
         assert_eq!(
-            pipe_name(Path::new(r"\\?\UNC\server\share\fsmonitor--daemon.ipc")),
-            pipe_name(Path::new(r"\\server\share\fsmonitor--daemon.ipc")),
+            crate::pipe::name(Path::new(r"\\?\UNC\server\share\fsmonitor--daemon.ipc"))?,
+            crate::pipe::name(Path::new(r"\\server\share\fsmonitor--daemon.ipc"))?,
             "verbatim paths name the same pipe as regular UNC paths"
         );
+        assert_eq!(
+            crate::pipe::name(Path::new("C:/pipe\0suffix"))
+                .expect_err("native pipe names cannot contain NUL")
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        Ok(())
     }
 
     #[test]
@@ -403,6 +480,25 @@ mod tests {
         expected.extend_from_slice(b"0005x0000");
         assert_eq!(connection.written, expected, "oversized tokens span multiple packets");
         Ok(())
+    }
+
+    #[test]
+    fn exchange_preserves_read_errors() {
+        for kind in [
+            io::ErrorKind::TimedOut,
+            io::ErrorKind::WouldBlock,
+            io::ErrorKind::ConnectionReset,
+        ] {
+            let mut connection = Connection::new(b"0000");
+            connection.read_error = Some(kind);
+            assert_eq!(
+                exchange(&mut connection, b"token", 0)
+                    .expect_err("timeouts and connection errors must propagate without retrying")
+                    .kind(),
+                kind,
+                "only interrupted reads may be retried"
+            );
+        }
     }
 
     #[test]

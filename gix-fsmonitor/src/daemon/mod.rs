@@ -20,7 +20,7 @@ use crate::server::{self, ipc};
 mod launch;
 
 /// Compatibility re-export of shared server endpoint selection.
-pub use crate::server::endpoint;
+pub use crate::server::{endpoint, endpoint_for_canonical_paths};
 
 /// A foreground, detached-startup, or client command for a repository's filesystem monitor.
 pub enum Command {

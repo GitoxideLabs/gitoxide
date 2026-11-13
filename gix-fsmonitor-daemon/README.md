@@ -100,8 +100,9 @@ marker in the same administrative directory and waits for its notification befor
 replying. Ready worktree notifications are published before external cookies, so
 linked worktrees also receive incremental results. Missing cookies, notification
 loss, and filesystems without supported synchronization require full verification.
-Windows clients and the daemon should run at the same elevation; Git's custom
-ACL for crossing elevation levels is not implemented.
+Windows named pipes use Git's ACL, granting the `Everyone` group read/write
+access so local clients and the daemon can run at different elevation levels.
+Remote named-pipe clients are rejected.
 
 The native watcher covers all worktree paths, deliberately independent of ignore
 rules and the default index. A client may use an alternate index that tracks paths

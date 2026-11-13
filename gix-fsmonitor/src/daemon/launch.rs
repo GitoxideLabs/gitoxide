@@ -124,7 +124,6 @@ fn environment(
 #[expect(unsafe_code)]
 fn native_spawn(arguments: &[OsString], environment: &[(OsString, OsString)]) -> std::io::Result<Child> {
     use std::{
-        io,
         os::unix::process::CommandExt,
         process::{Command, Stdio},
     };
@@ -138,13 +137,7 @@ fn native_spawn(arguments: &[OsString], environment: &[(OsString, OsString)]) ->
         .stderr(Stdio::null());
     // SAFETY: Only async-signal-safe setsid runs between fork and exec.
     unsafe {
-        command.pre_exec(|| {
-            if libc::setsid() == -1 {
-                Err(io::Error::last_os_error())
-            } else {
-                Ok(())
-            }
-        });
+        command.pre_exec(|| rustix::process::setsid().map(|_| ()).map_err(Into::into));
     }
     command.spawn()
 }
@@ -290,13 +283,7 @@ mod windows {
     fn working_directory(path: &Path) -> io::Result<Vec<u16>> {
         let canonical = path.canonicalize()?;
         let mut directory: Vec<_> = canonical.as_os_str().encode_wide().collect();
-        let verbatim: Vec<_> = "\\\\?\\".encode_utf16().collect();
-        let verbatim_unc: Vec<_> = "\\\\?\\UNC\\".encode_utf16().collect();
-        if directory.starts_with(&verbatim_unc) {
-            directory.splice(..verbatim_unc.len(), "\\\\".encode_utf16());
-        } else if directory.starts_with(&verbatim) {
-            directory.drain(..verbatim.len());
-        }
+        crate::windows_path::remove_verbatim_prefix(&mut directory);
         let directory = PathBuf::from(OsString::from_wide(&directory));
         if !directory.is_absolute() || directory.canonicalize()? != canonical {
             return Err(io::Error::new(

@@ -43,10 +43,14 @@ caller's responsibility.
 Callers supply endpoint paths, opaque token bytes, and command context. Repository
 configuration, trust decisions, index checkpoints, and status invalidation remain
 with the caller. Unix socket paths can exceed the platform address limit without
-changing the process working directory. Retry counts, retry delays, Unix I/O
-timeouts, and response limits are configurable through `client::daemon::Options`.
-Defaults allow 100 retries at 50 ms intervals, a 30-second Unix timeout, and
-64 MiB of response data. Windows response reads remain synchronous.
+changing the process working directory. `client::daemon::Options` configures
+connection retries, retry delays, I/O deadlines, and response limits for both
+blocking and async clients on Unix and Windows. Defaults allow 100 retries at
+50 ms intervals, 30 seconds for each connection attempt and, separately, the
+complete request/response exchange, and 64 MiB of response data. Partial I/O does
+not reset the exchange deadline. `socket_timeout: None` disables deadlines;
+zero expires immediately. Daemon startup and retry delays are not included in
+these I/O budgets; blocking filesystem preparation is not cancellable.
 
 ## Server (`server` feature)
 
@@ -125,3 +129,76 @@ Linked worktrees therefore have separate endpoints and watch lifetimes.
 Starting a second owner of an occupied endpoint fails, allowing applications to
 use the existing service. Restarting establishes a new token epoch and requires
 a fresh client baseline.
+
+On Windows, the named pipe uses Git's ACL, granting the `Everyone` group
+read/write access so local clients can connect across elevation levels.
+Remote named-pipe clients are rejected.
+
+## Async execution (`async-tokio` feature)
+
+Enable `async-tokio` for Tokio-based clients and server orchestration. Blocking
+APIs remain available alongside their async counterparts.
+
+| Required features       | APIs                                                                      |
+| ----------------------- | ------------------------------------------------------------------------- |
+| `async-tokio`           | `client::daemon::query_async`, `client::hook::query_async`                  |
+| `server`, `async-tokio` | `server::asynchronous::spawn`, `server::ipc::{query_async,is_running_async}` |
+
+Applications supply an entered Tokio runtime with I/O and timers enabled and
+keep it alive through shutdown. Hooks and default Git startup also require Tokio
+process support. A current-thread runtime is supported. Tokio is an optional
+dependency enabled by `async-tokio`; blocking execution does not require a runtime.
+
+### Server and IPC examples
+
+Both frontends take a caller-prepared `server::Context` containing the paths and
+filesystem settings described above. They return a handle only after binding the
+endpoint and registering native watches.
+
+Blocking use requires `server` and no async runtime:
+
+```rust,ignore
+use gix_fsmonitor::server::{self, Options, ipc::{self, Request}};
+let server = server::spawn(context, Options::default())?;
+let response = ipc::query(server.endpoint(), Request::Message(b""))?;
+server.shutdown()?;
+```
+
+Async use requires both `server` and `async-tokio`, within a Tokio runtime:
+
+```rust,ignore
+use gix_fsmonitor::server::{self, Options, ipc::{self, Request}};
+let server = server::asynchronous::spawn(context, Options::default()).await?;
+let response = ipc::query_async(server.endpoint(), Request::Message(b"")).await?;
+server.shutdown().await?;
+```
+
+Blocking and async clients receive identical raw token/path responses and can
+query either server frontend. `server::ipc::query` and `query_async` both use one
+five-second I/O deadline covering connection, request, and response, and accept
+at most 32 MiB of response data. Unlike `client::daemon` queries, these helpers
+never start a missing daemon.
+
+### Cancellation and ownership
+
+Dropping a `server::asynchronous::Handle` requests shutdown without joining on
+the caller thread. Await `shutdown()` to observe safe resource release, or call
+`request_shutdown()` and then await `wait()`. Cancelling server startup or a wait
+also requests cleanup.
+
+Deadlines do not imply native cancellation: synchronization work may continue
+until it can safely release its resources. Filesystem housekeeping runs on
+bounded workers whose permits remain held through completion and cookie cleanup,
+even when waits are cancelled. Batches are ingested before asynchronous root
+checks; interrupted checks retain conservative recovery state. Server shutdown
+awaits housekeeping and endpoint cleanup.
+
+Cancelling an async client query closes its connection; a daemon startup or a
+transmitted control request may still execute. Cancelling an async hook query
+kills its active child process.
+
+The server's event interpretation, bounded journal, generation/token invalidation,
+fence consumption and response construction are shared. Its blocking and Tokio
+loops use their own transport and deadline adapters. Async cookie waits are
+notification-driven, bounded by the fence deadline; they do not poll every 20 ms.
+Native watcher root checks and the server's ownership check remain unchanged.

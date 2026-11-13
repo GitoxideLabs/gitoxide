@@ -7,6 +7,9 @@ use bstr::ByteSlice;
 use gix_fsmonitor::{client, server};
 use gix_testtools::{TestResult, tempfile::TempDir};
 
+#[cfg(feature = "async-tokio")]
+mod asynchronous;
+
 struct Fixture {
     _parent: TempDir,
     worktree: PathBuf,
@@ -109,6 +112,13 @@ fn native_endpoint_selection_ignores_socket_directory_on_local_filesystems() -> 
         "server-only builds select the canonical Git directory's native endpoint"
     );
     assert!(!endpoint.exists(), "endpoint discovery does not bind or create it");
+    assert_eq!(
+        server::endpoint_for_canonical_paths(&git_dir.canonicalize()?, &missing_worktree, || {
+            panic!("canonical local endpoints also ignore socketDir configuration")
+        })?,
+        endpoint,
+        "the server API accepts canonical paths without resolving an unused worktree"
+    );
     #[cfg(feature = "daemon")]
     assert_eq!(
         gix_fsmonitor::daemon::endpoint(&git_dir, &missing_worktree, || {
@@ -452,28 +462,7 @@ fn an_active_connection_gets_a_new_idle_window_when_it_finishes() -> gix_error::
     #[cfg(unix)]
     let stream = std::os::unix::net::UnixStream::connect(handle.endpoint())?;
     #[cfg(windows)]
-    let stream = {
-        use std::os::windows::ffi::{OsStrExt, OsStringExt};
-
-        // Git's native pipe spelling removes the verbatim prefix and replaces the drive colon.
-        let mut path: Vec<_> = handle.endpoint().as_os_str().encode_wide().collect();
-        let prefix: Vec<_> = "\\\\?\\".encode_utf16().collect();
-        let unc_prefix: Vec<_> = "\\\\?\\UNC\\".encode_utf16().collect();
-        if path.starts_with(&unc_prefix) {
-            path.splice(..unc_prefix.len(), "\\\\".encode_utf16());
-        } else if path.starts_with(&prefix) {
-            path.drain(..prefix.len());
-        }
-        if path.get(1) == Some(&(b':' as u16)) {
-            path[1] = b'_' as u16;
-        }
-        let mut pipe: Vec<_> = "\\\\.\\pipe\\".encode_utf16().collect();
-        pipe.extend(path);
-        std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(std::ffi::OsString::from_wide(&pipe))?
-    };
+    let stream = connect_pipe(handle.endpoint())?;
     std::thread::sleep(Duration::from_millis(900));
     drop(stream);
     std::thread::sleep(Duration::from_millis(100));
@@ -488,6 +477,14 @@ fn an_active_connection_gets_a_new_idle_window_when_it_finishes() -> gix_error::
     );
     handle.wait()?;
     Ok(())
+}
+
+#[cfg(windows)]
+fn connect_pipe(endpoint: &std::path::Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(super::pipe_name(endpoint))
 }
 
 #[test]

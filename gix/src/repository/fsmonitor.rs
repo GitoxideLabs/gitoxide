@@ -158,4 +158,23 @@ impl Repository {
         server::spawn(self.fsmonitor_server_context()?, options)
             .or_raise(|| message("starting the repository's filesystem monitor"))
     }
+
+    /// Start a Tokio filesystem monitor and await complete native registration.
+    ///
+    /// Requires `async-fsmonitor-server` and a Tokio runtime with I/O and timers enabled through
+    /// shutdown. The blocking [`Self::fsmonitor_server()`] remains available. Cancelling startup
+    /// requests safe cleanup; dropping the handle requests shutdown without joining this thread.
+    /// Await its `shutdown()` method to observe release of all watches and the endpoint.
+    #[cfg(feature = "async-fsmonitor-server")]
+    pub fn fsmonitor_server_async(
+        &self,
+        options: server::Options,
+    ) -> impl std::future::Future<Output = Result<server::asynchronous::Handle>> + Send + 'static {
+        let context = self.fsmonitor_server_context();
+        async move {
+            server::asynchronous::spawn(context?, options)
+                .await
+                .or_raise(|| message("starting the repository's asynchronous filesystem monitor"))
+        }
+    }
 }

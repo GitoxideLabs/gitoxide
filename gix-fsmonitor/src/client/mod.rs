@@ -2,3 +2,6 @@
 pub mod daemon;
 /// Filesystem monitor hook execution and protocol negotiation.
 pub mod hook;
+
+#[cfg(unix)]
+mod transport;

@@ -201,6 +201,8 @@ fn layout() -> Layout {
 
 fn monitor() -> RepositoryMonitor {
     RepositoryMonitor {
+        #[cfg(feature = "async-notify")]
+        wake: gix_parallel::OwnShared::new(tokio::sync::Notify::new()),
         layout: layout(),
         options: Options::default(),
         metadata: Domain::default(),

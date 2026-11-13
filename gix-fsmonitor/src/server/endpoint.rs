@@ -30,6 +30,27 @@ pub fn endpoint(git_dir: &Path, worktree: &Path, socket_dir: impl FnOnce() -> Re
     }
 }
 
+/// Select the native IPC endpoint from paths that the caller has already canonicalized.
+///
+/// This performs the same filesystem classification and lazy `socket_dir` lookup as [`endpoint()`],
+/// without resolving `git_dir` or `worktree` again. Their canonical form is not checked; use
+/// [`endpoint()`] when accepting unresolved paths.
+pub fn endpoint_for_canonical_paths(
+    git_dir: &Path,
+    worktree: &Path,
+    socket_dir: impl FnOnce() -> Result<PathBuf>,
+) -> Result<PathBuf> {
+    #[cfg(unix)]
+    {
+        endpoint_inner(git_dir, || Ok(worktree), socket_dir, is_remote)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (worktree, socket_dir);
+        Ok(git_dir.join("fsmonitor--daemon.ipc"))
+    }
+}
+
 #[cfg(unix)]
 fn endpoint_with_remote(
     git_dir: &Path,
@@ -38,11 +59,27 @@ fn endpoint_with_remote(
     is_remote: impl FnOnce(&Path) -> std::io::Result<bool>,
 ) -> Result<PathBuf> {
     let git_dir = git_dir.canonicalize().or_error()?;
-    if is_remote(&git_dir).or_raise(|| message("determining whether the Git directory is on a remote filesystem"))? {
-        let worktree = worktree
-            .canonicalize()
-            .or_raise(|| message("resolving the filesystem monitor worktree"))?;
-        return remote(&worktree, &socket_dir()?);
+    endpoint_inner(
+        &git_dir,
+        || {
+            worktree
+                .canonicalize()
+                .or_raise(|| message("resolving the filesystem monitor worktree"))
+        },
+        socket_dir,
+        is_remote,
+    )
+}
+
+#[cfg(unix)]
+fn endpoint_inner<P: AsRef<Path>>(
+    git_dir: &Path,
+    worktree: impl FnOnce() -> Result<P>,
+    socket_dir: impl FnOnce() -> Result<PathBuf>,
+    is_remote: impl FnOnce(&Path) -> std::io::Result<bool>,
+) -> Result<PathBuf> {
+    if is_remote(git_dir).or_raise(|| message("determining whether the Git directory is on a remote filesystem"))? {
+        return remote(worktree()?.as_ref(), &socket_dir()?);
     }
     // Git ignores fsmonitor.socketDir when the administrative directory is local.
     Ok(git_dir.join("fsmonitor--daemon.ipc"))

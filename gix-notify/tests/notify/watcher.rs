@@ -45,12 +45,31 @@ fn invalid_watch_configuration_is_classified_as_validation() -> TestResult {
             max_bytes: 0,
             ..Options::default()
         },
+        Options {
+            root_check_interval: Some(Duration::ZERO),
+            ..Options::default()
+        },
     ] {
-        let error = Watcher::new(options).err().expect("zero queue limits are invalid");
+        let error = Watcher::new(options).err().expect("invalid options must be rejected");
         assert!(
             error.is_validation(),
-            "invalid limits are caller input errors: {error:?}"
+            "invalid options are caller input errors: {error:?}"
         );
+        #[cfg(feature = "async")]
+        {
+            let async_error = gix_notify::asynchronous::Watcher::new(options)
+                .err()
+                .expect("invalid options must also be rejected by the async constructor");
+            assert!(
+                async_error.is_validation(),
+                "async validation retains the classification: {async_error:?}"
+            );
+            assert_eq!(
+                async_error.to_string(),
+                error.to_string(),
+                "both watcher frontends reject invalid options identically"
+            );
+        }
     }
     let mut watcher = Watcher::new(Options::default())?;
     let error = watcher
@@ -242,10 +261,13 @@ fn root_check_interval_must_be_nonzero_or_disabled() -> TestResult {
         "periodic root checks retain their one-second default"
     );
     for root_check_interval in [None, Some(Duration::from_millis(25)), Some(Duration::MAX)] {
-        Watcher::new(Options {
+        let options = Options {
             root_check_interval,
             ..Options::default()
-        })?;
+        };
+        Watcher::new(options)?;
+        #[cfg(feature = "async")]
+        gix_notify::asynchronous::Watcher::new(options)?.shutdown().wait()?;
     }
     let error = Watcher::new(Options {
         root_check_interval: Some(Duration::ZERO),

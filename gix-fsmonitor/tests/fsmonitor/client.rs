@@ -39,19 +39,176 @@ fn spawn_mock_daemon(
 #[test]
 #[cfg(unix)]
 fn running_daemon_exchanges_fragmented_packets_without_startup_context() -> TestResult {
+    for long_path in [false, true] {
+        let directory = gix_testtools::tempfile::tempdir_in("/tmp")?;
+        let parent = directory.path().join(if long_path {
+            "x".repeat(120)
+        } else {
+            "repository".into()
+        });
+        std::fs::create_dir(&parent)?;
+        let alias = directory.path().join("alias");
+        std::os::unix::fs::symlink(&parent, &alias)?;
+        // Bind through a short parent alias so the mock can expose an overlong endpoint pathname.
+        let server = spawn_mock_daemon(std::os::unix::net::UnixListener::bind(alias.join("fsmonitor.ipc"))?)?;
+        let response = client::daemon::query(
+            &parent.join("fsmonitor.ipc"),
+            b"old-token".as_bstr(),
+            || panic!("an existing daemon must not invoke the startup callback"),
+            client::daemon::Options::default(),
+        );
+        server.join().expect("the mock daemon must finish without panicking")?;
+        assert_eq!(
+            response?, b"token\x00a\x00b",
+            "short and overlong endpoints preserve the binary reply across fragmented packets"
+        );
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn query_with_delayed_io(
+    timeout: Option<std::time::Duration>,
+    fragmented: bool,
+    unread_request: bool,
+) -> TestResult<(gix_error::Result<Vec<u8>>, std::time::Duration)> {
+    use std::{
+        io::{self, Read, Write},
+        os::unix::net::UnixListener,
+        sync::mpsc,
+        time::{Duration, Instant},
+    };
+
     let directory = gix_testtools::tempfile::tempdir_in("/tmp")?;
     let socket = directory.path().join("fsmonitor.ipc");
-    let server = spawn_mock_daemon(std::os::unix::net::UnixListener::bind(&socket)?)?;
-    let response = client::daemon::query(
+    let listener = UnixListener::bind(&socket)?;
+    listener.set_nonblocking(true)?;
+    let (stop, receiver) = mpsc::channel();
+    let server = std::thread::spawn(move || -> io::Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    if receiver.recv_timeout(Duration::from_millis(2)).is_ok() || Instant::now() >= deadline {
+                        return Ok(());
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        };
+        stream.set_nonblocking(false)?;
+        stream.set_read_timeout(Some(Duration::from_secs(3)))?;
+        stream.set_write_timeout(Some(Duration::from_secs(3)))?;
+        if unread_request {
+            // The client must time out in write once its large token fills the socket buffer.
+            let _ = receiver.recv_timeout(Duration::from_secs(3));
+            return Ok(());
+        }
+        let mut request = [0; 13];
+        if let Err(error) = stream.read_exact(&mut request) {
+            return match error.kind() {
+                io::ErrorKind::UnexpectedEof | io::ErrorKind::ConnectionReset => Ok(()),
+                _ => Err(error),
+            };
+        }
+        assert_eq!(
+            request, *b"0009token0000",
+            "the mock receives a complete packetized request"
+        );
+        if fragmented {
+            // Every fragment arrives sooner than the timeout, but the complete reply takes longer.
+            for byte in b"001c0123456789012345678901230000" {
+                if receiver.recv_timeout(Duration::from_millis(30)).is_ok() {
+                    return Ok(());
+                }
+                if let Err(error) = stream.write_all(&[*byte]) {
+                    return match error.kind() {
+                        io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset => Ok(()),
+                        _ => Err(error),
+                    };
+                }
+            }
+        } else {
+            let _ = receiver.recv_timeout(Duration::from_secs(3));
+        }
+        Ok(())
+    });
+    let token = if unread_request {
+        vec![b'x'; 1024 * 1024]
+    } else {
+        b"token".to_vec()
+    };
+    let started = Instant::now();
+    let result = client::daemon::query(
         &socket,
-        b"old-token".as_bstr(),
-        || panic!("an existing daemon must not invoke the startup callback"),
-        client::daemon::Options::default(),
+        token.as_bstr(),
+        || panic!("an existing mock daemon must not trigger startup"),
+        client::daemon::Options {
+            socket_timeout: timeout,
+            connect_retries: 0,
+            ..Default::default()
+        },
     );
-    server.join().expect("the mock daemon must finish without panicking")?;
+    let elapsed = started.elapsed();
+    let _ = stop.send(());
+    server
+        .join()
+        .expect("the bounded mock daemon must finish without panicking")?;
+    Ok((result, elapsed))
+}
+
+#[test]
+#[cfg(unix)]
+fn blocking_daemon_bounds_stalled_and_fragmented_reads_and_blocked_writes() -> TestResult {
+    use std::{io, time::Duration};
+
+    for (fragmented, unread_request) in [(false, false), (true, false), (false, true)] {
+        let (result, elapsed) = query_with_delayed_io(Some(Duration::from_millis(200)), fragmented, unread_request)?;
+        let error = result.expect_err("one deadline bounds the exchange even if individual fragments make progress");
+        assert_eq!(
+            error
+                .downcast_any_ref::<io::Error>()
+                .expect("the query preserves its I/O error")
+                .kind(),
+            io::ErrorKind::TimedOut,
+            "stalled reads, fragmented replies, and undrained writes all report a timeout"
+        );
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "the deadline, not mock cleanup, releases the client"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn blocking_daemon_can_disable_the_deadline_or_expire_it_immediately() -> TestResult {
+    use std::{io, time::Duration};
+
+    let (response, elapsed) = query_with_delayed_io(None, true, false)?;
     assert_eq!(
-        response?, b"token\x00a\x00b",
-        "packet boundaries preserve the binary reply"
+        response?, b"012345678901234567890123",
+        "None permits a slow successful reply"
+    );
+    assert!(
+        elapsed > Duration::from_millis(200),
+        "the reply outlives the enabled test timeout"
+    );
+    let (result, elapsed) = query_with_delayed_io(Some(Duration::ZERO), false, false)?;
+    assert_eq!(
+        result
+            .expect_err("zero must expire immediately")
+            .downcast_any_ref::<io::Error>()
+            .expect("the query preserves the timeout error")
+            .kind(),
+        io::ErrorKind::TimedOut,
+        "zero disables waiting, not the deadline"
+    );
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "zero never waits for the daemon's reply"
     );
     Ok(())
 }
@@ -251,6 +408,99 @@ fn hook_negotiates_versions_and_preserves_arguments_context_and_binary_output() 
         )?,
         Some((Version::Two, b"next-token\x00path\x00".to_vec())),
         "the client returns the raw version-two response for its caller to interpret"
+    );
+    Ok(())
+}
+
+#[cfg(feature = "async-tokio")]
+#[tokio::test(flavor = "current_thread")]
+async fn async_hooks_share_negotiation_and_binary_arguments() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let directory = gix_testtools::tempfile::tempdir()?;
+    let command = br#"query() {
+        test "$1" = 1 || exit 5
+        printf '%s\0%s\0' "$1" "$2"
+    }
+    query "$@""#
+        .as_bstr();
+    let previous = b"previous token '$;".as_bstr();
+    let context = gix_command::Context {
+        worktree_dir: Some(directory.path().to_owned()),
+        ..Default::default()
+    };
+    assert_eq!(
+        client::hook::query_async(command, previous, None, context.clone()).await?,
+        Some((client::hook::Version::One, b"1\0previous token '$;\0".to_vec())),
+        "async negotiation preserves literal checkpoint arguments"
+    );
+    assert!(
+        client::hook::query_async(command, previous, Some(client::hook::Version::Two), context)
+            .await?
+            .is_none(),
+        "explicit protocols do not fall back"
+    );
+    Ok(())
+}
+
+#[cfg(all(feature = "async-tokio", unix))]
+#[tokio::test(flavor = "current_thread")]
+async fn async_daemon_exchange_deadline_does_not_block_the_executor() -> TestResult {
+    use std::{
+        io,
+        time::{Duration, Instant},
+    };
+    let directory = gix_testtools::tempfile::tempdir_in("/tmp")?;
+    let endpoint = directory.path().join("socket");
+    let error = client::daemon::query_async(
+        &endpoint,
+        b"token".as_bstr(),
+        async || panic!("an immediate deadline must not invoke startup even if the endpoint is missing"),
+        client::daemon::Options {
+            socket_timeout: Some(Duration::ZERO),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect_err("zero expires before a connection attempt");
+    assert_eq!(
+        error
+            .downcast_any_ref::<io::Error>()
+            .expect("the immediate timeout retains its I/O error")
+            .kind(),
+        io::ErrorKind::TimedOut,
+        "zero has the same meaning in blocking and async clients"
+    );
+    let listener = tokio::net::UnixListener::bind(&endpoint)?;
+    let server = tokio::spawn(async move {
+        let (_stream, _) = listener.accept().await?;
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        Ok::<_, io::Error>(())
+    });
+    let now = Instant::now();
+    let result = client::daemon::query_async(
+        &endpoint,
+        b"token".as_bstr(),
+        async || panic!("the endpoint is present"),
+        client::daemon::Options {
+            socket_timeout: Some(Duration::from_millis(20)),
+            ..Default::default()
+        },
+    )
+    .await;
+    server.abort();
+    let error = result.expect_err("a daemon that sends no response must time out");
+    assert_eq!(
+        error
+            .downcast_any_ref::<io::Error>()
+            .expect("the timeout retains its I/O error")
+            .kind(),
+        io::ErrorKind::TimedOut
+    );
+    assert!(
+        now.elapsed() < Duration::from_secs(1),
+        "the current-thread runtime runs the deadline timer while waiting for I/O"
     );
     Ok(())
 }

@@ -8,6 +8,20 @@
 #[forbid(unsafe_code)]
 pub mod client;
 
+#[cfg(any(windows, test))]
+mod pipe;
+mod protocol;
+
+#[cfg(feature = "async-tokio")]
+mod asynchronous;
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod named_pipe;
+
+#[cfg(any(windows, test))]
+mod windows_path;
+
 /// Select native IPC endpoints and serve Git's filesystem monitor protocol with application-owned watches and shutdown.
 #[cfg(feature = "server")]
 pub mod server;
