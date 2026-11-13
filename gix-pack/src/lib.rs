@@ -117,6 +117,12 @@ fn exact_vec<T>(capacity: usize) -> Vec<T> {
     v
 }
 
+/// Many small objects can require larger metadata buffers than any one decoded object.
+fn metadata_alloc_limit(alloc_limit_bytes: Option<usize>) -> Option<usize> {
+    // shortcut: a fixed multiplier still caps object count; use a separate budget if independent bounds are needed.
+    alloc_limit_bytes.map(|limit| limit.saturating_mul(64))
+}
+
 fn try_exact_vec<T>(capacity: usize, alloc_limit_bytes: Option<usize>) -> Result<Vec<T>> {
     use gix_error::{OptionExt, ResourceExhaustionKind, ResultExt, bail, resource_exhaustion};
 

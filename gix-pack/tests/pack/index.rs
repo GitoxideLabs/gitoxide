@@ -322,7 +322,7 @@ fn tree_from_offsets_respects_alloc_limit() -> gix_testtools::TestResult {
         let offsets = index.sorted_offsets();
         let item_bytes = std::mem::size_of::<gix_pack::cache::delta::tree::Item<u64>>();
         let allocation_bytes = offsets.len() * item_bytes;
-        for limit in [Some(0), Some(item_bytes - 1), Some(allocation_bytes), None] {
+        for limit in [Some(0), Some(allocation_bytes.div_ceil(64)), None] {
             let result = gix_pack::cache::delta::Tree::from_offsets_in_pack(
                 &fixture_path(pack_path),
                 offsets.iter().copied(),
@@ -337,7 +337,7 @@ fn tree_from_offsets_respects_alloc_limit() -> gix_testtools::TestResult {
                 gix_hash::Kind::Sha1,
                 limit,
             );
-            if limit.is_some_and(|limit| limit < item_bytes) {
+            if limit == Some(0) {
                 let err = result.err().expect("tree storage exceeds the configured limit");
                 assert!(
                     err.classify().any(|classification| {

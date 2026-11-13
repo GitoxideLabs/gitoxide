@@ -22,7 +22,7 @@ pub struct Tree<T> {
     /// Child indices waiting for an in-pack object with the given id to be resolved.
     ref_child_indices: tree::RefDeltaChildren,
     /// Maximum size of each root or child item allocation.
-    alloc_limit_bytes: Option<usize>,
+    item_alloc_limit_bytes: Option<usize>,
 }
 
 ///

@@ -17,8 +17,10 @@ pub struct Options {
     pub thread_limit: Option<usize>,
     /// The kinds of safety checks to perform.
     pub check: crate::index::traverse::SafetyCheck,
-    /// If `Some`, rejects individual allocations above the given number of bytes for index metadata, delta-tree item
-    /// storage, decoded objects and delta result buffers. `Some(0)` rejects all non-empty allocations covered by this limit.
+    /// Limit decoded-object and delta buffers to this many bytes. Sorted index entries and each delta-tree item buffer
+    /// may use up to 64 times this limit to accommodate many small objects; speculative tree preallocation stays within it.
+    /// This is a defensive per-buffer heuristic, not a total memory budget; callers should tune it for their input.
+    /// `None` disables the limit; `Some(0)` rejects all non-empty allocations covered by it.
     pub alloc_limit_bytes: Option<usize>,
 }
 

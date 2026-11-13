@@ -22,9 +22,10 @@ impl<T> Tree<T> {
     /// * `resolve_in_pack_id(&gix_hash::oid) -> Result<Option<data::Offset>>` takes an object ID and tries to resolve it to an offset
     ///   within this pack. `Err` aborts the operation with the resolver's error unchanged; `Ok(None)` aborts with a missing-base error.
     ///   The callback is only called for ref-deltas, which refer to their base by object ID instead of an encoded offset.
-    /// * `alloc_limit_bytes` limits the requested total size of each of the two item buffers (roots and children)
-    ///   independently, including during growth, rather than just the added bytes. Together these buffers can request
-    ///   up to twice the limit. This is not a total tree-memory budget: child-index lists, bookkeeping, allocations
+    /// * `alloc_limit_bytes` caps speculative preallocation. Each of the two item buffers (roots and children) may grow
+    ///   independently to 64 times this limit to accommodate many small objects. Growth checks the requested total
+    ///   buffer size, rather than just the added bytes. This heuristic should be tuned by callers for their input.
+    ///   This is not a total tree-memory budget: child-index lists, bookkeeping, allocations
     ///   owned by `T`, and allocator overhead are not counted, and reallocation can temporarily retain old buffers.
     ///   `None` disables the limit.
     ///
