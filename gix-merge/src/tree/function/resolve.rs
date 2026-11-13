@@ -427,7 +427,14 @@ pub fn tree<'objects>(
                                 } else {
                                     Swapped
                                 };
-                                if let Some(merged_mode) = merge_modes(*our_mode, *their_mode) {
+                                let previous_is_compatible = merge_modes(*our_mode, *previous_entry_mode).is_some()
+                                    && merge_modes(*their_mode, *previous_entry_mode).is_some();
+                                let merged_mode = if previous_is_compatible {
+                                    merge_modes_prev(*our_mode, *their_mode, *previous_entry_mode)
+                                } else {
+                                    merge_modes(*our_mode, *their_mode)
+                                };
+                                if let Some(merged_mode) = merged_mode {
                                     let their_rewritten_location = possibly_rewritten_location(
                                         pick(side, our_tree, their_tree),
                                         their_location.as_ref(),
