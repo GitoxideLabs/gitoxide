@@ -363,6 +363,8 @@ impl TowerPolicy<async_impl::body::Body, crate::Error> for TowerRedirectPolicy {
                 if let Some(previous_url) = self.urls.last() {
                     if let Some(v) = make_referer(&next_url, previous_url) {
                         req.headers_mut().insert(REFERER, v);
+                    } else {
+                        req.headers_mut().remove(REFERER);
                     }
                 }
             }
@@ -372,6 +374,80 @@ impl TowerPolicy<async_impl::body::Body, crate::Error> for TowerRedirectPolicy {
     // This must be implemented to make 307 and 308 redirects work
     fn clone_body(&self, body: &async_impl::body::Body) -> Option<async_impl::body::Body> {
         body.try_clone()
+    }
+}
+
+#[cfg(test)]
+#[tokio::test]
+async fn test_redirect_referer_on_https_downgrade() {
+    use http::header::LOCATION;
+    use tower::ServiceExt;
+    use tower_http::follow_redirect::FollowRedirect;
+
+    let initial_url = "https://example.com/private?token=secret";
+    let redirect_url = "https://example.com/redirect";
+
+    for (destination, expected_referer) in [
+        ("http://example.com/end", None),
+        ("https://example.com/end", Some(redirect_url)),
+    ] {
+        for referer in [true, false] {
+            for initial_referer in [None, Some("https://source.example/page")] {
+                let service = tower::service_fn(
+                    move |req: http::Request<async_impl::body::Body>| async move {
+                        let (expected, location) = match req.uri().path() {
+                            "/private" => (initial_referer, Some(redirect_url)),
+                            "/redirect" => (
+                                if referer {
+                                    Some(initial_url)
+                                } else {
+                                    initial_referer
+                                },
+                                Some(destination),
+                            ),
+                            "/end" => (
+                                if referer {
+                                    expected_referer
+                                } else {
+                                    initial_referer
+                                },
+                                None,
+                            ),
+                            _ => unreachable!(),
+                        };
+                        assert_eq!(
+                            req.headers().get(REFERER).map(|v| v.to_str().unwrap()),
+                            expected,
+                        );
+
+                        let mut res = http::Response::new(async_impl::body::Body::empty());
+                        if let Some(location) = location {
+                            *res.status_mut() = StatusCode::FOUND;
+                            res.headers_mut()
+                                .insert(LOCATION, HeaderValue::from_static(location));
+                        }
+                        Ok::<_, crate::Error>(res)
+                    },
+                );
+                let mut policy = TowerRedirectPolicy::new(Policy::default(), Arc::new(Vec::new()));
+                policy.with_referer(referer);
+
+                let mut req = http::Request::builder()
+                    .uri(initial_url)
+                    .body(async_impl::body::Body::empty())
+                    .unwrap();
+                if let Some(value) = initial_referer {
+                    req.headers_mut()
+                        .insert(REFERER, HeaderValue::from_static(value));
+                }
+
+                let res = FollowRedirect::with_policy(service, policy)
+                    .oneshot(req)
+                    .await
+                    .unwrap();
+                assert_eq!(res.status(), StatusCode::OK);
+            }
+        }
     }
 }
 
