@@ -47,5 +47,5 @@ fn to_string() {
     let err = Events::from_str("[core").expect_err("the section header is unterminated");
     insta::assert_debug_snapshot!(format_args!("{err}"), "an unterminated header identifies the section parser", @"Got an unexpected token on line 1 while trying to parse a section header: '[core'");
     let err = Events::from_str("[a]\n\tb \u{8}\n").expect_err("backspace is not trailing whitespace");
-    insta::assert_debug_snapshot!(format_args!("{err}"), "Git rejects backspace as trailing whitespace after an implicit boolean", @"Got an unexpected token on line 2 while trying to parse a name: '\u{8}\n'");
+    insta::assert_debug_snapshot!(format_args!("{err}"), "Git rejects backspace as trailing whitespace after an implicit boolean", @"Got an unexpected token on line 2 while trying to parse a value: '\u{8}\n'");
 }

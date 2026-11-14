@@ -74,23 +74,12 @@ fn fuzzed_stackoverflow() {
 }
 
 #[test]
-fn fuzzed_long_runtime() -> TestResult {
+fn fuzzed_long_runtime_is_invalid() -> TestResult {
     let config = std::fs::read(fixture_path("fuzzed/long-parsetime.config"))?;
-    let file = File::from_bytes_no_includes(&config, gix_config::file::Metadata::default(), Default::default())?;
-    assert_eq!(file.sections().count(), 52);
-    assert!(file.to_bstring().len() < 1200000);
-    File::from_bytes_no_includes(
-        &file.to_bstring(),
-        gix_config::file::Metadata::default(),
-        Default::default(),
-    )?;
-
-    let mut mutated_file = file.clone();
-    mutated_file.append(file)?;
-    assert_eq!(mutated_file.sections().count(), 52 * 2);
-    let serialized = mutated_file.to_bstring();
-    assert!(serialized.len() < 2400000);
-    File::from_bytes_no_includes(&serialized, gix_config::file::Metadata::default(), Default::default())?;
+    assert!(
+        File::from_bytes_no_includes(&config, gix_config::file::Metadata::default(), Default::default()).is_err(),
+        "Git rejects this fuzz input, which contains multiple implicit keys on one line"
+    );
     Ok(())
 }
 

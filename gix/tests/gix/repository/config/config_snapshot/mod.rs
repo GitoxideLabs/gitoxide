@@ -226,6 +226,16 @@ fn apply_cli_overrides() -> TestResult {
         Some(true),
         "values without key-sep are true"
     );
+    let reparsed = gix_config::File::from_bytes_no_includes(
+        &config.plumbing().to_bstring(),
+        gix_config::file::Metadata::default(),
+        Default::default(),
+    )?;
+    assert_eq!(
+        reparsed.boolean("implicit.bool-true")?,
+        Some(true),
+        "commented CLI overrides remain valid config when serialized"
+    );
 
     Ok(())
 }

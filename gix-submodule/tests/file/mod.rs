@@ -5,6 +5,47 @@ fn submodule(bytes: &str) -> gix_submodule::File {
 }
 
 #[test]
+fn rejects_settings_from_lines_git_rejects() -> TestResult {
+    for invalid in [
+        "x url = ../evil",
+        r#"[submodule "module"] x url = ../evil"#,
+        "br#anch = main",
+        "br #comment",
+        "br;comment",
+    ] {
+        let input = format!(
+            r#"[submodule "module"]
+                path = module
+                url = ../good
+                {invalid}
+            "#,
+        );
+        assert!(
+            gix_submodule::File::from_bytes(input.as_bytes(), None, &Default::default()).is_err(),
+            "invalid .gitmodules line {invalid:?} must prevent exposing any submodule settings"
+        );
+    }
+
+    for input in [
+        r#"[submodule "module"] url = ../good
+            path = module
+        "#,
+        r#"[submodule "module"] shallow
+            path = module
+            url = ../good
+        "#,
+    ] {
+        let modules = gix_submodule::File::from_bytes(input.as_bytes(), None, &Default::default())?;
+        assert_eq!(
+            modules.url("module".into())?.to_bstring(),
+            "../good",
+            "Git-compatible header-line settings and implicit booleans retain their URL"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn legacy_names_can_be_used_for_lookup() -> TestResult {
     let mut modules = submodule(
         r#"

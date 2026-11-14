@@ -55,8 +55,8 @@ impl SectionMut<'_> {
 
     /// Adds an entry to the end of this section name `value_name` and `value`. If `value` is `None`, no equal sign will be written leaving
     /// just the key. This is useful for boolean values which are true if merely the key exists.
-    /// `comment` has to be the text to put right after the value and behind a `#` character. Note that newlines are silently transformed
-    /// into spaces.
+    /// `comment` follows the value behind a `#` character, or goes on the next line for an implicit value.
+    /// Newlines in the comment are silently transformed into spaces.
     pub fn push_with_comment(
         &mut self,
         value_name: impl AsRef<str>,
@@ -91,6 +91,9 @@ impl SectionMut<'_> {
             None => events.push(Event::Value(Span::append(self.backing, b"")?)),
         }
         if let Some(comment) = comment {
+            if value.is_none() {
+                events.push(Event::Newline(Span::append(self.backing, &self.newline)?));
+            }
             events.push(Event::Whitespace(Span::append(self.backing, b" ")?));
             let mut c = Vec::with_capacity(comment.len());
             let mut bytes = comment.iter().peekable();
