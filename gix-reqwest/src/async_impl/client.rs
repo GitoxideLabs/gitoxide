@@ -1091,7 +1091,8 @@ impl ClientBuilder {
                 #[cfg(feature = "http3")]
                 h3_client: match h3_connector {
                     Some(h3_connector) => {
-                        let h3_service = H3Client::new(h3_connector, config.pool_idle_timeout);
+                        let h3_service =
+                            H3Client::new(h3_connector, config.pool_idle_timeout, proxies.clone());
                         let svc = tower::retry::Retry::new(retry_policy, h3_service);
                         #[cfg(feature = "cookies")]
                         let svc = CookieService::new(svc, config.cookie_store);
