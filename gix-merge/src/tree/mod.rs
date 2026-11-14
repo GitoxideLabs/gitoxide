@@ -235,30 +235,13 @@ impl Conflict {
                 )
             }
         };
-        match how.tree_merge {
-            treat_as_unresolved::TreeMerge::Undecidable => {
-                self.resolution.is_err() || self.content_merge().is_some_and(|info| content_merge_unresolved(&info))
+        match &self.resolution {
+            Err(_) => true,
+            Ok(Resolution::OursModifiedTheirsModifiedThenAncestor) => {
+                how.content_merge == treat_as_unresolved::ContentMerge::ForcedResolution
             }
-            treat_as_unresolved::TreeMerge::EvasiveRenames | treat_as_unresolved::TreeMerge::ForcedResolution => {
-                match &self.resolution {
-                    Ok(success) => match success {
-                        Resolution::SourceLocationAffectedByRename { .. } => false,
-                        Resolution::Forced(_) => {
-                            how.tree_merge == treat_as_unresolved::TreeMerge::ForcedResolution
-                                || self
-                                    .content_merge()
-                                    .is_some_and(|merged_blob| content_merge_unresolved(&merged_blob))
-                        }
-                        Resolution::OursModifiedTheirsRenamedAndChangedThenRename { merged_blob, .. } => {
-                            merged_blob.as_ref().is_some_and(content_merge_unresolved)
-                        }
-                        Resolution::OursModifiedTheirsModifiedThenBlobContentMerge { merged_blob } => {
-                            content_merge_unresolved(merged_blob)
-                        }
-                    },
-                    Err(_failure) => true,
-                }
-            }
+            Ok(Resolution::Forced(_)) if how.tree_merge == treat_as_unresolved::TreeMerge::ForcedResolution => true,
+            Ok(_) => self.content_merge().is_some_and(|info| content_merge_unresolved(&info)),
         }
     }
 
@@ -295,6 +278,7 @@ impl Conflict {
     pub fn content_merge(&self) -> Option<ContentMerge> {
         fn failure_merged_blob(failure: &ResolutionFailure) -> Option<ContentMerge> {
             match failure {
+                ResolutionFailure::ModeConflict { merged_blob } => Some(*merged_blob),
                 ResolutionFailure::OursRenamedTheirsRenamedDifferently { merged_blob }
                 | ResolutionFailure::DirectoryRename { merged_blob, .. } => *merged_blob,
                 ResolutionFailure::Unknown
@@ -315,7 +299,8 @@ impl Conflict {
         match &self.resolution {
             Ok(success) => match success {
                 Resolution::Forced(failure) => failure_merged_blob(failure),
-                Resolution::SourceLocationAffectedByRename { .. } => None,
+                Resolution::SourceLocationAffectedByRename { .. }
+                | Resolution::OursModifiedTheirsModifiedThenAncestor => None,
                 Resolution::OursModifiedTheirsRenamedAndChangedThenRename { merged_blob, .. } => *merged_blob,
                 Resolution::OursModifiedTheirsModifiedThenBlobContentMerge { merged_blob } => Some(*merged_blob),
             },
@@ -341,7 +326,7 @@ pub enum Resolution {
     /// We moved the changed blob from *ours* to its new location, and merged it successfully.
     /// If this is a `copy`, the source of the copy was set to be the changed blob as well so both match.
     OursModifiedTheirsRenamedAndChangedThenRename {
-        /// If one side added the executable bit, we always add it in the merged result.
+        /// The merged mode, retaining an executable-bit change from either side relative to the ancestor.
         merged_mode: Option<gix_object::tree::EntryMode>,
         /// If `Some(…)`, the content of the involved blob had to be merged.
         merged_blob: Option<ContentMerge>,
@@ -357,6 +342,11 @@ pub enum Resolution {
         /// The outcome of the content merge.
         merged_blob: ContentMerge,
     },
+    /// Both sides replaced the ancestor with conflicting symlinks, and the
+    /// [symlink conflict policy](Options::symlink_conflicts) restored the whole ancestor entry.
+    /// Its mode and object ID are available in [`Conflict::entries()`] at index 0; it need not be a blob.
+    /// This counts as a forced content resolution for [`Conflict::is_unresolved()`].
+    OursModifiedTheirsModifiedThenAncestor,
     /// This is a resolution failure was forcefully turned into a usable resolution, i.e. [making a choice](ResolveWith)
     /// is turned into a valid resolution.
     Forced(ResolutionFailure),
@@ -365,6 +355,12 @@ pub enum Resolution {
 /// Describes of a conflict involving *our* change and *their* failed to be resolved.
 #[derive(Debug, Clone)]
 pub enum ResolutionFailure {
+    /// Both sides replaced a non-blob ancestor with regular files whose executable bits differ.
+    /// The provisional tree uses the current side's mode, independently of the content merge.
+    ModeConflict {
+        /// The content merge, which may be clean even though the modes conflict.
+        merged_blob: ContentMerge,
+    },
     /// A new path was relocated through a directory renamed on the other side, but its location needs confirmation.
     DirectoryRename {
         /// The suggested repository-relative path, used in the provisional tree and unmerged index.
@@ -428,9 +424,8 @@ pub enum ResolutionFailure {
     Unknown,
 }
 
-/// Information about a blob content merge for use in a [`Resolution`].
-/// Note that content merges always count as success to avoid duplication of cases, which forces callers
-/// to check for the [`resolution`](Self::resolution) field.
+/// Information about a blob content merge for use in a [`Resolution`] or [`ResolutionFailure`].
+/// Check [`resolution`](Self::resolution) for content conflicts; a clean content merge can still have a tree conflict.
 #[derive(Debug, Copy, Clone)]
 pub struct ContentMerge {
     /// The fully merged blob.
@@ -576,9 +571,8 @@ pub mod apply_index_entries {
                             final_location.as_ref().map(|p| p.as_bstr()),
                             conflict.changes_in_resolution().1.location(),
                         ),
-                        Resolution::OursModifiedTheirsModifiedThenBlobContentMerge { .. } => {
-                            (None, conflict.ours.location())
-                        }
+                        Resolution::OursModifiedTheirsModifiedThenBlobContentMerge { .. }
+                        | Resolution::OursModifiedTheirsModifiedThenAncestor => (None, conflict.ours.location()),
                     },
                     Err(failure) => match failure {
                         ResolutionFailure::DirectoryRename { final_location, .. } => {
@@ -604,6 +598,7 @@ pub mod apply_index_entries {
                             (Some(destination), destination)
                         }
                         ResolutionFailure::OursModifiedTheirsRenamedTypeMismatch
+                        | ResolutionFailure::ModeConflict { .. }
                         | ResolutionFailure::SubmoduleMerge
                         | ResolutionFailure::SubmoduleAddAdd
                         | ResolutionFailure::OursRenamedTheirsRenamedToSameLocation

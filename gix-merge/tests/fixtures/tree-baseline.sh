@@ -2122,6 +2122,120 @@ git init type-change-to-symlink
   git commit -m "new link to point to 'b'"
 )
 
+# The ancestor `a` is executable. `A` renames it to `b` and removes the
+# executable bit, while `B` only edits its content and keeps the bit.
+# Only `A` changed the mode relative to the ancestor, so the merged `b` must
+# not be executable. Comparing just the two sides would restore the bit.
+git init rename-removes-exe-bit-vs-modification
+(cd rename-removes-exe-bit-vs-modification
+  git config core.filemode false
+  write_lines 1 2 3 4 5 >a
+  chmod +x a
+  git add --chmod=+x a && git commit -m "original executable 'a'"
+
+  git branch A
+  git branch B
+
+  git checkout A
+  git mv a b
+  chmod -x b
+  git update-index --chmod=-x b
+  git commit -m "rename 'a' to 'b' and remove the executable bit"
+
+  git checkout B
+  write_lines 1 2 3 4 5 6 >a
+  git commit -am "modify 'a', keeping the executable bit"
+
+  git checkout -b B-renamed
+  git mv a b
+  git commit -m "also rename the edited file to 'b'"
+)
+
+# The ancestor `a` is a symlink whose target bytes are `content`. Both sides
+# replace it with a regular file, but `A` writes exactly the ancestor's target
+# bytes, so its blob id equals the ancestor's. Only `B` changed the content,
+# so `B`'s file wins without an add/add conflict.
+git init symlink-to-files-one-keeps-ancestor-bytes
+(cd symlink-to-files-one-keeps-ancestor-bytes
+  ln -s content a
+  git add a && git commit -m "original symlink 'a'"
+
+  git branch A
+  git branch B
+
+  git checkout A
+  rm a && printf content >a
+  git add a && git commit -m "replace symlink with a file holding the same bytes"
+
+  git checkout B
+  rm a && write_lines other >a
+  git add a && git commit -m "replace symlink with a file holding other bytes"
+)
+
+# Replacing a symlink with files of differing executable modes conflicts even
+# when content identity makes the content choice trivial. Git keeps our mode.
+git init symlink-to-files-with-mode-conflict
+(cd symlink-to-files-with-mode-conflict
+  git config core.filemode false
+  ln -s old a
+  git add a && git commit -m "original symlink 'a'"
+  git branch base
+
+  for mode in executable regular; do
+    for content in unchanged changed; do
+      git checkout -b "$mode-$content" base
+      rm a
+      if test "$content" = unchanged; then
+        printf old >a
+      else
+        write_lines "$mode" >a
+      fi
+      if test "$mode" = executable; then
+        git add --chmod=+x a
+      else
+        git add --chmod=-x a
+      fi
+      git commit -m "replace symlink with $mode file with $content content"
+    done
+  done
+
+  git checkout -b regular-same-content base
+  rm a && write_lines executable >a
+  git add --chmod=-x a
+  git commit -m "keep the changed executable's content, but remove the executable bit"
+
+  # Forced tree resolutions restore the selected entry as a whole.
+  for executable_side in executable-unchanged executable-changed; do
+    for regular_side in regular-unchanged regular-changed regular-same-content; do
+      git rev-parse base^{tree} >".git/resolve-$executable_side-$regular_side-with-ancestor.tree"
+      git rev-parse base^{tree} >".git/resolve-$regular_side-$executable_side-with-ancestor.tree"
+      git rev-parse "$executable_side^{tree}" >".git/resolve-$executable_side-$regular_side-with-ours.tree"
+      git rev-parse "$regular_side^{tree}" >".git/resolve-$regular_side-$executable_side-with-ours.tree"
+    done
+  done
+)
+
+# The ancestor `a` is a regular file holding `target1`. Both sides replace it
+# with a symlink, but `A` points to `target1`, so its blob id equals the
+# ancestor's. Only `B` changed the target, so `B`'s symlink wins without a
+# symlink conflict.
+git init file-to-symlinks-one-keeps-ancestor-bytes
+(cd file-to-symlinks-one-keeps-ancestor-bytes
+  printf target1 >a
+  git add a && git commit -m "original file 'a'"
+
+  git branch A
+  git branch B
+
+  git checkout A
+  rm a && ln -s target1 a
+  git add a && git commit -m "replace file with a symlink to the same bytes"
+
+  git checkout B
+  rm a && ln -s target2 a
+  git add a && git commit -m "replace file with a symlink to 'target2'"
+)
+
 
 
 baseline non-tree-to-tree A-B A B
@@ -2235,6 +2349,15 @@ baseline identical-additions-with-different-relations A-B A B
 baseline identical-deletions-with-different-relations A-B A B
 baseline identical-rewrites-with-different-relations A-B A B
 baseline type-change-to-symlink A-B A B
+baseline rename-removes-exe-bit-vs-modification A-B A B
+baseline rename-removes-exe-bit-vs-modification both-rename A B-renamed
+baseline symlink-to-files-one-keeps-ancestor-bytes A-B A B
+baseline symlink-to-files-with-mode-conflict executable-keeps-bytes executable-unchanged regular-changed
+baseline symlink-to-files-with-mode-conflict regular-keeps-bytes executable-changed regular-unchanged
+baseline symlink-to-files-with-mode-conflict both-keep-bytes executable-unchanged regular-unchanged
+baseline symlink-to-files-with-mode-conflict both-change-bytes executable-changed regular-changed
+baseline symlink-to-files-with-mode-conflict same-changed-bytes executable-changed regular-same-content
+baseline file-to-symlinks-one-keeps-ancestor-bytes A-B A B
 
 ##
 ## Only once the tree-merges were performed can we refer to their objects
