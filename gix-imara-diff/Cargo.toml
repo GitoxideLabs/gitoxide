@@ -1,5 +1,6 @@
 # Modified for gitoxide from the upstream imara-diff crate.
 # Upstream source: git cat-file -p 32d1e45d3df061e6ccba6db7fdce92db29e345d8:Cargo.toml
+lints.workspace = true
 
 [package]
 name = "gix-imara-diff"
@@ -31,7 +32,3 @@ gix-object = { version = "^0.66.1", path = "../gix-object", features = ["sha1"] 
 gix-testtools = { path = "../tests/tools", default-features = false }
 cov-mark = "2.1.0"
 expect-test = "1.4.0"
-
-# [[bench]]
-# name = "git_repo"
-# harness = false

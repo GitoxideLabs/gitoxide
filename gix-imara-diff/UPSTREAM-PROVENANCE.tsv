@@ -16,7 +16,7 @@ src/lib.rs	upstream	modified	6a6eea650debc7897e6a58c9ced5b4c3454be711	git cat-fi
 src/myers.rs	upstream	modified	2ace530c0e282436c1b639e5ce89bcf3a1a6b901	git cat-file -p 32d1e45d3df061e6ccba6db7fdce92db29e345d8:src/myers.rs
 src/myers/middle_snake.rs	upstream	modified	a5cb5197c948821f5da2d377bdc729152745f9d4	git cat-file -p 32d1e45d3df061e6ccba6db7fdce92db29e345d8:src/myers/middle_snake.rs
 src/myers/preprocess.rs	upstream	modified	2ef5debd763f5859bc73ad0c54b6d558b1db44ec	git cat-file -p 32d1e45d3df061e6ccba6db7fdce92db29e345d8:src/myers/preprocess.rs
-src/myers/slice.rs	upstream	unchanged	f266fa7e17f07eb4a8c6d61fa942607a4beca52b	git cat-file -p 32d1e45d3df061e6ccba6db7fdce92db29e345d8:src/myers/slice.rs
+src/myers/slice.rs	upstream	modified	f266fa7e17f07eb4a8c6d61fa942607a4beca52b	git cat-file -p 32d1e45d3df061e6ccba6db7fdce92db29e345d8:src/myers/slice.rs
 src/postprocess.rs	upstream	modified	651b12b3a49019a6e2238d51c38d137c09f3ba27	git cat-file -p 32d1e45d3df061e6ccba6db7fdce92db29e345d8:src/postprocess.rs
 src/slider_heuristic.rs	upstream	modified	f3f85914427df381dcee42e44d406cb54663f91c	git cat-file -p 32d1e45d3df061e6ccba6db7fdce92db29e345d8:src/slider_heuristic.rs
 src/sources.rs	upstream	modified	e8ddcfc592b0a8b287b1b6923408ac91e79dbe50	git cat-file -p 32d1e45d3df061e6ccba6db7fdce92db29e345d8:src/sources.rs
