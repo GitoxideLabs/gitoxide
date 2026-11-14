@@ -553,3 +553,95 @@ async fn test_redirect_301_302_303_empty_payload_headers() {
         );
     }
 }
+
+#[tokio::test]
+async fn test_redirect_does_not_restore_sensitive_headers() -> Result<(), gix_reqwest::Error> {
+    use gix_reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+    use std::sync::{Arc, OnceLock};
+
+    fn assert_no_credentials(headers: &HeaderMap) {
+        for name in [
+            "authorization",
+            "cookie",
+            "cookie2",
+            "proxy-authorization",
+            "www-authenticate",
+        ] {
+            assert!(!headers.contains_key(name), "redirect restored {name}");
+        }
+    }
+
+    let original_addr = Arc::new(OnceLock::new());
+    let return_addr = original_addr.clone();
+    let destination = server::http(move |req| {
+        let return_addr = return_addr.clone();
+        async move {
+            assert_no_credentials(req.headers());
+            let next = match req.uri().path() {
+                "/first" => "/second".to_owned(),
+                "/second" => format!(
+                    "http://{}/return",
+                    return_addr.get().expect("original server is ready")
+                ),
+                path => panic!("unexpected redirect path {path}"),
+            };
+            http::Response::builder()
+                .status(302)
+                .header("location", next)
+                .body(Body::default())
+                .expect("valid redirect response")
+        }
+    });
+    let destination_addr = destination.addr();
+    let original = server::http(move |req| async move {
+        if req.uri().path() == "/start" {
+            for name in [
+                "authorization",
+                "cookie",
+                "cookie2",
+                "proxy-authorization",
+                "www-authenticate",
+            ] {
+                assert_eq!(req.headers()[name], "initial-secret", "initial {name}");
+            }
+            http::Response::builder()
+                .status(302)
+                .header("location", format!("http://{destination_addr}/first"))
+                .body(Body::default())
+                .expect("valid redirect response")
+        } else {
+            assert_eq!(req.uri().path(), "/return");
+            assert_no_credentials(req.headers());
+            http::Response::default()
+        }
+    });
+    original_addr
+        .set(original.addr())
+        .expect("address is initialized once");
+    let mut headers = HeaderMap::new();
+    for name in [
+        "authorization",
+        "cookie",
+        "cookie2",
+        "proxy-authorization",
+        "www-authenticate",
+    ] {
+        headers.insert(
+            HeaderName::from_static(name),
+            HeaderValue::from_static("initial-secret"),
+        );
+    }
+    let response = gix_reqwest::Client::builder()
+        .no_proxy()
+        .default_headers(headers)
+        .build()?
+        .get(format!("http://{}/start", original.addr()))
+        .send()
+        .await?;
+    assert_eq!(response.status(), gix_reqwest::StatusCode::OK);
+    assert_eq!(
+        response.url().as_str(),
+        format!("http://{}/return", original.addr())
+    );
+    Ok(())
+}
