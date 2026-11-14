@@ -120,6 +120,10 @@ Starting a second owner of an occupied endpoint fails, allowing applications to
 use the existing service. Restarting establishes a new token epoch and requires
 a fresh client baseline.
 
+On Windows, the named pipe uses Git's ACL, granting the `Everyone` group
+read/write access so local clients can connect across elevation levels.
+Remote named-pipe clients are rejected.
+
 Applications using `gix` can enable its `fsmonitor-server` feature and use:
 
 ```rust,ignore

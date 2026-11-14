@@ -196,8 +196,9 @@ pub(crate) struct Listener {
 impl Listener {
     pub fn bind(path: &Path) -> io::Result<Self> {
         let name = name(path)?;
-        // SAFETY: name is terminated and alive; default security belongs to the creating user.
-        // FIRST_PIPE_INSTANCE enforces singleton ownership, and remote clients are rejected.
+        let security = super::windows_security::Security::new().map_err(io::Error::other)?;
+        // SAFETY: name is terminated; security and its descriptor allocations remain alive for the
+        // call. FIRST_PIPE_INSTANCE enforces singleton ownership, and remote clients are rejected.
         let pipe = unsafe {
             CreateNamedPipeW(
                 name.as_ptr(),
@@ -207,7 +208,7 @@ impl Listener {
                 65536,
                 65536,
                 5000,
-                std::ptr::null(),
+                security.attributes(),
             )
         };
         if pipe == INVALID_HANDLE_VALUE {

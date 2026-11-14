@@ -6,9 +6,7 @@
 //! exchanges have one five-second deadline; native work abandoned at that deadline still owns
 //! its resources until completion. Source notifications, clients and shutdown wake the task directly.
 
-#[cfg(unix)]
-use super::transport;
-use super::{Context, Layout, Options, cookie};
+use super::{Context, Layout, Options, cookie, transport};
 use gix_error::{Result, ResultExt, bail, message};
 use gix_macros::keep as maybe_async;
 use gix_notify::{Batch, Budget, Fence, SynchronizeError, Watch, asynchronous::Watcher as NativeWatcher};
@@ -401,17 +399,10 @@ impl Listener {
         }
         #[cfg(windows)]
         {
-            use tokio::net::windows::named_pipe::ServerOptions;
             let name = crate::client::daemon::pipe_name(path)?;
-            let pipe = tokio::task::spawn_blocking(move || {
-                ServerOptions::new()
-                    .first_pipe_instance(true)
-                    .max_instances(1)
-                    .reject_remote_clients(true)
-                    .create(name)
-            })
-            .await
-            .map_err(io::Error::other)??;
+            let pipe = tokio::task::spawn_blocking(move || transport::create_async_pipe(&name))
+                .await
+                .map_err(io::Error::other)??;
             Ok(Self { pipe: Some(pipe) })
         }
     }
