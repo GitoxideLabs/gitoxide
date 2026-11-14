@@ -268,11 +268,16 @@ fn client_configuration_is_lazy_retained_on_restart_and_cached() -> gix_testtool
 
     use gix_transport::client::blocking_io::http::Http;
 
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _env = gix_testtools::Env::new().set("no_proxy", "*");
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-    let url = format!("http://{}/repo", listener.local_addr()?);
+    let addr = listener.local_addr()?;
+    let url = format!("http://{addr}/repo");
     let server = std::thread::spawn(move || -> std::io::Result<Vec<Vec<String>>> {
         let mut requests = Vec::new();
-        for _ in 0..2 {
+        for _ in 0..3 {
             let (stream, _) = listener.accept()?;
             stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
             let mut reader = std::io::BufReader::new(stream);
@@ -296,7 +301,7 @@ fn client_configuration_is_lazy_retained_on_restart_and_cached() -> gix_testtool
         })),
         ..Default::default()
     }));
-    let options = http::Options {
+    let mut options = http::Options {
         backend: Some(backend),
         extra_headers: vec!["configured-header: retained".into()],
         ..Default::default()
@@ -317,8 +322,17 @@ fn client_configuration_is_lazy_retained_on_restart_and_cached() -> gix_testtool
         format!("{err:?}").contains("client configuration failed once"),
         "client setup preserves the callback error: {err:?}"
     );
-    for _ in 0..2 {
-        let mut response = client.get(&url, &url, std::iter::empty::<&str>())?;
+    for index in 0..3 {
+        let url = if index == 2 {
+            assert_eq!(calls.load(Ordering::SeqCst), 2, "unchanged proxies reuse the client");
+            options.proxy = Some(format!("http://{addr}"));
+            options.no_proxy = Some(String::new());
+            client.configure(&options)?;
+            "http://git.invalid/repo"
+        } else {
+            &url
+        };
+        let mut response = client.get(url, url, std::iter::empty::<&str>())?;
         std::io::copy(&mut response.headers, &mut std::io::sink())?;
         let mut body = Vec::new();
         std::io::copy(&mut response.body, &mut body)?;
@@ -326,8 +340,8 @@ fn client_configuration_is_lazy_retained_on_restart_and_cached() -> gix_testtool
     }
     assert_eq!(
         calls.load(Ordering::SeqCst),
-        2,
-        "one failed setup and one shared successful client"
+        3,
+        "one failed setup, one shared client, and one rebuild for the configured proxy"
     );
     for request in server.join().expect("HTTP server thread completed")? {
         assert!(
