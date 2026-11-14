@@ -30,10 +30,12 @@ pub type ConfigureClientFn = dyn FnMut(gix_reqwest::blocking::ClientBuilder) -> 
 pub struct Options {
     /// Configure the client on the first request, before building and reusing it for subsequent requests.
     ///
-    /// The callback runs again if the worker is restarted after a failure or the effective proxy changes.
+    /// The callback runs again after client execution fails, after a worker restart, after a redirect chain changes
+    /// proxies, or when proxy routing or initial credentials change.
     /// Changes to this callback after initialization do not affect an existing client. The transport installs
     /// its proxy and redirect policies after this callback; use [`Self::configure_request`] for request-specific headers.
-    /// Sensitive headers are sent with empty values after cross-authority redirects to suppress client defaults.
+    /// Reqwest handles redirect headers and timeouts, including the client's Referer setting and total request timeout.
+    /// After an authority change, subsequent requests suppress sensitive client defaults and retain explicit request headers.
     pub configure_client: Option<Box<ConfigureClientFn>>,
     /// A function to configure the request that is about to be made.
     pub configure_request: Option<Box<ConfigureRequestFn>>,

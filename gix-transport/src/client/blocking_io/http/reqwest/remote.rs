@@ -58,8 +58,108 @@ fn basic_auth(username: &str, password: &str) -> header::HeaderValue {
 struct RedirectState {
     action: RedirectAction,
     tail: String,
-    next_url: Option<reqwest::Url>,
-    count: usize,
+    request: ProxyRequest,
+}
+
+#[derive(Clone, Default, Eq, PartialEq)]
+struct ProxyRouting {
+    proxy: Option<String>,
+    no_proxy: Option<String>,
+    http_proxy: Option<String>,
+    https_proxy: Option<String>,
+    all_proxy: Option<String>,
+    environment_no_proxy: Option<String>,
+}
+
+impl ProxyRouting {
+    fn capture(config: &http::Options) -> Self {
+        Self {
+            proxy: config.proxy.clone(),
+            no_proxy: config.no_proxy.clone(),
+            // Ignore uppercase HTTP_PROXY, which can originate in a CGI request.
+            http_proxy: std::env::var("http_proxy").ok().filter(|value| !value.is_empty()),
+            https_proxy: proxy_env("https_proxy", "HTTPS_PROXY"),
+            all_proxy: proxy_env("all_proxy", "ALL_PROXY"),
+            environment_no_proxy: proxy_env("no_proxy", "NO_PROXY"),
+        }
+    }
+}
+
+#[derive(Default)]
+struct ProxyRequest {
+    config: http::Options,
+    routing: ProxyRouting,
+    proxy: Option<gix_url::Url>,
+    proxy_changed: bool,
+    crossed_authority: bool,
+    credentials: Vec<(gix_url::Url, gix_credentials::protocol::Outcome)>,
+    selected_credentials: Option<usize>,
+}
+
+impl ProxyRequest {
+    fn prepare(&mut self, url: &reqwest::Url) -> Result {
+        self.proxy = None;
+        self.selected_credentials = None;
+        let no_proxy = self
+            .routing
+            .no_proxy
+            .as_deref()
+            .or(self.routing.environment_no_proxy.as_deref());
+        let mut proxy = if bypasses_proxy(no_proxy, url) {
+            None
+        } else {
+            proxy_url(&self.config, &self.routing, url.scheme())?
+        };
+        if let Some(proxy) = proxy.as_mut()
+            && let Some((action, authenticate)) = &self.config.proxy_authenticate
+            && (self.config.proxy.is_some() || proxy.user.is_some())
+        {
+            let index = match self.credentials.iter().position(|(declared, _)| declared == proxy) {
+                Some(index) => index,
+                None => {
+                    let action = if self.config.proxy.is_some() {
+                        action.clone()
+                    } else {
+                        gix_credentials::helper::Action::get_for_url(proxy.to_bstring())
+                    };
+                    let credentials = authenticate.lock().expect("no panics in other threads")(action)
+                        .or_raise(|| message("Could not obtain proxy credentials"))?
+                        .ok_or_else(|| message("The proxy credential helper returned no credentials").raise())?;
+                    self.credentials.push((proxy.clone(), credentials));
+                    self.credentials.len() - 1
+                }
+            };
+            match &self.credentials[index].1.credentials {
+                gix_sec::identity::Credentials::UsernamePassword { username, password, .. } => {
+                    proxy.user = Some(username.clone());
+                    proxy.password = Some(password.clone());
+                }
+                gix_sec::identity::Credentials::Encoded { .. } => {
+                    return Err(
+                        message("Pre-encoded credentials are not supported for proxy authentication")
+                            .unsupported_error(),
+                    );
+                }
+            }
+            self.selected_credentials = Some(index);
+        }
+        if let Some(proxy) = &proxy {
+            // Validate the authenticated URL too: custom proxy callbacks cannot report parse errors.
+            reqwest::Proxy::all(proxy.to_bstring().to_string()).or_raise(|| message("Invalid proxy URL"))?;
+        }
+        self.proxy = proxy;
+        Ok(())
+    }
+
+    fn finish_authentication(&self, failed: bool) -> Result {
+        if let Some(index) = self.selected_credentials
+            && let Some((_, authenticate)) = &self.config.proxy_authenticate
+        {
+            let next = self.credentials[index].1.next.clone();
+            authenticate.lock().expect("no panics in other threads")(if failed { next.erase() } else { next.store() })?;
+        }
+        Ok(())
+    }
 }
 
 impl Default for Remote {
@@ -70,10 +170,11 @@ impl Default for Remote {
         let redirected_base_url_shared_for_field = redirected_base_url_shared.clone();
         let handle = std::thread::spawn(gix_trace::in_thread(move || -> Result {
             let mut follow = None;
+            let mut suppress_client_defaults = false;
             let redirects = Arc::new(Mutex::new(RedirectState::default()));
 
             // Reuse connections until the effective proxy configuration (including credentials) changes.
-            let mut client: Option<(Option<gix_url::Url>, (reqwest::blocking::Client, bool))> = None;
+            let mut client: Option<(ProxyRouting, Option<gix_url::Url>, (reqwest::blocking::Client, bool))> = None;
             let create_builder = |config: &http::Options| -> Result<_> {
                 let mut customized = false;
                 let mut builder = reqwest::blocking::ClientBuilder::new()
@@ -92,12 +193,14 @@ impl Default for Remote {
                 }
                 Ok((builder, customized))
             };
-            let create_client = |(builder, customized): (reqwest::blocking::ClientBuilder, bool),
-                                 proxy: Option<&gix_url::Url>|
-             -> Result<_> {
+            let create_client = |(builder, customized): (reqwest::blocking::ClientBuilder, bool)| -> Result<_> {
                 // Keep Git's proxy and redirect policies authoritative after client customization.
-                let mut builder = builder
+                builder
                     .no_proxy()
+                    .proxy(reqwest::Proxy::custom({
+                        let redirects = redirects.clone();
+                        move |_| redirects.lock().request.proxy.as_ref().map(|proxy| proxy.to_bstring().to_string())
+                    }))
                     .redirect(reqwest::redirect::Policy::custom({
                         let redirects = redirects.clone();
                         move |attempt| {
@@ -106,16 +209,14 @@ impl Default for Remote {
                                 RedirectAction::Follow => {
                                     let curr_url = attempt.url();
                                     let prev_urls = attempt.previous();
-                                    // emulate default git behaviour which relies on curl default behaviour apparently.
+                                    // Emulate Git's curl redirect limit.
                                     const CURL_DEFAULT_REDIRS: usize = 50;
-                                    redirects.count += 1;
-                                    if redirects.count >= CURL_DEFAULT_REDIRS {
+                                    if prev_urls.len() >= CURL_DEFAULT_REDIRS {
                                         return attempt.error("too many redirects");
                                     }
                                     if let Some(prev_url) = prev_urls.last()
                                         && !redirect::scheme_is_safe(curr_url.as_str(), prev_url.as_str())
                                     {
-                                        // Don't follow insecure protocol redirects, particularly https-to-http downgrades.
                                         return attempt.stop();
                                     }
                                     if prev_urls.last().is_some_and(|prev_url| authority_changed(curr_url, prev_url))
@@ -127,10 +228,17 @@ impl Default for Remote {
                                             "redirect url {curr_url:?} does not end with expected request suffix {redirect_tail:?}",
                                         ));
                                     }
-                                    // Execute each hop ourselves: reqwest otherwise strips proxy credentials on
-                                    // authority changes without adding them again for the selected proxy.
-                                    redirects.next_url = Some(curr_url.clone());
-                                    attempt.stop()
+                                    let previous_proxy = redirects.request.proxy.clone();
+                                    if let Err(err) = redirects.request.finish_authentication(false)
+                                        .and_then(|()| redirects.request.prepare(curr_url))
+                                    {
+                                        return attempt.error(std::io::Error::other(err));
+                                    }
+                                    redirects.request.proxy_changed |= redirects.request.proxy != previous_proxy;
+                                    redirects.request.crossed_authority |= prev_urls
+                                        .last()
+                                        .is_some_and(|prev_url| authority_changed(curr_url, prev_url));
+                                    attempt.follow()
                                 }
                                 RedirectAction::RejectConfiguredHeaders => {
                                     attempt.error("refusing to follow redirect after request headers were configured")
@@ -138,15 +246,7 @@ impl Default for Remote {
                                 RedirectAction::Stop => attempt.stop(),
                             }
                         }
-                    }));
-                if let Some(proxy) = proxy {
-                    builder = builder.proxy(
-                        reqwest::Proxy::all(proxy.to_bstring().to_string())
-                            .map_err(classify_reqwest)
-                            .or_raise(|| message("Could not configure HTTP proxy"))?,
-                    );
-                }
-                builder
+                    }))
                     .build()
                     .map(|client| (client, customized))
                     .map_err(classify_reqwest)
@@ -164,7 +264,7 @@ impl Default for Remote {
                 let mut client_builder = client.is_none().then(|| create_builder(&config)).transpose()?;
                 let redirected_base_url = redirected_base_url_shared.lock().clone();
                 let effective_url = redirect::swap_tails(redirected_base_url.as_deref(), &base_url, url.clone());
-                let no_proxy = config.no_proxy.clone().or_else(|| proxy_env("no_proxy", "NO_PROXY"));
+                let routing = ProxyRouting::capture(&config);
                 let has_configured_extra_headers = !config.extra_headers.is_empty();
                 let mut req = reqwest::blocking::Request::new(
                     if upload_body_kind.is_some() {
@@ -227,187 +327,98 @@ impl Default for Remote {
                         .strip_prefix(&base_url)
                         .expect("BUG: caller assures `base_url` is subset of `url`")
                         .into(),
-                    ..Default::default()
+                    request: ProxyRequest {
+                        config: config.clone(),
+                        routing: routing.clone(),
+                        ..Default::default()
+                    },
                 };
 
                 if *follow == FollowRedirects::Initial {
                     *follow = FollowRedirects::None;
                 }
 
-                let mut proxy_credentials: Option<(gix_url::Url, gix_credentials::protocol::Outcome)> = None;
-                let mut strip_sensitive_headers = false;
-                let response = loop {
-                    let mut proxy = if bypasses_proxy(no_proxy.as_deref(), req.url()) {
-                        None
-                    } else {
-                        match proxy_url(&config, req.url().scheme()) {
-                            Ok(proxy) => proxy,
-                            Err(err) => {
-                                drop(req); // Release a streamed upload before sending its error to the header reader.
-                                headers_tx.channel.send(Err(std::io::Error::other(err))).ok();
-                                continue 'requests;
-                            }
-                        }
-                    };
-                    let mut proxy_auth_action = None;
-                    if let Some(proxy) = proxy.as_mut()
-                        && let Some((action, authenticate)) = &config.proxy_authenticate
-                        && (config.proxy.is_some() || proxy.user.is_some())
+                if let Err(err) = redirects.lock().request.prepare(req.url()) {
+                    drop(req); // Release a streamed upload before sending its error to the header reader.
+                    headers_tx.channel.send(Err(std::io::Error::other(err))).ok();
+                    continue 'requests;
+                }
+                let proxy = redirects.lock().request.proxy.clone();
+                if client.as_ref().is_none_or(|(previous_routing, previous_proxy, _)| {
+                    previous_routing != &routing || previous_proxy != &proxy
+                }) {
+                    let new_client = match client_builder
+                        .take()
+                        .map_or_else(|| create_builder(&config), Ok)
+                        .and_then(create_client)
                     {
-                        if proxy_credentials.as_ref().is_none_or(|(previous, _)| previous != proxy) {
-                            let action = if config.proxy.is_some() {
-                                action.clone()
-                            } else {
-                                gix_credentials::helper::Action::get_for_url(proxy.to_bstring())
-                            };
-                            let credentials = match authenticate.lock().expect("no panics in other threads")(action)
-                                .or_raise(|| message("Could not obtain proxy credentials"))
-                                .and_then(|credentials| {
-                                    credentials.ok_or_else(|| {
-                                        message("The proxy credential helper returned no credentials").raise()
-                                    })
-                                }) {
-                                Ok(credentials) => credentials,
-                                Err(err) => {
-                                    drop(req);
-                                    headers_tx.channel.send(Err(std::io::Error::other(err))).ok();
-                                    continue 'requests;
-                                }
-                            };
-                            proxy_credentials = Some((proxy.clone(), credentials));
-                        }
-                        let (_, credentials) = proxy_credentials.as_ref().expect("credentials were initialized above");
-                        match &credentials.credentials {
-                            gix_sec::identity::Credentials::UsernamePassword { username, password, .. } => {
-                                proxy.user = Some(username.clone());
-                                proxy.password = Some(password.clone());
-                            }
-                            gix_sec::identity::Credentials::Encoded { .. } => {
-                                drop(req);
-                                headers_tx
-                                    .channel
-                                    .send(Err(std::io::Error::other(
-                                        message("Pre-encoded credentials are not supported for proxy authentication")
-                                            .unsupported_error(),
-                                    )))
-                                    .ok();
-                                continue 'requests;
-                            }
-                        }
-                        proxy_auth_action = Some((credentials.next.clone(), authenticate));
-                    }
-                    if client
-                        .as_ref()
-                        .is_none_or(|(previous_proxy, _)| previous_proxy != &proxy)
-                    {
-                        let new_client = match client_builder
-                            .take()
-                            .map_or_else(|| create_builder(&config), Ok)
-                            .and_then(|builder| create_client(builder, proxy.as_ref()))
-                        {
-                            Ok(client) => client,
-                            Err(err) => {
-                                drop(req);
-                                headers_tx.channel.send(Err(std::io::Error::other(err))).ok();
-                                continue 'requests;
-                            }
-                        };
-                        client = Some((proxy, new_client));
-                    }
-                    let (proxy, (client, customized)) = client.as_ref().expect("client was initialized above");
-                    if strip_sensitive_headers {
-                        for name in [
-                            header::AUTHORIZATION,
-                            header::COOKIE,
-                            header::WWW_AUTHENTICATE,
-                            header::PROXY_AUTHORIZATION,
-                            header::HeaderName::from_static("cookie2"),
-                        ] {
-                            if *customized {
-                                // Occupied entries prevent `execute()` from reapplying client-default secrets.
-                                req.headers_mut().insert(name, header::HeaderValue::from_static(""));
-                            } else {
-                                req.headers_mut().remove(name);
-                            }
-                        }
-                        if req.url().scheme() == "http"
-                            && let Some(proxy) = proxy.as_ref()
-                            && matches!(proxy.scheme, gix_url::Scheme::Http | gix_url::Scheme::Https)
-                            && let Some(username) = proxy.user()
-                        {
-                            req.headers_mut().insert(
-                                header::PROXY_AUTHORIZATION,
-                                basic_auth(username, proxy.password().unwrap_or_default()),
-                            );
-                        }
-                    }
-                    let mut next_req = req.try_clone().unwrap_or_else(|| {
-                        // A streamed POST can still redirect to a GET. Reqwest stops 307/308 redirects
-                        // before invoking our policy when it cannot replay the body.
-                        let body = req.body_mut().take();
-                        let copy = req.try_clone().expect("a request without a body can be cloned");
-                        *req.body_mut() = body;
-                        copy
-                    });
-                    let response = client.execute(req);
-                    let proxy_auth_failed = match &response {
-                        Ok(res) => res.status() == StatusCode::PROXY_AUTHENTICATION_REQUIRED,
+                        Ok(client) => client,
                         Err(err) => {
-                            // ponytail: reqwest hides CONNECT's status and hyper-util's error type is private.
-                            // Use a typed check when either dependency exposes one.
-                            err.is_connect()
-                                && std::iter::successors(err.source(), |&err| err.source())
-                                    .any(|err| err.to_string() == "tunnel error: proxy authorization required")
-                        }
-                    };
-                    if (response.is_ok() || proxy_auth_failed)
-                        && let Some((action, authenticate)) = proxy_auth_action
-                    {
-                        let action = if proxy_auth_failed {
-                            action.erase()
-                        } else {
-                            action.store()
-                        };
-                        if let Err(err) = authenticate.lock().expect("no panics in other threads")(action) {
+                            drop(req);
                             headers_tx.channel.send(Err(std::io::Error::other(err))).ok();
                             continue 'requests;
                         }
+                    };
+                    client = Some((routing, proxy, new_client));
+                }
+                let (_, proxy, (http_client, customized)) = client.as_ref().expect("client was initialized above");
+                if suppress_client_defaults && *customized {
+                    let inserted_proxy_auth = !req.headers().contains_key(header::PROXY_AUTHORIZATION);
+                    for name in [
+                        header::AUTHORIZATION,
+                        header::COOKIE,
+                        header::WWW_AUTHENTICATE,
+                        header::PROXY_AUTHORIZATION,
+                        header::HeaderName::from_static("cookie2"),
+                    ] {
+                        req.headers_mut()
+                            .entry(name)
+                            .or_insert(header::HeaderValue::from_static(""));
                     }
-                    let Some(next_url) = redirects.lock().next_url.take() else {
-                        break response;
-                    };
-                    let res = match response {
-                        Ok(res) => res,
-                        Err(err) => break Err(err),
-                    };
-                    if res.status() == StatusCode::SEE_OTHER
-                        || (matches!(res.status(), StatusCode::MOVED_PERMANENTLY | StatusCode::FOUND)
-                            && next_req.method() == Method::POST)
+                    if inserted_proxy_auth
+                        && req.url().scheme() == "http"
+                        && let Some(proxy) = proxy
+                        && matches!(proxy.scheme, gix_url::Scheme::Http | gix_url::Scheme::Https)
+                        && let Some(username) = proxy.user()
                     {
-                        if next_req.method() != Method::HEAD {
-                            *next_req.method_mut() = Method::GET;
-                        }
-                        *next_req.body_mut() = None;
-                        for name in [
-                            header::CONTENT_LENGTH,
-                            header::CONTENT_TYPE,
-                            header::TRANSFER_ENCODING,
-                            header::CONTENT_ENCODING,
-                        ] {
-                            next_req.headers_mut().remove(name);
-                        }
+                        req.headers_mut().insert(
+                            header::PROXY_AUTHORIZATION,
+                            basic_auth(username, proxy.password().unwrap_or_default()),
+                        );
                     }
-                    strip_sensitive_headers |= authority_changed(&next_url, next_req.url());
-                    let mut referer = next_req.url().clone();
-                    referer.set_username("").ok();
-                    referer.set_password(None).ok();
-                    referer.set_fragment(None);
-                    if let Ok(value) = header::HeaderValue::from_str(referer.as_str()) {
-                        next_req.headers_mut().insert(header::REFERER, value);
-                    }
-                    *next_req.url_mut() = next_url;
-                    req = next_req;
+                }
+                let response = http_client.execute(req);
+                let execute_failed = response.is_err();
+                if !execute_failed {
+                    suppress_client_defaults |= redirects.lock().request.crossed_authority;
+                }
+                // Retire stale cores after response delivery and before the next request replaces routing state.
+                let _retired_client = if execute_failed || redirects.lock().request.proxy_changed {
+                    client.take()
+                } else {
+                    None
                 };
+                let proxy_auth_failed = match &response {
+                    Ok(res) => res.status() == StatusCode::PROXY_AUTHENTICATION_REQUIRED,
+                    Err(err) => {
+                        // shortcut: reqwest hides CONNECT's status and hyper-util's error type is private; use a typed check when exposed.
+                        err.is_connect()
+                            && std::iter::successors(err.source(), |&err| err.source())
+                                .any(|err| err.to_string() == "tunnel error: proxy authorization required")
+                    }
+                };
+                let authentication = if response.is_ok() || proxy_auth_failed {
+                    redirects.lock().request.finish_authentication(proxy_auth_failed)
+                } else {
+                    Ok(())
+                };
+                if let Err(err) = authentication {
+                    headers_tx.channel.send(Err(std::io::Error::other(err))).ok();
+                    if execute_failed {
+                        suppress_client_defaults |= redirects.lock().request.crossed_authority;
+                    }
+                    continue 'requests;
+                }
 
                 let mut www_authenticate = Vec::new();
                 let mut res = match response.and_then(|res| {
@@ -455,6 +466,9 @@ impl Default for Remote {
                             None => std::io::Error::other(classify_reqwest(err)),
                         };
                         headers_tx.channel.send(Err(err)).ok();
+                        if execute_failed {
+                            suppress_client_defaults |= redirects.lock().request.crossed_authority;
+                        }
                         continue;
                     }
                 };
@@ -594,15 +608,14 @@ fn bypasses_proxy(no_proxy: Option<&str>, url: &reqwest::Url) -> bool {
             })
 }
 
-fn proxy_url(config: &http::Options, scheme: &str) -> Result<Option<gix_url::Url>> {
-    let proxy = config.proxy.clone().or_else(|| {
-        // Like Git and curl, ignore uppercase HTTP_PROXY, which can originate in a CGI request.
+fn proxy_url(config: &http::Options, routing: &ProxyRouting, scheme: &str) -> Result<Option<gix_url::Url>> {
+    let proxy = routing.proxy.clone().or_else(|| {
         if scheme == "https" {
-            proxy_env("https_proxy", "HTTPS_PROXY")
+            routing.https_proxy.clone()
         } else {
-            std::env::var("http_proxy").ok().filter(|value| !value.is_empty())
+            routing.http_proxy.clone()
         }
-        .or_else(|| proxy_env("all_proxy", "ALL_PROXY"))
+        .or_else(|| routing.all_proxy.clone())
     });
     let Some(mut proxy) = proxy.filter(|proxy| !proxy.is_empty()) else {
         return Ok(None);
@@ -732,6 +745,10 @@ mod tests {
         ] {
             let proxy = super::proxy_url(
                 &super::http::Options {
+                    proxy: Some(input.into()),
+                    ..Default::default()
+                },
+                &super::ProxyRouting {
                     proxy: Some(input.into()),
                     ..Default::default()
                 },
