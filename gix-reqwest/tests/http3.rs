@@ -5,6 +5,8 @@ mod support;
 
 use http::header::CONTENT_LENGTH;
 use std::error::Error;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
 use support::server;
 
 fn assert_send_sync<T: Send + Sync>(_: &T) {}
@@ -36,6 +38,228 @@ async fn http3_request_full() {
 
     assert_eq!(res.version(), http::Version::HTTP_3);
     assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
+}
+
+fn assert_http3_proxy_error(err: &gix_reqwest::Error) {
+    assert!(err.is_request());
+    let mut source: &(dyn Error + 'static) = err;
+    while let Some(next) = source.source() {
+        source = next;
+    }
+    assert_eq!(
+        source.to_string(),
+        "HTTP/3 requests through proxies are not supported"
+    );
+}
+
+#[tokio::test]
+async fn http3_rejects_matching_proxies() {
+    let requests = Arc::new(AtomicUsize::new(0));
+    let received = requests.clone();
+    let server = server::Http3::new().build(move |_| {
+        received.fetch_add(1, Ordering::SeqCst);
+        async { http::Response::default() }
+    });
+    let url = format!("https://{}/", server.addr());
+
+    for proxy in [
+        gix_reqwest::Proxy::all("http://proxy.invalid:8080").unwrap(),
+        gix_reqwest::Proxy::https("https://proxy.invalid:8080").unwrap(),
+        gix_reqwest::Proxy::all("socks5://proxy.invalid:1080").unwrap(),
+    ] {
+        let client = gix_reqwest::Client::builder()
+            .http3_prior_knowledge()
+            .danger_accept_invalid_certs(true)
+            .timeout(std::time::Duration::from_secs(2))
+            .proxy(proxy)
+            .build()
+            .unwrap();
+        let err = client
+            .get(&url)
+            .version(http::Version::HTTP_3)
+            .send()
+            .await
+            .unwrap_err();
+
+        assert_http3_proxy_error(&err);
+        assert_eq!(err.url().unwrap().as_str(), url);
+        assert_eq!(requests.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[tokio::test]
+async fn http3_rejects_proxy_before_connecting() {
+    struct Resolver(std::net::SocketAddr, Arc<AtomicUsize>);
+
+    impl gix_reqwest::dns::Resolve for Resolver {
+        fn resolve(&self, _: gix_reqwest::dns::Name) -> gix_reqwest::dns::Resolving {
+            self.1.fetch_add(1, Ordering::SeqCst);
+            let addrs: gix_reqwest::dns::Addrs = Box::new(std::iter::once(self.0));
+            Box::pin(std::future::ready(Ok(addrs)))
+        }
+    }
+
+    let socket = std::net::UdpSocket::bind("[::1]:0").unwrap();
+    socket.set_nonblocking(true).unwrap();
+    let addr = socket.local_addr().unwrap();
+    let resolutions = Arc::new(AtomicUsize::new(0));
+    let url = format!("https://target.test:{}/", addr.port());
+    let err = gix_reqwest::Client::builder()
+        .http3_prior_knowledge()
+        .timeout(std::time::Duration::from_millis(200))
+        .proxy(gix_reqwest::Proxy::all("http://proxy.invalid:8080").unwrap())
+        .dns_resolver(Arc::new(Resolver(addr, resolutions.clone())))
+        .build()
+        .unwrap()
+        .get(&url)
+        .version(http::Version::HTTP_3)
+        .send()
+        .await
+        .unwrap_err();
+
+    assert_http3_proxy_error(&err);
+    assert_eq!(resolutions.load(Ordering::SeqCst), 0);
+    let mut packet = [0; 2048];
+    assert_eq!(
+        socket.recv_from(&mut packet).unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+}
+
+#[tokio::test]
+async fn http3_proxy_exclusions_allow_direct_requests() {
+    let server = server::Http3::new().build(|_| async { http::Response::default() });
+    let url = format!("https://{}/", server.addr());
+
+    for proxy in [
+        gix_reqwest::Proxy::http("http://proxy.invalid:8080").unwrap(),
+        gix_reqwest::Proxy::all("http://proxy.invalid:8080")
+            .unwrap()
+            .no_proxy(gix_reqwest::NoProxy::from_string(
+                &server.addr().ip().to_string(),
+            )),
+        gix_reqwest::Proxy::custom(|_| None::<&str>),
+    ] {
+        let response = gix_reqwest::Client::builder()
+            .http3_prior_knowledge()
+            .danger_accept_invalid_certs(true)
+            .timeout(std::time::Duration::from_secs(2))
+            .proxy(proxy)
+            .build()
+            .unwrap()
+            .get(&url)
+            .version(http::Version::HTTP_3)
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.version(), http::Version::HTTP_3);
+        assert_eq!(response.status(), gix_reqwest::StatusCode::OK);
+    }
+}
+
+#[tokio::test]
+async fn http3_redirect_rechecks_proxy() {
+    let requests = Arc::new(AtomicUsize::new(0));
+    let received = requests.clone();
+    let server = server::Http3::new().build(move |req| {
+        received.fetch_add(1, Ordering::SeqCst);
+        async move {
+            if req.uri().path() == "/start" {
+                http::Response::builder()
+                    .status(http::StatusCode::FOUND)
+                    .header(
+                        "location",
+                        format!("https://proxied.test:{}/end", req.uri().port_u16().unwrap()),
+                    )
+                    .body(gix_reqwest::Body::default())
+                    .unwrap()
+            } else {
+                http::Response::default()
+            }
+        }
+    });
+    let client = gix_reqwest::Client::builder()
+        .http3_prior_knowledge()
+        .danger_accept_invalid_certs(true)
+        .timeout(std::time::Duration::from_secs(2))
+        .proxy(
+            gix_reqwest::Proxy::all("http://proxy.invalid:8080")
+                .unwrap()
+                .no_proxy(gix_reqwest::NoProxy::from_string("direct.test")),
+        )
+        .resolve("direct.test", server.addr())
+        .resolve("proxied.test", server.addr())
+        .build()
+        .unwrap();
+    let err = client
+        .get(format!(
+            "https://direct.test:{}/start",
+            server.addr().port()
+        ))
+        .version(http::Version::HTTP_3)
+        .send()
+        .await
+        .unwrap_err();
+
+    assert_http3_proxy_error(&err);
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn http3_proxy_is_checked_before_reusing_connection() {
+    let requests = Arc::new(AtomicUsize::new(0));
+    let received = requests.clone();
+    let server = server::Http3::new().build(move |_| {
+        received.fetch_add(1, Ordering::SeqCst);
+        async { http::Response::default() }
+    });
+    let url = format!("https://{}/", server.addr());
+    let enabled = Arc::new(AtomicBool::new(false));
+    let proxy_enabled = enabled.clone();
+    let client = gix_reqwest::Client::builder()
+        .http3_prior_knowledge()
+        .danger_accept_invalid_certs(true)
+        .timeout(std::time::Duration::from_secs(2))
+        .proxy(gix_reqwest::Proxy::custom(move |_| {
+            proxy_enabled
+                .load(Ordering::SeqCst)
+                .then_some("http://proxy.invalid:8080")
+        }))
+        .build()
+        .unwrap();
+
+    client
+        .get(&url)
+        .version(http::Version::HTTP_3)
+        .send()
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+
+    enabled.store(true, Ordering::SeqCst);
+    let err = client
+        .get(&url)
+        .version(http::Version::HTTP_3)
+        .send()
+        .await
+        .unwrap_err();
+
+    assert_http3_proxy_error(&err);
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+
+    enabled.store(false, Ordering::SeqCst);
+    let response = client
+        .get(&url)
+        .version(http::Version::HTTP_3)
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), gix_reqwest::StatusCode::OK);
+    assert_eq!(requests.load(Ordering::SeqCst), 2);
 }
 
 async fn find_free_tcp_addr() -> std::net::SocketAddr {

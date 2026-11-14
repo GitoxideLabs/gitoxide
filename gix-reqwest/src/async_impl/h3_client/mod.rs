@@ -7,12 +7,14 @@ mod pool;
 use crate::async_impl::body::ResponseBody;
 use crate::async_impl::h3_client::pool::{Key, Pool, PoolClient};
 use crate::error::{BoxError, Error, Kind};
+use crate::proxy::Matcher as ProxyMatcher;
 use crate::{error, Body};
 use connect::H3Connector;
 use http::{Request, Response};
 use log::trace;
 use std::future::{self, Future};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 use sync_wrapper::SyncWrapper;
@@ -22,13 +24,19 @@ use tower::Service;
 pub(crate) struct H3Client {
     pool: Pool,
     connector: H3Connector,
+    proxies: Arc<Vec<ProxyMatcher>>,
 }
 
 impl H3Client {
-    pub fn new(connector: H3Connector, pool_timeout: Option<Duration>) -> Self {
+    pub fn new(
+        connector: H3Connector,
+        pool_timeout: Option<Duration>,
+        proxies: Arc<Vec<ProxyMatcher>>,
+    ) -> Self {
         H3Client {
             pool: Pool::new(pool_timeout),
             connector,
+            proxies,
         }
     }
 
@@ -64,6 +72,16 @@ impl H3Client {
         key: Key,
         req: Request<Body>,
     ) -> Result<Response<ResponseBody>, Error> {
+        if self
+            .proxies
+            .iter()
+            .any(|proxy| proxy.intercept(req.uri()).is_some())
+        {
+            return Err(error::request(
+                "HTTP/3 requests through proxies are not supported",
+            ));
+        }
+
         let mut pooled = match self.get_pooled_client(key).await {
             Ok(client) => client,
             Err(e) => return Err(error::request(e)),
