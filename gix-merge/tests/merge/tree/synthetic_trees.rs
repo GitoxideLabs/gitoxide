@@ -44,15 +44,13 @@ impl Repo {
         Ok(String::from_utf8(blob.data.to_vec())?)
     }
 
-    /// Merge `other` into `current` and return the entries of the merged tree.
+    /// Merge `other` into `current`.
     fn merge(
         &self,
         (base, current, other): (ObjectId, ObjectId, ObjectId),
-        symlink_conflicts: Option<ResolveWith>,
-    ) -> TestResult<Vec<(String, EntryMode, ObjectId)>> {
-        let mut options = basic_merge_options().tree_merge;
-        options.symlink_conflicts = symlink_conflicts;
-        let mut outcome = gix_merge::tree(
+        options: gix_merge::tree::Options,
+    ) -> TestResult<gix_merge::tree::Outcome<'_>> {
+        Ok(gix_merge::tree(
             &base,
             &current,
             &other,
@@ -63,7 +61,10 @@ impl Repo {
             &mut new_diff_resource_cache(self.root.path()),
             &mut new_blob_merge_platform(self.root.path(), None),
             options,
-        )?;
+        )?)
+    }
+
+    fn entries(&self, outcome: &mut gix_merge::tree::Outcome<'_>) -> TestResult<Vec<(String, EntryMode, ObjectId)>> {
         let merged_tree_id = outcome.tree.write(|tree| self.objects.write(tree))?;
         let mut buf = Vec::new();
         let merged = self.objects.find_tree(&merged_tree_id, &mut buf)?;
@@ -83,7 +84,10 @@ impl Repo {
         message: &str,
     ) -> TestResult {
         for (current, other) in [(ours, theirs), (theirs, ours)] {
-            let actual = self.merge((base, current, other), symlink_conflicts)?;
+            let mut options = basic_merge_options().tree_merge;
+            options.symlink_conflicts = symlink_conflicts;
+            let mut outcome = self.merge((base, current, other), options)?;
+            let actual = self.entries(&mut outcome)?;
             assert_eq!(actual, [(filename.to_owned(), mode, oid)], "{message}");
         }
         Ok(())
@@ -91,20 +95,92 @@ impl Repo {
 }
 
 #[test]
-fn symlink_ancestor_resolution_restores_a_non_symlink_ancestor() -> TestResult {
+fn symlink_ancestor_resolution_restores_the_whole_ancestor_entry() -> TestResult {
+    use gix_merge::tree::{TreatAsUnresolved, apply_index_entries::RemovalMode, treat_as_unresolved};
+
     let repo = Repo::new()?;
     let commit_id = gix_object::compute_hash(gix_testtools::object_hash(), gix_object::Kind::Commit, b"submodule")?;
     let ours = repo.tree("a", EntryKind::Link.into(), repo.blob("ours")?)?;
     let theirs = repo.tree("a", EntryKind::Link.into(), repo.blob("theirs")?)?;
 
-    for (kind, ancestor_id) in [(EntryKind::Commit, commit_id), (EntryKind::Blob, repo.blob("target")?)] {
+    for (kind, ancestor_id) in [
+        (EntryKind::Commit, commit_id),
+        (EntryKind::Blob, repo.blob("target")?),
+        (EntryKind::Link, repo.blob("target")?),
+    ] {
         let base = repo.tree("a", kind.into(), ancestor_id)?;
-        repo.assert_merges_to(
-            (base, ours, theirs),
-            Some(ResolveWith::Ancestor),
-            ("a", kind.into(), ancestor_id),
-            "choosing the ancestor restores its whole entry instead of writing its id as a symlink target",
-        )?;
+        for (current, other) in [(ours, theirs), (theirs, ours)] {
+            let mut options = basic_merge_options().tree_merge;
+            options.symlink_conflicts = Some(ResolveWith::Ancestor);
+            let mut outcome = repo.merge((base, current, other), options)?;
+            assert_eq!(
+                repo.entries(&mut outcome)?,
+                [("a".to_owned(), kind.into(), ancestor_id)],
+                "choosing the ancestor restores its whole entry instead of writing its id as a symlink target"
+            );
+            let [conflict] = outcome.conflicts.as_slice() else {
+                panic!("expected one forced symlink resolution, got {:?}", outcome.conflicts);
+            };
+            assert!(
+                conflict.content_merge().is_none(),
+                "restoring an ancestor entry does not expose its potentially absent commit as a merged blob"
+            );
+            let base_entry = conflict.entries()[0].expect("the conflict has an ancestor");
+            assert_eq!(
+                (base_entry.mode, base_entry.id),
+                (kind.into(), ancestor_id),
+                "the original mode identifies the restored object kind"
+            );
+            for tree_merge in [
+                treat_as_unresolved::TreeMerge::Undecidable,
+                treat_as_unresolved::TreeMerge::EvasiveRenames,
+                treat_as_unresolved::TreeMerge::ForcedResolution,
+            ] {
+                for content_merge in [
+                    treat_as_unresolved::ContentMerge::Markers,
+                    treat_as_unresolved::ContentMerge::ForcedResolution,
+                ] {
+                    let how = TreatAsUnresolved {
+                        tree_merge,
+                        content_merge,
+                    };
+                    let unresolved = content_merge == treat_as_unresolved::ContentMerge::ForcedResolution;
+                    assert_eq!(
+                        outcome.has_unresolved_conflicts(how),
+                        unresolved,
+                        "the symlink conflict remains a forced content resolution under {how:?}"
+                    );
+                    let mut index = gix_index::State::from_tree(&base, &repo.objects, Default::default())?;
+                    assert_eq!(
+                        outcome.index_changed_after_applying_conflicts(&mut index, how, RemovalMode::Prune),
+                        unresolved,
+                        "only a policy that considers this unresolved should add conflict stages"
+                    );
+                    let actual: Vec<_> = index
+                        .entries()
+                        .iter()
+                        .map(|entry| (entry.stage_raw(), entry.mode, entry.id))
+                        .collect();
+                    let expected = if unresolved {
+                        conflict
+                            .entries()
+                            .into_iter()
+                            .enumerate()
+                            .map(|(idx, entry)| {
+                                let entry = entry.expect("all three conflict stages exist");
+                                ((idx + 1) as u32, entry.mode.into(), entry.id)
+                            })
+                            .collect::<Vec<_>>()
+                    } else {
+                        vec![(0, kind.into(), ancestor_id)]
+                    };
+                    assert_eq!(
+                        actual, expected,
+                        "index stages preserve all object kinds and side identities"
+                    );
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -185,7 +261,8 @@ fn noncanonical_executable_mode_in_add_add_merge_keeps_side_orientation() -> Tes
     for (current, other, current_data, other_data) in
         [(ours, theirs, "ours", "theirs"), (theirs, ours, "theirs", "ours")]
     {
-        let entries = repo.merge((base, current, other), None)?;
+        let mut outcome = repo.merge((base, current, other), basic_merge_options().tree_merge)?;
+        let entries = repo.entries(&mut outcome)?;
         let [(filename, mode, merged_blob_id)] = entries.as_slice() else {
             panic!("expected exactly one merged entry, got {entries:?}");
         };
@@ -202,6 +279,57 @@ fn noncanonical_executable_mode_in_add_add_merge_keeps_side_orientation() -> Tes
         assert!(
             current_pos < other_pos,
             "the current side comes first in the conflict, as for byte-identical modes:\n{merged}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn forced_content_resolution_preserves_a_mode_conflict() -> TestResult {
+    use gix_merge::tree::{ResolutionFailure, TreatAsUnresolved};
+
+    let repo = Repo::new()?;
+    let base_tree_id = repo.tree("a", EntryKind::Link.into(), repo.blob("target")?)?;
+    let our_blob_id = repo.blob("ours\n")?;
+    let their_blob_id = repo.blob("theirs\n")?;
+    let our_tree_id = repo.tree("a", EntryKind::BlobExecutable.into(), our_blob_id)?;
+    let their_tree_id = repo.tree("a", EntryKind::Blob.into(), their_blob_id)?;
+
+    for (current, other, current_kind, current_blob_id) in [
+        (our_tree_id, their_tree_id, EntryKind::BlobExecutable, our_blob_id),
+        (their_tree_id, our_tree_id, EntryKind::Blob, their_blob_id),
+    ] {
+        let mut options = basic_merge_options().tree_merge;
+        options.blob_merge.text.conflict = gix_merge::blob::builtin_driver::text::Conflict::ResolveWithOurs;
+        options.fail_on_conflict = Some(TreatAsUnresolved::git());
+        let mut outcome = repo.merge((base_tree_id, current, other), options)?;
+        assert_eq!(
+            repo.entries(&mut outcome)?,
+            [("a".to_owned(), current_kind.into(), current_blob_id)],
+            "the current side provides both the conflicted mode and the explicitly selected content"
+        );
+        let [conflict] = outcome.conflicts.as_slice() else {
+            panic!("expected one mode conflict, got {:?}", outcome.conflicts);
+        };
+        assert!(
+            matches!(conflict.resolution, Err(ResolutionFailure::ModeConflict { .. })),
+            "forcing a content merge cannot resolve an independent mode conflict"
+        );
+        let content_merge = conflict
+            .content_merge()
+            .expect("the mode conflict retains its content merge");
+        assert_eq!(
+            content_merge.merged_blob_id, current_blob_id,
+            "the selected content is a blob"
+        );
+        assert_eq!(
+            content_merge.resolution,
+            gix_merge::blob::Resolution::CompleteWithAutoResolvedConflict,
+            "the content conflict records that it was forcefully resolved"
+        );
+        assert!(
+            outcome.failed_on_first_unresolved_conflict && outcome.has_unresolved_conflicts(TreatAsUnresolved::git()),
+            "the independent mode conflict still stops a merge configured to fail on conflicts"
         );
     }
     Ok(())

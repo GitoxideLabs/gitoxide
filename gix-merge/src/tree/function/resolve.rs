@@ -583,8 +583,14 @@ pub fn tree<'objects>(
                             {
                                 let previous_is_compatible = merge_modes(*our_mode, *previous_entry_mode).is_some()
                                     && merge_modes(*their_mode, *previous_entry_mode).is_some();
-                                let merged_mode = merge_modes_prev(*our_mode, *their_mode, *previous_entry_mode)
-                                    .expect("the match guard assures compatible current modes");
+                                let mode_conflict = !previous_is_compatible && our_mode.kind() != their_mode.kind();
+                                let merged_mode = if mode_conflict {
+                                    // Like merge-ort, retain the current mode independently of the content result.
+                                    *pick(outer_side, our_mode, their_mode)
+                                } else {
+                                    merge_modes_prev(*our_mode, *their_mode, *previous_entry_mode)
+                                        .expect("the match guard assures compatible current modes")
+                                };
                                 // Symlink merging compares target identities without loading a blob-platform base.
                                 let merging_links = our_mode.is_link() && their_mode.is_link();
                                 let (merge_base_id, merge_base_mode) = if previous_is_compatible || merging_links {
@@ -594,7 +600,7 @@ pub fn tree<'objects>(
                                 };
                                 // A type replacement can retain the ancestor bytes, which the empty base used for
                                 // incompatible ancestors would turn into an artificial add/add conflict.
-                                let side_kept_ancestor = !previous_is_compatible && our_mode.is_blob_or_symlink();
+                                let side_kept_ancestor = !previous_is_compatible && our_mode.is_blob();
                                 let (merged_blob_id, resolution) = if side_kept_ancestor && our_id == previous_id {
                                     (*their_id, crate::blob::Resolution::Complete)
                                 } else if side_kept_ancestor && their_id == previous_id {
@@ -617,21 +623,44 @@ pub fn tree<'objects>(
                                 // If both targets differ from the ancestor's, the result equals the ancestor id only if
                                 // `symlink_conflicts` picked the ancestor. Restore its entry as a whole: its id may be a
                                 // gitlink's commit or a regular file's content, neither of which is a link target.
-                                let picked_ancestor =
-                                    our_id != previous_id && their_id != previous_id && merged_blob_id == *previous_id;
-                                let merged_mode = if merging_links && picked_ancestor {
+                                let picked_ancestor = merging_links
+                                    && our_id != previous_id
+                                    && their_id != previous_id
+                                    && merged_blob_id == *previous_id;
+                                let merged_mode = if picked_ancestor {
                                     *previous_entry_mode
                                 } else {
                                     merged_mode
                                 };
-                                editor.upsert(toc(location), merged_mode.kind(), merged_blob_id)?;
-                                if should_fail_on_conflict(Conflict::with_resolution(
-                                    Resolution::OursModifiedTheirsModifiedThenBlobContentMerge {
-                                        merged_blob: ContentMerge {
-                                            resolution,
-                                            merged_blob_id,
-                                        },
-                                    },
+                                if mode_conflict && resolve_tree_conflicts.is_some() {
+                                    if matches!(resolve_tree_conflicts, Some(ResolveWith::Ours)) {
+                                        apply_our_resolution(
+                                            ours,
+                                            theirs,
+                                            outer_side,
+                                            &mut editor,
+                                            &mut ours_disposition,
+                                            &mut theirs_disposition,
+                                        )?;
+                                    }
+                                } else {
+                                    editor.upsert(toc(location), merged_mode.kind(), merged_blob_id)?;
+                                }
+                                let resolution = if picked_ancestor {
+                                    Ok(Resolution::OursModifiedTheirsModifiedThenAncestor)
+                                } else {
+                                    let merged_blob = ContentMerge {
+                                        resolution,
+                                        merged_blob_id,
+                                    };
+                                    if mode_conflict {
+                                        Err(ResolutionFailure::ModeConflict { merged_blob })
+                                    } else {
+                                        Ok(Resolution::OursModifiedTheirsModifiedThenBlobContentMerge { merged_blob })
+                                    }
+                                };
+                                if should_fail_on_conflict(Conflict::maybe_resolved(
+                                    resolution,
                                     (ours, theirs, Original, outer_side),
                                     [
                                         index_entry(previous_entry_mode, previous_id),
@@ -1838,8 +1867,8 @@ pub fn tree<'objects>(
                                     (id, Some(resolution))
                                 };
 
-                                let merged_mode =
-                                    merge_modes(*our_mode, *their_mode).expect("this case was assured earlier");
+                                let merged_mode = merge_modes_prev(*our_mode, *their_mode, *source_entry_mode)
+                                    .expect("this case was assured earlier");
 
                                 if matches!(resolve_tree_conflicts, None | Some(ResolveWith::Ours)) {
                                     editor.remove_if_leaf(toc(source_location))?;
