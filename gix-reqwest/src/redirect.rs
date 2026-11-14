@@ -11,7 +11,7 @@ use crate::header::{AUTHORIZATION, COOKIE, PROXY_AUTHORIZATION, REFERER, WWW_AUT
 use http::{HeaderMap, HeaderValue};
 use hyper::StatusCode;
 
-use crate::{async_impl, Url};
+use crate::{async_impl, proxy::Matcher as ProxyMatcher, Url};
 use tower_http::follow_redirect::policy::{
     Action as TowerAction, Attempt as TowerAttempt, Policy as TowerPolicy,
 };
@@ -236,19 +236,24 @@ pub(crate) enum ActionKind {
     Error(Box<dyn StdError + Send + Sync>),
 }
 
-pub(crate) fn remove_sensitive_headers(headers: &mut HeaderMap, next: &Url, previous: &[Url]) {
-    if let Some(previous) = previous.last() {
-        let cross_host = next.host_str() != previous.host_str()
+pub(crate) fn remove_sensitive_headers(
+    headers: &mut HeaderMap,
+    next: &Url,
+    previous: &[Url],
+) -> bool {
+    let cross_host = previous.last().is_some_and(|previous| {
+        next.host_str() != previous.host_str()
             || next.port_or_known_default() != previous.port_or_known_default()
-            || next.scheme() != previous.scheme();
-        if cross_host {
-            headers.remove(AUTHORIZATION);
-            headers.remove(COOKIE);
-            headers.remove("cookie2");
-            headers.remove(PROXY_AUTHORIZATION);
-            headers.remove(WWW_AUTHENTICATE);
-        }
+            || next.scheme() != previous.scheme()
+    });
+    if cross_host {
+        headers.remove(AUTHORIZATION);
+        headers.remove(COOKIE);
+        headers.remove("cookie2");
+        headers.remove(PROXY_AUTHORIZATION);
+        headers.remove(WWW_AUTHENTICATE);
     }
+    cross_host
 }
 
 #[derive(Debug)]
@@ -265,15 +270,17 @@ impl StdError for TooManyRedirects {}
 #[derive(Clone)]
 pub(crate) struct TowerRedirectPolicy {
     policy: Arc<Policy>,
+    proxies: Arc<Vec<ProxyMatcher>>,
     referer: bool,
     urls: Vec<Url>,
     https_only: bool,
 }
 
 impl TowerRedirectPolicy {
-    pub(crate) fn new(policy: Policy) -> Self {
+    pub(crate) fn new(policy: Policy, proxies: Arc<Vec<ProxyMatcher>>) -> Self {
         Self {
             policy: Arc::new(policy),
+            proxies,
             referer: false,
             urls: Vec::new(),
             https_only: false,
@@ -336,7 +343,22 @@ impl TowerPolicy<async_impl::body::Body, crate::Error> for TowerRedirectPolicy {
 
     fn on_request(&mut self, req: &mut http::Request<async_impl::body::Body>) {
         if let Ok(next_url) = Url::parse(&req.uri().to_string()) {
-            remove_sensitive_headers(req.headers_mut(), &next_url, &self.urls);
+            let cross_host = remove_sensitive_headers(req.headers_mut(), &next_url, &self.urls);
+            if cross_host && req.uri().scheme_str() == Some("http") {
+                for proxy in self.proxies.iter() {
+                    if let Some(proxy) = proxy.intercept(req.uri()) {
+                        let header = proxy
+                            .http_non_tunnel_custom_headers()
+                            .and_then(|headers| headers.get(PROXY_AUTHORIZATION).cloned())
+                            .or_else(|| proxy.http_non_tunnel_basic_auth());
+                        if let Some(header) = header {
+                            req.headers_mut().insert(PROXY_AUTHORIZATION, header);
+                        }
+                        // Use only the first matching proxy, as the connector does.
+                        break;
+                    }
+                }
+            }
             if self.referer {
                 if let Some(previous_url) = self.urls.last() {
                     if let Some(v) = make_referer(&next_url, previous_url) {
@@ -451,4 +473,71 @@ fn test_remove_sensitive_headers_on_scheme_downgrade_same_host_port() {
 
     remove_sensitive_headers(&mut headers, &next, &prev);
     assert_eq!(headers, filtered_headers);
+}
+
+#[test]
+fn test_redirect_proxy_auth_is_selected_for_each_destination() {
+    let proxies = Arc::new(vec![
+        crate::Proxy::custom(|url| {
+            (url.host_str() == Some("second.local")).then_some("http://other:secret@proxy.local")
+        })
+        .into_matcher(),
+        crate::Proxy::http("http://user:pass@proxy.local")
+            .expect("valid HTTP proxy")
+            .no_proxy(crate::NoProxy::from_string("direct.local"))
+            .into_matcher(),
+    ]);
+    let mut policy = TowerRedirectPolicy::new(Policy::default(), proxies);
+    policy
+        .urls
+        .push(Url::parse("http://original.local/").expect("valid URL"));
+    for (destination, expected) in [
+        ("http://original.local/next", Some("caller-proxy-auth")),
+        ("http://redirected.local/", Some("Basic dXNlcjpwYXNz")),
+        ("http://second.local/", Some("Basic b3RoZXI6c2VjcmV0")),
+        ("http://direct.local/", None),
+        ("https://redirected.local/", None),
+    ] {
+        let mut request = http::Request::builder()
+            .uri(destination)
+            .header(PROXY_AUTHORIZATION, "caller-proxy-auth")
+            .header(AUTHORIZATION, "origin-secret")
+            .body(async_impl::body::Body::empty())
+            .expect("valid request");
+        policy.on_request(&mut request);
+        assert_eq!(
+            request
+                .headers()
+                .get(PROXY_AUTHORIZATION)
+                .map(|value| value.to_str().expect("ASCII header")),
+            expected,
+            "proxy authentication for {destination}"
+        );
+        assert_eq!(
+            request.headers().contains_key(AUTHORIZATION),
+            destination == "http://original.local/next",
+            "origin credentials remain scoped to the original authority"
+        );
+    }
+}
+
+#[cfg(feature = "socks")]
+#[test]
+fn test_redirect_socks_auth_is_not_an_http_header() {
+    let proxies = Arc::new(vec![crate::Proxy::all("socks5h://user:pass@proxy.local")
+        .expect("valid SOCKS proxy")
+        .into_matcher()]);
+    let mut policy = TowerRedirectPolicy::new(Policy::default(), proxies);
+    policy
+        .urls
+        .push(Url::parse("http://original.local/").expect("valid URL"));
+    let mut request = http::Request::builder()
+        .uri("http://redirected.local/")
+        .body(async_impl::body::Body::empty())
+        .expect("valid request");
+    policy.on_request(&mut request);
+    assert!(
+        !request.headers().contains_key(PROXY_AUTHORIZATION),
+        "SOCKS authenticates its connection"
+    );
 }

@@ -493,3 +493,98 @@ async fn tunnel_includes_proxy_auth_with_multiple_proxies() {
     assert_eq!(res.url().as_str(), url);
     assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
 }
+
+#[tokio::test]
+async fn http_redirect_uses_selected_proxy_credentials() -> Result<(), gix_reqwest::Error> {
+    for custom_headers in [false, true] {
+        let destination = server::http(move |req| async move {
+            for name in ["authorization", "cookie", "proxy-authorization"] {
+                assert!(
+                    !req.headers().contains_key(name),
+                    "direct request leaked {name}"
+                );
+            }
+            assert_eq!(req.uri().path(), "/end");
+            http::Response::default()
+        });
+        let destination_url = format!("http://{}/end", destination.addr());
+        let direct_url = destination_url.clone();
+        let expected = if custom_headers {
+            "custom-proxy-auth"
+        } else {
+            "Basic c2Vjb25kOnBhc3N3b3Jk"
+        };
+        let second_proxy = server::http(move |req| {
+            let direct_url = direct_url.clone();
+            async move {
+                assert_eq!(req.uri().host(), Some("second.invalid"));
+                assert_eq!(
+                    req.headers()["proxy-authorization"],
+                    expected,
+                    "selected proxy authenticates each hop"
+                );
+                assert!(
+                    !req.headers().contains_key("authorization"),
+                    "origin credentials stay removed"
+                );
+                assert!(
+                    !req.headers().contains_key("cookie"),
+                    "origin cookies stay removed"
+                );
+                let next = match req.uri().path() {
+                    "/next" => "/same".to_owned(),
+                    "/same" => direct_url,
+                    path => panic!("unexpected proxy redirect path {path}"),
+                };
+                http::Response::builder()
+                    .status(302)
+                    .header("location", next)
+                    .body(gix_reqwest::Body::default())
+                    .expect("valid redirect response")
+            }
+        });
+        let first_proxy = server::http(move |req| async move {
+            assert_eq!(req.uri().host(), Some("first.invalid"));
+            assert_eq!(req.headers()["authorization"], "origin-secret");
+            assert_eq!(req.headers()["cookie"], "origin=cookie");
+            assert_eq!(
+                req.headers()["proxy-authorization"],
+                "Basic Zmlyc3Q6cGFzc3dvcmQ=",
+                "only the first matching proxy supplies credentials"
+            );
+            http::Response::builder()
+                .status(302)
+                .header("location", "http://second.invalid/next")
+                .body(gix_reqwest::Body::default())
+                .expect("valid redirect response")
+        });
+        let first_proxy_url = format!("http://first:password@{}", first_proxy.addr());
+        let mut selected_proxy =
+            gix_reqwest::Proxy::http(format!("http://{}", second_proxy.addr()))?
+                .basic_auth("second", "password")
+                .no_proxy(gix_reqwest::NoProxy::from_string("127.0.0.1"));
+        if custom_headers {
+            let mut headers = gix_reqwest::header::HeaderMap::new();
+            headers.insert(
+                gix_reqwest::header::PROXY_AUTHORIZATION,
+                gix_reqwest::header::HeaderValue::from_static(expected),
+            );
+            selected_proxy = selected_proxy.headers(headers);
+        }
+        let response = gix_reqwest::Client::builder()
+            .no_proxy()
+            .proxy(gix_reqwest::Proxy::custom(move |url| {
+                (url.host_str() == Some("first.invalid")).then(|| first_proxy_url.clone())
+            }))
+            .proxy(selected_proxy)
+            .build()?
+            .get("http://first.invalid/start")
+            .header("authorization", "origin-secret")
+            .header("cookie", "origin=cookie")
+            .send()
+            .await?;
+        assert_eq!(response.status(), gix_reqwest::StatusCode::OK);
+        assert_eq!(response.url().as_str(), destination_url);
+    }
+    Ok(())
+}

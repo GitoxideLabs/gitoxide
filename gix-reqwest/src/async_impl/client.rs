@@ -1034,7 +1034,7 @@ impl ClientBuilder {
         };
 
         let redirect_policy = {
-            let mut p = TowerRedirectPolicy::new(config.redirect_policy);
+            let mut p = TowerRedirectPolicy::new(config.redirect_policy, proxies.clone());
             p.with_referer(config.referer)
                 .with_https_only(config.https_only);
             p
