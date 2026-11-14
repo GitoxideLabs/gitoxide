@@ -436,6 +436,193 @@ fn proxy_authentication_survives_http_redirects_without_leaking_to_bypassed_orig
 
 #[cfg(feature = "http-client-reqwest")]
 #[test]
+fn reqwest_retires_connections_after_redirects_change_proxy() -> gix_testtools::TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _env = proxy_environment();
+    let origin = TcpListener::bind("127.0.0.1:0")?;
+    let proxy = TcpListener::bind("127.0.0.1:0")?;
+    let url = format!("http://{}/repo", origin.local_addr()?);
+    let proxy_address = proxy.local_addr()?;
+    let origin = std::thread::spawn(move || -> io::Result<()> {
+        let mut reader = io::BufReader::new(accept(origin)?);
+        read_request_lines(&mut reader);
+        reader.get_mut().write_all(b"HTTP/1.1 302 Found\r\nLocation: http://git.invalid/repo\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+    });
+    let proxy = std::thread::spawn(move || -> io::Result<Vec<String>> {
+        let mut reader = io::BufReader::new(accept(proxy)?);
+        let request = read_request_lines(&mut reader);
+        reader
+            .get_mut()
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")?;
+        // A changed route must retire the entire pool, including CONNECT tunnels with old credentials.
+        let read = reader.get_mut().read(&mut [0])?;
+        assert_eq!(
+            read, 0,
+            "the pool closes after delivering a proxy-changing redirect chain"
+        );
+        Ok(request)
+    });
+    let mut remote = http::reqwest::Remote::default();
+    remote.configure(&http::Options {
+        proxy: Some(format!("http://user:pass@{proxy_address}")),
+        no_proxy: Some("127.0.0.1".into()),
+        ..Default::default()
+    })?;
+    let mut response = remote.get(&url, &url, ["Accept: */*"])?;
+    io::copy(&mut response.headers, &mut io::sink())?;
+    io::copy(&mut response.body, &mut io::sink())?;
+    origin.join().expect("origin server does not panic")?;
+    let request = proxy.join().expect("proxy server does not panic")?;
+    assert!(
+        request
+            .iter()
+            .any(|line| line.eq_ignore_ascii_case("proxy-authorization: Basic dXNlcjpwYXNz")),
+        "the redirected request authenticates its selected forward proxy"
+    );
+    Ok(())
+}
+
+#[cfg(any(
+    feature = "http-client-reqwest-rust-tls",
+    feature = "http-client-reqwest-rust-tls-trust-dns",
+    feature = "http-client-reqwest-native-tls"
+))]
+#[test]
+fn reqwest_reports_failed_proxy_erase_after_connect_rejection() -> gix_testtools::TestResult {
+    use std::sync::{Arc, Mutex};
+
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _env = proxy_environment();
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let proxy_url = format!("http://user@{}", listener.local_addr()?);
+    let proxy = serve(listener, Some(407));
+    let (send, receive) = std::sync::mpsc::channel();
+    let client = std::thread::spawn(move || {
+        let result = (|| -> gix_error::Result {
+            let mut remote = http::reqwest::Remote::default();
+            remote.configure(&http::Options {
+                proxy: Some(proxy_url.clone()),
+                no_proxy: Some(String::new()),
+                proxy_authenticate: Some((
+                    gix_credentials::helper::Action::get_for_url(proxy_url),
+                    Arc::new(Mutex::new(|action: gix_credentials::helper::Action| {
+                        if action.expects_output() {
+                            Ok(Some(gix_credentials::protocol::Outcome {
+                                credentials: gix_sec::identity::Credentials::UsernamePassword {
+                                    username: "user".into(),
+                                    password: "pass".into(),
+                                    oauth_refresh_token: None,
+                                },
+                                next: gix_credentials::protocol::Context::default().into(),
+                            }))
+                        } else {
+                            Err(gix_error::message("proxy erase failed").raise())
+                        }
+                    })),
+                )),
+                ..Default::default()
+            })?;
+            let mut response = remote.get("https://git.invalid/repo", "https://git.invalid/repo", ["Accept: */*"])?;
+            io::copy(&mut response.headers, &mut io::sink()).or_error()?;
+            Ok(())
+        })();
+        send.send(result)
+            .expect("the test is waiting for the credential failure");
+    });
+    let result = receive
+        .recv_timeout(Duration::from_secs(3))
+        .expect("a failed proxy erase must report its error without deadlocking");
+    client.join().expect("HTTP client does not panic");
+    proxy.join().expect("proxy server does not panic")?;
+    let error = result.expect_err("the credential follow-up failed");
+    assert!(
+        format!("{error:?}").contains("proxy erase failed"),
+        "the original helper error is preserved"
+    );
+    Ok(())
+}
+
+#[cfg(feature = "http-client-reqwest")]
+#[test]
+fn reqwest_rebuilds_pooled_redirect_routes_when_bypass_changes() -> gix_testtools::TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _env = proxy_environment();
+    let proxy = TcpListener::bind("127.0.0.1:0")?;
+    let target = TcpListener::bind("127.0.0.1:0")?;
+    let proxy_address = proxy.local_addr()?;
+    let url = format!("http://{}/repo", target.local_addr()?);
+    let redirect_url = url.clone();
+    let direct = serve(target, Some(200));
+    let server = std::thread::spawn(move || -> io::Result<bool> {
+        let mut pooled = io::BufReader::new(accept(proxy.try_clone()?)?);
+        read_request_lines(&mut pooled);
+        // Keep the original destination's proxy connection alive in reqwest's pool.
+        pooled
+            .get_mut()
+            .write_all(b"HTTP/1.1 302 Found\r\nLocation: http://git.invalid/repo\r\nContent-Length: 0\r\n\r\n")?;
+        let mut reader = io::BufReader::new(accept(proxy.try_clone()?)?);
+        read_request_lines(&mut reader);
+        reader
+            .get_mut()
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")?;
+        drop(reader);
+
+        // The cached base URL starts the next request at git.invalid, whose proxy route is unchanged.
+        let mut reader = io::BufReader::new(accept(proxy)?);
+        read_request_lines(&mut reader);
+        write!(
+            reader.get_mut(),
+            "HTTP/1.1 302 Found\r\nLocation: {redirect_url}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )?;
+        drop(reader);
+        let stale_request = read_request_lines(&mut pooled);
+        if !stale_request.is_empty() {
+            pooled
+                .get_mut()
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")?;
+        }
+        Ok(!stale_request.is_empty())
+    });
+    let mut remote = http::reqwest::Remote::default();
+    let mut options = http::Options {
+        proxy: Some(format!("http://user:pass@{proxy_address}")),
+        no_proxy: Some(String::new()),
+        follow_redirects: http::options::FollowRedirects::All,
+        ..Default::default()
+    };
+    for bypass in ["", "127.0.0.1"] {
+        options.no_proxy = Some(bypass.into());
+        remote.configure(&options)?;
+        let mut response = remote.get(&url, &url, ["Accept: */*"])?;
+        io::copy(&mut response.headers, &mut io::sink())?;
+        io::copy(&mut response.body, &mut io::sink())?;
+    }
+    assert!(
+        !server.join().expect("proxy server does not panic")?,
+        "a changed bypass list retires pooled routes even when the initial proxy is unchanged"
+    );
+    let lines = direct.join().expect("direct server does not panic")?;
+    assert_eq!(
+        lines[0], "GET /repo HTTP/1.1",
+        "the redirected request reaches the newly bypassed origin directly"
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.to_ascii_lowercase().starts_with("proxy-authorization:")),
+        "the direct origin receives no proxy credentials"
+    );
+    Ok(())
+}
+
+#[cfg(feature = "http-client-reqwest")]
+#[test]
 fn reqwest_preserves_explicit_origin_authorization_with_url_credentials() -> gix_testtools::Result {
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
