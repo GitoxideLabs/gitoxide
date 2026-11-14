@@ -101,7 +101,7 @@ lean = [
 ##
 ## This build is essentially limited to local operations without any fanciness. It does not have `gix clone`.
 ##
-## Optimized for size, no parallelism thus much slower, progress line rendering.
+## Optimized for size, progress line rendering, and blocking filesystem monitoring.
 small = ["hashes", "pretty-cli", "prodash-render-line"]
 
 ## Like lean, but uses Rusts async implementations for networking.
@@ -269,6 +269,9 @@ serde_derive = ">=1.0.185"
 
 document-features = { version = "0.2.0", optional = true }
 
+[dev-dependencies]
+gix-testtools = { path = "tests/tools", default-features = false, features = ["sha1"] }
+
 # Keep local and CI artifacts small without weakening runtime checks.
 [profile.dev]
 debug = 0
@@ -354,6 +357,9 @@ members = [
     "gix-mailmap",
     "gix-macros",
     "gix-note",
+    "gix-notify",
+    "gix-fsmonitor",
+    "gix-fsmonitor-daemon",
     "gix-negotiate",
     "gix-fetchhead",
     "gix-prompt",

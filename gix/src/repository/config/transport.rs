@@ -312,13 +312,7 @@ impl crate::Repository {
                             debug_assert_eq!(key, config::tree::Http::SSL_CA_INFO.logical_name());
                             opts.ssl_ca_info = config
                                 .path_filter(key, &mut trusted_only)
-                                .map(|p| {
-                                    use crate::config::cache::interpolate_context;
-                                    p.interpolate(interpolate_context(
-                                        self.install_dir().ok().as_deref(),
-                                        self.config.home_dir().as_deref(),
-                                    ))
-                                })
+                                .map(|path| self.interpolate_path(path))
                                 .transpose()
                                 .with_leniency(lenient)
                                 .or_raise(|| message!("Could not interpolate path at key {key:?}"))?;

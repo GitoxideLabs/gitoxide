@@ -1,6 +1,68 @@
 use gix_ref::bstr;
 use gix_testtools::{Result, TestResult};
 
+#[cfg(all(feature = "notify", target_os = "macos"))]
+#[test]
+fn linked_worktree_removal_notifies_through_shared_metadata() -> TestResult {
+    use std::time::{Duration, Instant};
+
+    let (repo, _fixture) = crate::basic_rw_repo()?;
+    let destinations = gix_testtools::tempfile::tempdir()?;
+    let linked = destinations.path().join("linked");
+    let main = repo.workdir().expect("the fixture has a main worktree");
+    let output = gix_testtools::git_command(main)
+        .args(["worktree", "add", "--detach"])
+        .arg(&linked)
+        .output()?;
+    assert!(
+        output.status.success(),
+        "the disposable linked worktree is created: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut monitor = repo.monitor(gix::notify::Options {
+        worktree_coverage: None,
+        ..Default::default()
+    })?;
+    let opener = || gix::open_opts(main, crate::restricted());
+    for _ in 0..2 {
+        let outcome = monitor.service(Instant::now(), opener);
+        assert!(outcome.errors.is_empty(), "startup succeeds: {:?}", outcome.errors);
+    }
+    // The removed worktree lies outside the watched roots; its shared metadata must report it.
+    let output = gix_testtools::git_command(main)
+        .args(["worktree", "remove"])
+        .arg(&linked)
+        .output()?;
+    assert!(
+        output.status.success(),
+        "Git removes the linked worktree: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let (mut references, mut layout, mut removed) = (false, false, 0);
+    loop {
+        let outcome = monitor.service(Instant::now(), opener);
+        assert!(
+            outcome.errors.is_empty(),
+            "event-driven reconciliation succeeds: {:?}",
+            outcome.errors
+        );
+        references |= outcome.changes.references;
+        layout |= outcome.changes.layout;
+        removed += outcome.statistics.removed;
+        if references && layout && removed != 0 {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "shared administrative events must invalidate references/layout and remove obsolete subscriptions"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(!linked.exists(), "Git also removed the working directory");
+    Ok(())
+}
+
 #[cfg(feature = "worktree-mutation")]
 mod lock {
     use gix::bstr::ByteSlice;

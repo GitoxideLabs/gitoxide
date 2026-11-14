@@ -98,6 +98,12 @@ pub enum Subcommands {
     Odb(odb::Subcommands),
     /// Check for missing objects.
     Fsck(fsck::Platform),
+    /// Print raw filesystem notifications for paths until interrupted.
+    Notify(notify::Platform),
+    /// Print repository and worktree invalidations until interrupted.
+    Watch(watch::Platform),
+    /// Serve and control a self-spawning filesystem monitor daemon for Git.
+    Fsmonitor(fsmonitor::Platform),
     /// Interact with tree objects.
     #[clap(subcommand)]
     Tree(tree::Subcommands),
@@ -247,6 +253,201 @@ pub mod archive {
         ///
         /// If commit, the commit timestamp will be used as timestamp for each file in the archive.
         pub treeish: Option<String>,
+    }
+}
+
+pub mod notify {
+    use std::{num::NonZeroUsize, path::PathBuf};
+
+    #[derive(Debug, clap::Parser)]
+    #[clap(
+        after_help = "This debug tool watches filesystem paths without opening a Git repository. Events are reconciliation hints. Loss reports require a fresh baseline and may require restarting registration; this command only logs them. Ctrl-C releases native watches."
+    )]
+    pub struct Platform {
+        /// Files or directories to watch; defaults to the current directory.
+        #[clap(value_name = "PATH", default_value = ".")]
+        pub paths: Vec<PathBuf>,
+        /// Watch only the specified files or directories and their immediate entries.
+        #[clap(long)]
+        pub non_recursive: bool,
+        /// Maximum queued events; crossing either queue limit reports loss.
+        #[clap(long, default_value = "4096")]
+        pub max_events: NonZeroUsize,
+        /// Maximum estimated bytes retained in the notification queue.
+        #[clap(long, default_value = "4194304")]
+        pub max_bytes: NonZeroUsize,
+        /// Maximum events returned by each drain before checking for interruption.
+        #[clap(long, default_value = "256")]
+        pub batch_events: NonZeroUsize,
+        /// Estimated byte budget per drain; one larger event may still be returned.
+        #[clap(long, default_value = "262144")]
+        pub batch_bytes: NonZeroUsize,
+        /// Native root identity check interval on macOS/Windows; zero disables idle checks.
+        #[clap(long, default_value_t = 1000)]
+        pub root_check_ms: u64,
+    }
+}
+
+pub mod watch {
+    use std::time::{Duration, Instant};
+
+    #[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
+    pub enum Coverage {
+        /// Watch tracked and unignored directories, stopping at nested repositories.
+        #[default]
+        IgnoreAware,
+        /// Include ignored paths and nested repositories.
+        All,
+        /// Disable worktree coverage and report metadata only.
+        None,
+    }
+
+    #[derive(Debug, clap::Parser)]
+    #[clap(
+        after_help = "File invalidations are hints, not an operation history. Directory scopes, full invalidations, and coverage loss require reconciliation. Other worktrees share metadata subscriptions and report lifecycle changes separately. This command logs updates without maintaining a cached baseline."
+    )]
+    pub struct Platform {
+        /// Report worktree invalidations without repository metadata.
+        #[clap(long, conflicts_with = "all_worktrees")]
+        pub no_metadata: bool,
+        /// Monitor other worktrees too, sharing repository metadata subscriptions.
+        #[clap(long)]
+        pub all_worktrees: bool,
+        /// Select directory coverage. File invalidations remain unfiltered.
+        #[clap(long, value_enum, default_value_t = Coverage::default())]
+        pub worktree_coverage: Coverage,
+        /// Metadata quiet period in milliseconds; zero publishes immediately.
+        #[clap(long, default_value_t = 100)]
+        pub debounce_ms: u64,
+        /// Maximum metadata burst delay in milliseconds; zero publishes immediately.
+        #[clap(long, default_value_t = 250)]
+        pub max_latency_ms: u64,
+        /// Failed discovery or watch-registration retry interval in milliseconds.
+        #[clap(long, default_value_t = 5000, value_parser = clap::value_parser!(u64).range(1..))]
+        pub retry_ms: u64,
+        /// Maximum idle wait in milliseconds, also bounded by the monitor's deadlines.
+        #[clap(long, default_value_t = 250, value_parser = clap::value_parser!(u64).range(1..))]
+        pub poll_ms: u64,
+    }
+
+    impl Platform {
+        pub fn into_options(self) -> gix::Result<(gix::notify::Options, Duration)> {
+            use gix::error::{bail, message};
+
+            let now = Instant::now();
+            for (milliseconds, flag) in [
+                (self.debounce_ms, "--debounce-ms"),
+                (self.max_latency_ms, "--max-latency-ms"),
+                (self.retry_ms, "--retry-ms"),
+                (self.poll_ms, "--poll-ms"),
+            ] {
+                if now.checked_add(Duration::from_millis(milliseconds)).is_none() {
+                    bail!(message!("{flag} exceeds the platform's clock range"));
+                }
+            }
+            Ok((
+                gix::notify::Options {
+                    metadata: !self.no_metadata,
+                    all_worktrees: self.all_worktrees,
+                    worktree_coverage: match self.worktree_coverage {
+                        Coverage::IgnoreAware => Some(gix::notify::WorktreeCoverage::IgnoreAware),
+                        Coverage::All => Some(gix::notify::WorktreeCoverage::All),
+                        Coverage::None => None,
+                    },
+                    metadata_debounce: Duration::from_millis(self.debounce_ms),
+                    max_latency: Duration::from_millis(self.max_latency_ms),
+                    retry_interval: Duration::from_millis(self.retry_ms),
+                },
+                Duration::from_millis(self.poll_ms),
+            ))
+        }
+    }
+}
+
+pub mod fsmonitor {
+    use gix::bstr::BString;
+    use std::path::PathBuf;
+
+    #[derive(Debug, clap::Parser)]
+    #[clap(
+        after_help = "Use `git config core.fsmonitor 'gix fsmonitor hook'` and `git config core.fsmonitorHookVersion 2` for hook autostart. Explicit startup also supports native Git IPC clients. Each worktree owns its endpoint. Children run this same gix executable using the blocking library APIs."
+    )]
+    pub struct Platform {
+        #[clap(subcommand)]
+        pub cmd: Subcommands,
+    }
+
+    #[derive(Debug, clap::Args)]
+    pub struct Startup {
+        /// Exit after this many seconds without a client connection; zero disables idle shutdown.
+        #[clap(long, default_value_t = 0)]
+        pub idle_timeout: u64,
+    }
+
+    #[derive(Debug, clap::Subcommand)]
+    pub enum Subcommands {
+        /// Serve in the foreground until stopped, interrupted, or idle expiry.
+        Run {
+            #[clap(flatten)]
+            startup: Startup,
+            #[clap(long, hide = true)]
+            ready_file: Option<PathBuf>,
+        },
+        /// Start a detached daemon from this gix executable and wait for readiness.
+        Start(Startup),
+        /// Stop the daemon currently owning the endpoint and wait for it to exit.
+        Stop,
+        /// Succeed if the daemon is running, otherwise fail.
+        Status,
+        /// Invalidate token history and print the binary full-baseline response.
+        Flush,
+        /// Query the daemon with an opaque checkpoint and print its binary response.
+        Query {
+            #[clap(value_parser = crate::shared::AsBString, allow_hyphen_values = true)]
+            token: Option<BString>,
+        },
+        /// Git hook-v2 entrypoint; start this daemon when its endpoint is unavailable.
+        Hook {
+            #[clap(value_parser = clap::value_parser!(u8).range(2..=2))]
+            version: u8,
+            #[clap(value_parser = crate::shared::AsBString, allow_hyphen_values = true)]
+            token: BString,
+            #[clap(flatten)]
+            startup: Startup,
+        },
+        /// Print the native IPC endpoint for this worktree.
+        Path,
+    }
+
+    impl Platform {
+        pub(crate) fn into_command(self) -> gitoxide_core::repository::fsmonitor::Command {
+            use gitoxide_core::repository::fsmonitor::Command;
+            match self.cmd {
+                Subcommands::Run { startup, ready_file } => Command::Run {
+                    idle_timeout: startup.idle_timeout,
+                    ready_file,
+                },
+                Subcommands::Start(startup) => Command::Start {
+                    idle_timeout: startup.idle_timeout,
+                },
+                Subcommands::Stop => Command::Stop,
+                Subcommands::Status => Command::Status,
+                Subcommands::Flush => Command::Flush,
+                Subcommands::Query { token } => Command::Query {
+                    token: token.unwrap_or_default(),
+                },
+                Subcommands::Hook {
+                    version,
+                    token,
+                    startup,
+                } => Command::Hook {
+                    version,
+                    token,
+                    idle_timeout: startup.idle_timeout,
+                },
+                Subcommands::Path => Command::Path,
+            }
+        }
     }
 }
 

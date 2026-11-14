@@ -41,7 +41,7 @@ impl Diff {
             },
             heuristic: &mut heuristic,
         }
-        .run()
+        .run();
     }
 
     /// Postprocesses the diff using an `InternedInput` and a custom heuristic.

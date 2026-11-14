@@ -140,6 +140,8 @@ pub use gix_date as date;
 pub use gix_dir as dir;
 pub use gix_error as error;
 pub use gix_fs as fs;
+#[cfg(feature = "fsmonitor")]
+pub use gix_fsmonitor as fsmonitor;
 pub use gix_glob as glob;
 pub use gix_hash as hash;
 pub use gix_hashtable as hashtable;
@@ -428,6 +430,7 @@ pub fn config(git_dir: Option<&std::path::Path>, options: &open::Options) -> Res
         &options.api_config_overrides,
         &options.cli_config_overrides,
         options.use_repository_local_environment,
+        &mut |_| {},
     )
 }
 
@@ -545,6 +548,10 @@ pub mod state;
 ///
 #[cfg(feature = "status")]
 pub mod status;
+
+/// Filesystem notifications interpreted using repository layout and ignore rules.
+#[cfg(feature = "notify")]
+pub mod notify;
 
 ///
 pub mod shallow;

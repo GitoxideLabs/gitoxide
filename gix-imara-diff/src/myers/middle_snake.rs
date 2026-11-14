@@ -145,7 +145,7 @@ impl<const BACK: bool> MiddleSnakeSearch<BACK> {
             };
 
             if off > SNAKE_CNT {
-                res = Some(SearchResult::Snake)
+                res = Some(SearchResult::Snake);
             }
 
             if BACK {
@@ -252,7 +252,7 @@ impl<const BACK: bool> MiddleSnakeSearch<BACK> {
                 if is_snake {
                     best_token_idx1 = token_idx1;
                     best_token_idx2 = token_idx2;
-                    best_score = score
+                    best_score = score;
                 }
             }
 

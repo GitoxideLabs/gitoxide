@@ -39,6 +39,8 @@ pub(crate) mod root {
         pub const EXTENSIONS: sections::Extensions = sections::Extensions;
         /// The `fetch` section.
         pub const FETCH: sections::Fetch = sections::Fetch;
+        /// The `fsmonitor` section.
+        pub const FS_MONITOR: sections::FsMonitor = sections::FsMonitor;
         /// The `gitoxide` section.
         pub const GITOXIDE: sections::Gitoxide = sections::Gitoxide;
         /// The `gpg` section.
@@ -92,6 +94,7 @@ pub(crate) mod root {
                 &Self::DIFF,
                 &Self::EXTENSIONS,
                 &Self::FETCH,
+                &Self::FS_MONITOR,
                 &Self::GITOXIDE,
                 &Self::GPG,
                 &Self::HTTP,
@@ -118,10 +121,10 @@ pub(crate) mod root {
 
 mod sections;
 pub use sections::{
-    Author, Branch, Checkout, Clone, Commit, Committer, Core, Credential, Extensions, Fetch, Gitoxide, Gpg, Http,
-    Index, Init, Mailmap, Merge, Notes, Pack, Protocol, Push, Remote, Safe, Ssh, Url, User, Worktree, branch, checkout,
-    commit, core, credential, extensions, fetch, gitoxide, gpg, http, index, merge, notes, pack, protocol, push,
-    remote, ssh,
+    Author, Branch, Checkout, Clone, Commit, Committer, Core, Credential, Extensions, Fetch, FsMonitor, Gitoxide, Gpg,
+    Http, Index, Init, Mailmap, Merge, Notes, Pack, Protocol, Push, Remote, Safe, Ssh, Url, User, Worktree, branch,
+    checkout, commit, core, credential, extensions, fetch, fsmonitor, gitoxide, gpg, http, index, merge, notes, pack,
+    protocol, push, remote, ssh,
 };
 #[cfg(feature = "blob-diff")]
 pub use sections::{Diff, diff};

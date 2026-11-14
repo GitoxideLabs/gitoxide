@@ -1,0 +1,49 @@
+lints.workspace = true
+
+[package]
+name = "gix-notify"
+version = "0.1.0"
+repository = "https://github.com/GitoxideLabs/gitoxide"
+license = "MIT OR Apache-2.0"
+description = "Bounded filesystem notifications for long-running applications"
+authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
+edition = "2024"
+rust-version = "1.88"
+include = ["/src/**/*", "/examples/**/*", "/LICENSE-*"]
+
+[package.metadata.qa]
+extra-platforms = ["freebsd-x86_64"]
+checks = [{ args = [] }, { args = ["--features", "async"] }]
+tests = [{ args = [] }, { args = ["--features", "async"] }]
+
+[features]
+## Runtime-independent futures for registration, readiness, fences, and shutdown.
+async = ["dep:async-channel", "dep:event-listener"]
+
+[dependencies]
+gix-error = { version = "^0.5.1", path = "../gix-error" }
+gix-parallel = { version = "^0.50.0", path = "../gix-parallel", features = ["parallel"] }
+async-channel = { version = "2.5.0", optional = true }
+event-listener = { version = "5.4.2", optional = true }
+
+[dev-dependencies]
+tempfile = "3.26.0"
+futures-lite = "2.6.1"
+
+[target.'cfg(not(any(target_os = "macos", target_os = "linux", windows)))'.dependencies]
+notify = "8.2.0"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+inotify = { version = "0.11.5", default-features = false }
+rustix = { version = "1.1.5", features = ["event"] }
+tempfile = "3.26.0"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+fsevent-sys = "4.1.0"
+dispatch2 = { version = "0.3.0", default-features = false, features = ["std"] }
+libc = "0.2.186"
+rustix = { version = "1.1.5", features = ["fs"] }
+tempfile = "3.26.0"

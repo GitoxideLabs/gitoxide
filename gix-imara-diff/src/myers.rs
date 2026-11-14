@@ -92,8 +92,8 @@ impl Myers {
         let kvec: *mut [i32] = Box::into_raw(vec![0; 2 * ndiags + 2].into_boxed_slice());
         let (kforward, kbackward) = unsafe {
             (
-                NonNull::new_unchecked((kvec as *mut i32).add(len2 + 1)),
-                NonNull::new_unchecked((kvec as *mut i32).add(ndiags + len2 + 1)),
+                NonNull::new_unchecked(kvec.cast::<i32>().add(len2 + 1)),
+                NonNull::new_unchecked(kvec.cast::<i32>().add(ndiags + len2 + 1)),
             )
         };
         Self {
@@ -125,7 +125,7 @@ impl Myers {
 
             file1 = file1.slice(split.token_idx1 as u32..);
             file2 = file2.slice(split.token_idx2 as u32..);
-            need_min = split.minimized_hi
+            need_min = split.minimized_hi;
         }
     }
 
@@ -169,8 +169,8 @@ impl Myers {
                     }
                 }
             } else {
-                found_snake |= forward_search.run(file1, file2, |_, _| false).is_some()
-            };
+                found_snake |= forward_search.run(file1, file2, |_, _| false).is_some();
+            }
 
             backwards_search.next_d();
             if !is_odd {
@@ -192,8 +192,8 @@ impl Myers {
                     }
                 }
             } else {
-                found_snake |= backwards_search.run(file1, file2, |_, _| false).is_some()
-            };
+                found_snake |= backwards_search.run(file1, file2, |_, _| false).is_some();
+            }
 
             if need_min {
                 continue;

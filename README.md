@@ -145,6 +145,9 @@ exposing their APIs through public crates, may remain _major-zero crates_ indefi
   * `gitoxide-core`
 * **very early**  _(possibly without any documentation and many rough edges)_
   * [gix-blame](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-blame)
+  * [gix-notify](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-notify)
+  * [gix-fsmonitor](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-fsmonitor)
+  * [gix-fsmonitor-daemon](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-fsmonitor-daemon)
 * **idea** _(just a name placeholder)_
   * [gix-note](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-note)
   * [gix-fetchhead](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-fetchhead)
@@ -298,6 +301,86 @@ Once installed, there are two binaries:
   * high level commands, _porcelain_, for every-day use, optimized for a pleasant user experience
 * **gix**
   * low level commands, _plumbing_, for use in more specialized cases and to validate newly written code in real-world scenarios
+
+### Raw filesystem notifications
+
+`gix notify` prints native filesystem hints for ordinary files and directories,
+using `gix-notify` directly. It defaults to the current directory, accepts multiple
+paths, and watches directory descendants recursively:
+
+```sh
+gix notify
+gix notify /path/to/first /path/to/second
+gix notify --non-recursive /path/to/directory
+```
+
+No Git repository is required; the global `-r` option does not select notification
+paths. Each batch reports its coverage generation, publication sequence, and
+whether more work is queued, followed by event kind, path-kind hints, and paths.
+Registration initially prints `Rescan required: WatchSetChanged`. Notifications
+can be coalesced or lost; reconcile filesystem state and establish a new baseline
+when loss is reported. This command prints hints without performing that scan.
+
+`--max-events` (4096) and `--max-bytes` (4194304 estimated bytes) bound the retained
+queue. `--batch-events` (256) and `--batch-bytes` (262144 estimated bytes) bound
+each drain; all four limits must be positive. `--root-check-ms` defaults to 1000
+and configures periodic native root identity checks on macOS and Windows. A value
+of `0` disables those periodic checks; supported registration and delivery checks
+remain active. Root checks do not scan directory contents or detect every silent
+notification gap. Ctrl-C releases the watches. The command uses blocking APIs
+and remains Tokio-free in normal builds.
+
+### Watching repositories
+
+`gix watch` prints repository invalidations, discovered worktrees, native watcher
+statistics, and recovery errors. Use `-r` to select a repository and Ctrl-C to
+release its watches:
+
+```sh
+gix -r /path/to/repository watch
+gix watch --all-worktrees
+gix watch --no-metadata --worktree-coverage all
+```
+
+The default watches metadata and uses the index and ignore rules to select
+worktree directories. File invalidations remain unfiltered. `--all-worktrees`
+shares metadata watches while reporting each checkout separately and requires
+metadata monitoring. `--worktree-coverage none` selects metadata only; `all`
+also covers ignored directories and nested repositories. The command logs
+invalidation hints; consumers still need to reconcile filesystem state and
+rebuild a baseline after loss. Scheduling options are listed by `gix watch --help`.
+
+### Filesystem monitor daemons
+
+`gix fsmonitor` serves Git's filesystem monitor protocols and starts detached
+children from the running `gix` executable itself. Its implementation uses the
+`gix-fsmonitor` library independently of the standalone `gix-fsmonitor` tool.
+Both commands use blocking APIs and normal builds remain Tokio-free.
+
+```sh
+gix fsmonitor start --idle-timeout 300
+gix fsmonitor status
+gix fsmonitor query
+gix fsmonitor flush
+gix fsmonitor stop
+```
+
+`run` serves in the foreground, `path` prints the native IPC endpoint, and
+`query [TOKEN]` writes the binary token/path response. The global `-r PATH` and
+`-c key=value` options apply to these commands and are preserved when starting
+their child. An idle timeout of `0` disables idle shutdown.
+
+To have Git automatically start this implementation through hook v2:
+
+```sh
+git config core.fsmonitor 'gix fsmonitor hook --idle-timeout 300'
+git config core.fsmonitorHookVersion 2
+```
+
+Hook mode selects `gix` for autostart. With `core.fsmonitor=true`, Git instead
+starts its own native daemon when the shared endpoint is missing. See the
+[`gix-fsmonitor` documentation](gix-fsmonitor/README.md) for protocol, ownership,
+and consistency guarantees.
 
 ## Project Goals
 

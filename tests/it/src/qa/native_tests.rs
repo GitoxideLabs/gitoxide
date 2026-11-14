@@ -110,14 +110,14 @@ fn test_command(
         },
         "1",
     );
-    command.args([
-        "-E",
-        if windows_arm {
-            "not ((package(=internal-tools) & binary(=qa)) | test(performance) | test(speed))"
-        } else {
-            "not (package(=internal-tools) & binary(=qa))"
-        },
-    ]);
+    // Workspace unification can enable notify, but gix/Cargo.toml runs these tests once in a dedicated variant.
+    let mut excluded = String::from(
+        "(package(=internal-tools) & binary(=qa)) | (package(=gix) & (test(notify::) | test(=repository::worktree::linked_worktree_removal_notifies_through_shared_metadata)))",
+    );
+    if windows_arm {
+        excluded.push_str(" | test(performance) | test(speed)");
+    }
+    command.args(["-E", &format!("not ({excluded})")]);
     Ok(command)
 }
 
@@ -637,10 +637,10 @@ mod tests {
                     "--no-tests",
                     "pass",
                     "-E",
-                    "not (package(=internal-tools) & binary(=qa))",
+                    "not ((package(=internal-tools) & binary(=qa)) | (package(=gix) & (test(notify::) | test(=repository::worktree::linked_worktree_removal_notifies_through_shared_metadata))))",
                 ]
                 .map(OsStr::new),
-                "both fixture modes run the exact saved binaries without rebuilding"
+                "both fixture modes reuse saved binaries without repeating self-tests or the dedicated notify variant"
             );
             let env: BTreeMap<_, _> = command.get_envs().collect();
             for (name, value) in [
@@ -683,11 +683,11 @@ mod tests {
             command.get_args().collect::<Vec<_>>().ends_with(
                 &[
                     "-E",
-                    "not ((package(=internal-tools) & binary(=qa)) | test(performance) | test(speed))",
+                    "not ((package(=internal-tools) & binary(=qa)) | (package(=gix) & (test(notify::) | test(=repository::worktree::linked_worktree_removal_notifies_through_shared_metadata))) | test(performance) | test(speed))",
                 ]
                 .map(OsStr::new)
             ),
-            "Windows ARM retains its performance-test exclusions"
+            "Windows ARM retains performance-test exclusions without repeating the dedicated notify variant"
         );
         let env: BTreeMap<_, _> = command.get_envs().collect();
         for (name, value) in [

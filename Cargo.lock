@@ -1098,6 +1098,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dispatch2"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e0e367e4e7da84520dedcac1901e4da967309406d1e51017ae1abfb97adbd38"
+dependencies = [
+ "bitflags 2.13.2",
+]
+
+[[package]]
 name = "displaydoc"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1331,19 +1340,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "fs-err"
-version = "3.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5c95b673b8f6f7235229ae11c5642d81b04c2e64c1e2fb417bc0cf73ca45f29"
-dependencies = [
- "autocfg",
-]
-
-[[package]]
 name = "fs_extra"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
+
+[[package]]
+name = "fsevent-sys"
+version = "4.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76ee7a02da4d231650c7cea31349b889be2f45ddb3ef3032d2ec8185f6313fd2"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "futures-channel"
@@ -1479,6 +1488,7 @@ dependencies = [
  "futures-lite",
  "gitoxide-core",
  "gix",
+ "gix-testtools",
  "gix-tix",
  "prodash",
  "serde_derive",
@@ -1498,7 +1508,6 @@ dependencies = [
  "crossbeam-channel",
  "document-features",
  "dua-core",
- "fs-err",
  "futures-io",
  "futures-lite",
  "gitoxide-core",
@@ -1548,6 +1557,7 @@ dependencies = [
  "gix-error",
  "gix-filter",
  "gix-fs",
+ "gix-fsmonitor",
  "gix-glob",
  "gix-hash",
  "gix-hashtable",
@@ -1558,6 +1568,7 @@ dependencies = [
  "gix-merge",
  "gix-negotiate",
  "gix-note",
+ "gix-notify",
  "gix-object",
  "gix-odb",
  "gix-pack",
@@ -1599,6 +1610,7 @@ dependencies = [
  "signal-hook 0.4.6",
  "smallvec",
  "termtree",
+ "tokio",
 ]
 
 [[package]]
@@ -1972,6 +1984,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "gix-fsmonitor"
+version = "0.1.0"
+dependencies = [
+ "bstr",
+ "getrandom 0.4.3",
+ "gix-command",
+ "gix-error",
+ "gix-lock",
+ "gix-macros",
+ "gix-notify",
+ "gix-packetline",
+ "gix-parallel",
+ "gix-path",
+ "gix-testtools",
+ "gix-trace",
+ "gix-utils",
+ "libc",
+ "rustix",
+ "sha1dc",
+ "tempfile",
+ "tokio",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "gix-fsmonitor-daemon"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "gix",
+ "gix-fsmonitor-daemon",
+ "gix-testtools",
+]
+
+[[package]]
 name = "gix-glob"
 version = "0.29.1"
 dependencies = [
@@ -2184,6 +2231,25 @@ dependencies = [
  "gix-odb",
  "gix-testtools",
  "insta",
+]
+
+[[package]]
+name = "gix-notify"
+version = "0.1.0"
+dependencies = [
+ "async-channel 2.5.0",
+ "dispatch2",
+ "event-listener 5.4.2",
+ "fsevent-sys",
+ "futures-lite",
+ "gix-error",
+ "gix-parallel",
+ "inotify",
+ "libc",
+ "notify",
+ "rustix",
+ "tempfile",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2627,11 +2693,11 @@ dependencies = [
  "crossterm",
  "directories",
  "gix",
+ "gix-error",
  "gix-testtools",
  "gix-trace",
  "gix-worktree",
  "insta",
- "notify",
  "ratatui",
  "terminal-colorsaurus",
  "tracing",
@@ -5390,6 +5456,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",
