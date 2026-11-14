@@ -332,6 +332,39 @@ mod push {
 
 mod push_with_comment {
     #[test]
+    fn implicit_values_roundtrip() -> crate::TestResult {
+        for (newline, implicit_newline) in [("\n", false), ("\n", true), ("\r\n", false), ("\r\n", true)] {
+            let mut config = gix_config::File::try_from(format!("[core]{newline}").as_str())?;
+            config
+                .section_mut("core", None)?
+                .set_implicit_newline(implicit_newline)
+                .push_with_comment("flag", None, "comment")?;
+            let serialized = config.to_bstring();
+            let parsed = gix_config::File::from_bytes_no_includes(
+                &serialized,
+                gix_config::file::Metadata::default(),
+                Default::default(),
+            )?;
+            assert_eq!(
+                parsed.boolean("core.flag")?,
+                Some(true),
+                "the comment must preserve implicit true"
+            );
+            assert_eq!(
+                parsed.section("core", None)?.value_implicit("flag"),
+                Some(None),
+                "the key remains implicit instead of acquiring an explicit value"
+            );
+            assert_eq!(
+                parsed.to_bstring(),
+                serialized,
+                "comments and line endings survive reparsing"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn various_comments_and_escaping() -> gix_testtools::TestResult {
         for (comment, expected) in [
             ("", "$head\tk = v #$nl"),

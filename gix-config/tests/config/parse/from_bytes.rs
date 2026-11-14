@@ -1,6 +1,43 @@
 use super::*;
 
 #[test]
+fn implicit_values_match_git() -> gix_testtools::TestResult {
+    let fixture = crate::scripted_fixture_read_only("make_parse_baseline.sh")?;
+    let baseline = std::fs::read(fixture.join("baseline.git"))?;
+    let baseline = baseline.strip_suffix(b"\0").expect("Git baseline records end in NUL");
+    let fields = baseline.split(|byte| *byte == 0).collect::<Vec<_>>();
+    let (cases, remainder) = fields.as_chunks::<4>();
+    assert!(remainder.is_empty(), "each Git baseline record has four fields");
+    for [description, input, status, url] in cases {
+        let description = std::str::from_utf8(description)?;
+        let accepted = *status == b"0";
+        let events = Events::from_bytes(input, None);
+        assert_eq!(events.is_ok(), accepted, "{description}: parsing agrees with Git");
+        assert_eq!(
+            Events::from_bytes(input, Some(|_| false)).is_ok(),
+            accepted,
+            "{description}: filtering events cannot bypass validation"
+        );
+        let file =
+            gix_config::File::from_bytes_no_includes(input, gix_config::file::Metadata::default(), Default::default());
+        assert_eq!(file.is_ok(), accepted, "{description}: files agree with Git");
+        if accepted {
+            assert_eq!(
+                file?.raw_value("submodule.module.url")?,
+                *url,
+                "{description}: the winning URL agrees with Git"
+            );
+            let mut roundtrip = Vec::new();
+            for event in events?.iter() {
+                event.write_to(&mut roundtrip)?;
+            }
+            assert_eq!(roundtrip, *input, "{description}: valid syntax is preserved");
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn fuzz() {
     assert!(
         Events::from_str("[]A=\\\\\r\\\n\n").is_err(),
