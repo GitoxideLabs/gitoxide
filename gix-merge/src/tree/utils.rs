@@ -730,7 +730,7 @@ impl Conflict {
         Conflict::maybe_resolved(Ok(resolution), changes, entries)
     }
 
-    fn maybe_resolved(
+    pub(super) fn maybe_resolved(
         resolution: std::result::Result<Resolution, ResolutionFailure>,
         (ours, theirs, map, outer_map): (&Change, &Change, ConflictMapping, ConflictMapping),
         entries: [Option<ConflictIndexEntry>; 3],
