@@ -97,7 +97,7 @@ impl std::fmt::Display for EntryRef<'_, '_> {
         write!(
             f,
             "{:>6o} {:>6} {}\t{}",
-            self.mode(),
+            self.mode().normalized(),
             self.mode().as_str(),
             self.id().shorten_or_id(),
             self.filename()

@@ -19,6 +19,29 @@ fn find_entry() -> TestResult {
 }
 
 #[test]
+fn displayed_entry_modes_match_git() -> TestResult {
+    let repo = named_repo("make_basic_repo.sh")?;
+    let subtree_id = repo.object_hash().empty_tree();
+    for (raw_mode, canonical_mode, kind) in [
+        ("100700", "100755", "exe"),
+        ("120777", "120000", "link"),
+        ("140000", "160000", "commit"),
+        ("040777", "40000", "tree"),
+    ] {
+        let mut data = format!("{raw_mode} entry\0").into_bytes();
+        data.extend_from_slice(subtree_id.as_bytes());
+        let tree = gix::Tree::from_data(repo.object_hash().null(), data, &repo);
+        let entry = tree.iter().next().expect("one entry")?;
+        assert_eq!(
+            entry.to_string(),
+            format!("{canonical_mode} {kind:>6} {}\tentry", entry.id().shorten_or_id()),
+            "{raw_mode}: displayed numeric modes agree with the interpreted object kind"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn lookup_entry_by_path() -> TestResult {
     let repo = worktree_repo()?;
     let tree = repo.head_commit()?.tree()?;

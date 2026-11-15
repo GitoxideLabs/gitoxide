@@ -87,3 +87,22 @@ fn executable_non_file_nodes_are_not_type_changes() {
         }
     }
 }
+#[test]
+fn tree_modes_are_canonicalized() -> gix_testtools::TestResult {
+    for (raw, expected) in [
+        ("100700", Mode::FILE_EXECUTABLE),
+        ("100010", Mode::FILE),
+        ("120777", Mode::SYMLINK),
+        ("140000", Mode::COMMIT),
+        ("170000", Mode::COMMIT),
+        ("040777", Mode::DIR),
+    ] {
+        let mode = gix_object::tree::EntryMode::from_bytes(raw.as_bytes()).expect("valid octal mode");
+        assert_eq!(
+            Mode::from(mode),
+            expected,
+            "{raw}: index entries use Git's interpreted mode"
+        );
+    }
+    Ok(())
+}
