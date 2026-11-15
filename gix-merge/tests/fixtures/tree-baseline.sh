@@ -3851,6 +3851,65 @@ function policy_commits () {
   git update-ref refs/heads/B "$their_commit_id"
 }
 
+# File/directory conflicts must reserve names against additions on either side,
+# including when a rename introduces the blocking file or the directory.
+# Forced resolutions keep the selected entries and every unrelated addition.
+for pair in add-dir modify-dir rename-dir rename-rename-dir; do
+  for occupancy in none file directory; do
+    for file_side in A B; do
+      repo="structural-path-$pair-$occupancy-$file_side"
+      git init "$repo"
+      (cd "$repo"
+        file_blob_id=$(write_lines "file payload" | git hash-object -w --stdin)
+        child_blob_id=$(write_lines "child payload" | git hash-object -w --stdin)
+        occupied_blob_id=$(write_lines "unrelated payload" | git hash-object -w --stdin)
+        base_entries=()
+        file_entries=(d 100644 "$file_blob_id")
+        directory_entries=(d/f 100644 "$child_blob_id")
+        case "$pair" in
+          modify-dir)
+            base_blob_id=$(write_lines "base payload" | git hash-object -w --stdin)
+            base_entries=(d 100644 "$base_blob_id") ;;
+          rename-dir)
+            base_entries=(x 100644 "$file_blob_id")
+            directory_entries+=("${base_entries[@]}") ;;
+          rename-rename-dir)
+            base_entries=(x 100644 "$file_blob_id" old/f 100644 "$child_blob_id")
+            file_entries+=(old/f 100644 "$child_blob_id")
+            directory_entries+=(x 100644 "$file_blob_id") ;;
+        esac
+        occupied_entries=()
+        if test "$occupancy" != none; then
+          occupied_entries=("d~$file_side" 100644 "$occupied_blob_id")
+        fi
+        base_tree_id=$(policy_tree "${base_entries[@]+"${base_entries[@]}"}")
+        ancestor_tree_id=$(policy_tree "${base_entries[@]+"${base_entries[@]}"}" "${occupied_entries[@]+"${occupied_entries[@]}"}")
+        forced_file_tree_id=$(policy_tree "${file_entries[@]}" "${occupied_entries[@]+"${occupied_entries[@]}"}")
+        forced_directory_tree_id=$(policy_tree "${directory_entries[@]}" "${occupied_entries[@]+"${occupied_entries[@]}"}")
+        case "$occupancy" in
+          file) file_entries+=("${occupied_entries[@]}") ;;
+          directory) directory_entries+=("${occupied_entries[@]}") ;;
+        esac
+        file_tree_id=$(policy_tree "${file_entries[@]}")
+        directory_tree_id=$(policy_tree "${directory_entries[@]}")
+        if test "$file_side" = A; then
+          our_tree_id=$file_tree_id; their_tree_id=$directory_tree_id
+          echo "$forced_file_tree_id" >.git/resolve-A-B-with-ours.tree
+          echo "$forced_directory_tree_id" >.git/resolve-B-A-with-ours.tree
+        else
+          our_tree_id=$directory_tree_id; their_tree_id=$file_tree_id
+          echo "$forced_directory_tree_id" >.git/resolve-A-B-with-ours.tree
+          echo "$forced_file_tree_id" >.git/resolve-B-A-with-ours.tree
+        fi
+        echo "$ancestor_tree_id" >.git/resolve-A-B-with-ancestor.tree
+        echo "$ancestor_tree_id" >.git/resolve-B-A-with-ancestor.tree
+        policy_commits
+      )
+      baseline "$repo" A-B A B
+    done
+  done
+done
+
 # The same distinct-type collision must preserve both entries and unrelated
 # additions across every pairing. The opposite side occupies the regular
 # file's preferred conflict name, even when directory relocation defers it.

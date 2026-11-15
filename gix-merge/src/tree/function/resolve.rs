@@ -316,7 +316,7 @@ pub fn tree<'objects>(
                                 let renamed_location = unique_path_in_tree(
                                     location.as_bstr(),
                                     &editor,
-                                    &[their_tree],
+                                    [our_tree, their_tree],
                                     labels.other.unwrap_or_default(),
                                 )?;
                                 match resolve_tree_conflicts {
@@ -737,9 +737,13 @@ pub fn tree<'objects>(
                             // A child of a file-to-directory replacement waits for the parent deletion to settle the
                             // blocking rewrite; the retry ignores that same rewrite when looking for another conflict. For
                             // example, ours renames the file `dir` to `moved` while theirs replaces it with `dir/file`.
-                            (Change::Rewrite { .. }, Change::Addition { relation: Some(_), .. })
+                            (Change::Rewrite { source_location, .. }, Change::Addition { relation: Some(_), .. })
                                 if matches!(match_kind, Some(MatchKind::EraseLeaf))
                                     && needs_tree_insertion.is_none()
+                                    && theirs
+                                        .location()
+                                        .strip_prefix(source_location.as_bytes())
+                                        .is_some_and(|suffix| suffix.starts_with(b"/"))
                                     && !matches!(resolve_tree_conflicts, Some(ResolveWith::Ancestor)) =>
                             {
                                 push_deferred((theirs.clone(), Some(ours_idx)), their_changes, theirs_idx);
@@ -772,7 +776,7 @@ pub fn tree<'objects>(
                                 let renamed_location = unique_path_in_tree(
                                     blocking_location.as_bstr(),
                                     &editor,
-                                    &[our_tree],
+                                    [our_tree, their_tree],
                                     labels.current.unwrap_or_default(),
                                 )?;
                                 let conflict = Conflict::without_resolution(
@@ -842,7 +846,7 @@ pub fn tree<'objects>(
                                 let renamed_location = unique_path_in_tree(
                                     blocking_location.as_bstr(),
                                     &editor,
-                                    &[our_tree],
+                                    [our_tree, their_tree],
                                     labels.current.unwrap_or_default(),
                                 )?;
                                 let conflict = Conflict::without_resolution(
@@ -1051,15 +1055,15 @@ pub fn tree<'objects>(
                                     ];
                                     match resolve_tree_conflicts {
                                         None => {
-                                            let our_tree = pick_mut(side, our_tree, their_tree);
                                             let renamed_path = unique_path_in_tree(
                                                 location.as_bstr(),
                                                 &editor,
-                                                &[our_tree],
+                                                [our_tree, their_tree],
                                                 label_of_side_to_be_moved,
                                             )?;
                                             editor.remove_if_leaf(toc(location))?;
-                                            our_tree.remove_existing_change(location.as_bstr());
+                                            pick_mut(side, our_tree, their_tree)
+                                                .remove_existing_change(location.as_bstr());
 
                                             let new_change = Change::Addition {
                                                 location: renamed_path.clone(),
@@ -1187,11 +1191,16 @@ pub fn tree<'objects>(
                                     }
                                 }
                             }
-                            // A file rename lands at a renamed directory's destination. Keep the directory there and
-                            // relocate the file rename to a unique path. For example, a directory moves from `old` to
-                            // `new` while a file moves from `file` to `new`.
+                            // A file rename lands at an added or renamed directory's destination. Keep the directory
+                            // there and relocate the file rename to a unique path. For example, a directory moves from
+                            // `old` to `new` while a file moves from `file` to `new`.
                             (
                                 Change::Rewrite {
+                                    entry_mode: tree_mode,
+                                    location: tree_location,
+                                    ..
+                                }
+                                | Change::Addition {
                                     entry_mode: tree_mode,
                                     location: tree_location,
                                     ..
@@ -1207,7 +1216,7 @@ pub fn tree<'objects>(
                                 let renamed_location = unique_path_in_tree(
                                     location.as_bstr(),
                                     &editor,
-                                    &[our_tree],
+                                    [our_tree, their_tree],
                                     labels.other.unwrap_or_default(),
                                 )?;
                                 let conflict = Conflict::without_resolution(
@@ -1530,7 +1539,7 @@ pub fn tree<'objects>(
                                 let renamed_location = unique_path_in_tree(
                                     blocking_location.as_bstr(),
                                     &editor,
-                                    &[our_tree],
+                                    [our_tree, their_tree],
                                     labels.current.unwrap_or_default(),
                                 )?;
                                 let conflict = Conflict::without_resolution(
@@ -2255,7 +2264,7 @@ fn resolve_distinct_types(
                     locations[side] = unique_path_in_tree(
                         location.as_bstr(),
                         editor,
-                        &[our_tree, their_tree],
+                        [our_tree, their_tree],
                         label.unwrap_or_default(),
                     )?;
                 }

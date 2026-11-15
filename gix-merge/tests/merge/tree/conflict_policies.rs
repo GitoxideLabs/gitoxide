@@ -44,8 +44,11 @@ fn merge(
 }
 
 #[test]
-fn distinct_types_select_original_entries_across_pairs() -> TestResult {
-    for case in cases("shared-distinct-types-")? {
+fn forced_entries_preserve_sources_and_unrelated_paths_across_pairs() -> TestResult {
+    for case in cases("shared-distinct-types-")?
+        .into_iter()
+        .chain(cases("structural-path-")?)
+    {
         for (choice, name) in [(ResolveWith::Ancestor, "ancestor"), (ResolveWith::Ours, "ours")] {
             let mut options = basic_merge_options().tree_merge;
             options.tree_conflicts = Some(choice);

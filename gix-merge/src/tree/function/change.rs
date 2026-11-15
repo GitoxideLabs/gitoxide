@@ -266,15 +266,25 @@ pub(super) fn matching(
             their_location = location.as_bstr();
             our_tree.check_conflict(their_location).filter(|candidate| {
                 matches!(candidate, PossibleConflict::TreeToNonTree { change_idx: None })
-                    || candidate
-                        .change_idx()
-                        .is_some_and(|idx| matches!(our_changes[idx].inner, Change::Rewrite { .. }))
+                    || candidate.change_idx().is_some_and(|idx| {
+                        matches!(our_changes[idx].inner, Change::Rewrite { .. })
+                            || matches!(our_changes[idx].inner, Change::Addition { entry_mode, .. } if entry_mode.is_tree())
+                    })
             })
         }
         _ => None,
     });
 
     candidate.filter(|ours| {
+        // A newly added directory disappears when forced resolutions discard all its children.
+        if ours.change_idx().is_some_and(
+            |idx| matches!(our_changes[idx].inner, Change::Addition { entry_mode, .. } if entry_mode.is_tree()),
+        ) && our_tree.all_changes_at_or_below(their_location, |idx| {
+            let change = &our_changes[idx];
+            change.inner.entry_mode().is_tree() || change.was_processed_without_application()
+        }) {
+            return false;
+        }
         // Deletions alone leave no descendants that could collide with a replacement leaf.
         if matches!(ours, PossibleConflict::TreeToNonTree { change_idx: None })
             && our_tree.all_changes_at_or_below(their_location, |idx| {

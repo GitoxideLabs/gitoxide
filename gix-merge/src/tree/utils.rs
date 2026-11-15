@@ -65,7 +65,7 @@ pub fn rewrite_location_with_renamed_directory(their_location: &BStr, passed_cha
     }
 }
 
-/// Produce a side-qualified path for `file_path` like `a/b`, using `editor` and `trees` to assure uniqueness.
+/// Produce a side-qualified path for `file_path` like `a/b`, checking `editor` and both sides' pending changes.
 ///
 /// This normally keeps the file in its directory, as in `a/b~side`. If a non-tree component blocks that directory,
 /// the blocker itself is qualified instead, as in `a~side/b`, because changing only the child name could never make
@@ -73,7 +73,7 @@ pub fn rewrite_location_with_renamed_directory(their_location: &BStr, passed_cha
 pub fn unique_path_in_tree(
     file_path: &BStr,
     editor: &tree::Editor<'_>,
-    trees: &[&TreeNodes],
+    trees: [&TreeNodes; 2],
     side_name: &BStr,
 ) -> Result<BString> {
     let mut qualifier = BString::from("~");
@@ -923,7 +923,7 @@ mod tree_nodes_tests {
         );
 
         assert_eq!(
-            unique_path_in_tree("dir/file".into(), &editor, &[&tree], "OURS".into())?,
+            unique_path_in_tree("dir/file".into(), &editor, [&tree, &TreeNodes::new()], "OURS".into())?,
             "dir~OURS/file",
             "the blocking path component itself must be moved aside"
         );
