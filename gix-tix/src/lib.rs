@@ -1274,10 +1274,14 @@ fn worktrunk_input(key: KeyEvent, selected: usize, len: usize, page: usize) -> O
             }))
         }
         KeyCode::Up => select(selected.saturating_sub(1)),
+        KeyCode::Char('p' | 'P') if key.modifiers.contains(KeyModifiers::CONTROL) => select(selected.saturating_sub(1)),
         KeyCode::Char('k' | 'K') if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
             select(selected.saturating_sub(1))
         }
         KeyCode::Down => select(selected.saturating_add(1).min(len.saturating_sub(1))),
+        KeyCode::Char('n' | 'N') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            select(selected.saturating_add(1).min(len.saturating_sub(1)))
+        }
         KeyCode::Char('j' | 'J') if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
             select(selected.saturating_add(1).min(len.saturating_sub(1)))
         }
@@ -9840,6 +9844,42 @@ mod tests {
             worktrunk_input(key(KeyCode::Char('j')), 1, 4, 2),
             Some(WorktrunkInput::Select(2))
         );
+        for (ch, selected, expected) in [
+            ('n', 1, 2),
+            ('p', 1, 0),
+            ('N', 1, 2),
+            ('P', 1, 0),
+            ('n', 3, 3),
+            ('p', 0, 0),
+        ] {
+            for kind in [KeyEventKind::Press, KeyEventKind::Repeat] {
+                assert_eq!(
+                    worktrunk_input(
+                        KeyEvent::new_with_kind(KeyCode::Char(ch), KeyModifiers::CONTROL, kind),
+                        selected,
+                        4,
+                        2,
+                    ),
+                    Some(WorktrunkInput::Select(expected)),
+                    "Ctrl-n/p presses and repeats move one row within the list bounds"
+                );
+            }
+            assert_eq!(
+                worktrunk_input(key(KeyCode::Char(ch)), selected, 4, 2),
+                None,
+                "n/p only navigate when Control is held"
+            );
+            assert_eq!(
+                worktrunk_input(
+                    KeyEvent::new_with_kind(KeyCode::Char(ch), KeyModifiers::CONTROL, KeyEventKind::Release),
+                    selected,
+                    4,
+                    2,
+                ),
+                None,
+                "releasing Ctrl-n/p does not move the selection again"
+            );
+        }
         assert_eq!(
             worktrunk_input(key(KeyCode::PageDown), 1, 4, 2),
             Some(WorktrunkInput::Select(3))
