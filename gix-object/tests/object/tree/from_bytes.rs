@@ -22,6 +22,46 @@ fn empty() -> gix_testtools::TestResult {
 }
 
 #[test]
+fn noncanonical_modes_match_git_without_losing_their_encoding() -> gix_testtools::TestResult {
+    let root = gix_testtools::scripted_fixture_read_only("make_tree_modes.sh")?;
+    let hash_kind = crate::fixture_hash_kind();
+    for raw_mode in [
+        "100700", "100100", "100600", "100010", "100664", "120777", "140000", "140777", "170000", "060000", "40000",
+        "040000", "40777", "040777",
+    ] {
+        let data = std::fs::read(root.join(format!("{raw_mode}.tree")))?;
+        let baseline = std::fs::read_to_string(root.join(format!("{raw_mode}.baseline")))?;
+        let expected_mode = u16::from_str_radix(&baseline[..6], 8)?;
+        let tree = TreeRef::from_bytes(&data, hash_kind)?;
+        let iterated = TreeRefIter::from_bytes(&data, hash_kind).entries()?;
+        assert_eq!(tree.entries, iterated, "both tree readers preserve the same entries");
+        let mode = tree.entries[0].mode;
+        assert_eq!(
+            mode.normalized().value(),
+            expected_mode,
+            "{raw_mode}: normalization agrees with Git"
+        );
+        assert_eq!(
+            mode.is_commit(),
+            expected_mode == tree::EntryKind::Commit as u16,
+            "{raw_mode}: submodule detection agrees with Git"
+        );
+        assert_eq!(
+            mode.value(),
+            u16::from_str_radix(raw_mode, 8)?,
+            "{raw_mode}: the raw numeric value remains available"
+        );
+        let mut encoded = Vec::new();
+        tree.write_to(&mut encoded)?;
+        assert_eq!(encoded, data, "{raw_mode}: re-encoding preserves the object id");
+        encoded.clear();
+        Tree::from(tree).write_to(&mut encoded)?;
+        assert_eq!(encoded, data, "{raw_mode}: owned trees preserve the same encoding");
+    }
+    Ok(())
+}
+
+#[test]
 fn everything() -> gix_testtools::TestResult {
     let fixture = tree_fixture("everything.tree")?;
     let hash_kind = crate::fixture_hash_kind();

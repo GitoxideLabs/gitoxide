@@ -56,37 +56,50 @@ pub struct Editor<'a> {
 ///
 /// Used in [`mutable::Entry`][crate::tree::Entry] and [`EntryRef`].
 ///
-/// Note that even though it can be created from any `u16`, it should be preferable to
-/// create it by converting [`EntryKind`] into `EntryMode`.
+/// The stored mode is retained for serialization. Use [`kind()`][Self::kind()] to obtain
+/// Git's canonical interpretation, or [`normalized()`][Self::normalized()] to obtain its canonical mode.
 #[derive(Clone, Copy, PartialEq, Eq, Ord, PartialOrd, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EntryMode {
-    // Represents the value read from Git, except that "040000" is represented with 0o140000 but
-    // "40000" is represented with 0o40000.
-    internal: u16,
+    // Keep zero padding outside the raw mode bits to distinguish "040000" from "140000".
+    internal: u32,
 }
 
 impl TryFrom<u32> for tree::EntryMode {
     type Error = u32;
     fn try_from(mode: u32) -> Result<Self, Self::Error> {
         Ok(match mode {
-            0o40000 | 0o120000 | 0o160000 => EntryMode { internal: mode as u16 },
-            blob_mode if blob_mode & 0o100000 == 0o100000 => EntryMode { internal: mode as u16 },
+            0o40000 | 0o120000 | 0o160000 => EntryMode {
+                internal: u32::from(mode as u16),
+            },
+            blob_mode if blob_mode & 0o100000 == 0o100000 => EntryMode {
+                internal: u32::from(mode as u16),
+            },
             _ => return Err(mode),
         })
     }
 }
 
 impl EntryMode {
-    /// Expose the value as u16 (lossy, unlike the internal representation that is hidden).
-    pub const fn value(self) -> u16 {
-        // Demangle the hack: In the case where the second leftmost octet is 4 (Tree), the leftmost bit is
-        // there to represent whether the bytes representation should have 5 or 6 octets.
-        if self.internal & IFMT == 0o140000 {
-            0o040000
-        } else {
-            self.internal
+    /// Return this mode normalized to Git's canonical interpretation.
+    ///
+    /// Regular files become `100755` if the owner's execute bit is set, or `100644` otherwise.
+    /// Trees and symlinks become `40000` and `120000`, respectively, ignoring permission bits.
+    /// All other file types become submodule commits (`160000`).
+    ///
+    /// This is equivalent to converting [`kind()`][Self::kind()] back into an `EntryMode`, discarding
+    /// noncanonical permissions and leading zero padding. The original mode remains unchanged.
+    pub const fn normalized(self) -> Self {
+        Self {
+            internal: self.kind() as u32,
         }
+    }
+
+    /// Expose the stored numeric mode, without its zero padding.
+    ///
+    /// This may be noncanonical. Use [`normalized()`][Self::normalized()] followed by `value()` for the mode Git reads.
+    pub const fn value(self) -> u16 {
+        self.internal as u16
     }
 
     /// Return the representation as used in the git internal format, which is octal and written
@@ -98,17 +111,11 @@ impl EntryMode {
             for (idx, backing_octet) in backing.iter_mut().enumerate() {
                 let bit_pos = 3 /* because base 8 and 2^3 == 8*/ * (6 - idx - 1);
                 let oct_mask = 0b111 << bit_pos;
-                let digit = (self.internal & oct_mask) >> bit_pos;
+                let digit = (self.value() & oct_mask) >> bit_pos;
                 *backing_octet = b'0' + digit as u8;
             }
-            // Hack: `0o140000` represents `"040000"`, `0o40000` represents `"40000"`.
-            if backing[1] == b'4' {
-                if backing[0] == b'1' {
-                    backing[0] = b'0';
-                    &backing[0..6]
-                } else {
-                    &backing[1..6]
-                }
+            if self.is_tree() && self.internal & ZERO_PADDED == 0 {
+                &backing[1..6]
             } else {
                 &backing[0..6]
             }
@@ -119,7 +126,7 @@ impl EntryMode {
     /// Construct an EntryMode from bytes represented as in the git internal format
     /// Return the mode and the remainder of the bytes.
     pub(crate) fn extract_from_bytes(i: &[u8]) -> Option<(Self, &'_ [u8])> {
-        let mut mode = 0;
+        let mut mode: u16 = 0;
         if i.is_empty() {
             return None;
         }
@@ -166,11 +173,11 @@ impl EntryMode {
             space_pos
         };
 
-        // Hack: `0o140000` represents `"040000"`, `0o40000` represents `"40000"`.
-        if mode == 0o040000 && i[0] == b'0' {
-            mode += 0o100000;
+        let mut internal = u32::from(mode);
+        if mode & IFMT == EntryKind::Tree as u16 && i[0] == b'0' {
+            internal |= ZERO_PADDED;
         }
-        Some((Self { internal: mode }, &i[(space_pos + 1)..]))
+        Some((Self { internal }, &i[(space_pos + 1)..]))
     }
 
     /// Construct an EntryMode from bytes represented as in the git internal format.
@@ -213,7 +220,7 @@ pub enum EntryKind {
 
 impl From<EntryKind> for EntryMode {
     fn from(value: EntryKind) -> Self {
-        EntryMode { internal: value as u16 }
+        EntryMode { internal: value as u32 }
     }
 }
 
@@ -240,9 +247,13 @@ impl EntryKind {
 }
 
 const IFMT: u16 = 0o170000;
+const ZERO_PADDED: u32 = 1 << 16;
 
 impl EntryMode {
-    /// Discretize the raw mode into an enum with well-known state while dropping unnecessary details.
+    /// Return Git's canonical interpretation of the stored mode.
+    ///
+    /// Only the owner's execute bit matters for regular files. Symlinks and trees ignore permission
+    /// bits, and all other file types are interpreted as submodule commits.
     pub const fn kind(&self) -> EntryKind {
         let etype = self.value() & IFMT;
         if etype == 0o100000 {
@@ -267,7 +278,7 @@ impl EntryMode {
 
     /// Return true if this entry mode represents the commit of a submodule.
     pub const fn is_commit(&self) -> bool {
-        self.value() & IFMT == EntryKind::Commit as u16
+        matches!(self.kind(), EntryKind::Commit)
     }
 
     /// Return true if this entry mode represents a symbolic link

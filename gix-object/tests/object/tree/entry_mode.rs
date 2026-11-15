@@ -4,7 +4,7 @@ use gix_object::tree::{EntryKind, EntryMode};
 fn size_in_bytes() {
     assert_eq!(
         std::mem::size_of::<EntryMode>(),
-        2,
+        4,
         "it should not change without notice"
     );
 }
@@ -48,6 +48,56 @@ fn is_methods() {
         EntryKind::Commit,
         "commit is really 'anything else' as `kind()` can't fail"
     );
+}
+
+#[test]
+fn normalized() -> gix_error::TestResult {
+    for (raw, kind) in [
+        ("40000", EntryKind::Tree),
+        ("040000", EntryKind::Tree),
+        ("40777", EntryKind::Tree),
+        ("040777", EntryKind::Tree),
+        ("100644", EntryKind::Blob),
+        ("100600", EntryKind::Blob),
+        ("100010", EntryKind::Blob),
+        ("100755", EntryKind::BlobExecutable),
+        ("100700", EntryKind::BlobExecutable),
+        ("100100", EntryKind::BlobExecutable),
+        ("120000", EntryKind::Link),
+        ("120777", EntryKind::Link),
+        ("160000", EntryKind::Commit),
+        ("167124", EntryKind::Commit),
+        ("140000", EntryKind::Commit),
+        ("140777", EntryKind::Commit),
+        ("170000", EntryKind::Commit),
+        ("060000", EntryKind::Commit),
+        ("000000", EntryKind::Commit),
+    ] {
+        let mode = EntryMode::from_bytes(raw.as_bytes()).expect("valid octal mode");
+        let normalized = mode.normalized();
+        assert_eq!(
+            normalized,
+            EntryMode::from(kind),
+            "{raw}: normalization agrees with kind()"
+        );
+        assert_eq!(normalized.value(), kind as u16, "{raw}: the numeric mode is canonical");
+        assert_eq!(
+            normalized.as_bytes(&mut Default::default()),
+            kind.as_octal_str(),
+            "{raw}: serialization discards noncanonical permissions and tree padding"
+        );
+        assert_eq!(
+            normalized.normalized(),
+            normalized,
+            "{raw}: normalization is idempotent"
+        );
+        assert_eq!(
+            mode.value(),
+            u16::from_str_radix(raw, 8)?,
+            "{raw}: normalization leaves the original numeric mode unchanged"
+        );
+    }
+    Ok(())
 }
 
 #[test]
