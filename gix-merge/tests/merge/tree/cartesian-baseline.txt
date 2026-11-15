@@ -39,7 +39,7 @@ gix ours current-side payload retention: 120/120
 gix ours conflict provenance retained: 86/86
 gix ours clean-oracle passes: 53/53
 gix ancestor unresolved directional merges: 32/210
-gix ancestor unchanged default-clean merges: 122/124
+gix ancestor unchanged default-clean merges: 124/124
 gix ancestor conflict provenance retained: 86/86
 gix ancestor clean-oracle passes: 53/53
 gix early-exit conflicting directional checks: 86/86
@@ -134,9 +134,8 @@ gix no-rewrites clean-oracle passes: 53/53
 ## gix ours clean-oracle failures (0)
 - none
 
-## gix ancestor changes to default-clean merges (2)
-- rename-free-a + rename-modify-free-a A+B
-- rename-free-a + rename-modify-free-a B+A
+## gix ancestor changes to default-clean merges (0)
+- none
 
 ## gix ancestor forgotten conflict provenance (0)
 - none

@@ -191,7 +191,7 @@ fn rename_add_after_destination_was_consumed() -> TestResult {
                 let (resolution, ours, theirs) = conflict.clone().into_parts_by_resolution();
                 matches!(
                     resolution,
-                    Err(gix_merge::tree::ResolutionFailure::OursAddedTheirsAddedTypeMismatch { .. })
+                    Err(gix_merge::tree::ResolutionFailure::DistinctTypes { .. })
                 ) && [ours, theirs].iter().any(|change| {
                     let (mode, object_id) = change.entry_mode_and_id();
                     mode.is_commit() && object_id == *added_commit_id
@@ -255,7 +255,8 @@ fn run_baseline() -> TestResult {
     {
         actual_cases += 1;
         let mut graph = gix_revwalk::Graph::new(&odb, None);
-        let large_file_threshold_bytes = 100;
+        // Recursive conflict markers exceed the small threshold used by the large-file cases.
+        let large_file_threshold_bytes = if case_name.contains("criss-cross") { 0 } else { 100 };
         let mut blob_merge = new_blob_merge_platform(&root, large_file_threshold_bytes);
         let mut diff_resource_cache = new_diff_resource_cache(&root);
         let mut options = basic_merge_options();
@@ -269,6 +270,12 @@ fn run_baseline() -> TestResult {
                 .try_into()
                 .expect("non-zero"),
         };
+        if case_name.contains("file-favor-ours") {
+            options.tree_merge.blob_merge.text.conflict =
+                gix_merge::blob::builtin_driver::text::Conflict::ResolveWithOurs;
+            options.tree_merge.symlink_conflicts = Some(gix_merge::blob::builtin_driver::binary::ResolveWith::Ours);
+            options.tree_merge.blob_merge.resolve_binary_with = options.tree_merge.symlink_conflicts;
+        }
 
         let mut actual = gix_merge::commit(
             our_commit_id,
@@ -432,11 +439,11 @@ fn run_baseline() -> TestResult {
     }
 
     assert_eq!(
-        actual_cases, 311,
+        actual_cases, 535,
         "BUG: update this number, and don't forget to remove a filter in the end"
     );
     assert_eq!(
-        skipped_tree_resolve_cases, 390,
+        skipped_tree_resolve_cases, 586,
         "this is done when no case is skipped, and we don't want to accidentally skip them.\
         Some don't actually have conflicts.\
         The ones we skipped don't have irreconcilable conflicts"
@@ -823,3 +830,5 @@ fn new_blob_merge_platform(
 
 mod baseline;
 mod cartesian;
+mod conflict_policies;
+mod synthetic_trees;
