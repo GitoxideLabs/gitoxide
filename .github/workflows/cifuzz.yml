@@ -16,6 +16,10 @@ on:
       - Makefile
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions: {}  # The fuzzing actions don't use our github.token at all.
 
 jobs:

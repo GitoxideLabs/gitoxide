@@ -359,6 +359,10 @@ fixes when fast selection misses an undeclared dependency. CI cancels obsolete P
 keeps landed-commit runs. The `Tests pass` gate requires the planner and all required jobs.
 Advisory, package-size and WASM failures remain informational, locally and in CI.
 
+CodeQL, zizmor, CIFuzz and scheduled stress runs cancel older runs of the same workflow
+on the same branch or pull request. Release runs are not automatically cancelled, as they
+can already have created a draft release or uploaded assets.
+
 ### What runs where
 
 Portable checks run locally on Linux, macOS or Windows. CI assigns them once to Linux x86-64

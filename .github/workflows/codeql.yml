@@ -24,6 +24,10 @@ on:
     - cron: '32 3 * * 6'
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions: {}  # Expanded in the `analyze` job.
 
 jobs:

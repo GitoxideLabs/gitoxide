@@ -11,6 +11,10 @@ on:
       - main
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions: {}  # Expanded in the `zizmor` job.
 
 jobs:
