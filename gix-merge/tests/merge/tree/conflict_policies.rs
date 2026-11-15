@@ -44,6 +44,48 @@ fn merge(
 }
 
 #[test]
+fn distinct_types_select_original_entries_across_pairs() -> TestResult {
+    for case in cases("shared-distinct-types-")? {
+        for (choice, name) in [(ResolveWith::Ancestor, "ancestor"), (ResolveWith::Ours, "ours")] {
+            let mut options = basic_merge_options().tree_merge;
+            options.tree_conflicts = Some(choice);
+            options.fail_on_conflict = Some(TreatAsUnresolved::git());
+            let mut actual = merge(&case, options)?;
+            let expected_tree_id = gix_hash::ObjectId::from_hex(
+                std::fs::read_to_string(case.root.join(format!(
+                    ".git/resolve-{}-{}-with-{name}.tree",
+                    case.our_side_name, case.their_side_name
+                )))?
+                .trim()
+                .as_bytes(),
+            )?;
+            let actual_tree_id = actual.tree.write(|tree| case.odb.write(tree))?;
+            if actual_tree_id != expected_tree_id {
+                baseline::show_diff_trees_and_fail(
+                    &case.case_name,
+                    actual_tree_id,
+                    &actual,
+                    expected_tree_id,
+                    name,
+                    &case.odb,
+                );
+            }
+            assert!(
+                !actual.failed_on_first_unresolved_conflict
+                    && !actual.has_unresolved_conflicts(TreatAsUnresolved::git())
+                    && actual
+                        .conflicts
+                        .iter()
+                        .all(|conflict| conflict.content_merge().is_none()),
+                "{}: a forced entry cannot retain a discarded content conflict",
+                case.case_name
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn modes_without_shared_ancestor_conflict_independently_of_contents() -> TestResult {
     for case in cases("mode-conflict-")? {
         let mut options = basic_merge_options().tree_merge;

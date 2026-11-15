@@ -95,6 +95,34 @@ impl Repo {
 }
 
 #[test]
+fn virtual_blob_merges_preserve_explicit_tree_policy() -> TestResult {
+    use gix_merge::tree::ResolveWith;
+
+    let repo = Repo::new()?;
+    let base_tree_id = repo.tree("a", EntryKind::Blob.into(), repo.blob("base\n")?)?;
+    let modified_tree_id = repo.tree("a", EntryKind::Blob.into(), repo.blob("modified\n")?)?;
+    let deleted_tree_id = repo.objects.write(&gix_object::Tree::default())?;
+    for (current_tree_id, other_tree_id) in [(modified_tree_id, deleted_tree_id), (deleted_tree_id, modified_tree_id)] {
+        for (choice, expected_tree_id) in [
+            (None, modified_tree_id),
+            (Some(ResolveWith::Ours), current_tree_id),
+            (Some(ResolveWith::Ancestor), base_tree_id),
+        ] {
+            let mut options = basic_merge_options().tree_merge;
+            options.blob_merge.is_virtual_ancestor = true;
+            options.tree_conflicts = choice;
+            let mut actual = repo.merge((base_tree_id, current_tree_id, other_tree_id), options)?;
+            assert_eq!(
+                actual.tree.write(|tree| repo.objects.write(tree))?,
+                expected_tree_id,
+                "virtual blob handling does not replace the requested tree policy {choice:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn symlink_ancestor_resolution_restores_the_whole_ancestor_entry() -> TestResult {
     use gix_merge::tree::{TreatAsUnresolved, apply_index_entries::RemovalMode, treat_as_unresolved};
 

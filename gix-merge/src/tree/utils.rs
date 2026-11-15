@@ -12,10 +12,7 @@ use bstr::{BStr, BString, ByteSlice, ByteVec};
 use gix_diff::tree_with_rewrites::{Change, ChangeRef};
 use gix_error::{OptionExt, ResultExt, message};
 use gix_hash::ObjectId;
-use gix_object::{
-    tree,
-    tree::{EntryKind, EntryMode},
-};
+use gix_object::{tree, tree::EntryMode};
 
 use crate::{
     blob::{ResourceKind, builtin_driver::binary::Pick, platform::builtin_merge},
@@ -123,7 +120,7 @@ pub fn unique_path_in_tree(
     }
 }
 
-/// Perform a merge between two blobs and return the result of its object id.
+/// Merge nontrivial blob contents, retaining the selected input alongside its object ID and resolution.
 #[expect(clippy::too_many_arguments)]
 pub fn perform_blob_merge(
     mut labels: crate::blob::builtin_driver::text::Labels<'_>,
@@ -136,19 +133,8 @@ pub fn perform_blob_merge(
     (previous_location, previous_id, previous_mode): (&BString, ObjectId, EntryMode),
     (extra_markers, outer_side): (u8, ConflictMapping),
     options: &Options,
-) -> Result<(ObjectId, crate::blob::Resolution)> {
-    if our_id == their_id {
-        return Ok((their_id, crate::blob::Resolution::Complete));
-    }
-    if matches!(our_mode.kind(), EntryKind::Link) && matches!(their_mode.kind(), EntryKind::Link) {
-        // A target unchanged from the ancestor yields to the other target,
-        // even when the ancestor entry was a regular file rather than a link.
-        if our_id == previous_id {
-            return Ok((their_id, crate::blob::Resolution::Complete));
-        }
-        if their_id == previous_id {
-            return Ok((our_id, crate::blob::Resolution::Complete));
-        }
+) -> Result<(ObjectId, crate::blob::Resolution, builtin_merge::Pick)> {
+    if our_mode.is_link() && their_mode.is_link() {
         let (pick, resolution) = crate::blob::builtin_driver::binary(options.symlink_conflicts);
         let (our_id, their_id) = match outer_side {
             ConflictMapping::Original => (our_id, their_id),
@@ -159,7 +145,15 @@ pub fn perform_blob_merge(
             Pick::Ours => our_id,
             Pick::Theirs => their_id,
         };
-        return Ok((id, resolution));
+        return Ok((
+            id,
+            resolution,
+            match pick {
+                Pick::Ancestor => builtin_merge::Pick::Ancestor,
+                Pick::Ours => builtin_merge::Pick::Ours,
+                Pick::Theirs => builtin_merge::Pick::Theirs,
+            },
+        ));
     }
     let (our_kind, their_kind) = match outer_side {
         ConflictMapping::Original => (ResourceKind::CurrentOrOurs, ResourceKind::OtherOrTheirs),
@@ -225,7 +219,7 @@ pub fn perform_blob_merge(
         .id_by_pick(pick, buf, write_blob_to_odb)
         .or_raise(|| message("Failed to write merged blob content as blob to the object database"))?
         .ok_or_raise(|| crate::tree::Error::MissingBinaryMergeResult)?;
-    Ok((merged_blob_id, resolution))
+    Ok((merged_blob_id, resolution, pick))
 }
 
 /// A change from one side's base-to-side diff, together with its merge scheduling metadata.
@@ -238,6 +232,8 @@ pub fn perform_blob_merge(
 pub struct TrackedChange {
     /// The actual change
     pub inner: Change,
+    /// The original change in this side's list, retained when a rename becomes a deferred addition.
+    pub origin: Option<usize>,
     state: ChangeState,
     /// If `Some(ours_idx_to_ignore)`, this change must be placed into the tree before handling it.
     /// This makes sure that new changes aren't visible too early, which would mean the algorithm
@@ -304,6 +300,7 @@ impl TrackedChange {
     ) -> Self {
         TrackedChange {
             inner,
+            origin: None,
             state: ChangeState::Pending,
             needs_tree_insertion,
             rewritten_location,
@@ -779,6 +776,7 @@ impl Conflict {
 mod tree_nodes_tests {
     use super::*;
     use gix_error::Result;
+    use gix_object::tree::EntryKind;
 
     #[test]
     fn subtree_queries_only_visit_the_requested_prefix() {

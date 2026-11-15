@@ -191,7 +191,7 @@ fn rename_add_after_destination_was_consumed() -> TestResult {
                 let (resolution, ours, theirs) = conflict.clone().into_parts_by_resolution();
                 matches!(
                     resolution,
-                    Err(gix_merge::tree::ResolutionFailure::OursAddedTheirsAddedTypeMismatch { .. })
+                    Err(gix_merge::tree::ResolutionFailure::DistinctTypes { .. })
                 ) && [ours, theirs].iter().any(|change| {
                     let (mode, object_id) = change.entry_mode_and_id();
                     mode.is_commit() && object_id == *added_commit_id
@@ -439,7 +439,7 @@ fn run_baseline() -> TestResult {
     }
 
     assert_eq!(
-        actual_cases, 471,
+        actual_cases, 487,
         "BUG: update this number, and don't forget to remove a filter in the end"
     );
     assert_eq!(

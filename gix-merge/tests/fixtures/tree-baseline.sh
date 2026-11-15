@@ -2673,11 +2673,8 @@ EOF
 )
 
 (cd rename-add-symlink
-  rm .git/index
-  # the symlink of 'bar' from A
-  git update-index --index-info <<EOF
-120000 blob $(oid 19102815663d23f8b75a47e7a01965dcdc96468c)	bar
-EOF
+  # Selecting A retains its symlink and its modification at the cancelled rename's source.
+  git read-tree A
   make_resolve_tree ours A B
 
   rm .git/index
@@ -2687,9 +2684,8 @@ EOF
 EOF
   make_resolve_tree ours B A
 
-  rm .git/index
-  # foo is renamed to bar, type clash means neither A nor B can be added - empty tree
-  # It is not able to 'get foo back', it can't track that currently.
+  # The deferred rename retains its origin, so ancestor selection restores foo.
+  git read-tree main
   make_resolve_tree ancestor A B
   make_resolve_tree ancestor B A
 )
@@ -3854,6 +3850,77 @@ function policy_commits () {
   git update-ref refs/heads/A "$our_commit_id"
   git update-ref refs/heads/B "$their_commit_id"
 }
+
+# The same distinct-type collision must preserve both entries and unrelated
+# additions across every pairing. The opposite side occupies the regular
+# file's preferred conflict name, even when directory relocation defers it.
+for pair in add-add rename-add rename-rename relocated-add-add; do
+  for regular_side in A B; do
+    repo="shared-distinct-types-$pair-$regular_side"
+    git init "$repo"
+    (cd "$repo"
+      git config merge.directoryRenames true
+      regular_blob_id=$(write_lines "regular payload" | git hash-object -w --stdin)
+      link_blob_id=$(printf target | git hash-object -w --stdin)
+      occupied_blob_id=$(write_lines "unrelated payload" | git hash-object -w --stdin)
+      our_mode=100644; our_blob_id=$regular_blob_id
+      their_mode=120000; their_blob_id=$link_blob_id
+      if test "$regular_side" = B; then
+        our_mode=120000; our_blob_id=$link_blob_id
+        their_mode=100644; their_blob_id=$regular_blob_id
+      fi
+      our_path=dst
+      their_path=dst
+      base_entries=()
+      our_entries=()
+      their_entries=()
+      case "$pair" in
+        rename-add)
+          base_entries=(a "$our_mode" "$our_blob_id")
+          their_entries=("${base_entries[@]}") ;;
+        rename-rename)
+          base_entries=(a "$our_mode" "$our_blob_id" c "$their_mode" "$their_blob_id")
+          our_entries=(c "$their_mode" "$their_blob_id")
+          their_entries=(a "$our_mode" "$our_blob_id") ;;
+        relocated-add-add)
+          anchor_a_blob_id=$(printf anchor-a | git hash-object -w --stdin)
+          anchor_b_blob_id=$(printf anchor-b | git hash-object -w --stdin)
+          base_entries=(old/a 100644 "$anchor_a_blob_id" old/b 100644 "$anchor_b_blob_id")
+          our_entries=(new/a 100644 "$anchor_a_blob_id" new/b 100644 "$anchor_b_blob_id")
+          their_entries=("${base_entries[@]}")
+          our_path=new/dst
+          their_path=old/dst ;;
+      esac
+      ancestor_entries=("${base_entries[@]+"${base_entries[@]}"}")
+      if test "$pair" = relocated-add-add; then
+        ancestor_entries=("${our_entries[@]}")
+      fi
+      our_entries+=("$our_path" "$our_mode" "$our_blob_id")
+      their_entries+=("$their_path" "$their_mode" "$their_blob_id")
+      occupied_path="$our_path~$regular_side"
+      base_tree_id=$(policy_tree "${base_entries[@]+"${base_entries[@]}"}")
+      our_tree_id=$(policy_tree "${our_entries[@]}")
+      their_tree_id=$(policy_tree "${their_entries[@]}")
+      if test "$regular_side" = A; then
+        their_tree_id=$(policy_tree "${their_entries[@]}" "$occupied_path" 100644 "$occupied_blob_id")
+      else
+        our_tree_id=$(policy_tree "${our_entries[@]}" "$occupied_path" 100644 "$occupied_blob_id")
+      fi
+      policy_commits
+
+      # Tree favor selects the original entry, retaining independent changes
+      # including the directory rename and the occupied conflict name.
+      if test "$pair" = relocated-add-add; then
+        their_entries=("${ancestor_entries[@]}" "$their_path" "$their_mode" "$their_blob_id")
+      fi
+      policy_tree "${ancestor_entries[@]+"${ancestor_entries[@]}"}" "$occupied_path" 100644 "$occupied_blob_id" >.git/resolve-A-B-with-ancestor.tree
+      cp .git/resolve-A-B-with-ancestor.tree .git/resolve-B-A-with-ancestor.tree
+      policy_tree "${our_entries[@]}" "$occupied_path" 100644 "$occupied_blob_id" >.git/resolve-A-B-with-ours.tree
+      policy_tree "${their_entries[@]}" "$occupied_path" 100644 "$occupied_blob_id" >.git/resolve-B-A-with-ours.tree
+    )
+    baseline "$repo" A-B A B
+  done
+done
 
 # Changing one of eight 64-byte spans keeps binary renames above the similarity threshold.
 function policy_binary_blob () {
