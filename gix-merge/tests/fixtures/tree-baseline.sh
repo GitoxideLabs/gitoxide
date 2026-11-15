@@ -469,30 +469,6 @@ git init same-rename-with-content
   echo changed-by-B >>file
   git mv file target
   git commit -am "B renames and changes file"
-
-  # Both sides agree on the rename, so this is an ordinary content conflict using the
-  # configured marker size. These branches provide the merged blob for gix's index shape.
-  git checkout -b expected main
-  git rm file
-  write_lines \
-    foxtrot foxtrot foxtrot foxtrot foxtrot \
-    '<<<<<<< A' \
-    changed-by-A \
-    ======= \
-    changed-by-B \
-    '>>>>>>> B' >target
-  git add target && git commit -m "single content merge at shared rename destination"
-
-  git checkout -b expected-reversed main
-  git rm file
-  write_lines \
-    foxtrot foxtrot foxtrot foxtrot foxtrot \
-    '<<<<<<< B' \
-    changed-by-B \
-    ======= \
-    changed-by-A \
-    '>>>>>>> A' >target
-  git add target && git commit -m "single reversed content merge at shared rename destination"
 )
 
 git init same-rename-and-file-to-directory
@@ -2737,28 +2713,6 @@ EOF
   make_resolve_tree ours B A
 )
 
-(cd same-rename-with-content
-  # The merged tree matches Git, but the conflict index differs. Git puts the base and the
-  # original A and B blobs at stages 1, 2, and 3 of `target`. gix instead keeps the base at
-  # its original path `file` and puts the already-merged conflict blob into both destination
-  # stages. The structured conflict still retains the original side entries.
-  rm .git/index
-  git update-index --index-info <<EOF
-100644 blob $(git rev-parse main:file) 1	file
-100644 blob $(git rev-parse expected:target) 2	target
-100644 blob $(git rev-parse expected:target) 3	target
-EOF
-  make_conflict_index same-rename-with-content-A-B
-
-  rm .git/index
-  git update-index --index-info <<EOF
-100644 blob $(git rev-parse main:file) 1	file
-100644 blob $(git rev-parse expected-reversed:target) 2	target
-100644 blob $(git rev-parse expected-reversed:target) 3	target
-EOF
-  make_conflict_index same-rename-with-content-A-B-reversed
-)
-
 (cd renames-to-same-destination
   # Git leaves this unresolved as an add/add at `target`, with A at stage 2 and B at stage 3
   # and neither original path in the index. The following trees instead record gix's explicit
@@ -3976,6 +3930,43 @@ for mode in 100644 120000 distinct-types binary; do
   baseline "$repo" criss-cross-file-favor-ours A-tip B-tip
 done
 
+# Both bases rename the same source, and one tip restores it. The virtual base
+# must remove that source and retain the merged destinations, including conflicts.
+for destination in same different; do
+  for contents in clean conflicting; do
+    repo="recursive-shared-source-$destination-$contents"
+    git init "$repo"
+    (cd "$repo"
+      base_blob_id=$(write_lines one two three four five six seven eight | git hash-object -w --stdin)
+      our_blob_id=$base_blob_id
+      if test "$contents" = conflicting; then
+        our_blob_id=$(write_lines LEFT two three four five six seven eight | git hash-object -w --stdin)
+      fi
+      their_blob_id=$(write_lines RIGHT two three four five six seven eight | git hash-object -w --stdin)
+      their_path=b
+      if test "$destination" = different; then
+        their_path=c
+      fi
+      base_tree_id=$(policy_tree a 100644 "$base_blob_id")
+      our_tree_id=$(policy_tree b 100644 "$our_blob_id")
+      their_tree_id=$(policy_tree "$their_path" 100644 "$their_blob_id")
+      restored_tree_id=$(policy_tree a 100644 "$base_blob_id" b 100644 "$our_blob_id")
+      policy_commits
+      git update-ref refs/heads/A-tip "$(git commit-tree "$restored_tree_id" -p "$our_commit_id" -p "$their_commit_id" -m A-tip)"
+      git update-ref refs/heads/B-tip "$(git commit-tree "$their_tree_id" -p "$their_commit_id" -p "$our_commit_id" -m B-tip)"
+    )
+    baseline "$repo" direct A B
+    if test "$destination" = same; then
+      # With a shared destination there is no tree conflict for ancestor favor to resolve.
+      IFS= read -r -d '' merged_tree_id <"$repo/direct.merge-info"
+      echo "$merged_tree_id" >"$repo/.git/resolve-A-B-with-ancestor.tree"
+      IFS= read -r -d '' merged_tree_id <"$repo/direct-reversed.merge-info"
+      echo "$merged_tree_id" >"$repo/.git/resolve-B-A-with-ancestor.tree"
+    fi
+    baseline "$repo" criss-cross A-tip B-tip
+  done
+done
+
 # Ancestor selection discards conflicted content. Ours selects a location while
 # retaining merged content, except for add/add which selects the whole entry.
 for pair in divergent-renames modify-rename converging-renames rename-add add-add; do
@@ -4015,4 +4006,9 @@ for pair in divergent-renames modify-rename converging-renames rename-add add-ad
     policy_tree "${ancestor_entries[@]}" >.git/force-ancestor.tree
   )
   baseline "$repo" directory-renames-conflict A B
+  if test "$pair" = converging-renames; then
+    # Accepted relocation keeps every content-conflict stage at the shared destination.
+    (cd "$repo" && git config merge.directoryRenames true)
+    baseline "$repo" directory-renames-true A B
+  fi
 done

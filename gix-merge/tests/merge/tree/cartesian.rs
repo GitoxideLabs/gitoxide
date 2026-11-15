@@ -497,6 +497,10 @@ fn records_status_quo_sha1() -> gix_testtools::TestResult {
         "the ours policy must not affect merges which need no resolution: {ours_changed_clean_merge:#?}"
     );
     assert!(
+        ancestor_changed_clean_merge.is_empty(),
+        "the ancestor policy must not affect merges which need no resolution: {ancestor_changed_clean_merge:#?}"
+    );
+    assert!(
         ours_lost_current_payload.is_empty(),
         "the ours policy must retain unique current-side content: {ours_lost_current_payload:#?}"
     );

@@ -1918,17 +1918,21 @@ pub fn tree<'objects>(
                                 let (merged_mode, _) = merge_modes(*our_mode, *their_mode, Some(*source_entry_mode))
                                     .expect("this case was assured earlier");
 
-                                if matches!(resolve_tree_conflicts, None | Some(ResolveWith::Ours)) {
-                                    editor.remove_if_leaf(toc(source_location))?;
-                                    our_tree.remove_change(source_location.as_bstr());
-                                    their_tree.remove_change(source_location.as_bstr());
-                                }
-
                                 let (our_location, their_location) = (our_destination, their_destination);
                                 let relocated =
                                     matches!(our_location, Cow::Owned(_)) || matches!(their_location, Cow::Owned(_));
                                 let location_conflict =
                                     relocated && options.directory_renames == crate::tree::DirectoryRenames::Conflict;
+                                // Virtual bases retain the renamed entries, including merged conflict content.
+                                let resolve_tree_conflicts =
+                                    resolve_tree_conflicts.filter(|_| !options.blob_merge.is_virtual_ancestor);
+                                if matches!(resolve_tree_conflicts, None | Some(ResolveWith::Ours))
+                                    || (our_location == their_location && !location_conflict)
+                                {
+                                    editor.remove_if_leaf(toc(source_location))?;
+                                    our_tree.remove_change(source_location.as_bstr());
+                                    their_tree.remove_change(source_location.as_bstr());
+                                }
                                 if location_conflict {
                                     for location in [&our_location, &their_location] {
                                         if matches!(location, Cow::Owned(_))
@@ -1985,6 +1989,30 @@ pub fn tree<'objects>(
                                     }
                                     (None, None)
                                 } else if our_location == their_location {
+                                    if let Some(resolution) = resolution {
+                                        let mut conflict = Conflict::with_resolution(
+                                            Resolution::OursModifiedTheirsModifiedThenBlobContentMerge {
+                                                merged_blob: ContentMerge {
+                                                    resolution,
+                                                    merged_blob_id,
+                                                },
+                                            },
+                                            (ours, theirs, Original, outer_side),
+                                            [
+                                                index_entry(source_entry_mode, source_id),
+                                                index_entry(our_mode, our_id),
+                                                index_entry(their_mode, their_id),
+                                            ],
+                                        );
+                                        for change in [&mut conflict.ours, &mut conflict.theirs] {
+                                            if let Change::Rewrite { location, .. } = change {
+                                                *location = our_location.as_ref().to_owned();
+                                            }
+                                        }
+                                        if should_fail_on_conflict(conflict) {
+                                            break 'outer;
+                                        }
+                                    }
                                     (
                                         None,
                                         Some(Change::Addition {
@@ -2064,36 +2092,6 @@ pub fn tree<'objects>(
                                     }
                                 };
 
-                                if let Some(resolution) = resolution
-                                    && should_fail_on_conflict(Conflict::with_resolution(
-                                        Resolution::OursModifiedTheirsModifiedThenBlobContentMerge {
-                                            merged_blob: ContentMerge {
-                                                resolution,
-                                                merged_blob_id,
-                                            },
-                                        },
-                                        (ours, theirs, Original, outer_side),
-                                        [
-                                            index_entry_at_path(
-                                                source_entry_mode,
-                                                source_id,
-                                                ConflictIndexEntryPathHint::Source,
-                                            ),
-                                            index_entry_at_path(
-                                                our_mode,
-                                                &merged_blob_id,
-                                                ConflictIndexEntryPathHint::Current,
-                                            ),
-                                            index_entry_at_path(
-                                                their_mode,
-                                                &merged_blob_id,
-                                                ConflictIndexEntryPathHint::RenamedOrTheirs,
-                                            ),
-                                        ],
-                                    ))
-                                {
-                                    break 'outer;
-                                }
                                 if let Some(addition) = our_addition {
                                     push_deferred((addition, Some(theirs_idx)), our_changes);
                                 }

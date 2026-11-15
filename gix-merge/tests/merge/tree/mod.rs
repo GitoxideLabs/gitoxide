@@ -255,7 +255,8 @@ fn run_baseline() -> TestResult {
     {
         actual_cases += 1;
         let mut graph = gix_revwalk::Graph::new(&odb, None);
-        let large_file_threshold_bytes = 100;
+        // Recursive conflict markers exceed the small threshold used by the large-file cases.
+        let large_file_threshold_bytes = if case_name.contains("criss-cross") { 0 } else { 100 };
         let mut blob_merge = new_blob_merge_platform(&root, large_file_threshold_bytes);
         let mut diff_resource_cache = new_diff_resource_cache(&root);
         let mut options = basic_merge_options();
@@ -438,11 +439,11 @@ fn run_baseline() -> TestResult {
     }
 
     assert_eq!(
-        actual_cases, 381,
+        actual_cases, 399,
         "BUG: update this number, and don't forget to remove a filter in the end"
     );
     assert_eq!(
-        skipped_tree_resolve_cases, 462,
+        skipped_tree_resolve_cases, 494,
         "this is done when no case is skipped, and we don't want to accidentally skip them.\
         Some don't actually have conflicts.\
         The ones we skipped don't have irreconcilable conflicts"

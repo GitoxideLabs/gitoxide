@@ -113,8 +113,11 @@ fn added_modes_do_not_change_content_sides() -> TestResult {
 }
 
 #[test]
-fn recursive_rename_collisions_preserve_paths() -> TestResult {
-    for case in cases("recursive-rename-collision-")? {
+fn recursive_renames_preserve_paths() -> TestResult {
+    for case in cases("recursive-rename-collision-")?
+        .into_iter()
+        .chain(cases("recursive-shared-source-")?)
+    {
         let mut options = basic_merge_options().tree_merge;
         if case.case_name.contains("file-favor-ours") {
             options.blob_merge.text.conflict = text::Conflict::ResolveWithOurs;
