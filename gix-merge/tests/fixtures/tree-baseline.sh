@@ -3855,6 +3855,14 @@ function policy_commits () {
   git update-ref refs/heads/B "$their_commit_id"
 }
 
+# Changing one of eight 64-byte spans keeps binary renames above the similarity threshold.
+function policy_binary_blob () {
+  {
+    printf '%s\0%0*d' "$1" "$((63 - ${#1}))" 0
+    printf '%064d' 1 2 3 4 5 6 7
+  } | git hash-object -w --stdin
+}
+
 for pair in add-add rename-add rename-rename; do
   for contents in identical conflicting; do
     repo="mode-conflict-$pair-$contents"
@@ -3933,7 +3941,7 @@ done
 # Both bases rename the same source, and one tip restores it. The virtual base
 # must remove that source and retain the merged destinations, including conflicts.
 for destination in same different; do
-  for contents in clean conflicting; do
+  for contents in clean conflicting binary binary-mode-change; do
     repo="recursive-shared-source-$destination-$contents"
     git init "$repo"
     (cd "$repo"
@@ -3943,15 +3951,28 @@ for destination in same different; do
         our_blob_id=$(write_lines LEFT two three four five six seven eight | git hash-object -w --stdin)
       fi
       their_blob_id=$(write_lines RIGHT two three four five six seven eight | git hash-object -w --stdin)
+      their_mode=100644
+      if [[ "$contents" == binary* ]]; then
+        base_blob_id=$(policy_binary_blob BASE)
+        our_blob_id=$(policy_binary_blob LEFT)
+        their_blob_id=$(policy_binary_blob RIGHT)
+        if test "$contents" = binary-mode-change; then
+          their_mode=100755
+        fi
+      fi
       their_path=b
       if test "$destination" = different; then
         their_path=c
       fi
       base_tree_id=$(policy_tree a 100644 "$base_blob_id")
       our_tree_id=$(policy_tree b 100644 "$our_blob_id")
-      their_tree_id=$(policy_tree "$their_path" 100644 "$their_blob_id")
+      their_tree_id=$(policy_tree "$their_path" "$their_mode" "$their_blob_id")
       restored_tree_id=$(policy_tree a 100644 "$base_blob_id" b 100644 "$our_blob_id")
       policy_commits
+      if test "$destination" = different && [[ "$contents" == binary* ]]; then
+        echo "$base_tree_id" >.git/resolve-A-B-with-ancestor.tree
+        echo "$base_tree_id" >.git/resolve-B-A-with-ancestor.tree
+      fi
       git update-ref refs/heads/A-tip "$(git commit-tree "$restored_tree_id" -p "$our_commit_id" -p "$their_commit_id" -m A-tip)"
       git update-ref refs/heads/B-tip "$(git commit-tree "$their_tree_id" -p "$their_commit_id" -p "$our_commit_id" -m B-tip)"
     )
@@ -3964,7 +3985,63 @@ for destination in same different; do
       echo "$merged_tree_id" >"$repo/.git/resolve-B-A-with-ancestor.tree"
     fi
     baseline "$repo" criss-cross A-tip B-tip
+    if [[ "$contents" == binary* ]]; then
+      baseline "$repo" file-favor-ours A B
+      baseline "$repo" criss-cross-file-favor-ours A-tip B-tip
+    fi
   done
+done
+
+# Rename/delete and rename/type-change must keep the ancestor at the renamed
+# path in a virtual base. Restoring the source in a tip exposes a stale base path.
+for case_name in delete-clean delete-text delete-binary delete-link delete-executable delete-addition \
+                 typechange-link typechange-file typechange-edited typechange-executable; do
+  repo="recursive-rename-$case_name"
+  git init "$repo"
+  (cd "$repo"
+    base_mode=100644
+    our_mode=100644
+    their_mode=100644
+    base_blob_id=$(write_lines one two three four five six seven eight | git hash-object -w --stdin)
+    our_blob_id=$base_blob_id
+    their_blob_id=$(write_lines RIGHT two three four five six seven eight | git hash-object -w --stdin)
+    case "$case_name" in
+      delete-binary)
+        base_blob_id=$(policy_binary_blob BASE)
+        our_blob_id=$(policy_binary_blob LEFT) ;;
+      delete-text|delete-addition|typechange-edited)
+        our_blob_id=$(write_lines LEFT two three four five six seven eight | git hash-object -w --stdin) ;;
+      delete-link|typechange-file)
+        base_mode=120000
+        our_mode=120000
+        base_blob_id=$(printf target | git hash-object -w --stdin)
+        our_blob_id=$base_blob_id ;;
+      delete-executable|typechange-executable) our_mode=100755 ;;
+    esac
+    if [[ "$case_name" == typechange-* ]] && test "$case_name" != typechange-file; then
+      their_mode=120000
+      their_blob_id=$(printf target | git hash-object -w --stdin)
+    fi
+    base_tree_id=$(policy_tree a "$base_mode" "$base_blob_id")
+    our_tree_id=$(policy_tree b "$our_mode" "$our_blob_id")
+    case "$case_name" in
+      delete-addition) their_tree_id=$(policy_tree b "$their_mode" "$their_blob_id") ;;
+      delete-*) their_tree_id=$(git mktree </dev/null) ;;
+      typechange-*) their_tree_id=$(policy_tree a "$their_mode" "$their_blob_id") ;;
+    esac
+    restored_tree_id=$(policy_tree a "$base_mode" "$base_blob_id" b "$our_mode" "$our_blob_id")
+    policy_commits
+    if test "$case_name" != delete-addition; then
+      echo "$base_tree_id" >.git/resolve-A-B-with-ancestor.tree
+      echo "$base_tree_id" >.git/resolve-B-A-with-ancestor.tree
+      echo "$our_tree_id" >.git/resolve-A-B-with-ours.tree
+      echo "$their_tree_id" >.git/resolve-B-A-with-ours.tree
+    fi
+    git update-ref refs/heads/A-tip "$(git commit-tree "$restored_tree_id" -p "$our_commit_id" -p "$their_commit_id" -m A-tip)"
+    git update-ref refs/heads/B-tip "$(git commit-tree "$their_tree_id" -p "$their_commit_id" -p "$our_commit_id" -m B-tip)"
+  )
+  baseline "$repo" direct A B
+  baseline "$repo" criss-cross A-tip B-tip
 done
 
 # Ancestor selection discards conflicted content. Ours selects a location while

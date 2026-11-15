@@ -545,6 +545,15 @@ pub fn tree<'objects>(
                                                 editor.upsert(toc(our_location), our_mode.kind(), *our_id)?;
                                             }
                                         }
+                                        Some(ResolveWith::Ancestor) if options.blob_merge.is_virtual_ancestor => {
+                                            // The type change survives at the source; the renamed path keeps its ancestor.
+                                            editor.upsert(toc(our_location), our_mode.kind(), *our_id)?;
+                                            editor.upsert(
+                                                toc(their_location),
+                                                previous_entry_mode.kind(),
+                                                *previous_id,
+                                            )?;
+                                        }
                                         Some(ResolveWith::Ancestor) => {}
                                     }
 
@@ -2023,6 +2032,16 @@ pub fn tree<'objects>(
                                         }),
                                     )
                                 } else {
+                                    // A conflicting merge that picked ours must keep the other binary at its own path.
+                                    let ((our_mode, our_blob_id), (their_mode, their_blob_id)) = if resolution
+                                        == Some(crate::blob::Resolution::Conflict)
+                                        && merged_mode == *pick(outer_side, our_mode, their_mode)
+                                        && merged_blob_id == *pick(outer_side, our_id, their_id)
+                                    {
+                                        ((*our_mode, *our_id), (*their_mode, *their_id))
+                                    } else {
+                                        ((merged_mode, merged_blob_id), (merged_mode, merged_blob_id))
+                                    };
                                     let mut conflict = Conflict::without_resolution(
                                         ResolutionFailure::OursRenamedTheirsRenamedDifferently {
                                             merged_blob: resolution.take().map(|resolution| ContentMerge {
@@ -2038,13 +2057,13 @@ pub fn tree<'objects>(
                                                 ConflictIndexEntryPathHint::Source,
                                             ),
                                             index_entry_at_path(
-                                                our_mode,
-                                                &merged_blob_id,
+                                                &our_mode,
+                                                &our_blob_id,
                                                 ConflictIndexEntryPathHint::Current,
                                             ),
                                             index_entry_at_path(
-                                                their_mode,
-                                                &merged_blob_id,
+                                                &their_mode,
+                                                &their_blob_id,
                                                 ConflictIndexEntryPathHint::RenamedOrTheirs,
                                             ),
                                         ],
@@ -2064,14 +2083,14 @@ pub fn tree<'objects>(
                                             let our_addition = Change::Addition {
                                                 location: our_location.into_owned(),
                                                 relation: None,
-                                                entry_mode: merged_mode,
-                                                id: merged_blob_id,
+                                                entry_mode: our_mode,
+                                                id: our_blob_id,
                                             };
                                             let their_addition = Change::Addition {
                                                 location: their_location.into_owned(),
                                                 relation: None,
-                                                entry_mode: merged_mode,
-                                                id: merged_blob_id,
+                                                entry_mode: their_mode,
+                                                id: their_blob_id,
                                             };
                                             (Some(our_addition), Some(their_addition))
                                         }
@@ -2133,6 +2152,8 @@ pub fn tree<'objects>(
                                     Swapped
                                 };
 
+                                let resolve_tree_conflicts =
+                                    resolve_tree_conflicts.filter(|_| !options.blob_merge.is_virtual_ancestor);
                                 match resolve_tree_conflicts {
                                     None | Some(ResolveWith::Ours) => {
                                         editor.remove_if_leaf(toc(source_location))?;
@@ -2163,20 +2184,28 @@ pub fn tree<'objects>(
                                 {
                                     break 'outer;
                                 }
-                                let our_addition = Change::Addition {
-                                    location: their_rewritten_location.unwrap_or_else(|| location.to_owned()),
-                                    relation: None,
-                                    entry_mode: *rewritten_mode,
-                                    id: *rewritten_id,
-                                };
+                                let location = their_rewritten_location.unwrap_or_else(|| location.to_owned());
                                 let destination_is_added = pick(side, our_tree, their_tree)
-                                    .check_conflict(our_addition.location())
+                                    .check_conflict(location.as_bstr())
                                     .and_then(|candidate| candidate.change_idx())
                                     .is_some_and(|change_idx| {
                                         let change = &pick(side, our_changes, their_changes)[change_idx].inner;
-                                        change.location() == our_addition.location()
+                                        change.location() == location.as_bstr()
                                             && matches!(change, Change::Addition { .. } | Change::Rewrite { .. })
                                     });
+                                // A collision is an add/add; otherwise the virtual base keeps the renamed ancestor.
+                                let (entry_mode, blob_id) =
+                                    if options.blob_merge.is_virtual_ancestor && !destination_is_added {
+                                        (*source_entry_mode, *source_id)
+                                    } else {
+                                        (*rewritten_mode, *rewritten_id)
+                                    };
+                                let our_addition = Change::Addition {
+                                    location,
+                                    relation: None,
+                                    entry_mode,
+                                    id: blob_id,
+                                };
 
                                 let mut conflict = Conflict::without_resolution(
                                     ResolutionFailure::OursDeletedTheirsRenamed,

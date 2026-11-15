@@ -114,7 +114,7 @@ fn added_modes_do_not_change_content_sides() -> TestResult {
 
 #[test]
 fn recursive_renames_preserve_paths() -> TestResult {
-    for case in cases("recursive-rename-collision-")?
+    for case in cases("recursive-rename-")?
         .into_iter()
         .chain(cases("recursive-shared-source-")?)
     {
