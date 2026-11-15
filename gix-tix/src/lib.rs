@@ -13646,12 +13646,22 @@ added
             let options = gix::notify::Options {
                 metadata,
                 all_worktrees,
+                worktree_filter: Some(Vec::new()),
+                additional_paths: vec![gix::notify::InvalidationPath {
+                    path: fixture.join("application-state"),
+                    changes: gix::notify::Changes {
+                        index: true,
+                        ..Default::default()
+                    },
+                }],
                 worktree_coverage: Some(gix::notify::WorktreeCoverage::All),
                 metadata_debounce: Duration::from_millis(42),
                 max_latency: Duration::from_millis(84),
                 retry_interval: Duration::from_secs(2),
             };
-            let mut monitor = Some(test_repository::open(&fixture)?.monitor(options.clone())?);
+            let initial = test_repository::open(&fixture)?.monitor(options)?;
+            let options = initial.options().clone();
+            let mut monitor = Some(initial);
             sync_worktree_monitor(&mut monitor, true, false, || {
                 panic!("unchanged coverage must not reopen")
             })?;
@@ -13683,6 +13693,8 @@ added
                     (
                         actual.metadata,
                         actual.all_worktrees,
+                        &actual.worktree_filter,
+                        &actual.additional_paths,
                         actual.metadata_debounce,
                         actual.max_latency,
                         actual.retry_interval,
@@ -13690,6 +13702,8 @@ added
                     (
                         options.metadata,
                         options.all_worktrees,
+                        &options.worktree_filter,
+                        &options.additional_paths,
                         options.metadata_debounce,
                         options.max_latency,
                         options.retry_interval,

@@ -244,6 +244,48 @@ fn event(path: impl Into<PathBuf>, kind: EventKind, path_kind: PathKind) -> Even
     }
 }
 
+#[test]
+fn additional_paths_keep_component_boundaries_debounce_and_loss_invalidations() {
+    let now = Instant::now();
+    let expected = Changes {
+        operations: true,
+        worktree: Some(Scope::All),
+        ..Changes::default()
+    };
+    for (path, ignore_case, matched) in [
+        ("/external/state.lock", false, true),
+        ("/external/state.lock-other", false, false),
+        ("/external", false, true),
+        ("/EXTERNAL/STATE.lock", false, false),
+        ("/EXTERNAL/STATE.lock", true, true),
+    ] {
+        let mut monitor = monitor();
+        monitor.options.worktree_coverage = None;
+        monitor.options.additional_paths = vec![InvalidationPath {
+            path: "/external/state.lock".into(),
+            changes: expected.clone(),
+        }];
+        monitor.ignore_case = ignore_case;
+        monitor.observe(&event(path, EventKind::Modify, PathKind::File), false, now);
+        assert!(
+            monitor.take_changes(now).is_empty(),
+            "custom metadata respects debounce"
+        );
+        assert_eq!(
+            monitor.take_changes(now + monitor.options.metadata_debounce),
+            if matched { expected.clone() } else { Changes::default() },
+            "custom paths use native case rules and component boundaries: {path}"
+        );
+        monitor.coverage_lost(false, now);
+        let lost = monitor.take_changes(now);
+        assert!(lost.operations, "loss invalidates application operation state");
+        assert_eq!(
+            lost.worktree, expected.worktree,
+            "loss retains custom scopes without built-in checkout coverage"
+        );
+    }
+}
+
 fn modified(path: impl Into<PathBuf>) -> Event {
     event(path, EventKind::Modify, PathKind::File)
 }
@@ -1464,7 +1506,7 @@ fn metadata_watches_exclude_ancestors_and_external_configuration() -> TestResult
     let external_root = external.path().canonicalize()?;
     for worktree in [root, None] {
         layout.worktree = worktree;
-        let watches = inventory::metadata_watches(&layout)?;
+        let watches = inventory::metadata_watches(&layout, None, false)?;
         assert!(
             watches.keys().all(|path| path == &external_root
                 || path.starts_with(&layout.git_dir)
@@ -1496,7 +1538,7 @@ fn metadata_watches_exclude_ancestors_and_external_configuration() -> TestResult
     });
     std::fs::remove_dir_all(&layout.git_dir)?;
     assert!(
-        inventory::metadata_watches(&layout)?.is_empty(),
+        inventory::metadata_watches(&layout, None, false)?.is_empty(),
         "a missing repository root does not broaden coverage to its parent"
     );
     Ok(())
@@ -1536,7 +1578,7 @@ fn metadata_inventory_limits_linked_worktrees_to_administrative_roots() -> TestR
             !dependencies.contains_key(&worktrees) && !dependencies.contains_key(&worktrees.join("other")),
             "worktree-only coverage does not enumerate linked-worktree membership"
         );
-        let watches = inventory::metadata_watches(&layout)?;
+        let watches = inventory::metadata_watches(&layout, None, false)?;
         assert_eq!(
             watches.get(&worktrees),
             Some(&false),
@@ -1666,7 +1708,7 @@ fn metadata_inventory_reports_unreadable_worktree_membership() -> TestResult {
         "worktree-only dependencies do not inspect unrelated linked-worktree membership"
     );
     assert!(
-        inventory::metadata_watches(&layout).is_err(),
+        inventory::metadata_watches(&layout, None, false).is_err(),
         "an unreadable worktree inventory cannot silently certify incomplete coverage"
     );
     std::fs::write(&layout.index, "invalid index\n")?;
@@ -1705,7 +1747,7 @@ fn missing_dependencies_follow_the_nearest_existing_ancestor() -> TestResult {
         kind: DependencyKind::Configuration,
     });
     assert!(
-        inventory::metadata_watches(&layout)?.contains_key(&root),
+        inventory::metadata_watches(&layout, None, false)?.contains_key(&root),
         "missing parents are observed through an existing ancestor"
     );
     std::fs::create_dir_all(root.join("missing/deeper"))?;
@@ -1715,7 +1757,8 @@ fn missing_dependencies_follow_the_nearest_existing_ancestor() -> TestResult {
         "creating an ancestor rediscovers the dependency's parent"
     );
     assert!(
-        inventory::metadata_watches(&layout)?.contains_key(dependency.parent().expect("dependency has parent")),
+        inventory::metadata_watches(&layout, None, false)?
+            .contains_key(dependency.parent().expect("dependency has parent")),
         "registration advances as missing ancestors appear"
     );
     Ok(())
@@ -2393,6 +2436,18 @@ fn native_errors_count_discarded_registrations() -> TestResult {
         out.statistics.removed, registered,
         "discarded registrations count as removed"
     );
+    let quiet = monitor.service(now, || panic!("native recovery must respect backoff"));
+    assert!(
+        quiet.errors.is_empty() && quiet.recovery_pending,
+        "quiet native retry preserves degraded coverage"
+    );
+    let recovered = monitor.service(now + monitor.options.retry_interval, || {
+        panic!("all coverage does not reopen")
+    });
+    assert!(
+        recovered.errors.is_empty() && !recovered.recovery_pending,
+        "native registration repairs coverage"
+    );
     Ok(())
 }
 
@@ -2619,6 +2674,7 @@ fn child_maintenance_failure_and_same_layout_recovery_invalidate_only_that_child
                 .expect("retained child")
                 .maintenance_failed(now);
             let failed = monitor.service(now, || panic!("the injected failure has a future retry deadline"));
+            assert!(failed.recovery_pending, "the parent reports a degraded linked checkout");
             assert!(
                 failed.errors.is_empty(),
                 "the state transition does not synthesize diagnostics"
@@ -2631,6 +2687,7 @@ fn child_maintenance_failure_and_same_layout_recovery_invalidate_only_that_child
                 .expect("retained child")
                 .maintenance_failed(now);
             let repeated = monitor.service(now, || panic!("repeated failures still respect backoff"));
+            assert!(repeated.recovery_pending, "quiet child backoff remains degraded");
             assert!(
                 repeated.changes.is_empty() && repeated.other_worktrees.is_empty(),
                 "{coverage:?}: the first failure invalidates once, not on every retry"
@@ -2644,6 +2701,10 @@ fn child_maintenance_failure_and_same_layout_recovery_invalidate_only_that_child
             });
             assert_eq!(opens, 1, "the due child recovery uses one freshly opened repository");
             assert!(recovered.errors.is_empty(), "recovery succeeds: {:?}", recovered.errors);
+            assert!(
+                !recovered.recovery_pending,
+                "repaired child coverage clears the parent recovery state"
+            );
             assert_only_child_change(&recovered, &layout, &full);
             assert_eq!(
                 monitor.other_worktrees[&git_dir].layout, layout,

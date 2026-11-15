@@ -87,7 +87,7 @@ impl RepositoryMonitor {
             .or_raise(|| message("could not enumerate worktrees for monitoring"))?;
         let mut seen = HashSet::new();
         let main_git_dir = absolute_path(repo.common_dir(), repo.current_dir(), self.precompose_unicode)?;
-        if !same_path(&main_git_dir, &self.layout.git_dir, self.ignore_case) {
+        if !same_path(&main_git_dir, &self.layout.git_dir, self.ignore_case) && self.includes_worktree(&main_git_dir) {
             seen.insert(main_git_dir.clone());
             if self.other_needs_maintenance(&main_git_dir, now) {
                 self.maintain_other(main_git_dir, repo.main_repo(), now, statistics, errors);
@@ -95,7 +95,7 @@ impl RepositoryMonitor {
         }
         for proxy in linked {
             let git_dir = absolute_path(proxy.git_dir(), repo.current_dir(), self.precompose_unicode)?;
-            if same_path(&git_dir, &self.layout.git_dir, self.ignore_case) {
+            if same_path(&git_dir, &self.layout.git_dir, self.ignore_case) || !self.includes_worktree(&git_dir) {
                 continue;
             }
             seen.insert(git_dir.clone());
@@ -148,6 +148,13 @@ impl RepositoryMonitor {
         Ok(())
     }
 
+    fn includes_worktree(&self, git_dir: &Path) -> bool {
+        self.options
+            .worktree_filter
+            .as_ref()
+            .is_none_or(|paths| paths.iter().any(|path| same_path(path, git_dir, self.ignore_case)))
+    }
+
     fn other_needs_maintenance(&self, git_dir: &Path, now: Instant) -> bool {
         self.other_worktrees.get(git_dir).map_or_else(
             || {
@@ -195,6 +202,8 @@ impl RepositoryMonitor {
                 std::collections::btree_map::Entry::Vacant(entry) => {
                     let mut other = repo.monitor(Options {
                         all_worktrees: false,
+                        worktree_filter: None,
+                        additional_paths: Vec::new(),
                         ..self.options.clone()
                     })?;
                     other.shared_metadata = true;

@@ -9,7 +9,7 @@ use gix_hashtable::hash_table::HashTable;
 
 use gix_notify::Watch;
 
-use super::{DependencyKind, Layout};
+use super::{DependencyKind, InvalidationPath, Layout, same_path};
 use crate::Repository;
 
 pub(super) fn directory_lookup(paths: impl IntoIterator<Item = PathBuf>) -> HashTable<PathBuf> {
@@ -107,7 +107,11 @@ pub(super) fn watch_parent(layout: &Layout, watches: &mut BTreeMap<PathBuf, bool
     }
 }
 
-pub(super) fn metadata_watches(layout: &Layout) -> Result<BTreeMap<PathBuf, bool>> {
+pub(super) fn metadata_watches(
+    layout: &Layout,
+    worktree_filter: Option<&[PathBuf]>,
+    ignore_case: bool,
+) -> Result<BTreeMap<PathBuf, bool>> {
     let mut out = BTreeMap::new();
     for root in [&layout.git_dir, &layout.common_dir] {
         watch_directory(layout, &mut out, root, false);
@@ -123,6 +127,11 @@ pub(super) fn metadata_watches(layout: &Layout) -> Result<BTreeMap<PathBuf, bool
         Ok(entries) => {
             for entry in entries {
                 let entry = entry.or_raise(|| message("could not read a linked-worktree administrative entry"))?;
+                if worktree_filter
+                    .is_some_and(|paths| !paths.iter().any(|path| same_path(path, &entry.path(), ignore_case)))
+                {
+                    continue;
+                }
                 if entry
                     .file_type()
                     .or_raise(|| message!("could not inspect linked-worktree directory {}", entry.path().display()))?
@@ -140,6 +149,35 @@ pub(super) fn metadata_watches(layout: &Layout) -> Result<BTreeMap<PathBuf, bool
     }
     merge_watches(&mut out, private_metadata_watches(layout));
     Ok(out)
+}
+
+pub(super) fn additional_watches(paths: &[InvalidationPath]) -> Result<BTreeMap<PathBuf, bool>> {
+    let mut watches = BTreeMap::new();
+    for dependency in paths {
+        for candidate in dependency.path.ancestors() {
+            match std::fs::metadata(candidate) {
+                Ok(metadata) if metadata.is_dir() => {
+                    let recursive = candidate == dependency.path;
+                    watches
+                        .entry(candidate.to_owned())
+                        .and_modify(|mode| *mode |= recursive)
+                        .or_insert(recursive);
+                    if !recursive {
+                        break;
+                    }
+                }
+                Ok(_) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    return Err(err.and_raise(message!(
+                        "could not inspect additional monitor path {}",
+                        candidate.display()
+                    )));
+                }
+            }
+        }
+    }
+    Ok(watches)
 }
 
 pub(super) fn merge_watches(into: &mut BTreeMap<PathBuf, bool>, watches: BTreeMap<PathBuf, bool>) {

@@ -1528,6 +1528,68 @@ mod tests {
     use super::*;
 
     #[test]
+    fn watch_arguments_configure_application_paths_and_worktree_selection() -> gix::error::TestResult {
+        use clap::Parser;
+        use gix::notify::{Changes, Scope};
+
+        let args = Args::try_parse_from([
+            "gix",
+            "watch",
+            "--all-worktrees",
+            "--worktree-filter",
+            "repo/.git/worktrees/one",
+            "--worktree-filter",
+            "repo/.git/worktrees/two",
+            "--additional-path",
+            "application/state",
+            "--additional-path",
+            "application/events",
+        ])?;
+        let Subcommands::Watch(platform) = args.cmd else {
+            panic!("watch arguments select the repository monitor")
+        };
+        let (options, _) = platform.into_options()?;
+        assert_eq!(
+            options.worktree_filter,
+            Some(vec!["repo/.git/worktrees/one".into(), "repo/.git/worktrees/two".into()]),
+            "private Git directories filter native coverage"
+        );
+        assert_eq!(
+            options
+                .additional_paths
+                .iter()
+                .map(|path| path.path.as_path())
+                .collect::<Vec<_>>(),
+            [
+                std::path::Path::new("application/state"),
+                std::path::Path::new("application/events")
+            ],
+            "every application path reaches the monitor"
+        );
+        for path in options.additional_paths {
+            assert_eq!(
+                path.changes,
+                Changes {
+                    references: true,
+                    index: true,
+                    configuration: true,
+                    ignores: true,
+                    attributes: true,
+                    operations: true,
+                    layout: true,
+                    worktree: Some(Scope::All)
+                },
+                "application changes conservatively invalidate every cache"
+            );
+        }
+        assert!(
+            Args::try_parse_from(["gix", "watch", "--worktree-filter", "repo/.git/worktrees/one"]).is_err(),
+            "worktree filtering requires linked-worktree coverage"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn clap() {
         use clap::{CommandFactory, Parser};
 

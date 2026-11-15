@@ -289,7 +289,10 @@ pub mod notify {
 }
 
 pub mod watch {
-    use std::time::{Duration, Instant};
+    use std::{
+        path::PathBuf,
+        time::{Duration, Instant},
+    };
 
     #[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
     pub enum Coverage {
@@ -298,7 +301,7 @@ pub mod watch {
         IgnoreAware,
         /// Include ignored paths and nested repositories.
         All,
-        /// Disable worktree coverage and report metadata only.
+        /// Disable automatic worktree coverage.
         None,
     }
 
@@ -313,6 +316,12 @@ pub mod watch {
         /// Monitor other worktrees too, sharing repository metadata subscriptions.
         #[clap(long)]
         pub all_worktrees: bool,
+        /// Limit --all-worktrees to these private Git directories; repeatable.
+        #[clap(long, value_name = "GIT_DIR", requires = "all_worktrees")]
+        pub worktree_filter: Option<Vec<PathBuf>>,
+        /// Request full invalidations when an application file or directory changes; repeatable.
+        #[clap(long = "additional-path", value_name = "PATH")]
+        pub additional_paths: Vec<PathBuf>,
         /// Select directory coverage. File invalidations remain unfiltered.
         #[clap(long, value_enum, default_value_t = Coverage::default())]
         pub worktree_coverage: Coverage,
@@ -349,6 +358,24 @@ pub mod watch {
                 gix::notify::Options {
                     metadata: !self.no_metadata,
                     all_worktrees: self.all_worktrees,
+                    worktree_filter: self.worktree_filter,
+                    additional_paths: self
+                        .additional_paths
+                        .into_iter()
+                        .map(|path| gix::notify::InvalidationPath {
+                            path,
+                            changes: gix::notify::Changes {
+                                references: true,
+                                index: true,
+                                configuration: true,
+                                ignores: true,
+                                attributes: true,
+                                operations: true,
+                                layout: true,
+                                worktree: Some(gix::notify::Scope::All),
+                            },
+                        })
+                        .collect(),
                     worktree_coverage: match self.worktree_coverage {
                         Coverage::IgnoreAware => Some(gix::notify::WorktreeCoverage::IgnoreAware),
                         Coverage::All => Some(gix::notify::WorktreeCoverage::All),

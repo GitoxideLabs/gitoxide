@@ -1,7 +1,8 @@
 use std::time::{Duration, Instant};
 
 use gix::notify::{
-    Changes, DependencyKind, Layout, Options, Outcome, RepositoryMonitor, Scope, WorktreeChange, WorktreeCoverage,
+    Changes, DependencyKind, InvalidationPath, Layout, Options, Outcome, RepositoryMonitor, Scope, WorktreeChange,
+    WorktreeCoverage,
 };
 use gix_error::TestResult;
 
@@ -228,6 +229,8 @@ fn assert_options(actual: &Options, expected: &Options) {
         (
             actual.metadata,
             actual.all_worktrees,
+            &actual.worktree_filter,
+            &actual.additional_paths,
             actual.worktree_coverage,
             actual.metadata_debounce,
             actual.max_latency,
@@ -236,6 +239,8 @@ fn assert_options(actual: &Options, expected: &Options) {
         (
             expected.metadata,
             expected.all_worktrees,
+            &expected.worktree_filter,
+            &expected.additional_paths,
             expected.worktree_coverage,
             expected.metadata_debounce,
             expected.max_latency,
@@ -243,6 +248,52 @@ fn assert_options(actual: &Options, expected: &Options) {
         ),
         "the options accessor reports every effective coverage and scheduling choice"
     );
+}
+
+#[test]
+fn monitor_reports_recovery_during_quiet_backoff_until_coverage_is_repaired() -> TestResult {
+    use gix::error::{ErrorExt, message};
+
+    let (fixture, ()) = gix_testtools::scripted_fixture_read_only_with_post("make_notify_repo.sh", 8, |_| Ok(()))?;
+    let repo = gix::open_opts(fixture.join("unignored"), crate::restricted())?;
+    for worktree_coverage in [None, Some(WorktreeCoverage::All), Some(WorktreeCoverage::IgnoreAware)] {
+        let mut monitor = repo.monitor(Options {
+            worktree_coverage,
+            ..Options::default()
+        })?;
+        for _ in 0..2 {
+            let out = monitor.service(Instant::now(), || gix::open_opts(repo.git_dir(), crate::restricted()));
+            assert!(out.errors.is_empty(), "initial coverage succeeds: {:?}", out.errors);
+            assert!(
+                !out.recovery_pending,
+                "initial verification does not imply failed coverage"
+            );
+        }
+        monitor.rescan();
+        let now = Instant::now();
+        let failed = monitor.service(now, || Err(message("deliberate recovery failure").raise()));
+        assert_eq!(failed.errors.len(), 1, "the initial failure is reported");
+        assert!(failed.recovery_pending, "failed discovery leaves coverage degraded");
+        let quiet = monitor.service(now, || panic!("retry backoff must not reopen the repository"));
+        assert!(quiet.errors.is_empty(), "quiet backoff does not repeat the diagnostic");
+        assert!(
+            quiet.recovery_pending,
+            "an empty error list cannot certify repaired coverage"
+        );
+        let repaired = monitor.service(now + monitor.options().retry_interval, || {
+            gix::open_opts(repo.git_dir(), crate::restricted())
+        });
+        assert!(
+            repaired.errors.is_empty(),
+            "the due retry repairs coverage: {:?}",
+            repaired.errors
+        );
+        assert!(
+            !repaired.recovery_pending,
+            "successful registration clears the recovery state"
+        );
+    }
+    Ok(())
 }
 
 #[test]
@@ -256,6 +307,7 @@ fn monitor_defers_worktree_discovery_until_service() -> TestResult {
         metadata_debounce: Duration::from_millis(19),
         max_latency: Duration::from_millis(43),
         retry_interval: Duration::from_millis(89),
+        ..Options::default()
     };
     let mut monitor = repo.monitor(options.clone())?;
     assert_options(monitor.options(), &options);
@@ -1743,6 +1795,28 @@ mod all_worktrees {
                     "initial discovery requests a full baseline, not an incremental invalidation"
                 );
             }
+            drop(monitor);
+            for filter in [vec![], vec![repo.git_dir().to_owned()]] {
+                let mut monitor = repo.monitor(Options {
+                    worktree_filter: Some(filter),
+                    ..options(WorktreeCoverage::IgnoreAware)
+                })?;
+                let filtered = service(&mut monitor, &repo);
+                assert!(filtered.errors.is_empty(), "selected-only filtering succeeds");
+                assert!(
+                    filtered.other_worktrees.is_empty(),
+                    "an empty filter or the primary Git directory selects no other checkouts"
+                );
+                assert_eq!(
+                    monitor.other_worktrees().count(),
+                    0,
+                    "excluded checkouts have no monitor inventory"
+                );
+                assert_eq!(
+                    filtered.changes, baseline.changes,
+                    "the primary baseline is independent of the filter"
+                );
+            }
             let error = repo
                 .monitor(Options {
                     metadata: false,
@@ -1763,6 +1837,169 @@ mod all_worktrees {
         use super::*;
 
         const TIMEOUT: Duration = Duration::from_secs(5);
+
+        #[test]
+        fn additional_paths_cover_missing_files_and_external_directory_descendants() -> TestResult {
+            let Some(fixture) = writable_fixture("files")? else {
+                return Ok(());
+            };
+            let repo = gix::open_opts(fixture.path().join("main"), crate::restricted())?;
+            let missing = fixture.path().join("application/missing/state.lock");
+            let directory = fixture.path().join("events");
+            std::fs::create_dir_all(directory.join("nested"))?;
+            let mut monitor = repo.monitor(Options {
+                additional_paths: vec![
+                    InvalidationPath {
+                        path: missing.clone(),
+                        changes: Changes {
+                            operations: true,
+                            ..Changes::default()
+                        },
+                    },
+                    InvalidationPath {
+                        path: directory.clone(),
+                        changes: Changes {
+                            attributes: true,
+                            ..Changes::default()
+                        },
+                    },
+                ],
+                worktree_coverage: None,
+                metadata_debounce: Duration::ZERO,
+                ..Options::default()
+            })?;
+            wait_for_quiet(&mut monitor, &repo, "additional-path startup", |_| true);
+            std::fs::create_dir_all(missing.parent().expect("the missing file has parents"))?;
+            wait_for_quiet(&mut monitor, &repo, "missing-parent discovery", |out| {
+                out.changes.operations
+            });
+            std::fs::write(&missing, b"application state")?;
+            wait_for_quiet(&mut monitor, &repo, "additional lock-file creation", |out| {
+                out.changes.operations
+            });
+            let replacement = missing.with_extension("replacement");
+            std::fs::write(&replacement, b"replacement state")?;
+            std::fs::rename(&replacement, &missing)?;
+            wait_for_quiet(&mut monitor, &repo, "atomic application-state replacement", |out| {
+                out.changes.operations
+            });
+            std::fs::write(directory.join("nested/event"), b"event")?;
+            wait_for(&mut monitor, &repo, "external directory descendant", |out| {
+                out.changes.attributes
+            });
+            Ok(())
+        }
+
+        #[test]
+        fn additional_paths_work_without_builtin_coverage_and_survive_rescan() -> TestResult {
+            let Some(fixture) = writable_fixture("files")? else {
+                return Ok(());
+            };
+            let repo = gix::open_opts(fixture.path().join("main"), crate::restricted())?;
+            let path = fixture.path().join("application-state");
+            let mut monitor = repo.monitor(Options {
+                metadata: false,
+                worktree_coverage: None,
+                additional_paths: vec![InvalidationPath {
+                    path: path.clone(),
+                    changes: Changes {
+                        operations: true,
+                        worktree: Some(Scope::All),
+                        ..Changes::default()
+                    },
+                }],
+                metadata_debounce: Duration::ZERO,
+                ..Options::default()
+            })?;
+            for rescan in [false, true] {
+                if rescan {
+                    monitor.rescan();
+                }
+                let out = monitor.service(Instant::now(), || {
+                    panic!("additional paths do not need a repository opener")
+                });
+                assert!(
+                    out.errors.is_empty(),
+                    "additional-path coverage succeeds: {:?}",
+                    out.errors
+                );
+                assert_worktree_only(&out.changes);
+                assert_eq!(
+                    out.changes.worktree,
+                    Some(Scope::All),
+                    "startup and rescan preserve custom invalidations"
+                );
+            }
+            wait_for_quiet(&mut monitor, &repo, "additional-only startup", |_| true);
+            std::fs::write(path, b"state")?;
+            let out = wait_for(&mut monitor, &repo, "additional-only write", |out| {
+                out.changes.worktree.is_some()
+            });
+            assert_worktree_only(&out.changes);
+            Ok(())
+        }
+
+        #[test]
+        fn worktree_filter_reduces_native_coverage_and_skips_excluded_indexes() -> TestResult {
+            let Some(fixture) = writable_fixture("files")? else {
+                return Ok(());
+            };
+            for selected in ["main", "linked-b", "bare.git"] {
+                let repo = gix::open_opts(fixture.path().join(selected), crate::restricted())?;
+                let included = gix::open_opts(
+                    fixture
+                        .path()
+                        .join(if selected == "bare.git" { "bare-a" } else { "linked-a" }),
+                    crate::restricted(),
+                )?;
+                let excluded = gix::open_opts(
+                    fixture
+                        .path()
+                        .join(if selected == "bare.git" { "bare-b" } else { "linked-b" }),
+                    crate::restricted(),
+                )?;
+                let mut all = repo.monitor(options(WorktreeCoverage::IgnoreAware))?;
+                let all_baseline = service(&mut all, &repo);
+                assert!(all_baseline.errors.is_empty(), "unfiltered coverage succeeds");
+                drop(all);
+                let mut filtered = repo.monitor(Options {
+                    worktree_filter: Some(vec![included.git_dir().to_owned()]),
+                    ..options(WorktreeCoverage::IgnoreAware)
+                })?;
+                let baseline = service(&mut filtered, &repo);
+                assert!(baseline.errors.is_empty(), "filtered coverage succeeds");
+                assert_eq!(
+                    baseline.other_worktrees.len(),
+                    1,
+                    "only the included checkout gets a baseline"
+                );
+                assert_eq!(
+                    baseline.other_worktrees[0].git_dir,
+                    included.git_dir().canonicalize()?,
+                    "private Git directories select checkouts"
+                );
+                assert!(
+                    baseline.statistics.added < all_baseline.statistics.added,
+                    "filtering reduces native registration, rather than filtering outcomes"
+                );
+                drop(filtered);
+                if selected != "linked-b" {
+                    let index = excluded.index_path();
+                    let contents = std::fs::read(&index)?;
+                    std::fs::write(&index, b"invalid index")?;
+                    let mut filtered = repo.monitor(Options {
+                        worktree_filter: Some(vec![included.git_dir().to_owned()]),
+                        ..options(WorktreeCoverage::IgnoreAware)
+                    })?;
+                    assert!(
+                        service(&mut filtered, &repo).errors.is_empty(),
+                        "excluded indexes are never processed"
+                    );
+                    std::fs::write(index, contents)?;
+                }
+            }
+            Ok(())
+        }
 
         fn wait_for(
             monitor: &mut RepositoryMonitor,

@@ -11,6 +11,9 @@
 //! including checkout additions, moves and removals. [`Layout`](crate::notify::Layout) describes
 //! only the selected checkout; use [`RepositoryMonitor::other_worktrees()`](crate::notify::RepositoryMonitor::other_worktrees)
 //! after service for the additional discovered layouts, including temporarily inaccessible checkouts.
+//! Use [`Options::worktree_filter`](crate::notify::Options::worktree_filter) to limit native coverage
+//! to selected private Git directories, and [`Options::additional_paths`](crate::notify::Options::additional_paths)
+//! to invalidate caller-selected caches from application files.
 //!
 //! Reftable notifications are conservative invalidations, not reference reads. Ignore-aware coverage
 //! retains `gix`'s limitations for reftable branch-conditioned configuration.
@@ -125,6 +128,29 @@ pub enum WorktreeCoverage {
     All,
 }
 
+/// An application filesystem dependency and the caches to invalidate when it changes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InvalidationPath {
+    /// A file or directory in native filesystem spelling, including paths outside the repository.
+    ///
+    /// Nonempty absolute or relative paths are accepted without prior normalization or
+    /// [`std::fs::canonicalize()`]. At construction, relative paths are based on
+    /// [`Repository::current_dir()`], not necessarily the worktree root. Resolution makes
+    /// paths absolute, resolves symlinks and normalizes `.` and `..`, preserving missing
+    /// components. Windows paths use native verbatim spelling, and Unicode precomposition
+    /// follows the repository's filesystem options.
+    /// Missing paths are observed through their nearest existing parent; existing directories
+    /// and their descendants receive recursive coverage. Parent watches also detect atomic
+    /// replacement. Ancestor events can conservatively invalidate this path.
+    pub path: PathBuf,
+    /// Invalidations merged into [`Outcome::changes`], using the selected checkout's relative paths.
+    ///
+    /// Normal metadata debounce and `metadata = false` suppression apply. These invalidations
+    /// are also published on startup, rescan and coverage loss, even without checkout coverage.
+    /// Additional paths belong to the primary monitor, not its other linked-worktree outcomes.
+    pub changes: Changes,
+}
+
 /// Scheduling and subscription options.
 /// Durations must fit the platform's monotonic clock range; [`Repository::monitor()`] rejects overflow.
 #[derive(Clone, Debug)]
@@ -138,14 +164,43 @@ pub struct Options {
 
     /// Also observe the main and other linked worktrees, sharing one metadata subscription set.
     ///
-    /// Defaults to `false` and requires `metadata = true`. Takes effect while worktree coverage is enabled.
+    /// Defaults to `false` and requires `metadata = true`. Only takes effect when
+    /// [`Self::worktree_coverage`] is `Some(_)`; with `None`, metadata monitoring retains
+    /// the selected repository's view instead of creating additional checkout monitors.
     /// Each checkout uses its own index and ignore rules. Additional checkout changes are returned
     /// in [`Outcome::other_worktrees`]; the selected checkout retains [`Outcome::changes`].
     pub all_worktrees: bool,
+    /// Limit `all_worktrees` to these private Git directories, before opening their repositories
+    /// or registering their private metadata and checkout watches.
+    ///
+    /// `None` includes every additional checkout. `Some(paths)` includes only additional
+    /// checkouts whose private Git directories are listed; an empty list includes none.
+    /// For example, `/projects/repo/.git/worktrees/feature` selects the linked worktree
+    /// registered as `feature`; pass this administrative directory, not the checkout's root.
+    /// The repository used to create the monitor is not filtered and remains monitored
+    /// according to the other options. Shared metadata and worktree-membership watches
+    /// remain necessary. Paths are resolved like [`InvalidationPath::path`].
+    ///
+    /// Only applies when [`Self::all_worktrees`] is `true` and [`Self::worktree_coverage`]
+    /// is `Some(_)`, since additional checkout monitors are not created otherwise.
+    /// Recreate the monitor to change the selection; registrations whose Git directories
+    /// move must be selected anew.
+    pub worktree_filter: Option<Vec<PathBuf>>,
+    /// Additional application dependencies, empty by default. See [`InvalidationPath`].
+    ///
+    /// Paths need not be normalized or canonicalized by the caller; see [`InvalidationPath::path`].
+    /// For example, on Unix:
+    ///
+    /// - With [`Repository::current_dir()`] equal to `/projects/repo` and `config` an ordinary
+    ///   directory (not a symlink), `PathBuf::from("./config/../extra/settings.toml")` resolves to
+    ///   `/projects/repo/extra/settings.toml`, even if `extra/settings.toml` does not exist.
+    /// - If `/projects/shared` is a symlink to `/shared`, an absolute path supplied as
+    ///   `PathBuf::from("/projects/shared/settings.toml")` resolves to `/shared/settings.toml`.
+    pub additional_paths: Vec<InvalidationPath>,
     /// Observe the worktree when one exists, and its index if `metadata` is enabled.
     ///
     /// Defaults to `Some(WorktreeCoverage::IgnoreAware)`. `None` disables checkout coverage;
-    /// if `metadata` is also disabled, servicing neither opens a repository nor installs watches.
+    /// if `metadata` is also disabled, servicing only observes `additional_paths`, without opening a repository.
     pub worktree_coverage: Option<WorktreeCoverage>,
     /// Wait this long after a metadata event before publishing its invalidation.
     pub metadata_debounce: Duration,
@@ -160,6 +215,8 @@ impl Default for Options {
         Self {
             metadata: true,
             all_worktrees: false,
+            worktree_filter: None,
+            additional_paths: Vec::new(),
             worktree_coverage: Some(WorktreeCoverage::default()),
             metadata_debounce: Duration::from_millis(100),
             max_latency: Duration::from_millis(250),
@@ -221,6 +278,14 @@ pub struct Changes {
 }
 
 impl Changes {
+    fn metadata_all_for(options: &Options) -> Self {
+        let mut changes = Self::metadata_all();
+        for path in &options.additional_paths {
+            changes.merge(path.changes.clone());
+        }
+        changes
+    }
+
     /// Return whether no cached information was invalidated.
     pub fn is_empty(&self) -> bool {
         !self.references
@@ -363,6 +428,12 @@ pub struct Outcome {
     pub other_worktrees: Vec<WorktreeChanges>,
     /// Discovery or native watcher failures, retained with their error chains.
     pub errors: Vec<Error>,
+    /// Whether enabled coverage still needs recovery, including degraded linked worktrees.
+    ///
+    /// Remains true during quiet retry backoff. An empty `errors` list does not establish that
+    /// coverage has recovered; use this field to retain earlier diagnostics until it does.
+    /// Successful initial registration and ordinary inventory verification are not recovery failures.
+    pub recovery_pending: bool,
     /// Native-event and registration counts.
     pub statistics: Statistics,
 }
@@ -459,11 +530,11 @@ impl Domain {
 /// stream. Checkout streams retain independent ignore rules and recovery. Recursive `All` coverage
 /// can still overlap metadata paths or another checkout nested inside a watched root.
 ///
-/// Subscriptions stay within the selected checkouts and their private and shared Git directories, without
+/// Repository subscriptions stay within the selected checkouts and their private and shared Git directories, without
 /// additional parent subscriptions to detect replacement of an entire root directory. External
-/// configuration and attribute files are not watched. Ignore-aware worktree coverage also watches
-/// the nearest existing parents of external ignore dependencies. Reopen the repository to read
-/// current external configuration.
+/// configuration and attribute files are not watched unless supplied in [`Options::additional_paths`].
+/// Ignore-aware worktree coverage also watches the nearest existing parents of external ignore
+/// dependencies. Reopen the repository to read current external configuration.
 ///
 /// Reported event loss invalidates the affected caches at the next [`service()`](Self::service)
 /// call and requests inventory repair. Lost native root identities also require re-registration,
@@ -512,7 +583,7 @@ impl Repository {
     /// To change monitoring options, drop the existing monitor before constructing its replacement
     /// to avoid resource usage peaks. See [`RepositoryMonitor`] for the replacement lifecycle.
     /// For raw native events with caller-owned watch registration and recovery, use [`plumbing::Watcher`].
-    pub fn monitor(&self, options: Options) -> Result<RepositoryMonitor> {
+    pub fn monitor(&self, mut options: Options) -> Result<RepositoryMonitor> {
         if options.all_worktrees && !options.metadata {
             return Err(gix_error::validation("all-worktree monitoring requires metadata monitoring").raise());
         }
@@ -531,10 +602,16 @@ impl Repository {
                     .raise());
             }
         }
-        let layout = Layout::for_options(self, &options)?;
         let filesystem = self
             .filesystem_options()
             .or_raise(|| message("could not read filesystem options"))?;
+        for path in options.worktree_filter.iter_mut().flatten() {
+            *path = absolute_path(path, self.current_dir(), filesystem.precompose_unicode)?;
+        }
+        for path in &mut options.additional_paths {
+            path.path = absolute_path(&path.path, self.current_dir(), filesystem.precompose_unicode)?;
+        }
+        let layout = Layout::for_options(self, &options)?;
         Ok(RepositoryMonitor {
             #[cfg(feature = "async-notify")]
             wake: gix_parallel::OwnShared::new(tokio::sync::Notify::new()),
@@ -766,7 +843,18 @@ impl RepositoryMonitor {
     }
 
     fn active(&self) -> bool {
-        self.options.metadata || self.worktree_enabled()
+        self.options.metadata || self.worktree_enabled() || !self.options.additional_paths.is_empty()
+    }
+
+    fn recovery_pending(&self) -> bool {
+        self.maintenance_failed
+            || self.metadata.rebuild
+                && (self.options.metadata
+                    || self.worktree_enabled() && self.ignore_aware()
+                    || !self.options.additional_paths.is_empty())
+            || self.worktree.rebuild && self.worktree_enabled()
+            || !self.undiscovered_worktrees.is_empty()
+            || self.other_worktrees.values().any(Self::recovery_pending)
     }
 
     fn poll(&mut self, now: Instant, out: &mut Outcome) {
@@ -818,6 +906,7 @@ impl RepositoryMonitor {
                     &mut self.metadata
                 };
                 domain.watcher = None;
+                domain.rebuild = true;
                 out.statistics.removed += domain.registered.len();
                 domain.registered.clear();
                 out.errors.push(error.and_raise(message!(
@@ -842,7 +931,8 @@ impl RepositoryMonitor {
     /// directory; drop this monitor and create a new instance to select another primary repository.
     /// Other repository handles are derived only during maintenance and are never retained.
     /// Worktree-only [`WorktreeCoverage::All`] does not call it. With metadata disabled, only
-    /// worktree scopes are published; errors are still returned. Both domains disabled is a no-op.
+    /// worktree scopes are published; errors are still returned. Both domains disabled is a no-op
+    /// unless additional paths are configured.
     pub fn service(&mut self, now: Instant, mut opener: impl FnMut() -> Result<Repository>) -> Outcome {
         let mut out = Outcome::default();
         if !self.active() {
@@ -909,6 +999,7 @@ impl RepositoryMonitor {
         if let Some(deadline) = self.undiscovered_worktrees.values().copied().min() {
             self.maintenance = Some(self.maintenance.map_or(deadline, |current| current.min(deadline)));
         }
+        out.recovery_pending = self.recovery_pending();
         self.pending_statistics.merge(std::mem::take(&mut out.statistics));
         if !out.changes.is_empty() || !out.other_worktrees.is_empty() || !out.errors.is_empty() {
             out.statistics = std::mem::take(&mut self.pending_statistics);
@@ -949,7 +1040,7 @@ impl RepositoryMonitor {
     fn maintenance_failed(&mut self, now: Instant) {
         if !self.maintenance_failed {
             self.pending_metadata
-                .add(Changes::metadata_all(), now, &self.options, true);
+                .add(Changes::metadata_all_for(&self.options), now, &self.options, true);
             if self.worktree_enabled() {
                 self.pending_worktree.merge(Changes::worktree_all());
             }
@@ -961,7 +1052,7 @@ impl RepositoryMonitor {
     fn maintenance_recovered(&mut self, now: Instant) {
         if std::mem::take(&mut self.maintenance_failed) {
             self.pending_metadata
-                .add(Changes::metadata_all(), now, &self.options, true);
+                .add(Changes::metadata_all_for(&self.options), now, &self.options, true);
             if self.worktree_enabled() {
                 self.pending_worktree.merge(Changes::worktree_all());
             }
@@ -979,7 +1070,7 @@ impl RepositoryMonitor {
                 other.coverage_lost(false, now);
             }
             self.pending_metadata
-                .add(Changes::metadata_all(), now, &self.options, true);
+                .add(Changes::metadata_all_for(&self.options), now, &self.options, true);
             self.metadata_dirty = true;
             self.inventory_dirty = true;
             self.index_dirty = true;
@@ -1013,7 +1104,7 @@ impl RepositoryMonitor {
             }
             self.layout = layout;
             self.pending_metadata
-                .add(Changes::metadata_all(), now, &self.options, true);
+                .add(Changes::metadata_all_for(&self.options), now, &self.options, true);
             if self.worktree_enabled() {
                 self.pending_worktree.merge(Changes::worktree_all());
             }
@@ -1032,10 +1123,21 @@ impl RepositoryMonitor {
             let mut watches = if self.shared_metadata {
                 inventory::private_metadata_watches(&self.layout)
             } else if self.options.metadata {
-                inventory::metadata_watches(&self.layout)?
+                inventory::metadata_watches(
+                    &self.layout,
+                    self.options
+                        .worktree_filter
+                        .as_deref()
+                        .filter(|_| self.all_worktrees_enabled()),
+                    self.ignore_case,
+                )?
             } else {
                 inventory::dependency_watches(&self.layout)
             };
+            inventory::merge_watches(
+                &mut watches,
+                inventory::additional_watches(&self.options.additional_paths)?,
+            );
             if self.metadata_is_shared() && self.worktree_enabled() {
                 inventory::watch_parent(&self.layout, &mut watches, &self.layout.index);
             }
@@ -1052,8 +1154,12 @@ impl RepositoryMonitor {
                     Ok(changed) => {
                         self.metadata_dirty = false;
                         if changed {
-                            self.pending_metadata
-                                .add(Changes::metadata_all(), now, &self.options, true);
+                            self.pending_metadata.add(
+                                Changes::metadata_all_for(&self.options),
+                                now,
+                                &self.options,
+                                true,
+                            );
                             if self.worktree_enabled() {
                                 self.pending_worktree.merge(Changes::worktree_all());
                             }
@@ -1161,6 +1267,19 @@ impl RepositoryMonitor {
     }
 
     fn maintain_all(&mut self, now: Instant, statistics: &mut Statistics) -> Result<bool> {
+        if !self.options.metadata && !self.options.additional_paths.is_empty() {
+            let watches = inventory::additional_watches(&self.options.additional_paths)?;
+            let changed = self
+                .metadata
+                .replace(watches, statistics)
+                .inspect_err(|_| self.coverage_lost(false, now))?;
+            self.metadata_dirty = false;
+            if changed {
+                self.pending_metadata
+                    .add(Changes::metadata_all_for(&self.options), now, &self.options, true);
+                self.maintenance = Some(now);
+            }
+        }
         let Some(root) = self.layout.worktree.clone() else {
             return Ok(false);
         };
@@ -1349,6 +1468,21 @@ impl RepositoryMonitor {
                     _ => changes.worktree = Some(Scope::All),
                 }
             } else {
+                let mut additional = Changes::default();
+                for dependency in &self.options.additional_paths {
+                    if strip_prefix(path, &dependency.path, self.ignore_case).is_some()
+                        || strip_prefix(&dependency.path, path, self.ignore_case).is_some()
+                    {
+                        additional.merge(dependency.changes.clone());
+                        if strip_prefix(&dependency.path, path, self.ignore_case).is_some()
+                            && (event.path_kind != PathKind::File
+                                || !same_path(path, &dependency.path, self.ignore_case))
+                        {
+                            self.metadata_dirty = true;
+                            self.maintenance = Some(now);
+                        }
+                    }
+                }
                 if path
                     .file_name()
                     .is_some_and(|name| name.as_encoded_bytes().ends_with(b".lock"))
@@ -1358,6 +1492,7 @@ impl RepositoryMonitor {
                         .dependencies
                         .iter()
                         .any(|dependency| same_path(path, &dependency.path, self.ignore_case))
+                    && additional.is_empty()
                 {
                     continue;
                 }
@@ -1372,7 +1507,7 @@ impl RepositoryMonitor {
                     self.metadata_dirty = true;
                     self.maintenance = Some(now);
                 }
-                let (classified, refresh) = if self.shared_metadata {
+                let (mut classified, refresh) = if self.shared_metadata {
                     classify_metadata_scoped(path, &self.layout, self.ignore_case, MetadataScope::Other)
                 } else if self.all_worktrees_enabled() {
                     classify_metadata_scoped(path, &self.layout, self.ignore_case, MetadataScope::Primary)
@@ -1381,6 +1516,12 @@ impl RepositoryMonitor {
                 } else {
                     classify_dependencies(path, &self.layout, self.ignore_case)
                 };
+                let refresh = refresh
+                    || additional.configuration
+                    || additional.ignores
+                    || additional.attributes
+                    || additional.layout;
+                classified.merge(additional);
                 if refresh || self.all_worktrees_enabled() && classified.layout {
                     self.metadata_dirty = true;
                     if classified.configuration || classified.ignores || classified.attributes || classified.layout {
