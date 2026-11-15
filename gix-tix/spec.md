@@ -1466,12 +1466,12 @@ views.
   A completed final replay does not reload history; another pass loads only the
   remapped edit graph and replay route, never unrelated references.
   A conflict retains the ours tree, exact merge-result
-  tree, conflict stages, prepared commits, and in-memory objects without changing
+  tree, an owned plan for its final index, prepared commits, and in-memory objects without changing
   the repository. The actual conflicting row is selected and centered with normal
   history-boundary clamping and shows a steady red conflict marker; `<enter>` persists
   the prepared rebase, leaves affected later commits lazy, checks
-  out the conflicting commit at the ours tree, then checks out the merge result and derives the
-  unmerged index from it. `Esc` discards the suspended operation; navigation and
+  out the conflicting commit at the ours tree, then checks out the merge result and constructs the
+  unmerged index from the retained plan. `Esc` discards the suspended operation; navigation and
   other read-only actions leave the choice armed, while repository-changing actions
   and refresh are blocked. Key-release events are not actions and leave it armed.
   Once an `Esc` press cancels it, repeats from that press cannot return to or close
@@ -1832,6 +1832,7 @@ views.
   while awaiting an explicit `<enter>` or `Esc` choice. Dropping it writes nothing;
   accepting it consumes the repository immediately after persisting the commit at
   the ours tree and materializing the retained merge result in the worktree and index.
+  The retained index plan owns paths and object IDs without holding a repository handle.
   Delete, reword, commit insertion, review finishing, and other shared-rebase
   callers propagate this same suspended result instead of completing their ref
   transaction first. Thus a checkout-path conflict is reported by the initiating

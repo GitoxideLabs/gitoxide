@@ -3,6 +3,93 @@ use gix::merge::tree::DirectoryRenames;
 use gix_testtools::TestResult;
 
 #[test]
+fn final_index_is_independent_of_mutable_tree_and_diagnostics() -> TestResult {
+    use gix::{
+        bstr::BString,
+        index::entry::{Mode, Stage},
+        merge::tree::TreatAsUnresolved,
+        object::tree::EntryKind,
+    };
+
+    let repo = named_repo("make_basic_repo.sh")?.with_object_memory();
+    let tree = |content: &str| -> gix::Result<_> {
+        let blob_id = repo.write_blob(content)?;
+        let tree_id = repo
+            .edit_tree(repo.object_hash().empty_tree())?
+            .upsert("file", EntryKind::Blob, blob_id)?
+            .write()?;
+        Ok((tree_id, blob_id))
+    };
+    let (base_tree_id, base_blob_id) = tree("base\n")?;
+    let (our_tree_id, our_blob_id) = tree("ours\n")?;
+    let (their_tree_id, their_blob_id) = tree("theirs\n")?;
+    let mut outcome = repo.merge_trees(
+        base_tree_id,
+        our_tree_id,
+        their_tree_id,
+        Default::default(),
+        repo.tree_merge_options()?,
+    )?;
+    let how = TreatAsUnresolved::git();
+    outcome.conflicts.clear();
+    assert_eq!(
+        outcome.tree.remove("file")?.write()?,
+        repo.object_hash().empty_tree(),
+        "the caller can edit the provisional tree independently"
+    );
+    assert!(
+        outcome.has_unresolved_conflicts(how),
+        "clearing diagnostics does not clear the finalized conflict verdict"
+    );
+    let entries = |index: &gix::index::State| {
+        index
+            .entries()
+            .iter()
+            .map(|entry| (entry.path(index).to_owned(), entry.stage(), entry.mode, entry.id))
+            .collect::<Vec<_>>()
+    };
+    let expected = [
+        (Stage::Base, base_blob_id),
+        (Stage::Ours, our_blob_id),
+        (Stage::Theirs, their_blob_id),
+    ]
+    .map(|(stage, blob_id)| (BString::from("file"), stage, Mode::FILE, blob_id.detach()));
+    let index = outcome.index(how)?;
+    index.verify_entries()?;
+    assert_eq!(
+        entries(&index),
+        expected,
+        "the index retains the final merge stages after its provisional tree is edited"
+    );
+
+    let index_on_disk = std::fs::read(repo.index_path())?;
+    let file = outcome.index_file(how)?;
+    assert_eq!(
+        std::fs::read(repo.index_path())?,
+        index_on_disk,
+        "constructing the index file does not write the repository's index"
+    );
+    let plan = outcome.index.clone();
+    drop(outcome);
+    assert_eq!(
+        file.path(),
+        repo.index_path(),
+        "the file targets this repository's index"
+    );
+    assert_eq!(
+        entries(&file),
+        expected,
+        "the index file retains the final merge stages after the merge outcome is dropped"
+    );
+    assert_eq!(
+        entries(&plan.to_index(how, &repo, Default::default())?),
+        expected,
+        "a detached plan can construct the same index after the merge outcome is dropped"
+    );
+    Ok(())
+}
+
+#[test]
 fn tree_merge_options() -> TestResult {
     let repo = named_repo("make_basic_repo.sh")?;
     let opts: gix::merge::plumbing::tree::Options = repo.tree_merge_options()?.into();

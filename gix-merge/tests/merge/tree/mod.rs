@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use gix_diff::Rewrites;
 use gix_merge::{
     commit::Options,
-    tree::{TreatAsUnresolved, apply_index_entries::RemovalMode, treat_as_unresolved},
+    tree::{TreatAsUnresolved, treat_as_unresolved},
 };
 use gix_object::Write;
 use gix_worktree::stack::state::attributes;
@@ -177,27 +177,29 @@ fn rename_add_after_destination_was_consumed() -> TestResult {
             options,
         )?;
         assert_no_unknown_conflicts(&outcome, "rename/add after its destination was consumed");
+        let actual_tree_id = outcome.tree.clone().write(|tree| objects.write(tree))?;
         for (path, mode, object_id) in [
+            ("a/h", gix_object::tree::EntryKind::Commit, added_commit_id),
             ("c/a/h", gix_object::tree::EntryKind::Commit, commit_id),
             ("c/h/h", gix_object::tree::EntryKind::Commit, commit_id),
-            ("h/h~", gix_object::tree::EntryKind::Blob, blob_id),
+            ("h/h", gix_object::tree::EntryKind::Blob, blob_id),
         ] {
-            let entry = outcome.tree.get(path.split('/')).expect("renamed entries survive");
+            let entry = outcome.tree.get(path.split('/')).unwrap_or_else(|| {
+                panic!(
+                    "the renamed entry {path} survives:\n{}\nConflicts: {:#?}",
+                    baseline::visualize_tree(&actual_tree_id, &objects, None),
+                    outcome.conflicts,
+                )
+            });
             assert_eq!(entry.mode.kind(), mode, "the merge preserves the mode at {path}");
             assert_eq!(entry.oid, *object_id, "the merge preserves the object at {path}");
         }
-        assert!(
-            outcome.conflicts.iter().any(|conflict| {
-                let (resolution, ours, theirs) = conflict.clone().into_parts_by_resolution();
-                matches!(
-                    resolution,
-                    Err(gix_merge::tree::ResolutionFailure::DistinctTypes { .. })
-                ) && [ours, theirs].iter().any(|change| {
-                    let (mode, object_id) = change.entry_mode_and_id();
-                    mode.is_commit() && object_id == *added_commit_id
-                })
-            }),
-            "the added gitlink remains recoverable from the type-conflict record"
+        assert_eq!(
+            gix_index::State::from_tree(&actual_tree_id, &objects, Default::default())?
+                .entries()
+                .len(),
+            4,
+            "the normalized result matches Git without duplicate conflict paths"
         );
         outcome.tree.write(|tree| objects.write(tree))?;
     }
@@ -237,6 +239,7 @@ fn run_baseline() -> TestResult {
     let cases = std::fs::read_to_string(root.join("baseline.cases"))?;
     let mut actual_cases = 0;
     let mut skipped_tree_resolve_cases = 0;
+    let mut failures = Vec::new();
     // let new_test = Some("rename-within-rename-2-A-B-deviates");
     let new_test = None;
     for baseline::Expectation {
@@ -254,150 +257,31 @@ fn run_baseline() -> TestResult {
         .filter(|case| new_test.is_none_or(|prefix: &str| case.case_name.starts_with(prefix)))
     {
         actual_cases += 1;
-        let mut graph = gix_revwalk::Graph::new(&odb, None);
-        // Recursive conflict markers exceed the small threshold used by the large-file cases.
-        let large_file_threshold_bytes = if case_name.contains("criss-cross") { 0 } else { 100 };
-        let mut blob_merge = new_blob_merge_platform(&root, large_file_threshold_bytes);
-        let mut diff_resource_cache = new_diff_resource_cache(&root);
-        let mut options = basic_merge_options();
-        options.tree_merge.directory_renames = directory_renames_for_case(&case_name);
-        if case_name.contains("without-rewrites") {
-            options.tree_merge.rewrites = None;
-        }
-        options.tree_merge.blob_merge.text.conflict = gix_merge::blob::builtin_driver::text::Conflict::Keep {
-            style: conflict_style,
-            marker_size: gix_merge::blob::builtin_driver::text::Conflict::DEFAULT_MARKER_SIZE
-                .try_into()
-                .expect("non-zero"),
-        };
-        if case_name.contains("file-favor-ours") {
-            options.tree_merge.blob_merge.text.conflict =
-                gix_merge::blob::builtin_driver::text::Conflict::ResolveWithOurs;
-            options.tree_merge.symlink_conflicts = Some(gix_merge::blob::builtin_driver::binary::ResolveWith::Ours);
-            options.tree_merge.blob_merge.resolve_binary_with = options.tree_merge.symlink_conflicts;
-        }
-
-        let mut actual = gix_merge::commit(
-            our_commit_id,
-            their_commit_id,
-            gix_merge::blob::builtin_driver::text::Labels {
-                ancestor: None,
-                current: Some(our_side_name.as_str().into()),
-                other: Some(their_side_name.as_str().into()),
-            },
-            &mut graph,
-            &mut diff_resource_cache,
-            &mut blob_merge,
-            &odb,
-            &mut |id| id.to_hex_with_len(7).to_string(),
-            options.clone(),
-        )?
-        .tree_merge;
-        assert_no_unknown_conflicts(&actual, &case_name);
-        if case_name.starts_with("directory-rename-tie-") {
-            assert!(
-                merge_info
-                    .information
-                    .iter()
-                    .any(|info| matches!(info.kind, baseline::ConflictKind::DirectoryRenameSplit)),
-                "Git reports the tied directory destinations"
-            );
-            assert!(
-                actual.conflicts.is_empty(),
-                "tied destinations currently retain new paths without a directory-split diagnostic"
-            );
-        }
-
-        let actual_id = actual.tree.write(|tree| odb.write(tree))?;
-        match &deviation {
-            None => {
-                if actual_id != merge_info.merged_tree {
-                    baseline::show_diff_and_fail(&case_name, actual_id, &actual, &merge_info, &odb);
-                }
+        let mut phase = "default merge";
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> TestResult {
+            let mut graph = gix_revwalk::Graph::new(&odb, None);
+            // Recursive conflict markers exceed the small threshold used by the large-file cases.
+            let large_file_threshold_bytes = if case_name.contains("criss-cross") { 0 } else { 100 };
+            let mut blob_merge = new_blob_merge_platform(&root, large_file_threshold_bytes);
+            let mut diff_resource_cache = new_diff_resource_cache(&root);
+            let mut options = basic_merge_options();
+            options.tree_merge.directory_renames = directory_renames_for_case(&case_name);
+            if case_name.contains("without-rewrites") {
+                options.tree_merge.rewrites = None;
             }
-            Some(Deviation {
-                message,
-                expected_tree_id,
-            }) => {
-                // TODO: why did this ever work?
-                // Sometimes only the reversed part of a specific test is different.
-                // assert_eq!(
-                //     actual_id, merge_info.merged_tree,
-                //     "{case_name}: Git should match here, it just doesn't match in one of two cases"
-                // );
-                pretty_assertions::assert_str_eq!(
-                    baseline::visualize_tree(&actual_id, &odb, None).to_string(),
-                    baseline::visualize_tree(expected_tree_id, &odb, None).to_string(),
-                    "{case_name}: tree mismatch: {message} \n{:#?}\n{case_name}",
-                    actual.conflicts
-                );
-            }
-        }
-
-        let mut actual_index = gix_index::State::from_tree(&actual_id, &odb, Default::default())?;
-        let expected_index = {
-            let deviating_index_path = root.join(".git").join(format!("{case_name}.index"));
-            if deviating_index_path.exists() {
-                gix_index::File::at(
-                    deviating_index_path,
-                    odb.store().object_hash(),
-                    true,
-                    Default::default(),
-                )?
-                .into()
-            } else {
-                let mut index = actual_index.clone();
-                if let Some(conflicts) = &merge_info.conflicts {
-                    baseline::apply_git_index_entries(conflicts, &mut index);
-                }
-                index
-            }
-        };
-        let conflicts_like_in_git = TreatAsUnresolved::git();
-        let did_change =
-            actual.index_changed_after_applying_conflicts(&mut actual_index, conflicts_like_in_git, RemovalMode::Prune);
-
-        pretty_assertions::assert_eq!(
-            baseline::debug_entries(&actual_index),
-            baseline::debug_entries(&expected_index),
-            "{case_name}: index mismatch\nOur conflicts {:#?}\nGit conflicts {:#?}",
-            actual.conflicts,
-            merge_info.conflicts
-        );
-        if deviation.is_none() {
-            assert_eq!(
-                did_change,
-                actual.has_unresolved_conflicts(conflicts_like_in_git),
-                "{case_name}: If there is any kind of conflict, the index should have been changed"
-            );
-        }
-
-        // The content-merge mode is not relevant for the upcoming tree-conflict resolution.
-        if case_name.contains("diff3") {
-            continue;
-        }
-
-        for tree_resolution in [
-            gix_merge::tree::ResolveWith::Ancestor,
-            gix_merge::tree::ResolveWith::Ours,
-        ] {
-            let resolution_name = match tree_resolution {
-                gix_merge::tree::ResolveWith::Ancestor => "ancestor",
-                gix_merge::tree::ResolveWith::Ours => "ours",
+            options.tree_merge.blob_merge.text.conflict = gix_merge::blob::builtin_driver::text::Conflict::Keep {
+                style: conflict_style,
+                marker_size: gix_merge::blob::builtin_driver::text::Conflict::DEFAULT_MARKER_SIZE
+                    .try_into()
+                    .expect("non-zero"),
             };
-            let basename = format!("resolve-{our_side_name}-{their_side_name}-with-{resolution_name}");
-            let tree_path = root.join(".git").join(format!("{basename}.tree"));
-            if !tree_path.exists() {
-                skipped_tree_resolve_cases += 1;
-                continue;
-            }
-            let expected_tree_id = gix_hash::ObjectId::from_hex(std::fs::read_to_string(tree_path)?.trim().as_bytes())?;
-            options.tree_merge.tree_conflicts = Some(tree_resolution);
-            let resolve_with_ours = tree_resolution == gix_merge::tree::ResolveWith::Ours;
-            if resolve_with_ours {
+            if case_name.contains("file-favor-ours") {
                 options.tree_merge.blob_merge.text.conflict =
                     gix_merge::blob::builtin_driver::text::Conflict::ResolveWithOurs;
+                options.tree_merge.symlink_conflicts = Some(gix_merge::blob::builtin_driver::binary::ResolveWith::Ours);
+                options.tree_merge.blob_merge.resolve_binary_with = options.tree_merge.symlink_conflicts;
             }
+
             let mut actual = gix_merge::commit(
                 our_commit_id,
                 their_commit_id,
@@ -414,30 +298,180 @@ fn run_baseline() -> TestResult {
                 options.clone(),
             )?
             .tree_merge;
-            assert_no_unknown_conflicts(&actual, &basename);
-
-            let actual_id = actual.tree.write(|tree| odb.write(tree))?;
-            if actual_id != expected_tree_id {
-                baseline::show_diff_trees_and_fail(&case_name, actual_id, &actual, expected_tree_id, &basename, &odb);
+            assert_no_unknown_conflicts(&actual, &case_name);
+            if case_name.starts_with("directory-rename-tie-") {
+                assert!(
+                    merge_info
+                        .information
+                        .iter()
+                        .any(|info| matches!(info.kind, baseline::ConflictKind::DirectoryRenameSplit)),
+                    "Git reports the tied directory destinations"
+                );
+                assert!(
+                    actual.conflicts.is_empty(),
+                    "tied destinations currently retain new paths without a directory-split diagnostic"
+                );
             }
-            if resolve_with_ours && merge_info.conflicts.is_some() {
-                assert!(
-                    !actual.has_unresolved_conflicts(conflicts_like_in_git),
-                    "We have forcefully resolved all conflicts, as far as Git would be concerned\n{:#?}",
-                    actual.conflicts
+
+            phase = "default tree";
+            let actual_id = actual.tree.write(|tree| odb.write(tree))?;
+            match &deviation {
+                None => {
+                    if actual_id != merge_info.merged_tree {
+                        baseline::show_diff_and_fail(&case_name, actual_id, &actual, &merge_info, &odb);
+                    }
+                }
+                Some(Deviation {
+                    message,
+                    expected_tree_id,
+                }) => {
+                    // TODO: why did this ever work?
+                    // Sometimes only the reversed part of a specific test is different.
+                    // assert_eq!(
+                    //     actual_id, merge_info.merged_tree,
+                    //     "{case_name}: Git should match here, it just doesn't match in one of two cases"
+                    // );
+                    pretty_assertions::assert_str_eq!(
+                        baseline::visualize_tree(&actual_id, &odb, None).to_string(),
+                        baseline::visualize_tree(expected_tree_id, &odb, None).to_string(),
+                        "{case_name}: tree mismatch: {message} \n{:#?}\n{case_name}",
+                        actual.conflicts
+                    );
+                }
+            }
+
+            phase = "default index";
+            let conflicts_like_in_git = TreatAsUnresolved::git();
+            let actual_index = actual.index.to_index(conflicts_like_in_git, &odb, Default::default())?;
+            let expected_index = {
+                let deviating_index_path = root.join(".git").join(format!("{case_name}.index"));
+                if deviating_index_path.exists() {
+                    gix_index::File::at(
+                        deviating_index_path,
+                        odb.store().object_hash(),
+                        true,
+                        Default::default(),
+                    )?
+                    .into()
+                } else {
+                    let mut index = gix_index::State::from_tree(&actual_id, &odb, Default::default())?;
+                    if let Some(conflicts) = &merge_info.conflicts {
+                        baseline::apply_git_index_entries(conflicts, &mut index);
+                    }
+                    index
+                }
+            };
+            pretty_assertions::assert_eq!(
+                baseline::debug_entries(&actual_index),
+                baseline::debug_entries(&expected_index),
+                "{case_name}: index mismatch\nOur conflicts {:#?}\nGit conflicts {:#?}",
+                actual.conflicts,
+                merge_info.conflicts
+            );
+            if deviation.is_none() {
+                assert_eq!(
+                    actual.index.has_unmerged_entries(conflicts_like_in_git),
+                    actual.has_unresolved_conflicts(conflicts_like_in_git),
+                    "{case_name}: unresolved conflicts must have unmerged index entries"
                 );
-                assert!(
-                    actual.has_unresolved_conflicts(TreatAsUnresolved {
-                        content_merge: treat_as_unresolved::ContentMerge::ForcedResolution,
-                        tree_merge: treat_as_unresolved::TreeMerge::ForcedResolution,
-                    }),
-                    "But it's possible to adjust the parameter to still learn that a conflict happened,\
+            }
+
+            // The content-merge mode is not relevant for the upcoming tree-conflict resolution.
+            if case_name.contains("diff3") {
+                return Ok(());
+            }
+
+            for tree_resolution in [
+                gix_merge::tree::ResolveWith::Ancestor,
+                gix_merge::tree::ResolveWith::Ours,
+            ] {
+                let resolution_name = match tree_resolution {
+                    gix_merge::tree::ResolveWith::Ancestor => "ancestor",
+                    gix_merge::tree::ResolveWith::Ours => "ours",
+                };
+                let basename = format!("resolve-{our_side_name}-{their_side_name}-with-{resolution_name}");
+                let tree_path = root.join(".git").join(format!("{basename}.tree"));
+                if !tree_path.exists() {
+                    skipped_tree_resolve_cases += 1;
+                    continue;
+                }
+                phase = match tree_resolution {
+                    gix_merge::tree::ResolveWith::Ancestor => "forced ancestor",
+                    gix_merge::tree::ResolveWith::Ours => "forced ours",
+                };
+                let expected_tree_id =
+                    gix_hash::ObjectId::from_hex(std::fs::read_to_string(tree_path)?.trim().as_bytes())?;
+                options.tree_merge.tree_conflicts = Some(tree_resolution);
+                let resolve_with_ours = tree_resolution == gix_merge::tree::ResolveWith::Ours;
+                if resolve_with_ours {
+                    options.tree_merge.blob_merge.text.conflict =
+                        gix_merge::blob::builtin_driver::text::Conflict::ResolveWithOurs;
+                }
+                let mut actual = gix_merge::commit(
+                    our_commit_id,
+                    their_commit_id,
+                    gix_merge::blob::builtin_driver::text::Labels {
+                        ancestor: None,
+                        current: Some(our_side_name.as_str().into()),
+                        other: Some(their_side_name.as_str().into()),
+                    },
+                    &mut graph,
+                    &mut diff_resource_cache,
+                    &mut blob_merge,
+                    &odb,
+                    &mut |id| id.to_hex_with_len(7).to_string(),
+                    options.clone(),
+                )?
+                .tree_merge;
+                assert_no_unknown_conflicts(&actual, &basename);
+
+                let actual_id = actual.tree.write(|tree| odb.write(tree))?;
+                if actual_id != expected_tree_id {
+                    baseline::show_diff_trees_and_fail(
+                        &case_name,
+                        actual_id,
+                        &actual,
+                        expected_tree_id,
+                        &basename,
+                        &odb,
+                    );
+                }
+                if resolve_with_ours && merge_info.conflicts.is_some() {
+                    assert!(
+                        !actual.has_unresolved_conflicts(conflicts_like_in_git),
+                        "We have forcefully resolved all conflicts, as far as Git would be concerned\n{:#?}",
+                        actual.conflicts
+                    );
+                    assert!(
+                        actual.has_unresolved_conflicts(TreatAsUnresolved {
+                            content_merge: treat_as_unresolved::ContentMerge::ForcedResolution,
+                            tree_merge: treat_as_unresolved::TreeMerge::ForcedResolution,
+                        }),
+                        "But it's possible to adjust the parameter to still learn that a conflict happened,\
                 and each of these tests has one that is irreconcilable"
-                );
+                    );
+                }
+            }
+            Ok(())
+        }));
+        match result {
+            Ok(Ok(())) => {}
+            result => {
+                if let Ok(Err(err)) = result {
+                    eprintln!("{case_name} ({phase}): {err:?}");
+                }
+                failures.push(format!("{case_name}: {phase}"));
             }
         }
     }
 
+    assert!(
+        failures.is_empty(),
+        "{}/{} baseline cases failed:\n{}",
+        failures.len(),
+        actual_cases,
+        failures.join("\n"),
+    );
     assert_eq!(
         actual_cases, 535,
         "BUG: update this number, and don't forget to remove a filter in the end"
@@ -831,4 +865,7 @@ fn new_blob_merge_platform(
 mod baseline;
 mod cartesian;
 mod conflict_policies;
+mod gitlink_renames;
+mod rename_parent_namespace;
+mod structural_differential;
 mod synthetic_trees;

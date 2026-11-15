@@ -138,6 +138,7 @@ impl Repository {
         let mut blob_merge = self.merge_resource_cache(Default::default())?;
         let gix_merge::tree::Outcome {
             tree,
+            index,
             conflicts,
             failed_on_first_unresolved_conflict,
         } = gix_merge::tree(
@@ -160,6 +161,7 @@ impl Repository {
                 validate,
                 repo: self,
             },
+            index,
             conflicts,
             failed_on_first_unresolved_conflict,
         })
@@ -196,6 +198,7 @@ impl Repository {
             tree_merge:
                 gix_merge::tree::Outcome {
                     tree,
+                    index,
                     conflicts,
                     failed_on_first_unresolved_conflict,
                 },
@@ -221,6 +224,7 @@ impl Repository {
                 validate,
                 repo: self,
             },
+            index,
             conflicts,
             failed_on_first_unresolved_conflict,
         };

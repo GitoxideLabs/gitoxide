@@ -1,152 +1,68 @@
-//! Change discovery and structural matching for tree merges.
-//!
-//! This module turns each base-to-side tree diff into a [`SideState`]: a flat
-//! [`ChangeList`] containing scheduling state, paired with a [`TreeNodes`] path
-//! index whose entries point back into that list. It also finds path and rename
-//! interactions between sides and classifies the pairs consumed by the resolver.
-//!
-//! Semantic conflict resolution and edits to the result tree belong to the
-//! sibling `resolve` module; this module only prepares, indexes, and matches work.
+//! Discover rename identities from the two base-to-side diffs before resolving paths.
 
-use bstr::{BString, ByteSlice};
+use bstr::ByteSlice;
 use gix_diff::{
     tree::recorder::Location,
     tree_with_rewrites::{Change, ChangeRef},
 };
-use gix_error::ResultExt;
-use gix_error::{Result, message};
+use gix_error::{Result, ResultExt, message};
 use gix_object::FindExt;
 
-use crate::tree::utils::{ChangeList, ChangeListRef, PossibleConflict, TreeNodes, track};
-
-pub(super) struct SideState {
-    changes: ChangeList,
-    tree: TreeNodes,
-}
-
-/// Lifecycle
-impl SideState {
-    /// Like Git, only use a directory rename when the other side adds a leaf directly inside it or an ancestor.
-    pub(super) fn retain_relevant_directory_renames(&mut self, other: &Self) {
-        if !self
-            .changes
-            .iter()
-            .any(|change| matches!(&change.inner, Change::Rewrite { entry_mode, .. } if entry_mode.is_tree()))
-        {
-            return;
-        }
-        let relevant_directories: std::collections::HashSet<_> = other
-            .changes
-            .iter()
-            .filter(|change| {
-                !change.inner.entry_mode().is_tree()
-                    && matches!(change.inner, Change::Addition { .. } | Change::Rewrite { .. })
-            })
-            .filter_map(|change| {
-                let path = change.inner.location();
-                path.rfind_byte(b'/').map(|slash| path[..slash].as_bstr())
-            })
-            .collect();
-        let is_irrelevant = |change: &Change| {
-            let Change::Rewrite {
-                source_location,
-                entry_mode,
-                ..
-            } = change
-            else {
-                return false;
-            };
-            if !entry_mode.is_tree() {
-                return false;
-            }
-            let mut path = source_location.as_bstr();
-            loop {
-                if relevant_directories.contains(path) {
-                    return false;
-                }
-                let Some(slash) = path.rfind_byte(b'/') else {
-                    return true;
-                };
-                path = path[..slash].as_bstr();
-            }
-        };
-        if !self.changes.iter().any(|change| is_irrelevant(&change.inner)) {
-            return;
-        }
-        let mut changes = Vec::with_capacity(self.changes.len());
-        for change in self.changes.drain(..) {
-            if is_irrelevant(&change.inner) {
-                track_without_directory_rename(change.inner.to_ref(), &mut changes);
-            } else {
-                changes.push(change);
-            }
-        }
-        *self = Self::from_changes(changes);
+/// Like Git, only use a directory rename when the other side adds a leaf directly inside it or an ancestor.
+pub(super) fn retain_relevant_directory_renames(changes: &mut Vec<Change>, other: &[Change]) {
+    if !changes
+        .iter()
+        .any(|change| matches!(&change, Change::Rewrite { entry_mode, .. } if entry_mode.is_tree()))
+    {
+        return;
     }
-
-    fn from_changes(changes: ChangeList) -> Self {
-        let mut tree = TreeNodes::new();
-        for (idx, change) in changes.iter().enumerate() {
-            tree.track_change(&change.inner, idx);
-        }
-        SideState { changes, tree }
-    }
-}
-
-impl SideState {
-    /// Borrow the change schedule and its path index separately for resolution.
-    ///
-    /// The resolver swaps these pairs between "ours" and "theirs", appends deferred
-    /// changes to the list, and updates the corresponding index while processing them.
-    /// Every index stored in `TreeNodes` continues to refer into the returned `ChangeList`.
-    pub(super) fn parts_mut(&mut self) -> (&mut ChangeList, &mut TreeNodes) {
-        (&mut self.changes, &mut self.tree)
-    }
-    /// Return whether file rewrites can claim the same source identity.
-    /// Directory relations describe tree structure; all file rewrites are paired independently.
-    pub(super) fn has_ambiguous_rewrite_sources(&self) -> bool {
-        let mut sources = std::collections::HashSet::new();
-        self.changes.iter().any(|change| match &change.inner {
-            Change::Rewrite {
-                source_id, entry_mode, ..
-            } if !entry_mode.is_tree() => !sources.insert(*source_id),
-            _ => false,
+    let relevant_directories: std::collections::HashSet<_> = other
+        .iter()
+        .filter(|change| {
+            !change.entry_mode().is_tree() && matches!(change, Change::Addition { .. } | Change::Rewrite { .. })
         })
+        .filter_map(|change| {
+            let path = change.location();
+            path.rfind_byte(b'/').map(|slash| path[..slash].as_bstr())
+        })
+        .collect();
+    let is_irrelevant = |change: &Change| {
+        let Change::Rewrite {
+            source_location,
+            entry_mode,
+            ..
+        } = change
+        else {
+            return false;
+        };
+        if !entry_mode.is_tree() {
+            return false;
+        }
+        let mut path = source_location.as_bstr();
+        loop {
+            if relevant_directories.contains(path) {
+                return false;
+            }
+            let Some(slash) = path.rfind_byte(b'/') else {
+                return true;
+            };
+            path = path[..slash].as_bstr();
+        }
+    };
+    if !changes.iter().any(&is_irrelevant) {
+        return;
     }
-
-    /// Compare both sides by their ordered `(source, destination)` paths.
-    ///
-    /// When unrelated rewrites share an object ID, whichever side is scheduled first can
-    /// otherwise decide how those identities are paired. The resolver uses this ordering
-    /// to choose the same first side after the caller reverses ours and theirs. Paths are
-    /// used instead of object IDs so the choice remains stable across hash kinds.
-    pub(super) fn cmp_for_scheduling(&self, other: &Self) -> std::cmp::Ordering {
-        self.changes
-            .iter()
-            .map(|change| (change.inner.source_location(), change.inner.location()))
-            .cmp(
-                other
-                    .changes
-                    .iter()
-                    .map(|change| (change.inner.source_location(), change.inner.location())),
-            )
+    let mut retained = Vec::with_capacity(changes.len());
+    for change in changes.drain(..) {
+        if is_irrelevant(&change) {
+            track_without_directory_rename(change.to_ref(), &mut retained);
+        } else {
+            retained.push(change);
+        }
     }
+    *changes = retained;
 }
 
-#[derive(Debug)]
-pub(super) enum MatchKind {
-    /// A tree is supposed to be superseded by something else.
-    EraseTree,
-    /// A leaf node is superseded by a tree.
-    EraseLeaf,
-}
-
-/// Collect one side's changes relative to the base and build their path index.
-///
-/// `base_buf` contains `base_tree`, while `side_buf` is reused to load `side_tree`.
-/// Equal tree IDs produce an empty state without diffing. Otherwise, the path-aware
-/// diff, including the requested rewrite tracking, is normalized through [`track`]
-/// into a [`ChangeList`] and indexed by [`TreeNodes`] in the returned [`SideState`].
 #[expect(clippy::too_many_arguments)]
 pub(super) fn collect(
     base_tree: &gix_hash::oid,
@@ -158,12 +74,16 @@ pub(super) fn collect(
     diff_state: &mut gix_diff::tree::State,
     rewrites: Option<gix_diff::Rewrites>,
     directory_renames: crate::tree::DirectoryRenames,
-) -> Result<SideState> {
+) -> Result<Vec<Change>> {
     let mut changes = Vec::new();
     if base_tree != side_tree {
-        let side_tree = objects
-            .find_tree_iter(side_tree, side_buf)
-            .or_raise(|| message("Tree merge failed"))?;
+        let side_tree = if side_tree == side_tree.kind().empty_tree() {
+            gix_object::TreeRefIter::from_bytes(&[], side_tree.kind())
+        } else {
+            objects
+                .find_tree_iter(side_tree, side_buf)
+                .or_raise(|| message("Tree merge failed"))?
+        };
         gix_diff::tree_with_rewrites(
             gix_object::TreeRefIter::from_bytes(base_buf, base_tree.kind()),
             side_tree,
@@ -185,10 +105,10 @@ pub(super) fn collect(
         )
         .or_raise(|| message("Tree merge failed"))?;
     }
-    Ok(SideState::from_changes(changes))
+    Ok(changes)
 }
 
-fn track_without_directory_rename(change: ChangeRef<'_>, changes: &mut ChangeList) {
+fn track_without_directory_rename(change: ChangeRef<'_>, changes: &mut Vec<Change>) {
     if let ChangeRef::Rewrite {
         source_location,
         source_entry_mode,
@@ -226,165 +146,82 @@ fn track_without_directory_rename(change: ChangeRef<'_>, changes: &mut ChangeLis
     }
 }
 
-/// Find an eligible change on our indexed side that structurally interacts with `theirs`.
-///
-/// `rewritten_location` belongs to a deferred change whose path passed through a directory
-/// rewrite on our side. For example, if our side renamed `a` to `b`, their change at `a/x`
-/// must be retried at `b/x`. The tuple contains that effective path and the index of the
-/// directory rewrite which produced it, so matching starts where the change will actually
-/// be applied. A rewrite is also checked at its destination for rewrites or a directory
-/// with only descendant changes, exposing interactions not visible at the source path.
-///
-/// `needs_tree_insertion` identifies a clone appended for a later retry. The resolver inserts
-/// such a deferred change into its own side's [`TreeNodes`] immediately before processing it,
-/// keeping future work from seeing it prematurely. Its inner index, when present, identifies
-/// the opposite-side change which caused the deferral; that candidate is ignored on retry so
-/// the same pair cannot defer or resolve each other again.
-///
-/// Changes with identical tree effects need no conflict resolution. Relations and rewrite diff
-/// statistics are local bookkeeping from two independent diff operations and don't affect the
-/// result. For a deletion, applying `theirs` removes the same base entry our deletion would
-/// remove. An identical rewrite additionally creates the same destination. Marking our deletion
-/// or rewrite applied records that one editor update represents both sides and prevents a later
-/// scheduling pass from removing the shared source after descendant entries have been added there.
-///
-/// Applied deletions are otherwise ignored because their indexed path remains available for
-/// structural lookup even though the entry itself has already been removed from the editor.
-/// A deletion processed without application remains eligible: conflict resolution may have
-/// retained the ancestor entry, so it can still block a tree or descendant at that path.
-pub(super) fn matching(
-    theirs: &Change,
-    needs_tree_insertion: Option<Option<usize>>,
-    rewritten_location: Option<&(BString, usize)>,
-    our_tree: &TreeNodes,
-    our_changes: &mut ChangeList,
-) -> Option<PossibleConflict> {
-    let mut their_location =
-        rewritten_location.map_or_else(|| theirs.source_location(), |(location, _)| location.as_bstr());
-    let candidate = our_tree.check_conflict(their_location).or_else(|| match theirs {
-        Change::Rewrite { location, .. } => {
-            their_location = location.as_bstr();
-            our_tree.check_conflict(their_location).filter(|candidate| {
-                matches!(candidate, PossibleConflict::TreeToNonTree { change_idx: None })
-                    || candidate.change_idx().is_some_and(|idx| {
-                        matches!(our_changes[idx].inner, Change::Rewrite { .. })
-                            || matches!(our_changes[idx].inner, Change::Addition { entry_mode, .. } if entry_mode.is_tree())
-                    })
-            })
-        }
-        _ => None,
-    });
-
-    candidate.filter(|ours| {
-        // A newly added directory disappears when forced resolutions discard all its children.
-        if ours.change_idx().is_some_and(
-            |idx| matches!(our_changes[idx].inner, Change::Addition { entry_mode, .. } if entry_mode.is_tree()),
-        ) && our_tree.all_changes_at_or_below(their_location, |idx| {
-            let change = &our_changes[idx];
-            change.inner.entry_mode().is_tree() || change.was_processed_without_application()
-        }) {
-            return false;
-        }
-        // Deletions alone leave no descendants that could collide with a replacement leaf.
-        if matches!(ours, PossibleConflict::TreeToNonTree { change_idx: None })
-            && our_tree.all_changes_at_or_below(their_location, |idx| {
-                let change = &our_changes[idx];
-                matches!(change.inner, Change::Deletion { .. }) && !change.was_processed_without_application()
-            })
-        {
-            return false;
-        }
-        ours.change_idx()
-            .zip(needs_tree_insertion.flatten())
-            .is_none_or(|(ours_idx, ignore_idx)| ours_idx != ignore_idx)
-            && ours.change_idx().is_none_or(|ours_idx| {
-                let ours = &mut our_changes[ours_idx];
-                if same_effect(&ours.inner, theirs) {
-                    // Applying `theirs` also consumes an identical source removal, which must not
-                    // run again after descendants have been added.
-                    if matches!(theirs, Change::Deletion { .. } | Change::Rewrite { .. }) {
-                        ours.mark_applied();
-                    }
-                    false
-                } else {
-                    !(ours.was_applied() && matches!(ours.inner, Change::Deletion { .. }))
-                }
-            })
-    })
-}
-
-fn same_effect(ours: &Change, theirs: &Change) -> bool {
-    std::mem::discriminant(ours) == std::mem::discriminant(theirs)
-        && ours.source_location() == theirs.source_location()
-        && ours.source_entry_mode_and_id() == theirs.source_entry_mode_and_id()
-        && ours.location() == theirs.location()
-        && ours.entry_mode_and_id() == theirs.entry_mode_and_id()
-        && match (ours, theirs) {
-            (Change::Rewrite { copy: ours, .. }, Change::Rewrite { copy: theirs, .. }) => ours == theirs,
-            _ => true,
-        }
-}
-
-/// Turn a path-index match, `candidate`, from our side into a concrete change pair for the resolution matrix.
-///
-/// The first tuple element indexes `our_changes`; `None` means the overlap has no eligible change to pair with. The
-/// second describes a tree/non-tree boundary: [`MatchKind::EraseTree`] replaces our tree with their leaf, while
-/// [`MatchKind::EraseLeaf`] replaces our leaf with their tree. An exact-path match needs no `MatchKind`.
-///
-/// A tree-to-non-tree candidate is pairable only when its indexed change can remove or replace that tree. A passed
-/// rewritten directory is deliberately not paired here because the scheduler relocates it before calling this function.
-pub(super) fn pair(candidate: &PossibleConflict, our_changes: &ChangeListRef) -> (Option<usize>, Option<MatchKind>) {
-    match *candidate {
-        PossibleConflict::TreeToNonTree { change_idx: Some(idx) }
-            if matches!(
-                our_changes[idx].inner,
-                Change::Deletion { .. } | Change::Addition { .. } | Change::Rewrite { .. }
-            ) =>
-        {
-            (Some(idx), Some(MatchKind::EraseTree))
-        }
-        PossibleConflict::NonTreeToTree { change_idx } => (change_idx, Some(MatchKind::EraseLeaf)),
-        PossibleConflict::Match { change_idx } => (Some(change_idx), None),
-        _ => (None, None),
+/// Copy sources remain in place and therefore contribute ordinary additions to a merge.
+fn track(change: ChangeRef<'_>, changes: &mut Vec<Change>) {
+    if change.entry_mode().is_tree() && matches!(change, ChangeRef::Modification { .. }) {
+        return;
     }
+    changes.push(match change.into_owned() {
+        Change::Rewrite {
+            id,
+            entry_mode,
+            location,
+            relation,
+            copy: true,
+            ..
+        } => Change::Addition {
+            location,
+            relation,
+            entry_mode,
+            id,
+        },
+        other => other,
+    });
 }
 
 #[cfg(test)]
 mod tests {
-    use gix_diff::{tree::visit::Relation, tree_with_rewrites::ChangeRef};
-    use gix_object::tree::EntryKind;
-
-    use super::{SideState, track};
+    use gix_error::TestResult;
+    use gix_object::WriteTo;
 
     #[test]
-    fn directory_children_can_have_ambiguous_rewrite_sources() {
-        let blob_id = gix_hash::ObjectId::empty_blob(gix_testtools::object_hash());
-        for entry_kind in [EntryKind::Blob, EntryKind::Tree] {
-            for relation in [None, Some(Relation::ChildOfParent(1))] {
-                let mut changes = Vec::new();
-                for (source, destination) in [("old/a", "new/a"), ("old/b", "new/b")] {
-                    track(
-                        ChangeRef::Rewrite {
-                            source_location: source.into(),
-                            source_entry_mode: entry_kind.into(),
-                            source_id: blob_id,
-                            source_relation: relation,
-                            entry_mode: entry_kind.into(),
-                            id: blob_id,
-                            relation,
-                            similarity: None,
-                            location: destination.into(),
-                            copy: false,
-                        },
-                        &mut changes,
-                    );
-                }
-                assert_eq!(
-                    SideState::from_changes(changes).has_ambiguous_rewrite_sources(),
-                    entry_kind != EntryKind::Tree,
-                    "directory membership does not make file pairings unambiguous: {entry_kind:?}, {relation:?}"
-                );
-            }
+    fn an_empty_side_tree_need_not_exist_in_the_object_database() -> TestResult {
+        let hash = gix_testtools::object_hash();
+        let blob_id = gix_object::compute_hash(hash, gix_object::Kind::Blob, b"deleted")?;
+        let mut base_buf = Vec::new();
+        gix_object::Tree {
+            entries: vec![gix_object::tree::Entry {
+                mode: gix_object::tree::EntryKind::Blob.into(),
+                filename: "file".into(),
+                oid: blob_id,
+            }],
         }
+        .write_to(&mut base_buf)?;
+        let base_tree_id = gix_object::compute_hash(hash, gix_object::Kind::Tree, &base_buf)?;
+        let worktree = gix_testtools::tempfile::tempdir()?;
+        let mut resources = gix_diff::blob::Platform::new(
+            Default::default(),
+            gix_diff::blob::Pipeline::new(
+                Default::default(),
+                gix_filter::Pipeline::new(Default::default(), hash, Default::default()),
+                Vec::new(),
+                Default::default(),
+            ),
+            Default::default(),
+            gix_worktree::Stack::new(
+                worktree.path(),
+                gix_worktree::stack::State::AttributesStack(gix_worktree::stack::state::Attributes::default()),
+                Default::default(),
+                Vec::new(),
+                Vec::new(),
+            ),
+        );
+        let changes = super::collect(
+            &base_tree_id,
+            &hash.empty_tree(),
+            &base_buf,
+            &mut b"previous side tree bytes".to_vec(),
+            &gix_object::find::Never::panic_on_access(),
+            &mut resources,
+            &mut gix_diff::tree::State::default(),
+            None,
+            crate::tree::DirectoryRenames::Disabled,
+        )?;
+        assert_eq!(changes.len(), 1, "the only base entry is deleted");
+        assert!(
+            matches!(&changes[0], super::Change::Deletion { location, id, .. } if location == "file" && *id == blob_id),
+            "the implicit empty tree is diffed without consulting the object database or stale buffer"
+        );
+        Ok(())
     }
 }

@@ -42,6 +42,7 @@ gix-revision = { version = "^0.52.0", path = "../gix-revision", default-features
 gix-revwalk = { version = "^0.38.0", path = "../gix-revwalk" }
 gix-diff = { version = "^0.70.0", path = "../gix-diff", default-features = false, features = ["blob"] }
 gix-index = { version = "^0.58.0", path = "../gix-index" }
+gix-validate = { version = "^0.13.1", path = "../gix-validate" }
 gix-error = { version = "^0.5.2", path = "../gix-error" }
 imara-diff = { package = "gix-imara-diff", version = "^0.3.3", path = "../gix-imara-diff" }
 

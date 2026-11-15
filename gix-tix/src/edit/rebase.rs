@@ -489,7 +489,7 @@ impl Perform {
 
 pub(crate) struct Conflict {
     prepared: Prepared,
-    conflicts: Vec<gix::merge::tree::Conflict>,
+    index_plan: gix::merge::tree::IndexPlan,
     merged_tree: ObjectId,
     commit: ObjectId,
     original: ObjectId,
@@ -504,7 +504,7 @@ impl Conflict {
         self.prepared.selected = Some(self.commit);
         self.prepared.checkout_reference = None;
         self.prepared
-            .finish(Some(checkout), Some((self.merged_tree, &self.conflicts)))
+            .finish(Some(checkout), Some((self.merged_tree, &self.index_plan)))
     }
 }
 
@@ -512,17 +512,19 @@ fn materialize_conflict(
     repo: &gix::Repository,
     commit_id: ObjectId,
     merged_tree: ObjectId,
-    conflicts: &[gix::merge::tree::Conflict],
+    index_plan: &gix::merge::tree::IndexPlan,
 ) -> Result<()> {
-    let mut index = repo.index_from_tree(&merged_tree)?;
-    if !gix::merge::tree::apply_index_entries(
-        conflicts,
-        gix::merge::tree::TreatAsUnresolved::git(),
-        &mut index,
-        gix::merge::tree::apply_index_entries::RemovalMode::Prune,
-    ) {
-        gix::error::bail!("could not apply conflict stages to the prepared index");
+    if !index_plan.has_unmerged_entries(gix::merge::tree::TreatAsUnresolved::git()) {
+        gix::error::bail!("conflicting merge result has no unmerged index entries");
     }
+    let state = index_plan
+        .to_index(
+            gix::merge::tree::TreatAsUnresolved::git(),
+            repo,
+            repo.checkout_options(Default::default())?.validate,
+        )
+        .or_raise(|| message("could not construct the conflicting index from the merge result"))?;
+    let mut index = gix::index::File::from_state(state, repo.index_path());
     index.remove_tree();
     let ours_tree = repo.find_commit(commit_id)?.tree_id()?.detach();
     let workdir = repo
@@ -1401,8 +1403,8 @@ fn perform_inner(
             note_rewrites.push((old_id, new_id));
         }
         rewritten.insert(old_id, Some(new_id));
-        if let Some((tree, conflicts)) = new_conflict {
-            conflict = Some((old_id, tree, conflicts, new_id));
+        if let Some((tree, index_plan)) = new_conflict {
+            conflict = Some((old_id, tree, index_plan, new_id));
         }
         if Some(old_id) == root {
             if let Some(mut upper) = split_upper.take() {
@@ -1484,9 +1486,9 @@ fn perform_inner(
     };
     let enrichment = prepare_enrichment(&mut prepared, enrichment_headers)?;
     let perform = match conflict {
-        Some((original, merged_tree, conflicts, commit)) => Perform::Conflict(Conflict {
+        Some((original, merged_tree, index_plan, commit)) => Perform::Conflict(Conflict {
             prepared,
-            conflicts,
+            index_plan,
             merged_tree,
             commit,
             original,
@@ -1759,8 +1761,8 @@ pub(super) fn finish_review_with_progress(
         }
         rewritten.insert(old, Some(new));
         auto.refs.rewritten(old, Some(new));
-        if let Some((tree, conflicts)) = new_conflict {
-            conflict = Some((old, tree, conflicts, new));
+        if let Some((tree, index_plan)) = new_conflict {
+            conflict = Some((old, tree, index_plan, new));
         }
     }
 
@@ -1797,9 +1799,9 @@ pub(super) fn finish_review_with_progress(
         session: None,
     };
     match conflict {
-        Some((original, merged_tree, conflicts, commit)) => Ok(Perform::Conflict(Conflict {
+        Some((original, merged_tree, index_plan, commit)) => Ok(Perform::Conflict(Conflict {
             prepared,
-            conflicts,
+            index_plan,
             merged_tree,
             commit,
             original,
@@ -2108,11 +2110,11 @@ pub(crate) fn perform_plan_with_progress(
             resolving_merge_phase,
             (eager && step.commit.source().is_some()).then_some(&mut progress),
         )?;
-        let mut step_conflict = tree_conflict.map(|(merged, conflicts)| {
+        let mut step_conflict = tree_conflict.map(|(merged, index_plan)| {
             (
                 step.commit.source().expect("empty commits cannot conflict"),
                 merged,
-                conflicts,
+                index_plan,
                 None,
             )
         });
@@ -2147,9 +2149,9 @@ pub(crate) fn perform_plan_with_progress(
                     TreeRewrite::Conflict {
                         ours,
                         merged,
-                        conflicts,
+                        index_plan,
                     } => {
-                        step_conflict = Some((fold.commit_id, merged, conflicts, Some(squash_index)));
+                        step_conflict = Some((fold.commit_id, merged, index_plan, Some(squash_index)));
                         ours
                     }
                 };
@@ -2221,12 +2223,12 @@ pub(crate) fn perform_plan_with_progress(
             rewritten.insert(fold.commit_id, Some(new_id));
         }
         produced.push(new_id);
-        if let Some((original, tree, conflicts, squash_index)) = step_conflict {
+        if let Some((original, tree, index_plan, squash_index)) = step_conflict {
             let remaining_squash = squash_index.map_or_else(
                 || step.squash.clone(),
                 |squash_index| step.squash[squash_index + 1..].to_vec(),
             );
-            conflict = Some((original, tree, conflicts, new_id, index, remaining_squash));
+            conflict = Some((original, tree, index_plan, new_id, index, remaining_squash));
         }
     }
 
@@ -2333,7 +2335,7 @@ pub(crate) fn perform_plan_with_progress(
         signing_ms = progress.signing_time.as_millis(),
         "prepared rebase plan"
     );
-    let Some((original, merged_tree, conflicts, commit, conflict_step, conflict_remaining_squash)) = conflict else {
+    let Some((original, merged_tree, index_plan, commit, conflict_step, conflict_remaining_squash)) = conflict else {
         let mut outcome = prepared.finish(plan.checkout.as_ref().map(|_| checkout_options), None)?;
         if let Some(selection) = plan.selection {
             outcome.selected = Some(match selection {
@@ -2386,7 +2388,7 @@ pub(crate) fn perform_plan_with_progress(
     Ok(PlanPerform::Conflict(PlanConflict {
         conflict: Conflict {
             prepared,
-            conflicts,
+            index_plan,
             merged_tree,
             commit,
             original,
@@ -2457,7 +2459,7 @@ impl Prepared {
     fn finish(
         &mut self,
         checkout: Option<CheckoutOptions<'_>>,
-        materialized: Option<(ObjectId, &[gix::merge::tree::Conflict])>,
+        materialized: Option<(ObjectId, &gix::merge::tree::IndexPlan)>,
     ) -> Result<Outcome> {
         let Some(name) = self.stash_before_persist.take() else {
             return self.finish_inner(checkout, materialized);
@@ -2493,7 +2495,7 @@ impl Prepared {
     fn finish_inner(
         &mut self,
         checkout: Option<CheckoutOptions<'_>>,
-        materialized: Option<(ObjectId, &[gix::merge::tree::Conflict])>,
+        materialized: Option<(ObjectId, &gix::merge::tree::IndexPlan)>,
     ) -> Result<Outcome> {
         let mut resource_edits = super::stash::rewrite_edits(&self.repo, &self.stash_rewritten, &self.removed)?;
         let note_edits = note_rewrite_edits(&self.repo, &self.note_rewrites, &self.committer)?;
@@ -2692,8 +2694,8 @@ impl Prepared {
                     self.repo.is_bare(),
                     &deferred_ref_deletions,
                 )?);
-                if let Some((merged_tree, conflicts)) = materialized {
-                    materialize_conflict(&self.repo, selected, merged_tree, conflicts)?;
+                if let Some((merged_tree, index_plan)) = materialized {
+                    materialize_conflict(&self.repo, selected, merged_tree, index_plan)?;
                     materialized_tree = Some(merged_tree);
                     outcome.notice = Some(format!(
                         "{}; ready to resolve conflicts",
@@ -3098,7 +3100,7 @@ enum TreeRewrite {
     Conflict {
         ours: ObjectId,
         merged: ObjectId,
-        conflicts: Vec<gix::merge::tree::Conflict>,
+        index_plan: gix::merge::tree::IndexPlan,
     },
 }
 
@@ -3279,7 +3281,7 @@ fn cherry_pick_tree_outcome(
         Ok(TreeRewrite::Conflict {
             ours: new_base,
             merged,
-            conflicts: outcome.conflicts,
+            index_plan: outcome.index,
         })
     } else {
         Ok(TreeRewrite::Complete(merged))
@@ -3407,7 +3409,7 @@ struct Replay<'repo> {
 }
 
 struct ReplayedTree {
-    conflict: Option<(ObjectId, Vec<gix::merge::tree::Conflict>)>,
+    conflict: Option<(ObjectId, gix::merge::tree::IndexPlan)>,
     muted: bool,
 }
 
@@ -3479,13 +3481,13 @@ impl<'repo> Replay<'repo> {
             TreeRewrite::Conflict {
                 ours,
                 merged,
-                conflicts,
+                index_plan,
             } => {
                 if optional && !ordinary_merge {
                     replayed.muted = true;
                     commit.tree
                 } else {
-                    replayed.conflict = Some((merged, conflicts));
+                    replayed.conflict = Some((merged, index_plan));
                     ours
                 }
             }

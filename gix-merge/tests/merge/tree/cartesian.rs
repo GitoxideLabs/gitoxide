@@ -8,7 +8,9 @@ use std::{
 use bstr::ByteSlice;
 use gix_object::{FindExt, Write, tree::EntryMode};
 
-use super::{assert_no_unknown_conflicts, basic_merge_options, new_blob_merge_platform, new_diff_resource_cache};
+use super::{
+    assert_no_unknown_conflicts, baseline, basic_merge_options, new_blob_merge_platform, new_diff_resource_cache,
+};
 
 type Tree = BTreeMap<String, (EntryMode, gix_hash::ObjectId)>;
 
@@ -28,6 +30,7 @@ struct Case {
 struct Outcome {
     tree_id: gix_hash::ObjectId,
     tree: Tree,
+    index: gix_index::State,
     conflicted: bool,
     conflicted_with_forced_resolution: bool,
     failed_on_first_unresolved_conflict: bool,
@@ -86,6 +89,7 @@ fn records_status_quo_sha1() -> gix_testtools::TestResult {
     let mut commit_trees = BTreeMap::<gix_hash::ObjectId, Tree>::new();
 
     let mut exact_agreement = 0;
+    let mut index_agreement = 0;
     let mut shape_agreement = 0;
     let mut conflict_agreement = 0;
     let mut git_inverse_exact = Vec::new();
@@ -181,9 +185,11 @@ fn records_status_quo_sha1() -> gix_testtools::TestResult {
                 .last()
                 .is_some_and(|conflict| conflict.is_unresolved(git_kind));
             let tree_id = outcome.tree.write(|tree| objects.write(tree))?;
+            let index = outcome.index.to_index(git_kind, &objects, Default::default())?;
             Ok(Outcome {
                 tree_id,
                 tree: flatten_tree(tree_id, &objects)?,
+                index,
                 conflicted,
                 conflicted_with_forced_resolution,
                 failed_on_first_unresolved_conflict,
@@ -270,6 +276,12 @@ fn records_status_quo_sha1() -> gix_testtools::TestResult {
                 .into_iter()
                 .enumerate()
         {
+            pretty_assertions::assert_eq!(
+                baseline::debug_entries(&gix.index),
+                baseline::debug_entries(&git.index),
+                "{case_name} {direction}: every index path, stage, mode, and object ID must match Git"
+            );
+            index_agreement += 1;
             if git.tree_id == gix.tree_id {
                 exact_agreement += 1;
             } else {
@@ -381,6 +393,16 @@ fn records_status_quo_sha1() -> gix_testtools::TestResult {
             ("B+A", &gix_reverse, &ancestor_reverse, &fail_fast_reverse),
         ] {
             ancestor_unresolved += usize::from(ancestor.conflicted);
+            if case.left_operation == "file-to-dir" && case.right_operation == "rename-and-file-to-dir" {
+                assert_eq!(
+                    ancestor.tree, base_tree,
+                    "{direction}: choosing the ancestor restores the source file and discards both added children"
+                );
+                assert!(
+                    !ancestor.conflicted,
+                    "{direction}: discarded child contents cannot leave the selected ancestor unresolved"
+                );
+            }
             if !normal.conflicted {
                 ancestor_clean_directional_merges += 1;
                 if ancestor.tree_id != normal.tree_id {
@@ -606,6 +628,10 @@ fn records_status_quo_sha1() -> gix_testtools::TestResult {
     writeln!(
         report,
         "Git/gix exact tree agreement: {exact_agreement}/{directional_merges}"
+    )?;
+    writeln!(
+        report,
+        "Git/gix exact index agreement: {index_agreement}/{directional_merges}"
     )?;
     writeln!(
         report,
@@ -901,6 +927,7 @@ fn records_submodule_status_quo_sha1() -> gix_testtools::TestResult {
     let unresolved = gix_merge::tree::TreatAsUnresolved::git();
 
     let mut exact_agreement = 0;
+    let mut index_agreement = 0;
     let mut shape_agreement = 0;
     let mut conflict_agreement = 0;
     let mut default_submodule_merges = 0;
@@ -979,6 +1006,14 @@ fn records_submodule_status_quo_sha1() -> gix_testtools::TestResult {
                         )
                     })
                     .count();
+                if case.left_operation == "rename-free-a" && case.right_operation == "rename-modify-free-a" {
+                    // The changed gitlink is a deletion/addition, leaving one destination
+                    // add/add after normalization even when tree policy resolves it.
+                    assert_eq!(
+                        submodule_add_adds, 1,
+                        "{context}: a source deletion cannot discard or duplicate the destination add/add"
+                    );
+                }
                 match policy {
                     "default" => {
                         default_submodule_merges += submodule_merges;
@@ -998,6 +1033,13 @@ fn records_submodule_status_quo_sha1() -> gix_testtools::TestResult {
                 let tree_id = outcome.tree.write(|tree| objects.write(tree))?;
                 let tree = flatten_tree(tree_id, &objects)?;
                 if policy == "default" {
+                    let index = outcome.index.to_index(unresolved, &objects, Default::default())?;
+                    pretty_assertions::assert_eq!(
+                        baseline::debug_entries(&index),
+                        baseline::debug_entries(&git.index),
+                        "{context}: every gitlink index path, stage, mode, and object ID must match Git"
+                    );
+                    index_agreement += 1;
                     exact_agreement += usize::from(tree_id == git.tree_id);
                     shape_agreement += usize::from(same_shape(&tree, &git.tree));
                     conflict_agreement += usize::from(conflicted == git.conflicted);
@@ -1011,8 +1053,13 @@ fn records_submodule_status_quo_sha1() -> gix_testtools::TestResult {
     let directional_merges = cases.len() * 2;
     let policy_merges = directional_merges * 3;
     assert_eq!(
-        (exact_agreement, shape_agreement, conflict_agreement),
-        (directional_merges, directional_merges, directional_merges),
+        (exact_agreement, index_agreement, shape_agreement, conflict_agreement),
+        (
+            directional_merges,
+            directional_merges,
+            directional_merges,
+            directional_merges
+        ),
         "all tree-only gitlink cases should agree with Git"
     );
     let mut report = String::new();
@@ -1031,6 +1078,10 @@ fn records_submodule_status_quo_sha1() -> gix_testtools::TestResult {
     writeln!(
         report,
         "Git/gix exact tree agreement: {exact_agreement}/{directional_merges}"
+    )?;
+    writeln!(
+        report,
+        "Git/gix exact index agreement: {index_agreement}/{directional_merges}"
     )?;
     writeln!(
         report,
@@ -1099,15 +1150,16 @@ fn git_result(
     conflicted: bool,
     objects: &gix_odb::memory::Proxy<gix_odb::Handle>,
 ) -> Result<Outcome> {
-    let data = std::fs::read(repo.join(".git").join(filename))?;
-    let hex = data
-        .split(|byte| *byte == 0)
-        .next()
-        .expect("merge-tree always writes a tree");
-    let tree_id = gix_hash::ObjectId::from_hex(hex)?;
+    let merge_info = baseline::parse_merge_info(std::fs::read_to_string(repo.join(".git").join(filename))?);
+    let tree_id = merge_info.merged_tree;
+    let mut index = gix_index::State::from_tree(&tree_id, objects, Default::default())?;
+    if let Some(conflicts) = &merge_info.conflicts {
+        baseline::apply_git_index_entries(conflicts, &mut index);
+    }
     Ok(Outcome {
         tree_id,
         tree: flatten_tree(tree_id, objects)?,
+        index,
         conflicted,
         conflicted_with_forced_resolution: conflicted,
         failed_on_first_unresolved_conflict: false,

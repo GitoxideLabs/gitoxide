@@ -2186,6 +2186,7 @@ dependencies = [
  "gix-testtools",
  "gix-trace",
  "gix-utils",
+ "gix-validate",
  "gix-worktree",
  "insta",
  "nonempty",
