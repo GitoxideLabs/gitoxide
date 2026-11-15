@@ -35,6 +35,7 @@ without trading responsiveness for metadata that is not visible.
   preview. If that preview is not ready, the previous history remains
   visible, marked loading, and read-only; completion activates only the latest
   selection. Each activation refreshes its tree and worktree-change diffs.
+  `j`/`k`, Down/Up, and `Ctrl-N`/`Ctrl-P` move down/up by one worktree.
   `PageUp` and `PageDown` move by the visible list height. `/` opens a
   case-insensitive fuzzy search over worktree names; edits and navigation paint
   and preview the current match, `Ctrl-P` and `Ctrl-N` move up and down, `Enter`
