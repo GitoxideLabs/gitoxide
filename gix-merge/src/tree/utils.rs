@@ -18,7 +18,7 @@ use gix_object::{
 };
 
 use crate::{
-    blob::{ResourceKind, builtin_driver::binary::Pick},
+    blob::{ResourceKind, builtin_driver::binary::Pick, platform::builtin_merge},
     tree::{
         Conflict, ConflictIndexEntry, ConflictIndexEntryPathHint, ConflictMapping, Options, Resolution,
         ResolutionFailure,
@@ -213,7 +213,13 @@ pub fn perform_blob_merge(
         *marker_size =
             marker_size.saturating_add(extra_markers.saturating_add(options.marker_size_multiplier.saturating_mul(2)));
     }
-    let (pick, resolution) = prep.merge(buf, labels, &options.blob_merge_command_ctx)?;
+    let (mut pick, resolution) = prep.merge(buf, labels, &options.blob_merge_command_ctx)?;
+    if options.blob_merge.is_virtual_ancestor && previous_id.is_null() && matches!(pick, builtin_merge::Pick::Ancestor)
+    {
+        // Like merge-ort, represent an absent binary ancestor as an empty file in a virtual base.
+        buf.clear();
+        pick = builtin_merge::Pick::Buffer;
+    }
 
     let merged_blob_id = prep
         .id_by_pick(pick, buf, write_blob_to_odb)

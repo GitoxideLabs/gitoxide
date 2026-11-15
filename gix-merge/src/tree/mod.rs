@@ -274,7 +274,7 @@ impl Conflict {
         }
     }
 
-    /// Return information about the content merge if it was performed.
+    /// Return information about a content merge retained in the result.
     pub fn content_merge(&self) -> Option<ContentMerge> {
         fn failure_merged_blob(failure: &ResolutionFailure) -> Option<ContentMerge> {
             match failure {
@@ -355,7 +355,7 @@ pub enum Resolution {
 /// Describes of a conflict involving *our* change and *their* failed to be resolved.
 #[derive(Debug, Clone)]
 pub enum ResolutionFailure {
-    /// Both sides replaced a non-blob ancestor with regular files whose executable bits differ.
+    /// Regular files have differing executable bits and no shared regular-file ancestor to resolve them.
     /// The provisional tree uses the current side's mode, independently of the content merge.
     ModeConflict {
         /// The content merge, which may be clean even though the modes conflict.

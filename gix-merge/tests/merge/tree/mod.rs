@@ -269,6 +269,12 @@ fn run_baseline() -> TestResult {
                 .try_into()
                 .expect("non-zero"),
         };
+        if case_name.contains("file-favor-ours") {
+            options.tree_merge.blob_merge.text.conflict =
+                gix_merge::blob::builtin_driver::text::Conflict::ResolveWithOurs;
+            options.tree_merge.symlink_conflicts = Some(gix_merge::blob::builtin_driver::binary::ResolveWith::Ours);
+            options.tree_merge.blob_merge.resolve_binary_with = options.tree_merge.symlink_conflicts;
+        }
 
         let mut actual = gix_merge::commit(
             our_commit_id,
@@ -432,11 +438,11 @@ fn run_baseline() -> TestResult {
     }
 
     assert_eq!(
-        actual_cases, 331,
+        actual_cases, 381,
         "BUG: update this number, and don't forget to remove a filter in the end"
     );
     assert_eq!(
-        skipped_tree_resolve_cases, 410,
+        skipped_tree_resolve_cases, 462,
         "this is done when no case is skipped, and we don't want to accidentally skip them.\
         Some don't actually have conflicts.\
         The ones we skipped don't have irreconcilable conflicts"
@@ -823,4 +829,5 @@ fn new_blob_merge_platform(
 
 mod baseline;
 mod cartesian;
+mod conflict_policies;
 mod synthetic_trees;

@@ -88,6 +88,7 @@ use super::change::{MatchKind, collect as collect_changes, matching as matching_
 ///
 /// Selecting an absent binary merge resource, such as the ancestor in an add/add conflict, returns
 /// [`crate::tree::Error::MissingBinaryMergeResult`], classified as [`gix_error::Class::NotFound`].
+/// Virtual-base construction instead represents an absent binary ancestor with an empty blob, like Git.
 /// Downcast to [`crate::tree::Error`] and match this variant to distinguish it from missing object headers or data.
 ///
 /// ### Performance
@@ -161,8 +162,17 @@ pub fn tree<'objects>(
             }
         }
         if resolve_tree_conflicts.is_some()
-            && let Err(failure) = conflict.resolution
+            && let Err(mut failure) = conflict.resolution
         {
+            // Choosing the whole ancestor discards content merged for the rejected entries.
+            if resolve_tree_conflicts == Some(ResolveWith::Ancestor) && !options.blob_merge.is_virtual_ancestor {
+                match &mut failure {
+                    ResolutionFailure::ModeConflict { merged_blob }
+                    | ResolutionFailure::DirectoryRename { merged_blob, .. }
+                    | ResolutionFailure::OursRenamedTheirsRenamedDifferently { merged_blob } => *merged_blob = None,
+                    _ => {}
+                }
+            }
             conflict.resolution = Ok(Resolution::Forced(failure));
         }
         if let Some(how) = options.fail_on_conflict
@@ -427,8 +437,8 @@ pub fn tree<'objects>(
                                 } else {
                                     Swapped
                                 };
-                                if let Some(merged_mode) =
-                                    merge_modes_prev(*our_mode, *their_mode, *previous_entry_mode)
+                                if let Some((merged_mode, _)) =
+                                    merge_modes(*our_mode, *their_mode, Some(*previous_entry_mode))
                                 {
                                     let their_rewritten_location = possibly_rewritten_location(
                                         pick(side, our_tree, their_tree),
@@ -579,18 +589,17 @@ pub fn tree<'objects>(
                                     ..
                                 },
                             ) if !involves_submodule(our_mode, their_mode)
-                                && merge_modes(*our_mode, *their_mode).is_some() =>
+                                && merge_modes(*our_mode, *their_mode, None).is_some() =>
                             {
-                                let previous_is_compatible = merge_modes(*our_mode, *previous_entry_mode).is_some()
-                                    && merge_modes(*their_mode, *previous_entry_mode).is_some();
-                                let mode_conflict = !previous_is_compatible && our_mode.kind() != their_mode.kind();
-                                let merged_mode = if mode_conflict {
-                                    // Like merge-ort, retain the current mode independently of the content result.
-                                    *pick(outer_side, our_mode, their_mode)
-                                } else {
-                                    merge_modes_prev(*our_mode, *their_mode, *previous_entry_mode)
-                                        .expect("the match guard assures compatible current modes")
-                                };
+                                let previous_is_compatible = merge_modes(*our_mode, *previous_entry_mode, None)
+                                    .is_some()
+                                    && merge_modes(*their_mode, *previous_entry_mode, None).is_some();
+                                let (merged_mode, mode_conflict) = merge_modes(
+                                    *pick(outer_side, our_mode, their_mode),
+                                    *pick(outer_side, their_mode, our_mode),
+                                    Some(*previous_entry_mode),
+                                )
+                                .expect("the match guard assures compatible current modes");
                                 // Symlink merging compares target identities without loading a blob-platform base.
                                 let merging_links = our_mode.is_link() && their_mode.is_link();
                                 let (merge_base_id, merge_base_mode) = if previous_is_compatible || merging_links {
@@ -753,7 +762,7 @@ pub fn tree<'objects>(
                             ) if our_mode.is_no_tree()
                                 && their_mode.is_no_tree()
                                 && location == theirs.location()
-                                && merge_modes(*our_mode, *their_mode).is_none() =>
+                                && merge_modes(*our_mode, *their_mode, None).is_none() =>
                             {
                                 let moved = [
                                     our_mode.is_blob() || !their_mode.is_blob(),
@@ -797,9 +806,9 @@ pub fn tree<'objects>(
                                         previous_id,
                                         ..
                                     } => {
-                                        let hint = if merge_modes(*previous_entry_mode, *our_mode).is_some() {
+                                        let hint = if merge_modes(*previous_entry_mode, *our_mode, None).is_some() {
                                             Some(ConflictIndexEntryPathHint::Current)
-                                        } else if merge_modes(*previous_entry_mode, *their_mode).is_some() {
+                                        } else if merge_modes(*previous_entry_mode, *their_mode, None).is_some() {
                                             Some(ConflictIndexEntryPathHint::RenamedOrTheirs)
                                         } else {
                                             None
@@ -1080,19 +1089,17 @@ pub fn tree<'objects>(
                                     ..
                                 },
                                 Change::Addition {
+                                    location: their_location,
                                     entry_mode: their_mode,
                                     id: their_id,
                                     ..
                                 },
                             ) if !involves_submodule(our_mode, their_mode) => {
-                                let conflict = if let Some(merged_mode) = merge_modes(*our_mode, *their_mode) {
-                                    let side = if our_mode.kind() == their_mode.kind()
-                                        || matches!(our_mode.kind(), EntryKind::Blob)
-                                    {
-                                        outer_side
-                                    } else {
-                                        outer_side.swapped()
-                                    };
+                                let conflict = if let Some((merged_mode, mode_conflict)) = merge_modes(
+                                    *pick(outer_side, our_mode, their_mode),
+                                    *pick(outer_side, their_mode, our_mode),
+                                    None,
+                                ) {
                                     let (merged_blob_id, resolution) = perform_blob_merge(
                                         labels,
                                         objects,
@@ -1100,47 +1107,53 @@ pub fn tree<'objects>(
                                         &mut diff_state.buf1,
                                         &mut write_blob_to_odb,
                                         (location, *our_id, *our_mode),
-                                        (location, *their_id, *their_mode),
+                                        (their_location, *their_id, *their_mode),
                                         (location, their_id.kind().null(), merged_mode),
-                                        (0, side),
+                                        (0, outer_side),
                                         &options,
                                     )?;
-                                    editor.upsert(toc(location), merged_mode.kind(), merged_blob_id)?;
+                                    let relocated = rewritten_location.as_ref().filter(|_| {
+                                        options.directory_renames == crate::tree::DirectoryRenames::Conflict
+                                    });
+                                    let force_entry = resolve_tree_conflicts.is_some()
+                                        && (relocated.is_some()
+                                            || (mode_conflict && !options.blob_merge.is_virtual_ancestor));
+                                    if force_entry {
+                                        editor.remove_if_leaf(toc(location))?;
+                                        if resolve_tree_conflicts == Some(ResolveWith::Ours) {
+                                            apply_our_resolution(
+                                                ours,
+                                                theirs,
+                                                outer_side,
+                                                &mut editor,
+                                                &mut ours_disposition,
+                                                &mut theirs_disposition,
+                                            )?;
+                                        }
+                                    } else {
+                                        editor.upsert(toc(location), merged_mode.kind(), merged_blob_id)?;
+                                    }
                                     let merged_blob = ContentMerge {
                                         resolution,
                                         merged_blob_id,
                                     };
-                                    let mut conflict = Conflict::with_resolution(
-                                        Resolution::OursModifiedTheirsModifiedThenBlobContentMerge { merged_blob },
+                                    let resolution = if let Some((final_location, _)) = relocated {
+                                        Err(ResolutionFailure::DirectoryRename {
+                                            final_location: final_location.clone(),
+                                            merged_blob: (!force_entry).then_some(merged_blob),
+                                        })
+                                    } else if mode_conflict {
+                                        Err(ResolutionFailure::ModeConflict {
+                                            merged_blob: (!force_entry).then_some(merged_blob),
+                                        })
+                                    } else {
+                                        Ok(Resolution::OursModifiedTheirsModifiedThenBlobContentMerge { merged_blob })
+                                    };
+                                    Conflict::maybe_resolved(
+                                        resolution,
                                         (ours, theirs, Original, outer_side),
                                         [None, index_entry(our_mode, our_id), index_entry(their_mode, their_id)],
-                                    );
-                                    if options.directory_renames == crate::tree::DirectoryRenames::Conflict
-                                        && let Some((final_location, _)) = rewritten_location
-                                    {
-                                        conflict.resolution = Err(ResolutionFailure::DirectoryRename {
-                                            final_location: final_location.clone(),
-                                            merged_blob: Some(merged_blob),
-                                        });
-                                        match resolve_tree_conflicts {
-                                            None => {}
-                                            Some(ResolveWith::Ancestor) => {
-                                                editor.remove_if_leaf(toc(location))?;
-                                            }
-                                            Some(ResolveWith::Ours) => {
-                                                editor.remove_if_leaf(toc(location))?;
-                                                apply_our_resolution(
-                                                    ours,
-                                                    theirs,
-                                                    outer_side,
-                                                    &mut editor,
-                                                    &mut ours_disposition,
-                                                    &mut theirs_disposition,
-                                                )?;
-                                            }
-                                        }
-                                    }
-                                    conflict
+                                    )
                                 } else {
                                     // Actually this has a preference, as symlinks are always left in place with the other side renamed.
                                     let (
@@ -1569,13 +1582,18 @@ pub fn tree<'objects>(
                                 && location == their_location
                                 && !involves_submodule(our_mode, their_mode) =>
                             {
-                                match resolve_tree_conflicts {
+                                // Recursive collisions remove their sources even when their destination conflicts.
+                                match resolve_tree_conflicts.filter(|_| !options.blob_merge.is_virtual_ancestor) {
                                     None => {
                                         editor.remove_if_leaf(toc(our_source_location))?;
                                         editor.remove_if_leaf(toc(their_source_location))?;
                                         our_tree.remove_change(our_source_location.as_bstr());
                                         their_tree.remove_change(their_source_location.as_bstr());
-                                        let conflict = if let Some(merged_mode) = merge_modes(*our_mode, *their_mode) {
+                                        let conflict = if let Some((merged_mode, mode_conflict)) = merge_modes(
+                                            *pick(outer_side, our_mode, their_mode),
+                                            *pick(outer_side, their_mode, our_mode),
+                                            None,
+                                        ) {
                                             let (merged_blob_id, resolution) = perform_blob_merge(
                                                 labels,
                                                 objects,
@@ -1589,13 +1607,31 @@ pub fn tree<'objects>(
                                                 &options,
                                             )?;
                                             editor.upsert(toc(location), merged_mode.kind(), merged_blob_id)?;
-                                            Conflict::with_resolution(
-                                                Resolution::OursModifiedTheirsModifiedThenBlobContentMerge {
-                                                    merged_blob: ContentMerge {
-                                                        resolution,
-                                                        merged_blob_id,
-                                                    },
+                                            let merged_blob = ContentMerge {
+                                                resolution,
+                                                merged_blob_id,
+                                            };
+                                            Conflict::maybe_resolved(
+                                                if mode_conflict {
+                                                    Err(ResolutionFailure::ModeConflict {
+                                                        merged_blob: Some(merged_blob),
+                                                    })
+                                                } else {
+                                                    Ok(Resolution::OursModifiedTheirsModifiedThenBlobContentMerge {
+                                                        merged_blob,
+                                                    })
                                                 },
+                                                (ours, theirs, Original, outer_side),
+                                                [
+                                                    None,
+                                                    index_entry(our_mode, our_id),
+                                                    index_entry(their_mode, their_id),
+                                                ],
+                                            )
+                                        } else if options.blob_merge.is_virtual_ancestor {
+                                            // The destination has no ancestor of either type, so leave it absent.
+                                            Conflict::without_resolution(
+                                                ResolutionFailure::OursRenamedTheirsRenamedToSameLocation,
                                                 (ours, theirs, Original, outer_side),
                                                 [
                                                     None,
@@ -1853,8 +1889,14 @@ pub fn tree<'objects>(
                                 },
                             ) if ((our_mode.is_blob_or_symlink() && their_mode.is_blob_or_symlink())
                                 || (our_mode.is_commit() && their_mode.is_commit() && our_id == their_id))
-                                && merge_modes(*our_mode, *their_mode).is_some() =>
+                                && merge_modes(*our_mode, *their_mode, None).is_some() =>
                             {
+                                let their_destination =
+                                    possibly_rewritten_location(our_tree, their_location.as_bstr(), our_changes)
+                                        .map_or(Cow::Borrowed(their_location.as_bstr()), Cow::Owned);
+                                let our_destination =
+                                    possibly_rewritten_location(their_tree, our_location.as_bstr(), their_changes)
+                                        .map_or(Cow::Borrowed(our_location.as_bstr()), Cow::Owned);
                                 let (merged_blob_id, mut resolution) = if our_id == their_id {
                                     (*our_id, None)
                                 } else {
@@ -1867,13 +1909,13 @@ pub fn tree<'objects>(
                                         (our_location, *our_id, *our_mode),
                                         (their_location, *their_id, *their_mode),
                                         (source_location, *source_id, *source_entry_mode),
-                                        (u8::from(our_location != their_location), outer_side),
+                                        (u8::from(our_destination != their_destination), outer_side),
                                         &options,
                                     )?;
                                     (id, Some(resolution))
                                 };
 
-                                let merged_mode = merge_modes_prev(*our_mode, *their_mode, *source_entry_mode)
+                                let (merged_mode, _) = merge_modes(*our_mode, *their_mode, Some(*source_entry_mode))
                                     .expect("this case was assured earlier");
 
                                 if matches!(resolve_tree_conflicts, None | Some(ResolveWith::Ours)) {
@@ -1882,12 +1924,7 @@ pub fn tree<'objects>(
                                     their_tree.remove_change(source_location.as_bstr());
                                 }
 
-                                let their_location =
-                                    possibly_rewritten_location(our_tree, their_location.as_bstr(), our_changes)
-                                        .map_or(Cow::Borrowed(their_location.as_bstr()), Cow::Owned);
-                                let our_location =
-                                    possibly_rewritten_location(their_tree, our_location.as_bstr(), their_changes)
-                                        .map_or(Cow::Borrowed(our_location.as_bstr()), Cow::Owned);
+                                let (our_location, their_location) = (our_destination, their_destination);
                                 let relocated =
                                     matches!(our_location, Cow::Owned(_)) || matches!(their_location, Cow::Owned(_));
                                 let location_conflict =
@@ -2265,18 +2302,24 @@ pub fn tree<'objects>(
                                         }
                                         Some(ResolveWith::Ancestor) => {}
                                     }
-                                } else if let Some(merged_mode) = merge_modes(*our_mode, *their_mode) {
+                                } else if let Some((merged_mode, mode_conflict)) = merge_modes(
+                                    *pick(side.to_global(outer_side), our_mode, their_mode),
+                                    *pick(side.to_global(outer_side), their_mode, our_mode),
+                                    None,
+                                ) {
                                     let (merged_blob_id, resolution) = if our_id == their_id {
                                         (*our_id, None)
                                     } else {
+                                        let renamed = (location, *our_id, *our_mode);
+                                        let added = (add_location, *their_id, *their_mode);
                                         let (id, resolution) = perform_blob_merge(
                                             labels,
                                             objects,
                                             blob_merge,
                                             &mut diff_state.buf1,
                                             &mut write_blob_to_odb,
-                                            (location, *our_id, *our_mode),
-                                            (location, *their_id, *their_mode),
+                                            *pick(side, &renamed, &added),
+                                            *pick(side, &added, &renamed),
                                             (source_location, source_id.kind().null(), *source_entry_mode),
                                             (0, outer_side),
                                             &options,
@@ -2284,10 +2327,16 @@ pub fn tree<'objects>(
                                         (id, Some(resolution))
                                     };
 
-                                    let merged_blob = resolution.map(|resolution| ContentMerge {
-                                        resolution,
-                                        merged_blob_id,
-                                    });
+                                    let force_mode_resolution = mode_conflict
+                                        && resolve_tree_conflicts.is_some()
+                                        && !options.blob_merge.is_virtual_ancestor;
+                                    let merged_blob =
+                                        resolution
+                                            .filter(|_| !force_mode_resolution)
+                                            .map(|resolution| ContentMerge {
+                                                resolution,
+                                                merged_blob_id,
+                                            });
                                     let relocated = rewritten_location.as_ref().filter(|_| {
                                         options.directory_renames == crate::tree::DirectoryRenames::Conflict
                                     });
@@ -2297,7 +2346,13 @@ pub fn tree<'objects>(
                                                 final_location: final_location.clone(),
                                                 merged_blob,
                                             },
-                                            (ours, theirs, Original, outer_side),
+                                            (ours, theirs, side, outer_side),
+                                            [None, index_entry(our_mode, our_id), index_entry(their_mode, their_id)],
+                                        ))
+                                    } else if mode_conflict {
+                                        Some(Conflict::without_resolution(
+                                            ResolutionFailure::ModeConflict { merged_blob },
+                                            (ours, theirs, side, outer_side),
                                             [None, index_entry(our_mode, our_id), index_entry(their_mode, their_id)],
                                         ))
                                     } else {
@@ -2306,7 +2361,7 @@ pub fn tree<'objects>(
                                                 Resolution::OursModifiedTheirsModifiedThenBlobContentMerge {
                                                     merged_blob,
                                                 },
-                                                (ours, theirs, Original, outer_side),
+                                                (ours, theirs, side, outer_side),
                                                 [
                                                     None,
                                                     index_entry(our_mode, our_id),
@@ -2327,7 +2382,22 @@ pub fn tree<'objects>(
                                     if relocated.is_some() && resolve_tree_conflicts.is_some() {
                                         editor.remove_if_leaf(to_components(destination))?;
                                     }
-                                    if relocated.is_some() && resolve_tree_conflicts == Some(ResolveWith::Ancestor) {
+                                    if force_mode_resolution {
+                                        editor.remove_if_leaf(to_components(destination))?;
+                                        editor.upsert(toc(source_location), source_entry_mode.kind(), *source_id)?;
+                                        if resolve_tree_conflicts == Some(ResolveWith::Ours) {
+                                            apply_our_resolution(
+                                                ours,
+                                                theirs,
+                                                outer_side,
+                                                &mut editor,
+                                                &mut ours_disposition,
+                                                &mut theirs_disposition,
+                                            )?;
+                                        }
+                                    } else if relocated.is_some()
+                                        && resolve_tree_conflicts == Some(ResolveWith::Ancestor)
+                                    {
                                         editor.upsert(toc(source_location), source_entry_mode.kind(), *source_id)?;
                                     } else {
                                         let selected = (relocated.is_some()
@@ -2507,35 +2577,22 @@ fn involves_submodule(a: &EntryMode, b: &EntryMode) -> bool {
     a.is_commit() || b.is_commit()
 }
 
-/// Merge two modes without a common ancestor: retain equal modes and, for two blob modes, prefer executable.
-///
-/// This is suitable for add/add and other pairs without a single shared source mode. If both changes derive from the
-/// same entry, use [`merge_modes_prev()`] so a mode changed on one side wins over the unchanged ancestor mode.
-fn merge_modes(a: EntryMode, b: EntryMode) -> Option<EntryMode> {
+/// Merge compatible modes, reporting a conflict if differing executable bits lack a shared regular-file ancestor.
+/// In that case, retain `a`, which must be the global current side's mode.
+fn merge_modes(a: EntryMode, b: EntryMode, previous: Option<EntryMode>) -> Option<(EntryMode, bool)> {
     match (a.kind(), b.kind()) {
-        (_, _) if a == b => Some(a),
+        (_, _) if a == b => Some((a, false)),
         // Noncanonical modes like `100775` parse to the same kind as `100755`; merge them to the canonical mode.
-        (a, b) if a == b => Some(a.into()),
+        (a, b) if a == b => Some((a.into(), false)),
         (EntryKind::BlobExecutable, EntryKind::Blob) | (EntryKind::Blob, EntryKind::BlobExecutable) => {
-            Some(EntryKind::BlobExecutable.into())
+            if let Some(previous) = previous.filter(EntryMode::is_blob) {
+                let changed = if a.kind() == previous.kind() { b } else { a };
+                Some((changed.kind().into(), false))
+            } else {
+                Some((a, true))
+            }
         }
         _ => None,
-    }
-}
-
-/// Merge modes derived from the same ancestor mode, `prev`.
-///
-/// If blob modes differ only in their executable bit and `prev` is a blob, the side that differs from `prev` wins,
-/// preserving either a one-sided enable or disable of that bit. Otherwise, this is [`merge_modes()`].
-fn merge_modes_prev(a: EntryMode, b: EntryMode, prev: EntryMode) -> Option<EntryMode> {
-    match (a.kind(), b.kind()) {
-        (EntryKind::BlobExecutable, EntryKind::Blob) | (EntryKind::Blob, EntryKind::BlobExecutable)
-            if prev.is_blob() =>
-        {
-            let changed = if a.kind() == prev.kind() { b } else { a };
-            Some(changed.kind().into())
-        }
-        _ => merge_modes(a, b),
     }
 }
 

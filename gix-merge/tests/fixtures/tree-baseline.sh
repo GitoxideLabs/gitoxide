@@ -137,12 +137,16 @@ function baseline () (
   fi
 
   local merge_info="${output_name}.merge-info"
-  git -c merge.conflictStyle=$conflict_style merge-tree -z --write-tree --allow-unrelated-histories "$our_committish" "$their_committish" > "$merge_info" || :
+  local file_options=(--allow-unrelated-histories)
+  if [[ "$output_name" == *file-favor-ours* ]]; then
+    file_options+=(-Xours)
+  fi
+  git -c merge.conflictStyle=$conflict_style merge-tree -z --write-tree "${file_options[@]}" "$our_committish" "$their_committish" > "$merge_info" || :
   echo "$dir" "$conflict_style" "$our_commit_id" "$our_committish" "$their_commit_id" "$their_committish" "$merge_info" "$maybe_expected_tree" "$opt_deviation_message" >> ../baseline.cases
 
   if [[ "$one_side" != "no-reverse" ]]; then
     local merge_info="${output_name}-reversed.merge-info"
-    git -c merge.conflictStyle=$conflict_style merge-tree -z --write-tree --allow-unrelated-histories "$their_committish" "$our_committish" > "$merge_info" || :
+    git -c merge.conflictStyle=$conflict_style merge-tree -z --write-tree "${file_options[@]}" "$their_committish" "$our_committish" > "$merge_info" || :
     echo "$dir" "$conflict_style" "$their_commit_id" "$their_committish" "$our_commit_id" "$our_committish" "$merge_info" "$maybe_expected_reversed_tree" "$opt_deviation_message" >> ../baseline.cases
   fi
 )
@@ -591,12 +595,6 @@ git init identical-renames-to-same-destination-with-mode-change
   git checkout B
   git mv two target
   git commit -m "rename two to target"
-
-  # gix treats the identical content as clean and carries the executable mode
-  # selected from A to the shared destination in both merge directions.
-  git checkout -b expected A
-  git rm two
-  git commit -m "expected gix merge"
 )
 
 for change in add enable disable; do
@@ -631,7 +629,6 @@ for change in add enable disable; do
     chmod -x file
     git update-index --chmod=-x file
     git commit -m "non-executable content"
-    git tag expected A
   )
 done
 
@@ -1199,7 +1196,6 @@ git init same-rename-different-mode
 
   git branch A
   git branch B
-  git branch expected
 
   git checkout A
   write_lines 1 2 3 4 5 >a/x.f
@@ -1212,16 +1208,6 @@ git init same-rename-different-mode
   write_lines original 1 2 3 4 5 6 >a/x.f
   git mv a a-renamed
   git commit -am "changed all content, renamed a -> a-renamed"
-
-  git checkout expected
-  chmod +x a/x.f a/w
-  git update-index --chmod=+x a/x.f a/w
-  write_lines 1 2 3 4 5 6 >a/x.f
-  git mv a a-renamed
-  git commit -am "Git, when branches are reversed, doesn't keep the +x flag on a/w so we specify our own expectation"
-  # Git sets +x and adds it as conflict, even though the merge is perfect, i.e. one side adds +x on top, perfectly additive.
-  make_conflict_index same-rename-different-mode-A-B
-  make_conflict_index same-rename-different-mode-A-B-reversed
 )
 
 git init remove-executable-mode
@@ -1285,10 +1271,14 @@ git init added-file-changed-content-and-mode
   git commit -m "add new with content B and +x"
 
   git checkout expected
-  echo -n $'<<<<<<< A\n1\n2\n3\n4\n5\n=======\noriginal\n1\n2\n3\n4\n5\n6\n>>>>>>> B\n' >new
-  chmod +x new
+  write_lines "<<<<<<< A" 1 2 3 4 5 ======= original 1 2 3 4 5 6 ">>>>>>> B" >new
+  git add --chmod=-x new
+  git commit -m "the content driver keeps one conflict hunk; retain A's mode"
+
+  git checkout -b expected-reversed
+  write_lines "<<<<<<< B" original 1 2 3 4 5 6 ======= 1 2 3 4 5 ">>>>>>> A" >new
   git add --chmod=+x new
-  git commit -m "Git has a better merge here, but that's due to better hunk handling/hunk splitting. We, however, consistently use +x"
+  git commit -m "reverse the content markers and retain B's mode"
 )
 
 git init type-change-and-renamed
@@ -2275,8 +2265,8 @@ baseline same-rename-with-content A-B A B
 baseline same-rename-and-file-to-directory A-B A B
 baseline renames-to-same-destination A-B A B
 baseline identical-renames-to-same-destination A-B A B
-baseline identical-renames-to-same-destination-with-mode-change A-B A B "gix resolves the identical content and mode change cleanly, while Git leaves an add/add mode conflict"
-baseline same-content-different-modes-add A-B A B "gix resolves identical added content cleanly and prefers executable mode; Git retains an add/add mode conflict"
+baseline identical-renames-to-same-destination-with-mode-change A-B A B
+baseline same-content-different-modes-add A-B A B
 baseline same-content-different-modes-enable A-B A B
 baseline same-content-different-modes-disable A-B A B
 baseline directory-replaced-partly-deleted-c A-B A B
@@ -2313,9 +2303,9 @@ baseline conflicting-rename A-B A B
 baseline conflicting-rename-2 A-B A B
 baseline conflicting-rename-complex A-B A B
 
-baseline same-rename-different-mode A-B A B "Git works for the A/B case, but for B/A it forgets to set the executable bit"
+baseline same-rename-different-mode A-B A B
 baseline renamed-symlink-with-conflict A-B A B
-baseline added-file-changed-content-and-mode A-B A B "We improve on executable bit handling, but loose on diff quality as we are definitely missing some tweaks"
+baseline added-file-changed-content-and-mode A-B A B "Git splits the content conflict into smaller hunks; modes and conflict stages agree"
 
 baseline type-change-and-renamed A-B A B
 baseline change-and-delete A-B A B
@@ -2813,20 +2803,7 @@ EOF
   make_resolve_tree ours B A
 )
 
-(cd same-content-different-modes-add
-  # Preserve the existing gix policy of resolving identical add/add contents and modes.
-  git read-tree expected
-  make_conflict_index same-content-different-modes-add-A-B
-  make_conflict_index same-content-different-modes-add-A-B-reversed
-)
-
 (cd identical-renames-to-same-destination-with-mode-change
-  # Git leaves the two destination modes at stages 2 and 3. gix resolves the
-  # identical content and the one-sided executable change into a stage-0 entry.
-  git read-tree expected
-  make_conflict_index identical-renames-to-same-destination-with-mode-change-A-B
-  make_conflict_index identical-renames-to-same-destination-with-mode-change-A-B-reversed
-
   # Ancestor rejects both colliding renames.
   git read-tree main
   make_resolve_tree ancestor A B
@@ -3902,4 +3879,140 @@ for case_name in directory-rename-existing-majority directory-rename-new-majorit
     (cd "$case_name" && git config merge.directoryRenames "$mode")
     baseline "$case_name" "directory-renames-$mode" A B
   done
+done
+
+# These pairs have no shared regular-file ancestor at their destination.
+# Executable bits conflict independently of contents and of file favor.
+function policy_tree () {
+  git read-tree --empty
+  while test "$#" -gt 0; do
+    git update-index --add --cacheinfo "$2,$3,$1"
+    shift 3
+  done
+  git write-tree
+}
+
+function policy_commits () {
+  base_commit_id=$(git commit-tree "$base_tree_id" -m base)
+  our_commit_id=$(git commit-tree "$our_tree_id" -p "$base_commit_id" -m A)
+  their_commit_id=$(git commit-tree "$their_tree_id" -p "$base_commit_id" -m B)
+  git update-ref refs/heads/base "$base_commit_id"
+  git update-ref refs/heads/A "$our_commit_id"
+  git update-ref refs/heads/B "$their_commit_id"
+}
+
+for pair in add-add rename-add rename-rename; do
+  for contents in identical conflicting; do
+    repo="mode-conflict-$pair-$contents"
+    git init "$repo"
+    (cd "$repo"
+      base_blob_id=$(write_lines one two three four five six seven eight | git hash-object -w --stdin)
+      our_blob_id=$base_blob_id
+      their_blob_id=$base_blob_id
+      second_blob_id=$base_blob_id
+      if test "$contents" = conflicting; then
+        our_blob_id=$(write_lines ONE two three four five six seven eight | git hash-object -w --stdin)
+        their_blob_id=$(write_lines OTHER two three four five six seven eight | git hash-object -w --stdin)
+        if test "$pair" = rename-rename; then
+          second_blob_id=$(write_lines uno dos tres cuatro cinco seis siete ocho | git hash-object -w --stdin)
+          their_blob_id=$second_blob_id
+        fi
+      fi
+      case "$pair" in
+        add-add)
+          base_tree_id=$(policy_tree)
+          our_tree_id=$(policy_tree b 100755 "$our_blob_id")
+          their_tree_id=$(policy_tree b 100644 "$their_blob_id") ;;
+        rename-add)
+          base_tree_id=$(policy_tree a 100644 "$base_blob_id")
+          our_tree_id=$(policy_tree b 100755 "$our_blob_id")
+          their_tree_id=$(policy_tree a 100644 "$base_blob_id" b 100644 "$their_blob_id") ;;
+        rename-rename)
+          base_tree_id=$(policy_tree a 100644 "$base_blob_id" c 100644 "$second_blob_id")
+          our_tree_id=$(policy_tree b 100755 "$our_blob_id" c 100644 "$second_blob_id")
+          their_tree_id=$(policy_tree a 100644 "$base_blob_id" b 100644 "$their_blob_id") ;;
+      esac
+      policy_commits
+      for order in A-B B-A; do
+        echo "$base_tree_id" >".git/resolve-$order-with-ancestor.tree"
+      done
+      echo "$our_tree_id" >.git/resolve-A-B-with-ours.tree
+      echo "$their_tree_id" >.git/resolve-B-A-with-ours.tree
+    )
+    baseline "$repo" default A B
+    baseline "$repo" file-favor-ours A B
+  done
+done
+
+# Both tips retain their respective merge-base trees. Recursive rename collisions
+# must remove the old sources, so their surviving copies become additions later.
+for mode in 100644 120000 distinct-types binary; do
+  repo="recursive-rename-collision-$mode"
+  git init "$repo"
+  (cd "$repo"
+    our_mode=$mode
+    their_mode=$mode
+    if test "$mode" = distinct-types; then
+      our_mode=120000
+      their_mode=100644
+    elif test "$mode" = binary; then
+      our_mode=100644
+      their_mode=100644
+    fi
+    our_blob_id=$(printf left | git hash-object -w --stdin)
+    their_blob_id=$(printf right | git hash-object -w --stdin)
+    if test "$mode" = binary; then
+      our_blob_id=$(printf 'left\0' | git hash-object -w --stdin)
+      their_blob_id=$(printf 'right\0' | git hash-object -w --stdin)
+    fi
+    base_tree_id=$(policy_tree a "$our_mode" "$our_blob_id" c "$their_mode" "$their_blob_id")
+    our_tree_id=$(policy_tree b "$our_mode" "$our_blob_id" c "$their_mode" "$their_blob_id")
+    their_tree_id=$(policy_tree a "$our_mode" "$our_blob_id" b "$their_mode" "$their_blob_id")
+    policy_commits
+    git update-ref refs/heads/A-tip "$(git commit-tree "$our_tree_id" -p "$our_commit_id" -p "$their_commit_id" -m A-tip)"
+    git update-ref refs/heads/B-tip "$(git commit-tree "$their_tree_id" -p "$their_commit_id" -p "$our_commit_id" -m B-tip)"
+  )
+  baseline "$repo" criss-cross A-tip B-tip
+  baseline "$repo" criss-cross-file-favor-ours A-tip B-tip
+done
+
+# Ancestor selection discards conflicted content. Ours selects a location while
+# retaining merged content, except for add/add which selects the whole entry.
+for pair in divergent-renames modify-rename converging-renames rename-add add-add; do
+  repo="forced-content-$pair"
+  git init "$repo"
+  (cd "$repo"
+    git config merge.directoryRenames conflict
+    base_blob_id=$(write_lines one two three four five six seven eight | git hash-object -w --stdin)
+    our_blob_id=$(write_lines ONE two three four five six seven eight | git hash-object -w --stdin)
+    their_blob_id=$(write_lines OTHER two three four five six seven eight | git hash-object -w --stdin)
+    anchor_a_blob_id=$(printf anchor-a | git hash-object -w --stdin)
+    anchor_b_blob_id=$(printf anchor-b | git hash-object -w --stdin)
+    base_entries=(old/a 100644 "$anchor_a_blob_id" old/b 100644 "$anchor_b_blob_id")
+    new_entries=(new/a 100644 "$anchor_a_blob_id" new/b 100644 "$anchor_b_blob_id")
+    case "$pair" in
+      divergent-renames)
+        base_entries=()
+        new_entries=()
+        our_path=ours
+        their_path=theirs ;;
+      modify-rename) our_path=outside; their_path=old/incoming ;;
+      *) our_path=new/incoming; their_path=old/incoming ;;
+    esac
+    ancestor_entries=("${new_entries[@]+"${new_entries[@]}"}")
+    their_entries=("${base_entries[@]+"${base_entries[@]}"}")
+    if test "$pair" != add-add; then
+      base_entries+=(outside 100644 "$base_blob_id")
+      ancestor_entries+=(outside 100644 "$base_blob_id")
+    fi
+    if test "$pair" = rename-add; then
+      new_entries+=(outside 100644 "$base_blob_id")
+    fi
+    base_tree_id=$(policy_tree "${base_entries[@]+"${base_entries[@]}"}")
+    our_tree_id=$(policy_tree "${new_entries[@]+"${new_entries[@]}"}" "$our_path" 100644 "$our_blob_id")
+    their_tree_id=$(policy_tree "${their_entries[@]+"${their_entries[@]}"}" "$their_path" 100644 "$their_blob_id")
+    policy_commits
+    policy_tree "${ancestor_entries[@]}" >.git/force-ancestor.tree
+  )
+  baseline "$repo" directory-renames-conflict A B
 done

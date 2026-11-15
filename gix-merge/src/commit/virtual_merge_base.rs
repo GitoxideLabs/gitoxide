@@ -16,10 +16,7 @@ pub(super) mod function {
     use gix_error::{ResultExt, bail, message};
     use gix_object::FindExt;
 
-    use crate::{
-        blob::builtin_driver,
-        tree::{TreatAsUnresolved, treat_as_unresolved},
-    };
+    use crate::blob::builtin_driver;
 
     /// Create a single virtual merge-base by merging `first_commit`, `second_commit` and `others` into one.
     /// Note that `first_commit` and `second_commit` are expected to have been popped off `others`, so `first_commit`
@@ -46,8 +43,15 @@ pub(super) mod function {
         // Like merge-ort at nonzero call depth, do not infer new path locations in a virtual base.
         options.directory_renames = crate::tree::DirectoryRenames::Disabled;
         options.tree_conflicts = Some(crate::tree::ResolveWith::Ancestor);
+        options.fail_on_conflict = None;
         options.blob_merge.is_virtual_ancestor = true;
-        options.blob_merge.text.conflict = builtin_driver::text::Conflict::ResolveWithOurs;
+        // Conflict markers carry both histories into the final merge, independently of file favor.
+        if !matches!(
+            options.blob_merge.text.conflict,
+            builtin_driver::text::Conflict::Keep { .. }
+        ) {
+            options.blob_merge.text.conflict = Default::default();
+        }
         let favor_ancestor = Some(builtin_driver::binary::ResolveWith::Ancestor);
         options.blob_merge.resolve_binary_with = favor_ancestor;
         options.symlink_conflicts = favor_ancestor;
@@ -75,11 +79,13 @@ pub(super) mod function {
                     use_first_merge_base: false,
                 },
             )?;
-            // This shouldn't happen, but if for some buggy reason it does, we rather bail.
-            if out.tree_merge.has_unresolved_conflicts(TreatAsUnresolved {
-                content_merge: treat_as_unresolved::ContentMerge::Markers,
-                tree_merge: treat_as_unresolved::TreeMerge::Undecidable,
-            }) {
+            // Tree conflicts must be resolved, but text conflict markers belong in the virtual base.
+            if out
+                .tree_merge
+                .conflicts
+                .iter()
+                .any(|conflict| conflict.resolution.is_err())
+            {
                 bail!(
                     "Conflicts occurred when trying to resolve multiple merge-bases by merging them. This is most certainly a bug.",
                 );
