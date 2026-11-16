@@ -2450,32 +2450,6 @@ baseline file-to-symlinks-one-keeps-ancestor-bytes A-B A B
   make_resolve_tree ours B A
 )
 
-(cd rename-delete-after-consumed-path
-  # Trees agree with Git. Ordinary diff-tree pairs A's identical payloads as
-  # a/a -> a/d/a, f/a -> e, and h/d/a -> f; merge-ort instead chooses
-  # a/a -> e, f/a -> f, and h/d/a -> a/d/a. Both pair B's a/a -> b/a/a.
-  # Following ordinary diff-tree makes this a rename/rename conflict whose
-  # ancestor at a/a is replaced by a directory. Git also omits the ancestor for
-  # that identity (see the structural differential fixture), whereas merge-ort's
-  # different rename/delete identity retains a regular ancestor at a/d/a.
-  # Keep this merge-specific source-selection deviation explicit.
-  for direction in A-B A-B-reversed; do
-    IFS= read -r -d '' merged_tree_id <"$direction.merge-info"
-    git read-tree "$merged_tree_id"
-    git update-index --force-remove a/d/a b/a/a e f
-    if test "$direction" = A-B; then ours=2; theirs=3; else ours=3; theirs=2; fi
-    git update-index --index-info <<EOF
-100644 $(git rev-parse A:a/d/a) $ours	a/d/a
-100644 $(git rev-parse B:b/a/a) $theirs	b/a/a
-100644 $(git rev-parse A:e) $ours	e
-100644 $(git rev-parse B:e) $theirs	e
-100644 $(git rev-parse A:f) $ours	f
-100644 $(git rev-parse B:f) $theirs	f
-EOF
-    make_conflict_index "rename-delete-after-consumed-path-$direction"
-  done
-)
-
 (cd simple
   rm .git/index
   # 'whatever' is tree-conflict, 'greeting' is content conflict with markers

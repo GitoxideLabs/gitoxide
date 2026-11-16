@@ -217,6 +217,7 @@ fn assert_baseline(case: &str, variant: &str, rewrites: Rewrites) -> TestResult 
             }
             Ok(())
         },
+        Default::default(),
     )?;
     let expected_data = std::fs::read(case_dir.join(variant))?;
     let mut expected: Vec<_> = raw_records(&expected_data)
@@ -278,6 +279,7 @@ fn cancellation_stops_file_pairs_and_unmatched_changes() -> TestResult {
             &mut platform(&root),
             &odb,
             |_| Ok::<_, std::io::Error>(()),
+            Default::default(),
         )?;
         assert_eq!(calls, 1, "cancellation stops all further callbacks for {case}");
         tracker.emit(
@@ -285,6 +287,7 @@ fn cancellation_stops_file_pairs_and_unmatched_changes() -> TestResult {
             &mut platform(&root),
             &odb,
             |_| Ok::<_, std::io::Error>(()),
+            Default::default(),
         )?;
     }
     Ok(())
@@ -354,6 +357,7 @@ fn stricter_copy_threshold_does_not_crowd_out_a_valid_rename() -> TestResult {
         &mut platform(&root),
         &odb,
         |_| Ok::<_, std::io::Error>(()),
+        Default::default(),
     )?;
     assert!(renamed, "the lower rename threshold admits the deleted source");
     assert_eq!(modifications, 4, "copy-source modifications are all preserved");
@@ -408,6 +412,7 @@ fn a_later_weaker_copy_does_not_take_the_rename_label() -> TestResult {
             &mut platform(&root),
             &odb,
             |_| Ok::<_, std::io::Error>(()),
+            Default::default(),
         )?;
         assert_eq!(calls, 2, "the source is emitted as one rename and one copy");
     }
@@ -491,6 +496,7 @@ fn copy_harder_preserves_distinct_sources_with_truncated_locations() -> TestResu
                 }
                 Ok::<_, std::io::Error>(())
             },
+            Default::default(),
         )?;
         assert!(
             copied,
@@ -643,6 +649,7 @@ four
             &mut platform(&root),
             &objects,
             |_| -> Result<(), std::io::Error> { panic!("rename-only matching must not enumerate copy sources") },
+            Default::default(),
         )?;
         assert_eq!(matches, 1, "the source and destination form one rename");
         assert_eq!(
@@ -694,6 +701,7 @@ fn zero_threshold_does_not_match_edited_symlinks() -> TestResult {
         &mut platform(&root),
         &objects,
         |_| Ok::<_, std::io::Error>(()),
+        Default::default(),
     )?;
     assert_eq!(unmatched, 2, "the addition and deletion remain separate changes");
     Ok(())

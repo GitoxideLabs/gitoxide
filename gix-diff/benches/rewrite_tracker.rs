@@ -523,6 +523,7 @@ fn run_directory_diff(scenario: &DirectoryScenario, rewrites_enabled: bool) -> O
                 ..Default::default()
             }),
         },
+        Default::default(),
     )
     .expect("benchmark tree diff succeeds");
     assert_eq!(
@@ -571,6 +572,7 @@ fn run_tracker(scenario: &Scenario) -> Outcome {
                 }
                 Ok(())
             },
+            Default::default(),
         )
         .expect("benchmark rewrite tracking should succeed");
 

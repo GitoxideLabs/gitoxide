@@ -2,6 +2,7 @@ use crate::{Rewrites, tree::recorder::Location};
 
 mod change;
 mod directories;
+pub use crate::rewrites::tracker::Context;
 pub use change::{Change, ChangeRef};
 
 /// A removed directory's destinations inferred from finalized file renames.

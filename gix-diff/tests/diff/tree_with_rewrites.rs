@@ -116,6 +116,7 @@ fn empty_to_new_tree_without_rename_tracking() -> TestResult {
             &odb,
             |_change| Err(gix_error::message("custom error").raise()),
             Options::default(),
+            Default::default(),
         )
         .unwrap_err();
         error_snapshots.push(gix_testtools::redact_debug_snapshot(&(err), &[]));
@@ -1868,6 +1869,7 @@ mod util {
                 Ok(std::ops::ControlFlow::Continue(()))
             },
             options,
+            Default::default(),
         )?;
         Ok((out, rewrites_info.map(|outcome| outcome.rewrites)))
     }

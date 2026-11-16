@@ -61,6 +61,7 @@ impl<'old> Platform<'_, 'old> {
             &repo.objects,
             |change| for_each(Change::from_change_ref(change, repo, other.repo)),
             opts,
+            Default::default(),
         )
         .map(|outcome| outcome.map(|outcome| outcome.rewrites))
         .or_error()

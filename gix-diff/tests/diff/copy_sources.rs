@@ -128,6 +128,7 @@ fn tree_and_index_copies_use_the_original_source() -> TestResult {
                 location: Some(gix_diff::tree::recorder::Location::Path),
                 rewrites: Some(rewrites),
             },
+            Default::default(),
         )?;
         tree_changes.sort();
         assert_eq!(tree_changes, expected, "tree copies match Git for {case}");
@@ -205,6 +206,7 @@ five
             &mut new_cache(&root),
             &objects,
             |_| Ok::<_, std::convert::Infallible>(()),
+            Default::default(),
         )?;
         if deleted {
             assert!(
@@ -291,6 +293,7 @@ fn incompatible_sizes_skip_payloads() -> TestResult {
         &mut new_cache(&root),
         &objects,
         |_| Ok::<_, std::convert::Infallible>(()),
+        Default::default(),
     )?;
     assert_eq!(changes, 5, "all additions and deletions remain visible");
     assert_eq!(
@@ -389,6 +392,7 @@ fn directory_outcomes_preserve_roots_and_tied_destinations() -> TestResult {
                     ..Default::default()
                 }),
             },
+            Default::default(),
         )?
         .expect("rewrite tracking was enabled");
         let mut actual = outcome.directory_renames;
@@ -478,6 +482,7 @@ fn cancellation_stops_file_changes_and_inferred_directories() -> TestResult {
                     ..Default::default()
                 }),
             },
+            Default::default(),
         )?;
         if let Some(stop_after) = stop_after {
             assert_eq!(
@@ -523,6 +528,7 @@ fn cancellation_stops_file_changes_and_inferred_directories() -> TestResult {
             location: Some(gix_diff::tree::recorder::Location::Path),
             rewrites: Some(Rewrites::default()),
         },
+        Default::default(),
     );
     assert!(
         matches!(result, Err(gix_diff::tree::Error::Cancelled)),
@@ -595,6 +601,7 @@ fn location_projection_preserves_file_and_directory_matches() -> TestResult {
                     ..Default::default()
                 }),
             },
+            Default::default(),
         )?;
         paths.sort();
         assert_eq!(
@@ -785,6 +792,7 @@ fn directory_rewrites_match_git(
             location: Some(gix_diff::tree::recorder::Location::Path),
             rewrites: Some(rewrites),
         },
+        Default::default(),
     )?;
     actual.sort();
     assert_eq!(

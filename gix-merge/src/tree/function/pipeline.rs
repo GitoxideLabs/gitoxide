@@ -31,8 +31,8 @@ use crate::tree::{Conflict, ConflictMapping, IndexPlan, Options, Outcome, Resolu
 /// supplied trees and object database. The returned editor remains unwritten for the caller.
 ///
 /// Like Git's `merge-ort`, this resolves normalized three-input paths from children to parents.
-/// Rename identities still come from `gix-diff`, which may choose different sources when
-/// identical contents make a rename ambiguous. Copies are treated as additions.
+/// Rename identities come from `gix-diff`, with destination ordering derived from these
+/// three inputs. Ambiguous identities can still differ from Git. Copies are treated as additions.
 /// Explicit renames returned to their source by directory relocation still participate in opposite
 /// rename conflicts. Both destinations are retained; Git can miss this conflict depending on side order.
 ///
@@ -82,6 +82,11 @@ pub fn tree<'objects>(
         objects.find_tree(base_tree, &mut base_buf)?.to_owned()
     };
     let mut side_buf = Vec::new();
+    let destination_orders = if options.rewrites.is_some() {
+        change::destination_orders(&paths)
+    } else {
+        Default::default()
+    };
     let mut ours = change::collect(
         base_tree,
         our_tree,
@@ -92,6 +97,7 @@ pub fn tree<'objects>(
         diff_state,
         options.rewrites,
         options.directory_renames,
+        &destination_orders[0],
     )?;
     let mut theirs = change::collect(
         base_tree,
@@ -103,6 +109,7 @@ pub fn tree<'objects>(
         diff_state,
         options.rewrites,
         options.directory_renames,
+        &destination_orders[1],
     )?;
     change::retain_relevant_directory_renames(&mut ours, &theirs.entries);
     change::retain_relevant_directory_renames(&mut theirs, &ours.entries);

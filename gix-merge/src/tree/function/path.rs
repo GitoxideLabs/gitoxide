@@ -214,6 +214,25 @@ impl State {
         Ok(state)
     }
 
+    /// Original sibling modes, including identical entries needed as traversal-front placeholders.
+    pub fn input_modes(&self) -> impl Iterator<Item = (&BStr, [Option<gix_object::tree::EntryMode>; 3])> {
+        self.entries
+            .iter()
+            .map(|(path, node)| {
+                (
+                    path.as_bstr(),
+                    node.inputs
+                        .each_ref()
+                        .map(|entry| entry.as_ref().map(|entry| entry.mode)),
+                )
+            })
+            .chain(
+                self.unchanged
+                    .iter()
+                    .map(|(path, entry)| (path.as_bstr(), [Some(entry.mode); 3])),
+            )
+    }
+
     /// Make a lookup and its ancestors explicit without expanding unrelated siblings.
     pub fn ensure_path(&mut self, path: &BStr, objects: &impl gix_object::Find) -> Result<()> {
         for (idx, &byte) in path.iter().enumerate() {
