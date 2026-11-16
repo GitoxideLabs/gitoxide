@@ -837,7 +837,7 @@ impl ConnectorService {
                             inner: TokioIo::new(io),
                         }),
                         is_proxy: false,
-                        tls_info: false,
+                        tls_info: self.tls_info,
                     });
                 }
             }
@@ -885,7 +885,7 @@ impl ConnectorService {
                             inner: TokioIo::new(io),
                         }),
                         is_proxy: false,
-                        tls_info: false,
+                        tls_info: self.tls_info,
                     });
                 }
             }
