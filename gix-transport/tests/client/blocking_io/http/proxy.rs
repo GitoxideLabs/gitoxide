@@ -1099,7 +1099,9 @@ fn reqwest_checks_proxy_errors_after_request_url_changes() -> gix_testtools::Res
     remote.configure(&http::Options {
         backend: Some(Arc::new(Mutex::new(http::reqwest::Options {
             configure_request: Some(Box::new(|request| {
-                *request.url_mut() = "https://git.invalid/repo".parse::<reqwest::Url>().or_error()?;
+                *request.url_mut() = "https://git.invalid/repo"
+                    .parse::<gix_transport::gix_reqwest::Url>()
+                    .or_error()?;
                 Ok(())
             })),
             ..Default::default()
