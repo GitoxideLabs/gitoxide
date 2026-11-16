@@ -2760,3 +2760,33 @@ fn assert_only_child_change(out: &Outcome, layout: &Layout, expected: &Changes) 
         "an existing child's failure/recovery is a full Changed invalidation, not a new baseline: {change:?}"
     );
 }
+
+#[test]
+fn existing_application_files_keep_their_native_path() -> TestResult {
+    let fixture = fixture()?;
+    let root = fixture.path().canonicalize()?;
+    let path = root.join("REFRESH");
+    std::fs::write(&path, "refresh")?;
+    let normalized = absolute_path(&path, &root, false)?;
+    assert_eq!(
+        normalized.as_os_str(),
+        path.as_os_str(),
+        "normalizing an existing file must not append a directory separator"
+    );
+    assert!(
+        std::fs::metadata(&normalized)?.is_file(),
+        "the normalized file remains accessible to inventory"
+    );
+    let watches = inventory::additional_watches(&[InvalidationPath {
+        path: normalized,
+        changes: Changes {
+            layout: true,
+            ..Changes::default()
+        },
+    }])?;
+    assert!(
+        watches.contains_key(&root),
+        "an existing application file is watched through its parent directory"
+    );
+    Ok(())
+}

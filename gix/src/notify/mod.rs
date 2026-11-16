@@ -759,10 +759,16 @@ fn absolute_path(path: &Path, current_dir: &Path, precompose: bool) -> Result<Pa
     let path = path
         .ancestors()
         .find_map(|ancestor| match ancestor.canonicalize() {
-            Ok(native) => Some(Ok(native.join(
-                path.strip_prefix(ancestor)
-                    .expect("ancestors are prefixes of the resolved path"),
-            ))),
+            Ok(native) => {
+                let suffix = path
+                    .strip_prefix(ancestor)
+                    .expect("ancestors are prefixes of the resolved path");
+                Some(Ok(if suffix.as_os_str().is_empty() {
+                    native
+                } else {
+                    native.join(suffix)
+                }))
+            }
             Err(error)
                 if matches!(
                     error.kind(),
