@@ -129,12 +129,10 @@ impl Request {
         } else {
             None
         };
-        let mut req = Request::new(self.method().clone(), self.url().clone());
-        *req.timeout_mut() = self.timeout().copied();
-        *req.headers_mut() = self.headers().clone();
-        *req.version_mut() = self.version().clone();
-        req.body = body;
-        Some(req)
+        Some(Request {
+            body,
+            inner: self.inner.try_clone()?,
+        })
     }
 
     pub(crate) fn into_async(self) -> (async_impl::Request, Option<body::Sender>) {
@@ -1144,6 +1142,24 @@ mod tests {
         let values: Vec<_> = req.headers().get_all("authorization").iter().collect();
         assert_eq!(values, ["Bearer Hold my other bear"]);
         assert!(values[0].is_sensitive());
+    }
+
+    #[test]
+    fn request_cloning_preserves_extensions() {
+        let mut http_request = HttpRequest::builder()
+            .uri("http://example.com/")
+            .body("body")
+            .unwrap();
+        http_request
+            .extensions_mut()
+            .insert(String::from("metadata"));
+        let request = Request::try_from(http_request).unwrap();
+        let clone = request.try_clone().unwrap();
+        assert_eq!(
+            clone.inner.extensions().get::<String>(),
+            Some(&String::from("metadata"))
+        );
+        assert_eq!(clone.body().unwrap().as_bytes(), Some(&b"body"[..]));
     }
 
     #[test]
