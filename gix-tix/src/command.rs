@@ -518,6 +518,20 @@ impl Platform {
     }
 }
 
+/// Run the standalone binary, retaining fatal diagnostics after command teardown.
+pub fn main() -> Result<()> {
+    let diagnostics = crate::logging::FatalDiagnostics::new();
+    (|| {
+        let _interrupt = gix::interrupt::init_handler_default(1)?.auto_deregister();
+        parse().run()
+    })()
+    .inspect_err(|error| {
+        if let Some(diagnostics) = &diagnostics {
+            diagnostics.record_error(error);
+        }
+    })
+}
+
 impl Cli {
     /// Run the standalone command.
     pub fn run(self) -> Result<()> {

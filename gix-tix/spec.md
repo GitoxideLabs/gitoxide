@@ -15,6 +15,15 @@ without trading responsiveness for metadata that is not visible.
   from `HEAD` when none are supplied.
 - Standalone `tix` opts into `gix/error-print-location`, so errors returned from
   `main()` include captured caller locations. Alternate formatting omits them.
+- Standalone `tix` also saves unhandled errors and panics to its daily diagnostic
+  log, including discovery failures, errors after command or terminal teardown,
+  and worker-thread panics. Errors retain their full cause chain and caller
+  locations; panics retain their message, location, thread name, and a backtrace
+  even when `RUST_BACKTRACE` is disabled. Fatal records identify the process and
+  launch directory, independently of the current tracing subscriber and `--trace`.
+  Logging is synchronous and best effort: an unavailable log directory does not
+  replace the original failure. Stderr output, exit status, and terminal cleanup
+  remain intact.
 - Standalone `tix` accepts `-t|--trace` up to four times. One occurrence emits
   forest-formatted info events, two emit forest-formatted debug events, three
   emit flat debug events, and four emit flat trace events. `gix tix` inherits

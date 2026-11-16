@@ -301,6 +301,53 @@ pub(crate) struct Guard {
     trace: Option<SharedTraceBuffer>,
 }
 
+#[derive(Clone)]
+pub(crate) struct FatalDiagnostics {
+    dispatch: tracing::Dispatch,
+    invocation_directory: Option<PathBuf>,
+}
+
+impl FatalDiagnostics {
+    pub(crate) fn new() -> Option<Self> {
+        Self::in_directory(&log_directory()?).ok()
+    }
+
+    fn in_directory(directory: &Path) -> Result<Self> {
+        let diagnostics = FatalDiagnostics {
+            dispatch: diagnostic_dispatch(directory)?,
+            invocation_directory: std::env::current_dir().ok(),
+        };
+        let panic_diagnostics = diagnostics.clone();
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            tracing::dispatcher::with_default(&panic_diagnostics.dispatch, || {
+                let thread = std::thread::current();
+                tracing::error!(
+                    process_id = std::process::id(),
+                    invocation_directory = ?panic_diagnostics.invocation_directory,
+                    thread = ?thread.name(),
+                    panic = %info,
+                    backtrace = %std::backtrace::Backtrace::force_capture(),
+                    "tix panicked"
+                );
+            });
+            hook(info);
+        }));
+        Ok(diagnostics)
+    }
+
+    pub(crate) fn record_error(&self, error: &gix::Error) {
+        tracing::dispatcher::with_default(&self.dispatch, || {
+            tracing::error!(
+                process_id = std::process::id(),
+                invocation_directory = ?self.invocation_directory,
+                error = ?error,
+                "tix invocation failed"
+            );
+        });
+    }
+}
+
 impl Drop for Guard {
     fn drop(&mut self) {
         let Some(trace) = self.trace.as_ref() else {
@@ -353,13 +400,16 @@ fn try_init_trace(trace: u8, output: SharedTraceBuffer) -> Result<()> {
 
 fn try_init() -> Result<tracing::subscriber::DefaultGuard> {
     let directory = log_directory().ok_or_raise(|| message("could not determine the platform log directory"))?;
-    fs::create_dir_all(&directory)
-        .or_raise(|| message!("could not create log directory at {}", directory.display()))?;
-    let cleanup_errors = prune(&directory, SystemTime::now());
+    Ok(tracing::dispatcher::set_default(&diagnostic_dispatch(&directory)?))
+}
+
+fn diagnostic_dispatch(directory: &Path) -> Result<tracing::Dispatch> {
+    fs::create_dir_all(directory).or_raise(|| message!("could not create log directory at {}", directory.display()))?;
+    let cleanup_errors = prune(directory, SystemTime::now());
     let appender = tracing_appender::rolling::RollingFileAppender::builder()
         .rotation(tracing_appender::rolling::Rotation::DAILY)
         .filename_prefix(FILE_PREFIX)
-        .build(&directory)
+        .build(directory)
         .or_raise(|| message("could not open the daily diagnostic log"))?;
     let subscriber = tracing_subscriber::registry().with(
         tracing_subscriber::fmt::layer()
@@ -373,12 +423,14 @@ fn try_init() -> Result<tracing::subscriber::DefaultGuard> {
                     .with_target("gix_tix", tracing::Level::DEBUG),
             ),
     );
-    let guard = tracing::subscriber::set_default(subscriber);
-    tracing::info!(path = %directory.display(), "initialized diagnostics");
-    for error in cleanup_errors {
-        tracing::warn!(%error, "could not prune an old diagnostic log");
-    }
-    Ok(guard)
+    let dispatch = tracing::Dispatch::new(subscriber);
+    tracing::dispatcher::with_default(&dispatch, || {
+        tracing::info!(path = %directory.display(), "initialized diagnostics");
+        for error in cleanup_errors {
+            tracing::warn!(%error, "could not prune an old diagnostic log");
+        }
+    });
+    Ok(dispatch)
 }
 
 #[cfg(target_os = "macos")]
@@ -441,6 +493,64 @@ mod tests {
             received: 1,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn fatal_diagnostics_record_panics_without_an_active_subscriber() -> gix::error::TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let _env = gix_testtools::Env::new().set("RUST_BACKTRACE", "0");
+        let directory = gix_testtools::tempfile::TempDir::new()?;
+        let hook = std::panic::take_hook();
+        let diagnostics = FatalDiagnostics::in_directory(directory.path())?;
+        assert!(
+            std::panic::catch_unwind(|| panic!("foreground diagnostic test")).is_err(),
+            "the foreground panic is exercised"
+        );
+        let worker = std::thread::Builder::new()
+            .name("tix-panic-worker".into())
+            .spawn(|| panic!("worker diagnostic test"))?;
+        assert!(worker.join().is_err(), "the worker panic is exercised");
+        std::panic::set_hook(hook);
+        drop(diagnostics);
+
+        let entry = fs::read_dir(directory.path())?
+            .next()
+            .expect("the panic creates a daily log")?;
+        let log = fs::read_to_string(entry.path())?;
+        assert_eq!(
+            log.matches("tix panicked").count(),
+            2,
+            "each panic is recorded once: {log}"
+        );
+        for message in [
+            "foreground diagnostic test",
+            "worker diagnostic test",
+            "tix-panic-worker",
+        ] {
+            assert!(
+                log.contains(message),
+                "panic messages and thread names are retained: {log}"
+            );
+        }
+        assert!(
+            log.contains(concat!(file!(), ":")),
+            "panic source locations are retained: {log}"
+        );
+        assert!(
+            log.contains("backtrace="),
+            "a backtrace is captured with RUST_BACKTRACE=0: {log}"
+        );
+        assert!(
+            !log.contains("disabled backtrace"),
+            "the captured backtrace is enabled: {log}"
+        );
+        assert!(
+            log.contains("gix_tix::logging::"),
+            "the backtrace retains application frames: {log}"
+        );
+        Ok(())
     }
 
     #[test]

@@ -3,8 +3,7 @@
 use gix::Result;
 
 fn main() -> Result<()> {
-    let _interrupt = gix::interrupt::init_handler_default(1)?.auto_deregister();
-    gix_tix::command::parse().run()
+    gix_tix::command::main()
 }
 
 #[test]

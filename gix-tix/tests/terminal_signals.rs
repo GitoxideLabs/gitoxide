@@ -94,6 +94,19 @@ fn terminal_hangup_exits_without_a_signal() -> gix_error::TestResult {
         Some(1),
         "closed input must exit with an error, without a signal: {status}"
     );
+    let home = repository.path().join(".git/tix-test-home");
+    #[cfg(target_os = "macos")]
+    let directory = home.join("Library/Logs/org.GitoxideLabs.tix");
+    #[cfg(target_os = "linux")]
+    let directory = home.join("state/tix");
+    let entry = std::fs::read_dir(directory)?
+        .next()
+        .expect("the invocation creates a daily log")?;
+    let log = std::fs::read_to_string(entry.path())?;
+    assert!(
+        log.contains("tix invocation failed"),
+        "the input error is recorded after terminal teardown: {log}"
+    );
     Ok(())
 }
 
@@ -116,7 +129,12 @@ fn launch_in_pty() -> gix_error::TestResult {
         },
     )?;
     let mut command = Command::new(env!("CARGO_BIN_EXE_tix"));
-    gix_testtools::configure_git_environment(&mut command, std::env::current_dir()?).arg("--trace");
+    let current_dir = std::env::current_dir()?;
+    let home = current_dir.join(".git/tix-test-home");
+    gix_testtools::configure_git_environment(&mut command, &current_dir)
+        .env("HOME", &home)
+        .env("XDG_STATE_HOME", home.join("state"))
+        .arg("--trace");
     Err(command.exec().into())
 }
 
