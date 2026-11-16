@@ -468,6 +468,9 @@ without trading responsiveness for metadata that is not visible.
   hidden-branch target analysis. Lane construction releases ordering scratch
   before building the retained layout and computes visual counts from its
   indexed parent edges without a second ID lookup table.
+- Lane parent and child adjacency use contiguous offset and index arrays.
+  Neighbor order and direct slice access are preserved without allocating a
+  separate child vector for every row.
 - One persistent graph is shared by every worktrunk preview. Resolving another
   worktree adds only missing ancestry for its visible and hidden tips; selection
   switches the active rev-set without rebuilding or rewalking cached topology.
