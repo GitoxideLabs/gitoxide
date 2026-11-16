@@ -449,6 +449,17 @@ without trading responsiveness for metadata that is not visible.
 - The persistent graph is append-only and index-addressed, with one compact copy
   of each commit and flat parent edges. View refreshes project rows from this
   cache and stop walking when complete cached ancestry is reached.
+- Editable-scope and inspected-metadata membership live in the cached topology
+  nodes. Descendant and ref-tree membership use index-addressed bitmaps instead
+  of duplicating commit IDs. IDs without a cached node or display row retain
+  sparse fallback membership until they are cached.
+- Display rows are cached in first-insertion order; the ID lookup retains both
+  a direct shared row reference and its position, so repeated loads replace the
+  same slot without adding an indirection to row lookup. The cache retains its
+  own positions while background workers own or extend the topology graph.
+  Visible rows retain shared references for direct navigation and drawing.
+  These representations store no compressed data and preserve constant-time
+  membership and ID lookups.
 - One persistent graph is shared by every worktrunk preview. Resolving another
   worktree adds only missing ancestry for its visible and hidden tips; selection
   switches the active rev-set without rebuilding or rewalking cached topology.
