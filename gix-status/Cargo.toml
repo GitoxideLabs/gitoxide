@@ -48,7 +48,7 @@ document-features = { version = "0.2.0", optional = true }
 portable-atomic = "1"
 
 [target.'cfg(windows)'.dependencies]
-hashbrown = "0.16.0"
+hashbrown = "0.17.1"
 
 [dev-dependencies]
 insta = "1.46.3"

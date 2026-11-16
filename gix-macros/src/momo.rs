@@ -48,6 +48,7 @@ pub(crate) fn inner(code: proc_macro2::TokenStream) -> proc_macro2::TokenStream 
                 attrs
             },
             vis: Visibility::Inherited,
+            modifiers: Default::default(),
             sig: Signature {
                 ident: inner_ident.clone(),
                 ..item_fn.sig
@@ -67,6 +68,7 @@ pub(crate) fn inner(code: proc_macro2::TokenStream) -> proc_macro2::TokenStream 
             let new_item = Item::Fn(ItemFn {
                 attrs: item_fn.attrs,
                 vis: item_fn.vis,
+                modifiers: item_fn.modifiers,
                 sig: outer_sig,
                 block: if has_self {
                     parse_quote!({ self.#inner_ident(#argexprs) })
@@ -82,6 +84,7 @@ pub(crate) fn inner(code: proc_macro2::TokenStream) -> proc_macro2::TokenStream 
             let new_item = Item::Fn(ItemFn {
                 attrs: item_fn.attrs,
                 vis: item_fn.vis,
+                modifiers: item_fn.modifiers,
                 sig: outer_sig,
                 block: parse_quote!({
                     #new_inner_item
@@ -116,7 +119,9 @@ impl Conversion {
 
 fn parse_bounded_type(ty: &Type) -> Option<Ident> {
     match &ty {
-        Type::Path(TypePath { qself: None, path }) if path.segments.len() == 1 => Some(path.segments[0].ident.clone()),
+        Type::Path(TypePath { qself: None, path, .. }) if path.segments.len() == 1 => {
+            Some(path.segments[0].ident.clone())
+        }
         _ => None,
     }
 }
@@ -251,7 +256,7 @@ fn contains_self_type_path(path: &Path) -> bool {
                     })
                 }
                 PathArguments::Parenthesized(ParenthesizedGenericArguments { inputs, output, .. }) => {
-                    inputs.iter().any(contains_self_type)
+                    inputs.iter().any(|arg| contains_self_type(&arg.ty))
                         || matches!(output, ReturnType::Type(_, ty) if contains_self_type(ty))
                 }
                 _ => false,
