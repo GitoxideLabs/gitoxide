@@ -163,7 +163,7 @@ impl ListPool {
         let sclass = sclass as usize;
         // Insert the block on the free list which is a single linked list.
         self.data[block] = self.free[sclass];
-        self.free[sclass] = block as u32
+        self.free[sclass] = block as u32;
     }
 
     /// Returns two mutable slices representing the two requested blocks.

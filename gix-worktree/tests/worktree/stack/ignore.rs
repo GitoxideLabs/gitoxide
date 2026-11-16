@@ -9,6 +9,40 @@ use gix_worktree::{Stack, stack::state::ignore::Source};
 use crate::{hex_to_id, stack::probe_case};
 
 #[test]
+fn index_backed_ignore_paths_and_patterns_match_git_case_rules() -> TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_casefold_index_ignore.sh")?;
+    let worktree = fixture.join("repo");
+    let git_dir = worktree.join(".git");
+    let index = gix_index::File::at(
+        git_dir.join("index"),
+        gix_testtools::object_hash(),
+        false,
+        Default::default(),
+    )?;
+    let objects = gix_odb::at(git_dir.join("objects"), gix_testtools::object_hash())?;
+    for ignore_case in [false, true] {
+        let state = gix_worktree::stack::State::IgnoreStack(gix_worktree::stack::state::Ignore::new(
+            Default::default(),
+            Default::default(),
+            None,
+            Source::WorktreeThenIdMappingIfNotSkipped,
+            Default::default(),
+        ));
+        let mut stack = Stack::from_state_and_ignore_case(&worktree, ignore_case, state, &index, index.path_backing());
+        let baseline = std::fs::read_to_string(fixture.join(format!("baseline-{ignore_case}")))?;
+        for line in baseline.lines() {
+            let (status, path) = line.split_once(' ').expect("the fixture records status and path");
+            assert_eq!(
+                stack.at_entry(path, Some(Mode::FILE), &objects)?.is_excluded(),
+                status == "0",
+                "index-backed ignores match Git for {path} with ignoreCase={ignore_case}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 #[cfg(any(unix, windows))]
 fn symlinked_ignore_files_are_skipped_with_index_fallback() -> TestResult {
     for use_index in [false, true] {

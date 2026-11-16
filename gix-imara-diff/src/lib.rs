@@ -326,7 +326,7 @@ impl Diff {
     ///   ADDED/REMOVED hunks.
     /// * Move sliders as far down as possible.
     pub fn postprocess_no_heuristic<T>(&mut self, input: &InternedInput<T>) {
-        self.postprocess_with_heuristic(input, NoSliderHeuristic)
+        self.postprocess_with_heuristic(input, NoSliderHeuristic);
     }
 
     /// Postprocesses the diff to make it more human-readable. Certain hunks
@@ -347,7 +347,7 @@ impl Diff {
             IndentHeuristic::new(|token| {
                 IndentLevel::for_ascii_line(input.interner[token].as_ref().iter().copied(), 8)
             }),
-        )
+        );
     }
 
     /// Return an iterator that yields the changed hunks in this diff.

@@ -1,3 +1,6 @@
+// Modified for gitoxide from the upstream imara-diff crate.
+// Upstream source: git cat-file -p 32d1e45d3df061e6ccba6db7fdce92db29e345d8:src/myers/slice.rs
+
 use std::mem::take;
 use std::ops::RangeBounds;
 
@@ -67,7 +70,7 @@ impl<'a> FileSlice<'a> {
         let end = self.len() - common_postfix;
         *self = take(self).slice(start..end);
         let end = other.len() - common_postfix;
-        *other = take(other).slice(start..end)
+        *other = take(other).slice(start..end);
     }
 
     pub fn len(&self) -> u32 {

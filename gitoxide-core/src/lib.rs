@@ -72,6 +72,7 @@ pub mod commitgraph;
 #[cfg(feature = "corpus")]
 pub mod corpus;
 pub mod net;
+pub mod notify;
 
 #[cfg(feature = "estimate-hours")]
 pub mod hours;

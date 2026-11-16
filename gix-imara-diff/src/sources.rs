@@ -226,7 +226,7 @@ impl<'a> TokenSource for ByteLines<'a> {
     }
 
     fn estimate_tokens(&self) -> u32 {
-        let len: usize = self.take(20).map(|line| line.len()).sum();
+        let len: usize = self.take(20).map(<[u8]>::len).sum();
         (self.0.len() * 20).checked_div(len).unwrap_or(100) as u32
     }
 }

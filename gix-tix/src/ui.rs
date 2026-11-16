@@ -1299,7 +1299,7 @@ pub(crate) fn draw_with_worktree(
         frame.render_widget(Clear, *underlay);
         frame.render_widget(Block::new().borders(Borders::TOP).title(summary), outer);
         render_changes(frame, area, changes, pane, app);
-        if app.changes_focus == Some(pane) {
+        if app.changes_focus == Some(pane) || (pane == ChangePane::Worktree && app.worktree_watch_error.is_some()) {
             let status = Rect::new(
                 outer.x.saturating_add(2),
                 outer.bottom().saturating_sub(1),
@@ -1325,7 +1325,7 @@ pub(crate) fn draw_with_worktree(
                 spans.extend(shortcut("P next parent", 'P', true));
                 spans.push(Span::raw(" · "));
             }
-            if let Some(error) = &app.changes(pane).error {
+            if let Some(error) = app.changes_error(pane) {
                 spans.push(Span::styled(format!("diff: {error}"), color(Color::LightRed)));
             } else {
                 spans.push(Span::raw("↑↓/jk move · h/l pan · <enter> diff"));
@@ -1565,7 +1565,7 @@ fn time_travel_shortcuts(
         .iter()
         .any(|decoration| decoration.kind == DecorationKind::Pin);
     let clean = app.changes_mode == Some(ChangesMode::Both)
-        && app.worktree_changes.error.is_none()
+        && app.changes_error(ChangePane::Worktree).is_none()
         && worktree_changes.is_some_and(|changes| changes.paths.is_empty());
     let mut spans = Vec::new();
     if !clean {
@@ -7556,6 +7556,8 @@ mod tests {
 
     #[test]
     fn popup_keeps_a_focused_changes_error_visible() -> Result<(), Box<dyn std::error::Error>> {
+        use gix_error::ErrorExt;
+
         let mut app = App::new(1);
         app.id_mode = IdMode::Commit;
         app.extend_commits(
@@ -7610,6 +7612,39 @@ mod tests {
         assert_eq!(terminal.backend().buffer()[(2, 2)].bg, PANE_STATUS_BACKGROUND);
         assert!(rendered_line(&terminal, 3).contains("[ title"));
         assert!(rendered_line(&terminal, 4).contains("p command"));
+        app.changes_focus = None;
+        app.information_expanded = false;
+        terminal.backend_mut().resize(120, 20);
+        app.update_monitor_error(&gix::notify::Outcome {
+            errors: vec![gix_error::message("failed").raise()],
+            recovery_pending: true,
+            ..Default::default()
+        });
+        let clean = Changes::default();
+        for recovery_pending in [true, false] {
+            app.worktree_changes.error = None;
+            app.update_monitor_error(&gix::notify::Outcome {
+                recovery_pending,
+                ..Default::default()
+            });
+            terminal.draw(|frame| {
+                super::draw_with_worktree(
+                    frame,
+                    frame.area(),
+                    &mut app,
+                    &Decorations::new(),
+                    &gix::mailmap::Snapshot::default(),
+                    None,
+                    Some(&changes),
+                    Some(&clean),
+                );
+            })?;
+            assert_eq!(
+                (0..20).any(|row| rendered_line(&terminal, row).contains("filesystem watch: failed")),
+                recovery_pending,
+                "the rendered pane keeps startup failures visible until registration recovers"
+            );
+        }
         Ok(())
     }
 

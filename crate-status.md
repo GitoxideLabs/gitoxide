@@ -247,6 +247,35 @@ The top-level crate that acts as hub to all functionality provided by the `gix-*
     - probably based on [`internment`](https://docs.rs/internment/latest/internment/struct.Arena.html#),
       but needs `bumpalo` support to avoid item allocations/boxing, and avoid internal `Mutex`. (key type is pointer based).
 
+### gix-notify
+* [x] Git-independent filesystem notifications with upstream `notify` compatibility backends
+* [x] Bounded event intake, explicit coverage loss, replaceable watches, and event-loop wakeups
+* [x] Owned macOS FSEvents backend with administrative-marker delivery fences
+* [x] Owned Linux inotify backend with recursive watches and administrative-marker delivery fences
+* [x] Owned Windows `ReadDirectoryChangesW` backend with cancellable, bounded native reads
+* [ ] Windows delivery synchronization
+
+### gix-fsmonitor
+
+Clients for Git's filesystem monitor hooks and native daemon protocol.
+
+* [x] hook protocol 1 and 2, including automatic fallback
+* [x] native Simple IPC over Unix sockets and Windows named pipes
+* [x] Git daemon startup on macOS and Windows
+* [x] long Unix socket paths without changing the process working directory
+* [x] optional embeddable server with startup readiness and owned shutdown
+* [x] separate `daemon` feature for shared blocking control, native endpoint selection, and detached self-spawn
+* [x] independent watch lifetimes and IPC endpoints for linked worktrees
+
+### gix-fsmonitor-daemon
+
+* [x] Standalone daemon serving Git hook v2 and native Simple IPC clients
+* [x] Bounded multi-client token history, recovery, and complete worktree coverage
+* [x] Incremental macOS and Linux replies using administrative-marker synchronization on supported local filesystems
+* [x] Unix socket and Windows named-pipe transports
+* [x] Incremental Windows replies through ordered native-cookie observation
+* [x] Windows runtime validation (cross-compilation only)
+
 ### gix-fs
 * Stable API limited to race-proof creation, public retry configuration, boundary cleanup, and permission application for tempfiles and locks.
 * Other filesystem APIs, including `serde` and `walkdir` support, require `unstable`.

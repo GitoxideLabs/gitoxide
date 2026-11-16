@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use std::mem::swap;
 
 use expect_test::expect;
@@ -80,9 +81,7 @@ mod fuzzed {
         let expected = Duration::from_secs(3);
         assert!(
             elapsed < expected,
-            "clusterfuzz regression took {:?}, expected less than {:?}",
-            elapsed,
-            expected
+            "clusterfuzz regression took {elapsed:?}, expected less than {expected:?}"
         );
     }
 }
@@ -677,32 +676,32 @@ fn postprocess() {
 /// frequent, it is not discarded because it is bounded by unmatched runs that are short, which
 /// is offset by Git counting the line twice. Counting it only once would cause it to be discarded.
 #[test]
-fn a_frequent_line_between_short_unmatched_runs_is_kept() {
-    fn file(tag: &str) -> String {
+fn a_frequent_line_between_short_unmatched_runs_is_kept() -> gix_testtools::TestResult {
+    fn file(tag: &str) -> gix_testtools::TestResult<String> {
         // The first and last lines differ so that stripping the common prefix and postfix leaves
         // the blank lines in the region, which is what makes an empty line frequent here. The
         // unmatched runs are bounded by non-blank shared lines, so nothing else inside them is.
         let mut out = format!("first line, {tag}\n");
         for i in 0..8 {
-            out.push_str(&format!("shared line {i}\n\n"));
+            writeln!(out, "shared line {i}\n")?;
         }
         out.push_str("anchor above\n");
         for i in 0..3 {
-            out.push_str(&format!("only in {tag} {i}\n"));
+            writeln!(out, "only in {tag} {i}")?;
         }
         out.push('\n');
         for i in 3..6 {
-            out.push_str(&format!("only in {tag} {i}\n"));
+            writeln!(out, "only in {tag} {i}")?;
         }
         out.push_str("anchor below\n");
         for i in 8..16 {
-            out.push_str(&format!("shared line {i}\n\n"));
+            writeln!(out, "shared line {i}\n")?;
         }
-        out.push_str(&format!("last line, {tag}\n"));
-        out
+        writeln!(out, "last line, {tag}")?;
+        Ok(out)
     }
 
-    let (before, after) = (file("old"), file("new"));
+    let (before, after) = (file("old")?, file("new")?);
     let input = InternedInput::new(before.as_str(), after.as_str());
     let diff = Diff::compute(Algorithm::Myers, &input);
     let changed = diff.hunks().fold((0, 0), |(removed, inserted), hunk| {
@@ -713,6 +712,7 @@ fn a_frequent_line_between_short_unmatched_runs_is_kept() {
         (8, 8),
         "the blank line between the two unmatched runs should still be matched, just like `git diff --no-index --numstat`"
     );
+    Ok(())
 }
 
 #[test]

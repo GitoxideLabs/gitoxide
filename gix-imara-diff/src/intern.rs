@@ -116,7 +116,7 @@ impl<T: Eq + Hash> InternedInput<T> {
     /// [`update_before`](InternedInput::update_before) and
     /// [`update_after`](InternedInput::update_after).
     pub fn reserve_for_token_source<S: TokenSource<Token = T> + ?Sized>(&mut self, before: &S, after: &S) {
-        self.reserve(before.estimate_tokens(), after.estimate_tokens())
+        self.reserve(before.estimate_tokens(), after.estimate_tokens());
     }
 
     /// Reserves capacity for the specified number of tokens in each sequence.
@@ -192,7 +192,7 @@ impl<T: Hash + Eq> Interner<T> {
     /// Create an Interner with an initial capacity calculated by calling
     /// [`estimate_tokens`](TokenSource::estimate_tokens) methods of `before` and `after`
     pub fn reserve_for_token_source<S: TokenSource<Token = T>>(&mut self, before: &S, after: &S) {
-        self.reserve(before.estimate_tokens() as usize + after.estimate_tokens() as usize)
+        self.reserve(before.estimate_tokens() as usize + after.estimate_tokens() as usize);
     }
 
     /// Reserves capacity for at least the specified number of additional tokens.
