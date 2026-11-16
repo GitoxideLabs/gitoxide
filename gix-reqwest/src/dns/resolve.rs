@@ -201,3 +201,18 @@ mod sealed {
 
     impl std::error::Error for InvalidNameError {}
 }
+
+#[cfg(all(test, feature = "socks"))]
+#[tokio::test]
+async fn socks_ipv6_local_resolution() {
+    let uri = "http://[::1]:8080/".parse().unwrap();
+    let addrs: Vec<_> = DynResolver::gai()
+        .http_resolve(&uri)
+        .await
+        .unwrap()
+        .collect();
+    assert_eq!(
+        addrs[0],
+        "[::1]:8080".parse::<std::net::SocketAddr>().unwrap()
+    );
+}

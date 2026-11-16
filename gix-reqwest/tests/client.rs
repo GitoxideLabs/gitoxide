@@ -883,3 +883,22 @@ async fn response_before_streamed_body_is_sent() {
 
     assert_eq!(res.status(), gix_reqwest::StatusCode::PRECONDITION_FAILED);
 }
+
+#[tokio::test]
+async fn forwarded_extensions_capture_connection() {
+    let server = server::http(|_| async { http::Response::default() });
+    let mut req = http::Request::builder()
+        .uri(format!("http://{}/", server.addr()))
+        .body(gix_reqwest::Body::default())
+        .unwrap();
+    let captured = hyper_util::client::legacy::connect::capture_connection(&mut req);
+    let req = gix_reqwest::Request::try_from(req).unwrap();
+    gix_reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .execute(req)
+        .await
+        .unwrap();
+    assert!(captured.connection_metadata().is_some());
+}
