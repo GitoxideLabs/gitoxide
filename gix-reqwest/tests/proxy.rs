@@ -700,3 +700,45 @@ async fn socks_tls_info_is_reported_when_enabled() {
     }
     proxy.await.unwrap();
 }
+
+#[tokio::test]
+async fn return_to_original_host_drops_intermediate_proxy_credentials() {
+    let original = server::http(|req| async move {
+        if req.uri().path() == "/start" {
+            http::Response::builder()
+                .status(302)
+                .header("location", "http://b.invalid/next")
+                .body(gix_reqwest::Body::default())
+                .unwrap()
+        } else {
+            assert_eq!(req.uri().path(), "/end");
+            assert!(!req.headers().contains_key("proxy-authorization"));
+            http::Response::default()
+        }
+    });
+    let return_url = format!("http://{}/end", original.addr());
+    let proxy = server::http(move |req| {
+        let return_url = return_url.clone();
+        async move {
+            assert_eq!(req.headers()["proxy-authorization"], "Basic dXNlcjpwYXNz");
+            http::Response::builder()
+                .status(302)
+                .header("location", return_url)
+                .body(gix_reqwest::Body::default())
+                .unwrap()
+        }
+    });
+    let proxy_url = format!("http://user:pass@{}", proxy.addr());
+    let client = gix_reqwest::Client::builder()
+        .no_proxy()
+        .proxy(gix_reqwest::Proxy::custom(move |url| {
+            (url.host_str() == Some("b.invalid")).then(|| proxy_url.clone())
+        }))
+        .build()
+        .unwrap();
+    client
+        .get(format!("http://{}/start", original.addr()))
+        .send()
+        .await
+        .unwrap();
+}
