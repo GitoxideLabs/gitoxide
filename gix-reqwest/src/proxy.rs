@@ -3,11 +3,61 @@ use std::fmt;
 use std::sync::Arc;
 
 use http::uri::Scheme;
-use http::{header::HeaderValue, HeaderMap, Uri};
+use http::{
+    header::{HeaderValue, PROXY_AUTHORIZATION, REFERER},
+    HeaderMap, Uri,
+};
 use hyper_util::client::proxy::matcher;
 
 use crate::into_url::{IntoUrl, IntoUrlSealed};
 use crate::Url;
+
+#[derive(Clone)]
+pub(crate) struct HeaderContext {
+    pub(crate) proxies: Arc<Vec<Matcher>>,
+    pub(crate) payload_headers_removed: bool,
+    pub(crate) referer_handled: bool,
+}
+
+pub(crate) fn prepare_request(
+    mut req: http::Request<crate::async_impl::Body>,
+) -> http::Request<crate::async_impl::Body> {
+    let Some(context) = req.extensions_mut().remove::<HeaderContext>() else {
+        return req;
+    };
+    if req.uri().scheme_str() != Some("http") {
+        return req;
+    }
+    if let Some(proxy) = context
+        .proxies
+        .iter()
+        .find_map(|proxy| proxy.intercept(req.uri()))
+    {
+        let mut headers = proxy.http_non_tunnel_custom_headers().unwrap_or_default();
+        if !req.headers().contains_key(PROXY_AUTHORIZATION)
+            && !headers.contains_key(PROXY_AUTHORIZATION)
+        {
+            if let Some(header) = proxy.http_non_tunnel_basic_auth() {
+                headers.insert(PROXY_AUTHORIZATION, header);
+            }
+        }
+        if context.payload_headers_removed {
+            for name in [
+                "content-type",
+                "content-length",
+                "content-encoding",
+                "transfer-encoding",
+            ] {
+                headers.remove(name);
+            }
+        }
+        if context.referer_handled {
+            headers.remove(REFERER);
+        }
+        crate::util::replace_headers(req.headers_mut(), headers);
+    }
+    req
+}
 
 // # Internals
 //
