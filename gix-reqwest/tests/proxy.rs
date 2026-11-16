@@ -816,3 +816,294 @@ async fn connect_tunnel_tls_info_is_reported_when_enabled() {
         }
     }
 }
+
+#[tokio::test]
+async fn redirect_scopes_custom_proxy_headers_and_restores_origin_values() {
+    let direct = server::http(|req| async move {
+        assert!(!req.headers().contains_key("x-proxy-token"));
+        assert!(!req.headers().contains_key("x-first-proxy"));
+        assert!(!req.headers().contains_key("authorization"));
+        let values: Vec<_> = req.headers().get_all("x-shared").iter().collect();
+        assert_eq!(values, ["origin-first", "origin-second"]);
+        http::Response::default()
+    });
+    let direct_url = format!("http://{}/end", direct.addr());
+    let second = server::http(move |req| {
+        let direct_url = direct_url.clone();
+        async move {
+            assert_eq!(req.headers()["x-proxy-token"], "second");
+            assert!(!req.headers().contains_key("x-first-proxy"));
+            assert!(!req.headers().contains_key("authorization"));
+            let values: Vec<_> = req.headers().get_all("x-shared").iter().collect();
+            assert_eq!(values, ["origin-first", "origin-second"]);
+            let destination = if req.uri().path() == "/next" {
+                "http://second.invalid/same".to_owned()
+            } else {
+                assert_eq!(req.uri().path(), "/same");
+                direct_url
+            };
+            http::Response::builder()
+                .status(302)
+                .header("location", destination)
+                .body(gix_reqwest::Body::default())
+                .unwrap()
+        }
+    });
+    let first = server::http(|req| async move {
+        assert_eq!(req.headers()["x-proxy-token"], "first");
+        assert_eq!(req.headers()["x-first-proxy"], "secret");
+        assert_eq!(req.headers()["x-shared"], "proxy-override");
+        assert_eq!(req.headers()["authorization"], "proxy-authorization");
+        http::Response::builder()
+            .status(302)
+            .header("location", "http://second.invalid/next")
+            .body(gix_reqwest::Body::default())
+            .unwrap()
+    });
+    let first_url = format!("http://{}", first.addr());
+    let mut first_headers = gix_reqwest::header::HeaderMap::new();
+    first_headers.insert("x-proxy-token", "first".parse().unwrap());
+    first_headers.insert("x-first-proxy", "secret".parse().unwrap());
+    first_headers.insert("x-shared", "proxy-override".parse().unwrap());
+    first_headers.insert("authorization", "proxy-authorization".parse().unwrap());
+    let mut second_headers = gix_reqwest::header::HeaderMap::new();
+    second_headers.insert("x-proxy-token", "second".parse().unwrap());
+    let client = gix_reqwest::Client::builder()
+        .no_proxy()
+        .proxy(
+            gix_reqwest::Proxy::custom(move |url| {
+                (url.host_str() == Some("first.invalid")).then(|| first_url.clone())
+            })
+            .headers(first_headers),
+        )
+        .proxy(
+            gix_reqwest::Proxy::http(format!("http://{}", second.addr()))
+                .unwrap()
+                .headers(second_headers)
+                .no_proxy(gix_reqwest::NoProxy::from_string("127.0.0.1")),
+        )
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap();
+    let mut headers = gix_reqwest::header::HeaderMap::new();
+    headers.append("x-shared", "origin-first".parse().unwrap());
+    let mut sensitive = gix_reqwest::header::HeaderValue::from_static("origin-second");
+    sensitive.set_sensitive(true);
+    headers.append("x-shared", sensitive);
+    headers.insert("authorization", "origin-authorization".parse().unwrap());
+    client
+        .get("http://first.invalid/start")
+        .headers(headers)
+        .send()
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn same_authority_redirect_removes_headers_from_previous_proxy() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    let use_proxy = Arc::new(AtomicBool::new(true));
+    let callback = use_proxy.clone();
+    let direct = server::http(|req| async move {
+        assert_eq!(req.uri().path(), "/end");
+        assert!(!req.headers().contains_key("x-proxy-token"));
+        assert!(!req.headers().contains_key("proxy-authorization"));
+        assert_eq!(req.headers()["authorization"], "origin-secret");
+        http::Response::default()
+    });
+    let proxy = server::http(move |req| {
+        let use_proxy = use_proxy.clone();
+        async move {
+            assert_eq!(req.headers()["x-proxy-token"], "secret");
+            assert_eq!(req.headers()["proxy-authorization"], "Basic dXNlcjpwYXNz");
+            assert_eq!(req.headers()["authorization"], "origin-secret");
+            use_proxy.store(false, Ordering::SeqCst);
+            http::Response::builder()
+                .status(302)
+                .header("location", "/end")
+                .header("connection", "close")
+                .body(gix_reqwest::Body::default())
+                .unwrap()
+        }
+    });
+    let proxy_url = format!("http://user:pass@{}", proxy.addr());
+    let mut headers = gix_reqwest::header::HeaderMap::new();
+    headers.insert("x-proxy-token", "secret".parse().unwrap());
+    let client = gix_reqwest::Client::builder()
+        .no_proxy()
+        .resolve("origin.invalid", direct.addr())
+        .proxy(
+            gix_reqwest::Proxy::custom(move |_url| {
+                callback.load(Ordering::SeqCst).then(|| proxy_url.clone())
+            })
+            .headers(headers),
+        )
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap();
+    client
+        .get("http://origin.invalid/start")
+        .header("authorization", "origin-secret")
+        .send()
+        .await
+        .unwrap();
+}
+
+#[cfg(feature = "__rustls-aws-lc-rs")]
+#[tokio::test]
+async fn http_to_https_redirect_keeps_custom_proxy_headers_in_connect_only() {
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let certificate =
+        rustls::pki_types::CertificateDer::from(include_bytes!("support/server.cert").to_vec());
+    let key =
+        rustls::pki_types::PrivateKeyDer::try_from(include_bytes!("support/server.key").to_vec())
+            .unwrap();
+    let config = rustls::ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::aws_lc_rs::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .unwrap()
+    .with_no_client_auth()
+    .with_single_cert(vec![certificate], key)
+    .unwrap();
+    let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        while !request.ends_with(b"\r\n\r\n") {
+            request.push(socket.read_u8().await.unwrap());
+        }
+        let request = std::str::from_utf8(&request).unwrap();
+        assert!(request.starts_with("GET http://localhost/start HTTP/1.1\r\n"));
+        assert!(request.contains("x-proxy-token: secret\r\n"));
+        socket.write_all(b"HTTP/1.1 302 Found\r\nLocation: https://localhost/end\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+        socket.shutdown().await.unwrap();
+
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        while !request.ends_with(b"\r\n\r\n") {
+            request.push(socket.read_u8().await.unwrap());
+        }
+        let request = std::str::from_utf8(&request).unwrap();
+        assert!(request.starts_with("CONNECT localhost:443 HTTP/1.1\r\n"));
+        assert!(request.contains("x-proxy-token: secret\r\n"));
+        socket
+            .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            .await
+            .unwrap();
+        let mut stream = acceptor.accept(socket).await.unwrap();
+        let mut request = Vec::new();
+        while !request.ends_with(b"\r\n\r\n") {
+            request.push(stream.read_u8().await.unwrap());
+        }
+        let request = std::str::from_utf8(&request).unwrap();
+        assert!(request.starts_with("GET /end HTTP/1.1\r\n"));
+        assert!(!request.contains("x-proxy-token:"));
+        assert!(request.contains("x-shared: origin-value\r\n"));
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+            .await
+            .unwrap();
+        stream.shutdown().await.unwrap();
+    });
+    let mut headers = gix_reqwest::header::HeaderMap::new();
+    headers.insert("x-proxy-token", "secret".parse().unwrap());
+    headers.insert("x-shared", "proxy-override".parse().unwrap());
+    gix_reqwest::Client::builder()
+        .tls_backend_rustls()
+        .danger_accept_invalid_certs(true)
+        .proxy(
+            gix_reqwest::Proxy::all(format!("http://{addr}"))
+                .unwrap()
+                .headers(headers),
+        )
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap()
+        .get("http://localhost/start")
+        .header("x-shared", "origin-value")
+        .send()
+        .await
+        .unwrap();
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn proxy_overlay_does_not_restore_payload_headers_after_body_dropping_redirect() {
+    for (method, status) in [
+        (gix_reqwest::Method::POST, 301),
+        (gix_reqwest::Method::POST, 302),
+        (gix_reqwest::Method::POST, 303),
+        (gix_reqwest::Method::HEAD, 303),
+    ] {
+        let original_method = method.clone();
+        let redirected_method = if method == gix_reqwest::Method::HEAD {
+            gix_reqwest::Method::HEAD
+        } else {
+            gix_reqwest::Method::GET
+        };
+        let proxy = server::http(move |req| {
+            let original_method = original_method.clone();
+            let redirected_method = redirected_method.clone();
+            async move {
+                if req.uri().path() == "/start" {
+                    assert_eq!(req.method(), original_method);
+                    assert_eq!(req.headers()["content-type"], "proxy-type");
+                    http::Response::builder()
+                        .status(status)
+                        .header("location", "/next")
+                        .body(gix_reqwest::Body::default())
+                        .unwrap()
+                } else {
+                    assert_eq!(req.method(), redirected_method);
+                    for name in [
+                        "content-type",
+                        "content-length",
+                        "content-encoding",
+                        "transfer-encoding",
+                    ] {
+                        assert!(
+                            !req.headers().contains_key(name),
+                            "payload header {name} returned after {original_method} {status} redirect"
+                        );
+                    }
+                    if req.uri().path() == "/next" {
+                        http::Response::builder()
+                            .status(307)
+                            .header("location", "/end")
+                            .body(gix_reqwest::Body::default())
+                            .unwrap()
+                    } else {
+                        assert_eq!(req.uri().path(), "/end");
+                        http::Response::default()
+                    }
+                }
+            }
+        });
+        let mut headers = gix_reqwest::header::HeaderMap::new();
+        headers.insert("content-type", "proxy-type".parse().unwrap());
+        gix_reqwest::Client::builder()
+            .no_proxy()
+            .proxy(
+                gix_reqwest::Proxy::http(format!("http://{}", proxy.addr()))
+                    .unwrap()
+                    .headers(headers),
+            )
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap()
+            .request(method, "http://origin.invalid/start")
+            .header("content-type", "origin-type")
+            .body("upload")
+            .send()
+            .await
+            .unwrap();
+    }
+}
