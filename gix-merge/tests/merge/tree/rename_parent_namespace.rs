@@ -35,6 +35,7 @@ fn merge<'a>(
         &mut Default::default(),
         &mut new_diff_resource_cache(root),
         &mut new_blob_merge_platform(root, None),
+        Default::default(),
         options,
     )
 }

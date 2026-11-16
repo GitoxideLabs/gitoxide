@@ -51,6 +51,7 @@ fn gitlinks_use_typed_merges_during_rename_normalization() -> TestResult {
                     &mut new_blob_merge_platform(&case.root, None),
                     &case.odb,
                     &mut |commit_id| commit_id.to_hex_with_len(7).to_string(),
+                    gix_merge::tree::Context::default(),
                     options,
                 )
                 .or_raise(|| message!("{}: favor={favor:?}, virtual={virtual_ancestor}", case.case_name))?

@@ -360,8 +360,8 @@ pub enum ResolutionFailure {
         /// The resulting location of their entry.
         their_location: BString,
     },
-    /// *ours* and *theirs* produced conflicting commits for a submodule, but submodule history isn't available to this
-    /// tree merge to determine whether either commit contains the other.
+    /// *ours* and *theirs* produced submodule commits which cannot be fast-forwarded relative to the ancestor.
+    /// History may be unavailable, divergent, or contain a rewind relative to that ancestor.
     SubmoduleMerge,
     /// *ours* and *theirs* added different submodule commits at the same path, possibly by renaming one into place.
     /// There is no common gitlink at this path, so this is not a candidate for three-way reachability resolution.
@@ -416,6 +416,27 @@ pub struct ContentMerge {
     pub merged_blob_id: gix_hash::ObjectId,
     /// Identify the kind of resolution of the blob merge. Note that it may be conflicting.
     pub resolution: crate::blob::Resolution,
+}
+
+/// Caller-provided access to information outside the superproject's object database.
+#[derive(Default)]
+pub struct Context<'a> {
+    /// Query the original source path's submodule history to resolve three-way gitlink merges.
+
+    /// If absent, nontrivial gitlink merges remain conflicts. Trivial merges and gitlink add/add conflicts
+    /// do not query submodule history. The callback is reborrowed for recursively constructed virtual bases.
+    pub submodule: Option<&'a mut crate::submodule::QueryFn<'a>>,
+}
+
+impl Context<'_> {
+    pub(crate) fn reborrow(&mut self) -> Context<'_> {
+        Context {
+            submodule: self
+                .submodule
+                .as_mut()
+                .map(|query| &mut **query as &mut crate::submodule::QueryFn<'_>),
+        }
+    }
 }
 
 /// A way to configure [`tree()`](crate::tree()).

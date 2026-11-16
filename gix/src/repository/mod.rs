@@ -122,6 +122,7 @@ mod mailmap;
 ///
 #[cfg(feature = "merge")]
 mod merge;
+
 #[cfg(feature = "notes")]
 mod note;
 mod object;

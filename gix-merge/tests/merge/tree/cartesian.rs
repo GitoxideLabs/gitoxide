@@ -172,6 +172,7 @@ fn records_status_quo_sha1() -> gix_testtools::TestResult {
                 &mut blob_merge,
                 &objects,
                 &mut |id| id.to_hex_with_len(7).to_string(),
+                gix_merge::tree::Context::default(),
                 options.clone(),
             )?
             .tree_merge;
@@ -975,6 +976,7 @@ fn records_submodule_status_quo_sha1() -> gix_testtools::TestResult {
                     &mut blob_merge,
                     &objects,
                     &mut |id| id.to_hex_with_len(7).to_string(),
+                    gix_merge::tree::Context::default(),
                     options.clone(),
                 )?
                 .tree_merge;

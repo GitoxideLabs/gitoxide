@@ -119,6 +119,9 @@ impl Repository {
     ///
     /// Note that `ancestor_tree` can be the [empty tree hash](gix_hash::ObjectId::empty_tree) to indicate no common ancestry.
     ///
+    /// Available local submodule repositories provide history for resolving gitlink updates. Missing repositories
+    /// or commits leave a submodule conflict; errors reading available history are returned.
+    ///
     /// `labels` are typically chosen to identify the refs or names for `our_tree` and `their_tree` and `ancestor_tree` respectively.
     ///
     /// `options` should be initialized with [`tree_merge_options()`](Self::tree_merge_options()).
@@ -137,6 +140,10 @@ impl Repository {
     ) -> Result<crate::merge::tree::Outcome<'_>> {
         let mut diff_cache = self.diff_resource_cache_for_tree_diff()?;
         let mut blob_merge = self.merge_resource_cache(Default::default())?;
+        let mut submodule = submodule::query(self);
+        let context = gix_merge::tree::Context {
+            submodule: Some(&mut submodule),
+        };
         let gix_merge::tree::Outcome {
             tree,
             index,
@@ -152,6 +159,7 @@ impl Repository {
             &mut Default::default(),
             &mut diff_cache,
             &mut blob_merge,
+            context,
             options.into(),
         )?;
 
@@ -178,6 +186,8 @@ impl Repository {
     /// `labels` are typically chosen to identify the refs or names for `our_commit` and `their_commit`, with the ancestor being set
     /// automatically as part of the merge-base handling.
     ///
+    /// Submodule histories are resolved as in [`Self::merge_trees()`], including while constructing virtual merge-bases.
+    ///
     /// `options` should be initialized with [`Repository::tree_merge_options().into()`](Self::tree_merge_options()).
     ///
     /// ### Performance
@@ -195,6 +205,10 @@ impl Repository {
         let mut blob_merge = self.merge_resource_cache(Default::default())?;
         let commit_graph = self.commit_graph_if_enabled()?;
         let mut graph = self.revision_graph(commit_graph.as_ref());
+        let mut submodule = submodule::query(self);
+        let context = gix_merge::tree::Context {
+            submodule: Some(&mut submodule),
+        };
         let gix_merge::commit::Outcome {
             tree_merge:
                 gix_merge::tree::Outcome {
@@ -215,6 +229,7 @@ impl Repository {
             &mut blob_merge,
             self,
             &mut |id| id.to_owned().attach(self).shorten_or_id().to_string(),
+            context,
             options.into(),
         )?;
 
@@ -280,6 +295,10 @@ impl Repository {
 
         let mut diff_cache = self.diff_resource_cache_for_tree_diff()?;
         let mut blob_merge = self.merge_resource_cache(Default::default())?;
+        let mut submodule = submodule::query(self);
+        let context = gix_merge::tree::Context {
+            submodule: Some(&mut submodule),
+        };
 
         let gix_merge::commit::virtual_merge_base::Outcome {
             virtual_merge_bases,
@@ -294,6 +313,7 @@ impl Repository {
             &mut blob_merge,
             self,
             &mut |id| id.to_owned().attach(self).shorten_or_id().to_string(),
+            context,
             options.into(),
         )?;
 
@@ -302,5 +322,74 @@ impl Repository {
             commit_id: commit_id.attach(self),
             tree_id: tree_id.attach(self),
         })
+    }
+}
+
+mod submodule {
+    use std::collections::HashMap;
+
+    use crate::{
+        Repository, Result,
+        bstr::{BStr, BString, ByteSlice},
+    };
+
+    pub(super) fn query(
+        repo: &Repository,
+    ) -> impl FnMut(&BStr, gix_merge::submodule::Query<'_>) -> Result<Option<bool>> + '_ {
+        let mut repositories = HashMap::<BString, Option<Repository>>::new();
+        move |path, query| {
+            if !repositories.contains_key(path) {
+                repositories.insert(path.to_owned(), open(repo, path)?);
+            }
+            let Some(repo) = repositories.get(path).and_then(Option::as_ref) else {
+                return Ok(None);
+            };
+            Ok(Some(match query {
+                gix_merge::submodule::Query::CommitsAvailable(commit_ids) => {
+                    for commit_id in commit_ids {
+                        let Some(object) = repo
+                            .try_find_object(commit_id.to_owned())?
+                            .filter(|object| object.kind.is_commit())
+                        else {
+                            return Ok(Some(false));
+                        };
+                        object.try_into_commit()?.decode()?;
+                    }
+                    true
+                }
+                gix_merge::submodule::Query::IsAncestor { ancestor, descendant } => {
+                    let cache = repo.commit_graph_if_enabled()?;
+                    let mut graph = gix_revwalk::Graph::new(
+                        crate::revision::walk::Objects {
+                            repo,
+                            shallow: repo.shallow_commits()?,
+                        },
+                        cache.as_ref(),
+                    );
+                    gix_revision::merge_base::is_ancestor(ancestor.to_owned(), descendant.to_owned(), &mut graph)?
+                }
+            }))
+        }
+    }
+
+    fn open(repo: &Repository, path: &BStr) -> Result<Option<Repository>> {
+        // Git tries the checkout first, including unregistered or renamed submodules.
+        if let Some(worktree_gitdir) = crate::submodule::worktree_gitdir(repo, path)?
+            && let Some(git_dir) = crate::submodule::git_dir_from_worktree_gitdir(&worktree_gitdir, true)?
+            && let Some(subrepo) = crate::submodule::open(repo, &git_dir, path)?
+        {
+            return Ok(Some(subrepo));
+        }
+        if let Some(submodules) = repo.submodules()? {
+            for submodule in submodules {
+                if submodule
+                    .try_path()?
+                    .is_some_and(|configured_path| configured_path.as_bstr() == path)
+                {
+                    return submodule.open();
+                }
+            }
+        }
+        Ok(None)
     }
 }

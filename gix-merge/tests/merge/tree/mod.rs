@@ -69,6 +69,7 @@ fn directory_relocation_colliding_with_modified_file() -> TestResult {
                 &mut diff_state,
                 &mut diff_resource_cache,
                 &mut blob_merge,
+                gix_merge::tree::Context::default(),
                 basic_merge_options().tree_merge,
             )?;
             assert_no_unknown_conflicts(&outcome, "directory relocation colliding with a modified file");
@@ -216,6 +217,7 @@ fn directory_rename_destination_already_consumed() -> TestResult {
             &mut diff_state,
             &mut diff_resource_cache,
             &mut blob_merge,
+            gix_merge::tree::Context::default(),
             basic_merge_options().tree_merge,
         )?;
         assert_no_unknown_conflicts(&outcome, "directory and file renames sharing a destination");
@@ -283,6 +285,7 @@ fn rename_add_after_destination_was_consumed() -> TestResult {
             &mut diff_state,
             &mut diff_resource_cache,
             &mut blob_merge,
+            gix_merge::tree::Context::default(),
             options,
         )?;
         assert_no_unknown_conflicts(&outcome, "rename/add after its destination was consumed");
@@ -402,6 +405,7 @@ fn run_baseline() -> TestResult {
                 &mut blob_merge,
                 &odb,
                 &mut |id| id.to_hex_with_len(7).to_string(),
+                gix_merge::tree::Context::default(),
                 options.clone(),
             )?
             .tree_merge;
@@ -544,6 +548,7 @@ fn run_baseline() -> TestResult {
                     &mut blob_merge,
                     &odb,
                     &mut |id| id.to_hex_with_len(7).to_string(),
+                    gix_merge::tree::Context::default(),
                     options.clone(),
                 )?
                 .tree_merge;
@@ -652,6 +657,7 @@ fn directory_rename_controls() -> TestResult {
                 &mut blob_merge,
                 &case.odb,
                 &mut |commit_id| commit_id.to_hex_with_len(7).to_string(),
+                gix_merge::tree::Context::default(),
                 options,
             )
         };
@@ -738,6 +744,7 @@ fn directory_renames_are_disabled_in_virtual_merge_bases() -> TestResult {
                 &mut blob_merge,
                 &case.odb,
                 &mut |commit_id| commit_id.to_hex_with_len(7).to_string(),
+                gix_merge::tree::Context::default(),
                 options,
             )?;
             assert_eq!(
@@ -778,6 +785,7 @@ fn relocated_rename_conflicts_and_forced_content() -> TestResult {
                 &mut blob_merge,
                 &case.odb,
                 &mut |commit_id| commit_id.to_hex_with_len(7).to_string(),
+                gix_merge::tree::Context::default(),
                 options,
             )
         };
@@ -873,6 +881,7 @@ fn unrelated_commits_require_explicit_permission() -> TestResult {
             &mut blob_merge,
             &objects,
             &mut |id| id.to_hex_with_len(7).to_string(),
+            gix_merge::tree::Context::default(),
             Options {
                 allow_missing_merge_base,
                 ..basic_merge_options()
@@ -996,4 +1005,5 @@ mod rename_order;
 mod rename_parent_namespace;
 mod renormalized_delete;
 mod structural_differential;
+mod submodule_history;
 mod synthetic_trees;

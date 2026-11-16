@@ -80,6 +80,7 @@ impl Repo {
             &mut gix_diff::tree::State::default(),
             &mut new_diff_resource_cache(self.root.path()),
             &mut new_blob_merge_platform(self.root.path(), None),
+            gix_merge::tree::Context::default(),
             options,
         )?)
     }
@@ -875,6 +876,7 @@ fn fail_on_conflict_stops_before_merging_later_blobs() -> TestResult {
                     &mut gix_diff::tree::State::default(),
                     &mut new_diff_resource_cache(repo.root.path()),
                     &mut new_blob_merge_platform(repo.root.path(), None),
+                    gix_merge::tree::Context::default(),
                     options,
                 )?;
                 assert_eq!(

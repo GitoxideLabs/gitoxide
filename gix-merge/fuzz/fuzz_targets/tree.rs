@@ -286,6 +286,7 @@ fn fuzz(data: &[u8]) {
             &mut diff_state,
             &mut diff_resource_cache,
             &mut blob_merge,
+            gix_merge::tree::Context::default(),
             options.clone(),
         );
         let mut outcome = match outcome {

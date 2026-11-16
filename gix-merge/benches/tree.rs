@@ -98,6 +98,7 @@ fn merge<'objects>(
         diff_state,
         diff_resource_cache,
         blob_merge,
+        gix_merge::tree::Context::default(),
         options,
     )
     .expect("in-memory tree merge succeeds")
@@ -789,6 +790,7 @@ mod linux {
             diff_state,
             diff_resource_cache,
             blob_merge,
+            gix_merge::tree::Context::default(),
             options,
         )
         .expect("the synthetic tree merge succeeds")

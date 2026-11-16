@@ -101,9 +101,17 @@ impl Submodule<'_> {
     }
     /// Return the path at which the submodule can be found, relative to the repository.
     ///
+    /// Use [`try_path()`](Self::try_path()) if the path field is optional.
     /// For details, see [gix_submodule::File::path()].
     pub fn path(&self) -> Result<BString> {
         self.state.modules.path(self.name())
+    }
+
+    /// Return the submodule's path relative to the repository, or `None` if its path field is missing.
+    ///
+    /// A present but empty or invalid path remains an error. For details, see [gix_submodule::File::try_path()].
+    pub fn try_path(&self) -> Result<Option<BString>> {
+        self.state.modules.try_path(self.name())
     }
 
     /// Return the raw configured URL of the submodule, parsed as a Git URL.

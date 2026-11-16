@@ -29,6 +29,7 @@ use crate::tree::{Conflict, ConflictMapping, IndexPlan, Options, Outcome, Resolu
 /// `diff_state` and `diff_resource_cache` provide reusable scratch space and rename-similarity
 /// resources. `blob_merge` must not fall back to worktree data: all inputs come from the
 /// supplied trees and object database. The returned editor remains unwritten for the caller.
+/// `context` supplies optional submodule history queries without requiring repository discovery here.
 ///
 /// Like Git's `merge-ort`, this resolves normalized three-input paths from children to parents.
 /// Rename identities come from `gix-diff`, with destination ordering derived from these
@@ -50,6 +51,7 @@ pub fn tree<'objects>(
     diff_state: &mut gix_diff::tree::State,
     diff_resource_cache: &mut gix_diff::blob::Platform,
     blob_merge: &mut crate::blob::Platform,
+    mut context: crate::tree::Context<'_>,
     options: Options,
 ) -> Result<Outcome<'objects>> {
     let _span = gix_trace::coarse!("gix_merge::tree", ?base_tree, ?our_tree, ?their_tree, ?labels);
@@ -125,6 +127,7 @@ pub fn tree<'objects>(
         blob_merge,
         &mut diff_state.buf1,
         &mut write_blob_to_odb,
+        &mut context,
         &options,
         policy,
     )?;
@@ -154,6 +157,7 @@ pub fn tree<'objects>(
                         stages[0].as_ref().map(|stage| (stage.entry.id, stage.entry.mode)),
                     ),
                     (0, ConflictMapping::Original, ConflictMapping::Original),
+                    &mut context,
                     &options,
                     policy,
                 )

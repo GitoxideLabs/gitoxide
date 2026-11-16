@@ -68,6 +68,7 @@ fn recursive_bases_match_git_with_and_without_commit_graph() -> TestResult {
                     &mut new_blob_merge_platform(&root, 0),
                     &objects,
                     &mut |commit_id| commit_id.to_hex_with_len(7).to_string(),
+                    gix_merge::tree::Context::default(),
                     options,
                 )?;
                 assert_eq!(

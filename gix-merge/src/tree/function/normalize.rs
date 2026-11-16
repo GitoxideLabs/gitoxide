@@ -84,12 +84,13 @@ struct Forced {
     merged: Option<(BString, Stage)>,
 }
 
-struct Context<'a, 'labels, O, W> {
+struct Context<'a, 'labels, 'ctx, O, W> {
     labels: Labels<'labels>,
     objects: &'a O,
     blob_merge: &'a mut blob::Platform,
     buffer: &'a mut Vec<u8>,
     write_blob: &'a mut W,
+    external: &'a mut crate::tree::Context<'ctx>,
     options: &'a Options,
     policy: ResolutionPolicy,
 }
@@ -104,6 +105,7 @@ pub(super) fn run(
     blob_merge: &mut blob::Platform,
     buffer: &mut Vec<u8>,
     write_blob: &mut impl FnMut(&[u8]) -> Result<ObjectId>,
+    external: &mut crate::tree::Context<'_>,
     options: &Options,
     policy: ResolutionPolicy,
 ) -> Result<Outcome> {
@@ -155,6 +157,7 @@ pub(super) fn run(
         blob_merge,
         buffer,
         write_blob,
+        external,
         options,
         policy,
     };
@@ -274,7 +277,7 @@ pub(super) fn run(
     Ok(outcome)
 }
 
-impl<O: gix_object::FindObjectOrHeader, W: FnMut(&[u8]) -> Result<ObjectId>> Context<'_, '_, O, W> {
+impl<O: gix_object::FindObjectOrHeader, W: FnMut(&[u8]) -> Result<ObjectId>> Context<'_, '_, '_, O, W> {
     fn merge(
         &mut self,
         base: Option<&Stage>,
@@ -295,6 +298,7 @@ impl<O: gix_object::FindObjectOrHeader, W: FnMut(&[u8]) -> Result<ObjectId>> Con
                 base.map(|base| (base.entry.id, base.entry.mode)),
             ),
             (extra_markers, ConflictMapping::Original, ConflictMapping::Original),
+            self.external,
             self.options,
             self.policy,
         )

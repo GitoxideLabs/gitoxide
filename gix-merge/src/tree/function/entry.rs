@@ -157,6 +157,7 @@ pub(super) fn merge(
     theirs @ (_, their_id, their_mode): (&BString, ObjectId, EntryMode),
     (base_location, base): (&BString, Option<(ObjectId, EntryMode)>),
     (extra_markers, side, outer_side): (u8, ConflictMapping, ConflictMapping),
+    context: &mut crate::tree::Context<'_>,
     options: &Options,
     policy: ResolutionPolicy,
 ) -> Result<Option<Outcome>> {
@@ -177,6 +178,35 @@ pub(super) fn merge(
         merge_modes(our_mode, base_mode, None).is_some() && merge_modes(their_mode, base_mode, None).is_some();
     let trivial = our_id == their_id || our_id == base_id || their_id == base_id;
     if mode.is_commit() && !trivial {
+        let (current_commit_id, other_commit_id) = if global_side.is_swapped() {
+            (their_id, our_id)
+        } else {
+            (our_id, their_id)
+        };
+        if base.is_some_and(|(_, mode)| mode.is_commit())
+            && let Some(commit_id) = crate::submodule::merge(
+                base_location.as_bstr(),
+                &base_id,
+                &current_commit_id,
+                &other_commit_id,
+                context,
+            )?
+        {
+            return Ok(Some(Outcome {
+                entry: super::path::Entry { mode, id: commit_id },
+                merged_blob: None,
+                mode_conflict: false,
+                force: None,
+                pick: if commit_id == current_commit_id {
+                    Pick::Ours
+                } else {
+                    Pick::Theirs
+                },
+                trivial: true,
+                restored_ancestor: false,
+                submodule_conflict: None,
+            }));
+        }
         return Ok(Some(Outcome {
             entry: super::path::Entry {
                 mode,

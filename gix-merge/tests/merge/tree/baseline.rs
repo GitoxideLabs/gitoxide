@@ -56,6 +56,18 @@ pub enum ConflictKind {
     Binary,
     /// The submodule repository is unavailable for checking conflicting gitlink commits.
     SubmoduleNotInitialized,
+    /// One gitlink commit contains the other in its submodule history.
+    SubmoduleFastForwarding,
+    /// Both gitlink commits follow the base but are incomparable.
+    SubmoduleConflict,
+    /// Existing submodule merges suggest a manual conflict resolution.
+    SubmodulePossibleResolution,
+    /// One of the named gitlink commits is missing from the submodule.
+    SubmoduleHistoryUnavailable,
+    /// A selected gitlink commit rewinds behind its recorded base.
+    SubmoduleMayHaveRewinds,
+    /// The two gitlinks have no common recorded submodule base.
+    SubmoduleLacksMergeBase,
 }
 
 /// More loosely structured information about the `Conflict`.
@@ -309,6 +321,12 @@ fn parse_info<'a>(mut lines: impl Iterator<Item = &'a str>) -> Option<ConflictIn
         "CONFLICT (rename/delete)" => ConflictKind::RenameAddDelete,
         "CONFLICT (binary)" => ConflictKind::Binary,
         "CONFLICT (submodule not initialized)" => ConflictKind::SubmoduleNotInitialized,
+        "Fast forwarding submodule" => ConflictKind::SubmoduleFastForwarding,
+        "CONFLICT (submodule)" => ConflictKind::SubmoduleConflict,
+        "CONFLICT (submodule with possible resolution)" => ConflictKind::SubmodulePossibleResolution,
+        "CONFLICT (submodule history not available)" => ConflictKind::SubmoduleHistoryUnavailable,
+        "CONFLICT (submodule may have rewinds)" => ConflictKind::SubmoduleMayHaveRewinds,
+        "CONFLICT (submodule lacks merge base)" => ConflictKind::SubmoduleLacksMergeBase,
         conflict_type => panic!("Unkonwn conflict type: {conflict_type}"),
     };
     let message = lines.next()?.to_owned();

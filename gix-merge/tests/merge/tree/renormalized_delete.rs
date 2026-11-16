@@ -34,6 +34,7 @@ fn normalized_modify_delete_matches_git() -> TestResult {
             &mut blob_merge,
             &case.odb,
             &mut |commit_id| commit_id.to_hex_with_len(7).to_string(),
+            gix_merge::tree::Context::default(),
             basic_merge_options(),
         )?
         .tree_merge;
