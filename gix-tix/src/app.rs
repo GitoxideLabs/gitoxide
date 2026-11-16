@@ -4583,7 +4583,8 @@ pub(crate) struct Graph {
     visual_counts: Vec<usize>,
     parent_offsets: Vec<usize>,
     parents: Vec<usize>,
-    children: Vec<Vec<usize>>,
+    child_offsets: Vec<usize>,
+    children: Vec<usize>,
 }
 
 impl Graph {
@@ -4591,8 +4592,8 @@ impl Graph {
         let positions: HashMap<_, _> = rows.iter().enumerate().map(|(index, row)| (row.id, index)).collect();
         let mut parent_offsets = Vec::with_capacity(rows.len() + 1);
         let mut parents = Vec::new();
-        let mut children = vec![Vec::new(); rows.len()];
-        for (child, row) in rows.iter().enumerate() {
+        let mut child_offsets = vec![0usize; rows.len() + 1];
+        for row in rows {
             parent_offsets.push(parents.len());
             for parent in row
                 .parent_ids
@@ -4600,11 +4601,24 @@ impl Graph {
                 .filter_map(|parent| positions.get(parent).copied())
             {
                 parents.push(parent);
-                children[parent].push(child);
+                child_offsets[parent + 1] += 1;
             }
         }
         parent_offsets.push(parents.len());
         drop(positions);
+        for index in 1..child_offsets.len() {
+            child_offsets[index] += child_offsets[index - 1];
+        }
+        let mut children = vec![0; parents.len()];
+        for child in 0..rows.len() {
+            for &parent in &parents[parent_offsets[child]..parent_offsets[child + 1]] {
+                children[child_offsets[parent]] = child;
+                child_offsets[parent] += 1;
+            }
+        }
+        // Insertion advances each start to its end; shift those ends back to starts.
+        child_offsets.copy_within(..rows.len(), 1);
+        child_offsets[0] = 0;
         let mut route_priorities = vec![0; parents.len()];
         let mut route_owners = vec![usize::MAX; rows.len()];
         let mut routes = Vec::new();
@@ -4621,6 +4635,7 @@ impl Graph {
             visual_counts: visual_counts(&parent_offsets, &parents),
             parent_offsets,
             parents,
+            child_offsets,
             children,
         };
         for (index, row) in rows.iter().enumerate() {
@@ -4678,7 +4693,10 @@ impl Graph {
                 .parent_offsets
                 .get(index..=index.saturating_add(1))
                 .map_or(&[], |offsets| &self.parents[offsets[0]..offsets[1]]),
-            TopologicalDirection::Child => self.children.get(index).map_or(&[], Vec::as_slice),
+            TopologicalDirection::Child => self
+                .child_offsets
+                .get(index..=index.saturating_add(1))
+                .map_or(&[], |offsets| &self.children[offsets[0]..offsets[1]]),
         }
     }
 
@@ -5802,6 +5820,48 @@ mod tests {
 
     fn show_tree_changes(app: &mut App) {
         app.set_changes_layout(ChangesLayout::SideBySide, true, false);
+    }
+
+    #[test]
+    fn lane_neighbors_preserve_fanout_merges_and_empty_rows() -> gix::error::TestResult {
+        let mut app = App::new(10);
+        let rows = app.store_commits(
+            vec![
+                row_with_parents(6, &[3, 4]),
+                row_with_parents(5, &[3]),
+                row_with_parents(4, &[2, 1]),
+                row_with_parents(3, &[2]),
+                row(2),
+                row(1),
+                row(7),
+            ]
+            .into(),
+        );
+        let graph = Graph::new(&rows);
+        for (index, expected) in [&[][..], &[][..], &[0][..], &[0, 1][..], &[2, 3][..], &[2][..], &[][..]]
+            .into_iter()
+            .enumerate()
+        {
+            assert_eq!(
+                graph.neighbors(index, TopologicalDirection::Child),
+                expected,
+                "child neighbors retain their displayed order for row {index}"
+            );
+        }
+        assert_eq!(graph.neighbors(0, TopologicalDirection::Parent), &[3, 2]);
+        for graph in [&graph, &Graph::new(&[])] {
+            for direction in [TopologicalDirection::Parent, TopologicalDirection::Child] {
+                assert!(
+                    graph.neighbors(usize::MAX, direction).is_empty(),
+                    "unknown rows have no neighbors"
+                );
+                assert!(
+                    graph.neighbors(rows.len(), direction).is_empty(),
+                    "out-of-range rows have no neighbors"
+                );
+            }
+        }
+        Ok(())
     }
 
     #[test]
