@@ -39,6 +39,62 @@ async fn request_with_timeout() {
 }
 
 #[wasm_bindgen_test]
+fn bearer_auth_redacts_token_in_debug() {
+    let token = "sensitive-bearer-token";
+    let builder = gix_reqwest::Client::new()
+        .get("https://example.test/")
+        .bearer_auth(token);
+    let cloned_builder = builder.try_clone().unwrap();
+
+    assert!(!format!("{builder:?}").contains(token));
+    assert!(!format!("{cloned_builder:?}").contains(token));
+
+    let request = builder.build().unwrap();
+    let cloned_request = request.try_clone().unwrap();
+    for request in [request, cloned_request, cloned_builder.build().unwrap()] {
+        assert_eq!(
+            request.headers()[gix_reqwest::header::AUTHORIZATION],
+            format!("Bearer {token}")
+        );
+        assert!(request.headers()[gix_reqwest::header::AUTHORIZATION].is_sensitive());
+        assert!(!format!("{request:?}").contains(token));
+    }
+}
+
+#[wasm_bindgen_test]
+fn bearer_auth_invalid_tokens_return_builder_error() {
+    for token in ["token\rvalue", "token\nvalue", "token\0value"] {
+        let error = gix_reqwest::Client::new()
+            .get("https://example.test/")
+            .bearer_auth(token)
+            .build()
+            .unwrap_err();
+
+        assert!(error.is_builder());
+    }
+}
+
+#[wasm_bindgen_test]
+fn header_preserves_sensitive_values() {
+    let secret = "existing-secret";
+    let mut value = gix_reqwest::header::HeaderValue::from_static(secret);
+    value.set_sensitive(true);
+    let builder = gix_reqwest::Client::new()
+        .get("https://example.test/")
+        .header("x-sensitive", value)
+        .header("x-public", "visible");
+
+    assert!(!format!("{builder:?}").contains(secret));
+    assert!(format!("{builder:?}").contains("visible"));
+
+    let request = builder.build().unwrap();
+    assert_eq!(request.headers()["x-sensitive"], secret);
+    assert!(request.headers()["x-sensitive"].is_sensitive());
+    assert!(!request.headers()["x-public"].is_sensitive());
+    assert!(!format!("{request:?}").contains(secret));
+}
+
+#[wasm_bindgen_test]
 #[cfg(feature = "json")]
 fn preserve_content_type_if_set_manually() {
     use gix_reqwest::Client;

@@ -271,7 +271,7 @@ impl RequestBuilder {
         T: fmt::Display,
     {
         let header_value = format!("Bearer {token}");
-        self.header(crate::header::AUTHORIZATION, header_value)
+        self.header_sensitive(crate::header::AUTHORIZATION, header_value, true)
     }
 
     /// Set the request body.
@@ -301,7 +301,17 @@ impl RequestBuilder {
     }
 
     /// Add a `Header` to this Request.
-    pub fn header<K, V>(mut self, key: K, value: V) -> RequestBuilder
+    pub fn header<K, V>(self, key: K, value: V) -> RequestBuilder
+    where
+        HeaderName: TryFrom<K>,
+        <HeaderName as TryFrom<K>>::Error: Into<http::Error>,
+        HeaderValue: TryFrom<V>,
+        <HeaderValue as TryFrom<V>>::Error: Into<http::Error>,
+    {
+        self.header_sensitive(key, value, false)
+    }
+
+    fn header_sensitive<K, V>(mut self, key: K, value: V, sensitive: bool) -> RequestBuilder
     where
         HeaderName: TryFrom<K>,
         <HeaderName as TryFrom<K>>::Error: Into<http::Error>,
@@ -312,7 +322,10 @@ impl RequestBuilder {
         if let Ok(ref mut req) = self.request {
             match <HeaderName as TryFrom<K>>::try_from(key) {
                 Ok(key) => match <HeaderValue as TryFrom<V>>::try_from(value) {
-                    Ok(value) => {
+                    Ok(mut value) => {
+                        if sensitive {
+                            value.set_sensitive(true);
+                        }
                         req.headers_mut().append(key, value);
                     }
                     Err(e) => error = Some(crate::error::builder(e.into())),
