@@ -18,6 +18,10 @@ upstream merges reviewable. The manifest lists explicit existing Clippy style
 exceptions and Gitoxide QA configurations. Apply the root development rules
 to new local code; avoid unrelated cleanup of copied upstream code.
 
+The root `.github/workflows/gix-reqwest.yml` retains upstream's test coverage,
+including live TLS, HTTP/3, and browser WASM tests. Keep it in sync with changes
+to upstream tests and feature configurations.
+
 The package and Rust crate names are `gix-reqwest` and `gix_reqwest`. These
 types are distinct from upstream `reqwest` types. Keep docs, examples, and
 `gix_transport::gix_reqwest` consistent. Feature names and `reqwest_unstable`

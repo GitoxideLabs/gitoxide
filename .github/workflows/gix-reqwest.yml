@@ -1,0 +1,328 @@
+# Retain reqwest's upstream CI coverage outside Gitoxide's deterministic QA cases.
+name: gix-reqwest
+
+on:
+  pull_request:
+    paths:
+      - "gix-reqwest/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".cargo/**"
+      - ".github/workflows/gix-reqwest.yml"
+  push:
+    branches: [main, "run-ci/**", "**/run-ci/**"]
+    paths:
+      - "gix-reqwest/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".cargo/**"
+      - ".github/workflows/gix-reqwest.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: gix-reqwest-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  RUST_BACKTRACE: "1"
+  CARGO_INCREMENTAL: "0"
+  CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_DEV_STRIP: debuginfo
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  ci-pass:
+    name: gix-reqwest tests pass
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [style, test, features, unstable, nightly, msrv, android, wasm, docs]
+    steps:
+      - name: Require every upstream check to pass
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: jq -e 'all(.[]; .result == "success")' <<< "$RESULTS"
+
+  style:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: rustup update stable && rustup component add rustfmt --toolchain stable
+      - name: Check every imported Rust file
+        # Cargo can omit modules behind inactive cfgs (rust-lang/cargo#7732).
+        run: |
+          mapfile -t rust_files < <(rg --files gix-reqwest -g '*.rs')
+          cargo +stable fmt -p gix-reqwest -- --check "${rust_files[@]}"
+
+  test:
+    name: gix-reqwest / ${{ matrix.name }}
+    needs: style
+    runs-on: ${{ matrix.os || 'ubuntu-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux / stable
+          - name: linux / stable-aarch64-gnu
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - name: linux / beta
+            rust: beta
+          - name: macOS / stable
+            os: macos-latest
+          - name: windows / stable-x86_64-msvc
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            features: --features blocking,gzip,brotli,zstd,deflate,query,form,json,multipart,stream
+            aws_lc_sys_prebuilt_nasm: "1"
+          - name: windows / stable-i686-msvc
+            os: windows-latest
+            target: i686-pc-windows-msvc
+            features: --features blocking,gzip,brotli,zstd,deflate,query,form,json,multipart,stream
+            aws_lc_sys_prebuilt_nasm: "1"
+          - name: windows / stable-aarch64-msvc
+            os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            features: --features blocking,gzip,brotli,zstd,deflate,query,form,json,multipart,stream
+            aws_lc_sys_prebuilt_nasm: "1"
+          - name: windows / stable-x86_64-gnu
+            os: windows-latest
+            rust: stable-x86_64-pc-windows-gnu
+            target: x86_64-pc-windows-gnu
+            features: --features blocking,gzip,brotli,zstd,deflate,query,form,json,multipart,stream
+            mingw_packages: mingw-w64-x86_64-gcc mingw-w64-x86_64-clang mingw-w64-x86_64-nasm
+            mingw_path: C:\msys64\mingw64\bin
+            aws_lc_sys_prebuilt_nasm: "1"
+          - name: windows / stable-i686-gnu
+            os: windows-latest
+            # Rust 1.100 retired the i686 GNU host; cross-compile with the supported MSVC host.
+            target: i686-pc-windows-gnu
+            features: --no-default-features --features blocking,gzip,brotli,zstd,deflate,query,form,json,multipart,stream,native-tls,http2
+            mingw_packages: mingw-w64-i686-gcc
+            mingw_path: C:\msys64\mingw32\bin
+          - name: default-tls disabled
+            features: --no-default-features
+          - name: rustls
+            features: --no-default-features --features rustls
+          - name: rustls-no-provider
+            features: --no-default-features --features rustls-no-provider
+          # Upstream's native-tls and default-tls/native-tls rows use identical arguments.
+          - name: default-tls and native-tls
+            features: --features native-tls
+          - name: rustls and rustls-no-provider
+            features: --features rustls,rustls-no-provider
+          - name: cookies
+            features: --features cookies
+          - name: blocking
+            features: --features blocking
+          - name: blocking only
+            features: --no-default-features --features blocking
+          - name: gzip
+            features: --features gzip,stream
+          - name: brotli
+            features: --features brotli,stream
+          - name: zstd
+            features: --features zstd,stream
+          - name: deflate
+            features: --features deflate,stream
+          - name: query
+            features: --features query
+          - name: form
+            features: --features form
+          - name: json
+            features: --features json
+          - name: multipart
+            features: --features multipart
+          - name: stream
+            features: --features stream
+          - name: socks/default-tls
+            features: --features socks
+          - name: socks/native-tls
+            features: --features socks,native-tls
+          - name: hickory-dns
+            features: --features hickory-dns
+    env:
+      RUST_TOOLCHAIN: ${{ matrix.rust || 'stable' }}
+      RUST_TARGET: ${{ matrix.target }}
+      TEST_FEATURES: ${{ matrix.features }}
+      AWS_LC_SYS_PREBUILT_NASM: ${{ matrix.aws_lc_sys_prebuilt_nasm || '0' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --force-non-host
+          rustup default "$RUST_TOOLCHAIN" --force-non-host
+          if [[ -n "$RUST_TARGET" ]]; then
+            rustup target add "$RUST_TARGET"
+          fi
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
+        if: matrix.mingw_packages != ''
+        with:
+          release: false
+          update: true
+          install: ${{ matrix.mingw_packages }}
+      - name: Configure GNU build tools
+        if: matrix.mingw_path != ''
+        env:
+          MINGW_PATH: ${{ matrix.mingw_path }}
+        run: |
+          printf '%s\n' "$MINGW_PATH" >> "$GITHUB_PATH"
+          printf 'LIBCLANG_PATH=%s\n' "$MINGW_PATH" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: gix-reqwest-${{ matrix.rust || 'stable' }}-${{ matrix.target || matrix.os || 'linux' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          tool: cargo-nextest@0.9.122
+      - name: Run the complete test and doctest suites
+        run: |
+          read -r -a test_args <<< "$TEST_FEATURES"
+          if [[ -n "$RUST_TARGET" ]]; then
+            test_args+=(--target "$RUST_TARGET")
+          fi
+          cargo nextest run --locked -p gix-reqwest --no-fail-fast "${test_args[@]}"
+          cargo test --locked -p gix-reqwest --doc "${test_args[@]}"
+
+  features:
+    needs: style
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: rustup update stable && rustup default stable
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          tool: cargo-hack@0.6.46
+      - name: Check feature combinations through depth two
+        env:
+          RUSTFLAGS: -D dead_code -D unused_imports
+        run: cargo hack -p gix-reqwest --no-dev-deps check --feature-powerset --depth 2 --skip http3,__tls,__rustls,__rustls-aws-lc-rs,native-tls-vendored
+
+  unstable:
+    needs: style
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: rustup update stable && rustup default stable
+      - name: Run HTTP/3 tests and doctests
+        env:
+          RUSTFLAGS: --cfg reqwest_unstable
+          RUSTDOCFLAGS: --cfg reqwest_unstable
+        run: cargo test --locked -p gix-reqwest --features http3,stream
+
+  docs:
+    needs: style
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: rustup update stable && rustup default stable
+      - name: Check all-feature public and private documentation
+        env:
+          RUSTDOCFLAGS: --cfg reqwest_unstable -D warnings
+        run: cargo doc --locked -p gix-reqwest --no-deps --document-private-items --all-features
+
+  nightly:
+    needs: style
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: rustup toolchain install nightly --profile minimal
+      - name: Check minimum dependency versions outside the workspace
+        env:
+          RUSTFLAGS: --cfg reqwest_unstable
+        run: |
+          task_source=$(mktemp -d "$RUNNER_TEMP/gix-reqwest-minimum.XXXXXX")
+          cp -R gix-reqwest/. "$task_source/"
+          cd "$task_source"
+          cargo +nightly update -Z minimal-versions
+          # Upstream's hickory-proto dependency needs this prefix-trie minimum.
+          cargo +nightly update -p prefix-trie --precise 0.8.4
+          cargo +nightly check --locked
+          cargo +nightly check --locked --all-features
+
+  msrv:
+    needs: style
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: rustup update stable
+      - name: Check the crate's declared Rust floor outside the workspace
+        env:
+          CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
+        run: |
+          task_source=$(mktemp -d "$RUNNER_TEMP/gix-reqwest-msrv.XXXXXX")
+          cp -R gix-reqwest/. "$task_source/"
+          cd "$task_source"
+          cargo +stable update
+          rust_version=$(cargo +stable metadata --no-deps --format-version 1 | jq -r '.packages[0].rust_version')
+          rustup toolchain install "$rust_version" --profile minimal
+          cargo +"$rust_version" check --locked
+
+  android:
+    needs: style
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: rustup update stable && rustup default stable && rustup target add aarch64-linux-android
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          tool: cargo-ndk@4.1.2
+      - name: Build for Android
+        run: cargo ndk --target aarch64-linux-android build --locked -p gix-reqwest
+
+  wasm:
+    needs: style
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [firefox, chrome]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: rustup update stable && rustup default stable && rustup target add wasm32-unknown-unknown
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          tool: wasm-pack@0.15.1
+      - name: Check default and cookies configurations
+        run: |
+          cargo check --locked -p gix-reqwest --target wasm32-unknown-unknown
+          cargo check --locked -p gix-reqwest --target wasm32-unknown-unknown --features cookies
+      - name: Run browser unit and integration tests
+        env:
+          TEST_BROWSER: ${{ matrix.browser }}
+        # wasm-pack forwards options after the crate path directly to Cargo.
+        run: |
+          wasm-pack test --headless "--$TEST_BROWSER" gix-reqwest --locked --lib --test wasm_simple
+          wasm-pack test --headless "--$TEST_BROWSER" gix-reqwest --locked --lib --test wasm_simple --no-default-features --features cookies,query,form,json,multipart,stream

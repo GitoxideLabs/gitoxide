@@ -333,13 +333,8 @@ impl Http3 {
 
 #[cfg(feature = "http3")]
 fn install_default_crypto_provider() -> bool {
-    #[cfg(not(any(feature = "__rustls-ring", feature = "__rustls-aws-lc-rs")))]
+    #[cfg(not(feature = "__rustls-aws-lc-rs"))]
     panic!("No provider set");
-
-    #[cfg(all(feature = "__rustls-ring", not(feature = "__rustls-aws-lc-rs")))]
-    rustls::crypto::ring::default_provider()
-        .install_default()
-        .expect("failed to install the default Ring TLS provider");
 
     #[cfg(feature = "__rustls-aws-lc-rs")]
     rustls::crypto::aws_lc_rs::default_provider()

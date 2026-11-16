@@ -215,6 +215,7 @@ impl Part {
         }
     }
 
+    #[allow(deprecated)] // Keep older web-sys compatibility, as in the WASM fetch path.
     fn blob(&self, mime_type: Option<&Mime>) -> crate::Result<web_sys::Blob> {
         use web_sys::Blob;
         use web_sys::BlobPropertyBag;
@@ -324,6 +325,7 @@ impl PartMetadata {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
 
     use wasm_bindgen_test::*;
