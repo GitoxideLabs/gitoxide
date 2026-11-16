@@ -311,10 +311,18 @@ fn fuzz(data: &[u8]) {
             .to_index(TreatAsUnresolved::git(), &objects.db, Default::default())
             .expect("the merge plan can populate a complete index");
         let unresolved = outcome.has_unresolved_conflicts(TreatAsUnresolved::git());
+        let directory_diagnostic = outcome.conflicts.iter().any(|conflict| {
+            matches!(
+                conflict.resolution,
+                Err(gix_merge::tree::ResolutionFailure::DirectoryRenameSplit { .. }
+                    | gix_merge::tree::ResolutionFailure::DirectoryRenameBlocked { .. }
+                    | gix_merge::tree::ResolutionFailure::DirectoryRenameCollision { .. })
+            )
+        });
         assert_eq!(
-            outcome.index.has_unmerged_entries(TreatAsUnresolved::git()),
+            outcome.index.has_unmerged_entries(TreatAsUnresolved::git()) || directory_diagnostic,
             unresolved,
-            "unresolved conflicts must be represented by unmerged index entries"
+            "unresolved conflicts need unmerged stages or a directory diagnostic"
         );
         index
             .verify_entries()

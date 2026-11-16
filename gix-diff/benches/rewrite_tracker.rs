@@ -529,7 +529,7 @@ fn run_directory_diff(scenario: &DirectoryScenario, rewrites_enabled: bool) -> O
         actual, scenario.expected,
         "each callback kind occurs exactly as expected"
     );
-    outcome
+    outcome.map(|outcome| outcome.rewrites)
 }
 
 fn text_blob(idx: usize, with_edit: bool) -> String {

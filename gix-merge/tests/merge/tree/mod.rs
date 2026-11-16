@@ -6,7 +6,7 @@ use gix_merge::{
     commit::Options,
     tree::{TreatAsUnresolved, treat_as_unresolved},
 };
-use gix_object::Write;
+use gix_object::{FindExt, Write};
 use gix_worktree::stack::state::attributes;
 
 use crate::tree::baseline::Deviation;
@@ -32,47 +32,156 @@ fn assert_no_unknown_conflicts(outcome: &gix_merge::tree::Outcome<'_>, context: 
 #[test]
 fn directory_relocation_colliding_with_modified_file() -> TestResult {
     let root = gix_testtools::scripted_fixture_read_only("directory-relocation-collision.sh")?.join("repo");
-    let objects = gix_odb::at(root.join(".git/objects"), gix_testtools::object_hash())?;
-    let tree_ids = std::fs::read_to_string(root.join("trees"))?
+    let objects = gix_odb::memory::Proxy::new(
+        gix_odb::at(root.join(".git/objects"), gix_testtools::object_hash())?,
+        gix_testtools::object_hash(),
+    );
+    for layout in ["opposite", "same", "both", "different"] {
+        let tree_ids = std::fs::read_to_string(root.join(if layout == "opposite" {
+            "trees".to_owned()
+        } else {
+            format!("trees-{layout}")
+        }))?
         .lines()
         .map(|hex| gix_hash::ObjectId::from_hex(hex.as_bytes()))
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    let [base_tree_id, our_tree_id, their_tree_id] = tree_ids.as_slice() else {
-        panic!("the fixture records the base and both side trees");
-    };
-    for (current_tree_id, other_tree_id) in [(our_tree_id, their_tree_id), (their_tree_id, our_tree_id)] {
-        let mut diff_state = gix_diff::tree::State::default();
-        let mut diff_resource_cache = new_diff_resource_cache(&root);
-        let mut blob_merge = new_blob_merge_platform(&root, 100);
-        let outcome = gix_merge::tree(
-            base_tree_id,
-            current_tree_id,
-            other_tree_id,
-            Default::default(),
-            &objects,
-            |_buf| -> gix_error::Result<_> { unreachable!("this merge does not combine blob contents") },
-            &mut diff_state,
-            &mut diff_resource_cache,
-            &mut blob_merge,
-            basic_merge_options().tree_merge,
-        )?;
-        assert_no_unknown_conflicts(&outcome, "directory relocation colliding with a modified file");
-        for (path, content) in [
-            ("existing/anchor", "anchor"),
-            ("existing/block", "changed"),
-            ("existing/collision", "changed-collision"),
-            ("existing/fresh", "direct"),
-            ("old/block/fresh", "nested"),
-            ("old/collision", "new-collision"),
+        let [base_tree_id, our_tree_id, their_tree_id] = tree_ids.as_slice() else {
+            panic!("the fixture records the base and both side trees");
+        };
+        for (current_tree_id, other_tree_id, current, other) in [
+            (our_tree_id, their_tree_id, "ours", "theirs"),
+            (their_tree_id, our_tree_id, "theirs", "ours"),
         ] {
-            let entry = outcome
-                .tree
-                .get(path.split('/'))
-                .expect("all additions and the blocker survive");
+            let mut diff_state = gix_diff::tree::State::default();
+            let mut diff_resource_cache = new_diff_resource_cache(&root);
+            let mut blob_merge = new_blob_merge_platform(&root, 100);
+            let mut outcome = gix_merge::tree(
+                base_tree_id,
+                current_tree_id,
+                other_tree_id,
+                gix_merge::blob::builtin_driver::text::Labels {
+                    current: Some(current.into()),
+                    other: Some(other.into()),
+                    ancestor: None,
+                },
+                &objects,
+                |buf| objects.write_buf(gix_object::Kind::Blob, buf),
+                &mut diff_state,
+                &mut diff_resource_cache,
+                &mut blob_merge,
+                basic_merge_options().tree_merge,
+            )?;
+            assert_no_unknown_conflicts(&outcome, "directory relocation colliding with a modified file");
+            let prefix = if layout == "opposite" {
+                String::new()
+            } else {
+                format!("{layout}-")
+            };
+            let expected = baseline::parse_merge_info(std::fs::read_to_string(
+                root.join(format!("{prefix}{current}-{other}.merge-info")),
+            )?);
+            let actual_tree_id = outcome.tree.write(|tree| objects.write(tree))?;
+            let modified_side = if layout == "same" { "ours" } else { "theirs" };
+            let preserved_path = format!("existing/block~{modified_side}");
+            let modified_blob_id =
+                gix_object::compute_hash(gix_testtools::object_hash(), gix_object::Kind::Blob, b"changed")?;
+            let base_blob_id = gix_object::compute_hash(gix_testtools::object_hash(), gix_object::Kind::Blob, b"base")?;
+            let retained_blob_id = if layout == "different" {
+                let (our_content, their_content) = if current == "ours" {
+                    ("changed", "other-change")
+                } else {
+                    ("other-change", "changed")
+                };
+                objects.write_buf(
+                    gix_object::Kind::Blob,
+                    format!("<<<<<<< {current}\n{our_content}\n=======\n{their_content}\n>>>>>>> {other}\n").as_bytes(),
+                )?
+            } else {
+                modified_blob_id
+            };
+            let mut buffer = Vec::new();
+            let mut expected_tree = gix_object::tree::Editor::new(
+                objects.find_tree(&expected.merged_tree, &mut buffer)?.to_owned(),
+                &objects,
+                gix_testtools::object_hash(),
+            );
+            assert!(
+                expected_tree.get(preserved_path.split('/')).is_none(),
+                "Git never moves the parent aside to preserve both the file and incoming child"
+            );
+            // Git loses a resolved parent, or the incoming child if parent edits conflict.
+            // Preserve both as an ordinary file/directory conflict instead of reproducing the loss.
+            if layout == "different" {
+                assert!(
+                    expected_tree.get(["existing", "block", "fresh"]).is_none(),
+                    "Git loses the incoming child when the parent contents conflict"
+                );
+                expected_tree.remove(["existing", "block"])?;
+                expected_tree.upsert(
+                    ["existing", "block", "fresh"],
+                    gix_object::tree::EntryKind::Blob,
+                    gix_object::compute_hash(gix_testtools::object_hash(), gix_object::Kind::Blob, b"nested")?,
+                )?;
+            }
+            expected_tree.upsert(
+                preserved_path.split('/'),
+                gix_object::tree::EntryKind::Blob,
+                retained_blob_id,
+            )?;
+            let expected_tree_id = expected_tree.write(|tree| objects.write(tree))?;
             assert_eq!(
-                entry.oid,
-                gix_object::compute_hash(gix_testtools::object_hash(), gix_object::Kind::Blob, content.as_bytes())?,
-                "the merge preserves {path}, keeping the blocked addition at its original location"
+                actual_tree_id,
+                expected_tree_id,
+                "{layout} {current}-{other}: the tree differs from Git only to preserve both the parent and child\nactual: {}\nexpected: {}",
+                baseline::visualize_tree(&actual_tree_id, &objects, None),
+                baseline::visualize_tree(&expected_tree_id, &objects, None)
+            );
+            let mut expected_index = gix_index::State::from_tree(&expected_tree_id, &objects, Default::default())?;
+            if let Some(mut conflicts) = expected.conflicts {
+                for conflict in &mut conflicts {
+                    for entry in [&mut conflict.ancestor, &mut conflict.ours, &mut conflict.theirs]
+                        .into_iter()
+                        .flatten()
+                    {
+                        if entry.location == "existing/block" {
+                            entry.location = preserved_path.as_str().into();
+                        }
+                    }
+                }
+                baseline::apply_git_index_entries(&conflicts, &mut expected_index);
+            }
+            let modified = baseline::Entry {
+                location: preserved_path.as_str().into(),
+                id: modified_blob_id,
+                mode: gix_object::tree::EntryKind::Blob.into(),
+            };
+            let mut preserved = baseline::Conflict {
+                ancestor: (layout != "both").then(|| baseline::Entry {
+                    location: preserved_path.as_str().into(),
+                    id: base_blob_id,
+                    mode: gix_object::tree::EntryKind::Blob.into(),
+                }),
+                ..Default::default()
+            };
+            if current == modified_side {
+                preserved.ours = Some(modified);
+            } else {
+                preserved.theirs = Some(modified);
+            }
+            if layout != "different" {
+                baseline::apply_git_index_entries(&[preserved], &mut expected_index);
+            }
+            let actual_index = outcome
+                .index
+                .to_index(TreatAsUnresolved::git(), &objects, Default::default())?;
+            assert_eq!(
+                baseline::debug_entries(&actual_index),
+                baseline::debug_entries(&expected_index),
+                "Git's stages are preserved, with the modified parent represented as a file/directory conflict"
+            );
+            assert!(
+                outcome.has_unresolved_conflicts(TreatAsUnresolved::git()),
+                "both exact blockers and modified parent blockers require attention"
             );
         }
     }
@@ -308,8 +417,11 @@ fn run_baseline() -> TestResult {
                     "Git reports the tied directory destinations"
                 );
                 assert!(
-                    actual.conflicts.is_empty(),
-                    "tied destinations currently retain new paths without a directory-split diagnostic"
+                    actual.conflicts.iter().any(|conflict| matches!(
+                        conflict.resolution,
+                        Err(gix_merge::tree::ResolutionFailure::DirectoryRenameSplit { .. })
+                    )),
+                    "tied destinations retain new paths and report the unresolved directory split"
                 );
             }
 
@@ -369,10 +481,24 @@ fn run_baseline() -> TestResult {
                 merge_info.conflicts
             );
             if deviation.is_none() {
+                let git_has_unmerged_entries = expected_index
+                    .entries()
+                    .iter()
+                    .any(|entry| entry.stage() != gix_index::entry::Stage::Unconflicted);
                 assert_eq!(
                     actual.index.has_unmerged_entries(conflicts_like_in_git),
+                    git_has_unmerged_entries,
+                    "{case_name}: unmerged index stages must match Git"
+                );
+                assert_eq!(
                     actual.has_unresolved_conflicts(conflicts_like_in_git),
-                    "{case_name}: unresolved conflicts must have unmerged index entries"
+                    git_has_unmerged_entries
+                        || merge_info.information.iter().any(|info| !matches!(
+                            info.kind,
+                            baseline::ConflictKind::AutoMerging
+                                | baseline::ConflictKind::PathUpdatedDueToDirectoryRename
+                        )),
+                    "{case_name}: conflict status includes directory diagnostics with a clean index"
                 );
             }
 
@@ -865,6 +991,7 @@ fn new_blob_merge_platform(
 mod baseline;
 mod cartesian;
 mod conflict_policies;
+mod directory_outcomes;
 mod gitlink_renames;
 mod rename_parent_namespace;
 mod renormalized_delete;

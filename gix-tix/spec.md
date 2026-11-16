@@ -159,7 +159,7 @@ without trading responsiveness for metadata that is not visible.
   `HEAD` or a descendant. An attached source is preserved through the singleton
   HEAD-pin rules. A conflicting replay is published only when explicitly
   materialized; earlier completed replay steps retain their updates.
-  An accepted conflict writes the checkout and unmerged index,
+  An accepted conflict writes the checkout and provisional index,
   then exits with an error so resolution cannot be mistaken for completion.
 - `tix stash` saves the index and worktree state in a gix stash associated with
   the `HEAD` commit through the same commit-stash operation as the TUI.
@@ -319,8 +319,10 @@ without trading responsiveness for metadata that is not visible.
   document cancels successfully; malformed or unsupported state is an error.
 - By default, a todo conflict changes nothing. Explicit
   `--materialize-conflicts[=CONTINUE]` accepts the partial result, checks out the
-  conflicting commit with an unmerged index, and saves an editable continuation
+  conflicting commit with its provisional index, and saves an editable continuation
   inside the current worktree's Git metadata. Bare opt-in needs no output file.
+  A path-placement conflict can have only stage-zero entries. Its saved operation
+  is ready to continue with the provisional placement or with staged changes.
   `=CONTINUE` additionally creates a new export file; `=-` explicitly writes the
   todo to stdout. Optional filenames require `=` and never consume a positional
   input file. Export errors prevent materialization. Materialization exits
@@ -1471,7 +1473,7 @@ views.
   history-boundary clamping and shows a steady red conflict marker; `<enter>` persists
   the prepared rebase, leaves affected later commits lazy, checks
   out the conflicting commit at the ours tree, then checks out the merge result and constructs the
-  unmerged index from the retained plan. `Esc` discards the suspended operation; navigation and
+  provisional index from the retained plan. `Esc` discards the suspended operation; navigation and
   other read-only actions leave the choice armed, while repository-changing actions
   and refresh are blocked. Key-release events are not actions and leave it armed.
   Once an `Esc` press cancels it, repeats from that press cannot return to or close
@@ -1983,7 +1985,7 @@ views.
   read-only actions leave the preview armed; repository-changing actions and
   refresh are blocked. `<enter>` accepts the partial result,
   moves already-final refs, records the ours tree in the conflicting commit, and
-  checks out the retained merge result with an unmerged index,
+  checks out the retained merge result with its provisional index,
   and saves its continuation for either interface. Only `Esc` discards the
   preview without writes; cancelling a subsequent preview preserves the earlier
   saved pause. Cancellation and failed materialization synchronously restore

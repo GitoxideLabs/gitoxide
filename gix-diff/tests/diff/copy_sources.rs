@@ -360,6 +360,56 @@ fn root_directory_votes_are_counted() -> TestResult {
 }
 
 #[test]
+fn directory_outcomes_preserve_roots_and_tied_destinations() -> TestResult {
+    let root = crate::scripted_fixture_read_only("make_copy_sources.sh")?;
+    let objects = crate::open_odb(root.join(".git/objects"))?;
+    for (case, expected) in [
+        ("directory-root-wins", vec![("old", vec![""])]),
+        ("directory-root-tie", vec![("old", vec!["", "new"])]),
+        (
+            "directory-nested-root-wins",
+            vec![("old", vec![""]), ("old/sub", vec!["sub"])],
+        ),
+        ("directory-tie", vec![("old", vec!["first", "second"])]),
+    ] {
+        let before_tree_id = read_tree_id(&root, case, "before")?;
+        let after_tree_id = read_tree_id(&root, case, "after")?;
+        let (mut before_buf, mut after_buf) = (Vec::new(), Vec::new());
+        let outcome = gix_diff::tree_with_rewrites(
+            objects.find_tree_iter(&before_tree_id, &mut before_buf)?,
+            objects.find_tree_iter(&after_tree_id, &mut after_buf)?,
+            &mut new_cache(&root),
+            &mut Default::default(),
+            &objects,
+            |_| Ok(std::ops::ControlFlow::Continue(())),
+            gix_diff::tree_with_rewrites::Options {
+                location: None,
+                rewrites: Some(Rewrites {
+                    percentage: None,
+                    ..Default::default()
+                }),
+            },
+        )?
+        .expect("rewrite tracking was enabled");
+        let mut actual = outcome.directory_renames;
+        actual.sort_by(|left, right| left.source.cmp(&right.source));
+        assert_eq!(
+            actual,
+            expected
+                .into_iter()
+                .map(|(source, destinations)| gix_diff::tree_with_rewrites::DirectoryRename {
+                    source: source.into(),
+                    destinations: nonempty::NonEmpty::collect(destinations.into_iter().map(Into::into))
+                        .expect("every expected directory rename has at least one destination"),
+                })
+                .collect::<Vec<_>>(),
+            "{case}: complete directory outcomes survive an omitted callback location"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn equally_split_directory_remains_unpaired() -> TestResult {
     directory_rewrites_match_git("directory-tie", 1.0, false, &[], &[])
 }

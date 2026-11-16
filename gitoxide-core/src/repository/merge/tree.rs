@@ -149,10 +149,36 @@ pub(super) mod function {
         let how = TreatAsUnresolved::default();
         let mut paths = BTreeSet::new();
         for conflict in conflicts.iter().filter(|conflict| conflict.is_unresolved(how)) {
-            if let Err(gix::merge::tree::ResolutionFailure::DirectoryRename { final_location, .. }) =
-                &conflict.resolution
-            {
-                paths.insert(final_location.as_bstr());
+            match &conflict.resolution {
+                Err(gix::merge::tree::ResolutionFailure::DirectoryRename { final_location, .. }) => {
+                    paths.insert(final_location.as_bstr());
+                }
+                Err(gix::merge::tree::ResolutionFailure::DirectoryRenameSplit {
+                    source_location,
+                    destinations,
+                }) => {
+                    paths.insert(source_location.as_bstr());
+                    paths.extend(
+                        destinations
+                            .iter()
+                            .filter(|path| !path.is_empty())
+                            .map(|path| path.as_bstr()),
+                    );
+                }
+                Err(
+                    gix::merge::tree::ResolutionFailure::DirectoryRenameBlocked {
+                        original_paths,
+                        final_location,
+                    }
+                    | gix::merge::tree::ResolutionFailure::DirectoryRenameCollision {
+                        original_paths,
+                        final_location,
+                    },
+                ) => {
+                    paths.insert(final_location.as_bstr());
+                    paths.extend(original_paths.iter().map(|path| path.as_bstr()));
+                }
+                _ => {}
             }
             let (ours, theirs) = conflict.changes_in_resolution();
             for path in [

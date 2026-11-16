@@ -5,7 +5,7 @@
 //! Normalized stages keep their original input paths. Diagnostic events describe decisions,
 //! while resolved paths own the final index entries.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use bstr::{BStr, BString, ByteSlice};
 use gix_diff::tree_with_rewrites::Change;
@@ -98,6 +98,7 @@ struct Context<'a, 'labels, O, W> {
 pub(super) fn run(
     state: &mut State,
     changes: [&[Change]; 2],
+    directories: [&[gix_diff::tree_with_rewrites::DirectoryRename]; 2],
     labels: Labels<'_>,
     objects: &impl gix_object::FindObjectOrHeader,
     blob_merge: &mut blob::Platform,
@@ -108,13 +109,22 @@ pub(super) fn run(
 ) -> Result<Outcome> {
     let mut outcome = Outcome::default();
     let mut forced = Vec::new();
-    let destinations = relocate_directories(state, changes, objects, options, policy, &mut outcome, &mut forced)?;
+    let destinations = relocate_directories(
+        state,
+        changes,
+        directories,
+        objects,
+        options,
+        policy,
+        &mut outcome,
+        &mut forced,
+    )?;
     if options.fail_on_conflict.is_some() && outcome.events.iter().any(|event| event.should_stop(options)) {
         return Ok(outcome);
     }
     let mut sources: BTreeMap<BString, [Option<Rename>; 2]> = BTreeMap::new();
-    for (side, changes) in changes.into_iter().enumerate() {
-        for change in changes {
+    for (side, side_changes) in changes.into_iter().enumerate() {
+        for change in side_changes {
             if let Change::Rewrite {
                 source_location,
                 location,
@@ -723,9 +733,11 @@ fn below(path: &BStr, parent: &BStr) -> bool {
         .is_some_and(|suffix| suffix.starts_with(b"/"))
 }
 
+#[expect(clippy::too_many_arguments)]
 fn relocate_directories(
     state: &mut State,
     changes: [&[Change]; 2],
+    inferred: [&[gix_diff::tree_with_rewrites::DirectoryRename]; 2],
     objects: &impl gix_object::Find,
     options: &Options,
     policy: ResolutionPolicy,
@@ -736,67 +748,105 @@ fn relocate_directories(
     if options.directory_renames == DirectoryRenames::Disabled {
         return Ok(destinations);
     }
-    let directories: [BTreeMap<_, _>; 2] = changes.map(|changes| {
-        changes
+    for (side, inferred) in inferred.iter().enumerate() {
+        for directory in *inferred {
+            if directory.destinations.len() <= 1 {
+                continue;
+            }
+            let original = directory_change(changes[side], &directory.source);
+            let opposite = changes[1 - side]
+                .iter()
+                .find(|change| below(change.location(), directory.source.as_bstr()))
+                .unwrap_or(original);
+            let mut global_changes = [original.clone(), original.clone()];
+            global_changes[1 - side] = opposite.clone();
+            outcome.events.push(Event {
+                resolution: Err(ResolutionFailure::DirectoryRenameSplit {
+                    source_location: directory.source.clone(),
+                    destinations: directory.destinations.iter().cloned().collect(),
+                }),
+                changes: global_changes,
+                mapping: ConflictMapping::Original,
+                affected_paths: vec![directory.source.clone()],
+                location: directory.source.clone(),
+            });
+        }
+    }
+    let directories: [BTreeMap<_, _>; 2] = inferred.map(|directories| {
+        directories
             .iter()
-            .filter_map(|change| match change {
-                change @ Change::Rewrite {
-                    source_location,
-                    entry_mode,
-                    ..
-                } if entry_mode.is_tree() => Some((source_location.clone(), change)),
-                _ => None,
+            .filter_map(|directory| {
+                let (destination, []) = directory.destinations.split_first() else {
+                    return None;
+                };
+                Some((&directory.source, destination))
             })
             .collect()
     });
     let mut planned = Vec::new();
     let mut counts = BTreeMap::new();
-    for (side, changes) in changes.into_iter().enumerate() {
-        for change in changes {
+    for (side, side_changes) in changes.into_iter().enumerate() {
+        for change in side_changes {
             if change.entry_mode().is_tree() || !matches!(change, Change::Addition { .. } | Change::Rewrite { .. }) {
                 continue;
             }
-            let Some((directory, rewrite)) = directories[1 - side]
+            let Some((directory, destination)) = directories[1 - side]
                 .iter()
                 .rev()
                 .find(|(directory, _)| below(change.location(), directory.as_bstr()))
             else {
                 continue;
             };
-            if directories[side].contains_key(directory) || directories[side].contains_key(rewrite.location()) {
+            if directories[side].contains_key(directory) || directories[side].contains_key(destination) {
                 continue;
             }
-            let mut location = rewrite.location().to_owned();
-            location.extend_from_slice(&change.location()[directory.len()..]);
-            *counts.entry((side + 1, location.clone())).or_insert(0usize) += 1;
-            planned.push((side + 1, change, *rewrite, location));
+            let mut location = (*destination).clone();
+            if !location.is_empty() {
+                location.push(b'/');
+            }
+            location.extend_from_slice(&change.location()[directory.len() + 1..]);
+            counts
+                .entry((side + 1, location.clone()))
+                .or_insert_with(Vec::new)
+                .push(change.location().to_owned());
+            planned.push((
+                side + 1,
+                change,
+                directory_change(changes[1 - side], directory),
+                location,
+            ));
         }
     }
+    let mut reported = BTreeSet::new();
     for (side, change, rewrite, location) in planned {
         state.ensure_path(location.as_bstr(), objects)?;
         let blocked = state.entries.get(&location).is_some_and(|node| {
             node.stages[side].is_some()
                 || (node.inputs[0].is_some_and(|entry| !entry.mode.is_tree()) && change.source_location() != location)
-        }) || counts[&(side, location.clone())] > 1
-            || location.iter().enumerate().any(|(end, byte)| {
-                *byte == b'/'
-                    && state.entries.get(location[..end].as_bstr()).is_some_and(|node| {
-                        node.trivial_choice().map_or_else(
-                            || {
-                                node.stages[1..]
-                                    .iter()
-                                    .flatten()
-                                    .any(|stage| !stage.entry.mode.is_tree())
-                            },
-                            |side| {
-                                node.stages[side]
-                                    .as_ref()
-                                    .is_some_and(|stage| !stage.entry.mode.is_tree())
-                            },
-                        )
-                    })
-            });
-        if blocked {
+        });
+        let original_paths = &counts[&(side, location.clone())];
+        if blocked || original_paths.len() > 1 {
+            if reported.insert((side, location.clone())) {
+                let mut global_changes = [rewrite.clone(), rewrite.clone()];
+                global_changes[side - 1] = change.clone();
+                outcome.events.push(Event {
+                    resolution: Err(if blocked {
+                        ResolutionFailure::DirectoryRenameBlocked {
+                            original_paths: original_paths.clone(),
+                            final_location: location.clone(),
+                        }
+                    } else {
+                        ResolutionFailure::DirectoryRenameCollision {
+                            original_paths: original_paths.clone(),
+                            final_location: location.clone(),
+                        }
+                    }),
+                    changes: global_changes,
+                    mapping: ConflictMapping::Original,
+                    affected_paths: original_paths.clone(),
+                    location,
+                });
+            }
             continue;
         }
         state.ensure_subtree(location.as_bstr(), objects)?;
@@ -836,7 +886,18 @@ fn relocate_directories(
         let mut parent = location.as_bstr();
         while let Some(slash) = parent.rfind_byte(b'/') {
             parent = parent[..slash].as_bstr();
-            state.entries.entry(parent.to_owned()).or_default().directory_mask |= 1 << side;
+            let node = state.entries.entry(parent.to_owned()).or_default();
+            // The inferred directory replaces inherited files, but modifications on
+            // either side must survive through ordinary file/directory resolution.
+            for input in [1, 2] {
+                if node.stages[input]
+                    .as_ref()
+                    .is_some_and(|stage| stage.entry.mode.is_no_tree() && Some(stage.entry) == node.inputs[0])
+                {
+                    node.set_stage(input, None);
+                }
+            }
+            node.directory_mask |= 1 << side;
         }
         destinations.insert((side, change.location().to_owned()), location.clone());
         if options.directory_renames == DirectoryRenames::Conflict && policy.forced_resolution().is_some() {
@@ -847,4 +908,11 @@ fn relocate_directories(
         }
     }
     Ok(destinations)
+}
+
+fn directory_change<'a>(changes: &'a [Change], source: &BString) -> &'a Change {
+    changes
+        .iter()
+        .find(|change| change.entry_mode().is_tree() && change.source_location() == source)
+        .expect("directory inference starts from a removed tree")
 }

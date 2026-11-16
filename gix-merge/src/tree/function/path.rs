@@ -165,7 +165,8 @@ impl Path {
 
     pub fn set_result(&mut self, entry: Option<Entry>) {
         self.result = entry
-            .filter(|entry| !entry.id.is_null())
+            // Expanded directories follow their resolved children instead of reinstalling an input subtree.
+            .filter(|entry| !entry.id.is_null() && (entry.mode.is_no_tree() || self.opaque))
             .map_or(Resolution::Absent, Resolution::Present);
         self.unmerged = None;
     }

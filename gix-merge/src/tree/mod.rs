@@ -241,6 +241,9 @@ fn resolution_content_merge(resolution: &Result<Resolution, ResolutionFailure>) 
             ResolutionFailure::Unknown
             | ResolutionFailure::SubmoduleMerge
             | ResolutionFailure::SubmoduleAddAdd
+            | ResolutionFailure::DirectoryRenameSplit { .. }
+            | ResolutionFailure::DirectoryRenameBlocked { .. }
+            | ResolutionFailure::DirectoryRenameCollision { .. }
             | ResolutionFailure::OursRenamedTheirsRenamedToSameLocation
             | ResolutionFailure::OursDirectoryTheirsNonDirectoryTheirsRenamed { .. }
             | ResolutionFailure::OursModifiedTheirsDeleted
@@ -326,6 +329,28 @@ pub enum ResolutionFailure {
         final_location: BString,
         /// The content merge, if the relocated path also met a change at its destination.
         merged_blob: Option<ContentMerge>,
+    },
+    /// Renamed files equally support several directory destinations, leaving new paths in place.
+    DirectoryRenameSplit {
+        /// The removed directory whose destination could not be chosen.
+        source_location: BString,
+        /// Equally supported destinations, with an empty path denoting the repository root.
+        destinations: Vec<BString>,
+    },
+    /// Existing content prevents an inferred directory move. Original paths are retained.
+    DirectoryRenameBlocked {
+        /// Paths that would have been relocated into the blocked destination.
+        original_paths: Vec<BString>,
+        /// The occupied destination.
+        final_location: BString,
+    },
+    /// Several paths on one side would move into the same destination through directory renames.
+    /// They remain at their original locations because one index cannot represent their collision.
+    DirectoryRenameCollision {
+        /// Paths that would collide after relocation.
+        original_paths: Vec<BString>,
+        /// The shared destination.
+        final_location: BString,
     },
     /// Both sides produced different non-tree types at one path. Both versions are retained,
     /// moving regular files aside, or moving both entries if neither is a regular file.
@@ -437,7 +462,7 @@ pub struct Options {
 /// Control inferred relocation of additions and rename destinations through directory renames.
 ///
 /// This corresponds to Git's `merge.directoryRenames` and defaults to [`Conflict`](Self::Conflict), like Git.
-/// Tied destination counts leave new paths in place without reporting Git's directory-split conflict.
+/// With relocation enabled, tied destination counts leave new paths in place and report a directory-split conflict.
 #[derive(Default, Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum DirectoryRenames {
     /// Leave new paths at their explicit locations, without disabling file-rename detection.

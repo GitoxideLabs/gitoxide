@@ -514,9 +514,6 @@ fn materialize_conflict(
     merged_tree: ObjectId,
     index_plan: &gix::merge::tree::IndexPlan,
 ) -> Result<()> {
-    if !index_plan.has_unmerged_entries(gix::merge::tree::TreatAsUnresolved::git()) {
-        gix::error::bail!("conflicting merge result has no unmerged index entries");
-    }
     let state = index_plan
         .to_index(
             gix::merge::tree::TreatAsUnresolved::git(),

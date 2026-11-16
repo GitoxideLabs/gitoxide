@@ -8,12 +8,15 @@ use gix_diff::{
 use gix_error::{Result, ResultExt, message};
 use gix_object::FindExt;
 
+#[derive(Default)]
+pub(super) struct Changes {
+    pub entries: Vec<Change>,
+    pub directories: Vec<gix_diff::tree_with_rewrites::DirectoryRename>,
+}
+
 /// Like Git, only use a directory rename when the other side adds a leaf directly inside it or an ancestor.
-pub(super) fn retain_relevant_directory_renames(changes: &mut Vec<Change>, other: &[Change]) {
-    if !changes
-        .iter()
-        .any(|change| matches!(&change, Change::Rewrite { entry_mode, .. } if entry_mode.is_tree()))
-    {
+pub(super) fn retain_relevant_directory_renames(changes: &mut Changes, other: &[Change]) {
+    if changes.directories.is_empty() {
         return;
     }
     let relevant_directories: std::collections::HashSet<_> = other
@@ -26,6 +29,21 @@ pub(super) fn retain_relevant_directory_renames(changes: &mut Vec<Change>, other
             path.rfind_byte(b'/').map(|slash| path[..slash].as_bstr())
         })
         .collect();
+    let is_relevant = |source_location: &bstr::BStr| {
+        let mut path = source_location;
+        loop {
+            if relevant_directories.contains(path) {
+                return true;
+            }
+            let Some(slash) = path.rfind_byte(b'/') else {
+                return false;
+            };
+            path = path[..slash].as_bstr();
+        }
+    };
+    changes
+        .directories
+        .retain(|directory| is_relevant(directory.source.as_bstr()));
     let is_irrelevant = |change: &Change| {
         let Change::Rewrite {
             source_location,
@@ -38,29 +56,20 @@ pub(super) fn retain_relevant_directory_renames(changes: &mut Vec<Change>, other
         if !entry_mode.is_tree() {
             return false;
         }
-        let mut path = source_location.as_bstr();
-        loop {
-            if relevant_directories.contains(path) {
-                return false;
-            }
-            let Some(slash) = path.rfind_byte(b'/') else {
-                return true;
-            };
-            path = path[..slash].as_bstr();
-        }
+        !is_relevant(source_location.as_bstr())
     };
-    if !changes.iter().any(&is_irrelevant) {
+    if !changes.entries.iter().any(&is_irrelevant) {
         return;
     }
-    let mut retained = Vec::with_capacity(changes.len());
-    for change in changes.drain(..) {
+    let mut retained = Vec::with_capacity(changes.entries.len());
+    for change in changes.entries.drain(..) {
         if is_irrelevant(&change) {
             track_without_directory_rename(change.to_ref(), &mut retained);
         } else {
             retained.push(change);
         }
     }
-    *changes = retained;
+    changes.entries = retained;
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -74,8 +83,8 @@ pub(super) fn collect(
     diff_state: &mut gix_diff::tree::State,
     rewrites: Option<gix_diff::Rewrites>,
     directory_renames: crate::tree::DirectoryRenames,
-) -> Result<Vec<Change>> {
-    let mut changes = Vec::new();
+) -> Result<Changes> {
+    let mut changes = Changes::default();
     if base_tree != side_tree {
         let side_tree = if side_tree == side_tree.kind().empty_tree() {
             gix_object::TreeRefIter::from_bytes(&[], side_tree.kind())
@@ -84,7 +93,7 @@ pub(super) fn collect(
                 .find_tree_iter(side_tree, side_buf)
                 .or_raise(|| message("Tree merge failed"))?
         };
-        gix_diff::tree_with_rewrites(
+        let outcome = gix_diff::tree_with_rewrites(
             gix_object::TreeRefIter::from_bytes(base_buf, base_tree.kind()),
             side_tree,
             diff_resource_cache,
@@ -92,9 +101,9 @@ pub(super) fn collect(
             objects,
             |change| {
                 if directory_renames == crate::tree::DirectoryRenames::Disabled {
-                    track_without_directory_rename(change, &mut changes);
+                    track_without_directory_rename(change, &mut changes.entries);
                 } else {
-                    track(change, &mut changes);
+                    track(change, &mut changes.entries);
                 }
                 Ok(std::ops::ControlFlow::Continue(()))
             },
@@ -104,6 +113,9 @@ pub(super) fn collect(
             },
         )
         .or_raise(|| message("Tree merge failed"))?;
+        if directory_renames != crate::tree::DirectoryRenames::Disabled {
+            changes.directories = outcome.map_or_else(Vec::new, |outcome| outcome.directory_renames);
+        }
     }
     Ok(changes)
 }
@@ -217,9 +229,9 @@ mod tests {
             None,
             crate::tree::DirectoryRenames::Disabled,
         )?;
-        assert_eq!(changes.len(), 1, "the only base entry is deleted");
+        assert_eq!(changes.entries.len(), 1, "the only base entry is deleted");
         assert!(
-            matches!(&changes[0], super::Change::Deletion { location, id, .. } if location == "file" && *id == blob_id),
+            matches!(&changes.entries[0], super::Change::Deletion { location, id, .. } if location == "file" && *id == blob_id),
             "the implicit empty tree is diffed without consulting the object database or stale buffer"
         );
         Ok(())

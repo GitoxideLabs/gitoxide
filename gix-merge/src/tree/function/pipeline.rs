@@ -104,13 +104,15 @@ pub fn tree<'objects>(
         options.rewrites,
         options.directory_renames,
     )?;
-    change::retain_relevant_directory_renames(&mut ours, &theirs);
-    change::retain_relevant_directory_renames(&mut theirs, &ours);
-    let changes = [ours, theirs];
+    change::retain_relevant_directory_renames(&mut ours, &theirs.entries);
+    change::retain_relevant_directory_renames(&mut theirs, &ours.entries);
+    let directories = [ours.directories, theirs.directories];
+    let changes = [ours.entries, theirs.entries];
     let policy = ResolutionPolicy::new(&options);
     let mut normalized = normalize::run(
         &mut paths,
         [&changes[0], &changes[1]],
+        [&directories[0], &directories[1]],
         labels,
         objects,
         blob_merge,
@@ -154,17 +156,39 @@ pub fn tree<'objects>(
 
     let stopped = normalized.events.iter().any(|event| event.should_stop(&options));
     if !stopped {
-        normalized.events.retain(|event| {
-            let Ok(Resolution::OursModifiedTheirsModifiedThenBlobContentMerge { merged_blob }) = &event.resolution
-            else {
+        normalized.events.retain_mut(|event| {
+            let Some(merged_blob) = crate::tree::resolution_content_merge(&event.resolution) else {
                 return true;
             };
-            // A later forced choice can discard an already resolved path's contents.
-            event.affected_paths.iter().any(|path| {
+            // Binary merges can reuse an input ID, so retained conflicts also need their index owner.
+            if event.affected_paths.iter().any(|path| {
                 paths.entries.get(path).is_some_and(|node| {
-                        matches!(node.result, PathResolution::Present(entry) if entry.id == merged_blob.merged_blob_id)
-                    })
-            })
+                    matches!(node.result, PathResolution::Present(entry) if entry.id == merged_blob.merged_blob_id)
+                        && (merged_blob.resolution == crate::blob::Resolution::Complete || node.unmerged.is_some())
+                })
+            }) {
+                return true;
+            }
+            match &mut event.resolution {
+                Ok(Resolution::OursModifiedTheirsModifiedThenBlobContentMerge { .. }) => false,
+                Err(
+                    ResolutionFailure::ModeConflict { merged_blob }
+                    | ResolutionFailure::DirectoryRename { merged_blob, .. }
+                    | ResolutionFailure::OursRenamedTheirsRenamedDifferently { merged_blob },
+                )
+                | Ok(
+                    Resolution::Forced(
+                        ResolutionFailure::ModeConflict { merged_blob }
+                        | ResolutionFailure::DirectoryRename { merged_blob, .. }
+                        | ResolutionFailure::OursRenamedTheirsRenamedDifferently { merged_blob },
+                    )
+                    | Resolution::OursModifiedTheirsRenamedAndChangedThenRename { merged_blob, .. },
+                ) => {
+                    *merged_blob = None;
+                    true
+                }
+                _ => true,
+            }
         });
     }
     if stopped {
@@ -321,10 +345,11 @@ fn resolve_paths(
         let mut output_location = location.clone();
         let mut directory_conflict = None;
         if paths.has_live_descendants(location.as_bstr()) && (ours.is_some() || theirs.is_some()) {
-            let side = if paths.entries[&location].directory_mask & 2 != 0 {
-                2
-            } else {
-                1
+            let side = match (ours, theirs) {
+                (Some(_), None) => 1,
+                (None, Some(_)) => 2,
+                _ if paths.entries[&location].directory_mask & 2 != 0 => 2,
+                _ => 1,
             };
             output_location = paths.reserve_unique(
                 location.as_bstr(),

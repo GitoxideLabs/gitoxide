@@ -3,7 +3,7 @@ use std::ops::Range;
 
 use bstr::{BStr, BString, ByteSlice};
 
-use super::{Action, ChangeRef};
+use super::{Action, ChangeRef, DirectoryRename};
 use crate::tree::visit::Change;
 
 /// Buffers directory changes to infer directory renames from finalized file renames.
@@ -29,7 +29,7 @@ use crate::tree::visit::Change;
 ///
 /// 3. **Choose destinations.** In [`emit()`](Self::emit), each source independently chooses the
 ///    destination with the highest vote count, provided it is the unique maximum. No absolute majority
-///    is required. A tie, no votes, or a winner without directory metadata leaves the source unpaired.
+///    is required. Preserve ties and root destinations in the inference outcome even when no tree rewrite can be emitted.
 ///    Multiple sources may choose the same destination; there is no global one-to-one matching.
 /// 4. **Emit changes.** Walk the buffered changes in insertion order. Replace each paired deletion with
 ///    a [`ChangeRef::Rewrite`] using the source and destination directory metadata, with `copy: false`
@@ -96,23 +96,39 @@ impl Directories {
         }
     }
 
-    pub fn emit(&self, mut visit: impl FnMut(ChangeRef<'_>) -> Action) -> Action {
+    pub fn inferred_renames(&self) -> Vec<DirectoryRename> {
+        self.renames
+            .iter()
+            .filter_map(|(&source, candidates)| {
+                let max_count = candidates.values().copied().max()?;
+                Some(DirectoryRename {
+                    source: self.path_backing[self.changes[source].1.clone()].into(),
+                    destinations: nonempty::NonEmpty::collect(
+                        candidates
+                            .iter()
+                            .filter(|(_, count)| **count == max_count)
+                            .map(|(destination, _)| destination.clone()),
+                    )
+                    .expect("at least one destination has the maximum vote count"),
+                })
+            })
+            .collect()
+    }
+
+    pub fn emit(&self, inferred: &[DirectoryRename], mut visit: impl FnMut(ChangeRef<'_>) -> Action) -> Action {
         let mut renames = BTreeMap::new();
         let mut destinations = BTreeSet::new();
-        for (&source, candidates) in &self.renames {
-            let max_count = candidates.values().copied().max().unwrap_or(0);
-            let mut winners = candidates.iter().filter(|(_, count)| **count == max_count);
-            let Some((dest, _)) = winners.next() else {
+        for inference in inferred {
+            let (destination, []) = inference.destinations.split_first() else {
                 continue;
             };
-            // shortcut: ties stay unpaired; expose them when merge gains directory-split diagnostics.
-            if winners.next().is_some() {
-                continue;
-            }
-            let Some(dest) = self.find(dest.as_bstr(), false) else {
-                // shortcut: root destinations stay unpaired until tree changes can represent the root.
+            let Some(dest) = self.find(destination.as_bstr(), false) else {
+                // The inference outcome carries root destinations without inventing a root tree change.
                 continue;
             };
+            let source = self
+                .find(inference.source.as_bstr(), true)
+                .expect("inference uses removed directories");
             renames.insert(source, dest);
             destinations.insert(dest);
         }

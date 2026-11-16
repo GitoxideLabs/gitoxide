@@ -106,8 +106,53 @@ impl Repo {
 }
 
 #[test]
+fn forced_crossing_renames_do_not_reinstall_discarded_subtrees() -> TestResult {
+    use gix_merge::tree::{ResolveWith as TreeResolveWith, TreatAsUnresolved};
+
+    let repo = Repo::new()?;
+    let first_blob_id = repo.blob("binary payload 4\0\n")?;
+    let second_blob_id = repo.blob("binary payload 0\0\n")?;
+    let base_tree_id = repo.tree_from_paths(&[
+        ("b/a/a", EntryKind::Link, first_blob_id),
+        ("c/a/c", EntryKind::Link, second_blob_id),
+    ])?;
+    let our_tree_id = repo.tree_from_paths(&[
+        ("b/a/a", EntryKind::Link, first_blob_id),
+        ("b/a/c", EntryKind::Link, second_blob_id),
+    ])?;
+    let their_tree_id = repo.tree_from_paths(&[
+        ("b", EntryKind::Link, second_blob_id),
+        ("c", EntryKind::Link, first_blob_id),
+    ])?;
+
+    for (current, other) in [(our_tree_id, their_tree_id), (their_tree_id, our_tree_id)] {
+        let mut options = basic_merge_options().tree_merge;
+        options.directory_renames = Default::default();
+        options
+            .rewrites
+            .as_mut()
+            .expect("rename tracking is enabled")
+            .percentage = Some(1.0);
+        options.symlink_conflicts = Some(ResolveWith::Ancestor);
+        options.tree_conflicts = Some(TreeResolveWith::Ours);
+        let mut outcome = repo.merge((base_tree_id, current, other), options)?;
+        let merged_tree_id = outcome.tree.write(|tree| repo.objects.write(tree))?;
+        let index = outcome
+            .index
+            .to_index(TreatAsUnresolved::git(), &repo.objects, Default::default())?;
+        let tree_index = gix_index::State::from_tree(&merged_tree_id, &repo.objects, Default::default())?;
+        assert_eq!(
+            super::baseline::debug_entries(&index),
+            super::baseline::debug_entries(&tree_index),
+            "forced crossing renames keep the tree and index in agreement for current {current}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn renamed_gitlink_colliding_with_a_replacement_gitlink() -> TestResult {
-    use gix_merge::tree::{ResolveWith, TreatAsUnresolved};
+    use gix_merge::tree::{Resolution, ResolutionFailure, ResolveWith};
 
     let repo = Repo::new()?;
     let original_commit_id =
@@ -158,9 +203,17 @@ fn renamed_gitlink_colliding_with_a_replacement_gitlink() -> TestResult {
                 .expect("rename tracking is enabled")
                 .percentage = Some(1.0);
             options.tree_conflicts = tree_conflicts;
-            options.fail_on_conflict = Some(TreatAsUnresolved::git());
             let mut outcome = repo.merge((base_tree_id, current_tree_id, other_tree_id), options)?;
             super::assert_no_unknown_conflicts(&outcome, "a renamed gitlink colliding with a replacement gitlink");
+            assert!(
+                outcome.conflicts.iter().any(|conflict| matches!(
+                    conflict.resolution,
+                    Err(ResolutionFailure::DirectoryRenameBlocked { .. })
+                        | Ok(Resolution::Forced(ResolutionFailure::DirectoryRenameBlocked { .. }))
+                )),
+                "the blocked relocation is diagnosed before completing the tree merge: {:#?}",
+                outcome.conflicts
+            );
             assert_eq!(
                 outcome.tree.write(|tree| repo.objects.write(tree))?,
                 expected_tree_id,
@@ -1060,6 +1113,77 @@ fn forced_directories_restore_sources_of_crossing_renames() -> TestResult {
                 );
             }
         }
+    }
+    Ok(())
+}
+
+#[test]
+fn forced_tree_choices_discard_content_from_replaced_directories() -> TestResult {
+    use gix_merge::tree::{DirectoryRenames, ResolveWith, TreatAsUnresolved};
+
+    let repo = Repo::new()?;
+    let blob_ids: Vec<_> = (0..8)
+        .map(|index| repo.blob(&format!("binary payload {index}\0\n")))
+        .collect::<TestResult<_>>()?;
+    // Decoded from crash-e15731a4664b3c6e8368ca3a23dc33b12ee35c68, configuration 32.
+    let base_tree_id = repo.tree_from_paths(&[
+        ("a", EntryKind::BlobExecutable, blob_ids[7]),
+        ("c/a", EntryKind::Blob, blob_ids[0]),
+        ("e/e/e", EntryKind::Blob, blob_ids[7]),
+        ("e/e/f", EntryKind::Blob, blob_ids[4]),
+    ])?;
+    let our_tree_id = repo.tree_from_paths(&[
+        ("a/a", EntryKind::Blob, blob_ids[4]),
+        ("c/a", EntryKind::Blob, blob_ids[0]),
+        ("e/e", EntryKind::Blob, blob_ids[1]),
+    ])?;
+    let their_tree_id = repo.tree_from_paths(&[
+        ("a", EntryKind::Blob, blob_ids[0]),
+        ("e/b/e", EntryKind::Blob, blob_ids[4]),
+        ("e/e/a", EntryKind::Blob, blob_ids[0]),
+        ("e/e/e", EntryKind::Blob, blob_ids[0]),
+    ])?;
+    let mut options = basic_merge_options().tree_merge;
+    options.directory_renames = DirectoryRenames::Conflict;
+    options.tree_conflicts = Some(ResolveWith::Ours);
+    options
+        .rewrites
+        .as_mut()
+        .expect("the test enables rename tracking")
+        .percentage = Some(1.0);
+    for (current_tree_id, other_tree_id) in [(our_tree_id, their_tree_id), (their_tree_id, our_tree_id)] {
+        let mut outcome = repo.merge((base_tree_id, current_tree_id, other_tree_id), options.clone())?;
+        for how in [
+            TreatAsUnresolved::git(),
+            TreatAsUnresolved {
+                content_merge: gix_merge::tree::treat_as_unresolved::ContentMerge::ForcedResolution,
+                ..TreatAsUnresolved::git()
+            },
+        ] {
+            let index = outcome.index.to_index(how, &repo.objects, Default::default())?;
+            assert_eq!(
+                outcome.has_unresolved_conflicts(how),
+                outcome.index.has_unmerged_entries(how),
+                "only retained content can remain unresolved after forcing tree conflicts: {:#?}\nindex: {:#?}",
+                outcome.conflicts,
+                super::baseline::debug_entries(&index),
+            );
+        }
+        if !outcome.index.has_unmerged_entries(TreatAsUnresolved::git()) {
+            assert!(
+                outcome
+                    .conflicts
+                    .iter()
+                    .all(|conflict| conflict.content_merge().is_none()),
+                "restoring an input with the binary merge's ID does not retain its content conflict"
+            );
+        }
+        outcome.conflicts.clear();
+        assert_eq!(
+            outcome.has_unresolved_conflicts(TreatAsUnresolved::git()),
+            outcome.index.has_unmerged_entries(TreatAsUnresolved::git()),
+            "discarding diagnostics cannot change the final conflict verdict"
+        );
     }
     Ok(())
 }

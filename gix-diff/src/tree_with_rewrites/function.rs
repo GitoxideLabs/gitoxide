@@ -3,7 +3,7 @@ use gix_error::ErrorExt;
 use gix_error::Result;
 use gix_object::TreeRefIter;
 
-use super::{Action, ChangeRef, Options, directories::Directories};
+use super::{Action, ChangeRef, Options, Outcome, directories::Directories};
 use crate::{rewrites, rewrites::tracker, tree::Error};
 
 /// Call `for_each` repeatedly with all changes that are needed to convert `lhs` to `rhs`.
@@ -22,7 +22,8 @@ use crate::{rewrites, rewrites::tracker, tree::Error};
 ///
 /// `rhs` or `lhs` can be empty to indicate deletion or addition of an entire tree.
 ///
-/// Directory renames are inferred from finalized file renames from deleted trees into added or modified trees.
+/// Directory renames are inferred from finalized file renames from deleted trees into added or modified trees,
+/// or the repository root. The outcome also retains tied destinations that cannot establish a rename.
 /// Each source directory needs a unique destination with the most renamed children. Renamed files support
 /// their containing directories and ancestors with matching relative directory suffixes.
 /// Directory inference does not affect file matching.
@@ -36,7 +37,7 @@ pub fn diff(
     objects: &impl gix_object::FindObjectOrHeader,
     for_each: impl FnMut(ChangeRef<'_>) -> Result<Action>,
     options: Options,
-) -> std::result::Result<Option<rewrites::Outcome>, Error> {
+) -> std::result::Result<Option<Outcome>, Error> {
     fn callback_error(err: gix_error::Error) -> Error {
         Error::Failure(err.and_raise(gix_error::message("The user-provided callback failed")))
     }
@@ -106,7 +107,7 @@ where
     fn process_tracked_changes(
         &mut self,
         diff_cache: &mut crate::blob::Platform,
-    ) -> std::result::Result<Option<rewrites::Outcome>, Error> {
+    ) -> std::result::Result<Option<Outcome>, Error> {
         let tracked = match self.tracked.as_mut() {
             Some(t) => t,
             None => return Ok(None),
@@ -114,7 +115,7 @@ where
 
         self.directories.index_paths();
         let mut cancelled = false;
-        let outcome = tracked.emit(
+        let rewrites = tracked.emit(
             |dest, source| {
                 let change = match source {
                     Some(source) => {
@@ -155,12 +156,20 @@ where
                 gix_traverse::tree::breadthfirst(self.src_tree, state, self.objects, &mut delegate)
             },
         )?;
+        let directory_renames = if cancelled {
+            Vec::new()
+        } else {
+            self.directories.inferred_renames()
+        };
         if !cancelled {
-            let _ = self
-                .directories
-                .emit(|change| Self::emit_change(change, self.location, &mut self.visit, &mut self.err));
+            let _ = self.directories.emit(&directory_renames, |change| {
+                Self::emit_change(change, self.location, &mut self.visit, &mut self.err)
+            });
         }
-        Ok(Some(outcome))
+        Ok(Some(Outcome {
+            rewrites,
+            directory_renames,
+        }))
     }
 }
 

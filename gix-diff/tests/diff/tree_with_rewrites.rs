@@ -1869,7 +1869,7 @@ mod util {
             },
             options,
         )?;
-        Ok((out, rewrites_info))
+        Ok((out, rewrites_info.map(|outcome| outcome.rewrites)))
     }
 
     fn read_tree(odb: &dyn gix_object::Find, root: &Path, tree: Option<&str>) -> gix_testtools::Result<Vec<u8>> {
