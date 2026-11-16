@@ -3848,12 +3848,15 @@ impl App {
     }
 
     pub(crate) fn update_monitor_error(&mut self, outcome: &gix::notify::Outcome) -> bool {
+        use gix::notify::CoverageStatus;
+
         let error = if let Some(error) = outcome.errors.last() {
             Some(format!("filesystem watch: {error}"))
-        } else if outcome.recovery_pending {
-            return false;
         } else {
-            None
+            match outcome.coverage {
+                CoverageStatus::Updating | CoverageStatus::Recovering { .. } => return false,
+                CoverageStatus::Healthy | CoverageStatus::Inactive => None,
+            }
         };
         let changed = self.worktree_watch_error != error;
         self.worktree_watch_error = error;
@@ -4463,12 +4466,15 @@ mod tests {
     use super::*;
     #[test]
     fn monitor_warnings_survive_status_reload_and_navigation_until_recovery() {
+        use gix::notify::{CoverageStatus, Outcome};
+
         let mut app = App::new(1);
         app.changes_focus = Some(ChangePane::Worktree);
+        let recovering = CoverageStatus::Recovering { retry_at: None };
         for reason in ["initial registration failed", "native watch disconnected"] {
-            assert!(app.update_monitor_error(&gix::notify::Outcome {
+            assert!(app.update_monitor_error(&Outcome {
                 errors: vec![gix_error::message(reason).raise()],
-                recovery_pending: true,
+                coverage: recovering,
                 ..Default::default()
             }));
             let expected = format!("filesystem watch: {reason}");
@@ -4476,8 +4482,8 @@ mod tests {
             app.worktree_changes.error = None;
             app.update(Action::First);
             assert!(
-                !app.update_monitor_error(&gix::notify::Outcome {
-                    recovery_pending: true,
+                !app.update_monitor_error(&Outcome {
+                    coverage: recovering,
                     ..Default::default()
                 }),
                 "quiet retry backoff preserves the warning"
@@ -4487,10 +4493,20 @@ mod tests {
                 Some(expected.as_str()),
                 "a successful status load and navigation cannot repair native coverage"
             );
-            assert!(app.update_monitor_error(&gix::notify::Outcome::default()));
+            assert!(
+                !app.update_monitor_error(&Outcome {
+                    coverage: CoverageStatus::Updating,
+                    ..Outcome::default()
+                }),
+                "repair without verification preserves the warning"
+            );
+            assert!(app.update_monitor_error(&Outcome {
+                coverage: CoverageStatus::Healthy,
+                ..Outcome::default()
+            }));
             assert!(
                 app.changes_error(ChangePane::Worktree).is_none(),
-                "successful registration clears the warning and schedules a redraw"
+                "verified coverage clears the warning and schedules a redraw"
             );
         }
     }

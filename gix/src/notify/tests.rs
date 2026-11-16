@@ -104,6 +104,53 @@ fn all_coverage_classifies_literal_paths_without_inventory() {
 }
 
 #[test]
+fn all_coverage_reports_nested_git_topology_without_administrative_contents() {
+    let now = Instant::now();
+    for metadata in [false, true] {
+        for (path, parent, ignore_case) in [
+            ("nested/.git", "nested", false),
+            ("project/nested/.git", "project/nested", false),
+            ("nested/.GIT", "nested", true),
+        ] {
+            for kind in [EventKind::Create, EventKind::Remove, EventKind::Rename] {
+                for path_kind in [PathKind::File, PathKind::Directory, PathKind::Any] {
+                    let mut monitor = monitor();
+                    monitor.options.metadata = metadata;
+                    monitor.options.worktree_coverage = Some(WorktreeCoverage::All);
+                    monitor.ignore_case = ignore_case;
+                    monitor.observe(&event(Path::new("/repo").join(path), kind, path_kind), true, now);
+                    assert_eq!(
+                        monitor.take_changes(now).worktree,
+                        Some(Scope::Paths(vec![path_change(
+                            parent,
+                            EventKind::Any,
+                            PathKind::Directory
+                        )])),
+                        "{kind:?} of {path} changes the containing repository's topology"
+                    );
+                    assert!(
+                        !monitor.inventory_dirty && !monitor.index_dirty && monitor.maintenance.is_none(),
+                        "recursive coverage observes topology without rebuilding an ignore inventory"
+                    );
+                }
+            }
+        }
+        for path in [".git", ".git/HEAD", "nested/.git/HEAD", "nested/.git/deeper/.git"] {
+            for kind in [EventKind::Create, EventKind::Remove, EventKind::Rename] {
+                let mut monitor = monitor();
+                monitor.options.metadata = metadata;
+                monitor.options.worktree_coverage = Some(WorktreeCoverage::All);
+                monitor.observe(&event(Path::new("/repo").join(path), kind, PathKind::Any), true, now);
+                assert!(
+                    monitor.take_changes(now).is_empty(),
+                    "administrative events inside {path} do not become worktree content"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn worktree_only_failures_and_manual_refresh_publish_no_metadata() {
     for manual_refresh in [false, true] {
         let now = Instant::now();
@@ -204,6 +251,7 @@ fn monitor() -> RepositoryMonitor {
         #[cfg(feature = "async-notify")]
         wake: gix_parallel::OwnShared::new(tokio::sync::Notify::new()),
         layout: layout(),
+        current_dir: "/repo".into(),
         options: Options::default(),
         metadata: Domain::default(),
         worktree: Domain {
@@ -667,7 +715,14 @@ fn special_worktree_files_request_the_correct_refresh() {
             true,
         ),
         (".gitignore", Scope::All, true, false, true),
-        ("src/.gitattributes", Scope::All, false, true, false),
+        (
+            "src/.gitattributes",
+            Scope::Paths(vec![path_change("src", EventKind::Any, PathKind::Directory)]),
+            false,
+            true,
+            false,
+        ),
+        (".gitattributes", Scope::All, false, true, false),
         (".gitmodules", Scope::All, false, true, false),
         (
             "nested/.git",
@@ -1800,6 +1855,81 @@ fn physical_roots_and_config_symlink_replacements_are_both_observed() -> TestRes
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn unicode_and_case_aliases_use_the_native_physical_root_without_precomposition() -> TestResult {
+    let fixture = fixture()?;
+    let root = fixture.path().join("Cafe\u{301}");
+    std::fs::create_dir(&root)?;
+    let status = gix_testtools::git_command(&root)
+        .args(["init", "--quiet", "--initial-branch=main"])
+        .status()?;
+    assert!(
+        status.success(),
+        "the repository initializes under its physical spelling"
+    );
+    let config_path = root.join(".git/config");
+    let mut config = std::fs::read_to_string(&config_path)?;
+    config.push_str("\n[include]\npath = ../missing/deeper/config\n");
+    std::fs::write(config_path, config)?;
+    let physical = root.canonicalize()?;
+    for name in ["Café", "CAFÉ"] {
+        let alias = fixture.path().join(name);
+        if !alias.exists() {
+            continue;
+        }
+        let mut options = crate::open::Options::isolated()
+            .config_overrides(["core.precomposeUnicode=false", "core.ignoreCase=false"]);
+        options.permissions.config.includes = true;
+        let repo = crate::open_opts(&alias, options)?;
+        let mut monitor = repo.monitor(Options::default())?;
+        monitor.observe(&modified(physical.join("tracked")), true, Instant::now());
+        assert_eq!(
+            monitor.pending_worktree.worktree,
+            Some(Scope::Paths(vec![path_change(
+                "tracked",
+                EventKind::Modify,
+                PathKind::File
+            )])),
+            "native events still reach a repository opened through the {name:?} alias"
+        );
+        assert!(
+            classify_metadata(&physical.join(".git/HEAD"), monitor.layout(), false)
+                .0
+                .references,
+            "native metadata paths also match the physical repository spelling"
+        );
+        assert_eq!(
+            monitor.layout().index,
+            physical.join(".git/index"),
+            "an index that has not been created yet uses its physical existing parent"
+        );
+        monitor.observe(&modified(physical.join(".git/index")), true, Instant::now());
+        assert!(
+            monitor.pending_worktree.index,
+            "native index events invalidate the selected index"
+        );
+        assert!(
+            monitor.layout().dependencies.iter().any(|source| {
+                source.kind == DependencyKind::Configuration && source.path == physical.join("missing/deeper/config")
+            }),
+            "missing configuration includes retain their dependency under the physical root"
+        );
+        assert_eq!(
+            absolute_path(&alias.join("missing/deeper/config"), fixture.path(), false)?,
+            physical.join("missing/deeper/config"),
+            "missing dependency suffixes retain the existing ancestor's physical spelling"
+        );
+        let index = repo.index_or_empty()?;
+        let directories = inventory::worktree_directories(&repo, &index)?;
+        assert!(
+            directories.paths.contains_key(&physical) && !directories.paths.contains_key(&physical.join(".git")),
+            "worktree inventory shares physical spelling and still excludes its administrative directory"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn startup_verifies_registration_once_and_unchanged_sets_are_stable() -> TestResult {
     let fixture = fixture()?;
@@ -2074,12 +2204,12 @@ fn all_worktrees_share_metadata_and_settle_without_reopening() -> TestResult {
     monitor = open(&root)?.monitor(options)?;
     assert!(
         monitor.other_worktrees.is_empty(),
-        "disabling checkout coverage drops all additional checkout streams"
+        "construction defers metadata-only checkout discovery"
     );
     let disabled = monitor.service(Instant::now(), || open(&root));
     assert!(
-        disabled.errors.is_empty() && disabled.other_worktrees.is_empty(),
-        "metadata-only service does not rediscover checkout streams"
+        disabled.errors.is_empty() && disabled.other_worktrees.len() == 2 && monitor.other_worktrees.len() == 2,
+        "metadata-only service discovers private metadata streams"
     );
     let options = Options {
         worktree_coverage: Some(WorktreeCoverage::IgnoreAware),
@@ -2239,8 +2369,9 @@ fn bare_main_without_checkout_recovers_undiscovered_registration() -> TestResult
 }
 
 #[test]
-fn disabled_all_worktree_coverage_routes_metadata_as_selected_only() -> TestResult {
-    let fixture = gix_testtools::scripted_fixture_read_only("make_notify_worktrees.sh")?;
+fn disabled_checkout_coverage_retains_all_worktree_metadata_routing() -> TestResult {
+    // Isolate this synthetic timeline from native events emitted by writable fixture copies.
+    let (fixture, ()) = gix_testtools::scripted_fixture_read_only_with_post("make_notify_worktrees.sh", 6, |_| Ok(()))?;
     let root = fixture.join("linked-a");
     for coverage in [None, Some(WorktreeCoverage::All), Some(WorktreeCoverage::IgnoreAware)] {
         let mut monitor = open(&root)?.monitor(Options {
@@ -2271,23 +2402,31 @@ fn disabled_all_worktree_coverage_routes_metadata_as_selected_only() -> TestResu
                 );
             }
         }
-        monitor.observe(&modified(monitor.layout.common_dir.join("MERGE_MSG")), false, now);
+        let event = modified(monitor.layout.common_dir.join("MERGE_MSG"));
+        monitor.observe(&event, false, now);
+        for other in monitor.other_worktrees.values_mut() {
+            other.observe(&event, false, now);
+        }
         let out = monitor.service(now, || panic!("an operation-state file does not change watch coverage"));
+        assert!(
+            out.changes.is_empty(),
+            "main-private operation state is not relabeled as linked-primary metadata"
+        );
+        assert!(
+            out.other_worktrees
+                .iter()
+                .any(|change| change.git_dir == monitor.layout.common_dir
+                    && matches!(&change.kind, WorktreeChange::Changed(changes) if changes.operations)),
+            "metadata-only mode routes operation state to the main checkout"
+        );
         assert_eq!(
-            out.changes,
-            Changes {
-                operations: true,
-                ..Changes::default()
-            },
-            "{coverage:?}: with checkout coverage disabled, main-private metadata belongs to the selected-only view"
+            monitor.other_worktrees.len(),
+            2,
+            "metadata-only mode retains additional views"
         );
         assert!(
-            out.other_worktrees.is_empty() && monitor.other_worktrees.is_empty(),
-            "disabled all-worktree coverage has no child to receive main-private operation changes"
-        );
-        assert!(
-            !monitor.metadata_is_shared(),
-            "all_worktrees alone does not select shared metadata routing"
+            monitor.metadata_is_shared(),
+            "all-worktree metadata keeps shared routing without checkout coverage"
         );
     }
     Ok(())
@@ -2437,15 +2576,19 @@ fn native_errors_count_discarded_registrations() -> TestResult {
         "discarded registrations count as removed"
     );
     let quiet = monitor.service(now, || panic!("native recovery must respect backoff"));
-    assert!(
-        quiet.errors.is_empty() && quiet.recovery_pending,
+    assert!(quiet.errors.is_empty(), "quiet native retry does not repeat the error");
+    assert_eq!(
+        quiet.coverage,
+        CoverageStatus::Recovering {
+            retry_at: Some(now + monitor.options.retry_interval),
+        },
         "quiet native retry preserves degraded coverage"
     );
     let recovered = monitor.service(now + monitor.options.retry_interval, || {
         panic!("all coverage does not reopen")
     });
     assert!(
-        recovered.errors.is_empty() && !recovered.recovery_pending,
+        recovered.errors.is_empty() && matches!(recovered.coverage, CoverageStatus::Updating | CoverageStatus::Healthy),
         "native registration repairs coverage"
     );
     Ok(())
@@ -2674,7 +2817,13 @@ fn child_maintenance_failure_and_same_layout_recovery_invalidate_only_that_child
                 .expect("retained child")
                 .maintenance_failed(now);
             let failed = monitor.service(now, || panic!("the injected failure has a future retry deadline"));
-            assert!(failed.recovery_pending, "the parent reports a degraded linked checkout");
+            assert_eq!(
+                failed.coverage,
+                CoverageStatus::Recovering {
+                    retry_at: Some(now + monitor.options.retry_interval),
+                },
+                "the parent reports a degraded linked checkout"
+            );
             assert!(
                 failed.errors.is_empty(),
                 "the state transition does not synthesize diagnostics"
@@ -2687,7 +2836,10 @@ fn child_maintenance_failure_and_same_layout_recovery_invalidate_only_that_child
                 .expect("retained child")
                 .maintenance_failed(now);
             let repeated = monitor.service(now, || panic!("repeated failures still respect backoff"));
-            assert!(repeated.recovery_pending, "quiet child backoff remains degraded");
+            assert_eq!(
+                repeated.coverage, failed.coverage,
+                "quiet child backoff remains degraded"
+            );
             assert!(
                 repeated.changes.is_empty() && repeated.other_worktrees.is_empty(),
                 "{coverage:?}: the first failure invalidates once, not on every retry"
@@ -2702,7 +2854,7 @@ fn child_maintenance_failure_and_same_layout_recovery_invalidate_only_that_child
             assert_eq!(opens, 1, "the due child recovery uses one freshly opened repository");
             assert!(recovered.errors.is_empty(), "recovery succeeds: {:?}", recovered.errors);
             assert!(
-                !recovered.recovery_pending,
+                matches!(recovered.coverage, CoverageStatus::Updating | CoverageStatus::Healthy),
                 "repaired child coverage clears the parent recovery state"
             );
             assert_only_child_change(&recovered, &layout, &full);
@@ -2759,4 +2911,182 @@ fn assert_only_child_change(out: &Outcome, layout: &Layout, expected: &Changes) 
         matches!(&change.kind, WorktreeChange::Changed(changes) if changes == expected),
         "an existing child's failure/recovery is a full Changed invalidation, not a new baseline: {change:?}"
     );
+}
+
+#[test]
+fn existing_application_files_keep_their_native_path() -> TestResult {
+    let fixture = fixture()?;
+    let root = fixture.path().canonicalize()?;
+    let path = root.join("REFRESH");
+    std::fs::write(&path, "refresh")?;
+    let normalized = absolute_path(&path, &root, false)?;
+    assert_eq!(
+        normalized.as_os_str(),
+        path.as_os_str(),
+        "normalizing an existing file must not append a directory separator"
+    );
+    assert!(
+        std::fs::metadata(&normalized)?.is_file(),
+        "the normalized file remains accessible to inventory"
+    );
+    let watches = inventory::additional_watches(&[InvalidationPath {
+        path: normalized,
+        changes: Changes {
+            layout: true,
+            ..Changes::default()
+        },
+    }])?;
+    assert!(
+        watches.contains_key(&root),
+        "an existing application file is watched through its parent directory"
+    );
+    Ok(())
+}
+
+#[test]
+fn checkout_selection_preserves_metadata_watches_and_only_replaces_affected_domains() -> TestResult {
+    let (fixture, ()) = gix_testtools::scripted_fixture_read_only_with_post("make_notify_worktrees.sh", 4, |_| Ok(()))?;
+    let root = fixture.join("main");
+    let linked_a = open(&fixture.join("linked-a"))?.git_dir().canonicalize()?;
+    let linked_b = open(&fixture.join("linked-b"))?.git_dir().canonicalize()?;
+    for coverage in [WorktreeCoverage::All, WorktreeCoverage::IgnoreAware] {
+        let mut monitor = open(&root)?.monitor(Options {
+            all_worktrees: true,
+            checkout_filter: Some(vec![linked_a.clone()]),
+            worktree_coverage: Some(coverage),
+            ..Options::default()
+        })?;
+        let now = Instant::now();
+        for _ in 0..2 {
+            let outcome = monitor.service(now, || open(&root));
+            assert!(
+                outcome.errors.is_empty(),
+                "initial coverage settles: {:?}",
+                outcome.errors
+            );
+        }
+        let metadata = monitor.metadata.registered.clone();
+        let private: BTreeMap<_, _> = monitor
+            .other_worktrees
+            .iter()
+            .map(|(git_dir, other)| (git_dir.clone(), other.metadata.registered.clone()))
+            .collect();
+        assert!(
+            monitor.worktree.watcher.is_none(),
+            "the unselected coordinator has no checkout stream"
+        );
+        assert!(
+            monitor.other_worktrees[&linked_a].worktree.watcher.is_some(),
+            "A is covered"
+        );
+        assert!(
+            monitor.other_worktrees[&linked_b].worktree.watcher.is_none(),
+            "B is metadata only"
+        );
+        let removed = monitor.other_worktrees[&linked_a].worktree.registered.len();
+        monitor.update_checkout_filter(Some(vec![linked_b.clone()]))?;
+        let outcome = monitor.service(now, || open(&root));
+        assert!(
+            outcome.errors.is_empty(),
+            "coverage replacement succeeds: {:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            monitor.metadata.registered, metadata,
+            "shared metadata registrations remain unchanged"
+        );
+        assert!(
+            monitor.metadata.watcher.is_some() && !monitor.metadata.rebuild,
+            "coverage replacement retains the healthy metadata domain"
+        );
+        assert_eq!(
+            monitor
+                .other_worktrees
+                .iter()
+                .map(|(git_dir, other)| (git_dir.clone(), other.metadata.registered.clone()))
+                .collect::<BTreeMap<_, _>>(),
+            private,
+            "every private metadata inventory remains unchanged"
+        );
+        assert_eq!(
+            outcome.statistics.removed, removed,
+            "only A's checkout registrations are removed"
+        );
+        assert_eq!(
+            outcome.statistics.added,
+            monitor.other_worktrees[&linked_b].worktree.registered.len(),
+            "only B's checkout registrations are installed"
+        );
+        assert!(
+            monitor.other_worktrees[&linked_a].directory_inventory.is_none(),
+            "A's checkout inventory is released"
+        );
+        monitor.update_checkout_filter(Some(vec![]))?;
+        let outcome = monitor.service(now, || open(&root));
+        assert!(
+            outcome.errors.is_empty(),
+            "metadata-only service succeeds: {:?}",
+            outcome.errors
+        );
+        assert!(
+            monitor
+                .other_worktrees
+                .values()
+                .all(|other| other.worktree.watcher.is_none() && other.directory_inventory.is_none()),
+            "no checkout inventory remains allocated"
+        );
+        assert_eq!(
+            monitor.metadata.registered, metadata,
+            "metadata remains registered with no status consumer"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn metadata_only_all_worktree_maintenance_never_reads_checkout_indexes() -> TestResult {
+    let (fixture, ()) =
+        gix_testtools::scripted_fixture_read_only_with_post("make_notify_worktrees.sh", 5, |fixture| {
+            if let gix_testtools::FixtureState::Uninitialized(path) = fixture {
+                for index in [
+                    "main/.git/index",
+                    "main/.git/worktrees/linked-a/index",
+                    "main/.git/worktrees/linked-b/index",
+                ] {
+                    std::fs::write(path.join(index), "invalid index")?;
+                }
+            }
+            Ok(())
+        })?;
+    let root = fixture.join("main");
+    for coverage in [None, Some(WorktreeCoverage::IgnoreAware)] {
+        let mut monitor = open(&root)?.monitor(Options {
+            all_worktrees: true,
+            worktree_coverage: coverage,
+            checkout_filter: Some(vec![]),
+            ..Options::default()
+        })?;
+        for _ in 0..2 {
+            let outcome = monitor.service(Instant::now(), || open(&root));
+            assert!(
+                outcome.errors.is_empty(),
+                "metadata maintenance does not decode invalid indexes: {:?}",
+                outcome.errors
+            );
+        }
+        assert_eq!(
+            monitor.other_worktrees.len(),
+            2,
+            "metadata-only coverage keeps both checkouts"
+        );
+        assert!(
+            monitor.directory_inventory.is_none()
+                && monitor
+                    .other_worktrees
+                    .values()
+                    .all(|other| other.directory_inventory.is_none() && other.worktree.registered.is_empty()),
+            "unselected checkout inventories and recursive watches are absent"
+        );
+    }
+    Ok(())
 }

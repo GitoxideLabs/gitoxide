@@ -30,15 +30,35 @@ impl RepositoryMonitor {
     /// The `opener` runs on the worker and need only produce repositories there; no repository
     /// handle is retained between calls. Blocking [`Self::service()`] remains available.
     pub fn service_async(
-        mut self,
+        self,
         now: Instant,
         opener: impl FnMut() -> Result<Repository> + Send + 'static,
     ) -> impl Future<Output = Result<(Self, Outcome)>> {
+        self.service_async_with(now, opener, |_, outcome| outcome)
+    }
+
+    /// Service this monitor and process its complete outcome on the same Tokio blocking worker.
+    ///
+    /// Like [`Self::service_async()`], cancellation leaves native work and teardown on workers.
+    /// `process` runs after servicing, with access to the monitor for subscription updates and to
+    /// the owned outcome for filesystem work such as individual-file ignore filtering. It must
+    /// handle all invalidations and errors in the outcome; its return value replaces the outcome
+    /// in the reply. Returning a [`Result`] from `process` retains the monitor even if processing
+    /// fails. A panic in either callback instead shuts down the monitor and returns a task error.
+    /// Outcome coverage describes the completed service pass; subscription updates in `process`
+    /// can change [`Self::coverage_status()`] before the reply is returned.
+    pub fn service_async_with<T: Send + 'static>(
+        mut self,
+        now: Instant,
+        opener: impl FnMut() -> Result<Repository> + Send + 'static,
+        process: impl FnOnce(&mut Self, Outcome) -> T + Send + 'static,
+    ) -> impl Future<Output = Result<(Self, T)>> {
         let runtime = tokio::runtime::Handle::current();
         let task = tokio::task::spawn_blocking(move || {
             let outcome = self.service(now, opener);
+            let processed = process(&mut self, outcome);
             WorkerOwned {
-                value: Some((self, outcome)),
+                value: Some((self, processed)),
                 runtime,
             }
         });
@@ -47,7 +67,7 @@ impl RepositoryMonitor {
             Ok(reply
                 .value
                 .take()
-                .expect("the service worker returns one complete outcome"))
+                .expect("the service worker returns one complete reply"))
         }
     }
 
@@ -150,9 +170,8 @@ mod tests {
             ),
             "the completed task retains its value until the reply is claimed or abandoned"
         );
-        // Like service_async(), this future owns the join handle without claiming its result yet.
-        let reply = async move { task.await };
-        drop(reply);
+        // Like service_async(), abandoning this task leaves its completed reply unclaimed.
+        drop(task);
         assert_ne!(
             tokio::time::timeout(Duration::from_secs(2), dropped).await??,
             executor,
