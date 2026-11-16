@@ -96,7 +96,7 @@ impl Cache {
         fs::create_dir_all(self.directory.parent().expect("cache entries have a parent")).or_error()?;
         gix_lock::Marker::acquire_to_hold_resource(
             &self.directory,
-            gix_lock::acquire::Fail::AfterDurationWithBackoff(Duration::from_secs(6 * 60)),
+            gix_lock::acquire::Fail::AfterDurationWithBackoff(Duration::from_mins(6)),
             None,
             0,
         )

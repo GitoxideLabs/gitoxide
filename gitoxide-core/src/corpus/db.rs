@@ -165,10 +165,11 @@ impl Engine {
     pub(crate) fn runner_id_or_insert(&self) -> Result<Id> {
         let sys = sysinfo::System::new_with_specifics(
             RefreshKind::nothing().with_cpu(CpuRefreshKind::nothing().with_frequency()),
-        );
+        )
+        .or_raise(|| gix::error::message("failed to collect runner CPU information"))?;
         let cpu = &sys.cpus()[0];
         let vendor = Some(cpu.vendor_id().to_owned());
-        let host = sysinfo::System::host_name();
+        let host = sysinfo::System::host_name().ok();
         let brand = Some(cpu.brand().to_owned());
         self.con
             .query_row(

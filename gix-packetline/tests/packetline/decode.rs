@@ -137,7 +137,7 @@ mod streaming {
     #[test]
     fn error_on_invalid_hex() {
         let err = (streaming(b"fooo")).expect_err("the packet line is invalid");
-        insta::assert_debug_snapshot!(err, "error on invalid hex", @"Failed to decode the first four hex bytes indicating the line length: Invalid character");
+        insta::assert_debug_snapshot!(err, "error on invalid hex", @"Failed to decode the first four hex bytes indicating the line length: invalid hex byte 0x6f at index 1");
     }
 
     #[test]

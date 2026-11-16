@@ -9,7 +9,7 @@ license = "MIT OR Apache-2.0"
 description = "Implements git packs and related data structures"
 edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
-rust-version = "1.88"
+rust-version = "1.95"
 
 [lib]
 doctest = false
@@ -63,7 +63,7 @@ gix-diff = { version = "^0.70.0", path = "../gix-diff", default-features = false
 
 memmap2 = "0.9.11"
 smallvec = "1.15.1"
-parking_lot = { version = "0.12.4", default-features = false, optional = true }
+parking_lot = { version = "0.13.0", default-features = false, optional = true }
 crossbeam-deque = { version = "0.8.6", optional = true }
 
 # for caching

@@ -9,7 +9,7 @@ description = "A crate of the gitoxide project dedicated to implementing the git
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
-rust-version = "1.88"
+rust-version = "1.95"
 
 [lib]
 doctest = false
@@ -110,7 +110,7 @@ bstr = { version = "1.12.0", default-features = false, features = [
     "std",
     "unicode",
 ] }
-parking_lot = { version = "0.12.4", optional = true }
+parking_lot = { version = "0.13.0", optional = true }
 
 # for async-client
 async-trait = { version = "0.1.51", optional = true }
