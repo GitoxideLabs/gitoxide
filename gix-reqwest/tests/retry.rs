@@ -7,26 +7,63 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 #[tokio::test]
-async fn retries_apply_in_scope() {
+async fn retries_apply_in_scope() -> Result<(), gix_reqwest::Error> {
     let _ = env_logger::try_init();
+    let origin = server::http(|req| async move {
+        assert_eq!(
+            req.headers()["x-shared"],
+            "origin",
+            "origin headers survive proxy retries"
+        );
+        assert!(
+            !req.headers().contains_key("x-proxy-only"),
+            "proxy headers do not reach a bypassed origin"
+        );
+        assert!(
+            !req.headers().contains_key("proxy-authorization"),
+            "proxy credentials do not reach a bypassed origin"
+        );
+        http::Response::default()
+    });
+    let destination = format!("http://{}/final", origin.addr());
     let cnt = Arc::new(AtomicUsize::new(0));
-    let server = server::http(move |_req| {
+    let requests = cnt.clone();
+    let server = server::http(move |req| {
         let cnt = cnt.clone();
+        let destination = destination.clone();
         async move {
+            assert_eq!(
+                req.headers()["x-shared"],
+                "proxy",
+                "each retry keeps the proxy overlay"
+            );
+            assert_eq!(
+                req.headers()["x-proxy-only"],
+                "proxy",
+                "each retry keeps proxy-only headers"
+            );
+            assert_eq!(
+                req.headers()["proxy-authorization"],
+                "Basic dXNlcjpwYXNz",
+                "each retry keeps the selected proxy's credentials"
+            );
             if cnt.fetch_add(1, Ordering::Relaxed) == 0 {
                 // first req is bad
                 http::Response::builder()
                     .status(http::StatusCode::SERVICE_UNAVAILABLE)
                     .body(Default::default())
-                    .unwrap()
+                    .expect("valid retryable response")
             } else {
-                http::Response::default()
+                http::Response::builder()
+                    .status(http::StatusCode::FOUND)
+                    .header(http::header::LOCATION, destination)
+                    .body(Default::default())
+                    .expect("valid redirect to the bypassed origin")
             }
         }
     });
 
-    let scope = server.addr().ip().to_string();
-    let retries = gix_reqwest::retry::for_host(scope).classify_fn(|req_rep| {
+    let retries = gix_reqwest::retry::for_host("origin.local").classify_fn(|req_rep| {
         if req_rep.status() == Some(http::StatusCode::SERVICE_UNAVAILABLE) {
             req_rep.retryable()
         } else {
@@ -34,17 +71,39 @@ async fn retries_apply_in_scope() {
         }
     });
 
-    let url = format!("http://{}", server.addr());
+    let mut headers = gix_reqwest::header::HeaderMap::new();
+    headers.insert(
+        "x-shared",
+        gix_reqwest::header::HeaderValue::from_static("proxy"),
+    );
+    headers.insert(
+        "x-proxy-only",
+        gix_reqwest::header::HeaderValue::from_static("proxy"),
+    );
+    let proxy = gix_reqwest::Proxy::http(format!("http://{}", server.addr()))?
+        .basic_auth("user", "pass")
+        .headers(headers)
+        .no_proxy(gix_reqwest::NoProxy::from_string("127.0.0.1"));
     let resp = gix_reqwest::Client::builder()
         .retry(retries)
-        .build()
-        .unwrap()
-        .get(url)
+        .proxy(proxy)
+        .build()?
+        .get("http://origin.local/start")
+        .header("x-shared", "origin")
         .send()
-        .await
-        .unwrap();
+        .await?;
 
-    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.status(),
+        200,
+        "the redirect reaches the bypassed origin"
+    );
+    assert_eq!(
+        requests.load(Ordering::Relaxed),
+        2,
+        "the selected proxy received one retry"
+    );
+    Ok(())
 }
 
 #[cfg(feature = "http2")]

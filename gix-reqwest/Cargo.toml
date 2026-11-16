@@ -146,7 +146,7 @@ h2 = { version = "0.4", optional = true }
 log = "0.4.17"
 percent-encoding = "2.3"
 tokio = { version = "1.0", default-features = false, features = ["net", "time"] }
-tower = { version = "0.5.2", default-features = false, features = ["retry", "timeout", "util"] }
+tower = { version = "0.5.3", default-features = false, features = ["retry", "timeout", "util"] }
 tower-service = "0.3"
 tower-http = { version = "0.7.1", default-features = false, features = ["follow-redirect"] }
 pin-project-lite = "0.2.11"
@@ -229,7 +229,7 @@ wasm-bindgen = { version = "0.2.89", features = ["serde-serialize"] }
 wasm-bindgen-test = "0.3"
 
 [dev-dependencies]
-tower = { version = "0.5.2", default-features = false, features = ["limit"] }
+tower = { version = "0.5.3", default-features = false, features = ["limit"] }
 num_cpus = "1.0"
 libc = "0"
 

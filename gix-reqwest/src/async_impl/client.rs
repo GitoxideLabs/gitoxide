@@ -56,7 +56,7 @@ use quinn::TransportConfig;
 #[cfg(feature = "http3")]
 use quinn::VarInt;
 use tokio::time::Sleep;
-use tower::util::BoxCloneSyncServiceLayer;
+use tower::util::{BoxCloneSyncServiceLayer, MapRequest};
 use tower::{Layer, Service};
 #[cfg(any(
     feature = "gzip",
@@ -1052,6 +1052,8 @@ impl ClientBuilder {
 
         #[cfg(feature = "cookies")]
         let svc = CookieService::new(svc, config.cookie_store.clone());
+        // Keep proxy overlays out of redirect snapshots and in retry clones.
+        let svc = MapRequest::new(svc, crate::proxy::prepare_request as fn(_) -> _);
         let hyper = FollowRedirect::with_policy(svc, redirect_policy.clone());
         #[cfg(any(
             feature = "gzip",
@@ -1090,6 +1092,7 @@ impl ClientBuilder {
                         let svc = tower::retry::Retry::new(retry_policy, h3_service);
                         #[cfg(feature = "cookies")]
                         let svc = CookieService::new(svc, config.cookie_store);
+                        let svc = MapRequest::new(svc, crate::proxy::prepare_request as fn(_) -> _);
                         let svc = FollowRedirect::with_policy(svc, redirect_policy);
                         #[cfg(any(
                             feature = "gzip",
@@ -3133,7 +3136,10 @@ type MaybeDecompression<T> = Decompression<T>;
 
 type LayeredService<T> = MaybeDecompression<
     FollowRedirect<
-        MaybeCookieService<tower::retry::Retry<crate::retry::Policy, T>>,
+        MapRequest<
+            MaybeCookieService<tower::retry::Retry<crate::retry::Policy, T>>,
+            fn(http::Request<Body>) -> http::Request<Body>,
+        >,
         TowerRedirectPolicy,
     >,
 >;
