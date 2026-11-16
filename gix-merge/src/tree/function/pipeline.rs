@@ -127,7 +127,8 @@ pub fn tree<'objects>(
             labels,
             &options,
             objects,
-            |location, stages| {
+            blob_merge,
+            |location, stages, blob_merge| {
                 let ours = stages[1].as_ref().expect("content merging requires both sides");
                 let theirs = stages[2].as_ref().expect("content merging requires both sides");
                 let base_location = stages[0].as_ref().map_or(location, |stage| &stage.source);
@@ -263,14 +264,16 @@ pub fn tree<'objects>(
     })
 }
 
+#[expect(clippy::too_many_arguments)]
 fn resolve_paths(
     paths: &mut State,
     events: &mut Vec<Event>,
     renames: &BTreeMap<BString, [Option<Change>; 2]>,
     labels: crate::blob::builtin_driver::text::Labels<'_>,
     options: &Options,
-    objects: &impl gix_object::Find,
-    mut merge: impl FnMut(&BString, &[Option<Stage>; 3]) -> Result<Option<entry::Outcome>>,
+    objects: &impl gix_object::FindObjectOrHeader,
+    blob_merge: &mut crate::blob::Platform,
+    mut merge: impl FnMut(&BString, &[Option<Stage>; 3], &mut crate::blob::Platform) -> Result<Option<entry::Outcome>>,
 ) -> Result {
     let policy = ResolutionPolicy::new(options);
     let mut checked_events = 0;
@@ -358,6 +361,7 @@ fn resolve_paths(
                         labels,
                         policy,
                         objects,
+                        blob_merge,
                         &mut merge,
                     )?;
                     merged_file = Some((
@@ -392,9 +396,14 @@ fn resolve_paths(
             labels,
             policy,
             objects,
+            blob_merge,
             &mut merge,
         )?;
         if let Some((side, conflict)) = directory_conflict {
+            // Renormalization can make the file disappear, removing the D/F conflict too.
+            if content_clean && paths.entries[&output_location].result == PathResolution::Absent {
+                continue;
+            }
             let mut entries = leaves;
             if content_clean && let PathResolution::Present(entry) = paths.entries[&output_location].result {
                 // A clean content merge leaves only the file-owning side unresolved at a D/F destination.
@@ -424,8 +433,9 @@ fn resolve_leaf(
     renames: &BTreeMap<BString, [Option<Change>; 2]>,
     labels: crate::blob::builtin_driver::text::Labels<'_>,
     policy: ResolutionPolicy,
-    objects: &impl gix_object::Find,
-    merge: &mut impl FnMut(&BString, &[Option<Stage>; 3]) -> Result<Option<entry::Outcome>>,
+    objects: &impl gix_object::FindObjectOrHeader,
+    blob_merge: &mut crate::blob::Platform,
+    merge: &mut impl FnMut(&BString, &[Option<Stage>; 3], &mut crate::blob::Platform) -> Result<Option<entry::Outcome>>,
 ) -> Result<bool> {
     let [base, ours, theirs] = stages.each_ref().map(|stage| {
         stage
@@ -451,7 +461,22 @@ fn resolve_leaf(
         }
         (Some(_), None) | (None, Some(_)) => {
             let side = if ours.is_some() { 1 } else { 2 };
-            if base.is_some() && !path_conflict {
+            if let Some(base) = base.filter(|_| !path_conflict) {
+                let side_entry = ours.or(theirs).expect("one modified side remains after deletion");
+                if blob_merge.unchanged_after_renormalization(
+                    location.as_bstr(),
+                    (base.id, base.mode),
+                    (side_entry.id, side_entry.mode),
+                    if side == 1 {
+                        crate::blob::ResourceKind::CurrentOrOurs
+                    } else {
+                        crate::blob::ResourceKind::OtherOrTheirs
+                    },
+                    objects,
+                )? {
+                    set_result(paths, location, None);
+                    return Ok(true);
+                }
                 let conflict = event(
                     location,
                     stages,
@@ -470,7 +495,7 @@ fn resolve_leaf(
                         .entries
                         .get_mut(location)
                         .expect("the modified path is indexed")
-                        .set_unmerged([base, ours, theirs], None);
+                        .set_unmerged([Some(base), ours, theirs], None);
                 }
                 events.push(conflict);
             } else {
@@ -543,7 +568,7 @@ fn resolve_leaf(
                     event.relocate(location, &destinations);
                 }
             } else {
-                let merged = merge(location, stages)?.expect("compatible leaf entries can be merged");
+                let merged = merge(location, stages, blob_merge)?.expect("compatible leaf entries can be merged");
                 content_clean = !merged.is_conflict();
                 if let Some(choice) = merged.force {
                     retained_merges.extend(force_path(paths, original_location, choice, renames));

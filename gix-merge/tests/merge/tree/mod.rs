@@ -867,5 +867,6 @@ mod cartesian;
 mod conflict_policies;
 mod gitlink_renames;
 mod rename_parent_namespace;
+mod renormalized_delete;
 mod structural_differential;
 mod synthetic_trees;
