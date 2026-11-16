@@ -2872,9 +2872,7 @@ impl Client {
 
         // insert default headers in the request headers
         // without overwriting already appended headers.
-        let mut dest = self.inner.headers.clone();
-        crate::util::replace_headers(&mut dest, std::mem::take(&mut headers));
-        std::mem::swap(&mut headers, &mut dest);
+        crate::util::merge_default_headers(&mut headers, &self.inner.headers);
 
         let uri = match try_uri(&url) {
             Ok(uri) => uri,
