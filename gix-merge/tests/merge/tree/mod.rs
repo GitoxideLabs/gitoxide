@@ -991,6 +991,7 @@ mod cartesian;
 mod conflict_policies;
 mod directory_outcomes;
 mod gitlink_renames;
+mod recursive_bases;
 mod rename_parent_namespace;
 mod renormalized_delete;
 mod structural_differential;

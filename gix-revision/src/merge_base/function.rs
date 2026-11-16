@@ -1,4 +1,4 @@
-use std::cmp::Ordering;
+use std::cmp::{Ordering, Reverse};
 
 use gix_error::{OptionExt, Result, ResultExt, message};
 use gix_hash::ObjectId;
@@ -7,7 +7,8 @@ use gix_revwalk::graph;
 use crate::{Graph, PriorityQueue, merge_base::Flags};
 
 /// Given a commit at `first` id, traverse the commit `graph` and return all possible merge-base between it and `others`,
-/// sorted from best to worst. Returns `None` if there is no merge-base as `first` and `others` don't share history.
+/// sorted by descending commit time. Equal timestamps retain traversal order.
+/// Returns `None` if there is no merge-base as `first` and `others` don't share history.
 /// If `others` is empty, `Some(first)` is returned.
 ///
 /// All input commits must exist. After validating them, if `first` is contained in `others`, it is returned as the
@@ -22,7 +23,7 @@ use crate::{Graph, PriorityQueue, merge_base::Flags};
 ///
 /// For repeated calls, be sure to re-use `graph` as its content will be kept and reused for a great speed-up. The contained flags
 /// will automatically be cleared.
-/// With a commit-graph providing nonzero, unsaturated generations, the walk stops once either side's non-stale
+/// With a commit-graph providing reliable generations, the walk stops once either side's non-stale
 /// frontier is exhausted and no merge-base candidates remain queued.
 pub fn merge_base(
     first: ObjectId,
@@ -38,7 +39,8 @@ pub fn merge_base(
     graph.clear_commit_data(|f| *f = Flags::empty());
     let bases = paint_down_to_common(first, others, None, graph)?;
 
-    let bases = remove_redundant(&bases, graph)?;
+    let mut bases = remove_redundant(&bases, graph)?;
+    bases.sort_by_key(|commit_id| Reverse(graph.get(commit_id).expect("merge bases were traversed").commit_time));
     Ok(nonempty::NonEmpty::from_vec(bases))
 }
 
@@ -216,10 +218,19 @@ fn remove_redundant(
 }
 
 struct PaintQueue {
-    queue: PriorityQueue<GenThenTime, ObjectId>,
+    queue: PriorityQueue<(u64, gix_date::SecondsSinceUnixEpoch, Reverse<usize>), ObjectId>,
+    order: PaintOrder,
+    /// Git visits equal-priority commits in insertion order.
+    next_sequence: usize,
     /// Non-stale queued commits carrying each color. Candidates count toward both sides, keeping the walk alive
     /// until they have been recorded, even if no exclusively colored commits remain on one side.
     non_stale: [usize; 2],
+}
+
+enum PaintOrder {
+    CorrectedCommitDate,
+    /// Ancestor queries can stop below a topological generation, so must visit that generation first.
+    TopologicalGeneration,
 }
 
 impl PaintQueue {
@@ -242,7 +253,17 @@ impl PaintQueue {
         if commit.data.contains(Flags::ENQUEUED) {
             self.update_counts(commit.data, false);
         } else {
-            self.queue.insert(GenThenTime::from(&*commit), commit_id);
+            let generation = match self.order {
+                PaintOrder::CorrectedCommitDate => {
+                    commit.corrected_commit_date.map_or(u64::MAX, std::num::NonZeroU64::get)
+                }
+                PaintOrder::TopologicalGeneration => {
+                    u64::from(commit.generation.unwrap_or(gix_commitgraph::GENERATION_NUMBER_INFINITY))
+                }
+            };
+            self.queue
+                .insert((generation, commit.commit_time, Reverse(self.next_sequence)), commit_id);
+            self.next_sequence += 1;
             commit.data |= Flags::ENQUEUED;
         }
         commit.data |= flags;
@@ -250,14 +271,18 @@ impl PaintQueue {
     }
 
     fn pop(&mut self, graph: &mut Graph<'_, '_, graph::Commit<Flags>>) -> Option<(GenThenTime, ObjectId)> {
-        let (info, commit_id) = self.queue.pop()?;
+        let (_, commit_id) = self.queue.pop()?;
+        let commit = graph.get_mut(&commit_id).expect("everything queued is in graph");
+        let info = GenThenTime::from(&*commit);
         // Keep this commit counted until after the exit check so the last pending candidate is processed.
-        // Side exhaustion is only final when children are visited before parents. Missing, zero, or saturated
-        // generations fall back to date ordering, which can propagate a color to an already visited commit.
-        if self.non_stale == [0, 0] || (self.non_stale.contains(&0) && info.has_reliable_generation()) {
+        // Side exhaustion is only final when children are visited before parents.
+        let topologically_ordered = match self.order {
+            PaintOrder::CorrectedCommitDate => commit.corrected_commit_date.is_some_and(|date| date.get() < u64::MAX),
+            PaintOrder::TopologicalGeneration => info.has_reliable_generation(),
+        };
+        if self.non_stale == [0, 0] || (topologically_ordered && self.non_stale.contains(&0)) {
             return None;
         }
-        let commit = graph.get_mut(&commit_id).expect("everything queued is in graph");
         commit.data.remove(Flags::ENQUEUED);
         self.update_counts(commit.data, false);
         Some((info, commit_id))
@@ -275,6 +300,16 @@ fn paint_down_to_common(
 ) -> Result<Vec<(ObjectId, GenThenTime)>> {
     let mut queue = PaintQueue {
         queue: PriorityQueue::new(),
+        order: if min_generation.is_none()
+            && graph
+                .commit_graph()
+                .is_some_and(gix_commitgraph::Graph::corrected_commit_dates_available)
+        {
+            PaintOrder::CorrectedCommitDate
+        } else {
+            PaintOrder::TopologicalGeneration
+        },
+        next_sequence: 0,
         non_stale: [0; 2],
     };
     graph

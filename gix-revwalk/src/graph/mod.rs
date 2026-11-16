@@ -42,6 +42,11 @@ impl<'cache, T: Default> Graph<'_, 'cache, T> {
 
 /// Access and mutation
 impl<'cache, T> Graph<'_, 'cache, T> {
+    /// Return the optional commit graph used to accelerate object access and provide generation data.
+    pub fn commit_graph(&self) -> Option<&'cache gix_commitgraph::Graph> {
+        self.cache
+    }
+
     /// Returns the amount of entries in the graph.
     pub fn len(&self) -> usize {
         self.map.len()
@@ -362,6 +367,11 @@ pub struct Commit<T> {
     pub commit_time: SecondsSinceUnixEpoch,
     /// The generation of the commit, if available.
     pub generation: Option<u32>,
+    /// The corrected commit date (generation version 2), if every commit-graph layer provides it.
+    ///
+    /// Unlike the timestamp, this value is strictly greater than the value of each parent.
+    /// Git reserves zero for unavailable generation data.
+    pub corrected_commit_date: Option<std::num::NonZeroU64>,
     /// Any kind of data to associate with this commit.
     pub data: T,
 }
@@ -375,6 +385,7 @@ where
             .field("parents", &self.parents)
             .field("commit_time", &self.commit_time)
             .field("generation", &self.generation)
+            .field("corrected_commit_date", &self.corrected_commit_date)
             .field("data", &self.data)
             .finish()
     }
@@ -389,6 +400,7 @@ where
             parents: self.parents.clone(),
             commit_time: self.commit_time,
             generation: self.generation,
+            corrected_commit_date: self.corrected_commit_date,
             data: self.data.clone(),
         }
     }

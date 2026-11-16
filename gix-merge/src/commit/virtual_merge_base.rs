@@ -62,8 +62,8 @@ pub(super) mod function {
         };
         let mut virtual_merge_bases = Vec::new();
         let mut tree_id = None;
+        options.marker_size_multiplier += 1;
         while let Some(next_commit_id) = others.pop() {
-            options.marker_size_multiplier += 1;
             let mut out = crate::commit(
                 merged_commit_id,
                 next_commit_id,

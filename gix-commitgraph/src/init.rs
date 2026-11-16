@@ -139,7 +139,11 @@ impl Graph {
             parent_position_limit += file.num_commits();
             file.parent_position_limit = parent_position_limit;
         }
-        Ok(Self { files })
+        let corrected_commit_dates_available = files.iter().all(|file| file.generation_data_offset.is_some());
+        Ok(Self {
+            files,
+            corrected_commit_dates_available,
+        })
     }
 }
 

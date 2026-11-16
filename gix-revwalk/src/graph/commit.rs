@@ -37,6 +37,18 @@ impl<'graph, 'cache> LazyCommit<'graph, 'cache> {
         }
     }
 
+    /// Return the corrected commit date if all layers of the backing commit graph provide it.
+    ///
+    /// This can fail if an overflow offset in the commit graph is malformed.
+    pub fn corrected_commit_date(&self) -> Result<Option<u64>> {
+        match &self.backing {
+            Either::Right((cache, pos)) if cache.corrected_commit_dates_available() => {
+                cache.commit_at(*pos).corrected_commit_date()
+            }
+            _ => Ok(None),
+        }
+    }
+
     /// Returns the generation of the commit and its commit-time, either from cache if available, or parsed from the object buffer.
     pub fn generation_and_timestamp(&self) -> Result<(Option<Generation>, SecondsSinceUnixEpoch)> {
         Ok(match &self.backing {
@@ -87,6 +99,7 @@ impl<'graph, 'cache> LazyCommit<'graph, 'cache> {
                     parents,
                     commit_time: timestamp.unwrap_or_default(),
                     generation: None,
+                    corrected_commit_date: None,
                     data,
                 }
             }
@@ -105,6 +118,7 @@ impl<'graph, 'cache> LazyCommit<'graph, 'cache> {
                         message!("Commit-graph time could not be presented as signed integer: {actual}").corrupted()
                     })?,
                     generation: Some(commit.generation()),
+                    corrected_commit_date: self.corrected_commit_date()?.and_then(std::num::NonZeroU64::new),
                     data,
                 }
             }

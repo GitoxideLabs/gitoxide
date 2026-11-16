@@ -29,6 +29,10 @@ pub struct File {
     base_graphs_list_offset: Option<usize>,
     /// Byte offset into `data` of the CDAT chunk containing fixed-size commit records.
     commit_data_offset: usize,
+    /// Byte offset of corrected commit date offsets, one `u32` per commit.
+    generation_data_offset: Option<usize>,
+    /// Byte range of corrected commit date offsets that do not fit in 31 bits.
+    generation_overflow_range: Option<std::ops::Range<usize>>,
     /// Read-only memory mapping of the entire commit-graph file, including its checksum trailer.
     data: memmap2::Mmap,
     /// Byte range within `data` of the optional EDGE chunk containing additional parent positions.
@@ -57,6 +61,7 @@ pub struct File {
 /// generated via `git commit-graph write ...` commands.
 pub struct Graph {
     files: nonempty::NonEmpty<File>,
+    corrected_commit_dates_available: bool,
 }
 
 /// Owned parent commit information collected during traversal.

@@ -19,6 +19,8 @@ type ChunkId = gix_chunk::Id;
 const BASE_GRAPHS_LIST_CHUNK_ID: ChunkId = *b"BASE";
 const COMMIT_DATA_CHUNK_ID: ChunkId = *b"CDAT";
 const EXTENDED_EDGES_LIST_CHUNK_ID: ChunkId = *b"EDGE";
+const GENERATION_DATA_CHUNK_ID: ChunkId = *b"GDA2";
+const GENERATION_OVERFLOW_CHUNK_ID: ChunkId = *b"GDO2";
 const OID_FAN_CHUNK_ID: ChunkId = *b"OIDF";
 const OID_LOOKUP_CHUNK_ID: ChunkId = *b"OIDL";
 
