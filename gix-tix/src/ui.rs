@@ -3346,6 +3346,14 @@ fn metadata_columns<'a>(
             title_spans.extend(note_title);
             title_spans.push(Span::raw(" "));
         }
+    }
+    if row.is_empty {
+        title_spans.push(Span::styled(
+            "[empty] ",
+            color(Color::Yellow).add_modifier(Modifier::BOLD),
+        ));
+    }
+    if !show_emails {
         title_spans.extend(commit_title_spans(title, title_format));
     }
     MetadataColumns {
@@ -3723,6 +3731,7 @@ mod tests {
                     attributions: 0..0,
                     title: "wide 界 text".into(),
                     metadata_loaded: true,
+                    is_empty: false,
                     has_agent_marker: false,
                     is_review: index == 1,
                     has_merge_replay: false,
@@ -4010,6 +4019,7 @@ mod tests {
                     attributions: 0..0,
                     title: "subject".into(),
                     metadata_loaded: true,
+                    is_empty: false,
                     has_agent_marker: false,
                     is_review: false,
                     has_merge_replay: false,
@@ -4144,6 +4154,7 @@ mod tests {
             attributions: 0..0,
             title: "subject".into(),
             metadata_loaded: true,
+            is_empty: false,
             has_agent_marker: false,
             is_review: false,
             has_merge_replay: false,
@@ -5038,6 +5049,7 @@ mod tests {
                     attributions: 0..0,
                     title: "subject".into(),
                     metadata_loaded: true,
+                    is_empty: false,
                     has_agent_marker: false,
                     is_review: false,
                     has_merge_replay: false,
@@ -5087,6 +5099,7 @@ mod tests {
                     attributions: 0..0,
                     title: "subject".into(),
                     metadata_loaded: true,
+                    is_empty: false,
                     has_agent_marker: false,
                     is_review: false,
                     has_merge_replay: false,
@@ -5123,6 +5136,7 @@ mod tests {
             attributions: 0..0,
             title: "subject".into(),
             metadata_loaded: true,
+            is_empty: false,
             has_agent_marker: false,
             is_review: false,
             has_merge_replay: false,
@@ -5327,6 +5341,7 @@ Native tests: 2s"
                     attributions: 0..0,
                     title: "subject".into(),
                     metadata_loaded: true,
+                    is_empty: false,
                     has_agent_marker: false,
                     is_review: false,
                     has_merge_replay: false,
@@ -5395,6 +5410,7 @@ Native tests: 2s"
             attributions: 0..0,
             title: "subject".into(),
             metadata_loaded: true,
+            is_empty: false,
             has_agent_marker: false,
             is_review: false,
             has_merge_replay: false,
@@ -5719,6 +5735,7 @@ Native tests: 2s"
             attributions: 0..0,
             title: "a subject which is deliberately too long".into(),
             metadata_loaded: true,
+            is_empty: false,
             has_agent_marker: false,
             is_review: false,
             has_merge_replay: false,
@@ -5815,6 +5832,7 @@ Native tests: 2s"
             attributions: 0..0,
             title: title.into(),
             metadata_loaded: true,
+            is_empty: false,
             has_agent_marker: false,
             is_review: false,
             has_merge_replay: false,
@@ -5938,6 +5956,7 @@ Native tests: 2s"
             attributions: 0..0,
             title: 0..0,
             metadata_loaded: true,
+            is_empty: false,
             has_agent_marker: false,
             is_review: false,
             has_merge_replay: false,
@@ -6061,6 +6080,7 @@ Native tests: 2s"
                 attributions: 0..8,
                 title: "subject".into(),
                 metadata_loaded: true,
+                is_empty: false,
                 has_agent_marker: false,
                 is_review: false,
                 has_merge_replay: false,
@@ -6198,6 +6218,7 @@ Native tests: 2s"
             attributions: 0..0,
             title: "unique comment".into(),
             metadata_loaded: true,
+            is_empty: false,
             has_agent_marker: false,
             is_review: false,
             has_merge_replay: false,
@@ -6231,6 +6252,7 @@ Native tests: 2s"
                 attributions: 0..1,
                 title: "subject".into(),
                 metadata_loaded: true,
+                is_empty: false,
                 has_agent_marker: false,
                 is_review: false,
                 has_merge_replay: false,
@@ -6292,6 +6314,7 @@ Native tests: 2s"
             attributions: 0..0,
             title: "subject".into(),
             metadata_loaded: true,
+            is_empty: false,
             has_agent_marker: false,
             is_review: false,
             has_merge_replay: false,
@@ -6565,6 +6588,7 @@ Native tests: 2s"
             attributions: 0..0,
             title: "subject\u{1b}]0;spoof\u{7}\u{9b}2K".into(),
             metadata_loaded: true,
+            is_empty: false,
             has_agent_marker: false,
             has_merge_replay: false,
             is_review: false,
@@ -6606,6 +6630,7 @@ Native tests: 2s"
             attributions: 0..0,
             title: "subject".into(),
             metadata_loaded: true,
+            is_empty: false,
             has_agent_marker: false,
             is_review: false,
             has_merge_replay: false,
@@ -6695,6 +6720,7 @@ Native tests: 2s"
             attributions: 0..0,
             title: "subject".into(),
             metadata_loaded: true,
+            is_empty: false,
             has_agent_marker: false,
             is_review: false,
             has_merge_replay: false,
@@ -7183,6 +7209,7 @@ Native tests: 2s"
             attributions: 0..0,
             title: format!("commit {n}").into(),
             metadata_loaded: true,
+            is_empty: false,
             has_agent_marker: false,
             is_review: false,
             has_merge_replay: false,
@@ -7302,6 +7329,7 @@ Native tests: 2s"
             attributions: 0..0,
             title: "subject".into(),
             metadata_loaded: true,
+            is_empty: false,
             has_agent_marker: false,
             is_review: false,
             has_merge_replay: false,
@@ -7366,6 +7394,7 @@ Native tests: 2s"
             attributions: 0..0,
             title: "subject".into(),
             metadata_loaded: true,
+            is_empty: false,
             has_agent_marker: false,
             is_review: false,
             has_merge_replay: false,
@@ -7601,6 +7630,7 @@ Native tests: 2s"
             attributions: 0..0,
             title: "subject".into(),
             metadata_loaded: true,
+            is_empty: false,
             has_agent_marker: false,
             is_review: false,
             has_merge_replay: false,
@@ -7707,6 +7737,7 @@ Native tests: 2s"
                     attributions: 0..0,
                     title: "subject".into(),
                     metadata_loaded: true,
+                    is_empty: false,
                     has_agent_marker: false,
                     is_review: false,
                     has_merge_replay: false,
@@ -7772,6 +7803,7 @@ Native tests: 2s"
                     attributions: 0..0,
                     title: format!("subject {n}").into(),
                     metadata_loaded: true,
+                    is_empty: false,
                     has_agent_marker: false,
                     is_review: false,
                     has_merge_replay: false,
@@ -8052,6 +8084,7 @@ Native tests: 2s"
             attributions: 0..0,
             title: "subject".into(),
             metadata_loaded: true,
+            is_empty: false,
             has_agent_marker: false,
             is_review: false,
             has_merge_replay: false,
@@ -8111,6 +8144,7 @@ Native tests: 2s"
             attributions: 0..0,
             title: "subject".into(),
             metadata_loaded: true,
+            is_empty: false,
             has_agent_marker: false,
             is_review: false,
             has_merge_replay: false,
@@ -8221,6 +8255,7 @@ Native tests: 2s"
             attributions: 0..0,
             title: title.into(),
             metadata_loaded: true,
+            is_empty: false,
             has_agent_marker: false,
             is_review: false,
             has_merge_replay: false,
@@ -8377,6 +8412,7 @@ Native tests: 2s"
                     }
                     .into(),
                     metadata_loaded: true,
+                    is_empty: false,
                     has_agent_marker: false,
                     is_review: false,
                     has_merge_replay: false,
@@ -8661,6 +8697,7 @@ Native tests: 2s"
             attributions: 0..0,
             title: "subject".into(),
             metadata_loaded: true,
+            is_empty: false,
             has_agent_marker: false,
             is_review: false,
             has_merge_replay: false,
@@ -8731,6 +8768,7 @@ Native tests: 2s"
             attributions: 0..0,
             title: "subject".into(),
             metadata_loaded: true,
+            is_empty: false,
             has_agent_marker: false,
             is_review: false,
             has_merge_replay: false,
@@ -8902,6 +8940,7 @@ Native tests: 2s"
             attributions: 0..0,
             title: "subject".into(),
             metadata_loaded: true,
+            is_empty: false,
             has_agent_marker: false,
             is_review: false,
             has_merge_replay: false,
@@ -9045,6 +9084,7 @@ Native tests: 2s"
                     attributions: 0..0,
                     title: format!("history {n}").into(),
                     metadata_loaded: true,
+                    is_empty: false,
                     has_agent_marker: false,
                     is_review: false,
                     has_merge_replay: false,
@@ -9150,6 +9190,7 @@ Native tests: 2s"
                     attributions: 0..0,
                     title: format!("subject {n}").into(),
                     metadata_loaded: true,
+                    is_empty: false,
                     has_agent_marker: false,
                     is_review: false,
                     has_merge_replay: false,
@@ -9259,6 +9300,7 @@ Native tests: 2s"
                 attributions: 0..0,
                 title: "merge".into(),
                 metadata_loaded: true,
+                is_empty: false,
                 has_agent_marker: false,
                 is_review: false,
                 has_merge_replay: false,
@@ -9273,6 +9315,7 @@ Native tests: 2s"
                 attributions: 0..0,
                 title: "parent".into(),
                 metadata_loaded: true,
+                is_empty: false,
                 has_agent_marker: false,
                 is_review: false,
                 has_merge_replay: false,
@@ -10511,6 +10554,7 @@ Clippy: 1s"
                 attributions: 0..0,
                 title: format!("{marker} feat(gix-tix)!: **subject**").into(),
                 metadata_loaded: true,
+                is_empty: false,
                 has_agent_marker: false,
                 is_review: false,
                 has_merge_replay: false,
@@ -10586,6 +10630,65 @@ Clippy: 1s"
     }
 
     #[test]
+    fn highlights_empty_commits_in_compact_and_full_actor_views() -> gix_testtools::TestResult {
+        let mut app = App::new(1);
+        app.extend_commits(vec![Commit {
+            id: gix::ObjectId::Sha1([1; 20]),
+            parent_ids: Default::default(),
+            author_time: gix::date::Time::default(),
+            committer_time: gix::date::Time::default(),
+            author: author(b"author", b"author@example.com"),
+            attributions: 0..0,
+            title: "empty commit with a long subject that forces compact rendering in narrow terminals".into(),
+            metadata_loaded: true,
+            is_empty: true,
+            has_agent_marker: false,
+            is_review: false,
+            has_merge_replay: false,
+            signature: SignatureState::Unsigned,
+        }]);
+        complete(&mut app);
+        app.selected = None;
+        let decorations = Decorations::new();
+        let mailmap = gix::mailmap::Snapshot::default();
+        for show_emails in [false, true] {
+            app.show_emails = show_emails;
+            for alignment in [
+                HistoryAlignment::None,
+                HistoryAlignment::Title,
+                HistoryAlignment::Columns,
+                HistoryAlignment::Compressed,
+            ] {
+                app.alignment = alignment;
+                let width = if show_emails || alignment == HistoryAlignment::None {
+                    100
+                } else {
+                    24
+                };
+                let mut terminal = Terminal::new(TestBackend::new(width, 2))?;
+                terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+                let line = rendered_row(&terminal);
+                let start = line[..line.find("[empty]").expect("the empty-diff badge stays visible")]
+                    .chars()
+                    .count() as u16;
+                let badge = &terminal.backend().buffer()[(start, 0)];
+                assert_eq!(badge.fg, Color::Yellow, "the empty-diff badge has a distinct color");
+                assert!(badge.modifier.contains(Modifier::BOLD), "the empty-diff badge is bold");
+            }
+            for text in [
+                plain_history_metadata(&app, &app.rows[0], &decorations, &mailmap, false, None),
+                todo_metadata(&app, &app.rows[0], &mailmap),
+            ] {
+                assert!(
+                    text.contains("[empty]"),
+                    "plain history and rebase annotations retain the badge"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn styles_conventional_prefixes_only_in_history() -> gix_testtools::Result {
         let commit_id = gix::ObjectId::Sha1([1; 20]);
         let mut app = App::new(1);
@@ -10598,6 +10701,7 @@ Clippy: 1s"
             attributions: 0..0,
             title: "feat(gix-tix)!: **subject**".into(),
             metadata_loaded: true,
+            is_empty: false,
             has_agent_marker: false,
             is_review: false,
             has_merge_replay: false,
@@ -10704,6 +10808,7 @@ Clippy: 1s"
             attributions: 0..0,
             title: "subject".into(),
             metadata_loaded: true,
+            is_empty: false,
             has_agent_marker: true,
             is_review: false,
             has_merge_replay: false,
@@ -10768,6 +10873,7 @@ Clippy: 1s"
                     attributions: 0..0,
                     title: format!("subject {n}").into(),
                     metadata_loaded: true,
+                    is_empty: false,
                     has_agent_marker: false,
                     is_review: false,
                     has_merge_replay: false,
@@ -10809,6 +10915,7 @@ Clippy: 1s"
             attributions: 0..0,
             title: format!("subject {n}").into(),
             metadata_loaded: true,
+            is_empty: false,
             has_agent_marker: false,
             is_review: false,
             has_merge_replay: false,
@@ -10968,6 +11075,7 @@ Clippy: 1s"
             attributions: 0..0,
             title: "subject".into(),
             metadata_loaded: true,
+            is_empty: false,
             has_agent_marker: false,
             is_review: false,
             has_merge_replay: false,
@@ -11103,6 +11211,7 @@ Clippy: 1s"
             attributions: 0..0,
             title: "subject".into(),
             metadata_loaded: true,
+            is_empty: false,
             has_agent_marker: false,
             is_review: false,
             has_merge_replay: false,
@@ -11206,6 +11315,7 @@ Clippy: 1s"
                     attributions: 0..0,
                     title: "first-title".into(),
                     metadata_loaded: true,
+                    is_empty: false,
                     has_agent_marker: false,
                     is_review: false,
                     has_merge_replay: false,
@@ -11220,6 +11330,7 @@ Clippy: 1s"
                     attributions: 0..1,
                     title: "second-title".into(),
                     metadata_loaded: true,
+                    is_empty: false,
                     has_agent_marker: true,
                     is_review: false,
                     has_merge_replay: false,
@@ -11234,6 +11345,7 @@ Clippy: 1s"
                     attributions: 1..1,
                     title: "third-title".into(),
                     metadata_loaded: true,
+                    is_empty: false,
                     has_agent_marker: false,
                     is_review: false,
                     has_merge_replay: false,
@@ -11364,6 +11476,7 @@ Clippy: 1s"
                     attributions: 0..0,
                     title: if index == 0 { "tip" } else { "hidden" }.into(),
                     metadata_loaded: true,
+                    is_empty: false,
                     has_agent_marker: false,
                     is_review: false,
                     has_merge_replay: false,
