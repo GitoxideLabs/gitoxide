@@ -319,6 +319,7 @@ debug = 1
 strip = "none"
 
 [workspace]
+exclude = ["gix-reqwest"]
 members = [
     "gix-actor",
     "gix-url",

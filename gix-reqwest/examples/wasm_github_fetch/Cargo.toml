@@ -1,0 +1,18 @@
+[package]
+name = "wasm"
+version = "0.1.0"
+authors = ["John Gallagher <john.willis.gallagher@gmail.com>"]
+edition = "2021"
+
+# Config mostly pulled from: https://github.com/rustwasm/wasm-bindgen/blob/master/examples/fetch/Cargo.toml
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+reqwest = {path = "../../"}
+serde = { version = "1.0.101", features = ["derive"] }
+serde_derive = "^1.0.59"
+wasm-bindgen-futures = "0.4.1"
+serde_json = "1.0.41"
+wasm-bindgen = { version = "0.2.51", features = ["serde-serialize"]  }
