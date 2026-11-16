@@ -76,6 +76,16 @@ pub(crate) fn replace_headers(dst: &mut HeaderMap, src: HeaderMap) {
     }
 }
 
+pub(crate) fn merge_default_headers(dst: &mut HeaderMap, defaults: &HeaderMap) {
+    for key in defaults.keys() {
+        if !dst.contains_key(key) {
+            for value in defaults.get_all(key) {
+                dst.append(key, value.clone());
+            }
+        }
+    }
+}
+
 #[cfg(feature = "cookies")]
 #[cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))]
 pub(crate) fn add_cookie_header(
@@ -126,5 +136,32 @@ impl fmt::Display for Escape<'_> {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merge_default_headers_preserves_values_and_overrides() {
+        let mut defaults = HeaderMap::new();
+        defaults.append("x-default", HeaderValue::from_static("first"));
+        let mut secret = HeaderValue::from_static("second");
+        secret.set_sensitive(true);
+        defaults.append("x-default", secret);
+        defaults.append("x-override", HeaderValue::from_static("default"));
+
+        let mut headers = HeaderMap::new();
+        headers.append("x-override", HeaderValue::from_static("custom-first"));
+        headers.append("x-override", HeaderValue::from_static("custom-second"));
+        merge_default_headers(&mut headers, &defaults);
+
+        let values: Vec<_> = headers.get_all("x-default").iter().collect();
+        assert_eq!(values, ["first", "second"]);
+        assert!(values[1].is_sensitive());
+        let overrides: Vec<_> = headers.get_all("x-override").iter().collect();
+        assert_eq!(overrides, ["custom-first", "custom-second"]);
+        assert_eq!(defaults.get_all("x-default").iter().count(), 2);
     }
 }
