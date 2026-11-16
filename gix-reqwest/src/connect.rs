@@ -590,12 +590,15 @@ impl ConnectorService {
             }
             #[cfg(not(feature = "__tls"))]
             Inner::Http(http) => {
+                if dst.scheme_str() != Some("http") {
+                    return Err("TLS support is required for HTTPS requests".into());
+                }
                 let conn = socks::connect(proxy, dst, dns, &self.resolver, http).await?;
-                return Ok(Conn {
+                Ok(Conn {
                     inner: self.verbose.wrap(TokioIo::new(conn)),
                     is_proxy: false,
                     tls_info: false,
-                });
+                })
             }
         }
 
@@ -1945,7 +1948,11 @@ mod socks {
             }
         }
 
-        let proxy_uri = proxy.uri().clone();
+        // The connector dials TCP; the proxy service handles SOCKS negotiation.
+        let mut proxy_parts = proxy.uri().clone().into_parts();
+        proxy_parts.scheme = Some(Scheme::HTTP);
+        let proxy_uri = Uri::from_parts(proxy_parts)
+            .map_err(|err| SocksProxyError::SocksConnect(err.into()))?;
         // Build a Uri for the destination
         let dst_uri = format!(
             "{}://{}:{}",
