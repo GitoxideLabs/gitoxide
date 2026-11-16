@@ -78,7 +78,7 @@ impl Policy {
     /// # Example
     ///
     /// ```rust
-    /// # use reqwest::{Error, redirect};
+    /// # use gix_reqwest::{Error, redirect};
     /// #
     /// # fn run() -> Result<(), Error> {
     /// let custom = redirect::Policy::custom(|attempt| {
@@ -91,7 +91,7 @@ impl Policy {
     ///         attempt.follow()
     ///     }
     /// });
-    /// let client = reqwest::Client::builder()
+    /// let client = gix_reqwest::Client::builder()
     ///     .redirect(custom)
     ///     .build()?;
     /// # Ok(())
@@ -118,7 +118,7 @@ impl Policy {
     /// # Example
     ///
     /// ```rust
-    /// # use reqwest::{Error, redirect};
+    /// # use gix_reqwest::{Error, redirect};
     /// #
     /// # fn run() -> Result<(), Error> {
     /// let custom = redirect::Policy::custom(|attempt| {

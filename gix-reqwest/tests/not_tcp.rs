@@ -8,7 +8,7 @@ mod support;
 async fn unix_socket_works() {
     let server = support::not_tcp::uds(move |_| async move { http::Response::default() });
 
-    let res = reqwest::Client::builder()
+    let res = gix_reqwest::Client::builder()
         .unix_socket(server.path())
         .build()
         .unwrap()
@@ -24,9 +24,9 @@ async fn unix_socket_works() {
 async fn unix_socket_ignores_proxies() {
     let server = support::not_tcp::uds(move |_| async move { http::Response::default() });
 
-    let res = reqwest::Client::builder()
+    let res = gix_reqwest::Client::builder()
         .unix_socket(server.path())
-        .proxy(reqwest::Proxy::http("http://dont.use.me.local").unwrap())
+        .proxy(gix_reqwest::Proxy::http("http://dont.use.me.local").unwrap())
         .build()
         .unwrap()
         .get("http://yolo.local/foo")
@@ -43,7 +43,7 @@ async fn unix_socket_ignores_proxies() {
 async fn unix_socket_uses_tls() {
     let server = support::not_tcp::uds(move |_| async move { http::Response::default() });
 
-    let res = reqwest::Client::builder()
+    let res = gix_reqwest::Client::builder()
         .unix_socket(server.path())
         .build()
         .unwrap()

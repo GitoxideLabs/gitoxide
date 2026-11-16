@@ -18,11 +18,11 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 #[tokio::main]
-async fn main() -> Result<(), reqwest::Error> {
+async fn main() -> Result<(), gix_reqwest::Error> {
     background_threadpool::init_background_runtime();
     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
-    let client = reqwest::Client::builder()
+    let client = gix_reqwest::Client::builder()
         .connector_layer(background_threadpool::BackgroundProcessorLayer::new())
         .build()
         .expect("should be able to build reqwest client");

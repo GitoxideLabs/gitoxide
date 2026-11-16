@@ -10,5 +10,5 @@ async fn server_panics_should_propagate() {
         panic!("kaboom");
     });
 
-    let _ = reqwest::get(format!("http://{}/ci", server.addr())).await;
+    let _ = gix_reqwest::get(format!("http://{}/ci", server.addr())).await;
 }

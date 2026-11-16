@@ -17,7 +17,7 @@ async fn client_timeout() {
         }
     });
 
-    let client = reqwest::Client::builder()
+    let client = gix_reqwest::Client::builder()
         .timeout(Duration::from_millis(100))
         .no_proxy()
         .build()
@@ -45,7 +45,7 @@ async fn request_timeout() {
         }
     });
 
-    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let client = gix_reqwest::Client::builder().no_proxy().build().unwrap();
 
     let url = format!("http://{}/slow", server.addr());
 
@@ -69,7 +69,7 @@ async fn request_timeout() {
 async fn connect_timeout() {
     let _ = env_logger::try_init();
 
-    let client = reqwest::Client::builder()
+    let client = gix_reqwest::Client::builder()
         .connect_timeout(Duration::from_millis(100))
         .no_proxy()
         .build()
@@ -96,7 +96,7 @@ async fn connect_many_timeout_succeeds() {
     let server = server::http(move |_req| async { http::Response::default() });
     let port = server.addr().port();
 
-    let client = reqwest::Client::builder()
+    let client = gix_reqwest::Client::builder()
         .resolve_to_addrs(
             "many_addrs",
             &["192.0.2.1:81".parse().unwrap(), server.addr()],
@@ -121,7 +121,7 @@ async fn connect_many_timeout_succeeds() {
 async fn connect_many_timeout() {
     let _ = env_logger::try_init();
 
-    let client = reqwest::Client::builder()
+    let client = gix_reqwest::Client::builder()
         .resolve_to_addrs(
             "many_addrs",
             &[
@@ -155,7 +155,7 @@ async fn response_timeout() {
     let server = server::http(move |_req| {
         async {
             // immediate response, but delayed body
-            let body = reqwest::Body::wrap_stream(futures_util::stream::once(async {
+            let body = gix_reqwest::Body::wrap_stream(futures_util::stream::once(async {
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 Ok::<_, std::convert::Infallible>("Hello")
             }));
@@ -164,7 +164,7 @@ async fn response_timeout() {
         }
     });
 
-    let client = reqwest::Client::builder()
+    let client = gix_reqwest::Client::builder()
         .timeout(Duration::from_millis(500))
         .no_proxy()
         .build()
@@ -191,7 +191,7 @@ async fn read_timeout_applies_to_headers() {
         }
     });
 
-    let client = reqwest::Client::builder()
+    let client = gix_reqwest::Client::builder()
         .read_timeout(Duration::from_millis(100))
         .no_proxy()
         .build()
@@ -215,7 +215,7 @@ async fn read_timeout_applies_to_body() {
     let server = server::http(move |_req| {
         async {
             // immediate response, but delayed body
-            let body = reqwest::Body::wrap_stream(futures_util::stream::once(async {
+            let body = gix_reqwest::Body::wrap_stream(futures_util::stream::once(async {
                 tokio::time::sleep(Duration::from_millis(300)).await;
                 Ok::<_, std::convert::Infallible>("Hello")
             }));
@@ -224,7 +224,7 @@ async fn read_timeout_applies_to_body() {
         }
     });
 
-    let client = reqwest::Client::builder()
+    let client = gix_reqwest::Client::builder()
         .read_timeout(Duration::from_millis(100))
         .no_proxy()
         .build()
@@ -259,13 +259,13 @@ async fn read_timeout_allows_slow_response_body() {
                     None
                 }
             });
-            let body = reqwest::Body::wrap_stream(slow);
+            let body = gix_reqwest::Body::wrap_stream(slow);
 
             http::Response::new(body)
         }
     });
 
-    let client = reqwest::Client::builder()
+    let client = gix_reqwest::Client::builder()
         .read_timeout(Duration::from_millis(200))
         //.timeout(Duration::from_millis(200))
         .no_proxy()
@@ -285,7 +285,7 @@ async fn read_timeout_ignores_time_between_reads() {
 
     let server = server::http(move |_req| async { http::Response::new("Hello".into()) });
 
-    let client = reqwest::Client::builder()
+    let client = gix_reqwest::Client::builder()
         .read_timeout(Duration::from_millis(100))
         .no_proxy()
         .build()
@@ -306,7 +306,7 @@ async fn read_timeout_ignores_time_between_reads() {
 fn big_timeout_duration_does_not_overflow() {
     let _ = env_logger::try_init();
 
-    let client = reqwest::blocking::Client::builder()
+    let client = gix_reqwest::blocking::Client::builder()
         .timeout(Duration::MAX)
         .build()
         .unwrap();
@@ -328,7 +328,7 @@ fn timeout_closes_connection() {
 
     // Make Client drop *after* the Server, so the background doesn't
     // close too early.
-    let client = reqwest::blocking::Client::builder()
+    let client = gix_reqwest::blocking::Client::builder()
         .timeout(Duration::from_millis(500))
         .build()
         .unwrap();
@@ -355,7 +355,7 @@ fn timeout_blocking_request() {
 
     // Make Client drop *after* the Server, so the background doesn't
     // close too early.
-    let client = reqwest::blocking::Client::builder().build().unwrap();
+    let client = gix_reqwest::blocking::Client::builder().build().unwrap();
 
     let server = server::http(move |_req| {
         async {
@@ -381,7 +381,7 @@ fn timeout_blocking_request() {
 fn connect_timeout_blocking_request() {
     let _ = env_logger::try_init();
 
-    let client = reqwest::blocking::Client::builder()
+    let client = gix_reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_millis(100))
         .build()
         .unwrap();
@@ -400,7 +400,7 @@ fn connect_timeout_blocking_request() {
 fn blocking_request_timeout_body() {
     let _ = env_logger::try_init();
 
-    let client = reqwest::blocking::Client::builder()
+    let client = gix_reqwest::blocking::Client::builder()
         // this should be overridden
         .connect_timeout(Duration::from_millis(200))
         // this should be overridden
@@ -411,7 +411,7 @@ fn blocking_request_timeout_body() {
     let server = server::http(move |_req| {
         async {
             // immediate response, but delayed body
-            let body = reqwest::Body::wrap_stream(futures_util::stream::once(async {
+            let body = gix_reqwest::Body::wrap_stream(futures_util::stream::once(async {
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 Ok::<_, std::convert::Infallible>("Hello")
             }));
@@ -441,7 +441,7 @@ fn write_timeout_large_body() {
 
     // Make Client drop *after* the Server, so the background doesn't
     // close too early.
-    let client = reqwest::blocking::Client::builder()
+    let client = gix_reqwest::blocking::Client::builder()
         .timeout(Duration::from_millis(500))
         .build()
         .unwrap();
@@ -458,7 +458,7 @@ fn write_timeout_large_body() {
     let url = format!("http://{}/write-timeout", server.addr());
     let err = client
         .post(&url)
-        .body(reqwest::blocking::Body::sized(cursor, len as u64))
+        .body(gix_reqwest::blocking::Body::sized(cursor, len as u64))
         .send()
         .unwrap_err();
 
@@ -472,7 +472,7 @@ async fn response_body_timeout_forwards_size_hint() {
 
     let server = server::http(move |_req| async { http::Response::new(b"hello".to_vec().into()) });
 
-    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let client = gix_reqwest::Client::builder().no_proxy().build().unwrap();
 
     let url = format!("http://{}/slow", server.addr());
 

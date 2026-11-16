@@ -216,6 +216,7 @@ summarize EXPRESSION='all()':
 [group('Development')]
 fmt:
     cargo +nightly fmt --all -- --config-path rustfmt-nightly.toml
+    cargo +stable fmt -p gix-reqwest
     cargo +stable fmt --all -- --check
     {{ j }} --fmt --unstable
 

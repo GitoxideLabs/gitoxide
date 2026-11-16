@@ -26,12 +26,12 @@ async fn http_upgrade() {
                 .status(http::StatusCode::SWITCHING_PROTOCOLS)
                 .header(http::header::CONNECTION, "upgrade")
                 .header(http::header::UPGRADE, "foobar")
-                .body(reqwest::Body::default())
+                .body(gix_reqwest::Body::default())
                 .unwrap()
         }
     });
 
-    let res = reqwest::Client::builder()
+    let res = gix_reqwest::Client::builder()
         .build()
         .unwrap()
         .get(format!("http://{}", server.addr()))

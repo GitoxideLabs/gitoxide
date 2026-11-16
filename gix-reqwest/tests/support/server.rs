@@ -57,7 +57,7 @@ impl Drop for Server {
 pub fn http<F, Fut>(func: F) -> Server
 where
     F: Fn(http::Request<hyper::body::Incoming>) -> Fut + Clone + Send + 'static,
-    Fut: Future<Output = http::Response<reqwest::Body>> + Send + 'static,
+    Fut: Future<Output = http::Response<gix_reqwest::Body>> + Send + 'static,
 {
     let infall = move |req| {
         let fut = func(req);
@@ -71,7 +71,7 @@ type Builder = hyper_util::server::conn::auto::Builder<hyper_util::rt::TokioExec
 pub fn http_with_config<F1, Fut, E, F2, Bu>(func: F1, apply_config: F2) -> Server
 where
     F1: Fn(http::Request<hyper::body::Incoming>) -> Fut + Clone + Send + 'static,
-    Fut: Future<Output = Result<http::Response<reqwest::Body>, E>> + Send + 'static,
+    Fut: Future<Output = Result<http::Response<gix_reqwest::Body>, E>> + Send + 'static,
     E: Into<Box<dyn std::error::Error + Send + Sync>>,
     F2: FnOnce(&mut Builder) -> Bu + Send + 'static,
 {
@@ -179,7 +179,7 @@ impl Http3 {
             + Clone
             + Send
             + 'static,
-        Fut: Future<Output = http::Response<reqwest::Body>> + Send + 'static,
+        Fut: Future<Output = http::Response<gix_reqwest::Body>> + Send + 'static,
     {
         self.build_server(func, None)
     }
@@ -198,7 +198,7 @@ impl Http3 {
             + Clone
             + Send
             + 'static,
-        Fut: Future<Output = http::Response<reqwest::Body>> + Send + 'static,
+        Fut: Future<Output = http::Response<gix_reqwest::Body>> + Send + 'static,
     {
         self.build_server(func, Some(code))
     }
@@ -217,7 +217,7 @@ impl Http3 {
             + Clone
             + Send
             + 'static,
-        Fut: Future<Output = http::Response<reqwest::Body>> + Send + 'static,
+        Fut: Future<Output = http::Response<gix_reqwest::Body>> + Send + 'static,
     {
         use bytes::Buf;
         use http_body_util::BodyExt;

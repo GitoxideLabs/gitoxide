@@ -319,7 +319,6 @@ debug = 1
 strip = "none"
 
 [workspace]
-exclude = ["gix-reqwest"]
 members = [
     "gix-actor",
     "gix-url",
@@ -369,6 +368,7 @@ members = [
     "gix-sequencer",
     "gix-submodule",
     "gix-transport",
+    "gix-reqwest",
     "gix-credentials",
     "gix-protocol",
     "gix-pack",

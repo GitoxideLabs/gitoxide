@@ -16,7 +16,7 @@ use crate::Url;
 // - The public builder API
 // - The internal built types that our Connector knows how to use.
 //
-// The user creates a builder (`reqwest::Proxy`), and configures any extras.
+// The user creates a builder (`gix_reqwest::Proxy`), and configures any extras.
 // Once that type is passed to the `ClientBuilder`, we convert it into the
 // built matcher types, making use of `hyper-util`'s matchers.
 
@@ -31,7 +31,7 @@ use crate::Url;
 ///
 /// ```rust
 /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-/// let proxy = reqwest::Proxy::http("https://secure.example")?;
+/// let proxy = gix_reqwest::Proxy::http("https://secure.example")?;
 /// # Ok(())
 /// # }
 /// ```
@@ -48,7 +48,7 @@ use crate::Url;
 /// By enabling the `"socks"` feature it is possible to use a socks proxy:
 /// ```rust
 /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-/// let proxy = reqwest::Proxy::http("socks5://192.168.1.1:9000")?;
+/// let proxy = gix_reqwest::Proxy::http("socks5://192.168.1.1:9000")?;
 /// # Ok(())
 /// # }
 /// ```
@@ -89,7 +89,7 @@ enum Matcher_ {
 /// pieces attached thanks to `reqwest`s extra proxy configuration.
 pub(crate) struct Intercepted {
     inner: matcher::Intercept,
-    /// This is because of `reqwest::Proxy`'s design which allows configuring
+    /// This is because of `gix_reqwest::Proxy`'s design which allows configuring
     /// an explicit auth, besides what might have been in the URL (or Custom).
     extra: Extra,
 }
@@ -179,10 +179,10 @@ impl Proxy {
     /// # Example
     ///
     /// ```
-    /// # extern crate reqwest;
+    /// # extern crate gix_reqwest;
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let client = reqwest::Client::builder()
-    ///     .proxy(reqwest::Proxy::http("https://my.prox")?)
+    /// let client = gix_reqwest::Client::builder()
+    ///     .proxy(gix_reqwest::Proxy::http("https://my.prox")?)
     ///     .build()?;
     /// # Ok(())
     /// # }
@@ -197,10 +197,10 @@ impl Proxy {
     /// # Example
     ///
     /// ```
-    /// # extern crate reqwest;
+    /// # extern crate gix_reqwest;
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let client = reqwest::Client::builder()
-    ///     .proxy(reqwest::Proxy::https("https://example.prox:4545")?)
+    /// let client = gix_reqwest::Client::builder()
+    ///     .proxy(gix_reqwest::Proxy::https("https://example.prox:4545")?)
     ///     .build()?;
     /// # Ok(())
     /// # }
@@ -218,10 +218,10 @@ impl Proxy {
     /// # Example
     ///
     /// ```
-    /// # extern crate reqwest;
+    /// # extern crate gix_reqwest;
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let client = reqwest::Client::builder()
-    ///     .proxy(reqwest::Proxy::all("http://pro.xy")?)
+    /// let client = gix_reqwest::Client::builder()
+    ///     .proxy(gix_reqwest::Proxy::all("http://pro.xy")?)
     ///     .build()?;
     /// # Ok(())
     /// # }
@@ -236,11 +236,11 @@ impl Proxy {
     /// # Example
     ///
     /// ```
-    /// # extern crate reqwest;
+    /// # extern crate gix_reqwest;
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let target = reqwest::Url::parse("https://my.prox")?;
-    /// let client = reqwest::Client::builder()
-    ///     .proxy(reqwest::Proxy::custom(move |url| {
+    /// let target = gix_reqwest::Url::parse("https://my.prox")?;
+    /// let client = gix_reqwest::Client::builder()
+    ///     .proxy(gix_reqwest::Proxy::custom(move |url| {
     ///         if url.host_str() == Some("hyper.rs") {
     ///             Some(target.clone())
     ///         } else {
@@ -278,9 +278,9 @@ impl Proxy {
     /// # Example
     ///
     /// ```
-    /// # extern crate reqwest;
+    /// # extern crate gix_reqwest;
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let proxy = reqwest::Proxy::https("http://localhost:1234")?
+    /// let proxy = gix_reqwest::Proxy::https("http://localhost:1234")?
     ///     .basic_auth("Aladdin", "open sesame");
     /// # Ok(())
     /// # }
@@ -305,10 +305,10 @@ impl Proxy {
     /// # Example
     ///
     /// ```
-    /// # extern crate reqwest;
-    /// # use reqwest::header::*;
+    /// # extern crate gix_reqwest;
+    /// # use gix_reqwest::header::*;
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let proxy = reqwest::Proxy::https("http://localhost:1234")?
+    /// let proxy = gix_reqwest::Proxy::https("http://localhost:1234")?
     ///     .custom_http_auth(HeaderValue::from_static("justletmeinalreadyplease"));
     /// # Ok(())
     /// # }
@@ -324,12 +324,12 @@ impl Proxy {
     ///
     /// # Example
     /// ```
-    /// # extern crate reqwest;
-    /// # use reqwest::header::*;
+    /// # extern crate gix_reqwest;
+    /// # use gix_reqwest::header::*;
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
     /// let mut headers = HeaderMap::new();
     /// headers.insert(USER_AGENT, "reqwest".parse().unwrap());
-    /// let proxy = reqwest::Proxy::https("http://localhost:1234")?
+    /// let proxy = gix_reqwest::Proxy::https("http://localhost:1234")?
     ///     .headers(headers);
     /// # Ok(())
     /// # }
@@ -350,10 +350,10 @@ impl Proxy {
     /// # Example
     ///
     /// ```
-    /// # extern crate reqwest;
+    /// # extern crate gix_reqwest;
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let proxy = reqwest::Proxy::https("http://localhost:1234")?
-    ///     .no_proxy(reqwest::NoProxy::from_string("direct.tld, sub.direct2.tld"));
+    /// let proxy = gix_reqwest::Proxy::https("http://localhost:1234")?
+    ///     .no_proxy(gix_reqwest::NoProxy::from_string("direct.tld, sub.direct2.tld"));
     /// # Ok(())
     /// # }
     /// # fn main() {}

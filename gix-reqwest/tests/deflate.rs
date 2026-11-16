@@ -26,7 +26,7 @@ async fn test_deflate_empty_body() {
             .unwrap()
     });
 
-    let client = reqwest::Client::new();
+    let client = gix_reqwest::Client::new();
     let res = client
         .head(&format!("http://{}/deflate", server.addr()))
         .send()
@@ -49,19 +49,19 @@ async fn test_accept_header_is_not_changed_if_set() {
         http::Response::default()
     });
 
-    let client = reqwest::Client::new();
+    let client = gix_reqwest::Client::new();
 
     let res = client
         .get(&format!("http://{}/accept", server.addr()))
         .header(
-            reqwest::header::ACCEPT,
-            reqwest::header::HeaderValue::from_static("application/json"),
+            gix_reqwest::header::ACCEPT,
+            gix_reqwest::header::HeaderValue::from_static("application/json"),
         )
         .send()
         .await
         .unwrap();
 
-    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
 }
 
 #[tokio::test]
@@ -72,19 +72,19 @@ async fn test_accept_encoding_header_is_not_changed_if_set() {
         http::Response::default()
     });
 
-    let client = reqwest::Client::new();
+    let client = gix_reqwest::Client::new();
 
     let res = client
         .get(&format!("http://{}/accept-encoding", server.addr()))
         .header(
-            reqwest::header::ACCEPT_ENCODING,
-            reqwest::header::HeaderValue::from_static("identity"),
+            gix_reqwest::header::ACCEPT_ENCODING,
+            gix_reqwest::header::HeaderValue::from_static("identity"),
         )
         .send()
         .await
         .unwrap();
 
-    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
 }
 
 async fn deflate_case(response_size: usize, chunk_size: usize) {
@@ -127,7 +127,8 @@ async fn deflate_case(response_size: usize, chunk_size: usize) {
                     Some((chunk, (deflated, pos + 1)))
                 });
 
-            let body = reqwest::Body::wrap_stream(stream.map(Ok::<_, std::convert::Infallible>));
+            let body =
+                gix_reqwest::Body::wrap_stream(stream.map(Ok::<_, std::convert::Infallible>));
 
             http::Response::builder()
                 .header("content-encoding", "deflate")
@@ -137,7 +138,7 @@ async fn deflate_case(response_size: usize, chunk_size: usize) {
         }
     });
 
-    let client = reqwest::Client::new();
+    let client = gix_reqwest::Client::new();
 
     let res = client
         .get(&format!("http://{}/deflate", server.addr()))
@@ -184,7 +185,7 @@ async fn test_non_chunked_non_fragmented_response() {
         })
     });
 
-    let res = reqwest::Client::new()
+    let res = gix_reqwest::Client::new()
         .get(&format!("http://{}/", server.addr()))
         .send()
         .await
@@ -237,7 +238,7 @@ async fn test_chunked_fragmented_response_1() {
     });
 
     let start = tokio::time::Instant::now();
-    let res = reqwest::Client::new()
+    let res = gix_reqwest::Client::new()
         .get(&format!("http://{}/", server.addr()))
         .send()
         .await
@@ -292,7 +293,7 @@ async fn test_chunked_fragmented_response_2() {
     });
 
     let start = tokio::time::Instant::now();
-    let res = reqwest::Client::new()
+    let res = gix_reqwest::Client::new()
         .get(&format!("http://{}/", server.addr()))
         .send()
         .await
@@ -346,7 +347,7 @@ async fn test_chunked_fragmented_response_with_extra_bytes() {
     });
 
     let start = tokio::time::Instant::now();
-    let res = reqwest::Client::new()
+    let res = gix_reqwest::Client::new()
         .get(&format!("http://{}/", server.addr()))
         .send()
         .await

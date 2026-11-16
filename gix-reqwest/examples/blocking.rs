@@ -15,11 +15,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     eprintln!("Fetching {url:?}...");
 
-    // reqwest::blocking::get() is a convenience function.
+    // gix_reqwest::blocking::get() is a convenience function.
     //
-    // In most cases, you should create/build a reqwest::Client and reuse
+    // In most cases, you should create/build a gix_reqwest::Client and reuse
     // it for all requests.
-    let mut res = reqwest::blocking::get(url)?;
+    let mut res = gix_reqwest::blocking::get(url)?;
 
     eprintln!("Response: {:?} {}", res.version(), res.status());
     eprintln!("Headers: {:#?}\n", res.headers());

@@ -20,14 +20,14 @@ struct Post {
 //
 // `tokio = { version = "1", features = ["full"] }`
 #[tokio::main]
-async fn main() -> Result<(), reqwest::Error> {
+async fn main() -> Result<(), gix_reqwest::Error> {
     let new_post = Post {
         id: None,
         title: "Reqwest.rs".into(),
         body: "https://docs.rs/reqwest".into(),
         user_id: 1,
     };
-    let new_post: Post = reqwest::Client::new()
+    let new_post: Post = gix_reqwest::Client::new()
         .post("https://jsonplaceholder.typicode.com/posts")
         .json(&new_post)
         .send()

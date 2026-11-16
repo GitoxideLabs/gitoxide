@@ -151,7 +151,7 @@ impl Response {
     ///
     /// ```
     /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let content = reqwest::get("http://httpbin.org/range/26")
+    /// let content = gix_reqwest::get("http://httpbin.org/range/26")
     ///     .await?
     ///     .text()
     ///     .await?;
@@ -194,7 +194,7 @@ impl Response {
     ///
     /// ```
     /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let content = reqwest::get("http://httpbin.org/range/26")
+    /// let content = gix_reqwest::get("http://httpbin.org/range/26")
     ///     .await?
     ///     .text_with_charset("utf-8")
     ///     .await?;
@@ -232,10 +232,10 @@ impl Response {
     /// # Examples
     ///
     /// ```
-    /// # extern crate reqwest;
+    /// # extern crate gix_reqwest;
     /// # extern crate serde;
     /// #
-    /// # use reqwest::Error;
+    /// # use gix_reqwest::Error;
     /// # use serde::Deserialize;
     /// #
     /// // This `derive` requires the `serde` dependency.
@@ -245,7 +245,7 @@ impl Response {
     /// }
     ///
     /// # async fn run() -> Result<(), Error> {
-    /// let ip = reqwest::get("http://httpbin.org/ip")
+    /// let ip = gix_reqwest::get("http://httpbin.org/ip")
     ///     .await?
     ///     .json::<Ip>()
     ///     .await?;
@@ -278,7 +278,7 @@ impl Response {
     ///
     /// ```
     /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let bytes = reqwest::get("http://httpbin.org/ip")
+    /// let bytes = gix_reqwest::get("http://httpbin.org/ip")
     ///     .await?
     ///     .bytes()
     ///     .await?;
@@ -299,7 +299,7 @@ impl Response {
     ///
     /// ```
     /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let mut res = reqwest::get("https://hyper.rs").await?;
+    /// let mut res = gix_reqwest::get("https://hyper.rs").await?;
     ///
     /// while let Some(chunk) = res.chunk().await? {
     ///     println!("Chunk: {chunk:?}");
@@ -332,7 +332,7 @@ impl Response {
     /// use futures_util::StreamExt;
     ///
     /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let mut stream = reqwest::get("http://httpbin.org/ip")
+    /// let mut stream = gix_reqwest::get("http://httpbin.org/ip")
     ///     .await?
     ///     .bytes_stream();
     ///
@@ -359,7 +359,7 @@ impl Response {
     /// # Example
     ///
     /// ```
-    /// # use reqwest::Response;
+    /// # use gix_reqwest::Response;
     /// fn on_response(res: Response) {
     ///     match res.error_for_status() {
     ///         Ok(_res) => (),
@@ -368,7 +368,7 @@ impl Response {
     ///             // it could be any status between 400...599
     ///             assert_eq!(
     ///                 err.status(),
-    ///                 Some(reqwest::StatusCode::BAD_REQUEST)
+    ///                 Some(gix_reqwest::StatusCode::BAD_REQUEST)
     ///             );
     ///         }
     ///     }
@@ -390,7 +390,7 @@ impl Response {
     /// # Example
     ///
     /// ```
-    /// # use reqwest::Response;
+    /// # use gix_reqwest::Response;
     /// fn on_response(res: &Response) {
     ///     match res.error_for_status_ref() {
     ///         Ok(_res) => (),
@@ -399,7 +399,7 @@ impl Response {
     ///             // it could be any status between 400...599
     ///             assert_eq!(
     ///                 err.status(),
-    ///                 Some(reqwest::StatusCode::BAD_REQUEST)
+    ///                 Some(gix_reqwest::StatusCode::BAD_REQUEST)
     ///             );
     ///         }
     ///     }
@@ -455,7 +455,7 @@ impl From<Response> for Body {
 }
 
 // I'm not sure this conversion is that useful... People should be encouraged
-// to use `http::Response`, not `reqwest::Response`.
+// to use `http::Response`, not `gix_reqwest::Response`.
 impl<T: Into<Body>> From<http::Response<T>> for Response {
     fn from(r: http::Response<T>) -> Response {
         use crate::response::ResponseUrl;

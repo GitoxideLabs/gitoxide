@@ -4,7 +4,7 @@
 #[cfg(all(feature = "__tls"))]
 #[tokio::test]
 async fn test_badssl_modern() {
-    let text = reqwest::Client::builder()
+    let text = gix_reqwest::Client::builder()
         .no_proxy()
         .build()
         .unwrap()
@@ -22,7 +22,7 @@ async fn test_badssl_modern() {
 #[cfg(feature = "__tls")]
 #[tokio::test]
 async fn test_badssl_self_signed() {
-    let text = reqwest::Client::builder()
+    let text = gix_reqwest::Client::builder()
         .tls_danger_accept_invalid_certs(true)
         .no_proxy()
         .build()
@@ -41,7 +41,7 @@ async fn test_badssl_self_signed() {
 #[cfg(feature = "__tls")]
 #[tokio::test]
 async fn test_badssl_no_built_in_roots() {
-    let result = reqwest::Client::builder()
+    let result = gix_reqwest::Client::builder()
         .tls_certs_only([])
         .no_proxy()
         .build()
@@ -56,7 +56,7 @@ async fn test_badssl_no_built_in_roots() {
 #[cfg(any(feature = "__native-tls"))]
 #[tokio::test]
 async fn test_badssl_wrong_host() {
-    let text = reqwest::Client::builder()
+    let text = gix_reqwest::Client::builder()
         .tls_backend_native()
         .tls_danger_accept_invalid_hostnames(true)
         .no_proxy()
@@ -72,7 +72,7 @@ async fn test_badssl_wrong_host() {
 
     assert!(text.contains("<title>wrong.host.badssl.com</title>"));
 
-    let result = reqwest::Client::builder()
+    let result = gix_reqwest::Client::builder()
         .tls_backend_native()
         .tls_danger_accept_invalid_hostnames(true)
         .build()

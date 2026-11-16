@@ -6,8 +6,10 @@
 #[cfg(feature = "http3")]
 #[cfg(not(target_arch = "wasm32"))]
 #[tokio::main]
-async fn main() -> Result<(), reqwest::Error> {
-    let client = reqwest::Client::builder().http3_prior_knowledge().build()?;
+async fn main() -> Result<(), gix_reqwest::Error> {
+    let client = gix_reqwest::Client::builder()
+        .http3_prior_knowledge()
+        .build()?;
 
     // Some simple CLI args requirements...
     let url = match std::env::args().nth(1) {

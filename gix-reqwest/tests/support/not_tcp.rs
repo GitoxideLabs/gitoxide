@@ -53,7 +53,7 @@ impl Drop for Server {
 pub fn uds<F, Fut>(func: F) -> Server
 where
     F: Fn(http::Request<hyper::body::Incoming>) -> Fut + Clone + Send + 'static,
-    Fut: Future<Output = http::Response<reqwest::Body>> + Send + 'static,
+    Fut: Future<Output = http::Response<gix_reqwest::Body>> + Send + 'static,
 {
     uds_with_config(func, |_builder| {})
 }
@@ -63,7 +63,7 @@ type Builder = hyper_util::server::conn::auto::Builder<hyper_util::rt::TokioExec
 pub fn uds_with_config<F1, Fut, F2, Bu>(func: F1, apply_config: F2) -> Server
 where
     F1: Fn(http::Request<hyper::body::Incoming>) -> Fut + Clone + Send + 'static,
-    Fut: Future<Output = http::Response<reqwest::Body>> + Send + 'static,
+    Fut: Future<Output = http::Response<gix_reqwest::Body>> + Send + 'static,
     F2: FnOnce(&mut Builder) -> Bu + Send + 'static,
 {
     // Spawn new runtime in thread to prevent reactor execution context conflict
