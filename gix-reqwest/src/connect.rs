@@ -584,7 +584,7 @@ impl ConnectorService {
                     return Ok(Conn {
                         inner: self.verbose.wrap(RustlsTlsConn { inner: io }),
                         is_proxy: false,
-                        tls_info: false,
+                        tls_info: self.tls_info,
                     });
                 }
             }
