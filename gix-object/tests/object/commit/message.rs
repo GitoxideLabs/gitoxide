@@ -467,6 +467,184 @@ Signed-off-by: Bob <bob@example.com>\n\
     }
 
     #[test]
+    fn message_blocks_find_embedded_generic_trailers_without_a_footer() -> gix_testtools::TestResult {
+        let input = "Port the source commit.
+
+Reqwest-Patch: 2b5434d5a674c02e9ad78b80b5d48a364b12c539
+Reqwest-PR: https://github.com/seanmonstar/reqwest/pull/3123
+
+Original source message:
+
+perf(response): avoid copying the body again in `text()`
+";
+        for line_ending in ["\n", "\r\n"] {
+            let input = input.replace('\n', line_ending);
+            let body = body(&input);
+            let blocks = body.message_blocks().collect::<Vec<_>>();
+
+            assert_eq!(blocks.len(), 2, "embedded trailers separate the raw message portions");
+            assert_eq!(
+                blocks[0].message,
+                format!("Port the source commit.{line_ending}{line_ending}"),
+                "whitespace before the embedded trailers is preserved"
+            );
+            assert_eq!(
+                blocks[0].trailers().collect::<Vec<_>>(),
+                vec![
+                    TrailerRef {
+                        token: "Reqwest-Patch".into(),
+                        value: b"2b5434d5a674c02e9ad78b80b5d48a364b12c539".as_bstr().into(),
+                    },
+                    TrailerRef {
+                        token: "Reqwest-PR".into(),
+                        value: b"https://github.com/seanmonstar/reqwest/pull/3123".as_bstr().into(),
+                    },
+                ],
+                "embedded generic trailers remain adjacent"
+            );
+            assert_eq!(
+                blocks[1].message,
+                "
+Original source message:
+
+perf(response): avoid copying the body again in `text()`
+"
+                .replace('\n', line_ending),
+                "later prose retains its original separators and line endings"
+            );
+            assert_eq!(blocks[1].trailers().count(), 0, "the last message has no trailers");
+            assert_eq!(body.trailers().count(), 0, "Git-compatible parsing remains footer-only");
+            assert_eq!(
+                body.without_trailer(),
+                input,
+                "embedded trailers remain in the Git-compatible body"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn message_blocks_follow_git_trailer_rules_for_each_paragraph() -> gix_testtools::TestResult {
+        use std::{io::Write as _, process::Stdio};
+
+        let directory = gix_testtools::tempfile::TempDir::new()?;
+        for paragraph in [
+            b"".as_slice(),
+            b" \t\r\n",
+            b"Reqwest-Patch: patch
+Reqwest-PR: https://example.com/pr/1",
+            b"Note: this is prose
+more explanation",
+            b"some body text
+token: value",
+            b" indented: prose
+more explanation",
+            b"Signed-off-by: Alice
+not a trailer 1
+not a trailer 2
+not a trailer 3",
+            b"Signed-off-by: Alice
+not a trailer 1
+not a trailer 2
+not a trailer 3
+not a trailer 4",
+            b"not a trailer
+Signed-off-by: Alice
+another note
+Acked-by: Bob
+ continuation",
+            b"(cherry picked from commit 0123456789012345678901234567890123456789)
+Reqwest-PR: https://example.com/pr/1
+not a trailer",
+            b"Acked-by : Alice
+ continuation line",
+            b"token: value
+\tcontinuation
+",
+            b"Review: \xff",
+        ] {
+            let mut child = gix_testtools::git_command(directory.path())
+                .args(["interpret-trailers", "--parse"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()?;
+            {
+                let mut stdin = child.stdin.take().expect("stdin was configured as a pipe");
+                stdin.write_all(b"subject\n\n")?;
+                stdin.write_all(paragraph)?;
+            }
+            let output = child.wait_with_output()?;
+            assert!(
+                output.status.success(),
+                "Git parses trailers: {}",
+                output.stderr.as_bstr()
+            );
+            let expected = BodyRef::from_bytes(&output.stdout).trailers().collect::<Vec<_>>();
+            let body = BodyRef::from_bytes(paragraph);
+            assert_eq!(
+                body.trailers().collect::<Vec<_>>(),
+                expected,
+                "footer parsing matches Git for {:?}",
+                paragraph.as_bstr()
+            );
+            assert_eq!(
+                body.message_blocks()
+                    .flat_map(|block| block.trailers())
+                    .collect::<Vec<_>>(),
+                expected,
+                "block parsing applies Git's paragraph heuristic to {:?}",
+                paragraph.as_bstr()
+            );
+
+            let embedded = [b"intro\n\n".as_slice(), paragraph, b"\n\ntrailing prose"].concat();
+            let body = BodyRef::from_bytes(&embedded);
+            assert_eq!(body.trailers().count(), 0, "embedded groups aren't Git footer trailers");
+            assert_eq!(
+                body.without_trailer(),
+                embedded.as_bstr(),
+                "Git's body remains untouched"
+            );
+            assert_eq!(
+                body.message_blocks()
+                    .flat_map(|block| block.trailers())
+                    .collect::<Vec<_>>(),
+                expected,
+                "embedding preserves Git's paragraph decision for {:?}",
+                paragraph.as_bstr()
+            );
+
+            let with_footer = [embedded.as_slice(), b"\n\nFinal: footer"].concat();
+            let body = BodyRef::from_bytes(&with_footer);
+            let footer = TrailerRef {
+                token: "Final".into(),
+                value: b"footer".as_bstr().into(),
+            };
+            assert_eq!(
+                body.trailers().collect::<Vec<_>>(),
+                vec![footer.clone()],
+                "only the final footer is exposed"
+            );
+            assert_eq!(
+                body.without_trailer(),
+                embedded.as_bstr(),
+                "only the final footer is stripped"
+            );
+            let mut expected = expected;
+            expected.push(footer);
+            assert_eq!(
+                body.message_blocks()
+                    .flat_map(|block| block.trailers())
+                    .collect::<Vec<_>>(),
+                expected,
+                "earlier groups remain visible when a final footer exists for {:?}",
+                paragraph.as_bstr()
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn recognized_prefix_footer_at_exactly_twenty_five_percent_is_a_trailer_block() {
         let input = "Signed-off-by: Alice <alice@example.com>\n\
 not a trailer 1\n\
