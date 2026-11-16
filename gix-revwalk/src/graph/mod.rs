@@ -27,9 +27,11 @@ impl<T: std::fmt::Debug> std::fmt::Debug for Graph<'_, '_, T> {
 }
 
 impl<'cache, T: Default> Graph<'_, 'cache, T> {
-    /// Lookup `id` without failing if the commit doesn't exist, and assure that `id` is inserted into our set.
+    /// Lookup `id` without failing if the object doesn't exist or isn't a commit, and assure that `id` is inserted into our set.
     /// If it wasn't, associate it with the default value. Assure `update_data(data)` gets run.
-    /// Return the commit when done.
+    ///
+    /// Return `Ok(Some(commit))` with a lazy commit handle after updating its associated data,
+    /// or `Ok(None)` if the object doesn't exist or isn't a commit. Return an error if object lookup fails.
     /// Note that none of the data updates happen if there was no commit named `id`.
     pub fn try_lookup_or_insert(
         &mut self,
@@ -62,24 +64,26 @@ impl<'cache, T> Graph<'_, 'cache, T> {
         self.map.contains_key(id.as_ref())
     }
 
-    /// Returns the data associated with `id` if available.
+    /// Returns `Some(data)` with a reference to the data associated with `id`, or `None` if `id` isn't stored in the graph.
     pub fn get(&self, id: &gix_hash::oid) -> Option<&T> {
         self.map.get(id)
     }
 
-    /// Returns the data associated with `id` if available as mutable reference.
+    /// Returns `Some(data)` with a mutable reference to the data associated with `id`, or `None` if `id` isn't stored in the graph.
     pub fn get_mut(&mut self, id: &gix_hash::oid) -> Option<&mut T> {
         self.map.get_mut(id)
     }
 
-    /// Insert `id` into the graph and associate it with `value`, returning the previous value associated with `id` if it existed.
+    /// Insert `id` into the graph and associate it with `value`, returning `Some(previous_value)` if `id` was already stored,
+    /// or `None` if it was newly inserted.
     pub fn insert(&mut self, id: gix_hash::ObjectId, value: T) -> Option<T> {
         self.map.insert(id, value)
     }
 
-    /// Insert `id` into the graph and associate it with the value returned by `make_data`,
-    /// and returning the previous value associated with `id` if it existed.
-    /// Fail if `id` doesn't exist in the object database.
+    /// Insert `id` into the graph and associate it with the value returned by `make_data`.
+    ///
+    /// Return `Ok(Some(previous_value))` if `id` was already stored, or `Ok(None)` if it was newly inserted.
+    /// Return an error if `id` doesn't exist or isn't a commit, object lookup fails, or `make_data` fails.
     pub fn insert_data<E>(
         &mut self,
         id: gix_hash::ObjectId,
@@ -101,6 +105,9 @@ impl<'cache, T> Graph<'_, 'cache, T> {
     /// by calling `new_parent_data(parent_id, committer_timestamp)`, or update existing parents
     /// data with `update_existing(parent_id, &mut existing_data)`.
     /// If `first_parent` is `true`, only the first parent of commits will be looked at.
+    ///
+    /// Return `Ok(())` after processing the available parents, skipping objects that are missing or aren't commits.
+    /// Return an error if `id` doesn't exist or isn't a commit, object lookup fails, or parent information cannot be decoded.
     pub fn insert_parents(
         &mut self,
         id: &gix_hash::oid,
@@ -138,6 +145,10 @@ impl<'cache, T> Graph<'_, 'cache, T> {
     /// provided the full parent commit information.
     /// It will be provided either existing data, along with complete information about the parent,
     /// and produces new data even though it's only used in case the parent isn't stored in the graph yet.
+    ///
+    /// Return `Ok(())` after processing the available parents, skipping objects that are missing or aren't commits.
+    /// Return an error if `id` doesn't exist or isn't a commit, object lookup fails, parent information cannot be decoded,
+    /// or `parent_data` fails.
     #[expect(clippy::type_complexity)]
     pub fn insert_parents_with_lookup<E>(
         &mut self,
@@ -205,7 +216,10 @@ impl<T> Graph<'_, '_, Commit<T>> {
     /// Call `new_data()` to obtain data for a newly inserted commit.
     /// `update_data(data)` gets run either on existing or on new data.
     ///
-    /// Note that none of the data updates happen if `id` didn't exist.
+    /// Return `Ok(Some(commit))` with a mutable reference to the stored commit after updating its data,
+    /// or `Ok(None)` if `id` isn't stored in the graph and the object doesn't exist or isn't a commit.
+    /// Return an error if looking up or decoding a newly inserted commit fails.
+    /// Note that none of the data updates happen if no commit was found.
     pub fn get_or_insert_commit_default(
         &mut self,
         id: gix_hash::ObjectId,
@@ -242,7 +256,10 @@ impl<T: Default> Graph<'_, '_, Commit<T>> {
     /// Newly inserted commits are populated with default data.
     /// `update_data(data)` gets run either on existing or on new data.
     ///
-    /// Note that none of the data updates happen if `id` didn't exist.
+    /// Return `Ok(Some(commit))` with a mutable reference to the stored commit after updating its data,
+    /// or `Ok(None)` if `id` isn't stored in the graph and the object doesn't exist or isn't a commit.
+    /// Return an error if looking up or decoding a newly inserted commit fails.
+    /// Note that none of the data updates happen if no commit was found.
     ///
     /// If only commit data is desired without the need for attaching custom data, use
     /// [`try_lookup(id).to_owned()`][Graph::try_lookup()] instead.
@@ -257,7 +274,10 @@ impl<T: Default> Graph<'_, '_, Commit<T>> {
     /// Lookup `id` in the graph, but insert it if it's not yet present by looking it up without failing if the commit doesn't exist.
     /// `update_commit(commit)` gets run either on existing or on new data.
     ///
-    /// Note that none of the data updates happen if `id` didn't exist in the graph.
+    /// Return `Ok(Some(commit))` with a mutable reference to the stored commit after updating it,
+    /// or `Ok(None)` if `id` isn't stored in the graph and the object doesn't exist or isn't a commit.
+    /// Return an error if looking up or decoding a newly inserted commit fails.
+    /// Note that none of the data updates happen if no commit was found.
     pub fn get_or_insert_full_commit(
         &mut self,
         id: gix_hash::ObjectId,
@@ -287,10 +307,11 @@ impl<'cache, T> Graph<'_, 'cache, T> {
     /// Lookup `id` without failing if the commit doesn't exist or `id` isn't a commit,
     /// and assure that `id` is inserted into our set
     /// with a `default` value assigned to it.
-    /// `update_data(data)` gets run either on existing or no new data.
-    /// Return the commit when done.
+    /// `update_data(data)` gets run either on existing or on new data.
     ///
-    /// Note that none of the data updates happen if `id` didn't exist.
+    /// Return `Ok(Some(commit))` with a lazy commit handle after updating its associated data,
+    /// or `Ok(None)` if the object doesn't exist or isn't a commit. Return an error if object lookup fails.
+    /// Note that none of the data updates happen if no commit was found.
     ///
     /// If only commit data is desired without the need for attaching custom data, use
     /// [`try_lookup(id)`][Graph::try_lookup()] instead.
@@ -313,15 +334,16 @@ impl<'cache, T> Graph<'_, 'cache, T> {
         }))
     }
 
-    /// Try to lookup `id` and return a handle to it for accessing its data, but don't fail if the commit doesn't exist
-    /// or isn't a commit.
+    /// Try to lookup `id` and return `Ok(Some(commit))` with a lazy commit handle for accessing its data,
+    /// or `Ok(None)` if the object doesn't exist or isn't a commit. Return an error if object lookup fails.
     ///
     /// It's possible that commits don't exist if the repository is shallow.
     pub fn try_lookup(&mut self, id: &gix_hash::oid) -> Result<Option<LazyCommit<'_, 'cache>>> {
         try_lookup(id, &*self.find, self.cache, &mut self.buf)
     }
 
-    /// Lookup `id` and return a handle to it, or fail if it doesn't exist or is no commit.
+    /// Lookup `id` and return `Ok(commit)` with a lazy commit handle.
+    /// Return an error if the object doesn't exist or isn't a commit, or if object lookup fails.
     pub fn lookup(&mut self, id: &gix_hash::oid) -> Result<LazyCommit<'_, 'cache>> {
         self.try_lookup(id)?
             .ok_or_raise(|| gix_error::message!("An object with id {id} could not be found").not_found())

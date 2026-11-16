@@ -37,7 +37,7 @@ pub fn merge_base(
     }
 
     graph.clear_commit_data(|f| *f = Flags::empty());
-    let bases = paint_down_to_common(first, others, None, graph)?;
+    let bases = paint_down_to_common(first, others, None, false, graph)?;
 
     let mut bases = remove_redundant(&bases, graph)?;
     bases.sort_by_key(|commit_id| Reverse(graph.get(commit_id).expect("merge bases were traversed").commit_time));
@@ -48,7 +48,8 @@ pub fn merge_base(
 /// `git merge-base --is-ancestor`. A commit is its own ancestor, and commits of unrelated histories aren't ancestors
 /// of each other.
 ///
-/// All input commits must exist.
+/// All input commits and traversed parents must exist. Callers representing intentional shallow boundaries must
+/// remove those roots' parents from the graph instead of relying on missing objects to end traversal.
 ///
 /// # Performance
 ///
@@ -85,7 +86,7 @@ pub fn is_ancestor(
 
     graph.clear_commit_data(|f| *f = Flags::empty());
     let min_generation = ancestor.has_reliable_generation().then_some(ancestor.generation);
-    paint_down_to_common(ancestor_commit_id, &[descendant_commit_id], min_generation, graph)?;
+    paint_down_to_common(ancestor_commit_id, &[descendant_commit_id], min_generation, true, graph)?;
     Ok(graph
         .get(&ancestor_commit_id)
         .expect("input commits were inserted")
@@ -296,6 +297,7 @@ fn paint_down_to_common(
     first: ObjectId,
     others: &[ObjectId],
     min_generation: Option<graph::Generation>,
+    require_parents: bool,
     graph: &mut Graph<'_, '_, graph::Commit<Flags>>,
 ) -> Result<Vec<(ObjectId, GenThenTime)>> {
     let mut queue = PaintQueue {
@@ -345,13 +347,18 @@ fn paint_down_to_common(
         }
 
         for parent_id in commit.parents.clone() {
-            graph
+            let parent = graph
                 .get_or_insert_full_commit(parent_id, |parent| {
                     if (parent.data & flags_without_result) != flags_without_result {
                         queue.insert(parent_id, parent, flags_without_result);
                     }
                 })
                 .or_raise(|| message("could not insert parent commit into graph"))?;
+            if require_parents {
+                parent.ok_or_raise(|| {
+                    message!("Parent commit {parent_id} could not be found for ancestry traversal").not_found()
+                })?;
+            }
         }
     }
 
