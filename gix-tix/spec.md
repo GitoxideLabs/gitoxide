@@ -726,6 +726,12 @@ without trading responsiveness for metadata that is not visible.
   purple `[A]` before its title.
 - A commit with notes in the configured notes ref receives a matching `[N]`.
   Notes are loaded lazily for visible commits.
+- A commit whose tree matches its first parent's tree receives a bold yellow
+  `[empty]` badge before its title. Roots compare with the empty tree, and pending
+  replays use the retained display parent. An unavailable shallow parent doesn't
+  receive a badge. The badge remains visible in compact and full-actor modes;
+  `tix show` and rebase-todo annotations retain it without color. This flag is
+  cached with commit metadata and computed from tree IDs without tree or blob reads.
 - `n g` edits the selected commit's note in `core.notesRef`, or
   `refs/notes/commits` when it is unset. The action is available on every
   selected commit, including immutable hidden boundaries. Empty content removes

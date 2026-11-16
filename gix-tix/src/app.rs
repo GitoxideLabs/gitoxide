@@ -29,6 +29,7 @@ pub(crate) struct Commit<T> {
     pub attributions: Range<usize>,
     pub title: T,
     pub metadata_loaded: bool,
+    pub is_empty: bool,
     pub has_agent_marker: bool,
     pub is_review: bool,
     pub has_merge_replay: bool,
@@ -42,6 +43,7 @@ pub(crate) struct Metadata<T> {
     pub author: &'static Author,
     pub attributions: Range<usize>,
     pub title: T,
+    pub is_empty: bool,
     pub has_agent_marker: bool,
     pub is_review: bool,
     pub has_merge_replay: bool,
@@ -1462,6 +1464,7 @@ impl App {
                     attributions: attribution_base + row.attributions.start..attribution_base + row.attributions.end,
                     title: start..self.titles.len(),
                     metadata_loaded: row.metadata_loaded,
+                    is_empty: row.is_empty,
                     has_agent_marker: row.has_agent_marker,
                     is_review: row.is_review,
                     has_merge_replay: row.has_merge_replay,
@@ -1538,6 +1541,7 @@ impl App {
             author,
             attributions,
             title,
+            is_empty,
             has_agent_marker,
             is_review,
             has_merge_replay,
@@ -1553,6 +1557,7 @@ impl App {
         row.attributions = attribution_start + attributions.start..attribution_start + attributions.end;
         row.title = title_start..self.titles.len();
         row.metadata_loaded = true;
+        row.is_empty = is_empty;
         row.has_agent_marker = has_agent_marker;
         row.is_review = is_review;
         row.has_merge_replay = has_merge_replay;
@@ -3260,6 +3265,7 @@ impl App {
                             author: row.author,
                             attributions: row.attributions.clone(),
                             title: row.title.clone(),
+                            is_empty: row.is_empty,
                             has_agent_marker: row.has_agent_marker,
                             is_review: row.is_review,
                             has_merge_replay: row.has_merge_replay,
@@ -3286,6 +3292,7 @@ impl App {
                 row.attributions = metadata.attributions.clone();
                 row.title = metadata.title.clone();
                 row.metadata_loaded = true;
+                row.is_empty = metadata.is_empty;
                 row.has_agent_marker = metadata.has_agent_marker;
                 row.is_review = metadata.is_review;
                 row.has_merge_replay = metadata.has_merge_replay;
@@ -5553,6 +5560,7 @@ mod tests {
             attributions: 0..0,
             title: format!("commit {n}").into(),
             metadata_loaded: true,
+            is_empty: false,
             has_agent_marker: false,
             is_review: false,
             has_merge_replay: false,
@@ -7048,6 +7056,7 @@ mod tests {
                 author: row(1).author,
                 attributions: 0..0,
                 title: "loaded".into(),
+                is_empty: true,
                 has_agent_marker: true,
                 is_review: true,
                 has_merge_replay: true,
@@ -7073,6 +7082,7 @@ mod tests {
         assert_eq!(app.title(&app.rows[0]), "loaded");
         assert_eq!(app.rows[0].author_time, gix::date::Time::new(123, 60));
         assert_eq!(app.rows[0].committer_time, gix::date::Time::new(456, 120));
+        assert!(app.rows[0].is_empty, "empty-diff metadata survives lane computation");
         assert!(app.rows[0].has_agent_marker);
         assert!(app.rows[0].is_review);
         assert!(

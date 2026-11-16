@@ -595,6 +595,7 @@ mod tests {
             attributions: 0..0,
             title: format!("commit {n}").into(),
             metadata_loaded: true,
+            is_empty: false,
             has_agent_marker: false,
             is_review: false,
             has_merge_replay: false,

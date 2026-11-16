@@ -3160,6 +3160,63 @@ mod tests {
     }
 
     #[test]
+    fn show_highlights_commits_with_empty_tree_diffs() -> gix_testtools::TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only("empty-commits.sh")?;
+        let repository = crate::test_repository::open(&fixture)?;
+        let mut output = Vec::new();
+        write_history(
+            &repository,
+            &["main", "nonempty-root", "pending-empty", "pending-changed"].map(OsString::from),
+            &[OsString::from("empty-root")],
+            &mut output,
+        )?;
+        let output = String::from_utf8(output)?;
+        for (revision, expected_empty) in [
+            ("empty-root", true),
+            ("nonempty-root", false),
+            ("changed", false),
+            ("empty", true),
+            ("side", false),
+            ("empty-merge", true),
+            ("changed-merge", false),
+            ("mode-change", false),
+            ("pending-empty", true),
+            ("pending-changed", false),
+        ] {
+            let commit_id = repository.rev_parse_single(revision)?.detach();
+            let commit = repository.find_commit(commit_id)?;
+            let parent_commit_id = crate::edit::rebase::marked_parent_ref(&commit.decode()?)?
+                .unwrap_or_else(|| commit.parent_ids().next().map(gix::Id::detach));
+            let base_tree_id = match parent_commit_id {
+                Some(parent_commit_id) => repository.find_commit(parent_commit_id)?.tree_id()?.detach(),
+                None => repository.object_hash().empty_tree(),
+            };
+            let diff = gix_testtools::git_command(&fixture)
+                .args(["diff", "--no-ext-diff", "--name-only"])
+                .arg(base_tree_id.to_hex().to_string())
+                .arg(commit.tree_id()?.to_hex().to_string())
+                .output()?;
+            assert!(diff.status.success(), "Git compares the trees for {revision}");
+            assert_eq!(
+                diff.stdout.is_empty(),
+                expected_empty,
+                "Git's diff defines emptiness for {revision}"
+            );
+            let abbreviation = commit_id.to_hex_with_len(7).to_string();
+            let line = output
+                .lines()
+                .find(|line| line.contains(abbreviation.as_str()))
+                .expect("the requested commit appears in the history output");
+            assert_eq!(
+                line.contains("[empty]"),
+                expected_empty,
+                "history highlights the empty diff for {revision}: {line}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn show_prints_the_complete_plain_history_view() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repository = crate::test_repository::open(fixture.path())?;

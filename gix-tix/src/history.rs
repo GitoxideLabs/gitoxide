@@ -1000,8 +1000,14 @@ impl HistoryGraph {
                         None
                     } else {
                         let object = repo.find_commit(id)?;
+                        let is_empty = commit_is_empty(repo, &object)?;
                         let mut authors = gix::parallel::lock(authors);
-                        Some(decode_metadata(object.iter(), &mut authors, &mut attributions)?)
+                        Some(decode_metadata(
+                            object.iter(),
+                            is_empty,
+                            &mut authors,
+                            &mut attributions,
+                        )?)
                     };
                     let metadata_loaded = metadata.is_some();
                     let Metadata {
@@ -1010,6 +1016,7 @@ impl HistoryGraph {
                         author,
                         attributions: row_attributions,
                         title,
+                        is_empty,
                         has_agent_marker,
                         is_review,
                         has_merge_replay,
@@ -1020,6 +1027,7 @@ impl HistoryGraph {
                         author: &EMPTY_AUTHOR,
                         attributions: 0..0,
                         title: BString::default(),
+                        is_empty: false,
                         has_agent_marker: false,
                         is_review: false,
                         has_merge_replay: false,
@@ -1034,6 +1042,7 @@ impl HistoryGraph {
                         attributions: row_attributions,
                         title,
                         metadata_loaded,
+                        is_empty,
                         has_agent_marker,
                         is_review,
                         has_merge_replay,
@@ -1463,8 +1472,14 @@ pub(crate) fn load(
             None
         } else {
             let object = repo.find_commit(id)?;
+            let is_empty = commit_is_empty(repo, &object)?;
             let mut authors = gix::parallel::lock(authors);
-            Some(decode_metadata(object.iter(), &mut authors, &mut attributions)?)
+            Some(decode_metadata(
+                object.iter(),
+                is_empty,
+                &mut authors,
+                &mut attributions,
+            )?)
         };
         if should_emit {
             let metadata_loaded = metadata.is_some();
@@ -1474,6 +1489,7 @@ pub(crate) fn load(
                 author,
                 attributions: row_attributions,
                 title,
+                is_empty,
                 has_agent_marker,
                 is_review,
                 has_merge_replay,
@@ -1484,6 +1500,7 @@ pub(crate) fn load(
                 author: &EMPTY_AUTHOR,
                 attributions: 0..0,
                 title: BString::default(),
+                is_empty: false,
                 has_agent_marker: false,
                 is_review: false,
                 has_merge_replay: false,
@@ -1501,6 +1518,7 @@ pub(crate) fn load(
                 attributions: row_attributions,
                 title,
                 metadata_loaded,
+                is_empty,
                 has_agent_marker,
                 is_review,
                 has_merge_replay,
@@ -2034,8 +2052,9 @@ pub(crate) fn load_metadata(
 ) -> Result<(Metadata<BString>, Vec<Attribution>)> {
     let object = repo.find_commit(id)?;
     let mut attributions = Vec::new();
+    let is_empty = commit_is_empty(repo, &object)?;
     let mut authors = gix::parallel::lock(authors);
-    let metadata = decode_metadata(object.iter(), &mut authors, &mut attributions)?;
+    let metadata = decode_metadata(object.iter(), is_empty, &mut authors, &mut attributions)?;
     Ok((metadata, attributions))
 }
 
@@ -2053,11 +2072,12 @@ fn decode_commit(
         author,
         attributions: row_attributions,
         title,
+        is_empty,
         has_agent_marker,
         is_review,
         has_merge_replay,
         signature,
-    } = decode_metadata(object.iter(), authors, attributions)?;
+    } = decode_metadata(object.iter(), commit_is_empty(repo, &object)?, authors, attributions)?;
     Ok(Commit {
         id,
         parent_ids,
@@ -2067,6 +2087,7 @@ fn decode_commit(
         attributions: row_attributions,
         title,
         metadata_loaded: true,
+        is_empty,
         has_agent_marker,
         is_review,
         has_merge_replay,
@@ -2074,8 +2095,22 @@ fn decode_commit(
     })
 }
 
+fn commit_is_empty(repo: &gix::Repository, object: &gix::Commit<'_>) -> Result<bool> {
+    let commit = object.decode()?;
+    let parent_commit_id = crate::edit::rebase::marked_parent_ref(&commit)?.unwrap_or_else(|| commit.parents().next());
+    let tree_id = commit.tree();
+    Ok(match parent_commit_id {
+        Some(parent_commit_id) => match repo.try_find_object(parent_commit_id)? {
+            Some(parent) => parent.try_into_commit()?.tree_id()?.as_ref() == tree_id.as_ref(),
+            None => false,
+        },
+        None => tree_id.is_empty_tree(),
+    })
+}
+
 fn decode_metadata<'a>(
     tokens: impl Iterator<Item = gix::Result<Token<'a>>>,
+    is_empty: bool,
     authors: &mut Authors,
     attributions: &mut Vec<Attribution>,
 ) -> Result<Metadata<BString>> {
@@ -2150,6 +2185,7 @@ fn decode_metadata<'a>(
         author: author.ok_or_raise(|| message("commit has no author"))?,
         attributions: attribution_start..attributions.len(),
         title: title.ok_or_raise(|| message("commit has no message"))?,
+        is_empty,
         has_agent_marker,
         is_review,
         has_merge_replay,
@@ -3328,6 +3364,54 @@ mod tests {
                 .iter()
                 .any(|decoration| decoration.kind == DecorationKind::HeadPinBranch && decoration.name == "topic")
         }));
+        Ok(())
+    }
+
+    #[test]
+    fn loads_empty_diff_metadata_for_indexed_pending_and_shallow_commits() -> TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only("empty-commits.sh")?;
+        let repo = crate::test_repository::open(&fixture)?;
+        let empty_commit_id = repo.rev_parse_single("empty")?.detach();
+        let pending_commit_id = repo.rev_parse_single("pending-empty")?.detach();
+        let events = loaded(&fixture, &["main", "pending-empty"], &["empty-root"])?;
+        let rows: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Commits(batch) => Some(batch.rows.as_slice()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        let pending = rows
+            .iter()
+            .find(|row| row.id == pending_commit_id)
+            .expect("the pending commit is visible");
+        assert!(
+            pending.metadata_loaded && pending.is_empty,
+            "unindexed commits retain empty-diff metadata"
+        );
+        let deferred = rows
+            .iter()
+            .find(|row| row.id == empty_commit_id)
+            .expect("the indexed empty commit is visible");
+        assert!(!deferred.metadata_loaded, "indexed commits defer metadata");
+        let authors = gix::parallel::OwnShared::new(gix::parallel::Mutable::new(Authors::default()));
+        let (metadata, _) = load_metadata(&repo, empty_commit_id, &authors)?;
+        assert!(metadata.is_empty, "deferred metadata detects the empty diff");
+
+        let shallow = crate::test_repository::open(fixture.join("shallow"))?;
+        let commit_id = shallow.head_id()?.detach();
+        let parent_commit_id = shallow
+            .find_commit(commit_id)?
+            .parent_ids()
+            .next()
+            .expect("the shallow tip has a parent");
+        assert!(
+            shallow.try_find_object(parent_commit_id)?.is_none(),
+            "the shallow parent is unavailable"
+        );
+        let (metadata, _) = load_metadata(&shallow, commit_id, &authors)?;
+        assert!(!metadata.is_empty, "an unavailable parent does not imply an empty diff");
         Ok(())
     }
 
