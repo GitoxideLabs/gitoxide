@@ -953,13 +953,7 @@ fn environment_proxy_fallback_and_precedence() -> gix_testtools::Result {
     Ok(())
 }
 
-// Reqwest 0.13's connector rejects SOCKS URLs when built without TLS.
-#[cfg(any(
-    feature = "http-client-curl",
-    feature = "http-client-reqwest-rust-tls",
-    feature = "http-client-reqwest-rust-tls-trust-dns",
-    feature = "http-client-reqwest-native-tls"
-))]
+#[cfg(any(feature = "http-client-curl", feature = "http-client-reqwest"))]
 #[test]
 fn socks_alias_uses_socks4() -> gix_testtools::TestResult {
     if gix_testtools::run_in_isolated_process()? {
@@ -997,12 +991,7 @@ fn socks_alias_uses_socks4() -> gix_testtools::TestResult {
     Ok(())
 }
 
-#[cfg(any(
-    feature = "http-client-curl",
-    feature = "http-client-reqwest-rust-tls",
-    feature = "http-client-reqwest-rust-tls-trust-dns",
-    feature = "http-client-reqwest-native-tls"
-))]
+#[cfg(any(feature = "http-client-curl", feature = "http-client-reqwest"))]
 #[test]
 fn socks5h_resolves_the_destination_at_the_proxy() -> gix_testtools::Result {
     if gix_testtools::run_in_isolated_process()? {
@@ -1051,12 +1040,7 @@ fn socks5h_resolves_the_destination_at_the_proxy() -> gix_testtools::Result {
     Ok(())
 }
 
-#[cfg(any(
-    feature = "http-client-curl",
-    feature = "http-client-reqwest-rust-tls",
-    feature = "http-client-reqwest-rust-tls-trust-dns",
-    feature = "http-client-reqwest-native-tls"
-))]
+#[cfg(any(feature = "http-client-curl", feature = "http-client-reqwest"))]
 #[test]
 fn socks_credentials_do_not_become_http_headers_after_redirects() -> gix_testtools::TestResult {
     if gix_testtools::run_in_isolated_process()? {

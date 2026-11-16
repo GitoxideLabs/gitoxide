@@ -35,7 +35,7 @@ pub mod curl;
 ///
 /// Supports extra headers, redirects, HTTP/HTTPS and SOCKS proxies, proxy bypass lists, and proxy credential helpers.
 /// HTTP proxy authentication uses preemptive Basic authentication for both `Basic` and `AnyAuth`; other methods and
-/// Unix socket proxy paths and SOCKS4 user IDs are rejected. SOCKS proxies currently require a TLS feature in this backend.
+/// Unix socket proxy paths and SOCKS4 user IDs are rejected.
 /// Other shared HTTP options are not supported yet.
 #[cfg(feature = "http-client-reqwest")]
 pub mod reqwest;

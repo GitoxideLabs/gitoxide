@@ -41,7 +41,6 @@ http-client-curl-openssl = ["http-client-curl", "curl/ssl"]
 ## Configure it with the types re-exported as `gix_transport::gix_reqwest`.
 ## NOTE: `https://` is NOT supported by default. You must enable one of the `http-client-reqwest-rust-tls`
 ## or `http-client-reqwest-native-tls` features to enable HTTPS support.
-## SOCKS proxies also require one of the TLS features in this backend.
 http-client-reqwest = ["dep:gix-reqwest", "http-client", "dep:hyper-util"]
 ## Stacks with `http-client-reqwest` and enables `https://` via the `rustls` crate.
 http-client-reqwest-rust-tls = ["http-client-reqwest", "gix-reqwest/rustls"]

@@ -11,6 +11,49 @@ use tokio::sync::Mutex;
 // serialize tests that read from / write to environment variables
 static HTTP_PROXY_ENV_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
+#[cfg(all(feature = "socks", not(feature = "__tls")))]
+#[tokio::test]
+async fn without_tls_https_is_rejected_before_direct_or_socks_connection() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")
+        .expect("a loopback recording listener can be created");
+    listener
+        .set_nonblocking(true)
+        .expect("the listener supports checking for unexpected connections");
+    let authority = listener
+        .local_addr()
+        .expect("the bound listener has an address");
+    let proxy = gix_reqwest::Proxy::all(format!("socks5h://{authority}"))
+        .expect("the recording proxy URL is valid");
+
+    for proxy in [None, Some(proxy)] {
+        let mut builder = gix_reqwest::Client::builder()
+            .no_proxy()
+            .timeout(std::time::Duration::from_millis(200));
+        if let Some(proxy) = proxy {
+            builder = builder.proxy(proxy);
+        }
+        let error = builder
+            .build()
+            .expect("the no-TLS client configuration is valid")
+            .get(format!("https://{authority}/"))
+            .send()
+            .await
+            .expect_err("HTTPS requires TLS even when a SOCKS proxy is selected");
+        assert!(
+            error.is_connect(),
+            "unsupported HTTPS is a connection error"
+        );
+        assert_eq!(
+            listener
+                .accept()
+                .expect_err("HTTPS is rejected before any TCP dial")
+                .kind(),
+            std::io::ErrorKind::WouldBlock,
+            "neither direct nor SOCKS connections can send plaintext HTTPS"
+        );
+    }
+}
+
 #[tokio::test]
 async fn http_proxy() {
     let url = "http://hyper.rs.local/prox";
