@@ -103,7 +103,7 @@ impl H3Connector {
             .trim_end_matches(']');
         let port = dest.port_u16().unwrap_or(443);
 
-        let addrs = if let Some(addr) = IpAddr::from_str(host).ok() {
+        let addrs = if let Ok(addr) = IpAddr::from_str(host) {
             // If the host is already an IP address, skip resolving.
             vec![SocketAddr::new(addr, port)]
         } else {

@@ -65,8 +65,10 @@ Apply the same mechanical adaptations to both upstream sides before merging:
 - Preserve the fork's QA metadata, explicit Clippy style exceptions, and
   100-column `rustfmt.toml`. Feature names and `reqwest_unstable` retain their
   upstream spelling. Keep the upstream CI and Dependabot configurations
-  omitted from the nested `.github/`; Gitoxide's workspace QA drives active
-  checks. Keep the standalone WASM example's empty `[workspace]` table and
+  omitted from the nested `.github/`. Preserve workspace QA and the root
+  `.github/workflows/gix-reqwest.yml`; compare its configurations with upstream
+  CI when importing test or feature changes to avoid losing coverage.
+  Keep the standalone WASM example's empty `[workspace]` table and
   its macro-only `wasm-bindgen-futures` Machete exception.
 - Keep the integration skill and `AGENTS.md`. Follow the root prohibition on
   changing `CHANGELOG.md`; record omitted upstream changelog updates in the
