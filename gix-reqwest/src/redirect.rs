@@ -8,7 +8,7 @@ use std::fmt;
 use std::{error::Error as StdError, sync::Arc};
 
 use crate::header::{AUTHORIZATION, COOKIE, PROXY_AUTHORIZATION, REFERER, WWW_AUTHENTICATE};
-use http::{HeaderMap, HeaderValue};
+use http::{HeaderMap, HeaderName, HeaderValue};
 use hyper::StatusCode;
 
 use crate::{async_impl, proxy::Matcher as ProxyMatcher, Url};
@@ -271,6 +271,10 @@ impl StdError for TooManyRedirects {}
 pub(crate) struct TowerRedirectPolicy {
     policy: Arc<Policy>,
     proxies: Arc<Vec<ProxyMatcher>>,
+    proxies_maybe_http_headers: bool,
+    // Origin values replaced by the actual proxy selected for the preceding hop.
+    proxy_headers: Vec<(HeaderName, Vec<HeaderValue>)>,
+    payload_headers_removed: bool,
     referer: bool,
     urls: Vec<Url>,
     https_only: bool,
@@ -278,9 +282,15 @@ pub(crate) struct TowerRedirectPolicy {
 
 impl TowerRedirectPolicy {
     pub(crate) fn new(policy: Policy, proxies: Arc<Vec<ProxyMatcher>>) -> Self {
+        let proxies_maybe_http_headers = proxies
+            .iter()
+            .any(|proxy| proxy.maybe_has_http_auth() || proxy.maybe_has_http_custom_headers());
         Self {
             policy: Arc::new(policy),
             proxies,
+            proxies_maybe_http_headers,
+            proxy_headers: Vec::new(),
+            payload_headers_removed: false,
             referer: false,
             urls: Vec::new(),
             https_only: false,
@@ -334,6 +344,13 @@ impl TowerPolicy<async_impl::body::Body, crate::Error> for TowerRedirectPolicy {
                         next_url,
                     ));
                 }
+                // Tower removes payload headers when a redirect drops the body.
+                // Keep both saved origin values and new proxy overlays from restoring them.
+                self.payload_headers_removed |= attempt.status() == StatusCode::SEE_OTHER
+                    || (matches!(
+                        attempt.status(),
+                        StatusCode::MOVED_PERMANENTLY | StatusCode::FOUND
+                    ) && attempt.previous_method() == http::Method::POST);
                 Ok(TowerAction::Follow)
             }
             ActionKind::Stop => Ok(TowerAction::Stop),
@@ -343,20 +360,47 @@ impl TowerPolicy<async_impl::body::Body, crate::Error> for TowerRedirectPolicy {
 
     fn on_request(&mut self, req: &mut http::Request<async_impl::body::Body>) {
         if let Ok(next_url) = Url::parse(&req.uri().to_string()) {
-            let cross_host = remove_sensitive_headers(req.headers_mut(), &next_url, &self.urls);
-            if cross_host && req.uri().scheme_str() == Some("http") {
-                for proxy in self.proxies.iter() {
-                    if let Some(proxy) = proxy.intercept(req.uri()) {
-                        let header = proxy
-                            .http_non_tunnel_custom_headers()
-                            .and_then(|headers| headers.get(PROXY_AUTHORIZATION).cloned())
-                            .or_else(|| proxy.http_non_tunnel_basic_auth());
-                        if let Some(header) = header {
-                            req.headers_mut().insert(PROXY_AUTHORIZATION, header);
-                        }
-                        // Use only the first matching proxy, as the connector does.
-                        break;
+            // Undo the preceding proxy's overlay before filtering origin credentials.
+            // Headers already removed by Tower (for example on POST -> GET) stay removed.
+            for (name, values) in self.proxy_headers.drain(..) {
+                if req.headers_mut().remove(&name).is_some() {
+                    for value in values {
+                        req.headers_mut().append(name.clone(), value);
                     }
+                }
+            }
+            remove_sensitive_headers(req.headers_mut(), &next_url, &self.urls);
+            if self.proxies_maybe_http_headers && req.uri().scheme_str() == Some("http") {
+                if let Some(proxy) = self
+                    .proxies
+                    .iter()
+                    .find_map(|proxy| proxy.intercept(req.uri()))
+                {
+                    let mut headers = proxy.http_non_tunnel_custom_headers().unwrap_or_default();
+                    if !req.headers().contains_key(PROXY_AUTHORIZATION)
+                        && !headers.contains_key(PROXY_AUTHORIZATION)
+                    {
+                        if let Some(header) = proxy.http_non_tunnel_basic_auth() {
+                            headers.insert(PROXY_AUTHORIZATION, header);
+                        }
+                    }
+                    if self.payload_headers_removed {
+                        for name in [
+                            "content-type",
+                            "content-length",
+                            "content-encoding",
+                            "transfer-encoding",
+                        ] {
+                            headers.remove(name);
+                        }
+                    }
+                    for name in headers.keys() {
+                        self.proxy_headers.push((
+                            name.clone(),
+                            req.headers().get_all(name).iter().cloned().collect(),
+                        ));
+                    }
+                    crate::util::replace_headers(req.headers_mut(), headers);
                 }
             }
             if self.referer {
@@ -626,4 +670,54 @@ fn test_redirect_socks_auth_is_not_an_http_header() {
         !request.headers().contains_key(PROXY_AUTHORIZATION),
         "SOCKS authenticates its connection"
     );
+}
+
+#[test]
+fn proxy_overlay_restores_repeated_sensitive_origin_headers_and_manual_auth() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let enabled = Arc::new(AtomicBool::new(true));
+    let callback = enabled.clone();
+    let mut headers = HeaderMap::new();
+    headers.append("x-shared", HeaderValue::from_static("proxy-first"));
+    headers.append("x-shared", HeaderValue::from_static("proxy-second"));
+    let proxies = Arc::new(vec![crate::Proxy::custom(move |_url| {
+        callback
+            .load(Ordering::SeqCst)
+            .then_some("http://proxy.local")
+    })
+    .basic_auth("user", "pass")
+    .headers(headers)
+    .into_matcher()]);
+    let mut policy = TowerRedirectPolicy::new(Policy::default(), proxies);
+    let mut request = http::Request::builder()
+        .uri("http://origin.local/start")
+        .header("x-shared", "origin-first")
+        .header(PROXY_AUTHORIZATION, "manual-auth")
+        .body(async_impl::body::Body::empty())
+        .unwrap();
+    let mut sensitive = HeaderValue::from_static("origin-second");
+    sensitive.set_sensitive(true);
+    request.headers_mut().append("x-shared", sensitive);
+    policy.on_request(&mut request);
+    let values: Vec<_> = request.headers().get_all("x-shared").iter().collect();
+    assert_eq!(values, ["proxy-first", "proxy-second"]);
+    assert_eq!(request.headers()[PROXY_AUTHORIZATION], "manual-auth");
+
+    enabled.store(false, Ordering::SeqCst);
+    policy
+        .urls
+        .push(Url::parse("http://origin.local/start").unwrap());
+    *request.uri_mut() = "http://origin.local/end".parse().unwrap();
+    policy.on_request(&mut request);
+    let values: Vec<_> = request.headers().get_all("x-shared").iter().collect();
+    assert_eq!(values, ["origin-first", "origin-second"]);
+    assert!(values[1].is_sensitive());
+    assert_eq!(request.headers()[PROXY_AUTHORIZATION], "manual-auth");
+
+    policy
+        .urls
+        .push(Url::parse("http://origin.local/end").unwrap());
+    *request.uri_mut() = "http://other.local/end".parse().unwrap();
+    policy.on_request(&mut request);
+    assert!(!request.headers().contains_key(PROXY_AUTHORIZATION));
 }
