@@ -520,7 +520,7 @@ enum Inner {
 }
 
 impl Inner {
-    #[cfg(feature = "socks")]
+    #[cfg(all(feature = "socks", feature = "__tls"))]
     fn get_http_connector(&mut self) -> &mut crate::connect::HttpConnector {
         match self {
             #[cfg(feature = "__native-tls")]
@@ -599,16 +599,19 @@ impl ConnectorService {
             }
         }
 
-        let resolver = &self.resolver;
-        let http = self.inner.get_http_connector();
-        socks::connect(proxy, dst, dns, resolver, http)
-            .await
-            .map(|tcp| Conn {
-                inner: self.verbose.wrap(TokioIo::new(tcp)),
-                is_proxy: false,
-                tls_info: false,
-            })
-            .map_err(Into::into)
+        #[cfg(feature = "__tls")]
+        {
+            let resolver = &self.resolver;
+            let http = self.inner.get_http_connector();
+            socks::connect(proxy, dst, dns, resolver, http)
+                .await
+                .map(|tcp| Conn {
+                    inner: self.verbose.wrap(TokioIo::new(tcp)),
+                    is_proxy: false,
+                    tls_info: false,
+                })
+                .map_err(Into::into)
+        }
     }
 
     async fn connect_with_maybe_proxy(self, dst: Uri, is_proxy: bool) -> Result<Conn, BoxError> {
