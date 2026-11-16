@@ -742,3 +742,77 @@ async fn return_to_original_host_drops_intermediate_proxy_credentials() {
         .await
         .unwrap();
 }
+
+#[cfg(feature = "__rustls-aws-lc-rs")]
+#[tokio::test]
+async fn connect_tunnel_tls_info_is_reported_when_enabled() {
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let certificate =
+        rustls::pki_types::CertificateDer::from(include_bytes!("support/server.cert").to_vec());
+    let key =
+        rustls::pki_types::PrivateKeyDer::try_from(include_bytes!("support/server.key").to_vec())
+            .unwrap();
+    let config = rustls::ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::aws_lc_rs::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .unwrap()
+    .with_no_client_auth()
+    .with_single_cert(vec![certificate.clone()], key)
+    .unwrap();
+    let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+
+    let backends: &[fn(gix_reqwest::ClientBuilder) -> gix_reqwest::ClientBuilder] = &[
+        gix_reqwest::ClientBuilder::tls_backend_rustls,
+        #[cfg(feature = "__native-tls")]
+        gix_reqwest::ClientBuilder::tls_backend_native,
+    ];
+    for backend in backends {
+        for enabled in [false, true] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let acceptor = acceptor.clone();
+            let task = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    request.push(socket.read_u8().await.unwrap());
+                }
+                assert!(request.starts_with(b"CONNECT localhost:443 HTTP/1.1\r\n"));
+                socket
+                    .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                    .await
+                    .unwrap();
+                let mut stream = acceptor.accept(socket).await.unwrap();
+                request.clear();
+                while !request.ends_with(b"\r\n\r\n") {
+                    request.push(stream.read_u8().await.unwrap());
+                }
+                stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                    .await
+                    .unwrap();
+                stream.shutdown().await.unwrap();
+            });
+            let response = backend(gix_reqwest::Client::builder())
+                .danger_accept_invalid_certs(true)
+                .tls_info(enabled)
+                .timeout(std::time::Duration::from_secs(5))
+                .proxy(gix_reqwest::Proxy::all(format!("http://{addr}")).unwrap())
+                .build()
+                .unwrap()
+                .get("https://localhost/")
+                .send()
+                .await
+                .unwrap();
+            let info = response.extensions().get::<gix_reqwest::tls::TlsInfo>();
+            assert_eq!(info.is_some(), enabled);
+            if let Some(info) = info {
+                assert_eq!(info.peer_certificate(), Some(certificate.as_ref()));
+            }
+            task.await.unwrap();
+        }
+    }
+}
