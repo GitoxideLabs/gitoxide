@@ -147,15 +147,7 @@ impl Client {
 
     // merge request headers with Client default_headers, prior to external http fetch
     fn merge_headers(&self, req: &mut Request) {
-        use http::header::Entry;
-        let headers: &mut HeaderMap = req.headers_mut();
-        // insert default headers in the request headers
-        // without overwriting already appended headers.
-        for (key, value) in self.config.headers.iter() {
-            if let Entry::Vacant(entry) = headers.entry(key) {
-                entry.insert(value.clone());
-            }
-        }
+        crate::util::merge_default_headers(req.headers_mut(), &self.config.headers);
     }
 
     pub(super) fn execute_request(
@@ -348,9 +340,7 @@ impl ClientBuilder {
 
     /// Sets the default headers for every request
     pub fn default_headers(mut self, headers: HeaderMap) -> ClientBuilder {
-        for (key, value) in headers.iter() {
-            self.config.headers.insert(key, value.clone());
-        }
+        crate::util::replace_headers(&mut self.config.headers, headers);
         self
     }
 }
@@ -451,6 +441,33 @@ mod tests {
             "application/json",
             "request headers don't change client defaults"
         );
+    }
+
+    #[wasm_bindgen_test]
+    fn default_headers_preserve_multiple_values() {
+        use crate::header::{HeaderMap, HeaderValue};
+
+        let mut defaults = HeaderMap::new();
+        defaults.append("x-default", HeaderValue::from_static("first"));
+        defaults.append("x-default", HeaderValue::from_static("second"));
+        let client = crate::Client::builder()
+            .default_headers(defaults)
+            .build()
+            .expect("client");
+        for custom in [false, true] {
+            let mut builder = client.get("https://www.example.com");
+            if custom {
+                builder = builder.header("x-default", "custom");
+            }
+            let mut req = builder.build().expect("request");
+            client.merge_headers(&mut req);
+            let values: Vec<_> = req.headers().get_all("x-default").iter().collect();
+            if custom {
+                assert_eq!(values, ["custom"]);
+            } else {
+                assert_eq!(values, ["first", "second"]);
+            }
+        }
     }
 
     #[wasm_bindgen_test]
