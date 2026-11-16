@@ -158,7 +158,7 @@ impl Personas {
                     config_date
                         .to_str()
                         .ok()
-                        .and_then(|date| gix_date::parse(date, Some(gix_date::Zoned::now())).ok())
+                        .and_then(|date| gix_date::parse(date, Some(gix_date::ZonedDateTime::now())).ok())
                 })
                 .or_else(|| Some(gix_date::Time::now_local_or_utc()))
                 .map(|time| time.format_or_unix(gix_date::time::Format::Raw))

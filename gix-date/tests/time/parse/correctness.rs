@@ -57,7 +57,7 @@ fn weekdays_use_the_updated_calendar_and_keep_the_local_clock() -> TestResult {
 fn zero_and_zero_padded_counts_are_numbers() -> TestResult {
     // Intentional difference: Git ignores 008 and does not recognize the word zero.
     // Decimal padding must not erase an eight-day subtraction; zero is the identity.
-    let now = "2009-08-30T19:20:00[UTC]".parse::<jiff::Zoned>()?;
+    let now = "2009-08-30T19:20:00[UTC]".parse::<jiff::ZonedDateTime>()?;
     for (input, seconds) in [
         ("008 days", 1250968800),
         ("0008 days", 1250968800),

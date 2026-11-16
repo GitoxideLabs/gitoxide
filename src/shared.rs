@@ -350,7 +350,7 @@ mod clap {
 
         fn parse_ref(&self, cmd: &Command, arg: Option<&Arg>, value: &OsStr) -> Result<Self::Value, Error> {
             StringValueParser::new()
-                .try_map(|arg| gix::date::parse(&arg, Some(gix::date::Zoned::now())))
+                .try_map(|arg| gix::date::parse(&arg, Some(gix::date::ZonedDateTime::now())))
                 .parse_ref(cmd, arg, value)
         }
     }

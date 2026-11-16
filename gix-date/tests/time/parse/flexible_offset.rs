@@ -20,7 +20,7 @@ fn timezone_inference_preserves_jiffs_timestamp_range() -> gix_error::TestResult
             );
         }
     }
-    let now: gix_date::Zoned = "2025-01-15T10:00:00+23:59[+23:59]".parse()?;
+    let now: gix_date::ZonedDateTime = "2025-01-15T10:00:00+23:59[+23:59]".parse()?;
     for input in inputs {
         assert_eq!(
             gix_date::parse(input, Some(now.clone()))?,
@@ -79,7 +79,7 @@ fn numeric_dates_without_offsets_use_the_reference_timezone() -> gix_error::Test
             "2024-11-03 01:30:00 -0400",
         ),
     ] {
-        let now: gix_date::Zoned = reference.parse()?;
+        let now: gix_date::ZonedDateTime = reference.parse()?;
         let expected = gix_date::parse(expected, None)?;
         for input in inputs {
             assert_eq!(
@@ -203,7 +203,7 @@ fn a_relative_date_keeps_the_offset_of_the_time_it_is_relative_to() {
     // Relative dates inherit the reference timezone, including Jiff's wider offsets.
     let now = jiff::Timestamp::from_second(1_700_000_000)
         .expect("a timestamp well inside range")
-        .to_zoned(jiff::tz::TimeZone::fixed(jiff::tz::Offset::constant(25)));
+        .to_zoned_datetime(jiff::tz::TimeZone::fixed(jiff::tz::Offset::constant(25)));
     assert_eq!(
         gix_date::parse("1 day ago", Some(now))
             .expect("the input names no timezone, so there is nothing to reject")

@@ -9,7 +9,7 @@ struct Sample {
     format_name: Option<String>,
     exit_code: usize,
     seconds: SecondsSinceUnixEpoch,
-    now: Option<gix_date::Zoned>,
+    now: Option<gix_date::ZonedDateTime>,
 }
 
 static BASELINE: LazyLock<Vec<(String, Sample)>> = LazyLock::new(|| {
@@ -32,7 +32,10 @@ static BASELINE: LazyLock<Vec<(String, Sample)>> = LazyLock::new(|| {
                 "" => None,
                 seconds => {
                     let (seconds, zone) = seconds.split_once(' ').unwrap_or((seconds, "UTC"));
-                    Some(jiff::Timestamp::from_second(seconds.parse()?)?.to_zoned(jiff::tz::TimeZone::get(zone)?))
+                    Some(
+                        jiff::Timestamp::from_second(seconds.parse()?)?
+                            .to_zoned_datetime(jiff::tz::TimeZone::get(zone)?),
+                    )
                 }
             };
             samples.push((

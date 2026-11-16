@@ -45,7 +45,7 @@ pub mod time;
 
 ///
 pub mod parse;
-pub use jiff::Zoned;
+pub use jiff::ZonedDateTime;
 pub use parse::function::{parse, parse_header};
 
 /// A timestamp with timezone.
