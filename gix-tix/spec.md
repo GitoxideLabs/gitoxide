@@ -2343,9 +2343,10 @@ views.
   five seconds while still needed. Updates follow native notifications and reported
   coverage loss. Initial registration and runtime monitoring failures remain
   visible in the worktree changes pane through successful status reloads and
-  navigation until the monitor reports successful recovery. Idle retry backoff
-  does not clear the warning, and degraded coverage cannot certify a clean
-  worktree for travel shortcuts. When information appears stale,
+  navigation. Neither quiet retry backoff nor a successful retry awaiting
+  verification clears the warning. It clears when coverage is verified or no
+  longer requested. Degraded coverage cannot certify a clean worktree for
+  travel shortcuts. When information appears stale,
   `Shift-R` rebuilds native subscriptions and refreshes all enabled cache domains,
   including the revision view and visible worktree status.
 - Configuration dependencies within those roots, including active includes and

@@ -13643,7 +13643,7 @@ added
     fn worktree_monitor_preserves_options_and_skips_unchanged_coverage() -> gix_error::TestResult {
         let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
         for (metadata, all_worktrees) in [(false, false), (true, true)] {
-            let options = gix::notify::Options {
+            let mut options = gix::notify::Options {
                 metadata,
                 all_worktrees,
                 worktree_filter: Some(Vec::new()),
@@ -13657,8 +13657,9 @@ added
                 worktree_coverage: Some(gix::notify::WorktreeCoverage::All),
                 metadata_debounce: Duration::from_millis(42),
                 max_latency: Duration::from_millis(84),
-                retry_interval: Duration::from_secs(2),
+                ..Default::default()
             };
+            options.retry_interval = Duration::from_secs(2);
             let initial = test_repository::open(&fixture)?.monitor(options)?;
             let options = initial.options().clone();
             let mut monitor = Some(initial);
