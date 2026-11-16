@@ -2650,6 +2650,91 @@ mod lazy_platform_verifier {
             }
         }
     }
+
+    #[cfg(all(test, feature = "__rustls-aws-lc-rs"))]
+    mod tests {
+        use super::*;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        #[test]
+        fn unavailable_roots_are_lazy_and_retried_without_disabling_validation() {
+            let provider = super::super::default_rustls_crypto_provider();
+            let calls = Arc::new(AtomicUsize::new(0));
+            let attempts = calls.clone();
+            let verifier = Arc::new(LazyPlatformVerifier::new(provider.clone(), move || {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                Err(rustls::Error::General("missing roots".into()))
+            }));
+            let _config = rustls::ClientConfig::builder_with_provider(provider.clone())
+                .with_safe_default_protocol_versions()
+                .unwrap()
+                .dangerous()
+                .with_custom_certificate_verifier(verifier.clone())
+                .with_no_client_auth();
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+            let cert = CertificateDer::from(vec![0]);
+            let name = ServerName::try_from("localhost").unwrap();
+            for attempt in 1..=2 {
+                let error = verifier
+                    .verify_server_cert(
+                        &cert,
+                        &[],
+                        &name,
+                        &[],
+                        UnixTime::since_unix_epoch(std::time::Duration::ZERO),
+                    )
+                    .unwrap_err();
+                assert_eq!(error.to_string(), "unexpected error: missing roots");
+                assert_eq!(calls.load(Ordering::SeqCst), attempt);
+            }
+            assert_eq!(
+                verifier.supported_verify_schemes(),
+                provider
+                    .signature_verification_algorithms
+                    .supported_schemes(),
+            );
+            assert_eq!(calls.load(Ordering::SeqCst), 3);
+        }
+
+        #[cfg(any(all(unix, not(target_os = "android")), target_os = "windows"))]
+        #[test]
+        fn initialized_verifier_is_cached_and_rejects_invalid_certificates() {
+            let provider = super::super::default_rustls_crypto_provider();
+            let calls = Arc::new(AtomicUsize::new(0));
+            let attempts = calls.clone();
+            let init_provider = provider.clone();
+            let verifier = LazyPlatformVerifier::new(provider, move || {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                let root = CertificateDer::from(
+                    include_bytes!("../../tests/support/server.cert").to_vec(),
+                );
+                rustls_platform_verifier::Verifier::new_with_extra_roots(
+                    [root],
+                    init_provider.clone(),
+                )
+            });
+            let initialized = verifier.get().unwrap();
+            assert!(Arc::ptr_eq(&initialized, &verifier.get().unwrap()));
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                verifier.supported_verify_schemes(),
+                initialized.supported_verify_schemes()
+            );
+
+            let cert = CertificateDer::from(vec![0]);
+            let name = ServerName::try_from("localhost").unwrap();
+            let now = UnixTime::since_unix_epoch(std::time::Duration::ZERO);
+            let expected = initialized
+                .verify_server_cert(&cert, &[], &name, &[], now)
+                .unwrap_err();
+            let actual = verifier
+                .verify_server_cert(&cert, &[], &name, &[], now)
+                .unwrap_err();
+            assert_eq!(actual.to_string(), expected.to_string());
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+        }
+    }
 }
 
 #[cfg(feature = "__rustls")]
