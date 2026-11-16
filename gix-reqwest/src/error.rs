@@ -220,7 +220,12 @@ impl Error {
 
     #[allow(unused)]
     pub(crate) fn into_io(self) -> io::Error {
-        io::Error::new(io::ErrorKind::Other, self)
+        let kind = if self.is_timeout() {
+            io::ErrorKind::TimedOut
+        } else {
+            io::ErrorKind::Other
+        };
+        io::Error::new(kind, self)
     }
 }
 
@@ -486,12 +491,30 @@ mod tests {
         let orig = super::request("orig");
         // Convert gix_reqwest::Error into an io::Error...
         let io = orig.into_io();
+        assert_eq!(io.kind(), io::ErrorKind::Other);
         // Convert that io::Error back into a gix_reqwest::Error...
         let err = super::decode_io(io);
         // It should have pulled out the original, not nested it...
         match err.inner.kind {
             Kind::Request => (),
             _ => panic!("{err:?}"),
+        }
+    }
+
+    #[test]
+    fn timeout_io_error_preserves_kind_and_source() {
+        let url = Url::parse("http://example.com/timeout").unwrap();
+        for error in [
+            super::request(super::TimedOut),
+            super::decode(super::body(super::TimedOut)),
+            super::request(io::Error::from(io::ErrorKind::TimedOut)),
+        ] {
+            let io = error.with_url(url.clone()).into_io();
+            assert_eq!(io.kind(), io::ErrorKind::TimedOut);
+            let error = io.get_ref().unwrap().downcast_ref::<Error>().unwrap();
+            assert_eq!(error.url(), Some(&url));
+            assert!(error.is_timeout());
+            assert!(super::decode_io(io).is_timeout());
         }
     }
 
