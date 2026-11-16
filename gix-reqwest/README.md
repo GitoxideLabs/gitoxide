@@ -18,10 +18,16 @@ that depends on this fork. Feature names and the experimental
 
 The fork starts from upstream commit
 [`6b99ec2`](https://github.com/seanmonstar/reqwest/commit/6b99ec2a6a4fa9b601337fff9979541bb27050d2).
-`Reqwest-Upstream` commit trailers record complete upstream integration
-checkpoints; `Reqwest-Patch` trailers identify separately imported patches.
+`Reqwest-Upstream` commit fields record complete upstream integration
+checkpoints; `Reqwest-Patch` identifies separately imported patches and
+`Reqwest-PR` their known source PRs. Local provenance precedes the verbatim
+original message; inspect the full commit body instead of Git's trailer parser.
 Gitoxide can return to upstream `reqwest` once a release includes the required
 fixes and passes the fork's and transport's regression tests.
+
+Maintainers: follow the [reintegration skill](https://github.com/GitoxideLabs/gitoxide/blob/main/.agents/skills/reintegrate-reqwest/SKILL.md)
+when importing upstream changes. Commit trailers are the source of truth for
+the latest integrated revision, including after branch merges.
 
 The upstream client provides:
 

@@ -43,8 +43,10 @@ checks = [
     { args = ["--all-features", "--all-targets"], env = { RUSTFLAGS = "--cfg reqwest_unstable" } },
 ]
 tests = [
-    { args = ["--no-default-features", "--features", "blocking,http2,socks,rustls,cookies,charset,query,form,json,multipart,stream,gzip,brotli,zstd,deflate", "-E", "not binary(badssl) & not test(test_tls_info)"] },
-    { args = ["--no-default-features", "--features", "blocking,http2,socks,native-tls", "--lib", "--test", "proxy", "--test", "redirect"] },
+    { args = ["--no-default-features", "--features", "blocking,http2,socks,rustls,cookies,charset,query,form,json,multipart,stream,hickory-dns,gzip,brotli,zstd,deflate", "-E", "not binary(badssl) & not test(test_tls_info)"] },
+    # The loopback TLS server needs rustls to exercise both client backends.
+    { args = ["--features", "blocking,socks,native-tls", "--lib", "--test", "proxy", "--test", "redirect"] },
+    { args = ["--no-default-features", "--features", "blocking,http2,socks", "--lib", "--test", "proxy", "--test", "redirect"] },
 ]
 doctests = [
     { args = ["--features", "blocking,cookies,query,form,json,multipart,stream"] },
