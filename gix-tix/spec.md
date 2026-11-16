@@ -464,6 +464,10 @@ without trading responsiveness for metadata that is not visible.
   Visible rows retain shared references for direct navigation and drawing.
   These representations store no compressed data and preserve constant-time
   membership and ID lookups.
+- Views without hidden tips reuse their reachable scope directly and omit
+  hidden-branch target analysis. Lane construction releases ordering scratch
+  before building the retained layout and computes visual counts from its
+  indexed parent edges without a second ID lookup table.
 - One persistent graph is shared by every worktrunk preview. Resolving another
   worktree adds only missing ancestry for its visible and hidden tips; selection
   switches the active rev-set without rebuilding or rewalking cached topology.

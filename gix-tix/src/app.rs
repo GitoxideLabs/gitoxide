@@ -3020,6 +3020,11 @@ impl App {
     }
 
     fn update_hidden_branch_targets(&mut self) {
+        if self.hidden_rows.is_empty() {
+            self.hidden_branch_targets = HashMap::new();
+            self.hidden_rebase_bases = HashSet::new();
+            return;
+        }
         #[derive(Clone, Copy)]
         struct State {
             leaf: Option<ObjectId>,
@@ -4560,6 +4565,7 @@ pub(crate) fn compute_lanes(input: LaneInput) -> (Vec<SharedCommitRow>, Graph, D
             }
         }
     }
+    drop((positions, children, review_rows, ready, review_ready));
     let start = Instant::now();
     let graph = Graph::new(&rows);
     (rows, graph, start.elapsed())
@@ -4601,6 +4607,7 @@ impl Graph {
             }
         }
         parent_offsets.push(parents.len());
+        drop(positions);
         let mut route_priorities = vec![0; parents.len()];
         let mut route_owners = vec![usize::MAX; rows.len()];
         let mut routes = Vec::new();
@@ -4614,7 +4621,7 @@ impl Graph {
             routes: Vec::new(),
             route_colors: vec![0; parents.len()],
             route_slots: vec![0; parents.len()],
-            visual_counts: visual_counts(rows),
+            visual_counts: visual_counts(&parent_offsets, &parents),
             parent_offsets,
             parents,
             children,
@@ -5043,14 +5050,12 @@ impl Graph {
     }
 }
 
-fn visual_counts(rows: &[SharedCommitRow]) -> Vec<usize> {
-    let positions: HashMap<_, _> = rows.iter().enumerate().map(|(index, row)| (row.id, index)).collect();
-    let mut counts = vec![0; rows.len()];
-    for (index, row) in rows.iter().enumerate().rev() {
-        let base = row
-            .parent_ids
+fn visual_counts(parent_offsets: &[usize], parents: &[usize]) -> Vec<usize> {
+    let mut counts = vec![0; parent_offsets.len().saturating_sub(1)];
+    for index in (0..counts.len()).rev() {
+        let base = parents[parent_offsets[index]..parent_offsets[index + 1]]
             .iter()
-            .filter_map(|parent| positions.get(parent).copied())
+            .copied()
             .map(|parent| parent.saturating_add(counts[parent]))
             .min()
             .unwrap_or(index);
@@ -10675,6 +10680,32 @@ mod tests {
             Some(TreeDiffTarget::Commit { id: id(1), parent: 0 }),
             "multiple leaves retain the boundary commit's ordinary diff"
         );
+    }
+
+    #[test]
+    fn revealing_every_row_clears_hidden_branch_state() -> gix::error::TestResult {
+        let mut app = App::new(10);
+        app.extend_commits(vec![row_with_parents(3, &[2]), row_with_parents(2, &[1])]);
+        app.extend_hidden_commits(vec![row(1)]);
+        complete(&mut app);
+        assert_eq!(app.hidden_branch_targets.get(&id(1)), Some(&id(3)));
+        assert!(
+            app.hidden_rebase_bases.contains(&id(1)),
+            "the hidden boundary is a rebase base"
+        );
+
+        app.hidden_rows.clear();
+        app.update_hidden_branch_targets();
+
+        assert!(
+            app.hidden_branch_targets.is_empty(),
+            "revealed rows have no hidden branch target"
+        );
+        assert!(
+            app.hidden_rebase_bases.is_empty(),
+            "revealed rows have no hidden rebase base"
+        );
+        Ok(())
     }
 
     #[test]
