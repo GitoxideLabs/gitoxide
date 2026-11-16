@@ -622,3 +622,81 @@ async fn http_redirect_uses_selected_proxy_credentials() -> Result<(), gix_reqwe
     }
     Ok(())
 }
+
+#[cfg(all(feature = "socks", feature = "__rustls-aws-lc-rs"))]
+#[tokio::test]
+async fn socks_tls_info_is_reported_when_enabled() {
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let cert: rustls_pki_types::CertificateDer<'static> =
+        include_bytes!("support/server.cert").to_vec().into();
+    let key = include_bytes!("support/server.key")
+        .to_vec()
+        .try_into()
+        .unwrap();
+    let provider = rustls::crypto::aws_lc_rs::default_provider();
+    let config = rustls::ServerConfig::builder_with_provider(Arc::new(provider))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert], key)
+        .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_addr = listener.local_addr().unwrap();
+    let proxy = tokio::spawn(async move {
+        for _ in 0..2 {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut greeting = [0; 3];
+            socket.read_exact(&mut greeting).await.unwrap();
+            assert_eq!(greeting, [5, 1, 0]);
+            socket.write_all(&[5, 0]).await.unwrap();
+            let mut request = [0; 5];
+            socket.read_exact(&mut request).await.unwrap();
+            assert_eq!(&request[..4], &[5, 1, 0, 3]);
+            let mut destination = vec![0; request[4] as usize + 2];
+            socket.read_exact(&mut destination).await.unwrap();
+            assert_eq!(&destination[..destination.len() - 2], b"localhost");
+            socket
+                .write_all(&[5, 0, 0, 1, 127, 0, 0, 1, 0, 0])
+                .await
+                .unwrap();
+            let mut tls = tokio_rustls::TlsAcceptor::from(Arc::new(config.clone()))
+                .accept(socket)
+                .await
+                .unwrap();
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") {
+                head.push(tls.read_u8().await.unwrap());
+            }
+            tls.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            tls.shutdown().await.unwrap();
+        }
+    });
+    for enabled in [false, true] {
+        let response = gix_reqwest::Client::builder()
+            .tls_backend_rustls()
+            .danger_accept_invalid_certs(true)
+            .timeout(std::time::Duration::from_secs(5))
+            .tls_info(enabled)
+            .proxy(gix_reqwest::Proxy::all(format!("socks5h://{proxy_addr}")).unwrap())
+            .build()
+            .unwrap()
+            .get("https://localhost/")
+            .send()
+            .await
+            .unwrap();
+        let info = response.extensions().get::<gix_reqwest::tls::TlsInfo>();
+        assert_eq!(info.is_some(), enabled);
+        if let Some(info) = info {
+            assert_eq!(
+                info.peer_certificate(),
+                Some(&include_bytes!("support/server.cert")[..])
+            );
+            assert!(info.version().is_some());
+        }
+    }
+    proxy.await.unwrap();
+}
