@@ -1106,6 +1106,9 @@ pub(crate) fn view_scope(
     }
 
     let reachable = reachable_from(view_tips, &mut extend_parents);
+    if hidden_tips.is_empty() {
+        return (reachable, HashSet::new());
+    }
     let hidden = reachable_from(hidden_tips, &mut extend_parents);
     let visible: HashSet<_> = reachable.difference(&hidden).copied().collect();
     let boundary = if visible.is_empty() {
@@ -1113,8 +1116,6 @@ pub(crate) fn view_scope(
             .iter()
             .copied()
             .collect()
-    } else if hidden_tips.is_empty() {
-        HashSet::new()
     } else {
         let mut boundary = Vec::new();
         for id in &visible {
@@ -3507,6 +3508,32 @@ mod tests {
         assert!(
             !graph.unavailable_patches.contains(&original_commit_id),
             "ordinary commits are not confused with unresolved placeholders"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn scope_without_hidden_tips_contains_all_reachable_commits() -> gix::error::TestResult {
+        let graph = HistoryGraph::from_test_commits(&[
+            (id(4), vec![id(2), id(3)]),
+            (id(3), vec![id(1)]),
+            (id(2), vec![id(1)]),
+            (id(1), vec![]),
+        ]);
+        let (visible, boundary) = view_scope(&[id(4)], &[], |commit_id, out| {
+            out.extend(
+                graph
+                    .parents_of(commit_id)
+                    .expect("the test graph contains every reachable commit"),
+            );
+        });
+        assert_eq!(visible, HashSet::from([id(1), id(2), id(3), id(4)]));
+        assert!(boundary.is_empty(), "a view without hidden ancestry has no boundary");
+
+        let (visible, boundary) = view_scope(&[], &[], |_, _| panic!("empty tips need no parent lookup"));
+        assert!(
+            visible.is_empty() && boundary.is_empty(),
+            "an empty view retains neither scope nor boundary"
         );
         Ok(())
     }
