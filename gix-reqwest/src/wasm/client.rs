@@ -269,7 +269,7 @@ async fn fetch(req: Request) -> crate::Result<Response> {
     let js_resp = super::promise::<web_sys::Response>(p)
         .await
         .map_err(|error| {
-            if error.to_string() == "JsValue(\"reqwest::errors::TimedOut\")" {
+            if error.to_string() == "JsValue(\"gix_reqwest::errors::TimedOut\")" {
                 crate::error::TimedOut.into()
             } else {
                 error

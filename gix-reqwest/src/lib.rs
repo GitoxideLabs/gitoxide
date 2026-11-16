@@ -4,9 +4,14 @@
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 #![cfg_attr(test, deny(warnings))]
 
-//! # reqwest
+//! # gix-reqwest
 //!
-//! The `reqwest` crate provides a convenient, higher-level HTTP
+//! A fork of [reqwest](https://github.com/seanmonstar/reqwest), created by Sean McArthur
+//! and its contributors, carrying patches needed by Gitoxide until upstream catches up.
+//! Use `gix_reqwest` types with this fork: its clients, builders, and requests are distinct
+//! from those of upstream `reqwest`. The original MIT and Apache-2.0 licenses apply.
+//!
+//! The `gix-reqwest` crate provides a convenient, higher-level HTTP
 //! [`Client`][client].
 //!
 //! It handles many of the things that most people just expect an HTTP client
@@ -19,9 +24,9 @@
 //! - Uses [TLS](#tls) by default
 //! - Cookies
 //!
-//! The [`reqwest::Client`][client] is asynchronous (requiring Tokio). For
+//! The [`gix_reqwest::Client`][client] is asynchronous (requiring Tokio). For
 //! applications wishing  to only make a few HTTP requests, the
-//! [`reqwest::blocking`](blocking) API may be more convenient.
+//! [`gix_reqwest::blocking`][blocking] API may be more convenient.
 //!
 //! Additional learning resources include:
 //!
@@ -31,15 +36,16 @@
 //! ## Commercial Support
 //!
 //! For private advice, support, reviews, access to the maintainer, and the
-//! like, reach out for [commercial support][sponsor].
+//! like, see the upstream author's [commercial support][sponsor]. Report fork-specific
+//! issues to [Gitoxide](https://github.com/GitoxideLabs/gitoxide/issues).
 //!
 //! ## Making a GET request
 //!
 //! For a single request, you can use the [`get`][get] shortcut method.
 //!
 //! ```rust
-//! # async fn run() -> Result<(), reqwest::Error> {
-//! let body = reqwest::get("https://www.rust-lang.org")
+//! # async fn run() -> Result<(), gix_reqwest::Error> {
+//! let body = gix_reqwest::get("https://www.rust-lang.org")
 //!     .await?
 //!     .text()
 //!     .await?;
@@ -59,13 +65,13 @@
 //! by using the `body()` method of a [`RequestBuilder`][builder]. This lets you set the
 //! exact raw bytes of what the body should be. It accepts various types,
 //! including `String` and `Vec<u8>`. If you wish to pass a custom
-//! type, you can use the `reqwest::Body` constructors.
+//! type, you can use the `gix_reqwest::Body` constructors.
 //!
 //! ```rust
-//! # use reqwest::Error;
+//! # use gix_reqwest::Error;
 //! #
 //! # async fn run() -> Result<(), Error> {
-//! let client = reqwest::Client::new();
+//! let client = gix_reqwest::Client::new();
 //! let res = client.post("http://httpbin.org/post")
 //!     .body("the exact body that is sent")
 //!     .send()
@@ -85,13 +91,13 @@
 //! The feature `form` is required.
 //!
 //! ```rust
-//! # use reqwest::Error;
+//! # use gix_reqwest::Error;
 //! #
 //! # #[cfg(feature = "form")]
 //! # async fn run() -> Result<(), Error> {
 //! // This will POST a body of `foo=bar&baz=quux`
 //! let params = [("foo", "bar"), ("baz", "quux")];
-//! let client = reqwest::Client::new();
+//! let client = gix_reqwest::Client::new();
 //! let res = client.post("http://httpbin.org/post")
 //!     .form(&params)
 //!     .send()
@@ -109,7 +115,7 @@
 //! The feature `json` is required.
 //!
 //! ```rust
-//! # use reqwest::Error;
+//! # use gix_reqwest::Error;
 //! # use std::collections::HashMap;
 //! #
 //! # #[cfg(feature = "json")]
@@ -119,7 +125,7 @@
 //! map.insert("lang", "rust");
 //! map.insert("body", "json");
 //!
-//! let client = reqwest::Client::new();
+//! let client = gix_reqwest::Client::new();
 //! let res = client.post("http://httpbin.org/post")
 //!     .json(&map)
 //!     .send()
@@ -137,7 +143,7 @@
 //! ## Cookies
 //!
 //! The automatic storing and sending of session cookies can be enabled with
-//! the [`cookie_store`][ClientBuilder::cookie_store] method on `ClientBuilder`.
+//! the [`cookie_store`][cookie-store] method on `ClientBuilder`.
 //!
 //! ## Proxies
 //!
@@ -152,7 +158,7 @@
 //! HTTP or HTTPS proxies take precedence.
 //!
 //! These can be overwritten by adding a [`Proxy`] to `ClientBuilder`
-//! i.e. `let proxy = reqwest::Proxy::http("https://secure.example")?;`
+//! i.e. `let proxy = gix_reqwest::Proxy::http("https://secure.example")?;`
 //! or disabled by calling `ClientBuilder::no_proxy()`.
 //!
 //! `socks` feature is required if you have configured socks proxy like this:
@@ -179,7 +185,7 @@
 //!
 //! The Client implementation automatically switches to the WASM one when the target_arch is wasm32,
 //! the usage is basically the same as the async api. Some of the features are disabled in wasm
-//! : [`tls`], [`cookie`], [`blocking`], as well as various `ClientBuilder` methods such as `timeout()` and `connector_layer()`.
+//! : [`tls`][tls], [`cookie`][cookie], [`blocking`][blocking], as well as various `ClientBuilder` methods such as `timeout()` and `connector_layer()`.
 //!
 //! TLS and cookies are provided through the browser environment, so reqwest can issue TLS requests with cookies,
 //! but has limited configuration.
@@ -238,7 +244,11 @@
 //! Support this project by becoming a [sponsor][].
 //!
 //! [hyper]: https://hyper.rs
-//! [blocking]: ./blocking/index.html
+//! [blocking]: https://docs.rs/gix-reqwest/latest/gix_reqwest/blocking/index.html
+//! [cookie]: https://docs.rs/gix-reqwest/latest/gix_reqwest/cookie/index.html
+//! [cookie-store]: https://docs.rs/gix-reqwest/latest/gix_reqwest/struct.ClientBuilder.html#method.cookie_store
+//! [multipart]: https://docs.rs/gix-reqwest/latest/gix_reqwest/multipart/index.html
+//! [tls]: https://docs.rs/gix-reqwest/latest/gix_reqwest/tls/index.html
 //! [client]: ./struct.Client.html
 //! [response]: ./struct.Response.html
 //! [get]: ./fn.get.html
@@ -297,7 +307,7 @@ pub use self::response::ResponseBuilderExt;
 
 /// Shortcut method to quickly make a `GET` request.
 ///
-/// See also the methods on the [`reqwest::Response`](./struct.Response.html)
+/// See also the methods on the [`gix_reqwest::Response`](./struct.Response.html)
 /// type.
 ///
 /// **NOTE**: This function creates a new internal `Client` on each call,
@@ -307,8 +317,8 @@ pub use self::response::ResponseBuilderExt;
 /// # Examples
 ///
 /// ```rust
-/// # async fn run() -> Result<(), reqwest::Error> {
-/// let body = reqwest::get("https://www.rust-lang.org").await?
+/// # async fn run() -> Result<(), gix_reqwest::Error> {
+/// let body = gix_reqwest::get("https://www.rust-lang.org").await?
 ///     .text().await?;
 /// # Ok(())
 /// # }

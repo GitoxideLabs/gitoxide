@@ -8,8 +8,8 @@
 //
 // `tokio = { version = "1", features = ["full"] }`
 #[tokio::main]
-async fn main() -> Result<(), reqwest::Error> {
-    let echo_json: serde_json::Value = reqwest::Client::new()
+async fn main() -> Result<(), gix_reqwest::Error> {
+    let echo_json: serde_json::Value = gix_reqwest::Client::new()
         .post("https://jsonplaceholder.typicode.com/posts")
         .json(&serde_json::json!({
             "title": "Reqwest.rs",

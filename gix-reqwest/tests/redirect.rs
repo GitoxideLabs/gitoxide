@@ -1,13 +1,13 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![cfg(not(feature = "rustls-no-provider"))]
 mod support;
+use gix_reqwest::Body;
 use http_body_util::BodyExt;
-use reqwest::Body;
 use support::server;
 
 #[tokio::test]
 async fn test_redirect_301_and_302_and_303_changes_post_to_get() {
-    let client = reqwest::Client::new();
+    let client = gix_reqwest::Client::new();
     let codes = [301u16, 302, 303];
 
     for &code in &codes {
@@ -34,9 +34,9 @@ async fn test_redirect_301_and_302_and_303_changes_post_to_get() {
         let dst = format!("http://{}/{}", redirect.addr(), "dst");
         let res = client.post(&url).send().await.unwrap();
         assert_eq!(res.url().as_str(), dst);
-        assert_eq!(res.status(), reqwest::StatusCode::OK);
+        assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
         assert_eq!(
-            res.headers().get(reqwest::header::SERVER).unwrap(),
+            res.headers().get(gix_reqwest::header::SERVER).unwrap(),
             &"test-dst"
         );
     }
@@ -44,7 +44,7 @@ async fn test_redirect_301_and_302_and_303_changes_post_to_get() {
 
 #[tokio::test]
 async fn test_redirect_307_and_308_tries_to_get_again() {
-    let client = reqwest::Client::new();
+    let client = gix_reqwest::Client::new();
     let codes = [307u16, 308];
     for &code in &codes {
         let redirect = server::http(move |req| async move {
@@ -70,9 +70,9 @@ async fn test_redirect_307_and_308_tries_to_get_again() {
         let dst = format!("http://{}/{}", redirect.addr(), "dst");
         let res = client.get(&url).send().await.unwrap();
         assert_eq!(res.url().as_str(), dst);
-        assert_eq!(res.status(), reqwest::StatusCode::OK);
+        assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
         assert_eq!(
-            res.headers().get(reqwest::header::SERVER).unwrap(),
+            res.headers().get(gix_reqwest::header::SERVER).unwrap(),
             &"test-dst"
         );
     }
@@ -81,7 +81,7 @@ async fn test_redirect_307_and_308_tries_to_get_again() {
 #[tokio::test]
 async fn test_redirect_307_and_308_tries_to_post_again() {
     let _ = env_logger::try_init();
-    let client = reqwest::Client::new();
+    let client = gix_reqwest::Client::new();
     let codes = [307u16, 308];
     for &code in &codes {
         let redirect = server::http(move |mut req| async move {
@@ -119,9 +119,9 @@ async fn test_redirect_307_and_308_tries_to_post_again() {
         let dst = format!("http://{}/{}", redirect.addr(), "dst");
         let res = client.post(&url).body("Hello").send().await.unwrap();
         assert_eq!(res.url().as_str(), dst);
-        assert_eq!(res.status(), reqwest::StatusCode::OK);
+        assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
         assert_eq!(
-            res.headers().get(reqwest::header::SERVER).unwrap(),
+            res.headers().get(gix_reqwest::header::SERVER).unwrap(),
             &"test-dst"
         );
     }
@@ -130,7 +130,7 @@ async fn test_redirect_307_and_308_tries_to_post_again() {
 #[cfg(feature = "blocking")]
 #[test]
 fn test_redirect_307_does_not_try_if_reader_cannot_reset() {
-    let client = reqwest::blocking::Client::new();
+    let client = gix_reqwest::blocking::Client::new();
     let codes = [307u16, 308];
     for &code in &codes {
         let redirect = server::http(move |mut req| async move {
@@ -159,7 +159,7 @@ fn test_redirect_307_does_not_try_if_reader_cannot_reset() {
         let url = format!("http://{}/{}", redirect.addr(), code);
         let res = client
             .post(&url)
-            .body(reqwest::blocking::Body::new(&b"Hello"[..]))
+            .body(gix_reqwest::blocking::Body::new(&b"Hello"[..]))
             .send()
             .unwrap();
         assert_eq!(res.url().as_str(), url);
@@ -201,13 +201,13 @@ async fn test_redirect_removes_sensitive_headers() {
 
     tx.send(Some(mid_server.addr())).unwrap();
 
-    reqwest::Client::builder()
+    gix_reqwest::Client::builder()
         .build()
         .unwrap()
         .get(&format!("http://{}/sensitive", mid_server.addr()))
         .header(
-            reqwest::header::COOKIE,
-            reqwest::header::HeaderValue::from_static("foo=bar"),
+            gix_reqwest::header::COOKIE,
+            gix_reqwest::header::HeaderValue::from_static("foo=bar"),
         )
         .send()
         .await
@@ -226,7 +226,7 @@ async fn test_redirect_policy_can_return_errors() {
     });
 
     let url = format!("http://{}/loop", server.addr());
-    let err = reqwest::get(&url).await.unwrap_err();
+    let err = gix_reqwest::get(&url).await.unwrap_err();
     assert!(err.is_redirect());
 }
 
@@ -243,8 +243,8 @@ async fn test_redirect_policy_can_stop_redirects_without_an_error() {
 
     let url = format!("http://{}/no-redirect", server.addr());
 
-    let res = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
+    let res = gix_reqwest::Client::builder()
+        .redirect(gix_reqwest::redirect::Policy::none())
         .build()
         .unwrap()
         .get(&url)
@@ -253,7 +253,7 @@ async fn test_redirect_policy_can_stop_redirects_without_an_error() {
         .unwrap();
 
     assert_eq!(res.url().as_str(), url);
-    assert_eq!(res.status(), reqwest::StatusCode::FOUND);
+    assert_eq!(res.status(), gix_reqwest::StatusCode::FOUND);
 }
 
 #[tokio::test]
@@ -273,7 +273,7 @@ async fn test_referer_is_not_set_if_disabled() {
         }
     });
 
-    reqwest::Client::builder()
+    gix_reqwest::Client::builder()
         .referer(false)
         .build()
         .unwrap()
@@ -295,10 +295,10 @@ async fn test_invalid_location_stops_redirect_gh484() {
 
     let url = format!("http://{}/yikes", server.addr());
 
-    let res = reqwest::get(&url).await.unwrap();
+    let res = gix_reqwest::get(&url).await.unwrap();
 
     assert_eq!(res.url().as_str(), url);
-    assert_eq!(res.status(), reqwest::StatusCode::FOUND);
+    assert_eq!(res.status(), gix_reqwest::StatusCode::FOUND);
 }
 
 #[tokio::test]
@@ -313,7 +313,7 @@ async fn test_invalid_scheme_is_rejected() {
 
     let url = format!("http://{}/yikes", server.addr());
 
-    let err = reqwest::get(&url).await.unwrap_err();
+    let err = gix_reqwest::get(&url).await.unwrap_err();
     assert!(err.is_builder());
 }
 
@@ -339,14 +339,14 @@ async fn test_redirect_302_with_set_cookies() {
     let url = format!("http://{}/{}", server.addr(), code);
     let dst = format!("http://{}/{}", server.addr(), "dst");
 
-    let client = reqwest::ClientBuilder::new()
+    let client = gix_reqwest::ClientBuilder::new()
         .cookie_store(true)
         .build()
         .unwrap();
     let res = client.get(&url).send().await.unwrap();
 
     assert_eq!(res.url().as_str(), dst);
-    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
 }
 
 #[cfg(feature = "__rustls")]
@@ -363,7 +363,7 @@ async fn test_redirect_https_only_enforced_gh1312() {
 
     let url = format!("https://{}/yikes", server.addr());
 
-    let res = reqwest::Client::builder()
+    let res = gix_reqwest::Client::builder()
         .tls_danger_accept_invalid_certs(true)
         .tls_backend_rustls()
         .https_only(true)
@@ -398,8 +398,8 @@ async fn test_redirect_limit_to_1() {
     // The number at the end of the uri indicates the total number of redirections
     let url = format!("http://{}/redirect/0", server.addr());
 
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::limited(1))
+    let client = gix_reqwest::Client::builder()
+        .redirect(gix_reqwest::redirect::Policy::limited(1))
         .build()
         .unwrap();
     let res = client.get(&url).send().await.unwrap_err();
@@ -424,8 +424,8 @@ async fn test_redirect_custom() {
 
     let url = format!("http://{}/foo", server.addr());
 
-    let res = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+    let res = gix_reqwest::Client::builder()
+        .redirect(gix_reqwest::redirect::Policy::custom(|attempt| {
             if attempt.url().path().ends_with("/should_not_be_called") {
                 attempt.stop()
             } else {
@@ -440,7 +440,7 @@ async fn test_redirect_custom() {
         .unwrap();
 
     assert_eq!(res.url().as_str(), url);
-    assert_eq!(res.status(), reqwest::StatusCode::FOUND);
+    assert_eq!(res.status(), gix_reqwest::StatusCode::FOUND);
 }
 
 #[tokio::test]
@@ -454,8 +454,10 @@ async fn test_scheme_only_check_after_policy_return_follow() {
     });
 
     let url = format!("http://{}/yikes", server.addr());
-    let res = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::custom(|attempt| attempt.stop()))
+    let res = gix_reqwest::Client::builder()
+        .redirect(gix_reqwest::redirect::Policy::custom(|attempt| {
+            attempt.stop()
+        }))
         .build()
         .unwrap()
         .get(&url)
@@ -463,10 +465,10 @@ async fn test_scheme_only_check_after_policy_return_follow() {
         .await;
 
     assert!(res.is_ok());
-    assert_eq!(res.unwrap().status(), reqwest::StatusCode::FOUND);
+    assert_eq!(res.unwrap().status(), gix_reqwest::StatusCode::FOUND);
 
-    let res = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+    let res = gix_reqwest::Client::builder()
+        .redirect(gix_reqwest::redirect::Policy::custom(|attempt| {
             attempt.follow()
         }))
         .build()
@@ -481,7 +483,7 @@ async fn test_scheme_only_check_after_policy_return_follow() {
 
 #[tokio::test]
 async fn test_redirect_301_302_303_empty_payload_headers() {
-    let client = reqwest::Client::new();
+    let client = gix_reqwest::Client::new();
     let codes = [301u16, 302, 303];
     for &code in &codes {
         let redirect = server::http(move |mut req| async move {
@@ -496,8 +498,12 @@ async fn test_redirect_301_302_303_empty_payload_headers() {
                     .unwrap();
 
                 assert_eq!(&*data, b"Hello");
-                if req.headers().get(reqwest::header::CONTENT_LENGTH).is_some() {
-                    assert_eq!(req.headers()[reqwest::header::CONTENT_LENGTH], "5");
+                if req
+                    .headers()
+                    .get(gix_reqwest::header::CONTENT_LENGTH)
+                    .is_some()
+                {
+                    assert_eq!(req.headers()[gix_reqwest::header::CONTENT_LENGTH], "5");
                 }
                 assert_eq!(req.uri(), &*format!("/{code}"));
 
@@ -509,11 +515,17 @@ async fn test_redirect_301_302_303_empty_payload_headers() {
                     .unwrap()
             } else {
                 assert_eq!(req.method(), "GET");
-                assert!(req.headers().get(reqwest::header::CONTENT_TYPE).is_none());
-                assert!(req.headers().get(reqwest::header::CONTENT_LENGTH).is_none());
                 assert!(req
                     .headers()
-                    .get(reqwest::header::CONTENT_ENCODING)
+                    .get(gix_reqwest::header::CONTENT_TYPE)
+                    .is_none());
+                assert!(req
+                    .headers()
+                    .get(gix_reqwest::header::CONTENT_LENGTH)
+                    .is_none());
+                assert!(req
+                    .headers()
+                    .get(gix_reqwest::header::CONTENT_ENCODING)
                     .is_none());
                 http::Response::builder()
                     .header("server", "test-dst")
@@ -527,16 +539,16 @@ async fn test_redirect_301_302_303_empty_payload_headers() {
         let res = client
             .post(&url)
             .body("Hello")
-            .header(reqwest::header::CONTENT_TYPE, "text/plain")
-            .header(reqwest::header::CONTENT_LENGTH, "5")
-            .header(reqwest::header::CONTENT_ENCODING, "identity")
+            .header(gix_reqwest::header::CONTENT_TYPE, "text/plain")
+            .header(gix_reqwest::header::CONTENT_LENGTH, "5")
+            .header(gix_reqwest::header::CONTENT_ENCODING, "identity")
             .send()
             .await
             .unwrap();
         assert_eq!(res.url().as_str(), dst);
         assert_eq!(res.status(), 200);
         assert_eq!(
-            res.headers().get(reqwest::header::SERVER).unwrap(),
+            res.headers().get(gix_reqwest::header::SERVER).unwrap(),
             &"test-dst"
         );
     }

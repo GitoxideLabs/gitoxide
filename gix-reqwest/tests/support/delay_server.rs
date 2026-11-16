@@ -34,7 +34,7 @@ impl Server {
     pub async fn new<F1, Fut, F2, Bu>(func: F1, apply_config: F2, delay: Duration) -> Self
     where
         F1: Fn(Request<hyper::body::Incoming>) -> Fut + Clone + Send + 'static,
-        Fut: Future<Output = Response<reqwest::Body>> + Send + 'static,
+        Fut: Future<Output = Response<gix_reqwest::Body>> + Send + 'static,
         F2: FnOnce(&mut Builder) -> Bu + Send + 'static,
     {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();

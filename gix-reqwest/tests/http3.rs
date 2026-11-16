@@ -21,7 +21,7 @@ async fn http3_request_full() {
     });
 
     let url = format!("https://{}/content-length", server.addr());
-    let res_fut = reqwest::Client::builder()
+    let res_fut = gix_reqwest::Client::builder()
         .http3_prior_knowledge()
         .danger_accept_invalid_certs(true)
         .build()
@@ -35,7 +35,7 @@ async fn http3_request_full() {
     let res = res_fut.await.expect("request");
 
     assert_eq!(res.version(), http::Version::HTTP_3);
-    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
 }
 
 async fn find_free_tcp_addr() -> std::net::SocketAddr {
@@ -50,7 +50,7 @@ async fn http3_test_failed_connection() {
     let port = addr.port();
 
     let url = format!("https://[::1]:{port}/");
-    let client = reqwest::Client::builder()
+    let client = gix_reqwest::Client::builder()
         .http3_prior_knowledge()
         .danger_accept_invalid_certs(true)
         .http3_max_idle_timeout(std::time::Duration::from_millis(20))
@@ -102,7 +102,7 @@ async fn http3_test_failed_connection() {
         .expect("request");
 
     assert_eq!(res.version(), http::Version::HTTP_3);
-    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
     drop(server);
 }
 
@@ -111,12 +111,12 @@ async fn http3_test_failed_connection() {
 async fn http3_test_concurrent_request() {
     let server = server::Http3::new().build(|req| async move {
         let mut res = http::Response::default();
-        *res.body_mut() = reqwest::Body::from(format!("hello {}", req.uri().path()));
+        *res.body_mut() = gix_reqwest::Body::from(format!("hello {}", req.uri().path()));
         res
     });
     let addr = server.addr();
 
-    let client = reqwest::Client::builder()
+    let client = gix_reqwest::Client::builder()
         .http3_prior_knowledge()
         .danger_accept_invalid_certs(true)
         .http3_max_idle_timeout(std::time::Duration::from_millis(20))
@@ -144,7 +144,7 @@ async fn http3_test_concurrent_request() {
         let result = handler.await.unwrap();
 
         assert_eq!(result.version(), http::Version::HTTP_3);
-        assert_eq!(result.status(), reqwest::StatusCode::OK);
+        assert_eq!(result.status(), gix_reqwest::StatusCode::OK);
 
         let body = result.text().await.unwrap();
         assert_eq!(body, format!("hello /{}", i));
@@ -182,7 +182,7 @@ async fn http3_test_h3_stop_sending_before_response_no_error() {
                         })
                     });
                 let response_body =
-                    reqwest::Body::wrap(http_body_util::StreamBody::new(response_stream));
+                    gix_reqwest::Body::wrap(http_body_util::StreamBody::new(response_stream));
                 http::Response::new(response_body)
             }
         },
@@ -198,10 +198,10 @@ async fn http3_test_h3_stop_sending_before_response_no_error() {
             )
         })
     });
-    let request_body = reqwest::Body::wrap(http_body_util::StreamBody::new(request_stream));
+    let request_body = gix_reqwest::Body::wrap(http_body_util::StreamBody::new(request_stream));
 
     let url = format!("https://{}/", server.addr());
-    let client = reqwest::Client::builder()
+    let client = gix_reqwest::Client::builder()
         .http3_prior_knowledge()
         .danger_accept_invalid_certs(true)
         .build()
@@ -216,7 +216,7 @@ async fn http3_test_h3_stop_sending_before_response_no_error() {
         .expect("response");
 
     assert_eq!(res.version(), http::Version::HTTP_3);
-    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
 
     response_tx
         .send(bytes::Bytes::from_static(b"first"))
@@ -275,7 +275,7 @@ async fn http3_test_h3_stop_sending_before_response_no_error_request_body() {
                         })
                     });
                 let response_body =
-                    reqwest::Body::wrap(http_body_util::StreamBody::new(response_stream));
+                    gix_reqwest::Body::wrap(http_body_util::StreamBody::new(response_stream));
                 http::Response::new(response_body)
             }
         },
@@ -291,10 +291,10 @@ async fn http3_test_h3_stop_sending_before_response_no_error_request_body() {
             )
         })
     });
-    let request_body = reqwest::Body::wrap(http_body_util::StreamBody::new(request_stream));
+    let request_body = gix_reqwest::Body::wrap(http_body_util::StreamBody::new(request_stream));
 
     let url = format!("https://{}/", server.addr());
-    let client = reqwest::Client::builder()
+    let client = gix_reqwest::Client::builder()
         .http3_prior_knowledge()
         .danger_accept_invalid_certs(true)
         .build()
@@ -309,7 +309,7 @@ async fn http3_test_h3_stop_sending_before_response_no_error_request_body() {
         .expect("response");
 
     assert_eq!(res.version(), http::Version::HTTP_3);
-    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
 
     response_tx
         .send(bytes::Bytes::from_static(b"first"))
@@ -370,7 +370,7 @@ async fn http3_test_h3_stop_sending_before_response_internal_error() {
                         })
                     });
                 let response_body =
-                    reqwest::Body::wrap(http_body_util::StreamBody::new(response_stream));
+                    gix_reqwest::Body::wrap(http_body_util::StreamBody::new(response_stream));
                 http::Response::new(response_body)
             }
         },
@@ -386,10 +386,10 @@ async fn http3_test_h3_stop_sending_before_response_internal_error() {
             )
         })
     });
-    let request_body = reqwest::Body::wrap(http_body_util::StreamBody::new(request_stream));
+    let request_body = gix_reqwest::Body::wrap(http_body_util::StreamBody::new(request_stream));
 
     let url = format!("https://{}/", server.addr());
-    let client = reqwest::Client::builder()
+    let client = gix_reqwest::Client::builder()
         .http3_prior_knowledge()
         .danger_accept_invalid_certs(true)
         .build()
@@ -404,7 +404,7 @@ async fn http3_test_h3_stop_sending_before_response_internal_error() {
         .expect("response");
 
     assert_eq!(res.version(), http::Version::HTTP_3);
-    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
 
     response_tx
         .send(bytes::Bytes::from_static(b"first"))
@@ -453,7 +453,7 @@ async fn http3_test_reconnection() {
     let addr = server.addr();
 
     let url = format!("https://{}/", addr);
-    let client = reqwest::Client::builder()
+    let client = gix_reqwest::Client::builder()
         .http3_prior_knowledge()
         .danger_accept_invalid_certs(true)
         .http3_max_idle_timeout(std::time::Duration::from_millis(20))
@@ -468,7 +468,7 @@ async fn http3_test_reconnection() {
         .expect("request");
 
     assert_eq!(res.version(), http::Version::HTTP_3);
-    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
     drop(server);
 
     let err = client
@@ -507,7 +507,7 @@ async fn http3_test_reconnection() {
         .expect("request");
 
     assert_eq!(res.version(), http::Version::HTTP_3);
-    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
     drop(server);
 }
 
@@ -523,13 +523,13 @@ async fn http3_request_stream() {
     });
 
     let url = format!("https://{}", server.addr());
-    let body = reqwest::Body::wrap_stream(futures_util::stream::iter(vec![
+    let body = gix_reqwest::Body::wrap_stream(futures_util::stream::iter(vec![
         Ok::<_, std::convert::Infallible>("hello"),
         Ok::<_, std::convert::Infallible>(" "),
         Ok::<_, std::convert::Infallible>("world"),
     ]));
 
-    let res = reqwest::Client::builder()
+    let res = gix_reqwest::Client::builder()
         .http3_prior_knowledge()
         .danger_accept_invalid_certs(true)
         .build()
@@ -542,7 +542,7 @@ async fn http3_request_stream() {
         .expect("request");
 
     assert_eq!(res.version(), http::Version::HTTP_3);
-    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
 }
 
 #[cfg(all(feature = "http3", feature = "stream"))]
@@ -559,12 +559,12 @@ async fn http3_request_stream_error() {
     });
 
     let url = format!("https://{}", server.addr());
-    let body = reqwest::Body::wrap_stream(futures_util::stream::iter(vec![
+    let body = gix_reqwest::Body::wrap_stream(futures_util::stream::iter(vec![
         Ok::<_, std::io::Error>("first chunk"),
         Err::<_, std::io::Error>(std::io::Error::other("oh no!")),
     ]));
 
-    let res = reqwest::Client::builder()
+    let res = gix_reqwest::Client::builder()
         .http3_prior_knowledge()
         .danger_accept_invalid_certs(true)
         .build()
@@ -582,7 +582,7 @@ async fn http3_request_stream_error() {
         .unwrap()
         .source()
         .unwrap()
-        .downcast_ref::<reqwest::Error>()
+        .downcast_ref::<gix_reqwest::Error>()
         .unwrap();
     assert!(err.is_body());
 }

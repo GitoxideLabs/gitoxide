@@ -11,9 +11,9 @@ fn test_response_text() {
     let server = server::http(move |_req| async { http::Response::new("Hello".into()) });
 
     let url = format!("http://{}/text", server.addr());
-    let res = reqwest::blocking::get(&url).unwrap();
+    let res = gix_reqwest::blocking::get(&url).unwrap();
     assert_eq!(res.url().as_str(), &url);
-    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
     assert_eq!(res.content_length(), Some(5));
 
     let body = res.text().unwrap();
@@ -31,7 +31,7 @@ fn donot_set_content_length_0_if_have_no_body() {
     });
 
     let url = format!("http://{}/content-length", server.addr());
-    let res = reqwest::blocking::Client::builder()
+    let res = gix_reqwest::blocking::Client::builder()
         .no_proxy()
         .build()
         .expect("client builder")
@@ -39,7 +39,7 @@ fn donot_set_content_length_0_if_have_no_body() {
         .send()
         .expect("request");
 
-    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
 }
 
 #[test]
@@ -53,9 +53,9 @@ fn test_response_non_utf_8_text() {
     });
 
     let url = format!("http://{}/text", server.addr());
-    let res = reqwest::blocking::get(&url).unwrap();
+    let res = gix_reqwest::blocking::get(&url).unwrap();
     assert_eq!(res.url().as_str(), &url);
-    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
     assert_eq!(res.content_length(), Some(4));
 
     let body = res.text().unwrap();
@@ -69,9 +69,9 @@ fn test_response_json() {
     let server = server::http(move |_req| async { http::Response::new("\"Hello\"".into()) });
 
     let url = format!("http://{}/json", server.addr());
-    let res = reqwest::blocking::get(&url).unwrap();
+    let res = gix_reqwest::blocking::get(&url).unwrap();
     assert_eq!(res.url().as_str(), &url);
-    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
     assert_eq!(res.content_length(), Some(7));
 
     let body = res.json::<String>().unwrap();
@@ -83,9 +83,9 @@ fn test_response_copy_to() {
     let server = server::http(move |_req| async { http::Response::new("Hello".into()) });
 
     let url = format!("http://{}/1", server.addr());
-    let mut res = reqwest::blocking::get(&url).unwrap();
+    let mut res = gix_reqwest::blocking::get(&url).unwrap();
     assert_eq!(res.url().as_str(), &url);
-    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
 
     let mut dst = Vec::new();
     res.copy_to(&mut dst).unwrap();
@@ -97,10 +97,10 @@ fn test_get() {
     let server = server::http(move |_req| async { http::Response::default() });
 
     let url = format!("http://{}/1", server.addr());
-    let res = reqwest::blocking::get(&url).unwrap();
+    let res = gix_reqwest::blocking::get(&url).unwrap();
 
     assert_eq!(res.url().as_str(), &url);
-    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
     assert_eq!(res.remote_addr(), Some(server.addr()));
 
     assert_eq!(res.text().unwrap().len(), 0)
@@ -119,14 +119,14 @@ fn test_post() {
     });
 
     let url = format!("http://{}/2", server.addr());
-    let res = reqwest::blocking::Client::new()
+    let res = gix_reqwest::blocking::Client::new()
         .post(&url)
         .body("Hello")
         .send()
         .unwrap();
 
     assert_eq!(res.url().as_str(), &url);
-    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
 }
 
 #[test]
@@ -149,14 +149,14 @@ fn test_post_form() {
     let form = &[("hello", "world"), ("sean", "monstar")];
 
     let url = format!("http://{}/form", server.addr());
-    let res = reqwest::blocking::Client::new()
+    let res = gix_reqwest::blocking::Client::new()
         .post(&url)
         .form(form)
         .send()
         .expect("request send");
 
     assert_eq!(res.url().as_str(), &url);
-    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
 }
 
 /// Calling `Response::error_for_status`` on a response with status in 4xx
@@ -171,11 +171,11 @@ fn test_error_for_status_4xx() {
     });
 
     let url = format!("http://{}/1", server.addr());
-    let res = reqwest::blocking::get(&url).unwrap();
+    let res = gix_reqwest::blocking::get(&url).unwrap();
 
     let err = res.error_for_status().unwrap_err();
     assert!(err.is_status());
-    assert_eq!(err.status(), Some(reqwest::StatusCode::BAD_REQUEST));
+    assert_eq!(err.status(), Some(gix_reqwest::StatusCode::BAD_REQUEST));
 }
 
 /// Calling `Response::error_for_status`` on a response with status in 5xx
@@ -190,13 +190,13 @@ fn test_error_for_status_5xx() {
     });
 
     let url = format!("http://{}/1", server.addr());
-    let res = reqwest::blocking::get(&url).unwrap();
+    let res = gix_reqwest::blocking::get(&url).unwrap();
 
     let err = res.error_for_status().unwrap_err();
     assert!(err.is_status());
     assert_eq!(
         err.status(),
-        Some(reqwest::StatusCode::INTERNAL_SERVER_ERROR)
+        Some(gix_reqwest::StatusCode::INTERNAL_SERVER_ERROR)
     );
 }
 
@@ -209,7 +209,7 @@ fn test_default_headers() {
 
     let mut headers = http::HeaderMap::with_capacity(1);
     headers.insert("reqwest-test", "orly".parse().unwrap());
-    let client = reqwest::blocking::Client::builder()
+    let client = gix_reqwest::blocking::Client::builder()
         .default_headers(headers)
         .build()
         .unwrap();
@@ -218,7 +218,7 @@ fn test_default_headers() {
     let res = client.get(&url).send().unwrap();
 
     assert_eq!(res.url().as_str(), &url);
-    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
 }
 
 #[test]
@@ -236,7 +236,7 @@ fn test_override_default_headers() {
         http::header::AUTHORIZATION,
         http::header::HeaderValue::from_static("iamatoken"),
     );
-    let client = reqwest::blocking::Client::builder()
+    let client = gix_reqwest::blocking::Client::builder()
         .default_headers(headers)
         .build()
         .unwrap();
@@ -252,7 +252,7 @@ fn test_override_default_headers() {
         .unwrap();
 
     assert_eq!(res.url().as_str(), &url);
-    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
 }
 
 #[test]
@@ -266,7 +266,7 @@ fn test_appended_headers_not_overwritten() {
         http::Response::default()
     });
 
-    let client = reqwest::blocking::Client::new();
+    let client = gix_reqwest::blocking::Client::new();
 
     let url = format!("http://{}/4", server.addr());
     let res = client
@@ -277,16 +277,16 @@ fn test_appended_headers_not_overwritten() {
         .unwrap();
 
     assert_eq!(res.url().as_str(), &url);
-    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
 
     // make sure this also works with default headers
-    use reqwest::header;
+    use gix_reqwest::header;
     let mut headers = header::HeaderMap::with_capacity(1);
     headers.insert(
         header::ACCEPT,
         header::HeaderValue::from_static("text/html"),
     );
-    let client = reqwest::blocking::Client::builder()
+    let client = gix_reqwest::blocking::Client::builder()
         .default_headers(headers)
         .build()
         .unwrap();
@@ -300,7 +300,7 @@ fn test_appended_headers_not_overwritten() {
         .unwrap();
 
     assert_eq!(res.url().as_str(), &url);
-    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
 }
 
 #[cfg_attr(not(debug_assertions), ignore)]
@@ -316,14 +316,14 @@ fn test_blocking_inside_a_runtime() {
         .expect("new rt");
 
     rt.block_on(async move {
-        let _should_panic = reqwest::blocking::get(&url);
+        let _should_panic = gix_reqwest::blocking::get(&url);
     });
 }
 
 #[cfg(feature = "default-tls")]
 #[test]
 fn test_allowed_methods_blocking() {
-    let resp = reqwest::blocking::Client::builder()
+    let resp = gix_reqwest::blocking::Client::builder()
         .https_only(true)
         .build()
         .expect("client builder")
@@ -332,7 +332,7 @@ fn test_allowed_methods_blocking() {
 
     assert_eq!(resp.is_err(), false);
 
-    let resp = reqwest::blocking::Client::builder()
+    let resp = gix_reqwest::blocking::Client::builder()
         .https_only(true)
         .build()
         .expect("client builder")
@@ -342,12 +342,12 @@ fn test_allowed_methods_blocking() {
     assert_eq!(resp.is_err(), true);
 }
 
-/// Test that a [`reqwest::blocking::Body`] can be created from [`bytes::Bytes`].
+/// Test that a [`gix_reqwest::blocking::Body`] can be created from [`bytes::Bytes`].
 #[test]
 fn test_body_from_bytes() {
     let body = "abc";
     // No external calls are needed. Only the request building is tested.
-    let request = reqwest::blocking::Client::builder()
+    let request = gix_reqwest::blocking::Client::builder()
         .build()
         .expect("Could not build the client")
         .put("https://google.com")
@@ -366,7 +366,7 @@ fn blocking_add_json_default_content_type_if_not_set_manually() {
     let mut map = HashMap::new();
     map.insert("body", "json");
     let content_type = HeaderValue::from_static("application/vnd.api+json");
-    let req = reqwest::blocking::Client::new()
+    let req = gix_reqwest::blocking::Client::new()
         .post("https://google.com/")
         .header(CONTENT_TYPE, &content_type)
         .json(&map)
@@ -381,7 +381,7 @@ fn blocking_add_json_default_content_type_if_not_set_manually() {
 fn blocking_update_json_content_type_if_set_manually() {
     let mut map = HashMap::new();
     map.insert("body", "json");
-    let req = reqwest::blocking::Client::new()
+    let req = gix_reqwest::blocking::Client::new()
         .post("https://google.com/")
         .json(&map)
         .build()
@@ -397,16 +397,16 @@ fn test_response_no_tls_info_for_http() {
 
     let url = format!("http://{}/text", server.addr());
 
-    let client = reqwest::blocking::Client::builder()
+    let client = gix_reqwest::blocking::Client::builder()
         .tls_info(true)
         .build()
         .unwrap();
 
     let res = client.get(&url).send().unwrap();
     assert_eq!(res.url().as_str(), &url);
-    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
     assert_eq!(res.content_length(), Some(5));
-    let tls_info = res.extensions().get::<reqwest::tls::TlsInfo>();
+    let tls_info = res.extensions().get::<gix_reqwest::tls::TlsInfo>();
     assert_eq!(tls_info.is_none(), true);
 
     let body = res.text().unwrap();

@@ -3,10 +3,10 @@
 //! The blocking `Client` will block the current thread to execute, instead
 //! of returning futures that need to be executed on a runtime.
 //!
-//! Conversely, the functionality in `reqwest::blocking` must *not* be executed
+//! Conversely, the functionality in `gix_reqwest::blocking` must *not* be executed
 //! within an async runtime, or it will panic when attempting to block. If
 //! calling directly from an async function, consider using an async
-//! [`reqwest::Client`][crate::Client] instead. If the immediate context is only
+//! [`gix_reqwest::Client`][crate::Client] instead. If the immediate context is only
 //! synchronous, but a transitive caller is async, consider changing that caller
 //! to use [`tokio::task::spawn_blocking`] around the calls that need to block.
 //!
@@ -19,10 +19,10 @@
 //! For a single request, you can use the [`get`] shortcut method.
 //!
 //! ```rust
-//! # use reqwest::{Error, Response};
+//! # use gix_reqwest::{Error, Response};
 //!
 //! # fn run() -> Result<(), Error> {
-//! let body = reqwest::blocking::get("https://www.rust-lang.org")?
+//! let body = gix_reqwest::blocking::get("https://www.rust-lang.org")?
 //!     .text()?;
 //!
 //! println!("body = {body:?}");
@@ -44,13 +44,13 @@
 //! by using the `body()` method of a [`RequestBuilder`]. This lets you set the
 //! exact raw bytes of what the body should be. It accepts various types,
 //! including `String`, `Vec<u8>`, and `File`. If you wish to pass a custom
-//! Reader, you can use the `reqwest::blocking::Body::new()` constructor.
+//! Reader, you can use the `gix_reqwest::blocking::Body::new()` constructor.
 //!
 //! ```rust
-//! # use reqwest::Error;
+//! # use gix_reqwest::Error;
 //! #
 //! # fn run() -> Result<(), Error> {
-//! let client = reqwest::blocking::Client::new();
+//! let client = gix_reqwest::blocking::Client::new();
 //! let res = client.post("http://httpbin.org/post")
 //!     .body("the exact body that is sent")
 //!     .send()?;
@@ -85,8 +85,8 @@ pub use self::response::Response;
 /// # Examples
 ///
 /// ```rust
-/// # fn run() -> Result<(), reqwest::Error> {
-/// let body = reqwest::blocking::get("https://www.rust-lang.org")?
+/// # fn run() -> Result<(), gix_reqwest::Error> {
+/// let body = gix_reqwest::blocking::get("https://www.rust-lang.org")?
 ///     .text()?;
 /// # Ok(())
 /// # }

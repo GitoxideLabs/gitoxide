@@ -181,10 +181,10 @@ impl RequestBuilder {
     /// Add a `Header` to this Request.
     ///
     /// ```rust
-    /// use reqwest::header::USER_AGENT;
+    /// use gix_reqwest::header::USER_AGENT;
     ///
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let client = reqwest::blocking::Client::new();
+    /// let client = gix_reqwest::blocking::Client::new();
     /// let res = client.get("https://www.rust-lang.org")
     ///     .header(USER_AGENT, "foo")
     ///     .send()?;
@@ -238,7 +238,7 @@ impl RequestBuilder {
     /// The headers will be merged in to any already set.
     ///
     /// ```rust
-    /// use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT, CONTENT_TYPE};
+    /// use gix_reqwest::header::{HeaderMap, HeaderValue, USER_AGENT, CONTENT_TYPE};
     /// # use std::fs;
     ///
     /// fn construct_headers() -> HeaderMap {
@@ -250,7 +250,7 @@ impl RequestBuilder {
     ///
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
     /// let file = fs::File::open("much_beauty.png")?;
-    /// let client = reqwest::blocking::Client::new();
+    /// let client = gix_reqwest::blocking::Client::new();
     /// let res = client.post("http://httpbin.org/post")
     ///     .headers(construct_headers())
     ///     .body(file)
@@ -269,7 +269,7 @@ impl RequestBuilder {
     ///
     /// ```rust
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let client = reqwest::blocking::Client::new();
+    /// let client = gix_reqwest::blocking::Client::new();
     /// let resp = client.delete("http://httpbin.org/delete")
     ///     .basic_auth("admin", Some("good password"))
     ///     .send()?;
@@ -289,7 +289,7 @@ impl RequestBuilder {
     ///
     /// ```rust
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let client = reqwest::blocking::Client::new();
+    /// let client = gix_reqwest::blocking::Client::new();
     /// let resp = client.delete("http://httpbin.org/delete")
     ///     .bearer_auth("token")
     ///     .send()?;
@@ -312,7 +312,7 @@ impl RequestBuilder {
     ///
     /// ```rust
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let client = reqwest::blocking::Client::new();
+    /// let client = gix_reqwest::blocking::Client::new();
     /// let res = client.post("http://httpbin.org/post")
     ///     .body("from a &str!")
     ///     .send()?;
@@ -325,7 +325,7 @@ impl RequestBuilder {
     /// ```rust
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
     /// let file = std::fs::File::open("from_a_file.txt")?;
-    /// let client = reqwest::blocking::Client::new();
+    /// let client = gix_reqwest::blocking::Client::new();
     /// let res = client.post("http://httpbin.org/post")
     ///     .body(file)
     ///     .send()?;
@@ -340,7 +340,7 @@ impl RequestBuilder {
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
     /// // from bytes!
     /// let bytes: Vec<u8> = vec![1, 10, 100];
-    /// let client = reqwest::blocking::Client::new();
+    /// let client = gix_reqwest::blocking::Client::new();
     /// let res = client.post("http://httpbin.org/post")
     ///     .body(bytes)
     ///     .send()?;
@@ -376,10 +376,10 @@ impl RequestBuilder {
     /// Calling `.query(&[("foo", "a"), ("foo", "b")])` gives `"foo=a&foo=b"`.
     ///
     /// ```rust
-    /// # use reqwest::Error;
+    /// # use gix_reqwest::Error;
     /// #
     /// # fn run() -> Result<(), Error> {
-    /// let client = reqwest::blocking::Client::new();
+    /// let client = gix_reqwest::blocking::Client::new();
     /// let res = client.get("http://httpbin.org")
     ///     .query(&[("lang", "rust")])
     ///     .send()?;
@@ -439,14 +439,14 @@ impl RequestBuilder {
     /// header.
     ///
     /// ```rust
-    /// # use reqwest::Error;
+    /// # use gix_reqwest::Error;
     /// # use std::collections::HashMap;
     /// #
     /// # fn run() -> Result<(), Error> {
     /// let mut params = HashMap::new();
     /// params.insert("lang", "rust");
     ///
-    /// let client = reqwest::blocking::Client::new();
+    /// let client = gix_reqwest::blocking::Client::new();
     /// let res = client.post("http://httpbin.org")
     ///     .form(&params)
     ///     .send()?;
@@ -497,14 +497,14 @@ impl RequestBuilder {
     /// # Examples
     ///
     /// ```rust
-    /// # use reqwest::Error;
+    /// # use gix_reqwest::Error;
     /// # use std::collections::HashMap;
     /// #
     /// # fn run() -> Result<(), Error> {
     /// let mut map = HashMap::new();
     /// map.insert("lang", "rust");
     ///
-    /// let client = reqwest::blocking::Client::new();
+    /// let client = gix_reqwest::blocking::Client::new();
     /// let res = client.post("http://httpbin.org")
     ///     .json(&map)
     ///     .send()?;
@@ -540,11 +540,11 @@ impl RequestBuilder {
     /// Sends a multipart/form-data body.
     ///
     /// ```
-    /// # use reqwest::Error;
+    /// # use gix_reqwest::Error;
     ///
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let client = reqwest::blocking::Client::new();
-    /// let form = reqwest::blocking::multipart::Form::new()
+    /// let client = gix_reqwest::blocking::Client::new();
+    /// let form = gix_reqwest::blocking::multipart::Form::new()
     ///     .text("key3", "value3")
     ///     .file("file", "/path/to/field")?;
     ///
@@ -608,7 +608,7 @@ impl RequestBuilder {
     ///
     /// ```rust
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let client = reqwest::blocking::Client::new();
+    /// let client = gix_reqwest::blocking::Client::new();
     /// let builder = client.post("http://httpbin.org/post")
     ///     .body("from a &str!");
     /// let clone = builder.try_clone();
@@ -621,7 +621,7 @@ impl RequestBuilder {
     ///
     /// ```rust
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let client = reqwest::blocking::Client::new();
+    /// let client = gix_reqwest::blocking::Client::new();
     /// let builder = client.get("http://httpbin.org/get");
     /// let clone = builder.try_clone();
     /// assert!(clone.is_some());
@@ -633,9 +633,9 @@ impl RequestBuilder {
     ///
     /// ```rust
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// let client = reqwest::blocking::Client::new();
+    /// let client = gix_reqwest::blocking::Client::new();
     /// let builder = client.get("http://httpbin.org/get")
-    ///     .body(reqwest::blocking::Body::new(std::io::empty()));
+    ///     .body(gix_reqwest::blocking::Body::new(std::io::empty()));
     /// let clone = builder.try_clone();
     /// assert!(clone.is_none());
     /// # Ok(())

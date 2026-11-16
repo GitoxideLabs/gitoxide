@@ -144,7 +144,7 @@ impl Jar {
     /// # Example
     ///
     /// ```
-    /// use reqwest::{cookie::Jar, Url};
+    /// use gix_reqwest::{cookie::Jar, Url};
     ///
     /// let cookie = "foo=bar; Domain=yolo.local";
     /// let url = "https://yolo.local".parse::<Url>().unwrap();

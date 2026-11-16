@@ -34,7 +34,7 @@ pub struct Signature {
 
 #[wasm_bindgen]
 pub async fn run() -> Result<JsValue, JsValue> {
-    let res = reqwest::Client::new()
+    let res = gix_reqwest::Client::new()
         .get("https://api.github.com/repos/rustwasm/wasm-bindgen/branches/master")
         .header("Accept", "application/vnd.github.v3+json")
         .send()

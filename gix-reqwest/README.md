@@ -1,11 +1,29 @@
-# reqwest
+# gix-reqwest
 
-[![crates.io](https://img.shields.io/crates/v/reqwest.svg)](https://crates.io/crates/reqwest)
-[![Documentation](https://docs.rs/reqwest/badge.svg)](https://docs.rs/reqwest)
-[![MIT/Apache-2 licensed](https://img.shields.io/crates/l/reqwest.svg)](./LICENSE-APACHE)
-[![CI](https://github.com/seanmonstar/reqwest/actions/workflows/ci.yml/badge.svg)](https://github.com/seanmonstar/reqwest/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/gix-reqwest.svg)](https://crates.io/crates/gix-reqwest)
+[![Documentation](https://docs.rs/gix-reqwest/badge.svg)](https://docs.rs/gix-reqwest)
+[![MIT/Apache-2 licensed](https://img.shields.io/crates/l/gix-reqwest.svg)](./LICENSE-APACHE)
 
-An ergonomic, batteries-included HTTP Client for Rust.
+A fork of [reqwest](https://github.com/seanmonstar/reqwest), the HTTP client
+created by Sean McArthur and its contributors, maintained by the Gitoxide
+project. It carries bugfixes and patches needed for Gitoxide to work correctly
+until they are available upstream. The original MIT and Apache-2.0 licenses
+and copyright notices are preserved.
+
+`gix-reqwest` has its own release versions and Rust crate name, `gix_reqwest`.
+Its `Client`, `ClientBuilder`, `Request`, and other types are distinct from
+upstream `reqwest` types. Use this crate's types when configuring a consumer
+that depends on this fork. Feature names and the experimental
+`reqwest_unstable` configuration flag retain their upstream spelling.
+
+The fork starts from upstream commit
+[`6b99ec2`](https://github.com/seanmonstar/reqwest/commit/6b99ec2a6a4fa9b601337fff9979541bb27050d2).
+`Reqwest-Upstream` commit trailers record complete upstream integration
+checkpoints; `Reqwest-Patch` trailers identify separately imported patches.
+Gitoxide can return to upstream `reqwest` once a release includes the required
+fixes and passes the fork's and transport's regression tests.
+
+The upstream client provides:
 
 - Async and blocking `Client`s
 - Plain bodies, JSON, urlencoded, multipart
@@ -23,7 +41,7 @@ optional features, so your `Cargo.toml` could look like this:
 
 ```toml
 [dependencies]
-reqwest = { version = "0.13", features = ["json"] }
+gix-reqwest = { version = "0.1", features = ["json"] }
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -34,7 +52,7 @@ use std::collections::HashMap;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let resp = reqwest::get("https://httpbin.org/ip")
+    let resp = gix_reqwest::get("https://httpbin.org/ip")
         .await?
         .json::<HashMap<String, String>>()
         .await?;
@@ -45,11 +63,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Commercial Support
 
-For private advice, support, reviews, access to the maintainer, and the like, reach out for [commercial support][sponsor].
+For advice and support from the upstream author, see reqwest's
+[commercial support][sponsor]. Report issues with this fork to
+[Gitoxide](https://github.com/GitoxideLabs/gitoxide/issues).
 
 ## Requirements
 
-By default, Reqwest uses [rustls](https://github.com/rustls/rustls), but when the `native-tls` feature is enabled
+By default, `gix-reqwest` uses [rustls](https://github.com/rustls/rustls), but when the `native-tls` feature is enabled
 it will use the operating system TLS framework if available, meaning Windows and macOS.
 On Linux, it will use the available OpenSSL (see https://docs.rs/openssl for supported versions and more details)
 or fail to build if not found. Alternatively you can enable the `native-tls-vendored` feature to compile a copy of OpenSSL.
@@ -69,6 +89,6 @@ be dual licensed as above, without any additional terms or conditions.
 
 ## Sponsors
 
-Support this project by becoming a [sponsor][].
+Support upstream reqwest by becoming a [sponsor][].
 
 [sponsor]: https://seanmonstar.com/sponsor

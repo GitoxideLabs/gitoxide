@@ -15,7 +15,7 @@ extern "C" {
 
 #[wasm_bindgen_test]
 async fn simple_example() {
-    let res = reqwest::get("https://hyper.rs")
+    let res = gix_reqwest::get("https://hyper.rs")
         .await
         .expect("http get example");
     log(&format!("Status: {}", res.status()));
@@ -26,7 +26,7 @@ async fn simple_example() {
 
 #[wasm_bindgen_test]
 async fn request_with_timeout() {
-    let client = reqwest::Client::new();
+    let client = gix_reqwest::Client::new();
     let err = client
         .get("https://hyper.rs/not-cached")
         .timeout(Duration::from_millis(1))
@@ -41,8 +41,8 @@ async fn request_with_timeout() {
 #[wasm_bindgen_test]
 #[cfg(feature = "json")]
 fn preserve_content_type_if_set_manually() {
+    use gix_reqwest::Client;
     use http::{header::CONTENT_TYPE, HeaderValue};
-    use reqwest::Client;
     use std::collections::HashMap;
 
     let mut map = HashMap::new();
@@ -61,8 +61,8 @@ fn preserve_content_type_if_set_manually() {
 #[wasm_bindgen_test]
 #[cfg(feature = "json")]
 fn add_default_json_content_type_if_not_set_manually() {
+    use gix_reqwest::Client;
     use http::header::CONTENT_TYPE;
-    use reqwest::Client;
     use std::collections::HashMap;
 
     let mut map = HashMap::new();

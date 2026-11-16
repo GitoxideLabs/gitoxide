@@ -63,7 +63,7 @@ impl Body {
     /// # Example
     ///
     /// ```
-    /// # use reqwest::Body;
+    /// # use gix_reqwest::Body;
     /// # use futures_util;
     /// # fn main() {
     /// let chunks: Vec<Result<_, ::std::io::Error>> = vec![
@@ -128,7 +128,7 @@ impl Body {
     /// # Example
     ///
     /// ```
-    /// # use reqwest::Body;
+    /// # use gix_reqwest::Body;
     /// # use futures_util;
     /// # fn main() {
     /// let content = "hello,world!".to_string();

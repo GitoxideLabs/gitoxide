@@ -26,7 +26,7 @@ async fn retries_apply_in_scope() {
     });
 
     let scope = server.addr().ip().to_string();
-    let retries = reqwest::retry::for_host(scope).classify_fn(|req_rep| {
+    let retries = gix_reqwest::retry::for_host(scope).classify_fn(|req_rep| {
         if req_rep.status() == Some(http::StatusCode::SERVICE_UNAVAILABLE) {
             req_rep.retryable()
         } else {
@@ -35,7 +35,7 @@ async fn retries_apply_in_scope() {
     });
 
     let url = format!("http://{}", server.addr());
-    let resp = reqwest::Client::builder()
+    let resp = gix_reqwest::Client::builder()
         .retry(retries)
         .build()
         .unwrap()
@@ -61,7 +61,7 @@ async fn default_retries_have_a_limit() {
         |_| {},
     );
 
-    let client = reqwest::Client::builder()
+    let client = gix_reqwest::Client::builder()
         .http2_prior_knowledge()
         .build()
         .unwrap();
@@ -78,7 +78,7 @@ async fn default_retries_have_a_limit() {
 #[cfg(feature = "http2")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn highly_concurrent_requests_to_http2_server_with_low_max_concurrent_streams() {
-    let client = reqwest::Client::builder()
+    let client = gix_reqwest::Client::builder()
         .http2_prior_knowledge()
         .build()
         .unwrap();
@@ -100,7 +100,7 @@ async fn highly_concurrent_requests_to_http2_server_with_low_max_concurrent_stre
         let url = url.clone();
         async move {
             let res = client.get(&url).send().await.unwrap();
-            assert_eq!(res.status(), reqwest::StatusCode::OK);
+            assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
         }
     });
     futures_util::future::join_all(futs).await;
@@ -111,7 +111,7 @@ async fn highly_concurrent_requests_to_http2_server_with_low_max_concurrent_stre
 async fn highly_concurrent_requests_to_slow_http2_server_with_low_max_concurrent_streams() {
     use support::delay_server;
 
-    let client = reqwest::Client::builder()
+    let client = gix_reqwest::Client::builder()
         .http2_prior_knowledge()
         .build()
         .unwrap();
@@ -135,7 +135,7 @@ async fn highly_concurrent_requests_to_slow_http2_server_with_low_max_concurrent
         let url = url.clone();
         async move {
             let res = client.get(&url).send().await.unwrap();
-            assert_eq!(res.status(), reqwest::StatusCode::OK);
+            assert_eq!(res.status(), gix_reqwest::StatusCode::OK);
         }
     });
     futures_util::future::join_all(futs).await;

@@ -1,12 +1,12 @@
 [package]
-name = "reqwest"
-version = "0.13.5"
-description = "higher level HTTP client library"
+name = "gix-reqwest"
+version = "0.1.0"
+description = "An HTTP client with patches for gitoxide, maintained as a fork of reqwest."
 keywords = ["http", "request", "client"]
 categories = ["web-programming::http-client", "wasm"]
-repository = "https://github.com/seanmonstar/reqwest"
-documentation = "https://docs.rs/reqwest"
-authors = ["Sean McArthur <sean@seanmonstar.com>"]
+repository = "https://github.com/GitoxideLabs/gitoxide"
+documentation = "https://docs.rs/gix-reqwest"
+authors = ["Sean McArthur <sean@seanmonstar.com>", "Sebastian Thiel <sebastian.thiel@icloud.com>"]
 readme = "README.md"
 license = "MIT OR Apache-2.0"
 edition = "2021"
@@ -33,6 +33,27 @@ features = [
     "form",
     "json",
     "multipart",
+]
+
+[package.metadata.qa]
+# Keep upstream's live Internet tests out of the workspace's deterministic runs.
+isolated = true
+checks = [
+    { args = ["--no-default-features", "--features", "blocking,http2,socks"] },
+    { args = ["--all-features", "--all-targets"], env = { RUSTFLAGS = "--cfg reqwest_unstable" } },
+]
+tests = [
+    { args = ["--no-default-features", "--features", "blocking,http2,socks,rustls,cookies,charset,query,form,json,multipart,stream,gzip,brotli,zstd,deflate", "-E", "not binary(badssl) & not test(test_tls_info)"] },
+    { args = ["--no-default-features", "--features", "blocking,http2,socks,native-tls", "--lib", "--test", "proxy", "--test", "redirect"] },
+]
+doctests = [
+    { args = ["--features", "blocking,cookies,query,form,json,multipart,stream"] },
+]
+
+[package.metadata.qa.wasm]
+targets = ["wasm32-unknown-unknown"]
+checks = [
+    { args = ["--no-default-features", "--features", "cookies,query,form,json,multipart,stream"] },
 ]
 
 [features]
@@ -212,6 +233,34 @@ libc = "0"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(reqwest_unstable)'] }
+
+# Keep upstream idioms instead of mixing mechanical style changes into imports.
+[lints.clippy]
+bind_instead_of_map = "allow"
+bool_assert_comparison = "allow"
+clone_on_copy = "allow"
+derivable_impls = "allow"
+enum_variant_names = "allow"
+extra_unused_lifetimes = "allow"
+io_other_error = "allow"
+large_enum_variant = "allow"
+len_zero = "allow"
+manual_range_contains = "allow"
+map_clone = "allow"
+missing_const_for_thread_local = "allow"
+mixed_attributes_style = "allow"
+multiple_bound_locations = "allow"
+needless_borrow = "allow"
+needless_borrows_for_generic_args = "allow"
+needless_lifetimes = "allow"
+non_minimal_cfg = "allow"
+question_mark = "allow"
+redundant_closure = "allow"
+redundant_pattern_matching = "allow"
+too_many_arguments = "allow"
+type_complexity = "allow"
+useless_borrows_in_formatting = "allow"
+useless_conversion = "allow"
 
 [[example]]
 name = "blocking"

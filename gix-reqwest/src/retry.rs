@@ -168,7 +168,7 @@ impl Builder {
     /// # Example
     ///
     /// ```rust
-    /// # fn with_builder(builder: reqwest::retry::Builder) -> reqwest::retry::Builder {
+    /// # fn with_builder(builder: gix_reqwest::retry::Builder) -> gix_reqwest::retry::Builder {
     /// builder.classify_fn(|req_rep| {
     ///     match (req_rep.method(), req_rep.status()) {
     ///         (&http::Method::GET, Some(http::StatusCode::SERVICE_UNAVAILABLE)) => {
@@ -273,7 +273,7 @@ impl<B> tower::retry::Policy<Req, http::Response<B>, crate::Error> for Policy {
 fn is_retryable_error(err: &crate::Error) -> bool {
     use std::error::Error as _;
 
-    // pop the reqwest::Error
+    // pop the gix_reqwest::Error
     let err = if let Some(err) = err.source() {
         err
     } else {
