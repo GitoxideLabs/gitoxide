@@ -75,6 +75,8 @@ For advice and support from the upstream author, see reqwest's
 
 ## Requirements
 
+The crate declares Rust 1.85, but dependency selections can require newer Rust. WASM `stream` support requires Rust 1.88.
+
 By default, `gix-reqwest` uses [rustls](https://github.com/rustls/rustls), but when the `native-tls` feature is enabled
 it will use the operating system TLS framework if available, meaning Windows and macOS.
 On Linux, it will use the available OpenSSL (see https://docs.rs/openssl for supported versions and more details)

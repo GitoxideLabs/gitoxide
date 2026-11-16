@@ -183,13 +183,13 @@ quinn = { version = "0.11.1", default-features = false, features = ["runtime-tok
 futures-channel = { version = "0.3", optional = true }
 
 [target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dev-dependencies]
-env_logger = "0.10"
+env_logger = "0.11"
 hyper = { version = "1.1.0", default-features = false, features = ["http1", "http2", "client", "server"] }
 hyper-util = { version = "0.1.12", features = ["http1", "http2", "client", "client-legacy", "server-auto", "server-graceful", "tokio"] }
 serde = { version = "1.0", features = ["derive"] }
 flate2 = "1.0.13"
-brotli_crate = { package = "brotli", version = "8" }
-zstd_crate = { package = "zstd", version = "0.13" }
+brotli_crate = { package = "brotli", version = "9" }
+zstd_crate = { package = "zstd", version = "0.14" }
 doc-comment = "0.3"
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt-multi-thread"] }
 futures-util = { version = "0.3.28", default-features = false, features = ["std", "alloc"] }
@@ -200,7 +200,7 @@ futures-util = { version = "0.3.28", default-features = false, features = ["std"
 js-sys = "0.3.77"
 wasm-bindgen = "0.2.89"
 wasm-bindgen-futures = "0.4.18"
-wasm-streams = { version = "0.5", optional = true }
+wasm-streams = { version = "0.7", optional = true }
 
 [target.'cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))'.dependencies.web-sys]
 version = "0.3.28"
@@ -249,16 +249,19 @@ large_enum_variant = "allow"
 len_zero = "allow"
 manual_range_contains = "allow"
 map_clone = "allow"
+mem_replace_with_default = "allow"
 missing_const_for_thread_local = "allow"
 mixed_attributes_style = "allow"
 multiple_bound_locations = "allow"
 needless_borrow = "allow"
 needless_borrows_for_generic_args = "allow"
+needless_borrowed_reference = "allow"
 needless_lifetimes = "allow"
 non_minimal_cfg = "allow"
 question_mark = "allow"
 redundant_closure = "allow"
 redundant_pattern_matching = "allow"
+single_component_path_imports = "allow"
 too_many_arguments = "allow"
 type_complexity = "allow"
 useless_borrows_in_formatting = "allow"
