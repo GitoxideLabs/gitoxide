@@ -13,6 +13,7 @@ use gix::{
 };
 
 use crate::graph_tiles::{Edge, ROUTE_COLORS, SUBLANES_PER_CELL, Tile, route_edges};
+use crate::index_set::IndexSet;
 
 pub(crate) mod prefix;
 mod tree_selection;
@@ -645,8 +646,8 @@ pub(crate) struct MouseGraph {
 pub(crate) struct App {
     pub rows: Vec<SharedCommitRow>,
     pub graphics_enabled: bool,
-    all_rows: HashMap<ObjectId, SharedCommitRow>,
-    all_order: Vec<ObjectId>,
+    all_rows: Vec<SharedCommitRow>,
+    row_by_id: HashMap<ObjectId, (usize, SharedCommitRow)>,
     hidden_rows: HashSet<ObjectId>,
     hidden_branch_targets: HashMap<ObjectId, ObjectId>,
     hidden_rebase_bases: HashSet<ObjectId>,
@@ -760,8 +761,10 @@ pub(crate) struct App {
     split_available: bool,
     new_commit_available: bool,
     new_empty_commit_available: bool,
-    known_descendants: HashSet<ObjectId>,
-    known_merge_descendants: HashSet<ObjectId>,
+    known_descendants: IndexSet,
+    known_merge_descendants: IndexSet,
+    uncached_descendants: HashSet<ObjectId>,
+    uncached_merge_descendants: HashSet<ObjectId>,
     select_top_after_refresh: bool,
     pub(crate) signature_failures: usize,
     signature_verification_running: bool,
@@ -783,8 +786,8 @@ impl App {
         App {
             rows: Vec::new(),
             graphics_enabled: false,
-            all_rows: HashMap::new(),
-            all_order: Vec::new(),
+            all_rows: Vec::new(),
+            row_by_id: HashMap::new(),
             hidden_rows: HashSet::new(),
             hidden_branch_targets: HashMap::new(),
             hidden_rebase_bases: HashSet::new(),
@@ -898,8 +901,10 @@ impl App {
             split_available: false,
             new_commit_available: true,
             new_empty_commit_available: true,
-            known_descendants: HashSet::new(),
-            known_merge_descendants: HashSet::new(),
+            known_descendants: IndexSet::default(),
+            known_merge_descendants: IndexSet::default(),
+            uncached_descendants: HashSet::new(),
+            uncached_merge_descendants: HashSet::new(),
             select_top_after_refresh: false,
             signature_failures: 0,
             signature_verification_running: false,
@@ -1318,13 +1323,29 @@ impl App {
         self.pending_rebase_conflict == Some(id) || (head && self.worktree_conflicted)
     }
 
-    pub(crate) fn set_known_descendants(&mut self, ids: HashSet<ObjectId>) {
-        self.known_descendants = ids;
+    pub(crate) fn set_known_descendants(&mut self, ids: impl IntoIterator<Item = ObjectId>) {
+        self.known_descendants.clear();
+        self.uncached_descendants = HashSet::new();
+        for id in ids {
+            if let Some((index, _)) = self.row_by_id.get(&id) {
+                self.known_descendants.insert(*index);
+            } else {
+                self.uncached_descendants.insert(id);
+            }
+        }
         self.update_worktree_head_descendants();
     }
 
-    pub(crate) fn set_known_merge_descendants(&mut self, ids: HashSet<ObjectId>) {
-        self.known_merge_descendants = ids;
+    pub(crate) fn set_known_merge_descendants(&mut self, ids: impl IntoIterator<Item = ObjectId>) {
+        self.known_merge_descendants.clear();
+        self.uncached_merge_descendants = HashSet::new();
+        for id in ids {
+            if let Some((index, _)) = self.row_by_id.get(&id) {
+                self.known_merge_descendants.insert(*index);
+            } else {
+                self.uncached_merge_descendants.insert(id);
+            }
+        }
     }
 
     pub(crate) fn set_auto_merges(
@@ -1447,12 +1468,41 @@ impl App {
                     signature: row.signature,
                 };
                 let row = Arc::new(row);
-                if self.all_rows.insert(row.id, Arc::clone(&row)).is_none() {
-                    self.all_order.push(row.id);
-                }
+                self.store_cached_row(Arc::clone(&row));
                 row
             })
             .collect()
+    }
+
+    fn cached_row(&self, id: &ObjectId) -> Option<&SharedCommitRow> {
+        self.row_by_id.get(id).map(|(_, row)| row)
+    }
+
+    fn store_cached_row(&mut self, row: SharedCommitRow) {
+        match self.row_by_id.entry(row.id) {
+            Entry::Occupied(mut entry) => {
+                let (index, cached) = entry.get_mut();
+                self.all_rows[*index] = Arc::clone(&row);
+                *cached = row;
+            }
+            Entry::Vacant(entry) => {
+                let index = self.all_rows.len();
+                if self.uncached_descendants.remove(entry.key()) {
+                    self.known_descendants.insert(index);
+                    if self.uncached_descendants.is_empty() {
+                        self.uncached_descendants = HashSet::new();
+                    }
+                }
+                if self.uncached_merge_descendants.remove(entry.key()) {
+                    self.known_merge_descendants.insert(index);
+                    if self.uncached_merge_descendants.is_empty() {
+                        self.uncached_merge_descendants = HashSet::new();
+                    }
+                }
+                self.all_rows.push(Arc::clone(&row));
+                entry.insert((index, row));
+            }
+        }
     }
 
     pub(crate) fn cache_commits(&mut self, commits: LoadedCommits) {
@@ -1507,7 +1557,7 @@ impl App {
         row.is_review = is_review;
         row.has_merge_replay = has_merge_replay;
         row.signature = signature;
-        self.all_rows.insert(row.id, Arc::clone(&self.rows[index]));
+        self.store_cached_row(Arc::clone(&self.rows[index]));
     }
 
     pub(crate) fn title(&self, row: &CommitRow) -> &BStr {
@@ -1662,7 +1712,7 @@ impl App {
     fn rebuild_compressed_history(&mut self) {
         self.topological_navigation = None;
         let previous_display = self.selected_history_index();
-        self.compressed_expanded.retain(|id| self.all_rows.contains_key(id));
+        self.compressed_expanded.retain(|id| self.row_by_id.contains_key(id));
         let history = (self.graph.is_some() && !self.rows.is_empty()).then(|| {
             CompressedHistory::new(
                 &self.rows,
@@ -2859,8 +2909,8 @@ impl App {
                         changed.push((row.id, Arc::clone(row)));
                     }
                 }
-                for (id, row) in &changed {
-                    self.all_rows.insert(*id, Arc::clone(row));
+                for (_, row) in &changed {
+                    self.store_cached_row(Arc::clone(row));
                 }
                 let ids: Vec<_> = changed.into_iter().map(|(id, _)| id).collect();
                 if !ids.is_empty() {
@@ -3082,15 +3132,15 @@ impl App {
         drop(self.store_commits(commits));
 
         let (visible, boundary) = crate::history::view_scope(view_tips, hidden_tips, |id, out| {
-            if let Some(row) = self.all_rows.get(&id) {
+            if let Some(row) = self.cached_row(&id) {
                 out.extend(row.parent_ids.iter().copied());
             }
         });
         let rows: Vec<_> = self
-            .all_order
+            .all_rows
             .iter()
-            .filter(|id| visible.contains(*id) || boundary.contains(*id))
-            .filter_map(|id| self.all_rows.get(id).map(Arc::clone))
+            .filter(|row| visible.contains(&row.id) || boundary.contains(&row.id))
+            .map(Arc::clone)
             .collect();
         if self.tree_selection.is_some()
             && (boundary != self.hidden_rows
@@ -3162,7 +3212,7 @@ impl App {
                 return true;
             }
             if seen.insert(id)
-                && let Some(row) = self.all_rows.get(&id)
+                && let Some(row) = self.cached_row(&id)
             {
                 pending.extend(row.parent_ids.iter().copied());
             }
@@ -3300,7 +3350,11 @@ impl App {
         self.select_top_after_refresh = false;
         self.rows = Vec::new();
         self.all_rows.clear();
-        self.all_order.clear();
+        self.row_by_id.clear();
+        self.known_descendants.clear();
+        self.known_merge_descendants.clear();
+        self.uncached_descendants.clear();
+        self.uncached_merge_descendants.clear();
         self.hidden_rows.clear();
         self.hidden_branch_targets.clear();
         self.hidden_rebase_bases.clear();
@@ -3357,7 +3411,7 @@ impl App {
                 failed += 1;
                 SignatureState::Failed
             };
-            self.all_rows.insert(id, Arc::clone(&self.rows[index]));
+            self.store_cached_row(Arc::clone(&self.rows[index]));
         }
         self.signature_verification_running = false;
         self.signature_failures = failed;
@@ -3582,7 +3636,7 @@ impl App {
         self.rows.get(index).is_some_and(|row| {
             !self.is_row_hidden(index)
                 && row.parent_ids.len() == 1
-                && !self.known_merge_descendants.contains(&row.id)
+                && !self.has_known_merge_descendant(row.id)
                 && !self.auto_merges.contains_key(&row.id)
         })
     }
@@ -3624,7 +3678,17 @@ impl App {
     }
 
     fn has_known_descendant(&self, id: ObjectId) -> bool {
-        self.known_descendants.contains(&id) || self.rows.iter().any(|row| row.parent_ids.contains(&id))
+        self.row_by_id.get(&id).map_or_else(
+            || self.uncached_descendants.contains(&id),
+            |(index, _)| self.known_descendants.contains(*index),
+        ) || self.rows.iter().any(|row| row.parent_ids.contains(&id))
+    }
+
+    fn has_known_merge_descendant(&self, id: ObjectId) -> bool {
+        self.row_by_id.get(&id).map_or_else(
+            || self.uncached_merge_descendants.contains(&id),
+            |(index, _)| self.known_merge_descendants.contains(*index),
+        )
     }
 
     pub(crate) fn can_reword(&self) -> bool {
@@ -3816,7 +3880,7 @@ impl App {
                     !self.hidden_rows.contains(&source.id)
                         && source.parent_ids.len() == 1
                         && !self.auto_merges.contains_key(&source.id)
-                        && !self.known_merge_descendants.contains(&source.id)
+                        && !self.has_known_merge_descendant(source.id)
                         && self.rows.iter().enumerate().any(|(index, target)| {
                             target.id != source.id
                                 && self.is_squash_target(index)
@@ -3836,7 +3900,7 @@ impl App {
         }
         self.selected
             .and_then(|index| self.rows.get(index).map(|row| (index, row)))
-            .filter(|(index, row)| self.is_row_hidden(*index) || !self.known_merge_descendants.contains(&row.id))
+            .filter(|(index, row)| self.is_row_hidden(*index) || !self.has_known_merge_descendant(row.id))
             .map(|(_, row)| row.id)
     }
 
@@ -4067,8 +4131,8 @@ impl App {
                 changed.push((row.id, Arc::clone(row)));
             }
         }
-        for (id, row) in changed {
-            self.all_rows.insert(id, row);
+        for (_, row) in changed {
+            self.store_cached_row(row);
         }
         self.signature_failures = 0;
     }
@@ -5828,8 +5892,133 @@ mod tests {
         assert!(
             app.rows
                 .iter()
-                .all(|row| Arc::ptr_eq(row, app.all_rows.get(&row.id).expect("visible rows remain cached"))),
+                .all(|row| Arc::ptr_eq(row, app.cached_row(&row.id).expect("visible rows remain cached"))),
             "the active projection shares its immutable rows with the append-only cache"
+        );
+    }
+
+    #[test]
+    fn cached_rows_replace_in_place_and_cached_only_rows_join_refresh() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![row_with_parents(3, &[2]), row_with_parents(2, &[1]), row(1)]);
+        complete(&mut app);
+        let original = Arc::clone(app.cached_row(&id(3)).expect("the original row is cached"));
+        let original_index = app.row_by_id[&id(3)].0;
+        let mut replacement = row_with_parents(3, &[1]);
+        replacement.title = "replacement".into();
+        app.cache_commits(vec![replacement, row_with_parents(4, &[3])].into());
+
+        assert_eq!(
+            app.all_rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            [id(3), id(2), id(1), id(4)],
+            "replacement preserves first insertion order and new cache-only rows append"
+        );
+        assert_eq!(
+            app.row_by_id[&id(3)].0,
+            original_index,
+            "replacement retains the row's stable index"
+        );
+        let cached = app.cached_row(&id(3)).expect("the replacement row is cached");
+        assert_eq!(
+            app.title(cached),
+            "replacement",
+            "the cache retains the newest row metadata"
+        );
+        assert!(
+            !Arc::ptr_eq(&original, cached),
+            "replacement leaves existing shared rows intact"
+        );
+        assert!(
+            Arc::ptr_eq(&app.all_rows[original_index], cached),
+            "replacement updates both ordered and directly indexed cache references"
+        );
+        assert_eq!(
+            original.parent_ids.as_slice(),
+            [id(2)],
+            "the displayed frame keeps its original topology"
+        );
+
+        let rows = app
+            .start_refresh(Vec::<LoadedCommit>::new().into(), &[id(4)], &[], false)
+            .expect("cached-only rows can be projected without loading more objects");
+        let (rows, graph, time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, time);
+        assert_eq!(
+            app.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            [id(4), id(3), id(1)],
+            "refresh uses the replacement topology and includes the cached-only descendant"
+        );
+    }
+
+    #[test]
+    fn descendant_membership_follows_cached_row_indices_and_resets() {
+        let mut app = App::new(10);
+        app.cache_commits(vec![row(1)].into());
+        app.set_known_descendants([id(1), id(2)]);
+        app.set_known_merge_descendants([id(1), id(2)]);
+        assert!(
+            app.known_descendants.contains(0),
+            "cached membership uses the first row's index"
+        );
+        assert!(
+            app.has_known_descendant(id(2)),
+            "commits without rows retain their descendant membership"
+        );
+        assert!(
+            app.has_known_merge_descendant(id(2)),
+            "commits without rows retain merge membership"
+        );
+        app.cache_commits(vec![row(2)].into());
+        assert!(
+            app.known_descendants.contains(1),
+            "newly cached rows inherit existing descendant membership"
+        );
+        assert!(
+            app.known_merge_descendants.contains(1),
+            "newly cached rows inherit merge membership"
+        );
+        assert!(
+            app.uncached_descendants.is_empty(),
+            "cached rows leave the sparse fallback"
+        );
+        assert!(
+            app.uncached_merge_descendants.is_empty(),
+            "cached rows leave the merge fallback"
+        );
+        assert_eq!(
+            app.uncached_descendants.capacity(),
+            0,
+            "an emptied fallback releases its hash buckets"
+        );
+        assert_eq!(
+            app.uncached_merge_descendants.capacity(),
+            0,
+            "an emptied merge fallback releases its buckets"
+        );
+
+        app.set_known_descendants([id(3)]);
+        app.set_known_merge_descendants([]);
+        assert!(
+            !app.has_known_descendant(id(1)),
+            "replacement clears earlier cached membership"
+        );
+        assert!(
+            !app.has_known_merge_descendant(id(2)),
+            "replacement clears earlier merge membership"
+        );
+        assert!(
+            app.has_known_descendant(id(3)),
+            "the replacement retains uncached membership"
+        );
+        app.reload(false);
+        app.extend_commits(vec![row(4)]);
+        assert!(
+            !app.has_known_descendant(id(4)),
+            "reusing a cache slot cannot inherit stale membership"
+        );
+        assert!(
+            !app.has_known_descendant(id(3)),
+            "reload clears uncached membership too"
         );
     }
 
@@ -6821,6 +7010,17 @@ mod tests {
                 signature: SignatureState::Verified,
             },
             Vec::new(),
+        );
+        assert!(
+            Arc::ptr_eq(
+                &app.rows[0],
+                app.cached_row(&id(1)).expect("hydrated metadata remains cached")
+            ),
+            "copy-on-write metadata updates replace the stable cached row"
+        );
+        assert!(
+            Arc::ptr_eq(&app.rows[0], &app.all_rows[app.row_by_id[&id(1)].0]),
+            "copy-on-write metadata updates replace the ordered cache reference too"
         );
         let (rows, graph, lane_time) = compute_lanes(rows);
         app.finish_lane_computation(rows, graph, lane_time);

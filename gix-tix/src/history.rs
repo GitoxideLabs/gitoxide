@@ -210,13 +210,12 @@ pub(crate) struct HistoryGraph {
     parents: Vec<CommitIndex>,
     by_id: HashMap<ObjectId, CommitIndex>,
     stored_order: Vec<CommitIndex>,
-    edit_scope: HashSet<ObjectId>,
+    unindexed_edit_scope: HashSet<ObjectId>,
     read_only: HashSet<ObjectId>,
     /// Active history bounded by hidden tips, retained separately when an edit expands its scope.
     pub(crate) bounded_history: Option<Vec<ObjectId>>,
     tracking: HashMap<CommitIndex, Vec<SelectionRef>>,
     relations: HashMap<(CommitIndex, CommitIndex), (usize, usize)>,
-    edit_metadata_checked: HashSet<ObjectId>,
     pub(crate) unavailable_patches: HashSet<ObjectId>,
     pub(crate) auto_merges: HashMap<ObjectId, crate::edit::auto_merge::Definition>,
 }
@@ -276,7 +275,7 @@ impl HistoryGraph {
         }
         let ids = commits.iter().map(|(id, _)| *id).collect::<Vec<_>>();
         graph.set_current_view(&ids);
-        graph.edit_scope.extend(ids);
+        graph.extend_edit_scope(ids);
         graph
     }
 
@@ -293,7 +292,7 @@ impl HistoryGraph {
             graph.ensure_commit(repo, commit_graph.as_ref(), &shallow, *id, &mut buf)?;
         }
         graph.set_current_view(ids);
-        graph.edit_scope.extend(ids.iter().copied());
+        graph.extend_edit_scope(ids.iter().copied());
         graph.inspect_edit_metadata(repo)?;
         Ok(graph)
     }
@@ -308,7 +307,11 @@ impl HistoryGraph {
             parents: 0..0,
             commit_time: 0,
             generation: 0,
-            state: 0,
+            state: if self.unindexed_edit_scope.remove(&id) {
+                NODE_EDIT_SCOPE
+            } else {
+                0
+            },
         });
         self.by_id.insert(id, index);
         Ok(index)
@@ -337,7 +340,10 @@ impl HistoryGraph {
     }
 
     pub(crate) fn is_in_edit_scope(&self, id: ObjectId) -> bool {
-        self.edit_scope.contains(&id)
+        self.index(id).map_or_else(
+            || self.unindexed_edit_scope.contains(&id),
+            |index| self.commits[index.as_usize()].state & NODE_EDIT_SCOPE != 0,
+        )
     }
 
     pub(crate) fn is_read_only(&self, commit_id: ObjectId) -> bool {
@@ -347,17 +353,21 @@ impl HistoryGraph {
     pub(crate) fn edit_commit_ids(&self) -> Vec<ObjectId> {
         self.commits
             .iter()
-            .filter(|commit| self.edit_scope.contains(&commit.id))
+            .filter(|commit| commit.state & NODE_EDIT_SCOPE != 0)
             .map(|commit| commit.id)
             .collect()
     }
 
     fn inspect_edit_metadata(&mut self, repo: &gix::Repository) -> Result<()> {
-        for commit_id in self.edit_commit_ids() {
-            gix::error::ensure!(!gix::interrupt::is_triggered(), "history loading was cancelled");
-            if self.edit_metadata_checked.contains(&commit_id) {
+        for index in 0..self.commits.len() {
+            if self.commits[index].state & NODE_EDIT_SCOPE == 0 {
                 continue;
             }
+            gix::error::ensure!(!gix::interrupt::is_triggered(), "history loading was cancelled");
+            if self.commits[index].state & NODE_EDIT_METADATA_CHECKED != 0 {
+                continue;
+            }
+            let commit_id = self.commits[index].id;
             let commit = repo.find_commit(commit_id)?;
             let decoded = commit.decode()?;
             if decoded
@@ -375,7 +385,7 @@ impl HistoryGraph {
             )? {
                 self.auto_merges.insert(commit_id, definition);
             }
-            self.edit_metadata_checked.insert(commit_id);
+            self.commits[index].state |= NODE_EDIT_METADATA_CHECKED;
         }
         Ok(())
     }
@@ -398,7 +408,7 @@ impl HistoryGraph {
         false
     }
 
-    pub(crate) fn commits_with_descendants(&self) -> HashSet<ObjectId> {
+    pub(crate) fn commits_with_descendants(&self) -> impl Iterator<Item = ObjectId> + '_ {
         self.commits
             .iter()
             .filter(|commit| commit.state & NODE_IN_VIEW != 0)
@@ -408,7 +418,6 @@ impl HistoryGraph {
                     .copied()
             })
             .map(|parent| self.id(parent))
-            .collect()
     }
 
     /// `None` means unloaded or unknown; an empty list means a loaded root or shallow boundary.
@@ -430,7 +439,7 @@ impl HistoryGraph {
         }
     }
 
-    pub(crate) fn commits_with_merge_descendants(&self) -> HashSet<ObjectId> {
+    pub(crate) fn commits_with_merge_descendants(&self) -> impl Iterator<Item = ObjectId> + '_ {
         let mut pending: Vec<_> = self
             .commits
             .iter()
@@ -444,9 +453,11 @@ impl HistoryGraph {
                 self.parents[range.start as usize..range.end as usize].iter().copied()
             })
             .collect();
-        let mut ancestors = HashSet::new();
+        let mut ancestors = crate::index_set::IndexSet::default();
+        let mut included = Vec::new();
         while let Some(index) = pending.pop() {
-            if ancestors.insert(index) {
+            if ancestors.insert(index.as_usize()) {
+                included.push(index);
                 pending.extend(
                     self.known_parents(index)
                         .iter()
@@ -455,7 +466,7 @@ impl HistoryGraph {
                 );
             }
         }
-        ancestors.into_iter().map(|index| self.id(index)).collect()
+        included.into_iter().map(|index| self.id(index))
     }
 
     pub(crate) fn descendants_in_parent_order(&self, root: ObjectId) -> Option<Vec<ObjectId>> {
@@ -465,7 +476,7 @@ impl HistoryGraph {
         let root = self.index(root)?;
         let mut children = vec![Vec::new(); self.commits.len()];
         for (index, commit) in self.commits.iter().enumerate() {
-            if !self.is_in_edit_scope(commit.id) {
+            if commit.state & NODE_EDIT_SCOPE == 0 {
                 continue;
             }
             let index = CommitIndex::new(index).expect("an existing graph index fits into u32");
@@ -509,8 +520,12 @@ impl HistoryGraph {
     }
 
     pub(crate) fn set_current_view(&mut self, tips: &[ObjectId]) {
+        self.set_view_state(tips, NODE_IN_VIEW);
+    }
+
+    fn set_view_state(&mut self, tips: &[ObjectId], cleared: u8) {
         for commit in &mut self.commits {
-            commit.state &= !NODE_IN_VIEW;
+            commit.state &= !cleared;
         }
         let mut pending: Vec<_> = tips.iter().filter_map(|id| self.index(*id)).collect();
         while let Some(index) = pending.pop() {
@@ -523,11 +538,14 @@ impl HistoryGraph {
     }
 
     pub(crate) fn switch_view(&mut self, view_tips: &[ObjectId], hidden_tips: &[ObjectId]) {
-        self.set_current_view(if view_tips.is_empty() && !hidden_tips.is_empty() {
-            hidden_tips
-        } else {
-            view_tips
-        });
+        self.set_view_state(
+            if view_tips.is_empty() && !hidden_tips.is_empty() {
+                hidden_tips
+            } else {
+                view_tips
+            },
+            NODE_IN_VIEW | NODE_EDIT_SCOPE,
+        );
         self.set_edit_scope(view_tips, hidden_tips);
     }
 
@@ -537,10 +555,20 @@ impl HistoryGraph {
                 out.extend(self.known_parents(index).iter().map(|parent| self.id(*parent)));
             }
         });
-        self.edit_scope = visible;
-        self.edit_scope.extend(boundary.iter().copied());
+        self.unindexed_edit_scope.clear();
+        self.extend_edit_scope(visible.into_iter().chain(boundary.iter().copied()));
         self.read_only = boundary;
         self.bounded_history = (!hidden_tips.is_empty()).then(|| self.edit_commit_ids());
+    }
+
+    fn extend_edit_scope(&mut self, ids: impl IntoIterator<Item = ObjectId>) {
+        for id in ids {
+            if let Some(index) = self.index(id) {
+                self.commits[index.as_usize()].state |= NODE_EDIT_SCOPE;
+            } else {
+                self.unindexed_edit_scope.insert(id);
+            }
+        }
     }
 
     fn parent_ids(&self, index: CommitIndex) -> gix::traverse::commit::ParentIds {
@@ -1137,6 +1165,8 @@ const NODE_LOADED: u8 = 1 << 0;
 const NODE_COMPLETE: u8 = 1 << 1;
 const NODE_STORED: u8 = 1 << 2;
 const NODE_IN_VIEW: u8 = 1 << 3;
+const NODE_EDIT_SCOPE: u8 = 1 << 4;
+const NODE_EDIT_METADATA_CHECKED: u8 = 1 << 5;
 
 #[derive(Clone, Copy, Default)]
 struct WalkState {
@@ -2677,6 +2707,78 @@ mod tests {
     }
 
     #[test]
+    fn edit_scope_preserves_unknown_tips_and_independent_view_changes() -> gix::error::TestResult {
+        let mut graph = HistoryGraph::from_test_commits(&[(id(2), vec![id(1)]), (id(1), Vec::new())]);
+        graph.set_current_view(&[id(1)]);
+        assert!(
+            graph.is_in_edit_scope(id(2)),
+            "changing displayed ancestry alone does not change the editable scope"
+        );
+
+        graph.switch_view(&[id(3)], &[]);
+        assert!(graph.is_in_edit_scope(id(3)), "an unknown selected tip stays editable");
+        assert!(
+            graph.index(id(3)).is_none(),
+            "scope queries do not load unknown commits"
+        );
+        assert!(
+            !graph.is_in_edit_scope(id(2)),
+            "switching scope removes the previous view"
+        );
+        let added = graph.intern(id(3))?;
+        assert!(
+            graph.is_in_edit_scope(id(3)),
+            "interning preserves the selected tip's scope"
+        );
+        assert!(
+            graph.unindexed_edit_scope.is_empty(),
+            "indexed membership no longer retains a duplicate ID"
+        );
+
+        graph.switch_view(&[], &[id(4)]);
+        assert!(
+            graph.is_in_edit_scope(id(4)) && graph.is_read_only(id(4)),
+            "an unknown hidden fallback remains an editable read-only boundary"
+        );
+        assert!(
+            graph.commits[added.as_usize()].state & NODE_EDIT_SCOPE == 0,
+            "switching scope clears a previously interned tip"
+        );
+        graph.switch_view(&[id(1)], &[]);
+        assert!(
+            !graph.is_in_edit_scope(id(4)),
+            "switching scope clears unknown tips as well as indexed commits"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn merge_descendant_membership_uses_visible_ordinary_merges() {
+        let mut graph = HistoryGraph::from_test_commits(&[
+            (id(5), vec![id(4)]),
+            (id(4), vec![id(2), id(3)]),
+            (id(3), vec![id(1)]),
+            (id(2), vec![id(1)]),
+            (id(1), Vec::new()),
+        ]);
+        assert_eq!(
+            graph.commits_with_descendants().collect::<HashSet<_>>(),
+            HashSet::from([id(4), id(3), id(2), id(1)]),
+            "shared ancestry and duplicate edges preserve exact descendant membership"
+        );
+        assert_eq!(
+            graph.commits_with_merge_descendants().collect::<HashSet<_>>(),
+            HashSet::from([id(3), id(2), id(1)]),
+            "ordinary merge ancestors are included once"
+        );
+        graph.set_current_view(&[id(2)]);
+        assert!(
+            graph.commits_with_merge_descendants().next().is_none(),
+            "cached merges outside the current view do not mark ancestors"
+        );
+    }
+
+    #[test]
     fn marks_visible_views_behind_hidden_branches_at_their_base() {
         let mut graph = HistoryGraph::default();
         for (n, parents, generation) in [
@@ -3411,13 +3513,13 @@ mod tests {
 
     #[test]
     fn edit_scope_is_visible_history_plus_its_hidden_boundary() -> gix::error::TestResult {
-        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
-        let repo = crate::test_repository::open(fixture.path())?;
+        let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
+        let repo = crate::test_repository::open(&fixture)?;
         let topic = repo.rev_parse_single("topic")?.detach();
         let boundary = repo.rev_parse_single("topic^")?.detach();
         let root = repo.rev_parse_single("topic^^")?.detach();
         let hidden_tip = repo.rev_parse_single("main")?.detach();
-        let mut graph = loaded(fixture.path(), &["topic"], &["main"])?
+        let mut graph = loaded(&fixture, &["topic"], &["main"])?
             .into_iter()
             .find_map(|event| match event {
                 Event::Complete(graph) => Some(graph),
@@ -3443,6 +3545,11 @@ mod tests {
             !graph.is_in_edit_scope(hidden_tip),
             "hidden-only descendants are excluded"
         );
+        let inspected = graph.index(topic).expect("the visible tip is cached");
+        assert!(
+            graph.commits[inspected.as_usize()].state & NODE_EDIT_METADATA_CHECKED != 0,
+            "loaded editable commits have their edit headers inspected"
+        );
 
         let authors = gix::parallel::OwnShared::new(gix::parallel::Mutable::new(Authors::default()));
         graph.refresh(
@@ -3461,6 +3568,16 @@ mod tests {
         assert!(
             !graph.is_in_edit_scope(boundary),
             "refresh removes the previous boundary"
+        );
+        assert_eq!(graph.index(topic), Some(inspected), "refresh preserves cached indices");
+        assert!(
+            graph.commits[inspected.as_usize()].state & NODE_EDIT_METADATA_CHECKED != 0,
+            "changing scope retains completed edit-header inspection"
+        );
+        let newly_inspected = graph.index(hidden_tip).expect("refresh caches its new tip");
+        assert!(
+            graph.commits[newly_inspected.as_usize()].state & NODE_EDIT_METADATA_CHECKED != 0,
+            "refresh inspects newly editable cached commits"
         );
         Ok(())
     }
@@ -3506,6 +3623,11 @@ mod tests {
         assert!(
             !graph.is_in_edit_scope(parent),
             "an interned parent stays outside the explicit edit scope"
+        );
+        assert_eq!(
+            graph.commits_with_descendants().collect::<Vec<_>>(),
+            [parent],
+            "an unloaded parent still has a known descendant"
         );
         Ok(())
     }
@@ -3745,7 +3867,8 @@ mod tests {
                 }
             }
         }
-        graph.edit_scope.remove(&id(5));
+        let excluded = graph.index(id(5)).expect("the excluded commit is cached");
+        graph.commits[excluded.as_usize()].state &= !NODE_EDIT_SCOPE;
         let descendants = graph
             .descendants_in_parent_order(id(2))
             .expect("the editable subtree is acyclic");

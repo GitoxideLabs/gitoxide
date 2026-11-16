@@ -22,6 +22,7 @@ use crate::{
     command_menu::{self, Command, CommandGroup, CommandId},
     graph_tiles::{Hit, Tile},
     history::{CommitIndex, Decoration, DecorationKind, Decorations, HistoryGraph, RefSnapshot},
+    index_set::IndexSet,
     ui::{decoration_style, notice_area, render_notice},
 };
 
@@ -190,7 +191,7 @@ pub(crate) struct Tree {
     hide_tags: bool,
     remote_deletions: Vec<RemoteDeletion>,
     notice: Option<Notice>,
-    history_commits: HashSet<ObjectId>,
+    history_commits: IndexSet,
     pub(crate) show_pull_requests: bool,
     pub(crate) pull_requests_loading: bool,
     pub(crate) pull_requests_stale: bool,
@@ -243,9 +244,13 @@ impl Tree {
         });
     }
 
-    pub(crate) fn set_history_commits(&mut self, commits: impl IntoIterator<Item = ObjectId>) {
+    pub(crate) fn set_history_commits(&mut self, graph: &HistoryGraph, commits: impl IntoIterator<Item = ObjectId>) {
         self.history_commits.clear();
-        self.history_commits.extend(commits);
+        for commit_id in commits {
+            if let Some(index) = graph.index(commit_id) {
+                self.history_commits.insert(index.as_usize());
+            }
+        }
     }
 
     pub(crate) fn rebuild(&mut self, graph: &HistoryGraph, refs: &RefSnapshot, decorations: &Decorations) {
@@ -2049,7 +2054,7 @@ fn draw_nodes(
     offset: Offset,
     selected: Option<usize>,
     topological_choice: Option<char>,
-    history_commits: &HashSet<ObjectId>,
+    history_commits: &IndexSet,
     node_hits: &mut Vec<(Rect, usize)>,
 ) {
     for (index, node) in overview.nodes.iter().enumerate() {
@@ -2062,7 +2067,7 @@ fn draw_nodes(
         }
         let count = overlay.and_then(|overlay| overlay.counts[index]);
         let text = rail_label(node, count);
-        let mut style = if node.is_anchor && history_commits.contains(&node.id) {
+        let mut style = if node.is_anchor && history_commits.contains(node.commit.as_usize()) {
             Style::default().fg(Color::Cyan)
         } else if node.decorations.iter().any(|decoration| {
             matches!(
@@ -5350,7 +5355,7 @@ mod tests {
         decorations.get_mut(&id(5)).expect("topic is decorated")[0].kind = DecorationKind::WorktreeBranch;
         let mut tree = Tree::default();
         let mut app = App::new(10);
-        tree.set_history_commits([id(6)]);
+        tree.set_history_commits(&graph, [id(6)]);
         tree.rebuild(&graph, &refs, &decorations);
         let mut terminal = Terminal::new(TestBackend::new(100, 18))?;
 
@@ -5402,12 +5407,19 @@ mod tests {
             Color::Green,
             "an out-of-history linked worktree uses dark green"
         );
-        tree.set_history_commits([id(6), id(5)]);
+        tree.set_history_commits(&graph, [id(6), id(5)]);
         terminal.draw(|frame| draw_tree(frame, &mut tree, &graph))?;
         assert_eq!(
             terminal.backend().buffer()[(rail_width as u16, point.y as u16)].fg,
             Color::Cyan,
             "history visibility takes precedence with the bright current-history color"
+        );
+        tree.set_history_commits(&HistoryGraph::default(), []);
+        terminal.draw(|frame| draw_tree(frame, &mut tree, &graph))?;
+        assert_eq!(
+            terminal.backend().buffer()[(rail_width as u16, point.y as u16)].fg,
+            Color::Green,
+            "replacing the cached graph removes its previous history highlight"
         );
 
         let fork = tree.overview.as_ref().expect("the ref-tree exists").by_commit

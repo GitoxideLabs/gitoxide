@@ -12,6 +12,7 @@ mod enrich;
 mod github;
 mod graph_tiles;
 mod history;
+mod index_set;
 mod interrupt;
 mod kitty;
 mod logging;
@@ -1972,7 +1973,9 @@ fn event_loop(
                             requested_worktree_preview = None;
                         }
                     }
-                    ref_tree.set_history_commits(app.rows.iter().map(|row| row.id));
+                    if let Some(history) = history_graph.as_ref() {
+                        ref_tree.set_history_commits(history, app.rows.iter().map(|row| row.id));
+                    }
                     if return_to_history_after_refresh.take().is_some() {
                         ref_tree.leave();
                         app.close_shortcut_groups();
@@ -2554,7 +2557,9 @@ fn event_loop(
             else {
                 history_finished = true;
                 lane_receiver = None;
-                history_graph = Some(HistoryGraph::default());
+                let graph = HistoryGraph::default();
+                ref_tree.set_history_commits(&graph, []);
+                history_graph = Some(graph);
                 app.deferred_history_state = None;
                 app.state = State::Complete;
                 refresh_pending = true;
@@ -2579,6 +2584,7 @@ fn event_loop(
                     app.set_known_merge_descendants(graph.commits_with_merge_descendants());
                     app.set_auto_merges(&graph, &decorations, &ref_snapshot.pins);
                     ref_tree.rebuild(&graph, &ref_snapshot, &decorations);
+                    ref_tree.set_history_commits(&graph, app.rows.iter().map(|row| row.id));
                     history_graph = Some(graph);
                     update_hidden_branch_updates(&mut app, history_graph.as_ref(), &ref_snapshot);
                     selection_relation = None;
