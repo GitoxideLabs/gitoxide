@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project dealing magical pathspecs"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.95"
 include = ["/src/**/*", "/LICENSE-*", "/README.md"]
 
 [lib]
@@ -33,7 +33,7 @@ bitflags = "2"
 insta = "1.46.3"
 gix-parallel = { path = "../gix-parallel" }
 gix-testtools = { path = "../tests/tools", default-features = false, features = ["repo-snapshot", "sha1"] }
-serial_test = "3.4.0"
+serial_test = "4.0.1"
 
 [package.metadata.qa]
 tests = [

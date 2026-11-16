@@ -44,7 +44,7 @@ fn parse_header_is_not_too_lenient() {
 
 #[test]
 fn parse_errors_retain_original_input() -> TestResult {
-    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(jiff::tz::TimeZone::UTC);
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned_datetime(jiff::tz::TimeZone::UTC);
     for input in ["  not a date  ", "  garbage CET  ", "\tinvalid 🕰 \n", "  "] {
         for reference in [None, Some(now.clone())] {
             let err = gix_date::parse(input, reference).expect_err("these inputs contain no date");
@@ -60,7 +60,7 @@ fn parse_errors_retain_original_input() -> TestResult {
 
 #[test]
 fn named_timezones_do_not_change_relative_or_raw_inputs() -> TestResult {
-    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(jiff::tz::TimeZone::UTC);
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned_datetime(jiff::tz::TimeZone::UTC);
     for reference in [None, Some(now)] {
         for input in ["garbage", "14"] {
             assert_eq!(
@@ -75,7 +75,7 @@ fn named_timezones_do_not_change_relative_or_raw_inputs() -> TestResult {
 
 #[test]
 fn short() -> gix_testtools::Result {
-    let now = jiff::Timestamp::from_second(1251660000)?.to_zoned(jiff::tz::TimeZone::UTC);
+    let now = jiff::Timestamp::from_second(1251660000)?.to_zoned_datetime(jiff::tz::TimeZone::UTC);
     for (input, seconds) in [
         ("2008-12-01", 1228159200),
         ("2009-12-01", 1259695200),
@@ -388,7 +388,7 @@ mod textual_dates {
 
     #[test]
     fn complete_layouts_ordinals_and_offsets() -> gix_testtools::Result {
-        let now = jiff::Timestamp::from_second(1_000_000_000)?.to_zoned(jiff::tz::TimeZone::UTC);
+        let now = jiff::Timestamp::from_second(1_000_000_000)?.to_zoned_datetime(jiff::tz::TimeZone::UTC);
         for (input, seconds, offset) in [
             ("February 14, 2008 20:30:45 -0500", 1203039045, -18000),
             ("February 14th, 2008 20:30:45 -0500", 1203039045, -18000),
@@ -430,7 +430,7 @@ mod textual_dates {
 
     #[test]
     fn local_textual_dates_preserve_the_inferred_offset() -> gix_testtools::TestResult {
-        let now: jiff::Zoned = "2024-01-15T10:00:00[America/New_York]".parse()?;
+        let now: jiff::ZonedDateTime = "2024-01-15T10:00:00[America/New_York]".parse()?;
         assert_eq!(
             gix_date::parse("February 14 2008 20:30:45 UT", Some(now.clone()))?,
             Time::new(1_203_039_045, -18000),
@@ -443,7 +443,7 @@ mod textual_dates {
             "a spring-gap clock retains the offset inferred from the supplied civil time"
         );
         assert_eq!(
-            time.to_zoned()?.datetime().to_string(),
+            time.to_zoned_datetime()?.datetime().to_string(),
             "2024-03-10T02:30:00",
             "the timestamp and stored offset preserve the original author or committer clock"
         );
@@ -460,7 +460,7 @@ mod textual_dates {
         // Intentional difference: a missing day defaults to June 1, preserving the named month.
         // Git instead normalizes its unset day sentinel into May 30, before the requested month.
         let local_now = jiff::Timestamp::from_second(1_251_660_000)?
-            .to_zoned(jiff::tz::TimeZone::fixed(jiff::tz::Offset::from_hours(8)?));
+            .to_zoned_datetime(jiff::tz::TimeZone::fixed(jiff::tz::Offset::from_hours(8)?));
         for (input, expected, explicit_zone) in [
             ("June 7 00 12:34:56", "2000-06-07 12:34:56", None),
             ("June 7 12:34:56 00", "2000-06-07 12:34:56", None),
@@ -483,8 +483,8 @@ mod textual_dates {
                 );
             }
         }
-        let summer =
-            jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(jiff::tz::TimeZone::get("America/New_York")?);
+        let summer = jiff::Timestamp::from_second(1_251_660_000)?
+            .to_zoned_datetime(jiff::tz::TimeZone::get("America/New_York")?);
         assert_eq!(
             gix_date::parse("January 7 2009 12:34:56", Some(summer))?,
             gix_date::parse("2009-01-07 12:34:56 -0500", None)?,
@@ -718,7 +718,7 @@ mod numeric_dates {
                 let input = format!("{date} {clock} -0500");
                 for now in [
                     None,
-                    Some(jiff::Timestamp::UNIX_EPOCH.to_zoned(jiff::tz::TimeZone::UTC)),
+                    Some(jiff::Timestamp::UNIX_EPOCH.to_zoned_datetime(jiff::tz::TimeZone::UTC)),
                 ] {
                     assert!(
                         gix_date::parse(&input, now).is_err(),
@@ -759,7 +759,7 @@ mod subsecond_precision {
                     let input = format!("{date} 20:30:45.{fraction}{zone}");
                     for now in [
                         None,
-                        Some(jiff::Timestamp::UNIX_EPOCH.to_zoned(jiff::tz::TimeZone::UTC)),
+                        Some(jiff::Timestamp::UNIX_EPOCH.to_zoned_datetime(jiff::tz::TimeZone::UTC)),
                     ] {
                         assert!(
                             gix_date::parse(&input, now).is_err(),
@@ -822,7 +822,7 @@ mod fuzz {
         for input in ["-9999-1-1", "7	-𬞋", "5 ڜ-09", "-4 week ago Z", "8960609 day ago"] {
             gix_date::parse(
                 input,
-                Some(jiff::Timestamp::UNIX_EPOCH.to_zoned(jiff::tz::TimeZone::UTC)),
+                Some(jiff::Timestamp::UNIX_EPOCH.to_zoned_datetime(jiff::tz::TimeZone::UTC)),
             )
             .ok();
         }

@@ -19,6 +19,6 @@ fn main() -> std::io::Result<()> {
         filepath.display(),
         markerpath.display()
     );
-    std::thread::sleep(std::time::Duration::from_secs(8 * 60 * 60));
+    std::thread::sleep(std::time::Duration::from_hours(8));
     Ok(())
 }

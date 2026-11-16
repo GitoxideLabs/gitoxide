@@ -8,7 +8,7 @@ authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
 license = "MIT OR Apache-2.0"
 include = ["/src/**/*", "/LICENSE-*"]
-rust-version = "1.88"
+rust-version = "1.95"
 
 [[bin]]
 name = "jtt"
@@ -91,8 +91,8 @@ bstr = { version = "1.12.0", default-features = false }
 crc = "3.4.0"
 tempfile = "3.26.0"
 fs_extra = "1.2.0"
-parking_lot = { version = "0.12.4" }
-serial_test = { version = "3.4.0", default-features = false }
+parking_lot = { version = "0.13.0" }
+serial_test = { version = "4.0.1", default-features = false }
 is_ci = "1.1.1"
 io-close = "0.3.7"
 tar = { version = "0.4.46", default-features = false }

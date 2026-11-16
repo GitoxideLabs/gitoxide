@@ -216,7 +216,7 @@ fn append_zip_entry<W: std::io::Write + std::io::Seek>(
         gix_object::tree::EntryKind::Blob | gix_object::tree::EntryKind::BlobExecutable => {
             let file_builder = ar
                 .new_file(path)
-                .compression_method(rawzip::CompressionMethod::Deflate)
+                .compression_method(rawzip::CompressionMethod::DEFLATE)
                 .last_modified(mtime)
                 .unix_permissions(unix_permissions);
 
@@ -271,7 +271,7 @@ fn append_zip_entry<W: std::io::Write + std::io::Seek>(
 
             let (mut zip_entry, config) = ar
                 .new_file(symlink_path)
-                .compression_method(rawzip::CompressionMethod::Store)
+                .compression_method(rawzip::CompressionMethod::STORE)
                 .last_modified(mtime)
                 .unix_permissions(0o120644) // Symlink mode
                 .start()

@@ -19,7 +19,7 @@ rust-version = "1.88"
 proc-macro = true
 
 [dependencies]
-syn = { version = "2.0", features = ["full", "fold"] }
+syn = { version = "3.0.10", features = ["full", "fold"] }
 quote = "1.0"
 proc-macro2 = "1.0"
 

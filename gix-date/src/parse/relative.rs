@@ -1,7 +1,7 @@
 use gix_error::{OptionExt, Result, ResultExt, bail, message, validation};
-use jiff::{SignedDuration, Zoned, civil};
+use jiff::{SignedDuration, ZonedDateTime, civil};
 
-pub fn parse(input: &str, now: Option<Zoned>) -> Option<Result<Zoned>> {
+pub fn parse(input: &str, now: Option<ZonedDateTime>) -> Option<Result<ZonedDateTime>> {
     let mut words = input
         .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|word| !word.is_empty())
@@ -50,12 +50,12 @@ pub fn parse(input: &str, now: Option<Zoned>) -> Option<Result<Zoned>> {
 }
 
 /// Fast path for standalone epoch and fixed-duration names.
-fn parse_named(input: &str, now: Option<&Zoned>) -> Option<Result<Zoned>> {
+fn parse_named(input: &str, now: Option<&ZonedDateTime>) -> Option<Result<ZonedDateTime>> {
     let input = input.trim();
     if input.eq_ignore_ascii_case("never") {
-        return Some(Ok(
-            jiff::Timestamp::UNIX_EPOCH.to_zoned(now.map_or(jiff::tz::TimeZone::UTC, |now| now.time_zone().clone()))
-        ));
+        return Some(Ok(jiff::Timestamp::UNIX_EPOCH.to_zoned_datetime(
+            now.map_or(jiff::tz::TimeZone::UTC, |now| now.time_zone().clone()),
+        )));
     }
     let duration = if input.eq_ignore_ascii_case("now") {
         SignedDuration::ZERO
@@ -290,7 +290,7 @@ fn unit(period: &str) -> Option<(&str, Unit)> {
 ///
 /// Seconds-based units subtract from the timestamp, while months and years only step down the
 /// respective fields, constraining the day to the target month before the next operation.
-fn apply_operations(now: Option<Zoned>, operations: &[Operation<'_>]) -> Result<Zoned> {
+fn apply_operations(now: Option<ZonedDateTime>, operations: &[Operation<'_>]) -> Result<ZonedDateTime> {
     /// The calendar and clock fields for subtraction.
     struct Fields {
         year: Option<i16>,
@@ -299,11 +299,11 @@ fn apply_operations(now: Option<Zoned>, operations: &[Operation<'_>]) -> Result<
         day: i8,
         clock: Clock,
         // Retain the last normalized instant, including its offset at ambiguous local times.
-        zoned: Zoned,
+        zoned: ZonedDateTime,
     }
 
-    impl From<Zoned> for Fields {
-        fn from(zdt: Zoned) -> Self {
+    impl From<ZonedDateTime> for Fields {
+        fn from(zdt: ZonedDateTime) -> Self {
             Fields {
                 year: Some(zdt.year()),
                 month: Some(zdt.month()),
@@ -339,7 +339,7 @@ fn apply_operations(now: Option<Zoned>, operations: &[Operation<'_>]) -> Result<
         }
 
         /// Validate explicit dates and resolve local clocks using the target timezone rules.
-        fn normalize(&self, day: i8) -> Result<Zoned> {
+        fn normalize(&self, day: i8) -> Result<ZonedDateTime> {
             let month = self.month.unwrap_or(self.zoned.month());
             let year = self
                 .year
@@ -364,13 +364,13 @@ fn apply_operations(now: Option<Zoned>, operations: &[Operation<'_>]) -> Result<
                 .checked_add(self.clock.duration())
                 .or_raise(|| gix_error::validation("Clock rollover lies out of range"))?;
             datetime
-                .to_zoned(self.zoned.time_zone().clone())
+                .to_zoned_datetime(self.zoned.time_zone().clone())
                 .or_raise(|| gix_error::validation("Could not convert date to a point in time"))
         }
 
         /// Git defers a named clock's previous-day hint until normalization. A nonzero
         /// duration overrides that hint, so `noon 1 day ago` only goes back one day.
-        fn update(&self, seconds: i64) -> Result<Zoned> {
+        fn update(&self, seconds: i64) -> Result<ZonedDateTime> {
             let day = if self.day < 0 { self.zoned.day() } else { self.day };
             let mut normalized = self.normalize(day)?;
             if seconds == 0 && self.day < -1 {
@@ -378,14 +378,14 @@ fn apply_operations(now: Option<Zoned>, operations: &[Operation<'_>]) -> Result<
                     .datetime()
                     .checked_sub(SignedDuration::from_hours(24))
                     .or_raise(|| validation("Previous local day is out of range"))?
-                    .to_zoned(normalized.time_zone().clone())
+                    .to_zoned_datetime(normalized.time_zone().clone())
                     .or_raise(|| validation("Previous local clock is out of range"))?;
             }
             let timestamp = normalized
                 .timestamp()
                 .checked_sub(SignedDuration::from_secs(seconds))
                 .or_raise(|| gix_error::validation("Relative date is out of range"))?;
-            Ok(timestamp.to_zoned(normalized.time_zone().clone()))
+            Ok(timestamp.to_zoned_datetime(normalized.time_zone().clone()))
         }
     }
 
@@ -489,7 +489,7 @@ fn apply_operations(now: Option<Zoned>, operations: &[Operation<'_>]) -> Result<
                 pending = None;
                 explicit_clock = false;
                 fields = jiff::Timestamp::UNIX_EPOCH
-                    .to_zoned(fields.zoned.time_zone().clone())
+                    .to_zoned_datetime(fields.zoned.time_zone().clone())
                     .into();
                 continue;
             }
@@ -522,7 +522,7 @@ fn apply_operations(now: Option<Zoned>, operations: &[Operation<'_>]) -> Result<
                     .datetime()
                     .checked_sub(SignedDuration::from_secs(seconds))
                     .or_raise(err)?
-                    .to_zoned(fields.zoned.time_zone().clone())
+                    .to_zoned_datetime(fields.zoned.time_zone().clone())
                     .or_raise(err)?
                     .into();
                 continue;
@@ -536,7 +536,7 @@ fn apply_operations(now: Option<Zoned>, operations: &[Operation<'_>]) -> Result<
                     .datetime()
                     .checked_sub(span)
                     .or_raise(err)?
-                    .to_zoned(fields.zoned.time_zone().clone())
+                    .to_zoned_datetime(fields.zoned.time_zone().clone())
                     .or_raise(err)?
                     .into();
                 continue;
@@ -548,10 +548,10 @@ fn apply_operations(now: Option<Zoned>, operations: &[Operation<'_>]) -> Result<
     fields.update(0)
 }
 
-fn subtract_duration(now: Option<&Zoned>, duration: SignedDuration) -> Result<Zoned> {
+fn subtract_duration(now: Option<&ZonedDateTime>, duration: SignedDuration) -> Result<ZonedDateTime> {
     let now = now.ok_or_raise(|| validation("Missing current time"))?;
     now.timestamp()
         .checked_sub(duration)
-        .map(|timestamp| timestamp.to_zoned(now.time_zone().clone()))
+        .map(|timestamp| timestamp.to_zoned_datetime(now.time_zone().clone()))
         .or_raise(|| message!("Failed to subtract {duration} from {now}").validation())
 }

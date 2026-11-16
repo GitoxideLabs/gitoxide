@@ -1,5 +1,5 @@
 use crate::Time;
-use jiff::{SignedDuration, Zoned, civil::Date};
+use jiff::{SignedDuration, ZonedDateTime, civil::Date};
 
 /// Resolve Git's timezone abbreviations before RFC 2822 can treat an unfamiliar name as UTC.
 pub(super) fn normalize_named_timezone(input: &str) -> Option<String> {
@@ -49,7 +49,7 @@ fn named_timezone_hours(name: &str) -> Option<i32> {
 /// - 2-digit hour offset: `2008-02-14 20:30:45 -05`
 /// - Colon-separated offset: `2008-02-14 20:30:45 -05:00`
 /// - Subsecond precision (ignored): `20080214T203045.019-04:00`
-pub fn parse_git_date_format(input: &str, now: Option<&Zoned>) -> Option<Time> {
+pub fn parse_git_date_format(input: &str, now: Option<&ZonedDateTime>) -> Option<Time> {
     parse_numeric_date(input, now)
         .or_else(|| parse_textual_date(input, now))
         .or_else(|| parse_compact_iso8601(input, now))
@@ -85,7 +85,7 @@ pub(super) fn month_name(input: &str) -> Option<i8> {
 }
 
 /// Recognize complete textual dates without guessing missing fields from the current time.
-fn parse_textual_date(input: &str, now: Option<&Zoned>) -> Option<Time> {
+fn parse_textual_date(input: &str, now: Option<&ZonedDateTime>) -> Option<Time> {
     if input.contains('\n') {
         return None;
     }
@@ -252,7 +252,7 @@ fn parse_textual_date(input: &str, now: Option<&Zoned>) -> Option<Time> {
         Some(offset) => jiff::tz::Offset::from_seconds(offset).ok()?.to_time_zone(),
         None => now.map_or(jiff::tz::TimeZone::UTC, |now| now.time_zone().clone()),
     };
-    let zoned = datetime.to_zoned(zone).ok()?;
+    let zoned = datetime.to_zoned_datetime(zone).ok()?;
     // In a spring gap, preserve the offset inferred from the supplied clock, as Git does.
     let offset = i64::from(zoned.offset().seconds()) + datetime.duration_since(zoned.datetime()).as_secs();
     let offset = i32::try_from(offset).ok()?;
@@ -279,7 +279,7 @@ fn parse_textual_offset(zone: &str) -> Option<i32> {
 }
 
 /// Normalize numeric dates using Git's separator-dependent month/day preference.
-fn parse_numeric_date(input: &str, now: Option<&Zoned>) -> Option<Time> {
+fn parse_numeric_date(input: &str, now: Option<&ZonedDateTime>) -> Option<Time> {
     let (date, rest) = input.trim().split_once(char::is_whitespace)?;
     let (first, _) = date.split_once(['.', '/'])?;
     let (_, last) = date.rsplit_once(['.', '/'])?;
@@ -335,7 +335,7 @@ fn parse_numeric_date_with_short_year(date: &str) -> Option<Date> {
 /// - `20080214T20` (hours only)
 /// - With optional subsecond precision (ignored)
 /// - With optional timezone
-fn parse_compact_iso8601(input: &str, now: Option<&Zoned>) -> Option<Time> {
+fn parse_compact_iso8601(input: &str, now: Option<&ZonedDateTime>) -> Option<Time> {
     let input = input.trim();
 
     // Must have T separator and start with 8 digits for YYYYMMDD
@@ -374,7 +374,7 @@ fn parse_compact_iso8601(input: &str, now: Option<&Zoned>) -> Option<Time> {
 
 /// Parse ISO8601 with flexible timezone (Z suffix, 2-digit offset, colon-separated offset)
 /// and optional subsecond precision
-fn parse_flexible_iso8601(input: &str, now: Option<&Zoned>) -> Option<Time> {
+fn parse_flexible_iso8601(input: &str, now: Option<&ZonedDateTime>) -> Option<Time> {
     let input = input.trim();
 
     // Check if this looks like ISO8601 (YYYY-MM-DD format)
@@ -427,7 +427,7 @@ fn new_time(
     day: i32,
     (hour, minute, second): (u32, u32, u32),
     offset: &str,
-    now: Option<&Zoned>,
+    now: Option<&ZonedDateTime>,
 ) -> Option<Time> {
     if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
         return None;
@@ -441,7 +441,7 @@ fn new_time(
             .ok()?
             .to_time_zone()
     };
-    let zoned = datetime.to_zoned(zone).ok()?;
+    let zoned = datetime.to_zoned_datetime(zone).ok()?;
     // Preserve the requested clock's inferred offset through a DST gap, like textual dates.
     let offset = i64::from(zoned.offset().seconds()) + datetime.duration_since(zoned.datetime()).as_secs();
     let offset = i32::try_from(offset).ok()?;

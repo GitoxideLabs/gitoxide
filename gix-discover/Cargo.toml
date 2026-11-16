@@ -9,7 +9,7 @@ description = "Discover git repositories and check if a directory is a git repos
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
-rust-version = "1.88"
+rust-version = "1.95"
 
 [lib]
 doctest = true
@@ -35,7 +35,7 @@ dunce = "1.0.3"
 [dev-dependencies]
 insta = "1.46.3"
 gix-testtools = { path = "../tests/tools", features = ["sha1"] }
-serial_test = { version = "3.4.0", default-features = false }
+serial_test = { version = "4.0.1", default-features = false }
 is_ci = "1.1.1"
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]

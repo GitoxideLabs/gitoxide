@@ -1,17 +1,17 @@
 use std::time::SystemTime;
 
-use jiff::{ToSpan, Zoned, tz::TimeZone};
+use jiff::{ToSpan, ZonedDateTime, tz::TimeZone};
 use pretty_assertions::assert_eq;
 
-fn utc(time: SystemTime) -> Zoned {
-    Zoned::new(time.try_into().expect("system time is representable"), TimeZone::UTC)
+fn utc(time: SystemTime) -> ZonedDateTime {
+    ZonedDateTime::new(time.try_into().expect("system time is representable"), TimeZone::UTC)
 }
 
 #[test]
 fn normalization_preserves_the_requested_local_clock() -> gix_testtools::TestResult {
     // Intentional difference: Git carries now's DST flag into the pre-transition clock,
     // producing March 9 at 23:00. March 10 midnight is 1710046800 with the actual -0500 offset.
-    let now: Zoned = "2024-03-10T03:30:00[America/New_York]".parse()?;
+    let now: ZonedDateTime = "2024-03-10T03:30:00[America/New_York]".parse()?;
     for input in ["today", "00:00", "midnight"] {
         assert_eq!(
             gix_date::parse(input, Some(now.clone()))?,
@@ -24,7 +24,7 @@ fn normalization_preserves_the_requested_local_clock() -> gix_testtools::TestRes
 
 #[test]
 fn punctuation_between_relative_counts_and_units() -> gix_testtools::TestResult {
-    let now: Zoned = "2009-08-30T19:20:00[UTC]".parse()?;
+    let now: ZonedDateTime = "2009-08-30T19:20:00[UTC]".parse()?;
     let expected = gix_date::parse("2 days", Some(now.clone()))?;
     for input in ["2 -days", "2..days", "2//days", "2--days"] {
         assert_eq!(
@@ -38,7 +38,7 @@ fn punctuation_between_relative_counts_and_units() -> gix_testtools::TestResult 
 
 #[test]
 fn delimited_numeric_dates_are_not_guessed_as_separate_fields() -> gix_testtools::TestResult {
-    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::UTC);
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned_datetime(TimeZone::UTC);
     for input in ["02/14/2008", "2008/02/14", "14.02.2008", "02/14/08", "02/30/2008"] {
         for reference in [None, Some(now.clone())] {
             assert!(
@@ -57,7 +57,7 @@ fn delimited_numeric_dates_are_not_guessed_as_separate_fields() -> gix_testtools
 
 #[test]
 fn annotated_iso_dates_do_not_reach_relative_guessing() -> gix_testtools::TestResult {
-    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::UTC);
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned_datetime(TimeZone::UTC);
     for input in [
         "2008-02-14 20:30:45 -0500 (EST)",
         "2008-02-14T20:30:45-0500 (EST)",
@@ -84,7 +84,7 @@ fn annotated_iso_dates_do_not_reach_relative_guessing() -> gix_testtools::TestRe
 fn never_resets_to_the_unix_epoch() -> gix_testtools::Result {
     // Intentional differences: .3.days applies after the reset, and today keeps January 1
     // instead of Git restoring the original reference's day (January 30).
-    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::UTC);
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned_datetime(TimeZone::UTC);
     for (input, seconds) in [
         ("never", 0),
         ("NEVER", 0),
@@ -123,7 +123,7 @@ fn never_uses_the_local_epoch_calendar_and_historical_offset() -> gix_testtools:
         ("America/New_York", "never 23:00", 14400, -18000),
         ("America/New_York", "noon never", 0, -18000),
     ] {
-        let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::get(zone)?);
+        let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned_datetime(TimeZone::get(zone)?);
         assert_eq!(
             gix_date::parse(input, Some(now))?,
             gix_date::Time::new(seconds, offset),
@@ -137,7 +137,7 @@ fn never_uses_the_local_epoch_calendar_and_historical_offset() -> gix_testtools:
 fn pending_numbers_fill_calendar_fields_and_units() -> gix_testtools::Result {
     // Intentional differences: 008 means eight, 00/38 fill years 2000/2038, and .3.days
     // always subtracts three days. Reject unused numbers instead of Git silently dropping them.
-    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::UTC);
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned_datetime(TimeZone::UTC);
     for (input, seconds) in [
         ("2 long days ago", 1251487200),
         ("one or two days ago", 1251573600),
@@ -185,7 +185,7 @@ fn pending_numbers_fill_calendar_fields_and_units() -> gix_testtools::Result {
 fn textual_month_fragments_infer_missing_calendar_fields() -> gix_testtools::Result {
     // Intentional differences: retain padded numbers, attached month/day tokens and explicit
     // dates after duration arithmetic; Git can ignore each and return an unrelated cutoff.
-    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::UTC);
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned_datetime(TimeZone::UTC);
     for (input, seconds) in [
         ("July 5th", 1246821600),
         ("5 July", 1246821600),
@@ -232,7 +232,7 @@ fn textual_month_fragments_infer_missing_calendar_fields() -> gix_testtools::Res
 
 #[test]
 fn relative_month_names_accept_prefixes_and_attached_days() -> gix_testtools::Result {
-    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::UTC);
+    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned_datetime(TimeZone::UTC);
     for (index, name) in [
         "January",
         "February",
@@ -273,7 +273,8 @@ fn relative_month_names_accept_prefixes_and_attached_days() -> gix_testtools::Re
 
 #[test]
 fn textual_month_inference_uses_local_calendar_fields() -> gix_testtools::Result {
-    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::fixed(jiff::tz::Offset::from_hours(8)?));
+    let now = jiff::Timestamp::from_second(1_251_660_000)?
+        .to_zoned_datetime(TimeZone::fixed(jiff::tz::Offset::from_hours(8)?));
     for (input, expected) in [
         ("July 5th", "2009-07-05 03:20:00 +0800"),
         ("December", "2008-12-31 03:20:00 +0800"),
@@ -291,7 +292,7 @@ fn textual_month_inference_uses_local_calendar_fields() -> gix_testtools::Result
 
 #[test]
 fn fractional_clock_suffixes_do_not_become_calendar_days() -> gix_testtools::Result {
-    let now = jiff::Timestamp::from_second(1_251_616_800)?.to_zoned(TimeZone::UTC);
+    let now = jiff::Timestamp::from_second(1_251_616_800)?.to_zoned_datetime(TimeZone::UTC);
     assert_eq!(
         gix_date::parse("December 37 noon 12:34:56.3", Some(now))?,
         gix_date::parse("2037-12-30 12:34:56 +0000", None)?,
@@ -337,7 +338,8 @@ fn offset_leading_to_before_unix_epoch_can_be_represented() {
 
 #[test]
 fn the_timezone_of_now_controls_calendar_arithmetic() -> gix_testtools::TestResult {
-    let now = jiff::Timestamp::from_second(1_772_325_000)?.to_zoned(TimeZone::fixed(jiff::tz::Offset::from_hours(-5)?));
+    let now = jiff::Timestamp::from_second(1_772_325_000)?
+        .to_zoned_datetime(TimeZone::fixed(jiff::tz::Offset::from_hours(-5)?));
     let actual = gix_date::parse("1 month ago", Some(now))?;
     assert_eq!(
         actual.seconds, 1_769_646_600,
@@ -349,7 +351,8 @@ fn the_timezone_of_now_controls_calendar_arithmetic() -> gix_testtools::TestResu
 
 #[test]
 fn counted_weekdays_use_the_local_weekday() -> gix_testtools::Result {
-    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::fixed(jiff::tz::Offset::from_hours(8)?));
+    let now = jiff::Timestamp::from_second(1_251_660_000)?
+        .to_zoned_datetime(TimeZone::fixed(jiff::tz::Offset::from_hours(8)?));
     let actual = gix_date::parse("last monday", Some(now))?;
     assert_eq!(
         actual.seconds,
@@ -381,15 +384,15 @@ fn weekday_selection_and_fixed_duration_days_have_distinct_dst_semantics() -> gi
             "2024-11-02T02:30:00-04:00[America/New_York]",
         ),
     ] {
-        let now: Zoned = now.parse()?;
-        let expected: Zoned = expected.parse()?;
+        let now: ZonedDateTime = now.parse()?;
+        let expected: ZonedDateTime = expected.parse()?;
         for input in [input, "1 day ago"] {
             let expected = if input == "1 day ago" {
                 expected.clone()
             } else {
                 now.datetime()
                     .checked_sub(jiff::SignedDuration::from_hours(24))?
-                    .to_zoned(now.time_zone().clone())?
+                    .to_zoned_datetime(now.time_zone().clone())?
             };
             let actual = gix_date::parse(input, Some(now.clone()))?;
             assert_eq!(
@@ -430,7 +433,7 @@ fn named_clocks_compose_with_durations_and_calendar_weekdays() -> gix_testtools:
     // Git 2.55 fixed deferred named clocks. Intentional difference: after month subtraction,
     // compute the actual weekday; July 30, 2009 is Thursday, so last Friday is July 24.
     // Git's stale August weekday instead selects July 28, a Tuesday.
-    let now = jiff::Timestamp::from_second(1_251_616_800)?.to_zoned(TimeZone::UTC);
+    let now = jiff::Timestamp::from_second(1_251_616_800)?.to_zoned_datetime(TimeZone::UTC);
     for (input, seconds) in [
         ("noon yesterday", 1251547200),
         ("yesterday noon", 1251547200),
@@ -455,7 +458,7 @@ fn named_clocks_compose_with_durations_and_calendar_weekdays() -> gix_testtools:
 
 #[test]
 fn explicit_clocks_replace_named_clocks_without_rewinding_the_day() -> gix_testtools::TestResult {
-    let now: Zoned = "2009-08-30T07:20:00[UTC]".parse()?;
+    let now: ZonedDateTime = "2009-08-30T07:20:00[UTC]".parse()?;
     for (input, expected) in [
         ("noon 15:00", "2009-08-30 15:00:00 +0000"),
         ("noon 6pm", "2009-08-30 18:00:00 +0000"),
@@ -475,7 +478,8 @@ fn explicit_clocks_replace_named_clocks_without_rewinding_the_day() -> gix_testt
 #[test]
 fn named_clocks_use_the_reference_timezone() -> gix_testtools::Result {
     // This instant is Monday morning locally, but still Sunday evening in UTC.
-    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::fixed(jiff::tz::Offset::from_hours(8)?));
+    let now = jiff::Timestamp::from_second(1_251_660_000)?
+        .to_zoned_datetime(TimeZone::fixed(jiff::tz::Offset::from_hours(8)?));
     for (input, expected) in [
         ("noon", "2009-08-30 12:00:00 +0800"),
         ("midnight", "2009-08-31 00:00:00 +0800"),
@@ -498,7 +502,8 @@ fn named_clocks_use_the_reference_timezone() -> gix_testtools::Result {
 
 #[test]
 fn numeric_clocks_keep_the_local_date_and_token_boundaries() -> gix_testtools::Result {
-    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::fixed(jiff::tz::Offset::from_hours(8)?));
+    let now = jiff::Timestamp::from_second(1_251_660_000)?
+        .to_zoned_datetime(TimeZone::fixed(jiff::tz::Offset::from_hours(8)?));
     for (input, expected) in [
         ("15:00", "2009-08-31 15:00:00 +0800"),
         ("24:00", "2009-09-01 00:00:00 +0800"),
@@ -517,7 +522,7 @@ fn numeric_clocks_keep_the_local_date_and_token_boundaries() -> gix_testtools::R
 
 #[test]
 fn clock_assignments_clear_fractional_seconds() -> gix_testtools::Result {
-    let now = jiff::Timestamp::new(0, 500_000_000)?.to_zoned(TimeZone::UTC);
+    let now = jiff::Timestamp::new(0, 500_000_000)?.to_zoned_datetime(TimeZone::UTC);
     for input in ["midnight 1 second ago", "00:00 1 second ago", "12am 1 second ago"] {
         assert_eq!(
             gix_date::parse(input, Some(now.clone()))?,
@@ -530,7 +535,8 @@ fn clock_assignments_clear_fractional_seconds() -> gix_testtools::Result {
 
 #[test]
 fn am_pm_adjustments_use_local_clock_components() -> gix_testtools::Result {
-    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::fixed(jiff::tz::Offset::from_hours(8)?));
+    let now = jiff::Timestamp::from_second(1_251_660_000)?
+        .to_zoned_datetime(TimeZone::fixed(jiff::tz::Offset::from_hours(8)?));
     for (input, expected) in [
         ("6pm", "2009-08-31 18:00:00 +0800"),
         ("6:30:45pm", "2009-08-31 18:30:45 +0800"),
@@ -555,7 +561,7 @@ fn today_preserves_explicit_clocks_and_the_accumulated_date() -> gix_testtools::
     // and the accumulated date after subtraction. Git erases an equal clock and restores
     // the original day of the month. Dot-separated count/unit pairs always apply.
     for seconds in [1_251_616_800, 1_251_660_000] {
-        let now = jiff::Timestamp::from_second(seconds)?.to_zoned(TimeZone::UTC);
+        let now = jiff::Timestamp::from_second(seconds)?.to_zoned_datetime(TimeZone::UTC);
         for (input, expected) in [
             ("today", 1251590400),
             ("TODAY", 1251590400),
@@ -585,7 +591,8 @@ fn today_preserves_explicit_clocks_and_the_accumulated_date() -> gix_testtools::
 
 #[test]
 fn today_uses_local_midnight() -> gix_testtools::Result {
-    let now = jiff::Timestamp::from_second(1_251_660_000)?.to_zoned(TimeZone::fixed(jiff::tz::Offset::from_hours(8)?));
+    let now = jiff::Timestamp::from_second(1_251_660_000)?
+        .to_zoned_datetime(TimeZone::fixed(jiff::tz::Offset::from_hours(8)?));
     for (input, expected) in [
         ("today", "2009-08-31 00:00:00 +0800"),
         ("today at noon", "2009-08-31 12:00:00 +0800"),
@@ -624,7 +631,7 @@ fn numeric_clocks_check_component_and_timestamp_ranges() {
         );
     }
     assert!(
-        gix_date::parse("24:00", Some(jiff::Timestamp::MAX.to_zoned(TimeZone::UTC))).is_err(),
+        gix_date::parse("24:00", Some(jiff::Timestamp::MAX.to_zoned_datetime(TimeZone::UTC))).is_err(),
         "clock rollover beyond the timestamp range returns an error"
     );
 }
@@ -693,7 +700,7 @@ fn various() {
         let expected = utc(now)
             // account for the loss of precision when creating `Time` with seconds
             .round(
-                jiff::ZonedRound::new()
+                jiff::ZonedDateTimeRound::new()
                     .smallest(jiff::Unit::Second)
                     .mode(jiff::RoundMode::Trunc),
             )

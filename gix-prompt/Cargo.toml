@@ -9,7 +9,7 @@ description = "A crate of the gitoxide project for handling prompts in the termi
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
 include = ["/src/**/*", "/LICENSE-*", "/README.md"]
-rust-version = "1.88"
+rust-version = "1.95"
 
 [lib]
 doctest = false
@@ -21,15 +21,15 @@ gix-error = { version = "^0.5.2", path = "../gix-error" }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.2", features = ["termios"] }
-parking_lot = "0.12.4"
+parking_lot = "0.13.0"
 
 [dev-dependencies]
 insta = "1.46.3"
 gix-testtools = { path = "../tests/tools", features = ["sha1"] }
-serial_test = { version = "3.4.0", default-features = false }
+serial_test = { version = "4.0.1", default-features = false }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))'.dev-dependencies]
-expectrl = "0.7.0"
+expectrl = "0.9.0"
 
 [package.metadata.qa.wasm]
 targets = ["wasm32-unknown-unknown", "wasm32-wasip1", "wasm32-wasip2"]

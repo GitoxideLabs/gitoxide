@@ -9,7 +9,7 @@ description = "A crate of the gitoxide project for shared worktree related types
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
-rust-version = "1.88"
+rust-version = "1.95"
 
 [lib]
 doctest = false
@@ -46,7 +46,7 @@ gix-path = { version = "^0.14.1", path = "../gix-path" }
 gix-attributes = { version = "^0.37.1", path = "../gix-attributes", optional = true }
 gix-validate = { version = "^0.13.1", path = "../gix-validate", optional = true }
 gix-ignore = { version = "^0.24.1", path = "../gix-ignore" }
-dua-core = { version = "4.1.0", optional = true }
+dua-core = { version = "6.1.0", optional = true }
 
 
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }

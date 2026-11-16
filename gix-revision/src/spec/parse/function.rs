@@ -566,7 +566,7 @@ where
                         .to_str()
                         .or_raise(|| validation("could not parse time for reflog lookup").with_input(nav))
                         .and_then(|date| {
-                            gix_date::parse(date, Some(gix_date::Zoned::now()))
+                            gix_date::parse(date, Some(gix_date::ZonedDateTime::now()))
                                 .or_raise(|| validation("could not parse time for reflog lookup").with_input(nav))
                         })?;
                     let lookup = delegate::ReflogLookup::Date(time);

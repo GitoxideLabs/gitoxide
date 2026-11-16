@@ -2,6 +2,7 @@ mod options;
 
 #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))]
 mod ask {
+    use expectrl::Expect;
     use gix_testtools::bstr::ByteSlice;
 
     #[test]
@@ -59,7 +60,9 @@ mod ask {
             .to_owned()
     }
 
-    fn spawn_example(name: &str) -> gix_testtools::Result<(gix_testtools::tempfile::TempDir, expectrl::Session)> {
+    fn spawn_example(
+        name: &str,
+    ) -> gix_testtools::Result<(gix_testtools::tempfile::TempDir, expectrl::session::OsSession)> {
         let temp = gix_testtools::tempfile::tempdir()?;
         let example = std::path::PathBuf::from(evaluate_target_dir())
             .join("debug/examples")

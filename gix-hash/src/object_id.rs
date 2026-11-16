@@ -67,14 +67,8 @@ pub mod decode {
                 SIZE_OF_SHA1_HEX_DIGEST => Ok({
                     ObjectId::Sha1({
                         let mut buf = [0; SIZE_OF_SHA1_DIGEST];
-                        faster_hex::hex_decode(buffer, &mut buf).map_err(|err| match err {
-                            faster_hex::Error::InvalidChar | faster_hex::Error::Overflow => {
-                                message("Invalid character encountered").validation_error()
-                            }
-                            faster_hex::Error::InvalidLength(_) => {
-                                unreachable!("BUG: This is already checked")
-                            }
-                        })?;
+                        faster_hex::hex_decode(buffer, &mut buf)
+                            .map_err(|_| message("Invalid character encountered").validation_error())?;
                         buf
                     })
                 }),
@@ -82,14 +76,8 @@ pub mod decode {
                 SIZE_OF_SHA256_HEX_DIGEST => Ok({
                     ObjectId::Sha256({
                         let mut buf = [0; SIZE_OF_SHA256_DIGEST];
-                        faster_hex::hex_decode(buffer, &mut buf).map_err(|err| match err {
-                            faster_hex::Error::InvalidChar | faster_hex::Error::Overflow => {
-                                message("Invalid character encountered").validation_error()
-                            }
-                            faster_hex::Error::InvalidLength(_) => {
-                                unreachable!("BUG: This is already checked")
-                            }
-                        })?;
+                        faster_hex::hex_decode(buffer, &mut buf)
+                            .map_err(|_| message("Invalid character encountered").validation_error())?;
                         buf
                     })
                 }),

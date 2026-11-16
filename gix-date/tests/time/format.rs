@@ -48,6 +48,23 @@ fn iso8601_strict() -> gix_testtools::TestResult {
 }
 
 #[test]
+fn jiff_zoned_datetime_roundtrip() -> gix_error::TestResult {
+    let zoned: jiff::ZonedDateTime = time().to_zoned_datetime()?;
+    let reference: gix_date::ZonedDateTime = zoned.clone();
+    assert_eq!(
+        gix_date::parse("now", Some(reference))?,
+        time(),
+        "the public reference time accepts Jiff 1.0 values and preserves the offset"
+    );
+    assert_eq!(
+        zoned.strftime("%Y-%m-%dT%H:%M:%S%:z").to_string(),
+        time().format(format::ISO8601_STRICT)?,
+        "Jiff conversion and Git date formatting describe the same time"
+    );
+    Ok(())
+}
+
+#[test]
 fn rfc2822() -> gix_testtools::TestResult {
     assert_eq!(time().format(format::RFC2822)?, "Fri, 30 Nov 1973 00:03:09 +0230");
     assert_eq!(time_dec1().format(format::RFC2822)?, "Sat, 01 Dec 1973 00:03:09 +0230");

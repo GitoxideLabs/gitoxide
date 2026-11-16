@@ -500,7 +500,7 @@ mod time {
         pub fn try_into_time(
             &self,
             value: impl gix_utils::AsBStr,
-            now: Option<gix_date::Zoned>,
+            now: Option<gix_date::ZonedDateTime>,
         ) -> Result<gix_date::Time> {
             let value = value.as_bstr();
             gix_date::parse(
@@ -602,7 +602,7 @@ pub mod validate {
     impl Validate for Time {
         fn validate(&self, value: &BStr) -> Result {
             let value = value.to_str().or_raise(|| validation("Date must be valid UTF-8"))?;
-            gix_date::parse(value, gix_date::Zoned::now().into())?;
+            gix_date::parse(value, gix_date::ZonedDateTime::now().into())?;
             Ok(())
         }
     }

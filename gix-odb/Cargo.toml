@@ -9,7 +9,7 @@ license = "MIT OR Apache-2.0"
 description = "Implements various git object databases"
 edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
-rust-version = "1.88"
+rust-version = "1.95"
 autotests = false
 
 [lib]
@@ -42,7 +42,7 @@ serde = { version = "1.0.114", optional = true, default-features = false, featur
 ] }
 
 tempfile = "3.26.0"
-parking_lot = { version = "0.12.4" }
+parking_lot = { version = "0.13.0" }
 arc-swap = "1.9.0"
 memmap2 = "0.9.11"
 

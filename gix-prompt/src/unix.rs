@@ -10,12 +10,12 @@ pub(crate) mod imp {
     };
 
     use gix_error::{ErrorExt, Message, Result, ResultExt, message};
-    use parking_lot::{Mutex, RawMutex, const_mutex, lock_api::MutexGuard};
+    use parking_lot::{Mutex, RawMutex, lock_api::MutexGuard};
     use rustix::termios::{self, Termios};
 
     use crate::{Mode, Options, unix::TTY_PATH};
 
-    static TERM_STATE: Mutex<Option<Termios>> = const_mutex(None);
+    static TERM_STATE: Mutex<Option<Termios>> = Mutex::new(None);
 
     fn tty_io() -> Message {
         gix_error::message!("Failed to open terminal at {TTY_PATH:?} for writing prompt, or to write it")

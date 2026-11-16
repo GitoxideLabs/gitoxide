@@ -20,7 +20,7 @@ impl Time {
 
     /// Return the current local time, or the one at UTC if the local time wasn't available.
     pub fn now_local_or_utc() -> Self {
-        let zdt = jiff::Zoned::now();
+        let zdt = jiff::ZonedDateTime::now();
         let seconds = zdt.timestamp().as_second();
         let offset = zdt.offset().seconds();
         Self { seconds, offset }

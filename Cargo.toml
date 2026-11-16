@@ -8,8 +8,8 @@ authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
 license = "MIT OR Apache-2.0"
 version = "0.61.0"
-# Rust 1.91 is required by the interactive commit graph (`gix-tix`).
-rust-version = "1.91"
+# Rust 1.95 is required by the synchronization and hexadecimal dependencies.
+rust-version = "1.95"
 default-run = "gix"
 include = ["/src/**/*", "/build.rs", "/LICENSE-*", "/README.md"]
 resolver = "2"
@@ -143,12 +143,12 @@ sha1 = ["gix/sha1", "gix-tix?/sha1"]
 ## Enable support for the SHA-256 hash throughout the `gix` crate.
 sha256 = ["gix/sha256", "gix-tix?/sha256"]
 
-## Enable the interactive commit graph. This requires Rust 1.91 or newer.
+## Enable the interactive commit graph. This requires Rust 1.95 or newer.
 tix = ["dep:gix-tix"]
 
 ## Makes the crate execute as fast as possible by supporting parallel computation of otherwise long-running functions.
 ## If disabled, the binary will be visibly smaller.
-## Objects are decompressed and compressed with `sirocco`, which requires Rust 1.89 or newer.
+## Objects are decompressed and compressed with `sirocco`.
 fast = ["gix/max-performance", "gix/comfort", "gix/zlib-sirocco"]
 
 ## Deprecated: identical to `fast`, as all zlib backends are now pure Rust.
