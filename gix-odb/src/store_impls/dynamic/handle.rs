@@ -383,12 +383,26 @@ impl TryFrom<&super::Store> for super::Store {
 impl super::Handle<Rc<super::Store>> {
     /// Convert a ref counted store into one that is ref-counted and thread-safe, by creating a new Store.
     pub fn into_arc(self) -> std::io::Result<super::Handle<Arc<super::Store>>> {
-        let loose_compression = self.loose_compression;
-        let store = Arc::new(super::Store::try_from(self.store_ref())?);
+        let Self {
+            store,
+            refresh,
+            max_recursion_depth,
+            ignore_replacements,
+            loose_compression,
+            token,
+            snapshot: _,
+            inflate: _,
+            packed_object_count: _,
+        } = &self;
+        let store = Arc::new(super::Store::try_from(store.as_ref())?);
         let mut cache = store.to_handle_arc();
-        cache.refresh = self.refresh;
-        cache.max_recursion_depth = self.max_recursion_depth;
-        cache.loose_compression = loose_compression;
+        cache.refresh = *refresh;
+        cache.ignore_replacements = *ignore_replacements;
+        cache.max_recursion_depth = *max_recursion_depth;
+        cache.loose_compression = *loose_compression;
+        if matches!(token.as_ref(), Some(Mode::KeepDeletedPacksAvailable)) {
+            cache.prevent_pack_unload();
+        }
         Ok(cache)
     }
 }

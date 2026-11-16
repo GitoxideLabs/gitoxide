@@ -414,6 +414,23 @@ fn alternate_dbs_query() -> gix_testtools::TestResult {
 }
 
 #[test]
+fn conversion_preserves_pack_location_access() -> gix_testtools::TestResult {
+    use gix_pack::Find;
+
+    let dir = crate::scripted_fixture_read_only("make_repo_multi_index.sh")?;
+    let mut handle = crate::odb_at(dir.join(".git/objects"))?;
+    let id = handle.iter()?.next().expect("the fixture contains packed objects")?;
+    handle.prevent_pack_unload();
+    let converted = handle.into_arc()?;
+    let location = converted.location_by_oid(&id, &mut Vec::new())?;
+    assert!(
+        location.is_some(),
+        "the converted handle permits pack location access without reconfiguration"
+    );
+    Ok(())
+}
+
+#[test]
 fn object_replacement() -> gix_testtools::TestResult {
     let dir = crate::scripted_fixture_read_only("make_replaced_history.sh")?;
     let handle = crate::odb_at(dir.join(".git/objects"))?;
@@ -476,6 +493,15 @@ fn object_replacement() -> gix_testtools::TestResult {
     let hdr = handle.try_header(&short_history_link)?.expect("present");
     assert_eq!(hdr.kind(), gix_object::Kind::Commit);
     drop(replaced);
+    let converted = handle.clone().into_arc()?;
+    assert_eq!(
+        converted
+            .find_commit(&short_history_link, &mut buf)?
+            .parents()
+            .collect::<Vec<_>>(),
+        vec![long_history_second_id],
+        "the converted handle still reads the replacement"
+    );
     assert_eq!(
         handle.find(&short_history_link, &mut buf)?.data.len() as u64,
         hdr.size()
@@ -494,6 +520,14 @@ fn object_replacement() -> gix_testtools::TestResult {
     assert_eq!(
         handle.find(&short_history_link, &mut buf)?.data.len() as u64,
         hdr.size()
+    );
+
+    let converted = handle.clone().into_arc()?;
+    let commit = converted.find_commit(&short_history_link, &mut buf)?;
+    assert_eq!(
+        commit.parents().collect::<Vec<_>>(),
+        vec![orphan_of_new_history],
+        "the converted handle still reads the original object"
     );
 
     assert_eq!(
