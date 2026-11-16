@@ -37,22 +37,23 @@ http-client-curl-rust-tls = ["http-client-curl", "curl/rustls"]
 ## Implies `http-client-curl` and enables `ssl` for creating `https://` connections.
 ## If used in conjunction with `http-client-curl-rust-tls`, the `rust-tls` feature will take precedence.
 http-client-curl-openssl = ["http-client-curl", "curl/ssl"]
-## Implies `http-client` and adds support for http transports using the blocking version of `reqwest`.
+## Implies `http-client` and adds HTTP transports using the blocking version of `gix-reqwest`, Gitoxide's patched reqwest fork.
+## Configure it with the types re-exported as `gix_transport::gix_reqwest`.
 ## NOTE: `https://` is NOT supported by default. You must enable one of the `http-client-reqwest-rust-tls`
 ## or `http-client-reqwest-native-tls` features to enable HTTPS support.
-## With the current reqwest version, SOCKS proxies also require one of the TLS features.
-http-client-reqwest = ["reqwest", "http-client", "dep:hyper-util"]
+## SOCKS proxies also require one of the TLS features in this backend.
+http-client-reqwest = ["dep:gix-reqwest", "http-client", "dep:hyper-util"]
 ## Stacks with `http-client-reqwest` and enables `https://` via the `rustls` crate.
-http-client-reqwest-rust-tls = ["http-client-reqwest", "reqwest/rustls"]
+http-client-reqwest-rust-tls = ["http-client-reqwest", "gix-reqwest/rustls"]
 ## Stacks with `http-client-reqwest` and enables `https://` via the `rustls` crate.
 ## This also makes use of `trust-dns` to avoid `getaddrinfo`, but note it comes with its own problems.
 http-client-reqwest-rust-tls-trust-dns = [
     "http-client-reqwest",
-    "reqwest/rustls",
-    "reqwest/hickory-dns",
+    "gix-reqwest/rustls",
+    "gix-reqwest/hickory-dns",
 ]
 ## Stacks with `http-client-reqwest` and enables `https://` via the `native-tls` crate.
-http-client-reqwest-native-tls = ["http-client-reqwest", "reqwest/native-tls"]
+http-client-reqwest-native-tls = ["http-client-reqwest", "gix-reqwest/native-tls"]
 ## Allows sending credentials over cleartext HTTP. For testing purposes only.
 http-client-insecure-credentials = []
 ## If set, an async implementations of the git transports becomes available in `crate::client::async_io`.
@@ -127,7 +128,7 @@ curl = { version = "0.4", optional = true, default-features = false }
 
 # for http-client-reqwest
 # Git HTTP bodies are byte streams and don't need response charset decoding.
-reqwest = { version = "0.13.4", optional = true, default-features = false, features = ["blocking", "http2", "socks"] }
+gix-reqwest = { version = "^0.1.0", path = "../gix-reqwest", optional = true, default-features = false, features = ["blocking", "http2", "socks"] }
 hyper-util = { version = "0.1.20", optional = true, default-features = false, features = ["client-proxy"] }
 
 ## If used in conjunction with `async-client`, the `connect()` method will become available along with supporting the git protocol over TCP,

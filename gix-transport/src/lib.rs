@@ -18,6 +18,10 @@ pub use bstr;
 #[cfg(feature = "futures-io")]
 pub use futures_io;
 pub use gix_packetline as packetline;
+/// The patched HTTP client used by the `reqwest` backend and its configuration hooks.
+/// Obtain client, builder, and request types here instead of depending on upstream `reqwest`.
+#[cfg(feature = "http-client-reqwest")]
+pub use gix_reqwest;
 
 /// The version of the way client and server communicate.
 #[derive(Default, PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone, Copy)]

@@ -30,12 +30,12 @@ use crate::{
 ///
 pub mod curl;
 
-/// The experimental `reqwest` backend.
+/// The experimental backend using [`gix-reqwest`][crate::gix_reqwest], Gitoxide's patched reqwest fork.
+/// Use the re-exported client types when providing configuration hooks.
 ///
 /// Supports extra headers, redirects, HTTP/HTTPS and SOCKS proxies, proxy bypass lists, and proxy credential helpers.
 /// HTTP proxy authentication uses preemptive Basic authentication for both `Basic` and `AnyAuth`; other methods and
-/// Unix socket proxy paths and SOCKS4 user IDs are rejected. With the current reqwest version, SOCKS proxies also require
-/// a TLS feature.
+/// Unix socket proxy paths and SOCKS4 user IDs are rejected. SOCKS proxies currently require a TLS feature in this backend.
 /// Other shared HTTP options are not supported yet.
 #[cfg(feature = "http-client-reqwest")]
 pub mod reqwest;

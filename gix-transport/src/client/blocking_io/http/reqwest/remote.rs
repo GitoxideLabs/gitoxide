@@ -7,6 +7,7 @@ use std::{
 };
 
 use gix_error::{Class, Error, ErrorExt, Result, ResultExt, message};
+use gix_reqwest as reqwest;
 use gix_utils::io::pipe;
 use parking_lot::Mutex;
 use reqwest::{Method, StatusCode, header};

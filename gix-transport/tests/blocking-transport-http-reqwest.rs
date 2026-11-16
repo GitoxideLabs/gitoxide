@@ -1,4 +1,4 @@
-//! Regression tests specific to the blocking `reqwest` HTTP backend.
+//! Regression tests specific to the blocking `gix-reqwest` HTTP backend.
 
 pub mod bisync {
     pub use gix_macros::{discard as only_async, keep as only_sync, sync as bisync};
@@ -16,6 +16,7 @@ use gix_transport::{
         TransportWithoutIO,
         blocking_io::{Transport, http},
     },
+    gix_reqwest as reqwest,
 };
 
 mod http_helpers;
