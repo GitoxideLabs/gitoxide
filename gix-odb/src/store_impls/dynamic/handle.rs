@@ -476,6 +476,7 @@ impl super::Handle<Rc<super::Store>> {
             shared_repository_permissions,
             token,
             snapshot: _,
+            retained_indices: _,
             inflate: _,
             packed_object_count: _,
         } = &self;
