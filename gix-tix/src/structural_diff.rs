@@ -9,13 +9,14 @@ use gix::{
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
 };
 
 use crate::{
     FileChange, OBJECT_CACHE_SIZE,
     app::{ChangeKind, PathChange, TreeDiffTarget},
+    diff_colors::Palette,
 };
 
 pub(crate) mod outline;
@@ -30,6 +31,7 @@ pub(crate) struct Diff {
 struct File {
     path: PathChange,
     headers: Vec<String>,
+    language: Option<Language>,
     outline: std::result::Result<PreparedDiff, String>,
 }
 
@@ -81,19 +83,20 @@ fn prepare_commit_with_repository(
 
 impl File {
     fn prepare(repository: &gix::Repository, change: &FileChange, path: &PathChange) -> Self {
+        let language = [
+            Some(path.path.as_bstr()),
+            path.source.as_ref().map(|source| source.as_bstr()),
+        ]
+        .into_iter()
+        .flatten()
+        .find_map(|path| {
+            gix::path::from_bstr(path)
+                .ok()
+                .and_then(|path| Language::from_path(&path))
+        });
         let outline = (|| {
-            let language = [
-                Some(path.path.as_bstr()),
-                path.source.as_ref().map(|source| source.as_bstr()),
-            ]
-            .into_iter()
-            .flatten()
-            .find_map(|path| {
-                gix::path::from_bstr(path)
-                    .ok()
-                    .and_then(|path| Language::from_path(&path))
-            })
-            .ok_or_raise(|| message("Unsupported structural language; supported: Rust, TOML, Markdown"))?;
+            let language =
+                language.ok_or_raise(|| message("Unsupported structural language; supported: Rust, TOML, Markdown"))?;
             let resources = crate::prepare_file_diff_resources(repository, change)?;
             let (old, new) = resources
                 .resources()
@@ -117,6 +120,7 @@ impl File {
         Self {
             path: path.clone(),
             headers: file_headers(path, change),
+            language,
             outline,
         }
     }
@@ -181,26 +185,31 @@ struct FileTree {
 }
 
 impl FileTree {
-    fn render(&self, files: &[File], prefix: &str, lines: &mut Vec<Line<'static>>) {
+    fn render(&self, files: &[File], prefix: &str, lines: &mut Vec<Line<'static>>, colors: &Palette) {
         let count = self.directories.len() + self.files.len();
         for (index, (name, tree)) in self.directories.iter().enumerate() {
             let last = index + 1 == count;
-            lines.push(Line::from(format!(
-                "{prefix}{} {}/",
-                if last { "└──" } else { "├──" },
-                quoted(name.as_bstr(), "")
-            )));
-            tree.render(files, &format!("{prefix}{}", if last { "    " } else { "│   " }), lines);
+            lines.push(Line::styled(
+                format!(
+                    "{prefix}{} {}/",
+                    if last { "└──" } else { "├──" },
+                    quoted(name.as_bstr(), "")
+                ),
+                colors.metadata,
+            ));
+            tree.render(
+                files,
+                &format!("{prefix}{}", if last { "    " } else { "│   " }),
+                lines,
+                colors,
+            );
         }
         for (index, (name, file)) in self.files.iter().enumerate() {
             let path = &files[*file].path;
             let last = self.directories.len() + index + 1 == count;
             let mut spans = vec![
                 Span::raw(format!("{prefix}{} ", if last { "└──" } else { "├──" })),
-                Span::styled(
-                    format!("{} ", path.kind.letter()),
-                    Style::default().fg(crate::ui::change_color(path.kind)),
-                ),
+                Span::styled(format!("{} ", path.kind.letter()), colors.path(path.kind)),
                 Span::raw(quoted(name.as_bstr(), "")),
             ];
             if path.path.ends_with(b"/") {
@@ -209,7 +218,7 @@ impl FileTree {
             if let Some(source) = &path.source {
                 spans.push(Span::styled(
                     format!(" ← {}", quoted(source.as_bstr(), "")),
-                    Style::default().fg(Color::Cyan),
+                    colors.metadata,
                 ));
             }
             lines.push(Line::from(spans));
@@ -218,10 +227,10 @@ impl FileTree {
 }
 
 impl Diff {
-    fn render(&self, options: &Options) -> Vec<Line<'static>> {
+    fn render(&self, options: &Options, colors: &Palette) -> Vec<(Line<'static>, Option<Language>)> {
         let mut lines = vec![Line::styled(
             format!("Changed files ({})", self.files.len()),
-            Style::default().add_modifier(Modifier::BOLD),
+            colors.header,
         )];
         if self.files.is_empty() {
             lines.push(Line::from("No file changes."));
@@ -243,48 +252,52 @@ impl Diff {
             }
             node.files.insert(BString::from(*name), index);
         }
-        tree.render(&self.files, "", &mut lines);
+        tree.render(&self.files, "", &mut lines, colors);
+        let mut rows = lines.into_iter().map(|line| (line, None)).collect::<Vec<_>>();
         for file in &self.files {
-            lines.push(Line::default());
-            lines.extend(
-                file.headers
-                    .iter()
-                    .map(|header| Line::styled(header.clone(), Style::default().fg(Color::Cyan))),
-            );
+            rows.push((Line::default(), None));
+            rows.extend(file.headers.iter().map(|header| {
+                (
+                    Line::styled(
+                        header.clone(),
+                        if header.starts_with("diff --git") {
+                            colors.header
+                        } else {
+                            colors.metadata
+                        },
+                    ),
+                    None,
+                )
+            }));
             match &file.outline {
                 Ok(outline) => {
                     let rendered = outline.render(options);
                     if rendered.is_empty() {
-                        lines.push(Line::styled(
-                            "No structural changes.",
-                            Style::default().add_modifier(Modifier::DIM),
+                        rows.push((
+                            Line::styled("No structural changes.", Style::default().add_modifier(Modifier::DIM)),
+                            None,
                         ));
                     }
-                    lines.extend(rendered.into_iter().map(structural_line));
+                    rows.extend(
+                        rendered
+                            .into_iter()
+                            .map(|line| (structural_line(line, colors), file.language)),
+                    );
                 }
-                Err(reason) => lines.push(Line::styled(
-                    format!("Outline unavailable: {reason}"),
-                    Style::default().fg(Color::Yellow),
+                Err(reason) => rows.push((
+                    Line::styled(format!("Outline unavailable: {reason}"), colors.warning),
+                    None,
                 )),
             }
         }
-        lines
+        rows
     }
 }
 
-fn change_style(change: Change) -> Style {
-    match change {
-        Change::Context => Style::default(),
-        Change::Added => Style::default().fg(Color::Green),
-        Change::Removed => Style::default().fg(Color::LightRed),
-        Change::Modified => Style::default().fg(Color::Yellow),
-    }
-}
-
-fn structural_line(line: outline::Line) -> Line<'static> {
+fn structural_line(line: outline::Line, colors: &Palette) -> Line<'static> {
     let mut spans = vec![Span::styled(
         line.change.marker().to_string(),
-        change_style(line.change),
+        colors.marker(line.change),
     )];
     let mut column = 0;
     for fragment in line.fragments {
@@ -299,31 +312,33 @@ fn structural_line(line: outline::Line) -> Line<'static> {
             column += Span::raw(part).width();
         }
         let style = if line.change == Change::Modified && matches!(fragment.change, Change::Added | Change::Removed) {
-            change_style(fragment.change).add_modifier(Modifier::BOLD)
+            colors.emphasis(fragment.change)
         } else {
-            change_style(fragment.change)
+            Style::default()
         };
         spans.push(Span::styled(text, style));
     }
-    Line::from(spans)
+    Line::from(spans).style(colors.row(line.change))
 }
 
 pub(crate) struct View<'a> {
     diff: &'a Diff,
     options: &'a mut Options,
-    lines: Vec<Line<'static>>,
+    lines: Vec<(Line<'static>, Option<Language>)>,
     max_width: usize,
+    colors: &'a Palette,
 }
 
 impl<'a> View<'a> {
-    pub(crate) fn new(diff: &'a Diff, options: &'a mut Options) -> Self {
-        let lines = diff.render(options);
-        let max_width = lines.iter().map(Line::width).max().unwrap_or_default();
+    pub(crate) fn new(diff: &'a Diff, options: &'a mut Options, colors: &'a Palette) -> Self {
+        let lines = diff.render(options, colors);
+        let max_width = lines.iter().map(|(line, _)| line.width()).max().unwrap_or_default();
         Self {
             diff,
             options,
             lines,
             max_width,
+            colors,
         }
     }
 
@@ -344,8 +359,13 @@ impl<'a> View<'a> {
             KeyCode::Char('w') => self.options.word_diff = !self.options.word_diff,
             _ => return false,
         }
-        self.lines = self.diff.render(self.options);
-        self.max_width = self.lines.iter().map(Line::width).max().unwrap_or_default();
+        self.lines = self.diff.render(self.options, self.colors);
+        self.max_width = self
+            .lines
+            .iter()
+            .map(|(line, _)| line.width())
+            .max()
+            .unwrap_or_default();
         true
     }
 
@@ -359,14 +379,9 @@ impl<'a> View<'a> {
             frame,
             area,
             &self.diff.title.to_str_lossy(),
-            self.lines.iter().map(|line| {
-                Line::from(
-                    line.spans
-                        .iter()
-                        .map(|span| Span::styled(span.content.as_ref(), span.style))
-                        .collect::<Vec<_>>(),
-                )
-            }),
+            self.lines
+                .iter()
+                .map(|(line, language)| self.colors.highlight(line, *language)),
             (offset, horizontal_offset),
             &footer,
         );
@@ -401,19 +416,57 @@ mod tests {
         })
     }
 
-    fn text(lines: &[Line<'_>]) -> String {
-        lines.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n")
+    fn text(lines: &[(Line<'_>, Option<Language>)]) -> String {
+        lines
+            .iter()
+            .map(|(line, _)| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn changed_declarations_have_a_background_and_stronger_word_emphasis() -> TestResult {
+        let outline = PreparedDiff::new("fn f(arg: i32) {}", "fn f(arg: u32) {}", Language::Rust)?;
+        let changed = outline
+            .render(&Options {
+                word_diff: true,
+                ..Options::default()
+            })
+            .into_iter()
+            .find(|line| line.change == Change::Modified)
+            .expect("the changed signature has a modified row");
+        let colors = Palette::new([220; 3], [20; 3], None);
+        let line = structural_line(changed, &colors);
+        assert!(
+            line.style.bg.is_some(),
+            "changed declarations have a subtle line background"
+        );
+        for word in ["[-i32-]", "{+u32+}"] {
+            let span = line
+                .spans
+                .iter()
+                .find(|span| span.content == word)
+                .expect("changed words stay distinct");
+            assert_ne!(
+                span.style.bg, line.style.bg,
+                "{word} has stronger emphasis than its row"
+            );
+        }
+        Ok(())
     }
 
     #[test]
     fn continuous_diff_starts_with_the_file_tree_and_keeps_every_changed_file() -> TestResult {
         let repository = repository()?;
         let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
-        let lines = diff.render(&Options {
-            find_renames: true,
-            word_diff: true,
-            ..Options::default()
-        });
+        let lines = diff.render(
+            &Options {
+                find_renames: true,
+                word_diff: true,
+                ..Options::default()
+            },
+            &Palette::default(),
+        );
         let output = text(&lines);
         let first_header = output.find("diff --git").expect("changed files have patch headers");
         let overview = &output[..first_header];
@@ -472,14 +525,15 @@ mod tests {
             word_diff: true,
             ..Options::default()
         };
-        let original = text(&diff.render(&options));
+        let original = text(&diff.render(&options, &Palette::default()));
         assert!(
             original.contains("[renamed: old -> new]"),
             "declaration matching starts enabled"
         );
         assert!(original.contains("[-i32-]{+u32+}"), "word changes start enabled");
         {
-            let mut view = View::new(&diff, &mut options);
+            let colors = Palette::default();
+            let mut view = View::new(&diff, &mut options, &colors);
             assert!(view.key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)));
             let output = text(&view.lines);
             assert!(
@@ -516,7 +570,7 @@ mod tests {
             "settings outlive the view and can be reused for the next commit"
         );
         assert!(
-            !text(&View::new(&diff, &mut options).lines).contains("[-i32-]"),
+            !text(&View::new(&diff, &mut options, &Palette::default()).lines).contains("[-i32-]"),
             "reopening retains the word setting"
         );
         Ok(())
@@ -540,8 +594,8 @@ mod tests {
         )?;
         let commit = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "tip".into())?;
         assert_eq!(
-            text(&branch.render(&Options::default())),
-            text(&commit.render(&Options::default())),
+            text(&branch.render(&Options::default(), &Palette::default())),
+            text(&commit.render(&Options::default(), &Palette::default())),
             "branch and commit comparisons use the same selected base"
         );
         let first = prepare_commit_with_repository(&repository, target(&repository, "main", 0)?, "merge".into())?;
@@ -549,8 +603,8 @@ mod tests {
         assert_eq!(first.files[0].path.path, "side/parent.rs");
         let second = prepare_commit_with_repository(&repository, target(&repository, "main", 1)?, "merge".into())?;
         assert_eq!(
-            text(&second.render(&Options::default())),
-            text(&commit.render(&Options::default())),
+            text(&second.render(&Options::default(), &Palette::default())),
+            text(&commit.render(&Options::default(), &Palette::default())),
             "the second parent sees the main-side changes"
         );
         Ok(())
@@ -596,7 +650,7 @@ mod tests {
                 title: "staged".into(),
                 files: vec![staged],
             }
-            .render(&options),
+            .render(&options, &Palette::default()),
         );
         assert!(
             staged_output.contains("{+u64+}") && !staged_output.contains("u128"),
@@ -615,7 +669,7 @@ mod tests {
                 title: "unstaged".into(),
                 files: vec![unstaged],
             }
-            .render(&options),
+            .render(&options, &Palette::default()),
         );
         assert!(
             unstaged_output.contains("{+u128+}"),
@@ -642,7 +696,7 @@ mod tests {
                 title: "untracked".into(),
                 files: vec![untracked],
             }
-            .render(&options),
+            .render(&options, &Palette::default()),
         );
         assert!(
             output.contains("--- /dev/null") && output.contains("+fn untracked"),

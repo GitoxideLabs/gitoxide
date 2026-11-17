@@ -6,6 +6,7 @@ mod app;
 mod change_id;
 pub mod command;
 mod command_menu;
+mod diff_colors;
 mod edit;
 mod emoji;
 mod enrich;
@@ -976,11 +977,10 @@ fn run_ui(
     #[cfg(unix)]
     let theme_query_started = Instant::now();
     let terminal_colors = detect_terminal_colors();
-    let graphics = !quit_on_finish && kitty::supported();
     #[cfg(not(unix))]
     let ansi_colors = None;
     #[cfg(unix)]
-    let ansi_colors = if graphics && terminal_colors.is_some() {
+    let ansi_colors = if !quit_on_finish && terminal_colors.is_some() {
         terminal_palette::query(
             THEME_QUERY_TIMEOUT.saturating_sub(theme_query_started.elapsed()),
             &mut gix::parallel::lock(&TERMINAL_REPLIES),
@@ -992,6 +992,7 @@ fn run_ui(
     } else {
         None
     };
+    let graphics = !quit_on_finish && kitty::supported();
     let commit_pane_background = terminal_colors.as_ref().map(|palette| {
         shade_terminal_background(
             palette.background.scale_to_8bit(),
@@ -4262,11 +4263,13 @@ fn event_loop(
                             if matches!(effect, Effect::OpenStructuralDiff(..)) {
                                 let diff =
                                     structural_diff::prepare_file(&repository_path, repository_is_bare, change, path)?;
+                                let colors = terminal.backend().diff_colors();
                                 show_diff_view(
                                     terminal,
                                     DiffView::Structural(structural_diff::View::new(
                                         &diff,
                                         &mut app.structural_diff_options,
+                                        &colors,
                                     )),
                                     picker,
                                 )
@@ -4302,11 +4305,13 @@ fn event_loop(
                     let result = if matches!(effect, Effect::OpenCommitStructuralDiff(_)) {
                         structural_diff::prepare_commit(&repository_path, repository_is_bare, target, title).and_then(
                             |diff| {
+                                let colors = terminal.backend().diff_colors();
                                 show_diff_view(
                                     terminal,
                                     DiffView::Structural(structural_diff::View::new(
                                         &diff,
                                         &mut app.structural_diff_options,
+                                        &colors,
                                     )),
                                     picker.as_deref().map(|picker| (picker, *picker_focused)),
                                 )

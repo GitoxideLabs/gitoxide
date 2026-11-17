@@ -495,6 +495,13 @@ pub(crate) fn draw_diff<'a>(
         .skip(offset)
         .take(usize::from(body.height))
         .collect::<Vec<_>>();
+    for (y, line) in (body.y..body.bottom()).zip(&lines) {
+        if line.style.bg.is_some() {
+            frame
+                .buffer_mut()
+                .set_style(Rect::new(body.x, y, body.width, 1), line.style);
+        }
+    }
     frame.render_widget(
         Paragraph::new(Text::from(lines)).scroll((0, u16::try_from(horizontal_offset).unwrap_or(u16::MAX))),
         body,
@@ -2139,7 +2146,7 @@ fn render_changes(frame: &mut Frame<'_>, area: Rect, changes: &Changes, pane: Ch
     }
 }
 
-pub(crate) fn change_color(kind: ChangeKind) -> Color {
+fn change_color(kind: ChangeKind) -> Color {
     match kind {
         ChangeKind::Added => Color::Green,
         ChangeKind::Modified => Color::Yellow,
@@ -9312,7 +9319,8 @@ Native tests: 2s"
                 frame,
                 frame.area(),
                 "diff",
-                (0..80_000).map(|index| Line::from(format!("line {index}"))),
+                (0..80_000)
+                    .map(|index| Line::styled(format!("line {index}"), Style::default().bg(Color::Rgb(12, 44, 18)))),
                 (70_000, 0),
                 "back",
             );
@@ -9324,6 +9332,11 @@ Native tests: 2s"
         assert!(
             rendered_line(&terminal, 4).contains("line 70003"),
             "only the visible page is drawn"
+        );
+        assert_eq!(
+            terminal.backend().buffer()[(23, 1)].bg,
+            Color::Rgb(12, 44, 18),
+            "diff row backgrounds extend through the right edge of the viewport"
         );
         Ok(())
     }
