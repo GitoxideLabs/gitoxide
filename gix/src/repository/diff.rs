@@ -72,7 +72,6 @@ impl Repository {
                 Ok(std::ops::ControlFlow::Continue(()))
             },
             opts,
-            Default::default(),
         )
         .or_error()?;
         Ok(out)

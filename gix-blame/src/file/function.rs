@@ -757,7 +757,6 @@ fn tree_diff_with_rewrites_at_file_path(
             }
         },
         options,
-        Default::default(),
     );
     stats.trees_diffed_with_rewrites += 1;
 

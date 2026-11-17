@@ -1,19 +1,18 @@
-//! Discover rename identities from the two base-to-side diffs before resolving paths.
+//! Discover rename identities from the collected three-way inputs before resolving paths.
 
 use std::collections::HashMap;
 
-use bstr::{BStr, ByteSlice};
-use gix_diff::{
-    tree::recorder::Location,
-    tree_with_rewrites::{Change, ChangeRef},
-};
+use bstr::{BStr, BString, ByteSlice};
+use gix_diff::{rewrites::tracker, tree::visit::Change as RawChange, tree_with_rewrites::Change};
 use gix_error::{Result, ResultExt, message};
 use gix_object::FindExt;
+
+use super::{directories, path::Collected};
 
 #[derive(Default)]
 pub(super) struct Changes {
     pub entries: Vec<Change>,
-    pub directories: Vec<gix_diff::tree_with_rewrites::DirectoryRename>,
+    pub directories: Vec<directories::DirectoryRename>,
 }
 
 /// Retain ORT's destination discovery order using the already-collected three inputs.
@@ -94,7 +93,9 @@ pub(super) fn destination_orders(collected: &super::path::Collected) -> [Vec<&BS
         let side = index + 1;
         let mut destinations: Vec<_> = traversal()
             .filter_map(|(path, inputs)| {
-                (inputs[side].is_some_and(|entry| entry.mode.is_no_tree()) && inputs[side] != inputs[0]).then_some(path)
+                (inputs[side].is_some_and(|entry| entry.mode.is_no_tree())
+                    && inputs[0].is_none_or(|entry| entry.mode.is_tree()))
+                .then_some(path)
             })
             .collect();
         destinations.sort_by_cached_key(|path| {
@@ -184,164 +185,192 @@ pub(super) fn retain_relevant_directory_renames(changes: &mut Changes, other: &[
     changes
         .directories
         .retain(|directory| is_relevant(directory.source.as_bstr()));
-    let is_irrelevant = |change: &Change| {
-        let Change::Rewrite {
-            source_location,
-            entry_mode,
-            ..
-        } = change
-        else {
-            return false;
-        };
-        if !entry_mode.is_tree() {
-            return false;
-        }
-        !is_relevant(source_location.as_bstr())
-    };
-    if !changes.entries.iter().any(&is_irrelevant) {
-        return;
-    }
-    let mut retained = Vec::with_capacity(changes.entries.len());
-    for change in changes.entries.drain(..) {
-        if is_irrelevant(&change) {
-            track_without_directory_rename(change.to_ref(), &mut retained);
-        } else {
-            retained.push(change);
-        }
-    }
-    changes.entries = retained;
 }
 
 #[expect(clippy::too_many_arguments)]
 pub(super) fn collect(
+    collected: &Collected,
     base_tree: &gix_hash::oid,
-    side_tree: &gix_hash::oid,
-    base_buf: &[u8],
-    side_buf: &mut Vec<u8>,
+    side: usize,
     objects: &impl gix_object::FindObjectOrHeader,
     diff_resource_cache: &mut gix_diff::blob::Platform,
-    diff_state: &mut gix_diff::tree::State,
-    rewrites: Option<gix_diff::Rewrites>,
+    rewrites: gix_diff::Rewrites,
     directory_renames: crate::tree::DirectoryRenames,
     destination_order: &[&BStr],
 ) -> Result<Changes> {
     let mut changes = Changes::default();
-    if base_tree != side_tree {
-        let side_tree = if side_tree == side_tree.kind().empty_tree() {
-            gix_object::TreeRefIter::from_bytes(&[], side_tree.kind())
-        } else {
-            objects
-                .find_tree_iter(side_tree, side_buf)
-                .or_raise(|| message("Tree merge failed"))?
+    let mut tracked = gix_diff::rewrites::Tracker::new(rewrites);
+    for (name, inputs) in &collected.entries {
+        let location = collected.names[name.clone()].as_bstr();
+        let mut push = |change: RawChange| {
+            if let Some(change) = tracked.try_push_change(change, location) {
+                changes.entries.push(from_raw(&change, location));
+            }
         };
-        let outcome = gix_diff::tree_with_rewrites(
-            gix_object::TreeRefIter::from_bytes(base_buf, base_tree.kind()),
-            side_tree,
-            diff_resource_cache,
-            diff_state,
-            objects,
-            |change| {
-                if directory_renames == crate::tree::DirectoryRenames::Disabled {
-                    track_without_directory_rename(change, &mut changes.entries);
-                } else {
-                    track(change, &mut changes.entries);
-                }
-                Ok(std::ops::ControlFlow::Continue(()))
-            },
-            gix_diff::tree_with_rewrites::Options {
-                location: Some(Location::Path),
-                rewrites,
-            },
-            gix_diff::tree_with_rewrites::Context { destination_order },
-        )
-        .or_raise(|| message("Tree merge failed"))?;
-        if directory_renames != crate::tree::DirectoryRenames::Disabled {
-            changes.directories = outcome.map_or_else(Vec::new, |outcome| outcome.directory_renames);
+        match (inputs[0], inputs[side]) {
+            (Some(base), Some(current)) if base == current => {}
+            (Some(base), Some(current)) if base.mode.is_tree() && current.mode.is_tree() => {}
+            (Some(base), Some(current)) if base.mode.is_tree() != current.mode.is_tree() => {
+                push(RawChange::Deletion {
+                    entry_mode: base.mode,
+                    oid: base.id,
+                    relation: None,
+                });
+                push(RawChange::Addition {
+                    entry_mode: current.mode,
+                    oid: current.id,
+                    relation: None,
+                });
+            }
+            (Some(base), Some(current)) => push(RawChange::Modification {
+                previous_entry_mode: base.mode,
+                previous_oid: base.id,
+                entry_mode: current.mode,
+                oid: current.id,
+            }),
+            (Some(base), None) => push(RawChange::Deletion {
+                entry_mode: base.mode,
+                oid: base.id,
+                relation: None,
+            }),
+            (None, Some(current)) => push(RawChange::Addition {
+                entry_mode: current.mode,
+                oid: current.id,
+                relation: None,
+            }),
+            (None, None) => {}
         }
+    }
+    tracked
+        .emit(
+            |destination, source| {
+                let change = match source {
+                    Some(source) if source.kind == tracker::visit::SourceKind::Rename => {
+                        let (id, entry_mode) = destination.change.oid_and_entry_mode();
+                        Change::Rewrite {
+                            source_location: source.location.to_owned(),
+                            source_entry_mode: source.entry_mode,
+                            source_id: match source.change {
+                                RawChange::Modification { previous_oid, .. } => *previous_oid,
+                                change => change.oid().to_owned(),
+                            },
+                            source_relation: source.change.relation(),
+                            entry_mode,
+                            id: id.to_owned(),
+                            location: destination.location.to_owned(),
+                            relation: destination.change.relation(),
+                            similarity: source.similarity,
+                            copy: false,
+                        }
+                    }
+                    // Copies retain their sources and therefore participate in merges as additions.
+                    _ => from_raw(&destination.change, destination.location),
+                };
+                changes.entries.push(change);
+                std::ops::ControlFlow::Continue(())
+            },
+            diff_resource_cache,
+            objects,
+            |push| push_copy_sources(base_tree, objects, push),
+            tracker::Context { destination_order },
+        )
+        .or_raise(|| message("Tree merge rename discovery failed"))?;
+    if directory_renames != crate::tree::DirectoryRenames::Disabled {
+        changes.directories = directories::infer(collected, &changes.entries, side);
     }
     Ok(changes)
 }
 
-fn track_without_directory_rename(change: ChangeRef<'_>, changes: &mut Vec<Change>) {
-    if let ChangeRef::Rewrite {
-        source_location,
-        source_entry_mode,
-        source_id,
-        source_relation,
-        entry_mode,
-        id,
-        location,
-        relation,
-        ..
-    } = change
-        && entry_mode.is_tree()
-    {
-        // Keep structural boundaries for file/directory conflicts, but not the inferred relocation.
-        track(
-            ChangeRef::Deletion {
-                location: source_location,
-                entry_mode: source_entry_mode,
-                id: source_id,
-                relation: source_relation,
-            },
-            changes,
-        );
-        track(
-            ChangeRef::Addition {
-                location,
-                entry_mode,
-                id,
-                relation,
-            },
-            changes,
-        );
-    } else {
-        track(change, changes);
+fn from_raw(change: &RawChange, location: &BStr) -> Change {
+    match *change {
+        RawChange::Addition {
+            entry_mode,
+            oid,
+            relation,
+        } => Change::Addition {
+            location: location.to_owned(),
+            entry_mode,
+            id: oid,
+            relation,
+        },
+        RawChange::Deletion {
+            entry_mode,
+            oid,
+            relation,
+        } => Change::Deletion {
+            location: location.to_owned(),
+            entry_mode,
+            id: oid,
+            relation,
+        },
+        RawChange::Modification {
+            previous_entry_mode,
+            previous_oid,
+            entry_mode,
+            oid,
+        } => Change::Modification {
+            location: location.to_owned(),
+            previous_entry_mode,
+            previous_id: previous_oid,
+            entry_mode,
+            id: oid,
+        },
     }
 }
 
-/// Copy sources remain in place and therefore contribute ordinary additions to a merge.
-fn track(change: ChangeRef<'_>, changes: &mut Vec<Change>) {
-    if change.entry_mode().is_tree() && matches!(change, ChangeRef::Modification { .. }) {
-        return;
+fn push_copy_sources(
+    base_tree: &gix_hash::oid,
+    objects: &impl gix_object::Find,
+    push: &mut dyn FnMut(RawChange, &BStr),
+) -> Result<()> {
+    let mut pending = vec![(BString::default(), base_tree.to_owned())];
+    let mut buf = Vec::new();
+    while let Some((mut path, tree_id)) = pending.pop() {
+        if tree_id == tree_id.kind().empty_tree() {
+            continue;
+        }
+        let prefix_len = path.len();
+        for entry in objects.find_tree_iter(&tree_id, &mut buf)? {
+            let entry = entry?;
+            path.extend_from_slice(entry.filename);
+            if entry.mode.is_tree() {
+                let mut directory = path.clone();
+                directory.push(b'/');
+                pending.push((directory, entry.oid.to_owned()));
+            } else {
+                push(
+                    RawChange::Modification {
+                        previous_entry_mode: entry.mode,
+                        previous_oid: entry.oid.to_owned(),
+                        entry_mode: entry.mode,
+                        oid: entry.oid.to_owned(),
+                    },
+                    path.as_bstr(),
+                );
+            }
+            path.truncate(prefix_len);
+        }
     }
-    changes.push(match change.into_owned() {
-        Change::Rewrite {
-            id,
-            entry_mode,
-            location,
-            relation,
-            copy: true,
-            ..
-        } => Change::Addition {
-            location,
-            relation,
-            entry_mode,
-            id,
-        },
-        other => other,
-    });
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use gix_error::TestResult;
-    use gix_object::WriteTo;
 
     #[test]
     fn an_empty_side_tree_need_not_exist_in_the_object_database() -> TestResult {
         let hash = gix_testtools::object_hash();
         let blob_id = gix_object::compute_hash(hash, gix_object::Kind::Blob, b"deleted")?;
-        let mut base_buf = Vec::new();
-        gix_object::Tree {
-            entries: vec![gix_object::tree::Entry {
-                mode: gix_object::tree::EntryKind::Blob.into(),
-                filename: "file".into(),
-                oid: blob_id,
-            }],
-        }
-        .write_to(&mut base_buf)?;
-        let base_tree_id = gix_object::compute_hash(hash, gix_object::Kind::Tree, &base_buf)?;
+        let entry = super::super::path::Entry {
+            mode: gix_object::tree::EntryKind::Blob.into(),
+            id: blob_id,
+        };
+        let collected = super::Collected {
+            names: b"file".to_vec(),
+            entries: vec![(0..4, [Some(entry), None, Some(entry)])],
+            ..Default::default()
+        };
         let worktree = gix_testtools::tempfile::tempdir()?;
         let mut resources = gix_diff::blob::Platform::new(
             Default::default(),
@@ -361,21 +390,19 @@ mod tests {
             ),
         );
         let changes = super::collect(
-            &base_tree_id,
+            &collected,
             &hash.empty_tree(),
-            &base_buf,
-            &mut b"previous side tree bytes".to_vec(),
+            1,
             &gix_object::find::Never::panic_on_access(),
             &mut resources,
-            &mut gix_diff::tree::State::default(),
-            None,
+            gix_diff::Rewrites::default(),
             crate::tree::DirectoryRenames::Disabled,
             &[],
         )?;
         assert_eq!(changes.entries.len(), 1, "the only base entry is deleted");
         assert!(
             matches!(&changes.entries[0], super::Change::Deletion { location, id, .. } if location == "file" && *id == blob_id),
-            "the implicit empty tree is diffed without consulting the object database or stale buffer"
+            "collected deletions need no second tree traversal or object lookup"
         );
         Ok(())
     }

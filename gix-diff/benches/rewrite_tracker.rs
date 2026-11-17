@@ -523,14 +523,13 @@ fn run_directory_diff(scenario: &DirectoryScenario, rewrites_enabled: bool) -> O
                 ..Default::default()
             }),
         },
-        Default::default(),
     )
     .expect("benchmark tree diff succeeds");
     assert_eq!(
         actual, scenario.expected,
         "each callback kind occurs exactly as expected"
     );
-    outcome.map(|outcome| outcome.rewrites)
+    outcome
 }
 
 fn text_blob(idx: usize, with_edit: bool) -> String {

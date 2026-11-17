@@ -1845,7 +1845,6 @@ dependencies = [
  "gix-traverse",
  "gix-worktree",
  "insta",
- "nonempty",
  "pretty_assertions",
  "serde",
 ]

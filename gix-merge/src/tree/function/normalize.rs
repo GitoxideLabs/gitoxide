@@ -102,7 +102,7 @@ struct Context<'a, 'labels, 'ctx, O, W> {
 pub(super) fn run(
     state: &mut State<'_>,
     changes: [&[Change]; 2],
-    directories: [&[gix_diff::tree_with_rewrites::DirectoryRename]; 2],
+    directories: [&[super::directories::DirectoryRename]; 2],
     labels: Labels<'_>,
     objects: &impl gix_object::FindObjectOrHeader,
     blob_merge: &mut blob::Platform,
@@ -794,7 +794,7 @@ fn below(path: &BStr, parent: &BStr) -> bool {
 fn relocate_directories(
     state: &mut State<'_>,
     changes: [&[Change]; 2],
-    inferred: [&[gix_diff::tree_with_rewrites::DirectoryRename]; 2],
+    inferred: [&[super::directories::DirectoryRename]; 2],
     objects: &impl gix_object::Find,
     options: &Options,
     policy: ResolutionPolicy,

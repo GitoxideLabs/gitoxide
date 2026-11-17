@@ -161,6 +161,71 @@ fn forced_crossing_renames_do_not_reinstall_discarded_subtrees() -> TestResult {
 }
 
 #[test]
+fn exhaustive_copies_keep_opaque_sources_and_modify_delete_conflicts() -> TestResult {
+    let repo = Repo::new()?;
+    let original_blob_id = repo.blob("original\n")?;
+    let modified_blob_id = repo.blob("modified\n")?;
+    let base_tree_id = repo.tree_from_paths(&[
+        ("a/file", EntryKind::Blob, original_blob_id),
+        ("z/source", EntryKind::Blob, original_blob_id),
+    ])?;
+    let copied_tree_id = repo.tree_from_paths(&[
+        ("a/file", EntryKind::Blob, original_blob_id),
+        ("copy/file", EntryKind::Blob, original_blob_id),
+    ])?;
+    let modified_tree_id = repo.tree_from_paths(&[
+        ("a/file", EntryKind::Blob, original_blob_id),
+        ("z/source", EntryKind::Blob, modified_blob_id),
+    ])?;
+    let expected_tree_id = repo.tree_from_paths(&[
+        ("a/file", EntryKind::Blob, original_blob_id),
+        ("copy/file", EntryKind::Blob, original_blob_id),
+        ("z/source", EntryKind::Blob, modified_blob_id),
+    ])?;
+    let mut options = basic_merge_options().tree_merge;
+    options.directory_renames = gix_merge::tree::DirectoryRenames::Disabled;
+    options.rewrites = Some(gix_diff::Rewrites {
+        percentage: Some(1.0),
+        copies: Some(gix_diff::rewrites::Copies {
+            source: gix_diff::rewrites::CopySource::FromSetOfModifiedFilesAndAllSources,
+            percentage: Some(1.0),
+        }),
+        ..Default::default()
+    });
+    for (current, other) in [(copied_tree_id, modified_tree_id), (modified_tree_id, copied_tree_id)] {
+        let mut outcome = repo.merge((base_tree_id, current, other), options.clone())?;
+        assert_eq!(
+            outcome.tree.write(|tree| repo.objects.write(tree))?,
+            expected_tree_id,
+            "the opaque unchanged copy source wins matching without absorbing the modified deletion"
+        );
+        assert!(
+            outcome.has_unresolved_conflicts(gix_merge::tree::TreatAsUnresolved::git()),
+            "copy detection leaves the modify/delete conflict at its original source"
+        );
+        let index = outcome.index.to_index(
+            gix_merge::tree::TreatAsUnresolved::git(),
+            None,
+            &repo.objects,
+            Default::default(),
+        )?;
+        index.verify_entries()?;
+        let unmerged: Vec<_> = index
+            .entries()
+            .iter()
+            .filter(|entry| entry.stage() != gix_index::entry::Stage::Unconflicted)
+            .map(|entry| entry.path(&index))
+            .collect();
+        assert_eq!(
+            unmerged,
+            [bstr::BStr::new("z/source"); 2],
+            "the copied destination stays stage zero while the deletion retains its original stages"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn forced_rename_restores_a_file_without_retaining_its_replacement_directory() -> TestResult {
     let repo = Repo::new()?;
     let base_blob_id = repo.blob("binary base\0\n")?;

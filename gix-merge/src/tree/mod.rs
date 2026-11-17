@@ -188,6 +188,8 @@ impl Conflict {
     /// [`Resolution`] or [`ResolutionFailure`] respectively.
     /// Without this, the sides may appear swapped as `ours|theirs` is treated the same as `theirs/ours`
     /// if both types are different, like `modification|deletion`.
+    /// Directory-rename conflicts retain the original directory deletion here; inferred destinations
+    /// are carried by their resolution rather than a synthetic directory rewrite.
     pub fn changes_in_resolution(&self) -> (&Change, &Change) {
         match self.map {
             ConflictMapping::Original => (&self.ours, &self.theirs),

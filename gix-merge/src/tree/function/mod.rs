@@ -1,4 +1,5 @@
 mod change;
+mod directories;
 mod entry;
 mod normalize;
 mod path;

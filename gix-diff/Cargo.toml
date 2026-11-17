@@ -77,7 +77,6 @@ imara-diff = { package = "gix-imara-diff", version = "^0.3.3", optional = true, 
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
 getrandom = { version = "0.4", optional = true, default-features = false, features = ["wasm_js"] }
 bstr = { version = "1.12.0", default-features = false }
-nonempty = "0.12.0"
 
 document-features = { version = "0.2.0", optional = true }
 

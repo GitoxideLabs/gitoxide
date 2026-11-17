@@ -35,8 +35,8 @@ use crate::tree::{Conflict, ConflictMapping, IndexPlan, Options, Outcome, Resolu
 /// `context` supplies optional submodule history queries without requiring repository discovery here.
 ///
 /// Like Git's `merge-ort`, this resolves normalized three-input paths from children to parents.
-/// Rename identities come from `gix-diff`, with destination ordering derived from these
-/// three inputs. Ambiguous identities can still differ from Git. Copies are treated as additions.
+/// Rename candidates and directory destinations come from these three inputs; file matching
+/// uses `gix-diff`'s rewrite tracker. Ambiguous identities can still differ from Git. Copies are treated as additions.
 /// Explicit renames returned to their source by directory relocation still participate in opposite
 /// rename conflicts. Both destinations are retained; Git can miss this conflict depending on side order.
 ///
@@ -87,20 +87,17 @@ pub fn tree<'objects>(
         objects.find_tree(base_tree, &mut base_buf)?.to_owned()
     };
     let mut changes: [change::Changes; 2] = Default::default();
-    // Ordinary entries are already collected; only rename normalization needs the diffs.
-    if options.rewrites.is_some() {
+    // Rename candidates come from the same inputs as ordinary entry decisions.
+    if let Some(rewrites) = options.rewrites {
         let destination_orders = change::destination_orders(&collected);
-        let mut side_buf = Vec::new();
-        for (index, side_tree) in [our_tree, their_tree].into_iter().enumerate() {
+        for index in 0..2 {
             changes[index] = change::collect(
+                &collected,
                 base_tree,
-                side_tree,
-                &base_buf,
-                &mut side_buf,
+                index + 1,
                 objects,
                 diff_resource_cache,
-                diff_state,
-                options.rewrites,
+                rewrites,
                 options.directory_renames,
                 &destination_orders[index],
             )?;
