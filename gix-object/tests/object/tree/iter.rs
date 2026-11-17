@@ -38,6 +38,11 @@ fn offset_to_next_entry() {
     let actual = iter.offset_to_next_entry(&buf);
     assert_eq!(actual, 11 + hash_kind.len_in_bytes(), "now the offset increases");
     assert_eq!(
+        iter.remaining_bytes(),
+        &buf[actual..],
+        "remaining bytes begin exactly where iteration will resume"
+    );
+    assert_eq!(
         TreeRefIter::from_bytes(&buf[actual..], hash_kind)
             .next()
             .map(|e| e.unwrap().filename),

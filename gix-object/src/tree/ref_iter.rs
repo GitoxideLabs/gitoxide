@@ -151,6 +151,11 @@ impl<'a> TreeRefIter<'a> {
         self.collect()
     }
 
+    /// Return the unconsumed tree bytes, starting at the next entry to be decoded.
+    pub fn remaining_bytes(&self) -> &'a [u8] {
+        self.data
+    }
+
     /// Return the offset in bytes that our data advanced from `buf`, the original buffer
     /// to the beginning of the data of the tree.
     ///
