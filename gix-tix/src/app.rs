@@ -475,6 +475,7 @@ pub(crate) enum Action {
     ToggleChangesFocus,
     CycleChangesParent,
     OpenDiff,
+    OpenStructuralDiff,
     Reword,
     NewCommit,
     NewBelowCommit,
@@ -530,6 +531,8 @@ pub(crate) enum Effect {
     Reload(bool),
     OpenDiff(ChangePane, usize),
     OpenCommitDiff(TreeDiffTarget),
+    OpenStructuralDiff(ChangePane, usize),
+    OpenCommitStructuralDiff(TreeDiffTarget),
     Reword(ObjectId),
     AutoMerge(crate::edit::auto_merge::Selection),
     NewCommit {
@@ -702,6 +705,7 @@ pub(crate) struct App {
     pub(crate) worktree_changes: ChangesView,
     pub(crate) worktree_watch_error: Option<String>,
     pub(crate) changes_parent: usize,
+    pub(crate) structural_diff_options: crate::structural_diff::outline::Options,
     pub(crate) commit_offset: usize,
     pub(crate) commit_pane_background: Option<(u8, u8, u8)>,
     commit_page: usize,
@@ -842,6 +846,11 @@ impl App {
             worktree_changes: ChangesView::default(),
             worktree_watch_error: None,
             changes_parent: 0,
+            structural_diff_options: crate::structural_diff::outline::Options {
+                find_renames: true,
+                word_diff: true,
+                ..Default::default()
+            },
             commit_offset: 0,
             commit_pane_background: None,
             commit_page: 1,
@@ -2668,13 +2677,17 @@ impl App {
                     self.tree_changes.error = None;
                 }
             }
-            Action::OpenDiff if self.changes_focus.is_some() => {
+            Action::OpenDiff | Action::OpenStructuralDiff if self.changes_focus.is_some() => {
                 let pane = self.changes_focus.expect("focus was checked");
                 let changes = self.focused_changes_mut();
                 changes.error = None;
-                return vec![Effect::OpenDiff(pane, changes.selected)];
+                return vec![if action == Action::OpenStructuralDiff {
+                    Effect::OpenStructuralDiff(pane, changes.selected)
+                } else {
+                    Effect::OpenDiff(pane, changes.selected)
+                }];
             }
-            Action::OpenDiff if self.expand_selected_segment() => {}
+            Action::OpenDiff | Action::OpenStructuralDiff if self.expand_selected_segment() => {}
             Action::OpenDiff if self.review_return.is_some() => {
                 let (review, _) = self.review_return.expect("review return selection is active");
                 let Some(return_to) = self
@@ -2714,9 +2727,13 @@ impl App {
                 self.clear_reachability_selection();
                 return vec![Effect::Squash { source, target }];
             }
-            Action::OpenDiff => {
+            Action::OpenDiff | Action::OpenStructuralDiff => {
                 if let Some(target) = self.selected_tree_diff_target() {
-                    return vec![Effect::OpenCommitDiff(target)];
+                    return vec![if action == Action::OpenStructuralDiff {
+                        Effect::OpenCommitStructuralDiff(target)
+                    } else {
+                        Effect::OpenCommitDiff(target)
+                    }];
                 }
             }
             Action::Reword if self.can_reword() => {
@@ -6680,6 +6697,18 @@ mod tests {
             app.selected.map(|index| app.rows[index].id),
             Some(id(5)),
             "navigation skips ineligible rows"
+        );
+        assert_eq!(
+            app.update(Action::OpenStructuralDiff),
+            vec![Effect::OpenCommitStructuralDiff(TreeDiffTarget::Commit {
+                id: id(5),
+                parent: 0
+            })],
+            "Shift+Enter inspects the selected commit while choosing a review return"
+        );
+        assert!(
+            app.review_return_selection_active(),
+            "inspection leaves the confirmation pending"
         );
         assert_eq!(
             app.update(Action::OpenDiff),
@@ -10701,7 +10730,16 @@ mod tests {
             app.extend_hidden_commits(vec![row(1)]);
             complete(&mut app);
             app.select_commit(id(1));
-            app.selected_tree_diff_target()
+            let target = app.selected_tree_diff_target();
+            assert_eq!(
+                app.update(Action::OpenStructuralDiff),
+                target
+                    .map(Effect::OpenCommitStructuralDiff)
+                    .into_iter()
+                    .collect::<Vec<_>>(),
+                "the structural view uses the same boundary or branch scope"
+            );
+            target
         };
 
         assert_eq!(
@@ -10965,6 +11003,22 @@ mod tests {
     }
 
     #[test]
+    fn structural_diff_in_history_keeps_the_active_merge_parent() {
+        let mut app = App::new(4);
+        app.extend_commits(vec![row_with_parents(4, &[2, 3]), row(2), row(3)]);
+        complete(&mut app);
+        app.changes_parent = 1;
+        assert_eq!(
+            app.update(Action::OpenStructuralDiff),
+            vec![Effect::OpenCommitStructuralDiff(TreeDiffTarget::Commit {
+                id: id(4),
+                parent: 1
+            })],
+            "history retains the comparison chosen in the tree changes pane"
+        );
+    }
+
+    #[test]
     fn focused_changes_redirect_navigation_to_the_path_viewport() {
         let mut app = App::new(2);
         app.extend_commits((1..=3).map(row).collect::<Vec<_>>());
@@ -10983,6 +11037,11 @@ mod tests {
         assert_eq!(
             app.update(Action::OpenDiff),
             vec![Effect::OpenDiff(ChangePane::Tree, 1)]
+        );
+        assert_eq!(
+            app.update(Action::OpenStructuralDiff),
+            vec![Effect::OpenStructuralDiff(ChangePane::Tree, 1)],
+            "the structural view inspects the focused path"
         );
         assert_eq!(
             app.selected,
@@ -11012,6 +11071,14 @@ mod tests {
         assert_eq!(
             app.update(Action::OpenDiff),
             vec![Effect::OpenCommitDiff(TreeDiffTarget::Commit { id: id(1), parent: 0 })]
+        );
+        assert_eq!(
+            app.update(Action::OpenStructuralDiff),
+            vec![Effect::OpenCommitStructuralDiff(TreeDiffTarget::Commit {
+                id: id(1),
+                parent: 0
+            })],
+            "history opens the whole selected commit in the structural view"
         );
         assert_eq!(app.tree_changes.selected, 0);
         assert_eq!(app.tree_changes.offset, 0);

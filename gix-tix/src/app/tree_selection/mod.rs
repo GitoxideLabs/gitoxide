@@ -295,6 +295,7 @@ impl App {
                     | Action::ToggleChangesVisibility
                     | Action::CycleChangesParent
                     | Action::OpenDiff
+                    | Action::OpenStructuralDiff
                     | Action::Copy
                     | Action::CopyAuthor
                     | Action::CopyPath(_)

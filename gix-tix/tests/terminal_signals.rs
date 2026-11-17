@@ -77,6 +77,119 @@ fn sigint_restores_the_terminal_while_acknowledging_an_external_pager() -> gix_e
 }
 
 #[test]
+fn sigterm_restores_the_terminal_from_the_structural_diff() -> gix_error::TestResult {
+    check_shutdown(Some(Signal::TERM), View::StructuralDiff)
+}
+
+#[test]
+fn sigint_restores_the_terminal_from_the_structural_diff() -> gix_error::TestResult {
+    check_shutdown(Some(Signal::INT), View::StructuralDiff)
+}
+
+#[test]
+fn shift_enter_scrolls_the_continuous_structural_diff_and_keeps_live_settings() -> gix_error::TestResult {
+    let repository = structural_fixture()?;
+    std::fs::write(repository.path().join("src/api.rs"), "fn worktree_only() {}\n")?;
+    configure_difftool(repository.path(), "printf TIX_UNEXPECTED_TOOL; exit 99")?;
+    git(
+        repository.path(),
+        "config core.pager 'cat; printf TIX_TEST_LEGACY_PAGER'",
+    )?;
+    let (mut terminal, original) = Pty::spawn(repository.path(), true)?;
+    terminal.wait_for(|output| contains(output, b"second") && contains(output, b"\x1b_Ga=p,"))?;
+    let view_start = terminal.output.len();
+    terminal.master.write_all(b"\x1b[13;2u")?;
+    terminal.wait_for(|output| contains(&output[view_start..], b"r declaration renames:on"))?;
+    let first_page = &terminal.output[view_start..];
+    assert!(contains(first_page, b"src/"), "the file tree starts the built-in view");
+    assert!(
+        contains(first_page, b"---") && contains(first_page, b"+++") && contains(first_page, b"b/src/api.rs"),
+        "patch headers follow the file tree on the same page"
+    );
+    assert!(
+        !contains(first_page, b"TIX_UNEXPECTED_TOOL"),
+        "the structural view does not launch the configured difftool"
+    );
+    assert!(
+        !contains(first_page, b"TIX_TEST_LEGACY_PAGER"),
+        "the structural view owns the TUI"
+    );
+    assert!(
+        !contains(first_page, b"worktree_only"),
+        "history comparisons use committed resources"
+    );
+    assert!(
+        !contains(first_page, b"secret_"),
+        "structural output keeps implementation text hidden"
+    );
+    let last_page = terminal.output.len();
+    terminal.master.write_all(b"\x1b[F")?;
+    // The last row reuses the already drawn 'added_0' prefix and only writes '69'.
+    terminal.wait_for(|output| contains(&output[last_page..], b"69"))?;
+    let first_page = terminal.output.len();
+    terminal.master.write_all(b"\x1b[H")?;
+    terminal.wait_for(|output| contains(&output[first_page..], b"files ("))?;
+    let words_changed = terminal.output.len();
+    terminal.master.write_all(b"w")?;
+    terminal.wait_for(|output| contains(&output[words_changed..], b"pub fn old"))?;
+    let renames_changed = terminal.output.len();
+    terminal.master.write_all(b"r")?;
+    // Cell diffs emit the changed suffix of 'on' -> 'off', not the entire footer.
+    terminal.wait_for(|output| contains(&output[renames_changed..], b"ff"))?;
+    let back = terminal.output.len();
+    terminal.master.write_all(b"q")?;
+    terminal.wait_for(|output| contains(&output[back..], b"second"))?;
+    let reopened = terminal.output.len();
+    terminal.master.write_all(b"\x1b[13;2u")?;
+    terminal.wait_for(|output| contains(&output[reopened..], b"declaration renames:off"))?;
+    assert!(
+        contains(&terminal.output[reopened..], b"words:off"),
+        "settings persist when reopening the view"
+    );
+    terminal.master.write_all(b"\r")?;
+    let legacy_start = terminal.output.len();
+    terminal.master.write_all(b"\r")?;
+    terminal.wait_for(|output| contains(&output[legacy_start..], b"TIX_TEST_LEGACY_PAGER"))?;
+    terminal.master.write_all(b"\rqq")?;
+    assert!(
+        terminal.wait_for_exit()?.success(),
+        "ordinary Enter still uses the configured pager and returns to Tix"
+    );
+    let restored = rustix::termios::tcgetattr(&terminal.master)?;
+    assert_eq!(
+        restored.local_modes, original.local_modes,
+        "normal exit restores terminal modes"
+    );
+    Ok(())
+}
+
+#[test]
+fn empty_commits_open_an_empty_structural_view() -> gix_error::TestResult {
+    let repository = fixture()?;
+    git(repository.path(), "commit --allow-empty -m empty")?;
+    let (mut terminal, original) = Pty::spawn(repository.path(), true)?;
+    terminal.wait_for(|output| contains(output, b"empty") && contains(output, b"\x1b_Ga=p,"))?;
+    let start = terminal.output.len();
+    terminal.master.write_all(b"\x1b[13;2u")?;
+    terminal.wait_for(|output| contains(&output[start..], b"files (0)"))?;
+    assert!(
+        contains(&terminal.output[start..], b"changes."),
+        "the empty comparison explains that there are no file changes"
+    );
+    terminal.master.write_all(b"qqq")?;
+    assert!(
+        terminal.wait_for_exit()?.success(),
+        "the empty view returns to the graph and exits normally"
+    );
+    assert_eq!(
+        rustix::termios::tcgetattr(&terminal.master)?.local_modes,
+        original.local_modes,
+        "empty views retain terminal ownership correctly"
+    );
+    Ok(())
+}
+
+#[test]
 fn terminal_hangup_exits_without_a_signal() -> gix_error::TestResult {
     let repository = fixture()?;
     // Without a controlling terminal, closing the master generates no SIGHUP.
@@ -142,6 +255,7 @@ enum View {
     Graph,
     BuiltinDiff,
     PagerAcknowledgement,
+    StructuralDiff,
 }
 
 fn check_shutdown(signal: Option<Signal>, view: View) -> gix_error::TestResult {
@@ -156,10 +270,15 @@ fn check_shutdown(signal: Option<Signal>, view: View) -> gix_error::TestResult {
     terminal.wait_for(|output| contains(output, b"\x1b_Ga=p,") && contains(output, b"\x1b[?2026l"))?;
     let viewer_start = terminal.output.len();
     if !matches!(view, View::Graph) {
-        terminal.master.write_all(b"\t\r")?;
+        terminal.master.write_all(if matches!(view, View::StructuralDiff) {
+            b"\t\x1b[13;2u"
+        } else {
+            b"\t\r"
+        })?;
         let marker = match view {
             View::BuiltinDiff => b"/q/Esc back".as_slice(),
             View::PagerAcknowledgement => b"TIX_TEST_PAGER_FINISHED",
+            View::StructuralDiff => b"r declaration renames:on",
             View::Graph => unreachable!("only diff views need more input"),
         };
         terminal.wait_for(|output| contains(output, marker))?;
@@ -263,6 +382,47 @@ fn fixture() -> gix_error::TestResult<TempDir> {
     std::fs::write(path.join("tracked.txt"), "after\n")?;
     git(path, "commit -am second")?;
     Ok(repository)
+}
+
+fn structural_fixture() -> gix_error::TestResult<TempDir> {
+    use std::fmt::Write as _;
+
+    let repository = fixture()?;
+    let path = repository.path();
+    git(path, "checkout --detach HEAD^")?;
+    std::fs::create_dir_all(path.join("src"))?;
+    std::fs::write(
+        path.join("src/api.rs"),
+        "pub fn old(value: i32) -> i32 { let secret_before = value + 1; secret_before }\n",
+    )?;
+    git(path, "add src/api.rs")?;
+    git(path, "commit --amend --no-edit")?;
+    git(path, "checkout -B main")?;
+    std::fs::write(
+        path.join("src/api.rs"),
+        "pub fn new(value: u32) -> u32 { let secret_after = value + 2; secret_after }\n",
+    )?;
+    std::fs::write(path.join("tracked.txt"), "after\n")?;
+    let mut declarations = String::new();
+    for index in 0..70 {
+        writeln!(declarations, "fn added_{index:03}() {{ secret_body(); }}")?;
+    }
+    std::fs::write(path.join("src/many.rs"), declarations)?;
+    git(path, "add .")?;
+    git(path, "commit -m second")?;
+    Ok(repository)
+}
+
+fn configure_difftool(repository: &Path, command: &str) -> gix_error::TestResult {
+    git(repository, "config diff.tool capture")?;
+    let output = gix_testtools::git_command(repository)
+        .args(["config", "difftool.capture.cmd", command])
+        .output()?;
+    assert!(
+        output.status.success(),
+        "fixture tool configuration succeeds: {output:?}"
+    );
+    Ok(())
 }
 
 struct Pty {
