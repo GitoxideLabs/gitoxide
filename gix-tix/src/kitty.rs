@@ -12,7 +12,10 @@ use ratatui::{
     style::{Color, Modifier},
 };
 
-use crate::graph_tiles::{Colors, Tile};
+use crate::{
+    diff_colors,
+    graph_tiles::{Colors, Tile},
+};
 
 const MAX_TILES: usize = 1024;
 static OWNED_IMAGES: gix::parallel::Mutable<Vec<u32>> = gix::parallel::Mutable::new(Vec::new());
@@ -123,6 +126,7 @@ pub(crate) struct Backend<W: Write> {
     size: Option<(u16, u16)>,
     colors: Colors,
     ansi: Option<[[u8; 3]; 16]>,
+    diff_colors: diff_colors::Palette,
     tiles: HashMap<TileKey, u32>,
     placements: HashMap<(u16, u16), Placement>,
     placement_counts: HashMap<u32, usize>,
@@ -141,6 +145,7 @@ impl<W: Write> Backend<W> {
             size: None,
             colors: Colors::new([229, 229, 229], [0, 0, 0], None),
             ansi: None,
+            diff_colors: diff_colors::Palette::default(),
             tiles: HashMap::new(),
             placements: HashMap::new(),
             placement_counts: HashMap::new(),
@@ -159,7 +164,12 @@ impl<W: Write> Backend<W> {
         ansi: Option<[[u8; 3]; 16]>,
     ) {
         self.colors = Colors::new(foreground, background, ansi.as_ref());
+        self.diff_colors = diff_colors::Palette::new(foreground, background, ansi.as_ref());
         self.ansi = ansi;
+    }
+
+    pub(crate) fn diff_colors(&self) -> diff_colors::Palette {
+        self.diff_colors
     }
 
     pub(crate) fn enabled(&self) -> bool {
@@ -566,7 +576,7 @@ fn base64(bytes: &[u8]) -> String {
     encoded
 }
 
-fn rgb(color: Color, default: [u8; 3], ansi: Option<&[[u8; 3]; 16]>) -> [u8; 3] {
+pub(crate) fn rgb(color: Color, default: [u8; 3], ansi: Option<&[[u8; 3]; 16]>) -> [u8; 3] {
     match color {
         Color::Reset => default,
         Color::Rgb(red, green, blue) => [red, green, blue],

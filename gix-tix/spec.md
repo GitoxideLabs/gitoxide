@@ -644,11 +644,12 @@ without trading responsiveness for metadata that is not visible.
   instance's images before restoring the terminal, without deleting other
   applications' images. Normal-screen exit restores textual graph cells before
   deleting images. Default foreground/background colors follow the detected
-  terminal colors. On Unix, graphical views also query the terminal's sixteen
+  terminal colors. On Unix, interactive views also query the terminal's sixteen
   ANSI palette entries before starting keyboard input, using Kitty OSC 21 with
   an OSC 4 fallback when the terminal does not answer the first query. Palette
-  queries share the existing 100 ms startup color-detection budget and never
-  run during drawing or scrolling. The ANSI query skips prequeued input and stops
+  queries share the existing 100 ms startup color-detection budget, run before
+  graphics detection, and never run during drawing or scrolling. Text-only
+  views use the same palette. The ANSI query skips prequeued input and stops
   reading at its device-attributes reply, leaving following input queued. Late
   color replies, including an ANSI reply partially read before the deadline,
   are filtered out of built-in input handling. Only a complete palette replaces the fallback;
@@ -1683,6 +1684,20 @@ views.
   keys do not toggle the settings. Arrows/`j`/`k`, page keys, and `g`/`G` or
   `Home`/`End` move through the complete diff; `h`/`l` pans long lines.
   `Enter`, `q`, or `Escape` returns to Tix with its selection intact.
+- Structural mode colors declarations with lexical syntax foregrounds, subtle
+  red/green backgrounds for removals/additions, and a faint yellow background
+  for modifications. Changed words have stronger red/green backgrounds and
+  bold text. File-tree statuses and patch headers use the same terminal palette.
+  Foregrounds retain at least 4.5:1 contrast against their sampled backgrounds,
+  including syntax colors and word emphasis. Both light and dark themes use
+  the actual terminal foreground/background and its queried ANSI colors.
+  Missing default-color replies retain named ANSI foregrounds and bold,
+  underlined word emphasis without guessing a background. Missing ANSI replies
+  use standard ANSI RGB values against the detected default colors.
+  Only the visible page is syntax-colored, using borrowed display text;
+  cached outlines and rows retain no syntax-token strings. Coloring preserves
+  source text and word-change delimiters and does not expose hidden bodies.
+  Colors are sampled at startup; changing the terminal theme requires restarting Tix.
 - Structural preparation uses a fresh bounded repository and the selected
   old/new resources, including the active merge parent, branch comparison,
   staged blobs, and current unstaged or untracked contents. The view retains

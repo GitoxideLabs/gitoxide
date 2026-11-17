@@ -131,7 +131,8 @@ fn shift_enter_scrolls_the_continuous_structural_diff_and_keeps_live_settings() 
     terminal.wait_for(|output| contains(&output[first_page..], b"files ("))?;
     let words_changed = terminal.output.len();
     terminal.master.write_all(b"w")?;
-    terminal.wait_for(|output| contains(&output[words_changed..], b"pub fn old"))?;
+    // Syntax styles split declarations into several writes; the footer changes on -> off.
+    terminal.wait_for(|output| contains(&output[words_changed..], b"ff"))?;
     let renames_changed = terminal.output.len();
     terminal.master.write_all(b"r")?;
     // Cell diffs emit the changed suffix of 'on' -> 'off', not the entire footer.
@@ -185,6 +186,66 @@ fn empty_commits_open_an_empty_structural_view() -> gix_error::TestResult {
         rustix::termios::tcgetattr(&terminal.master)?.local_modes,
         original.local_modes,
         "empty views retain terminal ownership correctly"
+    );
+    Ok(())
+}
+
+#[test]
+fn text_only_structural_diffs_use_the_light_terminal_theme() -> gix_error::TestResult {
+    let repository = structural_fixture()?;
+    let (mut terminal, original) = Pty::spawn(repository.path(), true)?;
+    terminal.graphics = false;
+    terminal.foreground = [24, 28, 32];
+    terminal.background = [240, 244, 248];
+    terminal.palette = [[120; 3]; 16];
+    terminal.palette[1] = [180, 24, 40];
+    terminal.palette[2] = [24, 150, 80];
+    terminal.palette[4] = [30, 70, 180];
+    terminal.wait_for(|output| contains(output, b"second") && contains(output, "●".as_bytes()))?;
+    let palette_query = terminal
+        .output
+        .windows(b"\x1b]21".len())
+        .position(|bytes| bytes == b"\x1b]21")
+        .expect("text-only views query the Kitty color palette");
+    let graphics_query = terminal
+        .output
+        .windows(b"\x1b_Ga=q".len())
+        .position(|bytes| bytes == b"\x1b_Ga=q")
+        .expect("the fixture advertises the graphics protocol");
+    assert!(
+        palette_query < graphics_query,
+        "graphics detection cannot consume the color-query budget"
+    );
+    let view_start = terminal.output.len();
+    terminal.master.write_all(b"\x1b[13;2u")?;
+    terminal.wait_for(|output| contains(&output[view_start..], b"r declaration renames:on"))?;
+    let view_output = &terminal.output[view_start..];
+    assert!(
+        emitted_rgb_colors(view_output, "38;2;").contains(&terminal.foreground),
+        "diff text uses the sampled terminal foreground: {:?}",
+        emitted_rgb_colors(view_output, "38;2;")
+    );
+    let backgrounds = emitted_rgb_colors(view_output, "48;2;");
+    assert!(!backgrounds.is_empty(), "structural changes have RGB background tints");
+    assert!(
+        backgrounds
+            .iter()
+            .all(|color| color.iter().all(|channel| *channel > 130)),
+        "a light theme never receives dark diff backgrounds: {backgrounds:?}"
+    );
+    let scrolled = terminal.output.len();
+    terminal.master.write_all(b"\x1b[F")?;
+    terminal.wait_for(|output| contains(&output[scrolled..], b"69"))?;
+    assert!(
+        !contains(&terminal.output[scrolled..], b"\x1b]21"),
+        "scrolling never queries terminal colors"
+    );
+    terminal.master.write_all(b"qqq")?;
+    assert!(terminal.wait_for_exit()?.success(), "the colored view exits normally");
+    assert_eq!(
+        rustix::termios::tcgetattr(&terminal.master)?.local_modes,
+        original.local_modes,
+        "theme detection and diff rendering restore terminal modes"
     );
     Ok(())
 }
@@ -431,6 +492,9 @@ struct Pty {
     output: Vec<u8>,
     parsed: usize,
     graphics: bool,
+    foreground: [u8; 3],
+    background: [u8; 3],
+    palette: [[u8; 3]; 16],
 }
 
 impl Pty {
@@ -471,6 +535,7 @@ impl Pty {
             .env(PTY_CHILD, "1")
             .env_remove("TMUX")
             .env_remove("STY")
+            .env_remove("NO_COLOR")
             .stdin(Stdio::from(slave.try_clone()?))
             .stdout(Stdio::from(slave.try_clone()?))
             .stderr(Stdio::from(slave));
@@ -485,6 +550,9 @@ impl Pty {
                 output: Vec::new(),
                 parsed: 0,
                 graphics: true,
+                foreground: [221; 3],
+                background: [0; 3],
+                palette: std::array::from_fn(|index| [index as u8 * 17, 136, 255]),
             },
             original,
         ))
@@ -587,15 +655,17 @@ impl Pty {
                 b"\x1b[?u" => self.master.write_all(b"\x1b[?0u")?,
                 b"\x1b[6n" => self.master.write_all(b"\x1b[1;1R")?,
                 _ if sequence.starts_with(b"\x1b]10;?") => {
-                    self.master.write_all(b"\x1b]10;rgb:dddd/dddd/dddd\x1b\\")?;
+                    let [red, green, blue] = self.foreground;
+                    write!(self.master, "\x1b]10;rgb:{red:02x}/{green:02x}/{blue:02x}\x1b\\")?;
                 }
                 _ if sequence.starts_with(b"\x1b]11;?") => {
-                    self.master.write_all(b"\x1b]11;rgb:0000/0000/0000\x1b\\")?;
+                    let [red, green, blue] = self.background;
+                    write!(self.master, "\x1b]11;rgb:{red:02x}/{green:02x}/{blue:02x}\x1b\\")?;
                 }
                 _ if sequence.starts_with(b"\x1b]21;") => {
                     let mut palette = b"\x1b]21".to_vec();
-                    for index in 0..16 {
-                        write!(palette, ";{index}=rgb:{index:x}/8/f")?;
+                    for (index, [red, green, blue]) in self.palette.iter().enumerate() {
+                        write!(palette, ";{index}=rgb:{red:02x}/{green:02x}/{blue:02x}")?;
                     }
                     palette.extend_from_slice(b"\x1b\\");
                     self.master.write_all(&palette)?;
@@ -617,4 +687,19 @@ impl Drop for Pty {
 
 fn contains(output: &[u8], sequence: &[u8]) -> bool {
     output.windows(sequence.len()).any(|window| window == sequence)
+}
+
+fn emitted_rgb_colors(output: &[u8], prefix: &str) -> Vec<[u8; 3]> {
+    String::from_utf8_lossy(output)
+        .split(prefix)
+        .skip(1)
+        .filter_map(|color| {
+            let mut channels = color.split([';', 'm']);
+            Some([
+                channels.next()?.parse::<u8>().ok()?,
+                channels.next()?.parse::<u8>().ok()?,
+                channels.next()?.parse::<u8>().ok()?,
+            ])
+        })
+        .collect()
 }
