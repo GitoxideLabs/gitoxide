@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, path::Path};
+use std::{collections::BTreeMap, ops::Range, path::Path};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 use gix::{
@@ -246,7 +246,14 @@ struct FileTree {
 }
 
 impl FileTree {
-    fn render(&self, files: &[File], prefix: &str, lines: &mut Vec<Line<'static>>, colors: &Palette) {
+    fn render(
+        &self,
+        files: &[File],
+        prefix: &str,
+        lines: &mut Vec<Line<'static>>,
+        file_rows: &mut [Option<usize>],
+        colors: &Palette,
+    ) {
         let count = self.directories.len() + self.files.len();
         for (index, (name, tree)) in self.directories.iter().enumerate() {
             let last = index + 1 == count;
@@ -262,6 +269,7 @@ impl FileTree {
                 files,
                 &format!("{prefix}{}", if last { "    " } else { "│   " }),
                 lines,
+                file_rows,
                 colors,
             );
         }
@@ -282,13 +290,14 @@ impl FileTree {
                     colors.metadata,
                 ));
             }
+            file_rows[*file] = Some(lines.len());
             lines.push(Line::from(spans));
         }
     }
 }
 
 impl Diff {
-    fn render(&self, options: &Options, colors: &Palette) -> Vec<(Line<'static>, Option<Language>)> {
+    fn render(&self, options: &Options, colors: &Palette) -> (Vec<(Line<'static>, Option<Language>)>, Vec<FileLink>) {
         let visible: Vec<_> = self
             .files
             .iter()
@@ -325,11 +334,21 @@ impl Diff {
             }
             node.files.insert(BString::from(*name), index);
         }
-        tree.render(&self.files, "", &mut lines, colors);
+        let mut file_rows = vec![None; self.files.len()];
+        tree.render(&self.files, "", &mut lines, &mut file_rows, colors);
         let mut rows = lines.into_iter().map(|line| (line, None)).collect::<Vec<_>>();
+        let mut file_links = Vec::with_capacity(visible.len());
         for index in visible {
             let file = &self.files[index];
             rows.push((Line::default(), None));
+            if let Some(row) = file_rows[index] {
+                let line = &rows[row].0;
+                file_links.push(FileLink {
+                    row,
+                    columns: line.spans.iter().take(2).map(Span::width).sum::<usize>()..line.width(),
+                    target: rows.len(),
+                });
+            }
             rows.extend(file.headers.iter().map(|header| {
                 (
                     Line::styled(
@@ -364,7 +383,8 @@ impl Diff {
                 )),
             }
         }
-        rows
+        file_links.sort_unstable_by_key(|link| link.row);
+        (rows, file_links)
     }
 }
 
@@ -395,18 +415,25 @@ fn structural_line(line: outline::Line, colors: &Palette) -> Line<'static> {
     Line::from(spans).style(colors.row(line.change))
 }
 
+struct FileLink {
+    row: usize,
+    columns: Range<usize>,
+    target: usize,
+}
+
 pub(crate) struct View<'a> {
     diff: &'a Diff,
     options: &'a mut Options,
     lines: Vec<(Line<'static>, Option<Language>)>,
     max_width: usize,
     file_headers: Vec<(usize, usize)>,
+    file_links: Vec<FileLink>,
     colors: &'a Palette,
 }
 
 impl<'a> View<'a> {
     pub(crate) fn new(diff: &'a Diff, options: &'a mut Options, colors: &'a Palette) -> Self {
-        let lines = diff.render(options, colors);
+        let (lines, file_links) = diff.render(options, colors);
         let max_width = lines.iter().map(|(line, _)| line.width()).max().unwrap_or_default();
         let file_headers = file_header_rows(&lines);
         Self {
@@ -415,6 +442,7 @@ impl<'a> View<'a> {
             lines,
             max_width,
             file_headers,
+            file_links,
             colors,
         }
     }
@@ -431,6 +459,16 @@ impl<'a> View<'a> {
         crate::ui::sticky_diff_header(&self.file_headers, offset)
     }
 
+    pub(crate) fn last_file_header(&self) -> usize {
+        self.file_headers.last().map_or(0, |&(start, _)| start)
+    }
+
+    pub(crate) fn file_target(&self, row: usize, column: usize) -> Option<usize> {
+        let index = self.file_links.binary_search_by_key(&row, |link| link.row).ok()?;
+        let link = &self.file_links[index];
+        link.columns.contains(&column).then_some(link.target)
+    }
+
     pub(crate) fn key(&mut self, key: KeyEvent) -> bool {
         if key.kind != KeyEventKind::Press || !key.modifiers.is_empty() {
             return false;
@@ -441,7 +479,7 @@ impl<'a> View<'a> {
             KeyCode::Char('p') => self.options.production_only = !self.options.production_only,
             _ => return false,
         }
-        self.lines = self.diff.render(self.options, self.colors);
+        (self.lines, self.file_links) = self.diff.render(self.options, self.colors);
         self.file_headers = file_header_rows(&self.lines);
         self.max_width = self
             .lines
@@ -594,6 +632,120 @@ mod tests {
     }
 
     #[test]
+    fn file_tree_click_targets_follow_scrolling_panning_and_live_settings() -> TestResult {
+        let repository = production_repository()?;
+        let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
+        let mut options = Options::default();
+        let colors = Palette::default();
+        let mut review = crate::DiffView::Structural(View::new(&diff, &mut options, &colors));
+        let area = Rect::new(4, 3, 100, 7);
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(110, 12))?;
+        for key in [None, Some('p'), Some('w'), Some('r'), Some('p')] {
+            if let Some(key) = key {
+                assert!(review.key(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE)));
+            }
+            let crate::DiffView::Structural(view) = &review else {
+                unreachable!("this test reviews a structural diff")
+            };
+            assert_eq!(
+                view.file_links.len(),
+                view.file_headers.len(),
+                "each visible file has one jump target"
+            );
+            for link in &view.file_links {
+                let name = &view.lines[link.row].0.spans[2].content;
+                let file = diff
+                    .files
+                    .iter()
+                    .find(|file| {
+                        quoted(
+                            file.path
+                                .path
+                                .rsplit(|byte| *byte == b'/')
+                                .next()
+                                .expect("file paths have a basename")
+                                .as_bstr(),
+                            "",
+                        ) == name.as_ref()
+                    })
+                    .expect("fixture basenames identify individual files");
+                assert_eq!(
+                    view.lines[link.target].0.to_string(),
+                    file.headers[0],
+                    "the clicked name points to its own file's header"
+                );
+                let offset = link.row.saturating_sub(1);
+                let mouse = crate::MouseEvent {
+                    kind: crate::MouseEventKind::Down(crate::MouseButton::Left),
+                    column: area.x,
+                    row: area.y + 1 + u16::try_from(link.row - offset)?,
+                    modifiers: KeyModifiers::NONE,
+                };
+                let position = review
+                    .mouse(mouse, area, offset, link.columns.start)
+                    .expect("a visible filename is clickable after panning");
+                assert_eq!(position, (link.target, 0), "jumping clears horizontal panning");
+                assert!(
+                    position.0 <= review.max_offset(usize::from(area.height - 2)),
+                    "even the final short file can be placed at the top"
+                );
+                terminal.draw(|frame| review.draw(frame, area, position.0, position.1))?;
+                let header: String = (area.x..area.right())
+                    .map(|x| terminal.backend().buffer()[(x, area.y + 1)].symbol())
+                    .collect();
+                assert_eq!(
+                    header.trim_end(),
+                    file.headers[0],
+                    "the jump places the selected file at the viewport top"
+                );
+                for kind in [
+                    crate::MouseEventKind::Up(crate::MouseButton::Left),
+                    crate::MouseEventKind::Drag(crate::MouseButton::Left),
+                    crate::MouseEventKind::Down(crate::MouseButton::Right),
+                ] {
+                    assert!(
+                        review
+                            .mouse(crate::MouseEvent { kind, ..mouse }, area, offset, link.columns.start)
+                            .is_none(),
+                        "only a left-button press activates a filename"
+                    );
+                }
+                assert!(
+                    review
+                        .mouse(
+                            crate::MouseEvent {
+                                modifiers: KeyModifiers::CONTROL,
+                                ..mouse
+                            },
+                            area,
+                            offset,
+                            link.columns.start
+                        )
+                        .is_none(),
+                    "modified clicks do not activate a filename"
+                );
+                assert!(
+                    review.mouse(mouse, area, offset, 0).is_none(),
+                    "tree indentation is not a filename"
+                );
+                assert!(
+                    review.mouse(mouse, area, offset, link.columns.end).is_none(),
+                    "blank space past the filename is not a link"
+                );
+            }
+            assert!(
+                view.file_target(0, 0).is_none(),
+                "the overview heading is not a file link"
+            );
+            assert!(
+                view.file_target(view.last_file_header(), 0).is_none(),
+                "patch sections are not file-tree links"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn file_headers_stick_only_after_reaching_the_viewport_top() -> TestResult {
         let repository = repository()?;
         let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
@@ -667,7 +819,7 @@ mod tests {
     fn continuous_diff_starts_with_the_file_tree_and_keeps_every_changed_file() -> TestResult {
         let repository = repository()?;
         let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
-        let lines = diff.render(
+        let (lines, _) = diff.render(
             &Options {
                 find_renames: true,
                 word_diff: true,
@@ -733,7 +885,7 @@ mod tests {
             word_diff: true,
             ..Options::default()
         };
-        let original = text(&diff.render(&options, &Palette::default()));
+        let original = text(&diff.render(&options, &Palette::default()).0);
         assert!(
             original.contains("[renamed: old -> new]"),
             "declaration matching starts enabled"
@@ -961,7 +1113,7 @@ mod tests {
             ..Options::default()
         };
         assert_eq!(
-            text(&diff.render(&options, &Palette::default())),
+            text(&diff.render(&options, &Palette::default()).0),
             "Changed files (0)\nNo production file changes.",
             "a selected file with only test edits has no tree entry, patch header, or false parent change"
         );
@@ -986,8 +1138,8 @@ mod tests {
         )?;
         let commit = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "tip".into())?;
         assert_eq!(
-            text(&branch.render(&Options::default(), &Palette::default())),
-            text(&commit.render(&Options::default(), &Palette::default())),
+            text(&branch.render(&Options::default(), &Palette::default()).0),
+            text(&commit.render(&Options::default(), &Palette::default()).0),
             "branch and commit comparisons use the same selected base"
         );
         let first = prepare_commit_with_repository(&repository, target(&repository, "main", 0)?, "merge".into())?;
@@ -995,8 +1147,8 @@ mod tests {
         assert_eq!(first.files[0].path.path, "side/parent.rs");
         let second = prepare_commit_with_repository(&repository, target(&repository, "main", 1)?, "merge".into())?;
         assert_eq!(
-            text(&second.render(&Options::default(), &Palette::default())),
-            text(&commit.render(&Options::default(), &Palette::default())),
+            text(&second.render(&Options::default(), &Palette::default()).0),
+            text(&commit.render(&Options::default(), &Palette::default()).0),
             "the second parent sees the main-side changes"
         );
         Ok(())
@@ -1042,7 +1194,8 @@ mod tests {
                 title: "staged".into(),
                 files: vec![staged],
             }
-            .render(&options, &Palette::default()),
+            .render(&options, &Palette::default())
+            .0,
         );
         assert!(
             staged_output.contains("{+u64+}") && !staged_output.contains("u128"),
@@ -1061,7 +1214,8 @@ mod tests {
                 title: "unstaged".into(),
                 files: vec![unstaged],
             }
-            .render(&options, &Palette::default()),
+            .render(&options, &Palette::default())
+            .0,
         );
         assert!(
             unstaged_output.contains("{+u128+}"),
@@ -1088,7 +1242,8 @@ mod tests {
                 title: "untracked".into(),
                 files: vec![untracked],
             }
-            .render(&options, &Palette::default()),
+            .render(&options, &Palette::default())
+            .0,
         );
         assert!(
             output.contains("--- /dev/null") && output.contains("+fn untracked"),
