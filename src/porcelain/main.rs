@@ -48,6 +48,7 @@ pub fn main() -> Result<()> {
                 path,
                 language,
                 context,
+                find_renames,
                 color,
             }) => {
                 use std::io::IsTerminal;
@@ -61,6 +62,7 @@ pub fn main() -> Result<()> {
                     core::structural_diff::Options {
                         language,
                         context,
+                        find_renames,
                         path,
                         color: match color {
                             DiffColor::Auto => stdout.is_terminal() && std::env::var_os("NO_COLOR").is_none(),

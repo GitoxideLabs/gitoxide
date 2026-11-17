@@ -115,6 +115,9 @@ pub mod tools {
         /// The last count applies to all deeper levels.
         #[arg(long, short = 'U', value_delimiter = ',', default_value = "1")]
         pub context: Vec<usize>,
+        /// Infer unique similar renames among siblings (may be expensive).
+        #[arg(long, short = 'M')]
+        pub find_renames: bool,
         /// When to use terminal colors. Auto honors NO_COLOR and detects redirected output.
         #[arg(long, value_enum, default_value = "auto")]
         pub color: DiffColor,

@@ -252,3 +252,32 @@ fn context_counts_siblings_at_each_depth_and_keeps_ancestors() -> TestResult {
     );
     Ok(())
 }
+
+#[test]
+fn renames_are_opt_in_and_can_cross_unchanged_siblings() -> TestResult {
+    let out = render("rename-before.rs", "rename-after.rs", Options::default())?;
+    assert!(!out.contains("renamed:"), "similarity matching is disabled by default");
+    let out = render(
+        "rename-before.rs",
+        "rename-after.rs",
+        Options {
+            find_renames: true,
+            context: vec![0],
+            ..Options::default()
+        },
+    )?;
+    assert!(
+        out.contains("renamed: original -> renamed"),
+        "a unique match survives an edited body and a move: {out}"
+    );
+    assert!(
+        out.contains("-fn original") && out.contains("+fn renamed"),
+        "the before and after declarations remain visible"
+    );
+    assert!(!out.contains("secret_original"), "similarity inputs are never printed");
+    assert!(
+        !out.contains("fn anchor"),
+        "rename detection respects structural context"
+    );
+    Ok(())
+}

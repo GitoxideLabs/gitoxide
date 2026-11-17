@@ -14,6 +14,7 @@ use gix_imara_diff::{Algorithm, Diff, InternedInput};
 use owo_colors::OwoColorize;
 
 mod parse;
+mod renames;
 use parse::Item;
 
 /// Languages with a structural outline.
@@ -48,6 +49,8 @@ pub struct Options {
     pub color: bool,
     /// Unchanged siblings on each side, per nesting depth. Repeat the last value; empty means one.
     pub context: Vec<usize>,
+    /// Match unique similar additions and deletions as renames within each container.
+    pub find_renames: bool,
 }
 
 /// Compare two files without exposing implementation bodies. Differences are successful output.
@@ -109,7 +112,7 @@ fn read(path: &Path) -> Result<String> {
 
 type Pair<'a> = (Option<&'a Item>, Option<&'a Item>);
 
-fn align<'a>(before: &'a [Item], after: &'a [Item]) -> Vec<Pair<'a>> {
+fn align<'a>(before: &'a [Item], after: &'a [Item], find_renames: bool) -> Vec<Pair<'a>> {
     let mut input = InternedInput::default();
     input.update_before(before.iter().map(|item| (item.kind, item.name.as_str())));
     input.update_after(after.iter().map(|item| (item.kind, item.name.as_str())));
@@ -137,11 +140,37 @@ fn align<'a>(before: &'a [Item], after: &'a [Item]) -> Vec<Pair<'a>> {
         left += 1;
         right += 1;
     }
+    if find_renames {
+        let removed: Vec<_> = pairs
+            .iter()
+            .enumerate()
+            .filter_map(|(index, pair)| match pair {
+                (Some(item), None) => Some((index, *item)),
+                _ => None,
+            })
+            .collect();
+        let added: Vec<_> = pairs
+            .iter()
+            .enumerate()
+            .filter_map(|(index, pair)| match pair {
+                (None, Some(item)) => Some((index, *item)),
+                _ => None,
+            })
+            .collect();
+        for (left, right) in renames::candidates(
+            &removed.iter().map(|(_, item)| *item).collect::<Vec<_>>(),
+            &added.iter().map(|(_, item)| *item).collect::<Vec<_>>(),
+        ) {
+            pairs[removed[left].0] = (None, None);
+            pairs[added[right].0].0 = Some(removed[left].1);
+        }
+        pairs.retain(|(before, after)| before.is_some() || after.is_some());
+    }
     pairs
 }
 
 fn render(before: &[Item], after: &[Item], depth: usize, options: &Options, out: &mut impl Write) -> Result<()> {
-    let pairs = align(before, after);
+    let pairs = align(before, after, options.find_renames);
     let context = options
         .context
         .get(depth)
@@ -176,6 +205,15 @@ fn render(before: &[Item], after: &[Item], depth: usize, options: &Options, out:
 }
 
 fn paired(before: &Item, after: &Item, depth: usize, options: &Options, out: &mut impl Write) -> Result<()> {
+    if before.name != after.name {
+        let indent: String = after.header.chars().take_while(|ch| matches!(ch, ' ' | '\t')).collect();
+        lines(
+            &format!("{indent}[renamed: {} -> {}]", before.name, after.name),
+            '~',
+            options,
+            out,
+        )?;
+    }
     if before.header != after.header {
         lines(&before.header, '-', options, out)?;
         lines(&after.header, '+', options, out)?;

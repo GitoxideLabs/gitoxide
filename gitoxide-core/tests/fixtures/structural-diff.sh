@@ -137,3 +137,13 @@ impl Widget {
 struct Tail;
 EOF
 sed 's/secret_before/secret_after/' context-before.rs >context-after.rs
+
+# The renamed declaration crosses an unchanged anchor and also changes its body.
+cat >rename-before.rs <<'EOF'
+fn original(value: u32) -> u32 { secret_original(value) + 1 }
+fn anchor() {}
+EOF
+cat >rename-after.rs <<'EOF'
+fn anchor() {}
+fn renamed(value: u32) -> u32 { secret_original(value) + 2 }
+EOF

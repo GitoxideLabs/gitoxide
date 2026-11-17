@@ -43,6 +43,19 @@ unchanged file-level declarations and two peers around changed members inside a
 type, implementation, module, TOML table, or Markdown section. The final count
 applies at all deeper levels. `--context 0` shows only changes and their ancestors.
 
+## Rename detection
+
+`--find-renames` (or `-M`) compares unmatched declarations of the same kind within
+each container, including across unchanged siblings. A match needs at least 60%
+word-token similarity and must be the unique best match in both directions.
+Whitespace and occurrences of each item's own name do not count against similarity,
+so recursive references and modest body edits can accompany a rename. Annotations
+identify inferred renames while the old and new declarations remain visible.
+
+Ambiguous candidates stay as additions and deletions. Matching is heuristic,
+does not track changes across files or different parents, and can be expensive
+when many siblings are replaced. It is disabled by default.
+
 ## Use with Git difftool
 
 Configure the tool in the current repository:
