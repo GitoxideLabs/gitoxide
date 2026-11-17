@@ -46,7 +46,8 @@ impl Repository {
             self.object_hash(),
             crate::filter::Pipeline::options(self)?,
         );
-        let filter = gix_merge::blob::Pipeline::new(worktree_roots, filter, self.config.merge_pipeline_options()?);
+        // Git's diff size threshold does not change how text is merged.
+        let filter = gix_merge::blob::Pipeline::new(worktree_roots, filter, Default::default());
         let options = gix_merge::blob::platform::Options {
             default_driver: self.config.resolved.string(tree::Merge::DEFAULT),
         };

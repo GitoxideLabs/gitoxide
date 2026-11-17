@@ -369,9 +369,7 @@ fn run_baseline() -> TestResult {
         let mut phase = "default merge";
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> TestResult {
             let mut graph = gix_revwalk::Graph::new(&odb, None);
-            // Recursive conflict markers exceed the small threshold used by the large-file cases.
-            let large_file_threshold_bytes = if case_name.contains("criss-cross") { 0 } else { 100 };
-            let mut blob_merge = new_blob_merge_platform(&root, large_file_threshold_bytes);
+            let mut blob_merge = new_blob_merge_platform(&root, 0);
             let mut diff_resource_cache = new_diff_resource_cache(&root);
             let mut options = basic_merge_options();
             options.tree_merge.directory_renames = directory_renames_for_case(&case_name);
@@ -599,11 +597,11 @@ fn run_baseline() -> TestResult {
         failures.join("\n"),
     );
     assert_eq!(
-        actual_cases, 535,
+        actual_cases, 536,
         "BUG: update this number, and don't forget to remove a filter in the end"
     );
     assert_eq!(
-        skipped_tree_resolve_cases, 586,
+        skipped_tree_resolve_cases, 588,
         "this is done when no case is skipped, and we don't want to accidentally skip them.\
         Some don't actually have conflicts.\
         The ones we skipped don't have irreconcilable conflicts"

@@ -2,14 +2,17 @@ use gix_error::Result;
 use std::{num::NonZeroU8, str::FromStr};
 
 use bstr::{BStr, ByteSlice};
-use gix_error::{OptionExt, ResultExt, message};
+use gix_error::{ResultExt, bail, message};
 use gix_filter::attributes;
 
 use crate::blob::{
-    BuiltinDriver, Platform, PlatformRef, ResourceKind,
+    BuiltinDriver, MAX_TEXT_MERGE_SIZE, Platform, PlatformRef, ResourceKind,
     builtin_driver::text::Conflict,
+    pipeline::Mode,
     platform::{DriverChoice, ResourceRef, merge},
 };
+
+const MISSING_RESOURCES: &str = "The 'current', 'ancestor' or 'other' resource for the merge operation were not set";
 
 /// Preparation
 impl Platform {
@@ -26,26 +29,70 @@ impl Platform {
         objects: &impl gix_object::Find,
         mut options: merge::Options,
     ) -> Result<PlatformRef<'_>> {
-        let current = self.current.as_ref().ok_or_raise(|| {
-            message("The 'current', 'ancestor' or 'other' resource for the merge operation were not set")
-        })?;
-        let ancestor = self.ancestor.as_ref().ok_or_raise(|| {
-            message("The 'current', 'ancestor' or 'other' resource for the merge operation were not set")
-        })?;
-        let other = self.other.as_ref().ok_or_raise(|| {
-            message("The 'current', 'ancestor' or 'other' resource for the merge operation were not set")
-        })?;
+        let [Some(current), Some(_), Some(_)] = [&self.current, &self.ancestor, &self.other] else {
+            bail!(message(MISSING_RESOURCES));
+        };
+        let current_path = current.rela_path.clone();
+        let driver = self.select_driver(current_path.as_bstr(), objects, &mut options)?;
+        self.merge_ref(driver, options)
+    }
 
-        let entry = self
-            .attr_stack
-            .at_entry(current.rela_path.as_bstr(), None, objects)
-            .or_raise(|| {
-                message!(
-                    "Failed to obtain attributes for {:?} resource at '{}'",
-                    ResourceKind::CurrentOrOurs,
-                    current.rela_path
-                )
-            })?;
+    /// Prepare a blob merge for a tree merge, selecting the driver before loading resources.
+    ///
+    /// Unlike [`Self::prepare_merge()`], which uses already-loaded resources and their current path,
+    /// this method selects the driver using the explicit `current_path`, then calls `load_resources`.
+    /// The callback must set all three resources using [`Self::set_resource()`], with `current_path`
+    /// matching the path of the current resource. Driver selection and adjustments to `options` are
+    /// otherwise the same as in [`Self::prepare_merge()`].
+    ///
+    /// For built-in text and union drivers, loading unfiltered blobs from the object database
+    /// ([`Mode::ToGit`] with no worktree roots) temporarily caps the large-file threshold at
+    /// [`MAX_TEXT_MERGE_SIZE`], preserving any lower, nonzero threshold. Blobs exceeding this limit
+    /// can then fall back to a binary merge and be picked by object ID without reading their contents.
+    /// Renormalization, worktree resources, and other drivers retain the configured loading threshold.
+    /// In contrast, [`Self::prepare_merge()`] does not change resource loading: oversized buffers may
+    /// remain available for inspection even though they cannot be text-merged.
+    ///
+    /// The original threshold is restored before returning, including when `load_resources` fails.
+    pub(crate) fn prepare_tree_merge(
+        &mut self,
+        current_path: &BStr,
+        objects: &impl gix_object::Find,
+        mut options: merge::Options,
+        load_resources: impl FnOnce(&mut Self) -> Result<()>,
+    ) -> Result<PlatformRef<'_>> {
+        let driver = self.select_driver(current_path, objects, &mut options)?;
+        let previous_limit = self.filter.options.large_file_threshold_bytes;
+        let text_limit_when_merging = MAX_TEXT_MERGE_SIZE as u64;
+        // Stored sizes are authoritative for unfiltered blobs, which can be picked by ID without reading them.
+        if matches!(
+            driver,
+            DriverChoice::BuiltIn(BuiltinDriver::Text | BuiltinDriver::Union)
+        ) && self.filter_mode == Mode::ToGit
+            && self.filter.roots.is_unset()
+            && (previous_limit == 0 || previous_limit > text_limit_when_merging)
+        {
+            self.filter.options.large_file_threshold_bytes = text_limit_when_merging;
+        }
+        let loaded = load_resources(self);
+        self.filter.options.large_file_threshold_bytes = previous_limit;
+        loaded?;
+        self.merge_ref(driver, options)
+    }
+
+    fn select_driver(
+        &mut self,
+        current_path: &BStr,
+        objects: &impl gix_object::Find,
+        options: &mut merge::Options,
+    ) -> Result<DriverChoice> {
+        let entry = self.attr_stack.at_entry(current_path, None, objects).or_raise(|| {
+            message!(
+                "Failed to obtain attributes for {:?} resource at '{}'",
+                ResourceKind::CurrentOrOurs,
+                current_path
+            )
+        })?;
         entry.matching_attributes(&mut self.attrs);
         let mut attrs = self.attrs.iter_selected();
         let merge_attr = attrs.next().expect("pre-initialized with 'merge'");
@@ -85,15 +132,21 @@ impl Platform {
             options.resolve_binary_with = Some(crate::blob::builtin_driver::binary::ResolveWith::Ours);
         }
 
-        let out = PlatformRef {
+        Ok(driver)
+    }
+
+    fn merge_ref(&self, driver: DriverChoice, options: merge::Options) -> Result<PlatformRef<'_>> {
+        let [Some(current), Some(ancestor), Some(other)] = [&self.current, &self.ancestor, &self.other] else {
+            bail!(message(MISSING_RESOURCES));
+        };
+        Ok(PlatformRef {
             parent: self,
             driver,
             current: ResourceRef::new(current),
             ancestor: ResourceRef::new(ancestor),
             other: ResourceRef::new(other),
             options,
-        };
-        Ok(out)
+        })
     }
 
     fn find_driver_by_name(&self, name: Option<&BStr>) -> DriverChoice {

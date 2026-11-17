@@ -36,86 +36,6 @@ mod text {
     use pretty_assertions::assert_str_eq;
     use std::num::NonZero;
 
-    const DIVERGING: &[&str] = &[
-        // Somehow, on in zdiff mode, it's different, and I wasn't able to figure out the rule properly.
-        // Now we prefer ancestor/before newlines and somewhat ignore our hunks. It's probably a minor issue in practice.
-        // gix: "1\r\n2\n<<<<<<< complex/marker-newline-handling-lf2/ours.blob\n4\r\n||||||| complex/marker-newline-handling-lf2/base.blob\r\n2\r\n3\n=======\n5\n>>>>>>> complex/marker-newline-handling-lf2/theirs.blob\n"
-        // git: "1\r\n2\n<<<<<<< complex/marker-newline-handling-lf2/ours.blob\n4  \n||||||| complex/marker-newline-handling-lf2/base.blob  \n2\r\n3\n=======\n5\n>>>>>>> complex/marker-newline-handling-lf2/theirs.blob\n"
-        "complex/marker-newline-handling-lf2/zdiff3.merged",
-        "complex/marker-newline-handling-lf2/zdiff3-histogram.merged",
-        // This is related to Git seemingly extending a hunk to increase overlap (see diff3)
-        "zdiff3-interesting/merge.merged",
-        "zdiff3-interesting/merge-ours.merged",
-        "zdiff3-interesting/diff3.merged",
-        "zdiff3-interesting/diff3-histogram.merged",
-        "zdiff3-interesting/zdiff3.merged",
-        "zdiff3-interesting/zdiff3-histogram.merged",
-        "zdiff3-interesting/merge-union.merged",
-        // Git can extend hunks, similar to above, but the effect is not as noticeable.
-        // Implementing this would be interesting, to figure out when the hunk processing should apply.
-        "zdiff3-evil/merge.merged",
-        "zdiff3-evil/merge-union.merged",
-        // Git seems to merge to hunks if they are close together to get a less noisy diff.
-        "zdiff3-middlecommon/merge.merged",
-        "zdiff3-middlecommon/merge-union.merged",
-        // Git has special character handling, which does magic to prevent conflicts
-        "complex/auto-simplification/merge.merged",
-        "complex/auto-simplification/merge-union.merged",
-        // Git has special newline handling when diffing,
-        // which auto-inserts a newline when it was removed, kind of.
-        "complex/missing-LF-at-EOF/merge.merged",
-        "complex/missing-LF-at-EOF/diff3.merged",
-        "complex/missing-LF-at-EOF/diff3-histogram.merged",
-        "complex/missing-LF-at-EOF/zdiff3.merged",
-        "complex/missing-LF-at-EOF/zdiff3-histogram.merged",
-        "complex/missing-LF-at-EOF/merge-ours.merged",
-        "complex/missing-LF-at-EOF/merge-theirs.merged",
-        "complex/missing-LF-at-EOF/merge-union.merged",
-        // Git has different diff-slider-heuristics so diffs can be different.
-        // See https://github.com/mhagger/diff-slider-tools.
-        "complex/spurious-c-conflicts/merge.merged",
-        "complex/spurious-c-conflicts/merge-union.merged",
-        "complex/spurious-c-conflicts/diff3-histogram.merged",
-        "complex/spurious-c-conflicts/zdiff3-histogram.merged",
-    ];
-
-    /// Should be a copy of `DIVERGING` once the reverse operation truly works like before
-    const DIVERGING_REVERSED: &[&str] = &[
-        // expected cases
-        "zdiff3-middlecommon/merge.merged-reversed",
-        "zdiff3-middlecommon/merge-union.merged-reversed",
-        "zdiff3-interesting/merge.merged-reversed",
-        "zdiff3-interesting/merge-theirs.merged-reversed",
-        "zdiff3-interesting/diff3.merged-reversed",
-        "zdiff3-interesting/diff3-histogram.merged-reversed",
-        "zdiff3-interesting/zdiff3.merged-reversed",
-        "zdiff3-interesting/zdiff3-histogram.merged-reversed",
-        "zdiff3-interesting/merge-union.merged-reversed",
-        "zdiff3-evil/merge.merged-reversed",
-        "zdiff3-evil/merge-union.merged-reversed",
-        "complex/missing-LF-at-EOF/merge.merged-reversed",
-        "complex/missing-LF-at-EOF/diff3.merged-reversed",
-        "complex/missing-LF-at-EOF/diff3-histogram.merged-reversed",
-        "complex/missing-LF-at-EOF/zdiff3.merged-reversed",
-        "complex/missing-LF-at-EOF/zdiff3-histogram.merged-reversed",
-        "complex/missing-LF-at-EOF/merge-ours.merged-reversed",
-        "complex/missing-LF-at-EOF/merge-theirs.merged-reversed",
-        "complex/missing-LF-at-EOF/merge-union.merged-reversed",
-        "complex/auto-simplification/merge.merged-reversed",
-        "complex/auto-simplification/merge-union.merged-reversed",
-        "complex/marker-newline-handling-lf2/zdiff3.merged-reversed",
-        "complex/marker-newline-handling-lf2/zdiff3-histogram.merged-reversed",
-        "complex/spurious-c-conflicts/merge.merged-reversed",
-        "complex/spurious-c-conflicts/merge-union.merged-reversed",
-        "complex/spurious-c-conflicts/diff3-histogram.merged-reversed",
-        "complex/spurious-c-conflicts/zdiff3-histogram.merged-reversed",
-    ];
-
-    // TODO: fix all of these eventually
-    fn is_case_diverging(case: &baseline::Expectation, diverging: &[&str]) -> bool {
-        diverging.iter().any(|name| case.name == *name)
-    }
-
     #[test]
     fn fuzzed() {
         for (ours, base, theirs, opts) in [
@@ -204,16 +124,10 @@ mod text {
     #[test]
     fn run_baseline() -> TestResult {
         let root = gix_testtools::scripted_fixture_read_only("text-baseline.sh")?;
-        for (baseline, diverging, expected_percentage) in [
-            ("baseline.cases", DIVERGING, 10),
-            ("baseline-reversed.cases", DIVERGING_REVERSED, 10),
-        ] {
+        for baseline in ["baseline.cases", "baseline-reversed.cases"] {
             let cases = std::fs::read_to_string(root.join(baseline))?;
             let mut out = Vec::new();
-            let mut num_diverging = 0;
-            let mut num_cases = 0;
             for case in baseline::Expectations::new(&root, &cases) {
-                num_cases += 1;
                 let mut input = imara_diff::InternedInput::default();
                 let actual = gix_merge::blob::builtin_driver::text(
                     &mut out,
@@ -224,42 +138,21 @@ mod text {
                     &case.theirs,
                     case.options,
                 );
-                if is_case_diverging(&case, diverging) {
-                    num_diverging += 1;
-                } else {
-                    if case.expected.contains_str("<<<<<<<") {
-                        assert_eq!(actual, Resolution::Conflict, "{}: resolution mismatch", case.name);
-                    } else {
-                        assert!(
-                            matches!(
-                                actual,
-                                Resolution::Complete | Resolution::CompleteWithAutoResolvedConflict
-                            ),
-                            "{}: resolution mismatch",
-                            case.name
-                        );
-                    }
-                    assert_str_eq!(
-                        out.as_bstr().to_str_lossy(),
-                        case.expected.to_str_lossy(),
-                        "{}: output mismatch\n{}",
-                        case.name,
-                        out.as_bstr()
-                    );
-                    assert_eq!(out.as_bstr(), case.expected);
-                }
+                assert_eq!(
+                    actual == Resolution::Conflict,
+                    case.git_status != 0,
+                    "{}: resolution {actual:?} disagrees with Git exit status {}",
+                    case.name,
+                    case.git_status
+                );
+                assert_str_eq!(
+                    out.as_bstr().to_str_lossy(),
+                    case.expected.to_str_lossy(),
+                    "{}: output mismatch",
+                    case.name
+                );
+                assert_eq!(out.as_bstr(), case.expected, "{}: output bytes mismatch", case.name);
             }
-
-            assert_eq!(
-                num_diverging,
-                diverging.len(),
-                "Number of expected diverging cases must match the actual one - probably the implementation improved"
-            );
-            assert_eq!(
-                ((num_diverging as f32 / num_cases as f32) * 100.0) as usize,
-                expected_percentage,
-                "Just to show the percentage of skipped tests - this should get better"
-            );
         }
         Ok(())
     }
@@ -496,7 +389,7 @@ mod text {
     mod baseline {
         use std::path::Path;
 
-        use bstr::BString;
+        use bstr::{BString, ByteSlice};
         use gix_merge::blob::builtin_driver::text::{Conflict, ConflictStyle};
 
         #[derive(Debug)]
@@ -509,6 +402,7 @@ mod text {
             pub base_marker: String,
             pub name: BString,
             pub expected: BString,
+            pub git_status: u8,
             pub options: gix_merge::blob::builtin_driver::text::Options,
         }
 
@@ -553,6 +447,10 @@ mod text {
                 let mut options = gix_merge::blob::builtin_driver::text::Options::default();
                 let marker_size = 7.try_into().unwrap();
                 for arg in words {
+                    if arg == "--diff-algorithm=histogram" {
+                        options.diff_algorithm = imara_diff::Algorithm::Histogram;
+                        continue;
+                    }
                     options.conflict = match arg {
                         "--diff3" => Conflict::Keep {
                             style: ConflictStyle::Diff3,
@@ -568,9 +466,6 @@ mod text {
                         _ => panic!("Unknown argument to parse into options: '{arg}'"),
                     }
                 }
-                if output.contains("histogram") {
-                    options.diff_algorithm = imara_diff::Algorithm::Histogram;
-                }
 
                 Some(Expectation {
                     ours: read(ours),
@@ -580,6 +475,12 @@ mod text {
                     base: read(base),
                     base_marker: base.into(),
                     expected: read(output),
+                    git_status: read(&format!("{output}.status"))
+                        .to_str()
+                        .expect("Git's exit status is ASCII")
+                        .trim()
+                        .parse()
+                        .expect("Git wrote a numeric exit status"),
                     name: output.into(),
                     options,
                 })

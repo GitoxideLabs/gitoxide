@@ -3,6 +3,60 @@ use gix::merge::tree::DirectoryRenames;
 use gix_testtools::TestResult;
 
 #[test]
+fn large_text_merges_ignore_the_diff_size_threshold() -> TestResult {
+    use gix::merge::{plumbing::blob::builtin_driver::text::Labels, tree::TreatAsUnresolved};
+
+    let Some(fixture) =
+        gix_testtools::scripted_fixture_read_only_with_git_version("make_large_text_merge_repo.sh", |version| {
+            version >= (2, 38, 0)
+        })?
+    else {
+        return Ok(());
+    };
+    let repo = gix::open_opts(&fixture, crate::util::restricted())?.with_object_memory();
+    let tree_ids = std::fs::read_to_string(fixture.join("trees"))?
+        .lines()
+        .map(|line| gix::ObjectId::from_hex(line.as_bytes()))
+        .collect::<Result<Vec<_>, _>>()?;
+    for ((side, conflicted), their_tree_id) in [("B", false), ("C", true)].into_iter().zip(&tree_ids[2..]) {
+        let expected = std::fs::read_to_string(
+            repo.workdir()
+                .expect("fixture has a worktree")
+                .join(format!("{side}.merge-info")),
+        )?;
+        let expected_tree_id = gix::ObjectId::from_hex(
+            expected
+                .split('\0')
+                .next()
+                .expect("Git emits its result tree")
+                .as_bytes(),
+        )?;
+        let mut outcome = repo.merge_trees(
+            tree_ids[0],
+            tree_ids[1],
+            *their_tree_id,
+            Labels {
+                ancestor: None,
+                current: Some("A".into()),
+                other: Some(side.into()),
+            },
+            repo.tree_merge_options()?,
+        )?;
+        assert_eq!(
+            outcome.tree.write()?,
+            expected_tree_id,
+            "text beyond the diff threshold merges like Git"
+        );
+        assert_eq!(
+            outcome.has_unresolved_conflicts(TreatAsUnresolved::git()),
+            conflicted,
+            "only overlapping text edits conflict"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn final_index_is_independent_of_mutable_tree_and_diagnostics() -> TestResult {
     use gix::{
         bstr::BString,

@@ -263,7 +263,7 @@ pub(super) mod inner {
     ///
     pub mod builtin_merge {
         use crate::blob::{
-            BuiltinDriver, PlatformRef, Resolution, builtin_driver,
+            BuiltinDriver, MAX_TEXT_MERGE_SIZE, PlatformRef, Resolution, builtin_driver,
             platform::{merge::content_merge_input, resource::Data},
         };
 
@@ -362,10 +362,7 @@ pub(super) mod inner {
         fn is_binary_buf(data: Data<'_>) -> bool {
             match data {
                 Data::Missing => false,
-                Data::Buffer(buf) => {
-                    let buf = &buf[..buf.len().min(8000)];
-                    buf.contains(&0)
-                }
+                Data::Buffer(buf) => buf.len() > MAX_TEXT_MERGE_SIZE || buf[..buf.len().min(8000)].contains(&0),
                 Data::TooLarge { .. } => true,
             }
         }

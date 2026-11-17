@@ -1170,7 +1170,6 @@ git init added-file-changed-content-and-mode
 
   git branch A
   git branch B
-  git branch expected
 
   git checkout A
   write_lines 1 2 3 4 5 >new
@@ -1182,16 +1181,6 @@ git init added-file-changed-content-and-mode
   chmod +x new
   git add --chmod=+x new
   git commit -m "add new with content B and +x"
-
-  git checkout expected
-  write_lines "<<<<<<< A" 1 2 3 4 5 ======= original 1 2 3 4 5 6 ">>>>>>> B" >new
-  git add --chmod=-x new
-  git commit -m "the content driver keeps one conflict hunk; retain A's mode"
-
-  git checkout -b expected-reversed
-  write_lines "<<<<<<< B" original 1 2 3 4 5 6 ======= 1 2 3 4 5 ">>>>>>> A" >new
-  git add --chmod=+x new
-  git commit -m "reverse the content markers and retain B's mode"
 )
 
 git init type-change-and-renamed
@@ -2218,7 +2207,7 @@ baseline conflicting-rename-complex A-B A B
 
 baseline same-rename-different-mode A-B A B
 baseline renamed-symlink-with-conflict A-B A B
-baseline added-file-changed-content-and-mode A-B A B "Git splits the content conflict into smaller hunks; modes and conflict stages agree"
+baseline added-file-changed-content-and-mode A-B A B
 
 baseline type-change-and-renamed A-B A B
 baseline change-and-delete A-B A B
@@ -2229,8 +2218,7 @@ baseline both-modify-union-attr A-B-diff3 A B
 baseline both-modify-binary A-B A B
 baseline both-modify-binary A-B A B
 baseline both-modify-file-with-binary-attr A-B A B
-baseline big-file-merge A-B A B "Git actually ignores core.bigFileThreshold during merging and tries a normal merge (or binary one) anyway. We don't ignore it and treat big files like binary files" \
-                                no-reverse
+baseline big-file-merge A-B A B
 baseline no-merge-base A-B A B
 baseline no-merge-base A-B-diff3 A B
 

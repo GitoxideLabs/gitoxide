@@ -313,22 +313,6 @@ fn perform_blob_merge(
         ConflictMapping::Original => (ResourceKind::CurrentOrOurs, ResourceKind::OtherOrTheirs),
         ConflictMapping::Swapped => (ResourceKind::OtherOrTheirs, ResourceKind::CurrentOrOurs),
     };
-    blob_merge.set_resource(Some(our_id), our_mode.kind(), our_location.as_bstr(), our_kind, objects)?;
-    blob_merge.set_resource(
-        Some(their_id),
-        their_mode.kind(),
-        their_location.as_bstr(),
-        their_kind,
-        objects,
-    )?;
-    blob_merge.set_resource(
-        Some(previous_id),
-        previous_mode.kind(),
-        previous_location.as_bstr(),
-        ResourceKind::CommonAncestorOrBase,
-        objects,
-    )?;
-
     fn combined(side: &BStr, location: &BString) -> BString {
         let mut buf = side.to_owned();
         buf.push_byte(b':');
@@ -356,7 +340,23 @@ fn perform_blob_merge(
             other: other.as_ref().map(|n| n.as_bstr()),
         }
     };
-    let mut prep = blob_merge.prepare_merge(objects, options.blob_merge)?;
+    let mut prep = blob_merge.prepare_tree_merge(current_location.as_bstr(), objects, options.blob_merge, |cache| {
+        cache.set_resource(Some(our_id), our_mode.kind(), our_location.as_bstr(), our_kind, objects)?;
+        cache.set_resource(
+            Some(their_id),
+            their_mode.kind(),
+            their_location.as_bstr(),
+            their_kind,
+            objects,
+        )?;
+        cache.set_resource(
+            Some(previous_id),
+            previous_mode.kind(),
+            previous_location.as_bstr(),
+            ResourceKind::CommonAncestorOrBase,
+            objects,
+        )
+    })?;
     if let crate::blob::builtin_driver::text::Conflict::Keep { marker_size, .. } = &mut prep.options.text.conflict {
         *marker_size =
             marker_size.saturating_add(extra_markers.saturating_add(options.marker_size_multiplier.saturating_mul(2)));

@@ -58,15 +58,24 @@ impl Repo {
     /// Merge `other` into `current`.
     fn merge(
         &self,
-        (base, current, other): (ObjectId, ObjectId, ObjectId),
+        trees: (ObjectId, ObjectId, ObjectId),
         options: gix_merge::tree::Options,
     ) -> TestResult<gix_merge::tree::Outcome<'_>> {
+        self.merge_with_objects(trees, &self.objects, options)
+    }
+
+    fn merge_with_objects<'objects>(
+        &self,
+        (base, current, other): (ObjectId, ObjectId, ObjectId),
+        objects: &'objects impl gix_object::FindObjectOrHeader,
+        options: gix_merge::tree::Options,
+    ) -> TestResult<gix_merge::tree::Outcome<'objects>> {
         Ok(gix_merge::tree(
             &base,
             &current,
             &other,
             Default::default(),
-            &self.objects,
+            objects,
             |buf| self.objects.write_buf(gix_object::Kind::Blob, buf),
             &mut gix_diff::tree::State::default(),
             &mut new_diff_resource_cache(self.root.path()),
@@ -315,6 +324,68 @@ fn forced_rename_keeps_compatible_directory_replacements() -> TestResult {
             expected,
             "the replacement survives only when it can coexist with the selected rename to {destination}"
         );
+    }
+    Ok(())
+}
+
+#[test]
+fn built_in_text_merges_check_blob_sizes_before_loading() -> TestResult {
+    const GIT_TEXT_LIMIT: u64 = 1023 * 1024 * 1024;
+
+    struct SizedBlob<'a> {
+        repo: &'a Repo,
+        blob_id: ObjectId,
+        size: u64,
+    }
+
+    impl gix_object::Find for SizedBlob<'_> {
+        fn try_find<'a>(
+            &self,
+            id: &gix_hash::oid,
+            buf: &'a mut Vec<u8>,
+        ) -> gix_error::Result<Option<gix_object::Data<'a>>> {
+            assert!(
+                id != self.blob_id || self.size == GIT_TEXT_LIMIT,
+                "the built-in merge must not load blobs above Git's text size limit"
+            );
+            self.repo.objects.try_find(id, buf)
+        }
+    }
+
+    impl gix_object::FindHeader for SizedBlob<'_> {
+        fn try_header(&self, id: &gix_hash::oid) -> gix_error::Result<Option<gix_object::Header>> {
+            if id == self.blob_id {
+                Ok(Some(gix_object::Header {
+                    kind: gix_object::Kind::Blob,
+                    size: self.size,
+                }))
+            } else {
+                self.repo.objects.try_header(id)
+            }
+        }
+    }
+
+    let repo = Repo::new()?;
+    let blob_ids = [repo.blob("base\n")?, repo.blob("ours\n")?, repo.blob("theirs\n")?];
+    let [base_tree_id, our_tree_id, their_tree_id] =
+        blob_ids.map(|blob_id| repo.tree("file", EntryKind::Blob.into(), blob_id));
+    let (base_tree_id, our_tree_id, their_tree_id) = (base_tree_id?, our_tree_id?, their_tree_id?);
+    for blob_id in blob_ids {
+        for excess in [0, 1] {
+            let objects = SizedBlob {
+                repo: &repo,
+                blob_id,
+                size: GIT_TEXT_LIMIT + excess,
+            };
+            let mut options = basic_merge_options().tree_merge;
+            options.rewrites = None;
+            let mut outcome = repo.merge_with_objects((base_tree_id, our_tree_id, their_tree_id), &objects, options)?;
+            assert_eq!(
+                outcome.tree.write(|tree| repo.objects.write(tree))? == our_tree_id,
+                excess > 0,
+                "the binary fallback keeps ours only if a blob exceeds the limit"
+            );
+        }
     }
     Ok(())
 }

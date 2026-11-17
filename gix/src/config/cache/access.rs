@@ -131,13 +131,6 @@ impl Cache {
         Ok(out)
     }
 
-    #[cfg(feature = "merge")]
-    pub(crate) fn merge_pipeline_options(&self) -> Result<gix_merge::blob::pipeline::Options> {
-        Ok(gix_merge::blob::pipeline::Options {
-            large_file_threshold_bytes: self.big_file_threshold()?,
-        })
-    }
-
     #[cfg(feature = "blob-diff")]
     pub(crate) fn diff_pipeline_options(&self) -> Result<gix_diff::blob::pipeline::Options> {
         Ok(gix_diff::blob::pipeline::Options {

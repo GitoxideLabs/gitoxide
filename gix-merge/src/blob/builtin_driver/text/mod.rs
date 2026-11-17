@@ -135,7 +135,8 @@ impl Default for Conflict {
 pub struct Merge<'input, 'data> {
     input: &'input imara_diff::InternedInput<&'data [u8]>,
     current_tokens: Vec<imara_diff::Token>,
-    hunks: Vec<utils::Hunk>,
+    regions: Vec<utils::Region>,
+    diff_algorithm: imara_diff::Algorithm,
 }
 
 pub(super) mod function;
