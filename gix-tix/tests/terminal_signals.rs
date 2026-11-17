@@ -87,6 +87,44 @@ fn sigint_restores_the_terminal_from_the_structural_diff() -> gix_error::TestRes
 }
 
 #[test]
+fn mouse_clicks_and_wheels_navigate_the_structural_diff() -> gix_error::TestResult {
+    let repository = structural_fixture()?;
+    let (mut terminal, original) = Pty::spawn(repository.path(), true)?;
+    terminal.wait_for(|output| contains(output, b"second") && contains(output, b"\x1b_Ga=p,"))?;
+    let opened = terminal.output.len();
+    terminal.master.write_all(b"\x1b[13;2u")?;
+    terminal.wait_for(|output| contains(&output[opened..], b"declaration renames:on"))?;
+    let clicked = terminal.output.len();
+    terminal.master.write_all(b"\x1b[<0;12;5M\x1b[<0;12;5m")?;
+    // Cell diffs can reuse the file-header prefix; the jump reveals later declarations.
+    terminal.wait_for(|output| contains(&output[clicked..], b"added_016"))?;
+    for (wheel, expected) in [
+        (b"\x1b[<65;10;10M".as_slice(), b"added_".as_slice()),
+        (b"\x1b[<64;10;10M".as_slice(), b"100644".as_slice()),
+    ] {
+        let scrolled = terminal.output.len();
+        for _ in 0..10 {
+            // Drain each redraw rather than overflowing the nonblocking PTY input queue.
+            let redraw = terminal.output.len();
+            terminal.master.write_all(wheel)?;
+            terminal.wait_for(|output| output.len() > redraw)?;
+        }
+        terminal.wait_for(|output| contains(&output[scrolled..], expected))?;
+    }
+    terminal.master.write_all(b"qqq")?;
+    assert!(
+        terminal.wait_for_exit()?.success(),
+        "mouse navigation returns to history and exits normally"
+    );
+    assert_eq!(
+        rustix::termios::tcgetattr(&terminal.master)?.local_modes,
+        original.local_modes,
+        "mouse navigation preserves terminal restoration"
+    );
+    Ok(())
+}
+
+#[test]
 fn shift_enter_scrolls_the_continuous_structural_diff_and_keeps_live_settings() -> gix_error::TestResult {
     let repository = structural_fixture()?;
     std::fs::write(repository.path().join("src/api.rs"), "fn worktree_only() {}\n")?;

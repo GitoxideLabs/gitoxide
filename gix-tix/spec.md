@@ -1696,6 +1696,17 @@ views.
   Cache file boundaries with the display data and refresh them with structural
   settings, so scrolling finds the current file without scanning the whole diff.
   A viewport with only one content row shows changes instead of freezing a header.
+- Mouse-wheel events over either built-in diff scroll vertically; horizontal
+  wheel events pan using the same page width as `h`/`l`. Ignore mouse input while
+  unfocused and wheel events outside the diff, including the worktree picker.
+  In structural mode, a left-button press on a visible file-tree filename jumps
+  to that file's patch header and resets horizontal panning. Filename hit regions
+  follow scrolling, horizontal panning, and all live settings. Directory rows,
+  indentation, blank space, modified clicks, dragging, and button releases do not
+  activate a jump. Renamed-source labels jump to the same file section. Short
+  final sections can be placed at the top; `End`/`G` still shows the final page.
+  Cache jump targets with the detached rows so clicking requires no source reads
+  or parsing.
 - `p` toggles production-only structural review. It starts disabled and remains
   set for later views in the same invocation. Hide tests, benchmarks, examples,
   and fixtures in conventional directories, including their singular names,

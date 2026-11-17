@@ -58,8 +58,8 @@ use crossterm::{
     event::{
         self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste, EnableFocusChange,
         EnableMouseCapture, Event as TerminalEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
-        KeyboardEnhancementFlags, ModifierKeyCode, MouseButton, MouseEventKind, PopKeyboardEnhancementFlags,
-        PushKeyboardEnhancementFlags,
+        KeyboardEnhancementFlags, ModifierKeyCode, MouseButton, MouseEvent, MouseEventKind,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
     style::{Print, ResetColor},
@@ -742,8 +742,47 @@ impl DiffView<'_> {
     }
 
     fn max_offset(&self, page: usize) -> usize {
+        let max = self.end_offset(page);
+        match self {
+            Self::Patch(_) => max,
+            Self::Structural(view) => max.max(view.last_file_header()),
+        }
+    }
+
+    fn end_offset(&self, page: usize) -> usize {
         let offset = self.display_line_count().saturating_sub(page);
         offset + usize::from(page > 1 && self.sticky_header_index(offset).is_some())
+    }
+
+    fn mouse(&self, mouse: MouseEvent, area: Rect, offset: usize, horizontal_offset: usize) -> Option<(usize, usize)> {
+        if !area.contains(Position::new(mouse.column, mouse.row)) {
+            return None;
+        }
+        let max = self.max_offset(usize::from(area.height.saturating_sub(2)).max(1));
+        let horizontal_page = usize::from(area.width).max(1);
+        let horizontal_max = self.max_width().saturating_sub(horizontal_page);
+        match mouse_scroll_action(mouse.kind, mouse.modifiers, 1, true) {
+            Some(Action::MoveUpBy(distance)) => Some((offset.saturating_sub(distance), horizontal_offset)),
+            Some(Action::MoveDownBy(distance)) => Some((offset.saturating_add(distance).min(max), horizontal_offset)),
+            Some(Action::ScrollLeft) => Some((offset, horizontal_offset.saturating_sub(horizontal_page))),
+            Some(Action::ScrollRight) => Some((
+                offset,
+                horizontal_offset.saturating_add(horizontal_page).min(horizontal_max),
+            )),
+            _ if mouse.kind == MouseEventKind::Down(MouseButton::Left) && mouse.modifiers.is_empty() => {
+                let Self::Structural(view) = self else {
+                    return None;
+                };
+                if mouse.row <= area.y || mouse.row >= area.bottom().saturating_sub(1) {
+                    return None;
+                }
+                let frozen = usize::from(area.height > 3 && self.sticky_header_index(offset).is_some());
+                let row = usize::from(mouse.row - area.y - 1).checked_sub(frozen)? + offset;
+                let column = usize::from(mouse.column - area.x) + horizontal_offset;
+                view.file_target(row, column).map(|target| (target, 0))
+            }
+            _ => None,
+        }
     }
 
     fn display_line_count(&self) -> usize {
@@ -8523,6 +8562,7 @@ fn show_diff_view(
             worktrunk::areas(frame_area, picker.display_row_count())
         });
         let page = usize::from(diff_area.height.saturating_sub(2)).max(1);
+        let end = diff.end_offset(page);
         let max = diff.max_offset(page);
         let horizontal_page = usize::from(diff_area.width).max(1);
         let horizontal_max = diff.max_width().saturating_sub(horizontal_page);
@@ -8551,6 +8591,12 @@ fn show_diff_view(
                 continue;
             }
             TerminalEvent::Resize(_, _) => continue,
+            TerminalEvent::Mouse(mouse) if focused => {
+                if let Some(position) = diff.mouse(mouse, diff_area, offset, horizontal_offset) {
+                    (offset, horizontal_offset) = position;
+                }
+                continue;
+            }
             TerminalEvent::Key(key) if focused && key.kind != KeyEventKind::Release => key,
             _ => continue,
         };
@@ -8564,7 +8610,7 @@ fn show_diff_view(
                     continue;
                 }
                 KeyCode::End | KeyCode::Char('G') => {
-                    offset = max;
+                    offset = end;
                     continue;
                 }
                 _ => {}
@@ -8580,7 +8626,7 @@ fn show_diff_view(
             Some(Action::HalfPageUp) => offset = offset.saturating_sub((page / 2).max(1)),
             Some(Action::HalfPageDown) => offset = offset.saturating_add((page / 2).max(1)).min(max),
             Some(Action::First) => offset = 0,
-            Some(Action::Last) => offset = max,
+            Some(Action::Last) => offset = end,
             Some(Action::ScrollLeft) => horizontal_offset = horizontal_offset.saturating_sub(horizontal_page),
             Some(Action::ScrollRight) => {
                 horizontal_offset = horizontal_offset.saturating_add(horizontal_page).min(horizontal_max);
@@ -15608,6 +15654,90 @@ added
         assert!(
             !action_allowed_during_rebase_continuation(Some(&Action::Cancel), false),
             "history Escape is reserved for stopping"
+        );
+    }
+
+    #[test]
+    fn builtin_diff_mouse_wheels_scroll_and_respect_viewport_bounds() {
+        let diff = BuiltInDiff::new(
+            "patch".into(),
+            (0..80_000).map(|index| format!("line {index:010}").into()).collect(),
+        );
+        let view = DiffView::Patch(&diff);
+        let area = Rect::new(4, 3, 8, 7);
+        let mouse = MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        };
+        for (kind, expected) in [
+            (MouseEventKind::ScrollUp, (69_999, 3)),
+            (MouseEventKind::ScrollDown, (70_001, 3)),
+            (MouseEventKind::ScrollLeft, (70_000, 0)),
+            (MouseEventKind::ScrollRight, (70_000, 7)),
+        ] {
+            assert_eq!(
+                view.mouse(MouseEvent { kind, ..mouse }, area, 70_000, 3),
+                Some(expected),
+                "wheels navigate both axes beyond the terminal scroll integer limit"
+            );
+        }
+        assert_eq!(
+            view.mouse(
+                MouseEvent {
+                    kind: MouseEventKind::ScrollUp,
+                    ..mouse
+                },
+                area,
+                0,
+                0
+            ),
+            Some((0, 0)),
+            "upward scrolling stops at the beginning"
+        );
+        let max = view.max_offset(5);
+        assert_eq!(
+            view.mouse(mouse, area, max, 7),
+            Some((max, 7)),
+            "downward scrolling stops at the end"
+        );
+        for (column, row) in [
+            (area.x - 1, area.y),
+            (area.right(), area.y),
+            (area.x, area.y - 1),
+            (area.x, area.bottom()),
+        ] {
+            assert!(
+                view.mouse(MouseEvent { column, row, ..mouse }, area, 10, 0).is_none(),
+                "events outside the diff, including the worktree picker, do not scroll it"
+            );
+        }
+        assert!(
+            view.mouse(
+                MouseEvent {
+                    kind: MouseEventKind::Moved,
+                    ..mouse
+                },
+                area,
+                10,
+                0
+            )
+            .is_none(),
+            "pointer movement does not scroll the diff"
+        );
+        assert!(
+            view.mouse(
+                MouseEvent {
+                    kind: MouseEventKind::Down(MouseButton::Left),
+                    ..mouse
+                },
+                area,
+                10,
+                0
+            )
+            .is_none(),
+            "patch contents do not create file-tree links"
         );
     }
 
