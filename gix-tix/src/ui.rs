@@ -446,44 +446,62 @@ pub(crate) fn draw_file_diff(
     offset: usize,
     horizontal_offset: usize,
 ) {
-    let [header, body, footer] =
+    let lines = diff.lines.iter().map(|line| {
+        let style = if line.starts_with(b"@@") {
+            Style::default().fg(Color::Cyan)
+        } else if line.starts_with(b"+") {
+            Style::default().fg(Color::Green)
+        } else if line.starts_with(b"-") {
+            Style::default().fg(Color::LightRed)
+        } else if line.starts_with(b"Binary ") {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default()
+        };
+        Line::styled(line.to_str_lossy(), style)
+    });
+    let summary = diff
+        .summary
+        .as_deref()
+        .into_iter()
+        .flat_map(|summary| summary.iter().cloned().chain(std::iter::once(Line::default())));
+    draw_diff(
+        frame,
+        area,
+        &diff.title.to_str_lossy(),
+        summary.chain(lines),
+        (offset, horizontal_offset),
+        "↑↓/jk move · h/l pan · <enter>/q/Esc back",
+    );
+}
+
+pub(crate) fn draw_diff<'a>(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    title: &str,
+    lines: impl IntoIterator<Item = Line<'a>>,
+    (offset, horizontal_offset): (usize, usize),
+    footer: &str,
+) {
+    let [header, body, footer_area] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)]).areas(area);
     frame.render_widget(Clear, area);
     frame.render_widget(
-        Paragraph::new(diff.title.to_str_lossy()).style(Style::default().add_modifier(Modifier::BOLD)),
+        Paragraph::new(title).style(Style::default().add_modifier(Modifier::BOLD)),
         header,
     );
-    let mut lines = diff
-        .lines
-        .iter()
-        .map(|line| {
-            let style = if line.starts_with(b"@@") {
-                Style::default().fg(Color::Cyan)
-            } else if line.starts_with(b"+") {
-                Style::default().fg(Color::Green)
-            } else if line.starts_with(b"-") {
-                Style::default().fg(Color::LightRed)
-            } else if line.starts_with(b"Binary ") {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default()
-            };
-            Line::styled(line.to_str_lossy(), style)
-        })
+    let lines = lines
+        .into_iter()
+        .skip(offset)
+        .take(usize::from(body.height))
         .collect::<Vec<_>>();
-    if let Some(summary) = &diff.summary {
-        lines.splice(0..0, summary.iter().cloned().chain(std::iter::once(Line::default())));
-    }
     frame.render_widget(
-        Paragraph::new(Text::from(lines)).scroll((
-            u16::try_from(offset).unwrap_or(u16::MAX),
-            u16::try_from(horizontal_offset).unwrap_or(u16::MAX),
-        )),
+        Paragraph::new(Text::from(lines)).scroll((0, u16::try_from(horizontal_offset).unwrap_or(u16::MAX))),
         body,
     );
     frame.render_widget(
-        Paragraph::new("↑↓/jk move · h/l pan · <enter>/q/Esc back").style(Style::default().add_modifier(Modifier::DIM)),
-        footer,
+        Paragraph::new(footer).style(Style::default().add_modifier(Modifier::DIM)),
+        footer_area,
     );
 }
 
@@ -1532,7 +1550,7 @@ fn draw_history(
             if let Some(error) = app.changes_error(pane) {
                 spans.push(Span::styled(format!("diff: {error}"), color(Color::LightRed)));
             } else {
-                spans.push(Span::raw("↑↓/jk move · h/l pan · <enter> diff"));
+                spans.push(Span::raw("↑↓/jk move · h/l pan · <enter> diff · <⇧enter> structure"));
             }
             spans.push(Span::raw(" · "));
             spans.extend(shortcut("copy", 'y', true));
@@ -2121,7 +2139,7 @@ fn render_changes(frame: &mut Frame<'_>, area: Rect, changes: &Changes, pane: Ch
     }
 }
 
-fn change_color(kind: ChangeKind) -> Color {
+pub(crate) fn change_color(kind: ChangeKind) -> Color {
     match kind {
         ChangeKind::Added => Color::Green,
         ChangeKind::Modified => Color::Yellow,
@@ -2911,6 +2929,9 @@ fn active_prefix_popup(
             } else {
                 "<enter> diff"
             })]);
+            if !selected_segment {
+                navigation.push(vec![Span::raw("<shift-enter> structure")]);
+            }
         }
         logical_rows = Some(vec![
             information,
@@ -9284,6 +9305,30 @@ Native tests: 2s"
     }
 
     #[test]
+    fn diff_viewports_can_scroll_past_the_terminal_scroll_integer_limit() -> gix::error::TestResult {
+        let mut terminal = Terminal::new(TestBackend::new(24, 6))?;
+        terminal.draw(|frame| {
+            super::draw_diff(
+                frame,
+                frame.area(),
+                "diff",
+                (0..80_000).map(|index| Line::from(format!("line {index}"))),
+                (70_000, 0),
+                "back",
+            );
+        })?;
+        assert!(
+            rendered_line(&terminal, 1).contains("line 70000"),
+            "all changes remain reachable beyond 65,535 rows"
+        );
+        assert!(
+            rendered_line(&terminal, 4).contains("line 70003"),
+            "only the visible page is drawn"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn shows_changed_paths_in_a_bottom_pane_below_the_summary() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = App::new(6);
         app.id_mode = IdMode::Commit;
@@ -9617,8 +9662,8 @@ Native tests: 2s"
         assert!(rendered_line(&terminal, 14).contains("↑↓/jk move · h/l pan"));
 
         assert!(
-            rendered_line(&terminal, 14).contains("<enter> diff · copy · cycle tree"),
-            "the changes pane advertises the next cycle mode"
+            rendered_line(&terminal, 14).contains("<enter> diff · <⇧enter> structure · copy · cycle tree"),
+            "the changes pane advertises both diff actions and the next cycle mode"
         );
         let status = rendered_line(&terminal, 14);
         for (label, key) in [("copy", 'y'), ("cycle tree", 'e')] {
@@ -9712,7 +9757,7 @@ Native tests: 2s"
         );
         assert!(
             rendered_line(&terminal, 14).contains(
-                "vs parent 1/2 0202020 · P next parent · ↑↓/jk move · h/l pan · <enter> diff · copy · cycle tree"
+                "vs parent 1/2 0202020 · P next parent · ↑↓/jk move · h/l pan · <enter> diff · <⇧enter> structure · copy · cycle tree"
             ),
             "merge diffs keep parent controls alongside navigation"
         );

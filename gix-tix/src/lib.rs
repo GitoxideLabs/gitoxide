@@ -20,6 +20,7 @@ mod menu;
 mod patch_id;
 mod prefix_input;
 mod ref_tree;
+mod structural_diff;
 #[cfg(unix)]
 mod terminal_palette;
 mod terminal_reply;
@@ -467,8 +468,12 @@ fn set_worktree_resources(
         )
         .or_raise(|| message("could not prepare old worktree diff resource"))?;
     let new_resource = new.unwrap_or(fallback);
-    // A deleted side stays absent even if a directory now occupies its path.
-    let removed_root = new.is_none().then(|| cache.filter.roots.new_root.take());
+    // Only a null new ID reads the worktree; staged and deleted sides use their recorded resources.
+    let worktree_root = if new.is_some_and(|resource| resource.id.is_null()) {
+        None
+    } else {
+        cache.filter.roots.new_root.take()
+    };
     let result = cache.set_resource(
         new.map(|resource| resource.id),
         new_resource.mode.kind(),
@@ -476,8 +481,8 @@ fn set_worktree_resources(
         gix::diff::blob::ResourceKind::NewOrDestination,
         repository,
     );
-    if let Some(root) = removed_root {
-        cache.filter.roots.new_root = root;
+    if let Some(root) = worktree_root {
+        cache.filter.roots.new_root = Some(root);
     }
     result.or_raise(|| message("could not prepare new worktree diff resource"))?;
     Ok(())
@@ -553,9 +558,13 @@ impl LineDiffPool {
     }
 
     fn invalidate(&mut self) {
+        self.release_workers();
+        self.staged_diff_key = None;
+    }
+
+    fn release_workers(&mut self) {
         self.active = None;
         self.last_used = None;
-        self.staged_diff_key = None;
     }
 
     fn expire(&mut self, now: Instant) -> bool {
@@ -563,8 +572,7 @@ impl LineDiffPool {
             .last_used
             .is_some_and(|last_used| now.saturating_duration_since(last_used) >= LINE_DIFF_POOL_IDLE);
         if expired {
-            self.active = None;
-            self.last_used = None;
+            self.release_workers();
         }
         expired
     }
@@ -717,6 +725,41 @@ enum PreparedFileDiff {
 struct CommitDiff {
     external: Vec<gix::diff::blob::platform::prepare_diff_command::Command>,
     internal: FileDiff,
+}
+
+enum DiffView<'a> {
+    Patch(&'a BuiltInDiff),
+    Structural(structural_diff::View<'a>),
+}
+
+impl DiffView<'_> {
+    fn display_line_count(&self) -> usize {
+        match self {
+            Self::Patch(diff) => diff.display_line_count(),
+            Self::Structural(view) => view.line_count(),
+        }
+    }
+
+    fn max_width(&self) -> usize {
+        match self {
+            Self::Patch(diff) => diff.max_width,
+            Self::Structural(view) => view.max_width(),
+        }
+    }
+
+    fn draw(&self, frame: &mut ratatui::Frame<'_>, area: Rect, offset: usize, horizontal_offset: usize) {
+        match self {
+            Self::Patch(diff) => ui::draw_file_diff(frame, area, diff, offset, horizontal_offset),
+            Self::Structural(view) => view.draw(frame, area, offset, horizontal_offset),
+        }
+    }
+
+    fn key(&mut self, key: KeyEvent) -> bool {
+        match self {
+            Self::Patch(_) => false,
+            Self::Structural(view) => view.key(key),
+        }
+    }
 }
 
 pub(crate) struct BuiltInDiff {
@@ -4103,6 +4146,21 @@ fn event_loop(
                 effect,
                 Effect::OpenDiff(..)
                     | Effect::OpenCommitDiff(_)
+                    | Effect::OpenStructuralDiff(..)
+                    | Effect::OpenCommitStructuralDiff(_)
+            ) {
+                fill_repository.retain = false;
+                fill_repository.retained = None;
+                if let Some(pool) = line_diff_pool.as_mut() {
+                    pool.release_workers();
+                }
+            }
+            if matches!(
+                effect,
+                Effect::OpenDiff(..)
+                    | Effect::OpenCommitDiff(_)
+                    | Effect::OpenStructuralDiff(..)
+                    | Effect::OpenCommitStructuralDiff(_)
                     | Effect::Reword(_)
                     | Effect::NewCommit { .. }
                     | Effect::Split(_)
@@ -4191,7 +4249,7 @@ fn event_loop(
                     refresh_pending = true;
                     refresh_expand_hidden = true;
                 }
-                Effect::OpenDiff(pane, index) => {
+                Effect::OpenDiff(pane, index) | Effect::OpenStructuralDiff(pane, index) => {
                     let changes = match pane {
                         ChangePane::Tree => tree_changes.as_ref().map(|(_, changes)| changes),
                         ChangePane::Worktree => worktree_changes.as_ref().map(|(_, changes)| changes),
@@ -4200,15 +4258,22 @@ fn event_loop(
                         .and_then(|changes| changes.diffs.get(index).zip(changes.paths.get(index)))
                         .ok_or_raise(|| message("selected path no longer has diff resources"))
                         .and_then(|(change, path)| {
-                            prepare_file_diff(&repository_path, repository_is_bare, change, path)
-                        })
-                        .and_then(|diff| {
-                            show_file_diff(
-                                terminal,
-                                diff,
-                                enhanced_keyboard,
-                                picker.as_deref().map(|picker| (picker, *picker_focused)),
-                            )
+                            let picker = picker.as_deref().map(|picker| (picker, *picker_focused));
+                            if matches!(effect, Effect::OpenStructuralDiff(..)) {
+                                let diff =
+                                    structural_diff::prepare_file(&repository_path, repository_is_bare, change, path)?;
+                                show_diff_view(
+                                    terminal,
+                                    DiffView::Structural(structural_diff::View::new(
+                                        &diff,
+                                        &mut app.structural_diff_options,
+                                    )),
+                                    picker,
+                                )
+                            } else {
+                                let diff = prepare_file_diff(&repository_path, repository_is_bare, change, path)?;
+                                show_file_diff(terminal, diff, enhanced_keyboard, picker)
+                            }
                         });
                     match result {
                         Ok(true) => app.focus_history(),
@@ -4216,7 +4281,7 @@ fn event_loop(
                         Ok(false) => {}
                     }
                 }
-                Effect::OpenCommitDiff(target) => {
+                Effect::OpenCommitDiff(target) | Effect::OpenCommitStructuralDiff(target) => {
                     let title = match target {
                         app::TreeDiffTarget::Commit { id, .. } => app
                             .rows
@@ -4234,15 +4299,31 @@ fn event_loop(
                         .as_ref()
                         .filter(|(cached_target, _)| *cached_target == target)
                         .map(|(_, changes)| changes);
-                    let result = prepare_commit_diff(&repository_path, repository_is_bare, target, cached, title)
-                        .and_then(|diff| {
-                            show_commit_diff(
-                                terminal,
-                                diff,
-                                enhanced_keyboard,
-                                picker.as_deref().map(|picker| (picker, *picker_focused)),
-                            )
-                        });
+                    let result = if matches!(effect, Effect::OpenCommitStructuralDiff(_)) {
+                        structural_diff::prepare_commit(&repository_path, repository_is_bare, target, title).and_then(
+                            |diff| {
+                                show_diff_view(
+                                    terminal,
+                                    DiffView::Structural(structural_diff::View::new(
+                                        &diff,
+                                        &mut app.structural_diff_options,
+                                    )),
+                                    picker.as_deref().map(|picker| (picker, *picker_focused)),
+                                )
+                            },
+                        )
+                    } else {
+                        prepare_commit_diff(&repository_path, repository_is_bare, target, cached, title).and_then(
+                            |diff| {
+                                show_commit_diff(
+                                    terminal,
+                                    diff,
+                                    enhanced_keyboard,
+                                    picker.as_deref().map(|picker| (picker, *picker_focused)),
+                                )
+                            },
+                        )
+                    };
                     match result {
                         Ok(true) => app.focus_history(),
                         Err(err) => app.leave_error(format!("diff: {err:#}")),
@@ -7320,37 +7401,13 @@ fn prepare_file_diff_content(
     change: &FileChange,
     path: &PathChange,
 ) -> Result<PreparedFileDiff> {
-    if let FileChange::Unavailable(message) = change {
-        bail!("{message}");
-    }
+    let mut resources = prepare_file_diff_resources(repository, change)?;
     let global_command = repository
         .config_snapshot()
         .trusted_program(gix::config::tree::Diff::EXTERNAL)?
         .map(gix::path::os_string_into_bstring)
         .transpose()
         .or_raise(|| message("external diff command is not representable on this platform"))?;
-    let mut resources = match change {
-        FileChange::Tree(_) => repository.diff_resource_cache(
-            gix::diff::blob::pipeline::Mode::ToGitUnlessBinaryToTextIsPresent,
-            Default::default(),
-        )?,
-        FileChange::Worktree { .. } => worktree_diff_cache(
-            repository,
-            gix::diff::blob::pipeline::Mode::ToGitUnlessBinaryToTextIsPresent,
-        )?
-        .ok_or_raise(|| message("a working tree is required to show this diff"))?,
-        FileChange::Unavailable(_) => unreachable!("handled above"),
-    };
-    resources.options.skip_internal_diff_if_external_is_configured = true;
-    match change {
-        FileChange::Tree(change) => {
-            change.attach(repository, repository).diff(&mut resources)?;
-        }
-        FileChange::Worktree { old, new } => {
-            set_worktree_resources(repository, &mut resources, old.as_ref(), new.as_ref())?;
-        }
-        FileChange::Unavailable(_) => unreachable!("handled above"),
-    }
     let prepared = resources
         .prepare_diff()
         .map_err(gix::Error::from)
@@ -7396,26 +7453,46 @@ fn prepare_file_diff_content(
     }
 }
 
+fn prepare_file_diff_resources(repository: &gix::Repository, change: &FileChange) -> Result<gix::diff::blob::Platform> {
+    if let FileChange::Unavailable(message) = change {
+        bail!("{message}");
+    }
+    let mut resources = match change {
+        FileChange::Tree(_) => repository.diff_resource_cache(
+            gix::diff::blob::pipeline::Mode::ToGitUnlessBinaryToTextIsPresent,
+            Default::default(),
+        )?,
+        FileChange::Worktree { .. } => worktree_diff_cache(
+            repository,
+            gix::diff::blob::pipeline::Mode::ToGitUnlessBinaryToTextIsPresent,
+        )?
+        .ok_or_raise(|| message("a working tree is required to show this diff"))?,
+        FileChange::Unavailable(_) => unreachable!("handled above"),
+    };
+    resources.options.skip_internal_diff_if_external_is_configured = true;
+    match change {
+        FileChange::Tree(change) => {
+            change.attach(repository, repository).diff(&mut resources)?;
+        }
+        FileChange::Worktree { old, new } => {
+            set_worktree_resources(repository, &mut resources, old.as_ref(), new.as_ref())?;
+        }
+        FileChange::Unavailable(_) => unreachable!("handled above"),
+    }
+    Ok(resources)
+}
+
 fn prepare_pager(repository: &gix::Repository, diff: BuiltInDiff) -> Result<FileDiff> {
-    let Some(program) = repository.config_snapshot().trusted_program("core.pager")? else {
+    let Some(command) = repository
+        .pager_command()
+        .or_raise(|| message("could not prepare pager environment"))?
+    else {
         return Ok(FileDiff::BuiltIn(diff));
     };
-    if program.is_empty() || program == "cat" {
-        return Ok(FileDiff::BuiltIn(diff));
-    }
-    let command = gix::command::prepare(program)
-        .command_may_be_shell_script_disallow_manual_argument_splitting()
-        .with_context(
-            repository
-                .command_context()
-                .or_raise(|| message("could not prepare pager environment"))?,
-        )
-        .env("GIT_PAGER_IN_USE", "true")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .try_into()?;
-    Ok(FileDiff::Pager { command, diff })
+    Ok(FileDiff::Pager {
+        command: command.try_into()?,
+        diff,
+    })
 }
 
 fn prepare_external_diff(
@@ -7435,8 +7512,16 @@ fn prepare_external_diff(
         .or_raise(|| message("could not prepare external diff command"))
 }
 
-fn built_in_diff(path: &PathChange, change: &FileChange, rendered: Option<BString>, binary: bool) -> BuiltInDiff {
-    let (old_path, new_path, old_mode, new_mode) = match change {
+fn diff_sides<'a>(
+    path: &'a PathChange,
+    change: &'a FileChange,
+) -> (
+    Option<&'a BStr>,
+    Option<&'a BStr>,
+    Option<gix::objs::tree::EntryMode>,
+    Option<gix::objs::tree::EntryMode>,
+) {
+    match change {
         FileChange::Tree(gix::object::tree::diff::ChangeDetached::Addition { entry_mode, .. }) => {
             (None, Some(path.path.as_bstr()), None, Some(*entry_mode))
         }
@@ -7469,8 +7554,17 @@ fn built_in_diff(path: &PathChange, change: &FileChange, rendered: Option<BStrin
             old.as_ref().map(|resource| resource.mode),
             new.as_ref().map(|resource| resource.mode),
         ),
-        FileChange::Unavailable(_) => unreachable!("unavailable diffs aren't rendered"),
-    };
+        FileChange::Unavailable(_) => (
+            (path.kind != ChangeKind::Added).then_some(path.path.as_bstr()),
+            (path.kind != ChangeKind::Deleted).then_some(path.path.as_bstr()),
+            None,
+            None,
+        ),
+    }
+}
+
+fn built_in_diff(path: &PathChange, change: &FileChange, rendered: Option<BString>, binary: bool) -> BuiltInDiff {
+    let (old_path, new_path, old_mode, new_mode) = diff_sides(path, change);
     let display_path = |path: Option<&gix::bstr::BStr>, prefix: &str| -> BString {
         path.map_or_else(
             || "/dev/null".into(),
@@ -7509,7 +7603,7 @@ fn show_file_diff(
     match diff {
         FileDiff::External(command) => run_external_diff(terminal, command, enhanced_keyboard).map(|()| false),
         FileDiff::Pager { command, diff } => run_pager(terminal, command, &diff, enhanced_keyboard).map(|()| false),
-        FileDiff::BuiltIn(diff) => show_builtin_diff(terminal, &diff, picker),
+        FileDiff::BuiltIn(diff) => show_diff_view(terminal, DiffView::Patch(&diff), picker),
     }
 }
 
@@ -8256,13 +8350,13 @@ fn run_pager(terminal: &mut Terminal, mut command: Command, diff: &BuiltInDiff, 
 }
 
 fn wait_for_keypress() -> Result<()> {
-    terminal::enable_raw_mode().or_raise(|| message("could not read pager acknowledgement"))?;
+    terminal::enable_raw_mode().or_raise(|| message("could not read external program acknowledgement"))?;
     loop {
         if interrupt::requested() {
             return Ok(());
         }
         if matches!(
-            read_terminal_event().or_raise(|| message("could not read pager acknowledgement"))?,
+            read_terminal_event().or_raise(|| message("could not read external program acknowledgement"))?,
             Some(TerminalEvent::Key(KeyEvent {
                 kind: KeyEventKind::Press,
                 ..
@@ -8374,9 +8468,9 @@ fn pager_needs_acknowledgement(elapsed: Duration) -> bool {
     elapsed <= IMMEDIATE_PAGER_EXIT
 }
 
-fn show_builtin_diff(
+fn show_diff_view(
     terminal: &mut Terminal,
-    diff: &BuiltInDiff,
+    mut diff: DiffView<'_>,
     picker: Option<(&worktrunk::Worktrees, bool)>,
 ) -> Result<bool> {
     let mut offset = 0usize;
@@ -8396,7 +8490,7 @@ fn show_builtin_diff(
         let page = usize::from(diff_area.height.saturating_sub(2)).max(1);
         let max = diff.display_line_count().saturating_sub(page);
         let horizontal_page = usize::from(diff_area.width).max(1);
-        let horizontal_max = diff.max_width.saturating_sub(horizontal_page);
+        let horizontal_max = diff.max_width().saturating_sub(horizontal_page);
         offset = offset.min(max);
         horizontal_offset = horizontal_offset.min(horizontal_max);
         terminal
@@ -8404,7 +8498,7 @@ fn show_builtin_diff(
                 if let Some((picker, focused)) = picker {
                     worktrunk::draw(frame, list_area, picker, focused);
                 }
-                ui::draw_file_diff(frame, diff_area, diff, offset, horizontal_offset);
+                diff.draw(frame, diff_area, offset, horizontal_offset);
                 prepare_terminal_frame(frame);
             })
             .or_raise(|| message("could not draw file diff"))?;
@@ -8424,6 +8518,22 @@ fn show_builtin_diff(
             TerminalEvent::Key(key) if focused && key.kind != KeyEventKind::Release => key,
             _ => continue,
         };
+        if diff.key(key) {
+            continue;
+        }
+        if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) {
+            match key.code {
+                KeyCode::Home | KeyCode::Char('g') => {
+                    offset = 0;
+                    continue;
+                }
+                KeyCode::End | KeyCode::Char('G') => {
+                    offset = max;
+                    continue;
+                }
+                _ => {}
+            }
+        }
         match action(key) {
             Some(Action::OpenDiff) => return Ok(false),
             Some(Action::ForceQuit | Action::Quit | Action::Cancel) => return Ok(true),
@@ -8468,6 +8578,14 @@ fn load_changes(
 }
 
 fn load_changes_without_lines(repository: &gix::Repository, target: app::TreeDiffTarget) -> Result<Changes> {
+    load_changes_with_diff_options(repository, target, None)
+}
+
+fn load_changes_with_diff_options(
+    repository: &gix::Repository,
+    target: app::TreeDiffTarget,
+    options: Option<gix::diff::Options>,
+) -> Result<Changes> {
     let app::TreeDiffTarget::Commit {
         id,
         parent: requested_parent,
@@ -8478,7 +8596,7 @@ fn load_changes_without_lines(repository: &gix::Repository, target: app::TreeDif
         };
         let old_tree = repository.find_commit(base)?.tree()?;
         let new_tree = repository.find_commit(tip)?.tree()?;
-        let mut changes = load_tree_changes_without_lines(repository, Some(&old_tree), &new_tree, None)?;
+        let mut changes = load_tree_changes_with_diff_options(repository, Some(&old_tree), &new_tree, None, options)?;
         changes.range = Some(app::ComparedRange { base, tip });
         return Ok(changes);
     };
@@ -8506,7 +8624,7 @@ fn load_changes_without_lines(repository: &gix::Repository, target: app::TreeDif
         Some(parent) => Some(repository.find_commit(parent)?.tree()?),
         None => None,
     };
-    load_tree_changes_without_lines(repository, old_tree.as_ref(), &new_tree, compared_parent)
+    load_tree_changes_with_diff_options(repository, old_tree.as_ref(), &new_tree, compared_parent, options)
 }
 
 fn load_tree_changes_without_lines(
@@ -8515,7 +8633,17 @@ fn load_tree_changes_without_lines(
     new_tree: &gix::Tree<'_>,
     parent: Option<ComparedParent>,
 ) -> Result<Changes> {
-    let changes = repository.diff_tree_to_tree(old_tree, Some(new_tree), None)?;
+    load_tree_changes_with_diff_options(repository, old_tree, new_tree, parent, None)
+}
+
+fn load_tree_changes_with_diff_options(
+    repository: &gix::Repository,
+    old_tree: Option<&gix::Tree<'_>>,
+    new_tree: &gix::Tree<'_>,
+    parent: Option<ComparedParent>,
+    options: Option<gix::diff::Options>,
+) -> Result<Changes> {
+    let changes = repository.diff_tree_to_tree(old_tree, Some(new_tree), options)?;
     let mut out = Changes {
         parent,
         ..Changes::default()
@@ -9430,6 +9558,9 @@ fn diagnostic_action(key: KeyEvent, app: &App) -> Option<Action> {
 }
 
 fn app_action(key: KeyEvent, app: &App) -> Option<Action> {
+    if key.code == KeyCode::Enter && key.modifiers.contains(KeyModifiers::SHIFT) {
+        return (key.kind == KeyEventKind::Press).then_some(Action::OpenStructuralDiff);
+    }
     if app.tree_selection_active() {
         if key.kind == KeyEventKind::Release {
             return None;
@@ -9671,6 +9802,7 @@ fn action_allowed_during_rebase_continuation(action: Option<&Action>, changes_fo
                 | Action::Copy
                 | Action::CopyPath(_)
                 | Action::CopyAuthor
+                | Action::OpenStructuralDiff
                 | Action::ForceQuit
                 | Action::Quit
         )
@@ -9701,6 +9833,9 @@ fn action_with_shortcut_groups(
     };
     let action = match code {
         KeyCode::Tab => Some(Action::ToggleChangesFocus),
+        KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
+            (key.kind == KeyEventKind::Press).then_some(Action::OpenStructuralDiff)
+        }
         KeyCode::Enter => Some(Action::OpenDiff),
         KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::ForceQuit),
         KeyCode::Char('b' | 'B') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::PageUp),
@@ -12285,7 +12420,9 @@ mod tests {
                 assert!(diff.lines.iter().any(|line| line == "+root"));
             }
             FileDiff::External(_) => unreachable!("isolated repositories have no external diff"),
-            FileDiff::Pager { .. } => unreachable!("isolated repositories have no pager"),
+            FileDiff::Pager { .. } => {
+                unreachable!("isolated repositories have no pager")
+            }
         }
 
         let external_repository = crate::test_repository::open_with(&fixture, ["diff.external=test --flag"])?;
@@ -14193,6 +14330,18 @@ added
             Some(Action::OpenDiff)
         );
         assert_eq!(
+            action(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT)),
+            Some(Action::OpenStructuralDiff),
+            "Shift+Enter opens the built-in structural diff"
+        );
+        for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
+            assert_eq!(
+                action(KeyEvent::new_with_kind(KeyCode::Enter, KeyModifiers::SHIFT, kind)),
+                None,
+                "holding Shift+Enter does not launch another tool"
+            );
+        }
+        assert_eq!(
             action(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE)),
             Some(Action::PageUp)
         );
@@ -14787,6 +14936,19 @@ added
         assert_eq!(
             app_action(key(KeyCode::Enter), &app),
             Some(Action::ConfirmTreeSelection)
+        );
+        let target = app
+            .selected_tree_diff_target()
+            .expect("tree selection highlights a commit");
+        let structural_diff = app_action(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT), &app)
+            .expect("Shift+Enter inspects the highlighted commit");
+        assert_eq!(
+            app.update(structural_diff),
+            vec![Effect::OpenCommitStructuralDiff(target)]
+        );
+        assert!(
+            app.tree_selection_source_active(),
+            "inspection does not confirm the transplant source"
         );
         app.update(Action::ConfirmTreeSelection);
         assert!(
@@ -15394,6 +15556,10 @@ added
         assert!(
             !action_allowed_during_rebase_continuation(Some(&Action::OpenDiff), false),
             "history Enter is reserved for continuation"
+        );
+        assert!(
+            action_allowed_during_rebase_continuation(Some(&Action::OpenStructuralDiff), false),
+            "Shift+Enter inspects history without continuing the rebase"
         );
         assert!(
             !action_allowed_during_rebase_continuation(Some(&Action::Cancel), false),

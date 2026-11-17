@@ -1668,13 +1668,46 @@ views.
 
 - `Enter` in history opens the whole selected commit against the active parent.
   `Enter` in a focused changes block opens only its selected path.
-- A whole-commit diff starts with commit identity and a Git-style per-path
+- `Shift+Enter` opens the same scope in a separate, built-in structural mode.
+  One continuous scrollable view starts with a directory tree of all changed,
+  added, removed, renamed, and type-changed files. Each file then has Git-style
+  `diff --git`, mode/rename, `---`, and `+++` headers followed by its structural
+  changes. The file-tree overview precedes every per-file section; scrolling
+  traverses all sections from beginning to end. File renames are always detected.
+  Tix parses these outlines with Tree-sitter. Rust shows modules, structs,
+  fields, traits, implementations, and function signatures.
+  TOML shows tables and keys; Markdown shows heading hierarchies.
+  Hidden body, value, or prose changes mark their owning declaration with `~`;
+  executable code and opaque macro token trees remain hidden.
+- Inside structural mode, `r` toggles declaration rename matching and `w`
+  toggles word changes within paired signatures. Both start enabled and remain
+  set for later structural views in the same invocation. They redraw cached
+  outlines without reading Git objects or reparsing inputs; file rename
+  detection remains enabled under either setting. Repeated or modified setting
+  keys do not toggle the settings. Arrows/`j`/`k`, page keys, and `g`/`G` or
+  `Home`/`End` move through the complete diff; `h`/`l` pans long lines.
+  `Enter`, `q`, or `Escape` returns to Tix with its selection intact.
+- Structural preparation uses a fresh bounded repository and the selected
+  old/new resources, including the active merge parent, branch comparison,
+  staged blobs, and current unstaged or untracked contents. The view retains
+  detached paths, display rows, and parsed outlines sharing their source text.
+  Whole-commit preparation does not compute line counts. Empty diffs say there
+  are no file changes. Empty or mode-only files retain their headers. Unsupported
+  languages, binary or oversized data, invalid UTF-8, and malformed syntax
+  retain their file-tree entry and headers with an explicit unavailable-outline
+  reason. Holding modified Enter does not reopen the view; inspection during
+  selection or conflict resolution does not confirm an edit. Synthetic history
+  rows expand instead. Terminals must report modified Enter separately.
+  Entering a diff view drops the navigation repository and idle line-count
+  workers, retaining their completed display data while the user reads.
+- An `Enter` whole-commit patch starts with commit identity and a Git-style per-path
   diffstat in diff order. Each textual path retains Git's churn count and bar,
   followed by an aligned signed net `additions - deletions` count. Parent/root,
   kind totals, and aggregate line totals follow before the internal patch and any
   per-path external diff drivers.
-- Diff preparation honors Git attributes, text conversion, binary detection,
-  external diff commands, and the configured `core.pager` pipeline.
+- Plain `Enter` diffs honor Git attributes, text conversion, binary detection,
+  external diff commands, and the configured `core.pager` pipeline. Structural
+  mode honors attributes and text conversion without launching a diff tool or pager.
 - Only validated text is tokenized for patches and line counts, including counts
   for external diff commands. Additions and deletions compare the existing text
   with an empty side; an existing empty file remains a text resource. Binary
@@ -1694,8 +1727,8 @@ views.
 - External programs run with the terminal suspended and restored afterward.
   They retain terminal ownership until they return. A pending termination
   request then exits Tix without accepting edited contents. `SIGINT` received
-  while a foreground editor, pager, diff driver, or remote deletion runs is
-  consumed on its return so cancelling that program lets the UI resume;
+  while a foreground editor, pager, diff driver, or remote deletion
+  runs is consumed on its return so cancelling that program lets the UI resume;
   `SIGTERM`, `SIGHUP`, and `SIGQUIT` remain pending. A signal during the pager's
   acknowledgement prompt exits Tix normally.
   Broken-pipe writes are accepted. If a pager exits within 250 ms, its already
