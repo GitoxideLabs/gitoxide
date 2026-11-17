@@ -734,6 +734,18 @@ enum DiffView<'a> {
 }
 
 impl DiffView<'_> {
+    fn sticky_header_index(&self, offset: usize) -> Option<usize> {
+        match self {
+            Self::Patch(diff) => ui::sticky_diff_header(&diff.file_headers, offset),
+            Self::Structural(view) => view.sticky_header_index(offset),
+        }
+    }
+
+    fn max_offset(&self, page: usize) -> usize {
+        let offset = self.display_line_count().saturating_sub(page);
+        offset + usize::from(page > 1 && self.sticky_header_index(offset).is_some())
+    }
+
     fn display_line_count(&self) -> usize {
         match self {
             Self::Patch(diff) => diff.display_line_count(),
@@ -768,6 +780,7 @@ pub(crate) struct BuiltInDiff {
     summary: Option<Vec<Line<'static>>>,
     lines: Vec<BString>,
     max_width: usize,
+    file_headers: Vec<(usize, usize)>,
 }
 
 impl BuiltInDiff {
@@ -782,10 +795,15 @@ impl BuiltInDiff {
             summary: None,
             lines,
             max_width,
+            file_headers: Vec::new(),
         }
     }
 
     fn with_summary(mut self, summary: Vec<Line<'static>>) -> Self {
+        for (start, header) in &mut self.file_headers {
+            *start += summary.len() + 1;
+            *header += summary.len() + 1;
+        }
         self.max_width = self
             .max_width
             .max(summary.iter().map(Line::width).max().unwrap_or_default());
@@ -7378,15 +7396,25 @@ fn prepare_commit_diff_with_repository(
         .ok_or_raise(|| message("commit diff changes were neither cached nor loaded"))?;
     let mut external = Vec::new();
     let mut lines = Vec::new();
+    let mut file_headers = Vec::new();
     for (change, path) in changes.diffs.iter().zip(&changes.paths) {
         match prepare_file_diff_content(repository, change, path)? {
             PreparedFileDiff::External(command) => external.push(command),
-            PreparedFileDiff::BuiltIn(diff) => lines.extend(diff.lines),
+            PreparedFileDiff::BuiltIn(diff) => {
+                file_headers.extend(
+                    diff.file_headers
+                        .into_iter()
+                        .map(|(start, header)| (start + lines.len(), header + lines.len())),
+                );
+                lines.extend(diff.lines);
+            }
         }
     }
     let line_counts = changes.paths.iter().map(|path| path.lines).collect::<Vec<_>>();
     let summary = ui::commit_diff_summary(changes, &line_counts, changes.lines_added, changes.lines_removed);
-    let internal = prepare_pager(repository, BuiltInDiff::new(title, lines).with_summary(summary))?;
+    let mut diff = BuiltInDiff::new(title, lines);
+    diff.file_headers = file_headers;
+    let internal = prepare_pager(repository, diff.with_summary(summary))?;
     Ok(CommitDiff { external, internal })
 }
 
@@ -7593,10 +7621,12 @@ fn built_in_diff(path: &PathChange, change: &FileChange, rendered: Option<BStrin
     } else if let Some(rendered) = rendered {
         lines.extend(rendered.lines().map(BString::from));
     }
-    BuiltInDiff::new(
+    let mut diff = BuiltInDiff::new(
         format!("{} {}", path.kind.letter(), path.path.to_str_lossy()).into(),
         lines,
-    )
+    );
+    diff.file_headers.push((0, usize::from(new_path.is_some())));
+    diff
 }
 
 fn show_file_diff(
@@ -8493,10 +8523,11 @@ fn show_diff_view(
             worktrunk::areas(frame_area, picker.display_row_count())
         });
         let page = usize::from(diff_area.height.saturating_sub(2)).max(1);
-        let max = diff.display_line_count().saturating_sub(page);
+        let max = diff.max_offset(page);
         let horizontal_page = usize::from(diff_area.width).max(1);
         let horizontal_max = diff.max_width().saturating_sub(horizontal_page);
         offset = offset.min(max);
+        let page = page - usize::from(page > 1 && diff.sticky_header_index(offset).is_some());
         horizontal_offset = horizontal_offset.min(horizontal_max);
         terminal
             .draw(|frame| {
@@ -12538,6 +12569,14 @@ mod tests {
             topic_position < extra_position,
             "whole-commit patches retain tree-diff order"
         );
+        let summary_rows = diff.summary.as_ref().expect("commit diffs have a summary").len() + 1;
+        for header in [topic_position, extra_position] {
+            assert_eq!(
+                DiffView::Patch(&diff).sticky_header_index(summary_rows + header + 1),
+                Some(summary_rows + header),
+                "aggregated patches freeze each file's own header after the summary"
+            );
+        }
         let base = repository.rev_parse_single("v1^{}")?.detach();
         let branch_target = app::TreeDiffTarget::Branch { base, tip: topic_id };
         let branch = load_changes(&repository, branch_target, line_diff_pool)?;

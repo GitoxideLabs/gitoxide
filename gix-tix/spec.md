@@ -1688,6 +1688,14 @@ views.
   keys do not toggle the settings. Arrows/`j`/`k`, page keys, and `g`/`G` or
   `Home`/`End` move through the complete diff; `h`/`l` pans long lines.
   `Enter`, `q`, or `Escape` returns to Tix with its selection intact.
+- Built-in structural and patch views freeze the current file header at the
+  top of the diff content after it scrolls out of view. Headers first move in
+  normal flow; the next file replaces the frozen header when it reaches the
+  top. The overview has no frozen file header. Frozen rows retain their colors
+  and horizontal panning, and scrolling to the end still shows the final change.
+  Cache file boundaries with the display data and refresh them with structural
+  settings, so scrolling finds the current file without scanning the whole diff.
+  A viewport with only one content row shows changes instead of freezing a header.
 - `p` toggles production-only structural review. It starts disabled and remains
   set for later views in the same invocation. Hide tests, benchmarks, examples,
   and fixtures in conventional directories, including their singular names,

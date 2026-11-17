@@ -439,6 +439,21 @@ fn changes_pane_areas(
     }
 }
 
+fn patch_line(line: &BString) -> Line<'_> {
+    let style = if line.starts_with(b"@@") {
+        Style::default().fg(Color::Cyan)
+    } else if line.starts_with(b"+") {
+        Style::default().fg(Color::Green)
+    } else if line.starts_with(b"-") {
+        Style::default().fg(Color::LightRed)
+    } else if line.starts_with(b"Binary ") {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default()
+    };
+    Line::styled(line.to_str_lossy(), style)
+}
+
 pub(crate) fn draw_file_diff(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -446,20 +461,7 @@ pub(crate) fn draw_file_diff(
     offset: usize,
     horizontal_offset: usize,
 ) {
-    let lines = diff.lines.iter().map(|line| {
-        let style = if line.starts_with(b"@@") {
-            Style::default().fg(Color::Cyan)
-        } else if line.starts_with(b"+") {
-            Style::default().fg(Color::Green)
-        } else if line.starts_with(b"-") {
-            Style::default().fg(Color::LightRed)
-        } else if line.starts_with(b"Binary ") {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        };
-        Line::styled(line.to_str_lossy(), style)
-    });
+    let lines = diff.lines.iter().map(patch_line);
     let summary = diff
         .summary
         .as_deref()
@@ -470,9 +472,22 @@ pub(crate) fn draw_file_diff(
         area,
         &diff.title.to_str_lossy(),
         summary.chain(lines),
+        sticky_diff_header(&diff.file_headers, offset).map(|index| {
+            let summary_rows = diff.summary.as_ref().map_or(0, |summary| summary.len() + 1);
+            patch_line(&diff.lines[index - summary_rows])
+        }),
         (offset, horizontal_offset),
         "↑↓/jk move · h/l pan · <enter>/q/Esc back",
     );
+}
+
+// Pairs identify a file's first row and its filename row; deleted patches use the old filename.
+pub(crate) fn sticky_diff_header(file_headers: &[(usize, usize)], offset: usize) -> Option<usize> {
+    let index = file_headers
+        .partition_point(|&(start, _)| start <= offset)
+        .checked_sub(1)?;
+    let (_, header) = file_headers[index];
+    (header < offset).then_some(header)
 }
 
 pub(crate) fn draw_diff<'a>(
@@ -480,6 +495,7 @@ pub(crate) fn draw_diff<'a>(
     area: Rect,
     title: &str,
     lines: impl IntoIterator<Item = Line<'a>>,
+    sticky_header: Option<Line<'a>>,
     (offset, horizontal_offset): (usize, usize),
     footer: &str,
 ) {
@@ -490,10 +506,11 @@ pub(crate) fn draw_diff<'a>(
         Paragraph::new(title).style(Style::default().add_modifier(Modifier::BOLD)),
         header,
     );
-    let lines = lines
+    let sticky_header = sticky_header.filter(|_| body.height > 1);
+    let content_height = usize::from(body.height) - usize::from(sticky_header.is_some());
+    let lines = sticky_header
         .into_iter()
-        .skip(offset)
-        .take(usize::from(body.height))
+        .chain(lines.into_iter().skip(offset).take(content_height))
         .collect::<Vec<_>>();
     for (y, line) in (body.y..body.bottom()).zip(&lines) {
         if line.style.bg.is_some() {
@@ -5974,6 +5991,88 @@ Native tests: 2s"
     }
 
     #[test]
+    fn frozen_patch_headers_keep_file_names_and_final_changes_visible() -> gix::error::TestResult {
+        for kind in [ChangeKind::Added, ChangeKind::Deleted, ChangeKind::Renamed] {
+            let path = crate::app::PathChange {
+                kind,
+                group: ChangeGroup::Tree,
+                source: (kind == ChangeKind::Renamed).then(|| "before.rs".into()),
+                path: "after.rs".into(),
+                lines: None,
+            };
+            let mut diff = crate::built_in_diff(
+                &path,
+                &crate::FileChange::Unavailable("display-only test"),
+                Some(
+                    "@@ -1,4 +1,4 @@
+--- a/not-a-file-header
++++ b/not-a-file-header
+-old
++new
+ final change
+"
+                    .into(),
+                ),
+                false,
+            );
+            diff = diff.with_summary(vec![Line::from("overview")]);
+            let mut before = Vec::new();
+            diff.write_to(&mut before)?;
+            let mut terminal = Terminal::new(TestBackend::new(80, 7))?;
+            terminal.draw(|frame| draw_file_diff(frame, frame.area(), &diff, 0, 0))?;
+            assert_eq!(
+                rendered_line(&terminal, 1).trim_end(),
+                "overview",
+                "summaries do not freeze a file name"
+            );
+            let offset = 6;
+            let (name, color) = if kind == ChangeKind::Deleted {
+                ("--- a/after.rs", Color::LightRed)
+            } else {
+                ("+++ b/after.rs", Color::Green)
+            };
+            terminal.draw(|frame| draw_file_diff(frame, frame.area(), &diff, offset, 0))?;
+            assert_eq!(
+                rendered_line(&terminal, 1).trim_end(),
+                name,
+                "added, deleted, and renamed files retain an existing filename"
+            );
+            assert_eq!(
+                terminal.backend().buffer()[(0, 1)].fg,
+                color,
+                "freezing preserves patch header colors"
+            );
+            assert_eq!(
+                rendered_line(&terminal, 2).trim_end(),
+                diff.lines[offset - 2].to_str_lossy(),
+                "patch contents cannot masquerade as file boundaries"
+            );
+            terminal.draw(|frame| draw_file_diff(frame, frame.area(), &diff, offset, 4))?;
+            assert_eq!(
+                rendered_line(&terminal, 1).trim_end(),
+                &name[4..],
+                "frozen names pan with the patch"
+            );
+            for height in [3, 4, 7, 40] {
+                let mut terminal = Terminal::new(TestBackend::new(80, height))?;
+                let max = crate::DiffView::Patch(&diff).max_offset(usize::from(height - 2));
+                terminal.draw(|frame| draw_file_diff(frame, frame.area(), &diff, max, 0))?;
+                assert!(
+                    (1..height - 1).any(|y| rendered_line(&terminal, y).contains("final change")),
+                    "the final change remains reachable at every viewport height"
+                );
+            }
+            let mut after = Vec::new();
+            diff.write_to(&mut after)?;
+            assert_eq!(
+                before, after,
+                "frozen headers never add bytes to the configured pager's patch"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn renders_and_streams_compact_commit_diff_summaries() -> Result<(), Box<dyn std::error::Error>> {
         let row = Commit {
             id: gix::ObjectId::Sha1([1; 20]),
@@ -9321,6 +9420,7 @@ Native tests: 2s"
                 "diff",
                 (0..80_000)
                     .map(|index| Line::styled(format!("line {index}"), Style::default().bg(Color::Rgb(12, 44, 18)))),
+                None,
                 (70_000, 0),
                 "back",
             );

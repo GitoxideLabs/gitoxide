@@ -400,6 +400,7 @@ pub(crate) struct View<'a> {
     options: &'a mut Options,
     lines: Vec<(Line<'static>, Option<Language>)>,
     max_width: usize,
+    file_headers: Vec<(usize, usize)>,
     colors: &'a Palette,
 }
 
@@ -407,11 +408,13 @@ impl<'a> View<'a> {
     pub(crate) fn new(diff: &'a Diff, options: &'a mut Options, colors: &'a Palette) -> Self {
         let lines = diff.render(options, colors);
         let max_width = lines.iter().map(|(line, _)| line.width()).max().unwrap_or_default();
+        let file_headers = file_header_rows(&lines);
         Self {
             diff,
             options,
             lines,
             max_width,
+            file_headers,
             colors,
         }
     }
@@ -422,6 +425,10 @@ impl<'a> View<'a> {
 
     pub(crate) fn max_width(&self) -> usize {
         self.max_width
+    }
+
+    pub(crate) fn sticky_header_index(&self, offset: usize) -> Option<usize> {
+        crate::ui::sticky_diff_header(&self.file_headers, offset)
     }
 
     pub(crate) fn key(&mut self, key: KeyEvent) -> bool {
@@ -435,6 +442,7 @@ impl<'a> View<'a> {
             _ => return false,
         }
         self.lines = self.diff.render(self.options, self.colors);
+        self.file_headers = file_header_rows(&self.lines);
         self.max_width = self
             .lines
             .iter()
@@ -458,10 +466,25 @@ impl<'a> View<'a> {
             self.lines
                 .iter()
                 .map(|(line, language)| self.colors.highlight(line, *language)),
+            self.sticky_header_index(offset)
+                .map(|index| self.colors.highlight(&self.lines[index].0, None)),
             (offset, horizontal_offset),
             &footer,
         );
     }
+}
+
+fn file_header_rows(lines: &[(Line<'_>, Option<Language>)]) -> Vec<(usize, usize)> {
+    lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, (line, _))| {
+            line.spans
+                .first()
+                .is_some_and(|span| span.content.starts_with("diff --git "))
+                .then_some((index, index))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -566,6 +589,76 @@ mod tests {
                 span.style.bg, line.style.bg,
                 "{word} has stronger emphasis than its row"
             );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn file_headers_stick_only_after_reaching_the_viewport_top() -> TestResult {
+        let repository = repository()?;
+        let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
+        let mut options = Options::default();
+        let colors = Palette::new([220; 3], [20; 3], None);
+        let mut view = View::new(&diff, &mut options, &colors);
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(160, 7))?;
+        let row = |terminal: &ratatui::Terminal<ratatui::backend::TestBackend>, y| {
+            (0..160)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_owned()
+        };
+        for key in [None, Some('p'), Some('w'), Some('r')] {
+            if let Some(key) = key {
+                assert!(view.key(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE)));
+            }
+            terminal.draw(|frame| view.draw(frame, frame.area(), 0, 0))?;
+            assert!(
+                row(&terminal, 1).starts_with("Changed files"),
+                "the overview has no frozen file header"
+            );
+            let headers: Vec<_> = view
+                .lines
+                .iter()
+                .enumerate()
+                .filter_map(|(index, (line, _))| line.to_string().starts_with("diff --git ").then_some(index))
+                .collect();
+            for (file, header) in headers.into_iter().enumerate() {
+                let name = view.lines[header].0.to_string();
+                terminal.draw(|frame| view.draw(frame, frame.area(), header - 1, 0))?;
+                assert_eq!(
+                    row(&terminal, if file == 0 { 2 } else { 3 }),
+                    name,
+                    "the next header scrolls up in normal flow"
+                );
+                terminal.draw(|frame| view.draw(frame, frame.area(), header, 0))?;
+                assert_eq!(
+                    row(&terminal, 1),
+                    name,
+                    "a header reaching the top replaces the previous file"
+                );
+                assert_eq!(
+                    row(&terminal, 2),
+                    view.lines[header + 1].0.to_string(),
+                    "the header is not duplicated"
+                );
+                terminal.draw(|frame| view.draw(frame, frame.area(), header + 2, 0))?;
+                assert_eq!(
+                    row(&terminal, 1),
+                    name,
+                    "the current file stays visible while reading its changes"
+                );
+                assert_eq!(
+                    row(&terminal, 2),
+                    view.lines[header + 2].0.to_string(),
+                    "freezing does not discard the first visible change"
+                );
+                assert_eq!(
+                    terminal.backend().buffer()[(159, 1)].bg,
+                    colors.header.bg.expect("sampled headers have a background"),
+                    "the frozen header keeps its full-width theme color"
+                );
+            }
         }
         Ok(())
     }
