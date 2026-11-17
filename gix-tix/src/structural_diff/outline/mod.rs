@@ -105,7 +105,6 @@ impl PreparedDiff {
     }
 
     /// Whether either input contains declarations included by the current settings.
-    #[cfg(test)]
     pub fn has_code(&self, options: &Options) -> bool {
         self.before
             .iter()

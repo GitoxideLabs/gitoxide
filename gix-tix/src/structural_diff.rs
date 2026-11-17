@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, path::Path};
 
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 use gix::{
     Result,
     bstr::{BStr, BString, ByteSlice},
@@ -32,6 +32,7 @@ struct File {
     path: PathChange,
     headers: Vec<String>,
     language: Option<Language>,
+    metadata_changed: bool,
     outline: std::result::Result<PreparedDiff, String>,
 }
 
@@ -117,13 +118,73 @@ impl File {
             PreparedDiff::new(input(old.data)?, input(new.data)?, language)
         })()
         .map_err(|err: gix::Error| format!("{err:#}"));
+        let (_, _, old_mode, new_mode) = crate::diff_sides(path, change);
         Self {
             path: path.clone(),
             headers: file_headers(path, change),
             language,
+            metadata_changed: old_mode != new_mode || path.source.is_some(),
             outline,
         }
     }
+
+    fn visible(&self, options: &Options) -> bool {
+        if !options.production_only {
+            return true;
+        }
+        if non_production_path(self.path.path.as_bstr())
+            && (self.path.kind == ChangeKind::Copied
+                || self
+                    .path
+                    .source
+                    .as_ref()
+                    .is_none_or(|source| non_production_path(source.as_bstr())))
+        {
+            return false;
+        }
+        match &self.outline {
+            Ok(outline) => outline.has_code(options) && (self.metadata_changed || outline.has_changes(options)),
+            Err(_) => true,
+        }
+    }
+}
+
+// shortcut: custom Cargo target paths are unclassified; read target metadata if those layouts need filtering.
+fn non_production_path(path: &BStr) -> bool {
+    if path.split(|byte| *byte == b'/').any(|part| {
+        matches!(
+            part,
+            b"test"
+                | b"tests"
+                | b"bench"
+                | b"benches"
+                | b"benchmark"
+                | b"benchmarks"
+                | b"example"
+                | b"examples"
+                | b"fixture"
+                | b"fixtures"
+        )
+    }) {
+        return true;
+    }
+    let name = path.rsplit(|byte| *byte == b'/').next().unwrap_or_default();
+    let stem = name.strip_suffix(b".rs").unwrap_or_default();
+    matches!(
+        stem,
+        b"test"
+            | b"tests"
+            | b"bench"
+            | b"benches"
+            | b"benchmark"
+            | b"benchmarks"
+            | b"example"
+            | b"examples"
+            | b"fixture"
+            | b"fixtures"
+    ) || stem.starts_with(b"test_")
+        || stem.ends_with(b"_test")
+        || stem.ends_with(b"_tests")
 }
 
 fn file_headers(path: &PathChange, change: &FileChange) -> Vec<String> {
@@ -228,15 +289,27 @@ impl FileTree {
 
 impl Diff {
     fn render(&self, options: &Options, colors: &Palette) -> Vec<(Line<'static>, Option<Language>)> {
+        let visible: Vec<_> = self
+            .files
+            .iter()
+            .enumerate()
+            .filter(|(_, file)| file.visible(options))
+            .map(|(index, _)| index)
+            .collect();
         let mut lines = vec![Line::styled(
-            format!("Changed files ({})", self.files.len()),
+            format!("Changed files ({})", visible.len()),
             colors.header,
         )];
-        if self.files.is_empty() {
-            lines.push(Line::from("No file changes."));
+        if visible.is_empty() {
+            lines.push(Line::from(if options.production_only {
+                "No production file changes."
+            } else {
+                "No file changes."
+            }));
         }
         let mut tree = FileTree::default();
-        for (index, file) in self.files.iter().enumerate() {
+        for &index in &visible {
+            let file = &self.files[index];
             let components = file
                 .path
                 .path
@@ -254,7 +327,8 @@ impl Diff {
         }
         tree.render(&self.files, "", &mut lines, colors);
         let mut rows = lines.into_iter().map(|line| (line, None)).collect::<Vec<_>>();
-        for file in &self.files {
+        for index in visible {
+            let file = &self.files[index];
             rows.push((Line::default(), None));
             rows.extend(file.headers.iter().map(|header| {
                 (
@@ -351,12 +425,13 @@ impl<'a> View<'a> {
     }
 
     pub(crate) fn key(&mut self, key: KeyEvent) -> bool {
-        if key.kind != KeyEventKind::Press || key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) {
+        if key.kind != KeyEventKind::Press || !key.modifiers.is_empty() {
             return false;
         }
         match key.code {
             KeyCode::Char('r') => self.options.find_renames = !self.options.find_renames,
             KeyCode::Char('w') => self.options.word_diff = !self.options.word_diff,
+            KeyCode::Char('p') => self.options.production_only = !self.options.production_only,
             _ => return false,
         }
         self.lines = self.diff.render(self.options, self.colors);
@@ -371,7 +446,8 @@ impl<'a> View<'a> {
 
     pub(crate) fn draw(&self, frame: &mut Frame<'_>, area: Rect, offset: usize, horizontal_offset: usize) {
         let footer = format!(
-            "r declaration renames:{} · w words:{} · ↑↓/jk · g/G first/last · h/l pan · <enter>/q/Esc back",
+            "p production only:{} · r declaration renames:{} · w words:{} · ↑↓/jk · g/G ends · h/l · Enter/q/Esc",
+            if self.options.production_only { "on" } else { "off" },
             if self.options.find_renames { "on" } else { "off" },
             if self.options.word_diff { "on" } else { "off" },
         );
@@ -390,6 +466,7 @@ impl<'a> View<'a> {
 
 #[cfg(test)]
 mod tests {
+    use crossterm::event::KeyModifiers;
     use gix::error::TestResult;
 
     use super::*;
@@ -409,6 +486,11 @@ mod tests {
         )?)
     }
 
+    fn production_repository() -> TestResult<gix::Repository> {
+        let path = gix_testtools::scripted_fixture_read_only("structural-diff-production.sh")?;
+        Ok(crate::test_repository::open(&path)?)
+    }
+
     fn target(repository: &gix::Repository, name: &str, parent: usize) -> TestResult<TreeDiffTarget> {
         Ok(TreeDiffTarget::Commit {
             id: repository.rev_parse_single(name)?.detach(),
@@ -422,6 +504,39 @@ mod tests {
             .map(|(line, _)| line.to_string())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn conventional_non_production_paths_do_not_match_similar_production_names() {
+        for path in [
+            "tests/gix/mod.rs",
+            "crate/benches/run.rs",
+            "crate/benchmark/run.rs",
+            "benchmarks/compare.rs",
+            "examples/demo.rs",
+            "support/fixtures/input.bin",
+            "src/tests.rs",
+            "src/test_repository.rs",
+            "src/api_tests.rs",
+        ] {
+            assert!(
+                non_production_path(path.as_bytes().as_bstr()),
+                "conventional test and development paths are hidden: {path}"
+            );
+        }
+        for path in [
+            "src/latest.rs",
+            "src/tester.rs",
+            "src/contest.rs",
+            "Cargo.toml",
+            "docs/guide.md",
+            "src/api.rs",
+        ] {
+            assert!(
+                !non_production_path(path.as_bytes().as_bstr()),
+                "production and documentation paths remain visible: {path}"
+            );
+        }
     }
 
     #[test]
@@ -572,6 +687,190 @@ mod tests {
         assert!(
             !text(&View::new(&diff, &mut options, &Palette::default()).lines).contains("[-i32-]"),
             "reopening retains the word setting"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn production_only_hides_non_production_files_and_declarations() -> TestResult {
+        let repository = production_repository()?;
+        let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
+        let mut options = Options::default();
+        let colors = Palette::default();
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(160, 24))?;
+        {
+            let mut view = View::new(&diff, &mut options, &colors);
+            terminal.draw(|frame| view.draw(frame, frame.area(), 0, 0))?;
+            assert!(
+                text(&view.lines).starts_with("Changed files (13)"),
+                "all files are visible by default"
+            );
+            for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT, KeyModifiers::SHIFT] {
+                assert!(
+                    !view.key(KeyEvent::new(KeyCode::Char('p'), modifiers)),
+                    "modified keys leave the setting intact"
+                );
+            }
+            for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
+                assert!(
+                    !view.key(KeyEvent::new_with_kind(KeyCode::Char('p'), KeyModifiers::NONE, kind)),
+                    "holding a setting key does not oscillate it"
+                );
+            }
+            assert!(
+                view.key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
+                "p enables production-only review"
+            );
+            let output = text(&view.lines);
+            terminal.draw(|frame| view.draw(frame, frame.area(), 0, 0))?;
+            let buffer = terminal.backend().buffer();
+            let screen: String = (0..24)
+                .flat_map(|y| (0..160).map(move |x| buffer[(x, y)].symbol()))
+                .collect();
+            assert!(
+                output.starts_with("Changed files (5)"),
+                "the overview counts only visible files: {output}"
+            );
+            for hidden in [
+                "test-only.rs",
+                "unit.rs",
+                "test-mode.rs",
+                "integration.rs",
+                "benchmark.rs",
+                "compare.rs",
+                "demo.rs",
+                "input.rs",
+                "mod tests",
+                "fn smoke",
+                "test_helper",
+            ] {
+                assert!(
+                    !output.contains(hidden),
+                    "{hidden} is absent from the tree and every file section: {output}"
+                );
+                assert!(
+                    !screen.contains(hidden),
+                    "filtered names are erased from the rendered screen: {hidden}"
+                );
+            }
+            for kept in [
+                "mixed.rs",
+                "mode.rs",
+                "moved.rs",
+                "guide.md",
+                "unknown.txt",
+                "pub fn production",
+            ] {
+                assert!(
+                    output.contains(kept),
+                    "production and unclassified changes remain visible: {kept}"
+                );
+            }
+            for hidden in ["benches/", "benchmarks/", "examples/", "fixtures/", "tests/"] {
+                assert!(
+                    !output.contains(hidden),
+                    "directories emptied by filtering are absent: {hidden}"
+                );
+            }
+            assert!(
+                output.contains("rename from src/old.rs"),
+                "production file renames remain visible"
+            );
+            assert!(
+                output.contains("new mode 100755"),
+                "production mode-only changes retain their headers"
+            );
+            assert!(
+                output.contains("Outline unavailable:"),
+                "unknown file types retain an explicit outline status"
+            );
+            view.key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+            view.key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+            assert!(
+                !text(&view.lines).contains("test-only.rs"),
+                "other settings preserve the production filter"
+            );
+            assert!(view.key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)));
+            assert!(
+                text(&view.lines).starts_with("Changed files (13)"),
+                "p restores the complete diff"
+            );
+            assert!(
+                text(&view.lines).contains("integration.rs"),
+                "hidden files are cached for restoration"
+            );
+            view.key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
+        }
+        assert!(options.production_only, "the production setting outlives the view");
+        let view = View::new(&diff, &mut options, &colors);
+        assert!(
+            text(&view.lines).starts_with("Changed files (5)"),
+            "reopening retains the filter"
+        );
+        terminal.draw(|frame| view.draw(frame, frame.area(), 0, 0))?;
+        let footer: String = (0..160)
+            .map(|x| terminal.backend().buffer()[(x, 23)].symbol())
+            .collect();
+        assert!(
+            footer.contains("p production only:on"),
+            "the active shortcut is discoverable"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn production_paths_remain_visible_when_renamed_across_the_filter_boundary() -> TestResult {
+        let repository = production_repository()?;
+        let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
+        let mut file = diff
+            .files
+            .into_iter()
+            .find(|file| file.path.path == "src/moved.rs")
+            .expect("the fixture has a mode-preserving production file rename");
+        let options = Options {
+            production_only: true,
+            ..Options::default()
+        };
+        for (kind, source, path, visible) in [
+            (ChangeKind::Renamed, "src/old.rs", "tests/new.rs", true),
+            (ChangeKind::Renamed, "tests/old.rs", "src/new.rs", true),
+            (ChangeKind::Renamed, "tests/old.rs", "benches/new.rs", false),
+            (ChangeKind::Copied, "src/old.rs", "tests/new.rs", false),
+            (ChangeKind::Copied, "tests/old.rs", "src/new.rs", true),
+        ] {
+            file.path.kind = kind;
+            file.path.source = Some(source.into());
+            file.path.path = path.into();
+            assert_eq!(
+                file.visible(&options),
+                visible,
+                "production renames remain visible, while non-production copies are hidden"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_only_file_changes_leave_an_empty_production_view() -> TestResult {
+        let repository = production_repository()?;
+        let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
+        let file = diff
+            .files
+            .into_iter()
+            .find(|file| file.path.path == "src/test-only.rs")
+            .expect("the fixture changes tests within an otherwise unchanged production file");
+        let diff = Diff {
+            title: "test-only".into(),
+            files: vec![file],
+        };
+        let options = Options {
+            production_only: true,
+            ..Options::default()
+        };
+        assert_eq!(
+            text(&diff.render(&options, &Palette::default())),
+            "Changed files (0)\nNo production file changes.",
+            "a selected file with only test edits has no tree entry, patch header, or false parent change"
         );
         Ok(())
     }
