@@ -1676,7 +1676,7 @@ views.
   changes. The file-tree overview precedes every per-file section; scrolling
   traverses all sections from beginning to end. File renames are always detected.
   Tix parses these outlines with Tree-sitter. Rust shows modules, structs,
-  fields, traits, implementations, and function signatures.
+  named and tuple fields, traits, implementations, and function signatures.
   TOML shows tables and keys; Markdown shows heading hierarchies.
   Hidden body, value, or prose changes mark their owning declaration with `~`;
   executable code and opaque macro token trees remain hidden.
@@ -1688,6 +1688,25 @@ views.
   keys do not toggle the settings. Arrows/`j`/`k`, page keys, and `g`/`G` or
   `Home`/`End` move through the complete diff; `h`/`l` pans long lines.
   `Enter`, `q`, or `Escape` returns to Tix with its selection intact.
+- `p` toggles production-only structural review. It starts disabled and remains
+  set for later views in the same invocation. Hide tests, benchmarks, examples,
+  and fixtures in conventional directories, including their singular names,
+  and Rust helper filenames such as `tests.rs`, `test_*.rs`, `*_test.rs`, and
+  `*_tests.rs`. Hide Rust test/benchmark attributes and scopes that cannot be
+  enabled with `test` false, including nested `all`/`any`/`not` predicates and
+  inner attributes. Unknown feature/platform predicates retain any declaration
+  that might be production code. Opaque bodies and custom Cargo target paths
+  are not independently classified.
+  Filter before declaration alignment, context, and comparison: changes only
+  to tests do not leave modified parent modules or implementations. Remove
+  hidden files from the tree, count, and every per-file section, and prune
+  emptied directories. Preserve documentation and unclassified files, and
+  mode changes or renames with production declarations. Renames across the
+  production boundary remain visible; copies into non-production paths are
+  hidden. An entirely filtered diff says `No production file changes.`
+  The footer shows the active setting. Unmodified presses toggle it; repeats,
+  releases, and modified keys do not. Filtering redraws cached outlines without
+  source reads, parsing, terminal queries, or additional copies of source text.
 - Structural mode colors declarations with lexical syntax foregrounds, subtle
   red/green backgrounds for removals/additions, and a faint yellow background
   for modifications. Changed words have stronger red/green backgrounds and

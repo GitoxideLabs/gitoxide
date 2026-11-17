@@ -165,6 +165,61 @@ fn shift_enter_scrolls_the_continuous_structural_diff_and_keeps_live_settings() 
 }
 
 #[test]
+fn production_only_shortcut_filters_the_tree_and_survives_reopening() -> gix_error::TestResult {
+    let repository = gix_testtools::scripted_fixture_writable("structural-diff-production.sh")?;
+    let (mut terminal, original) = Pty::spawn(repository.path(), true)?;
+    terminal.wait_for(|output| contains(output, b"second") && contains(output, b"\x1b_Ga=p,"))?;
+    let opened = terminal.output.len();
+    terminal.master.write_all(b"\x1b[13;2u")?;
+    terminal.wait_for(|output| contains(&output[opened..], b"p production only:off"))?;
+    assert!(
+        contains(&terminal.output[opened..], b"integration.rs"),
+        "the initial tree contains test files"
+    );
+    let last_page = terminal.output.len();
+    terminal.master.write_all(b"\x1b[F")?;
+    terminal.wait_for(|output| contains(&output[last_page..], b"Outline unavailable:"))?;
+    let filtered = terminal.output.len();
+    terminal.master.write_all(b"pq")?;
+    terminal.wait_for(|output| contains(&output[filtered..], b"second"))?;
+    let reopened = terminal.output.len();
+    terminal.master.write_all(b"\x1b[13;2u")?;
+    terminal.wait_for(|output| contains(&output[reopened..], b"p production only:on"))?;
+    let output = &terminal.output[reopened..];
+    assert!(
+        contains(output, b"Changed files (5)"),
+        "the reopened tree counts only production changes"
+    );
+    // History redraws can precede the diff; its count identifies the filtered screen.
+    assert!(
+        !contains(&terminal.output[filtered..], b"\x1b]21"),
+        "filtering and reopening never query terminal colors"
+    );
+    let back = terminal.output.len();
+    terminal.master.write_all(b"pq")?;
+    terminal.wait_for(|output| contains(&output[back..], b"second"))?;
+    let restored = terminal.output.len();
+    terminal.master.write_all(b"\x1b[13;2u")?;
+    terminal.wait_for(|output| contains(&output[restored..], b"p production only:off"))?;
+    assert!(
+        contains(&terminal.output[restored..], b"Changed files (13)"),
+        "p restores the complete file tree"
+    );
+    assert!(
+        contains(&terminal.output[restored..], b"integration.rs"),
+        "p restores hidden files from the cached diff"
+    );
+    terminal.master.write_all(b"qqq")?;
+    assert!(terminal.wait_for_exit()?.success(), "filtered views exit normally");
+    assert_eq!(
+        rustix::termios::tcgetattr(&terminal.master)?.local_modes,
+        original.local_modes,
+        "production filtering restores terminal modes"
+    );
+    Ok(())
+}
+
+#[test]
 fn empty_commits_open_an_empty_structural_view() -> gix_error::TestResult {
     let repository = fixture()?;
     git(repository.path(), "commit --allow-empty -m empty")?;
