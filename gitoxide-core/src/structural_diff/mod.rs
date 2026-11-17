@@ -15,6 +15,7 @@ use owo_colors::OwoColorize;
 
 mod parse;
 mod renames;
+mod words;
 use parse::Item;
 
 /// Languages with a structural outline.
@@ -51,6 +52,8 @@ pub struct Options {
     pub context: Vec<usize>,
     /// Match unique similar additions and deletions as renames within each container.
     pub find_renames: bool,
+    /// Highlight changed words within paired visible declarations.
+    pub word_diff: bool,
 }
 
 /// Compare two files without exposing implementation bodies. Differences are successful output.
@@ -215,8 +218,7 @@ fn paired(before: &Item, after: &Item, depth: usize, options: &Options, out: &mu
         )?;
     }
     if before.header != after.header {
-        lines(&before.header, '-', options, out)?;
-        lines(&after.header, '+', options, out)?;
+        changed(&before.header, &after.header, options, out)?;
     } else {
         let changed = before.content != after.content;
         lines(&after.header, if changed { '~' } else { ' ' }, options, out)?;
@@ -229,12 +231,25 @@ fn paired(before: &Item, after: &Item, depth: usize, options: &Options, out: &mu
         render(&before.children, &after.children, depth + 1, options, out)?;
     }
     if before.footer != after.footer {
-        lines(&before.footer, '-', options, out)?;
-        lines(&after.footer, '+', options, out)?;
+        changed(&before.footer, &after.footer, options, out)?;
     } else {
         lines(&after.footer, ' ', options, out)?;
     }
     Ok(())
+}
+
+fn changed(before: &str, after: &str, options: &Options, out: &mut impl Write) -> Result<()> {
+    if options.word_diff {
+        let [before, after] =
+            [before, after].map(|text| text.lines().map(terminal_text).collect::<Vec<_>>().join("\n"));
+        for line in words::diff(&before, &after, options.color).lines() {
+            writeln!(out, "~{line}").or_error()?;
+        }
+        Ok(())
+    } else {
+        lines(before, '-', options, out)?;
+        lines(after, '+', options, out)
+    }
 }
 
 fn omitted(item: &Item, options: &Options, out: &mut impl Write) -> Result<()> {

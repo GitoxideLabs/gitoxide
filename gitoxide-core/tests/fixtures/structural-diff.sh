@@ -147,3 +147,17 @@ cat >rename-after.rs <<'EOF'
 fn anchor() {}
 fn renamed(value: u32) -> u32 { secret_original(value) + 2 }
 EOF
+
+cat >words-before.rs <<'EOF'
+impl Café {
+	pub fn compute(
+		&self,
+		café: i32,
+	) -> i32 { secret_before() }
+}
+EOF
+sed -e 's/café/thé/g' -e 's/i32/u32/g' -e 's/secret_before/secret_after/' words-before.rs >words-after.rs
+
+# Escape bytes in valid Markdown headings must never become terminal commands.
+printf '# Before \033[31mheading\n\nsecret_before\n' >terminal-before.md
+printf '# After \033[31mheading\n\nsecret_after\n' >terminal-after.md

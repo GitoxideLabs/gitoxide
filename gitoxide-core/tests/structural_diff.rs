@@ -281,3 +281,70 @@ fn renames_are_opt_in_and_can_cross_unchanged_siblings() -> TestResult {
     );
     Ok(())
 }
+
+#[test]
+fn word_diffs_preserve_multiline_signatures_and_only_compare_visible_text() -> TestResult {
+    let out = render(
+        "words-before.rs",
+        "words-after.rs",
+        Options {
+            word_diff: true,
+            ..Options::default()
+        },
+    )?;
+    assert!(
+        out.contains("~\t\t[-café-]{+thé+}: [-i32-]{+u32+},"),
+        "word edits keep Unicode and original tabs: {out}"
+    );
+    assert!(!out.contains("secret_"), "word diffing never sees bodies");
+    assert!(!out.contains("\\n"), "signature newlines remain newlines");
+    let out = render(
+        "body-before.rs",
+        "body-after.rs",
+        Options {
+            word_diff: true,
+            ..Options::default()
+        },
+    )?;
+    assert!(
+        !out.contains("[-") && !out.contains("{+"),
+        "body-only edits only mark the declaration"
+    );
+    let out = render(
+        "words-before.rs",
+        "words-after.rs",
+        Options {
+            word_diff: true,
+            color: true,
+            ..Options::default()
+        },
+    )?;
+    assert!(out.contains("\u{1b}["), "generated word colors remain ANSI escapes");
+    assert!(
+        !out.contains("\\u{1b}"),
+        "generated color must not be escaped as source text"
+    );
+    Ok(())
+}
+
+#[test]
+fn source_terminal_controls_are_escaped_even_in_word_diffs() -> TestResult {
+    for word_diff in [false, true] {
+        let out = render(
+            "terminal-before.md",
+            "terminal-after.md",
+            Options {
+                word_diff,
+                find_renames: true,
+                ..Options::default()
+            },
+        )?;
+        assert!(
+            !out.contains('\u{1b}'),
+            "input controls cannot issue terminal commands: {out}"
+        );
+        assert!(out.contains("\\u{1b}"), "escaped control bytes remain readable");
+        assert!(!out.contains("secret_"), "prose stays hidden");
+    }
+    Ok(())
+}

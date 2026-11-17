@@ -118,6 +118,9 @@ pub mod tools {
         /// Infer unique similar renames among siblings (may be expensive).
         #[arg(long, short = 'M')]
         pub find_renames: bool,
+        /// Highlight changed words in paired declarations, using [-old-]{+new+} markers.
+        #[arg(long)]
+        pub word_diff: bool,
         /// When to use terminal colors. Auto honors NO_COLOR and detects redirected output.
         #[arg(long, value_enum, default_value = "auto")]
         pub color: DiffColor,

@@ -56,6 +56,17 @@ Ambiguous candidates stay as additions and deletions. Matching is heuristic,
 does not track changes across files or different parents, and can be expensive
 when many siblings are replaced. It is disabled by default.
 
+## Word diffs
+
+`--word-diff` highlights changed words within matched declarations using
+`[-removed-]` and `{+added+}` on `~` lines. With color enabled, changed words
+also receive bold red or green styling. Unchanged whitespace, Unicode names,
+and multiline signature layout are preserved. Body-only changes still show
+only a modified declaration; implementation text never enters the word diff.
+
+Combine `--word-diff --find-renames` to highlight inferred name changes inline.
+Without rename detection, unmatched names remain separate additions/deletions.
+
 ## Use with Git difftool
 
 Configure the tool in the current repository:

@@ -49,6 +49,7 @@ pub fn main() -> Result<()> {
                 language,
                 context,
                 find_renames,
+                word_diff,
                 color,
             }) => {
                 use std::io::IsTerminal;
@@ -63,6 +64,7 @@ pub fn main() -> Result<()> {
                         language,
                         context,
                         find_renames,
+                        word_diff,
                         path,
                         color: match color {
                             DiffColor::Auto => stdout.is_terminal() && std::env::var_os("NO_COLOR").is_none(),

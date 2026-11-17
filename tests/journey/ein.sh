@@ -51,6 +51,14 @@ title "Porcelain ${kind}"
         it "does not reveal either implementation" && {
           expect_run 1 grep -E 'body_only_before|body_only_after' actual
         }
+        it "combines rename detection, word diffs, and structural context" && {
+          printf 'fn renamed() { let body_only_after = 2; }\n' >"source file.rs"
+          git config difftool.structural.cmd '"$EIN_DIFF_EXE" tool diff --color never --find-renames --word-diff --context 0,1 --path "$BASE" "$LOCAL" "$REMOTE"'
+          git difftool --no-prompt --tool=structural >actual
+          expect_run $SUCCESSFULLY grep -F '[renamed: outer -> renamed]' actual
+          expect_run $SUCCESSFULLY grep -F '[-outer-]{+renamed+}' actual
+          expect_run 1 grep -E 'body_only_before|body_only_after' actual
+        }
         it "produces no output for identical files" && {
           "$exe" tool diff --color never "source file.rs" "source file.rs" >actual
           expect_run $SUCCESSFULLY test ! -s actual
