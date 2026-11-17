@@ -85,6 +85,8 @@ pub struct Options {
     pub find_renames: bool,
     /// Highlight changed words within paired visible declarations.
     pub word_diff: bool,
+    /// Exclude Rust test and benchmark declarations, including scopes disabled when `test` is false.
+    pub production_only: bool,
 }
 
 /// Parsed outlines whose hidden implementation text participates only in comparison.
@@ -102,15 +104,23 @@ impl PreparedDiff {
         Ok(Self { before, after })
     }
 
+    /// Whether either input contains declarations included by the current settings.
+    #[cfg(test)]
+    pub fn has_code(&self, options: &Options) -> bool {
+        self.before
+            .iter()
+            .chain(&self.after)
+            .any(|item| !options.production_only || !item.test_only)
+    }
+
+    /// Whether the included declarations or their hidden implementations differ.
+    pub fn has_changes(&self, options: &Options) -> bool {
+        !same_items(&self.before, &self.after, options)
+    }
+
     /// Render the cached outlines with the current settings. Identical outlines emit no rows.
     pub fn render(&self, options: &Options) -> Vec<Line> {
-        if self.before.len() == self.after.len()
-            && self
-                .before
-                .iter()
-                .zip(&self.after)
-                .all(|(before, after)| before.content == after.content)
-        {
+        if !self.has_changes(options) {
             return Vec::new();
         }
         let mut lines = Vec::new();
@@ -119,9 +129,36 @@ impl PreparedDiff {
     }
 }
 
+fn same_items(before: &[Item], after: &[Item], options: &Options) -> bool {
+    let mut before = before.iter().filter(|item| !options.production_only || !item.test_only);
+    let mut after = after.iter().filter(|item| !options.production_only || !item.test_only);
+    loop {
+        match (before.next(), after.next()) {
+            (None, None) => return true,
+            (Some(before), Some(after)) if unchanged(before, after, options) => {}
+            _ => return false,
+        }
+    }
+}
+
+fn unchanged(before: &Item, after: &Item, options: &Options) -> bool {
+    if !options.production_only || !(before.contains_tests || after.contains_tests) {
+        return before.content == after.content;
+    }
+    before.content.same_shell(&after.content) && same_items(&before.children, &after.children, options)
+}
+
 type Pair<'a> = (Option<&'a Item>, Option<&'a Item>);
 
-fn align<'a>(before: &'a [Item], after: &'a [Item], find_renames: bool) -> Vec<Pair<'a>> {
+fn align<'a>(before: &'a [Item], after: &'a [Item], options: &Options) -> Vec<Pair<'a>> {
+    let before: Vec<_> = before
+        .iter()
+        .filter(|item| !options.production_only || !item.test_only)
+        .collect();
+    let after: Vec<_> = after
+        .iter()
+        .filter(|item| !options.production_only || !item.test_only)
+        .collect();
     let mut input = InternedInput::default();
     input.update_before(before.iter().map(|item| (item.kind, item.name.as_str())));
     input.update_after(after.iter().map(|item| (item.kind, item.name.as_str())));
@@ -131,25 +168,25 @@ fn align<'a>(before: &'a [Item], after: &'a [Item], find_renames: bool) -> Vec<P
     let (mut left, mut right) = (0, 0);
     for hunk in diff.hunks() {
         while left < hunk.before.start as usize {
-            pairs.push((Some(&before[left]), Some(&after[right])));
+            pairs.push((Some(before[left]), Some(after[right])));
             left += 1;
             right += 1;
         }
         for item in &before[hunk.before.start as usize..hunk.before.end as usize] {
-            pairs.push((Some(item), None));
+            pairs.push((Some(*item), None));
         }
         for item in &after[hunk.after.start as usize..hunk.after.end as usize] {
-            pairs.push((None, Some(item)));
+            pairs.push((None, Some(*item)));
         }
         left = hunk.before.end as usize;
         right = hunk.after.end as usize;
     }
     while left < before.len() {
-        pairs.push((Some(&before[left]), Some(&after[right])));
+        pairs.push((Some(before[left]), Some(after[right])));
         left += 1;
         right += 1;
     }
-    if find_renames {
+    if options.find_renames {
         let removed: Vec<_> = pairs
             .iter()
             .enumerate()
@@ -179,7 +216,7 @@ fn align<'a>(before: &'a [Item], after: &'a [Item], find_renames: bool) -> Vec<P
 }
 
 fn render(before: &[Item], after: &[Item], depth: usize, options: &Options, out: &mut Vec<Line>) {
-    let pairs = align(before, after, options.find_renames);
+    let pairs = align(before, after, options);
     let context = options
         .context
         .get(depth)
@@ -188,7 +225,7 @@ fn render(before: &[Item], after: &[Item], depth: usize, options: &Options, out:
         .unwrap_or(1);
     let mut visible = vec![false; pairs.len()];
     for (index, pair) in pairs.iter().enumerate() {
-        if !matches!(pair, (Some(before), Some(after)) if before.content == after.content) {
+        if !matches!(pair, (Some(before), Some(after)) if unchanged(before, after, options)) {
             let end = index.saturating_add(context).saturating_add(1).min(pairs.len());
             visible[index.saturating_sub(context)..end].fill(true);
         }
@@ -205,8 +242,8 @@ fn render(before: &[Item], after: &[Item], depth: usize, options: &Options, out:
         skipping = false;
         match (before, after) {
             (Some(before), Some(after)) => paired(before, after, depth, options, out),
-            (Some(before), None) => entire(before, Change::Removed, out),
-            (None, Some(after)) => entire(after, Change::Added, out),
+            (Some(before), None) => entire(before, Change::Removed, options, out),
+            (None, Some(after)) => entire(after, Change::Added, options, out),
             (None, None) => unreachable!("each aligned entry has at least one side"),
         }
     }
@@ -224,15 +261,19 @@ fn paired(before: &Item, after: &Item, depth: usize, options: &Options, out: &mu
     if before.header != after.header {
         changed(&before.header, &after.header, options, out);
     } else {
-        let change = if before.content != after.content {
+        let change = if !unchanged(before, after, options) {
             Change::Modified
         } else {
             Change::Context
         };
         lines(&after.header, change, out);
     }
-    if before.content == after.content {
-        if let Some(child) = after.children.first() {
+    if unchanged(before, after, options) {
+        if let Some(child) = after
+            .children
+            .iter()
+            .find(|item| !options.production_only || !item.test_only)
+        {
             omitted(child, out);
         }
     } else {
@@ -261,10 +302,14 @@ fn omitted(item: &Item, out: &mut Vec<Line>) {
     lines(&format!("{indent}…"), Change::Context, out);
 }
 
-fn entire(item: &Item, change: Change, out: &mut Vec<Line>) {
+fn entire(item: &Item, change: Change, options: &Options, out: &mut Vec<Line>) {
     lines(&item.header, change, out);
-    for child in &item.children {
-        entire(child, change, out);
+    for child in item
+        .children
+        .iter()
+        .filter(|item| !options.production_only || !item.test_only)
+    {
+        entire(child, change, options, out);
     }
     lines(&item.footer, change, out);
 }

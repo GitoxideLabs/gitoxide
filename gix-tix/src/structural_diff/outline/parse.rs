@@ -12,14 +12,21 @@ use super::Language;
 pub(super) struct Content {
     source: Arc<str>,
     range: Range<usize>,
+    body: Range<usize>,
 }
 
 impl Content {
     fn new(source: &Arc<str>, range: Range<usize>) -> Self {
         Self {
             source: Arc::clone(source),
+            body: range.end..range.end,
             range,
         }
+    }
+
+    pub(super) fn same_shell(&self, other: &Self) -> bool {
+        self.source[self.range.start..self.body.start] == other.source[other.range.start..other.body.start]
+            && self.source[self.body.end..self.range.end] == other.source[other.body.end..other.range.end]
     }
 }
 
@@ -52,6 +59,8 @@ pub(super) struct Item {
     pub footer: String,
     pub content: Content,
     pub children: Vec<Item>,
+    pub test_only: bool,
+    pub contains_tests: bool,
 }
 
 pub(super) fn parse(source: &str, language: Language) -> Result<Vec<Item>> {
@@ -83,15 +92,31 @@ pub(super) fn parse(source: &str, language: Language) -> Result<Vec<Item>> {
 fn rust_children(parent: Node<'_>, source: &Arc<str>) -> Vec<Item> {
     let mut items = Vec::new();
     let mut attributes = Vec::new();
+    let tuple = parent.kind() == "ordered_field_declaration_list";
+    let mut visibility = None;
+    let test_only = inner_test_only(parent, source);
     let mut cursor = parent.walk();
     for node in parent.named_children(&mut cursor) {
         if node.kind() == "attribute_item" {
             attributes.push(node);
             continue;
         }
-        let Some(mut item) = rust_item(node, source) else {
+        if tuple && node.kind() == "visibility_modifier" {
+            visibility = Some(node);
             continue;
+        }
+        if matches!(node.kind(), "line_comment" | "block_comment") {
+            continue;
+        }
+        let mut item = if tuple {
+            tuple_field(node, visibility.take(), source)
+        } else {
+            let Some(item) = rust_item(node, source) else {
+                continue;
+            };
+            item
         };
+        item.test_only |= test_only || attributes.iter().any(|attribute| test_attribute(*attribute, source));
         if let Some(first) = attributes.first() {
             item.content.range = first.start_byte()..node.end_byte();
             item.header = attributes
@@ -102,9 +127,106 @@ fn rust_children(parent: Node<'_>, source: &Arc<str>) -> Vec<Item> {
                 .join("\n");
             attributes.clear();
         }
+        item.contains_tests = item.test_only || item.children.iter().any(|child| child.contains_tests);
         items.push(item);
     }
     items
+}
+
+fn tuple_field(node: Node<'_>, visibility: Option<Node<'_>>, source: &Arc<str>) -> Item {
+    let start = visibility.map_or(node.start_byte(), |visibility| visibility.start_byte());
+    let mut header = indented(source, node, start..node.end_byte());
+    if source.as_bytes().get(node.end_byte()) == Some(&b',') {
+        header.push(',');
+    }
+    Item {
+        kind: "field",
+        // Tuple fields are positional; filtering must not retain test-field indices.
+        name: String::new(),
+        header,
+        footer: String::new(),
+        content: Content::new(source, start..node.end_byte()),
+        children: Vec::new(),
+        test_only: false,
+        contains_tests: false,
+    }
+}
+
+fn inner_test_only(parent: Node<'_>, source: &str) -> bool {
+    let mut cursor = parent.walk();
+    parent
+        .named_children(&mut cursor)
+        .any(|node| node.kind() == "inner_attribute_item" && test_attribute(node, source))
+}
+
+fn test_attribute(node: Node<'_>, source: &str) -> bool {
+    let Some(attribute) = node.named_child(0) else {
+        return false;
+    };
+    let Some(path) = attribute.named_child(0) else {
+        return false;
+    };
+    let path = text(source, path);
+    if matches!(path.rsplit("::").next(), Some("test" | "bench")) {
+        return true;
+    }
+    if path != "cfg" {
+        return false;
+    }
+    let Some(arguments) = attribute.child_by_field_name("arguments") else {
+        return false;
+    };
+    let mut cursor = arguments.walk();
+    let tokens: Vec<_> = arguments
+        .named_children(&mut cursor)
+        .filter(|node| !matches!(node.kind(), "line_comment" | "block_comment"))
+        .collect();
+    cfg_without_tests(&tokens, source) == Some(false)
+}
+
+// Unknown platform and feature predicates must not hide potentially production code.
+fn cfg_without_tests(tokens: &[Node<'_>], source: &str) -> Option<bool> {
+    if let [name] = tokens {
+        return (text(source, *name) == "test").then_some(false);
+    }
+    let [name, arguments] = tokens else {
+        return None;
+    };
+    if name.kind() != "identifier" || arguments.kind() != "token_tree" {
+        return None;
+    }
+    let mut cursor = arguments.walk();
+    let children: Vec<_> = arguments
+        .children(&mut cursor)
+        .filter(|node| !matches!(node.kind(), "line_comment" | "block_comment"))
+        .collect();
+    let children = children.get(1..children.len().saturating_sub(1))?;
+    let mut values = children
+        .split(|node| node.kind() == ",")
+        .filter(|tokens| !tokens.is_empty())
+        .map(|tokens| cfg_without_tests(tokens, source));
+    match text(source, *name) {
+        "all" | "any" => {
+            let decisive = text(source, *name) == "any";
+            let mut known = true;
+            for value in values {
+                match value {
+                    Some(value) if value == decisive => return Some(decisive),
+                    None => known = false,
+                    _ => {}
+                }
+            }
+            known.then_some(!decisive)
+        }
+        "not" => {
+            let value = values.next()?;
+            if values.next().is_some() {
+                return None;
+            }
+            value.map(|value| !value)
+        }
+        _ => None,
+    }
 }
 
 fn rust_item(node: Node<'_>, source: &Arc<str>) -> Option<Item> {
@@ -159,14 +281,18 @@ fn rust_item(node: Node<'_>, source: &Arc<str>) -> Option<Item> {
         footer: String::new(),
         content: Content::new(source, node.byte_range()),
         children: Vec::new(),
+        test_only: false,
+        contains_tests: false,
     };
     if node.kind() == "macro_definition" {
         let name = node.child_by_field_name("name")?;
         item.header = indented(source, node, node.start_byte()..name.end_byte()) + " { … }";
     } else if let Some(body) = node.child_by_field_name("body") {
+        item.test_only = inner_test_only(body, source);
         if kind == "function" {
             item.header = indented(source, node, node.start_byte()..body.start_byte()) + "{ … }";
-        } else if body.kind() != "ordered_field_declaration_list" {
+        } else {
+            item.content.body = body.start_byte() + 1..body.end_byte() - 1;
             item.header = indented(source, node, node.start_byte()..body.start_byte() + 1);
             let closing_prefix = &source[line_start(source, body.end_byte() - 1)..body.end_byte() - 1];
             item.footer = format!(
@@ -179,8 +305,6 @@ fn rust_item(node: Node<'_>, source: &Arc<str>) -> Option<Item> {
                 sanitized(source, node, body.end_byte() - 1..node.end_byte())
             );
             item.children = rust_children(body, source);
-        } else {
-            item.header = indented(source, node, node.byte_range());
         }
     } else {
         item.header = indented(source, node, node.byte_range());
@@ -224,6 +348,8 @@ fn toml_children(parent: Node<'_>, source: &Arc<str>) -> Vec<Item> {
                 footer: String::new(),
                 content: Content::new(source, node.byte_range()),
                 children: if table { toml_children(node, source) } else { Vec::new() },
+                test_only: false,
+                contains_tests: false,
             })
         })
         .collect()
@@ -244,6 +370,8 @@ fn markdown(root: Node<'_>, source: &Arc<str>) -> Vec<Item> {
             footer: String::new(),
             content: Content::new(source, 0..preamble.len()),
             children: Vec::new(),
+            test_only: false,
+            contains_tests: false,
         });
     }
     items.extend(markdown_items(&headings, source, source.len()));
@@ -297,6 +425,8 @@ fn markdown_items(mut headings: &[Node<'_>], source: &Arc<str>, end: usize) -> V
             footer: String::new(),
             content: Content::new(source, line_start(source, heading.start_byte())..section_end),
             children: markdown_items(&headings[1..next], source, section_end),
+            test_only: false,
+            contains_tests: false,
         });
         headings = &headings[next..];
     }

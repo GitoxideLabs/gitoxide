@@ -326,3 +326,289 @@ fn malformed_inputs_fail_and_identical_inputs_are_empty() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn production_only_removes_nested_tests_and_benchmarks_from_whole_file_changes() -> TestResult {
+    let source = "mod api {
+    pub fn production() { secret_production(); }
+    #[cfg(test)]
+    mod tests {
+        fn smoke() { secret_test(); }
+    }
+    #[tokio::test]
+    async fn async_test() { secret_test(); }
+    #[bench]
+    fn benchmark() { secret_benchmark(); }
+    #[cfg(all(test, unix))]
+    const TEST_ONLY: u32 = 1;
+    #[cfg(not(test))]
+    fn production_config() {}
+    #[cfg(any(test, feature = \"runtime\"))]
+    fn maybe_production() {}
+}";
+    for (before, after, marker) in [("", source, '+'), (source, "", '-')] {
+        let prepared = PreparedDiff::new(before, after, Language::Rust)?;
+        let options = Options {
+            production_only: true,
+            ..Options::default()
+        };
+        assert!(
+            prepared.has_code(&options),
+            "whole-file changes contain production declarations"
+        );
+        assert!(
+            prepared.has_changes(&options),
+            "production additions and removals are changes"
+        );
+        let output = text(&prepared, &options);
+        for declaration in [
+            "mod api",
+            "fn production",
+            "fn production_config",
+            "fn maybe_production",
+        ] {
+            assert!(
+                output.contains(declaration),
+                "production declarations remain visible: {output}"
+            );
+        }
+        for declaration in ["mod tests", "smoke", "async_test", "benchmark", "TEST_ONLY"] {
+            assert!(
+                !output.contains(declaration),
+                "non-production declaration {declaration} is hidden: {output}"
+            );
+        }
+        assert!(
+            output.lines().all(|line| line.starts_with(marker)),
+            "whole-file production changes retain their addition or removal markers"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn test_only_edits_do_not_mark_production_containers_as_modified() -> TestResult {
+    let before = "mod api {
+    impl Widget {
+        fn production() { secret_production(); }
+        #[cfg(test)]
+        fn test_helper() { secret_before(); }
+    }
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn smoke() { secret_before(); }
+    }
+}";
+    let after = before.replace("secret_before", "secret_after");
+    let prepared = PreparedDiff::new(before, &after, Language::Rust)?;
+    let mut options = Options::default();
+    assert!(!prepared.render(&options).is_empty(), "tests are visible by default");
+    options.production_only = true;
+    assert!(
+        prepared.render(&options).is_empty(),
+        "test changes do not leave modified modules or implementations"
+    );
+    options.production_only = false;
+    assert!(
+        !prepared.render(&options).is_empty(),
+        "the same outlines can restore test changes"
+    );
+    options.production_only = true;
+    let mixed = PreparedDiff::new(
+        before,
+        &after.replace("secret_production", "changed_production"),
+        Language::Rust,
+    )?;
+    let output = text(&mixed, &options);
+    assert!(
+        output.contains("~        fn production"),
+        "production body changes still mark their function: {output}"
+    );
+    for declaration in ["test_helper", "mod tests", "smoke"] {
+        assert!(
+            !output.contains(declaration),
+            "test declarations are absent even from context: {output}"
+        );
+    }
+
+    let production = "mod api {
+    fn production() {}
+}";
+    let with_tests = "mod api {
+    fn production() {}
+    #[test]
+    fn added_test() { secret_test(); }
+}";
+    options.production_only = true;
+    for (before, after) in [(production, with_tests), (with_tests, production)] {
+        assert!(
+            PreparedDiff::new(before, after, Language::Rust)?
+                .render(&options)
+                .is_empty(),
+            "adding or removing tests alone leaves no production diff"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn cfg_predicates_preserve_code_that_can_be_enabled_without_tests() -> TestResult {
+    for (condition, visible) in [
+        ("test", false),
+        ("all(test, unix)", false),
+        ("all(/* test gate */ test, unix)", false),
+        ("all(feature = \"runtime\", test)", false),
+        ("any(test, feature = \"runtime\")", true),
+        ("not(test)", true),
+        ("not(all(test, unix))", true),
+        ("not(any(not(test), unix))", false),
+        ("any(all(test, unix), all(test, feature = \"runtime\"))", false),
+        ("not(not(test))", false),
+        ("feature = \"test\"", true),
+        ("test_feature", true),
+        ("all(not(test), unix)", true),
+        ("all()", true),
+        ("any()", false),
+    ] {
+        let source = format!(
+            "#[cfg({condition})]
+fn gated() {{ secret_body(); }}"
+        );
+        let prepared = PreparedDiff::new("", &source, Language::Rust)?;
+        let output = text(
+            &prepared,
+            &Options {
+                production_only: true,
+                ..Options::default()
+            },
+        );
+        assert_eq!(
+            output.contains("fn gated"),
+            visible,
+            "unknown configuration predicates must not hide potentially production code: {condition}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn inner_test_attributes_hide_entire_files_and_modules() -> TestResult {
+    let options = Options {
+        production_only: true,
+        ..Options::default()
+    };
+    for source in [
+        "#![cfg(test)]
+fn test_helper() { secret_test(); }",
+        "mod test_support {
+    #![cfg(all(test, unix))]
+    fn test_helper() { secret_test(); }
+}",
+    ] {
+        let prepared = PreparedDiff::new("", source, Language::Rust)?;
+        assert!(
+            !prepared.has_code(&options),
+            "test-only scopes contain no production declarations"
+        );
+        assert!(
+            !prepared.has_changes(&options),
+            "test-only scopes contain no production changes"
+        );
+        assert!(
+            prepared.render(&options).is_empty(),
+            "test-only scopes leave no headers or elisions"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn production_only_keeps_hidden_container_signature_and_attribute_changes() -> TestResult {
+    let before = "#[cfg(feature = \"before\")]
+pub struct Config<const N: usize = { secret_before(); 3 }> {
+    #[cfg(test)]
+    test_only: bool,
+    pub data: [u8; N],
+}";
+    let options = Options {
+        production_only: true,
+        ..Options::default()
+    };
+    for after in [
+        before.replace("secret_before", "secret_after"),
+        before.replace("feature = \"before\"", "feature = \"after\""),
+    ] {
+        let prepared = PreparedDiff::new(before, &after, Language::Rust)?;
+        assert!(
+            prepared.has_changes(&options),
+            "hidden production expressions and attributes still participate in comparison"
+        );
+        let output = text(&prepared, &options);
+        assert!(
+            output.contains("~pub struct Config"),
+            "production signature changes mark their container: {output}"
+        );
+        assert!(
+            !output.contains("secret_") && !output.contains("test_only"),
+            "hidden expressions and test fields remain absent"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn production_only_omits_test_fields_from_tuple_structures() -> TestResult {
+    let before = "struct Config(
+    #[cfg(test)]
+    TestBefore,
+    pub Production,
+);";
+    let options = Options {
+        production_only: true,
+        ..Options::default()
+    };
+    let after = before.replace("TestBefore", "TestAfter");
+    let prepared = PreparedDiff::new(before, &after, Language::Rust)?;
+    assert!(
+        !prepared.has_changes(&options),
+        "test tuple-field changes leave no production diff"
+    );
+    let all = text(&prepared, &Options::default());
+    assert!(
+        all.contains("TestBefore") && all.contains("TestAfter"),
+        "test tuple fields remain visible by default"
+    );
+    let production = "struct Config(
+    pub Production,
+);";
+    for (before, after) in [(before, production), (production, before)] {
+        assert!(
+            !PreparedDiff::new(before, after, Language::Rust)?.has_changes(&options),
+            "adding or removing a test tuple field leaves production field positions unchanged"
+        );
+    }
+    for (before, after) in [("", before), (before, "")] {
+        let prepared = PreparedDiff::new(before, after, Language::Rust)?;
+        let output = text(&prepared, &options);
+        assert!(
+            output.contains("struct Config") && output.contains("pub Production"),
+            "production tuple declarations and fields remain visible"
+        );
+        assert!(
+            !output.contains("TestBefore") && !output.contains("cfg("),
+            "test tuple fields and their attributes are omitted"
+        );
+    }
+    let changed = before.replace("Production", "Updated");
+    let output = text(&PreparedDiff::new(before, &changed, Language::Rust)?, &options);
+    assert!(
+        output.contains("Updated"),
+        "production tuple-field changes remain visible"
+    );
+    assert!(
+        !output.contains("TestBefore"),
+        "test tuple fields are absent even from context"
+    );
+    Ok(())
+}
