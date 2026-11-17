@@ -602,10 +602,22 @@ impl Platform {
                     None
                 }
                 resource::Data::Buffer { buf, is_derived: _ } => {
-                    let mut tmp = gix_tempfile::new(
-                        std::env::temp_dir(),
+                    let directory = tempfile::tempdir().or_raise(|| {
+                        message!(
+                            "Could not create temporary directory for external diff of \"{}\"",
+                            res.rela_path
+                        )
+                    })?;
+                    let path = gix_path::from_bstr(res.rela_path)?;
+                    let filename = path.file_name().ok_or_raise(|| {
+                        message!("Resource path \"{}\" has no filename for external diff", res.rela_path)
+                    })?;
+                    let mut tmp = gix_tempfile::writable_at(
+                        directory.path().join(filename),
                         gix_tempfile::ContainingDirectory::Exists,
-                        gix_tempfile::AutoRemove::Tempfile,
+                        gix_tempfile::AutoRemove::TempfileAndEmptyParentDirectoriesUntil {
+                            boundary_directory: std::env::temp_dir(),
+                        },
                     )
                     .or_raise(|| {
                         message!(
@@ -636,6 +648,8 @@ impl Platform {
                             res.rela_path
                         )
                     })?;
+                    // The registered file owns directory cleanup, including on signals; the filename guides syntax detection.
+                    let _ = directory.keep();
                     Some(tmp)
                 }
                 resource::Data::Binary { .. } => {
