@@ -285,6 +285,25 @@ fn resources_of_worktree_and_odb_and_check_link() -> TestResult {
             .any(|arg| arg.to_string_lossy().contains("test --flag")),
         "configured command lines with arguments are interpreted by a shell"
     );
+    let inputs: Vec<_> = command
+        .get_args()
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.starts_with(std::env::temp_dir()))
+        .collect();
+    assert_eq!(inputs.len(), 2, "both inputs are materialized");
+    assert!(
+        inputs
+            .iter()
+            .all(|path| path.file_name() == Some(std::ffi::OsStr::new("a"))),
+        "temporary inputs retain their original filenames, including names without extensions"
+    );
+    drop(command);
+    assert!(
+        inputs
+            .iter()
+            .all(|path| !path.parent().expect("temporary input has a directory").exists()),
+        "dropping the command removes its temporary inputs and directories"
+    );
 
     platform.set_resource(
         Some(id),
