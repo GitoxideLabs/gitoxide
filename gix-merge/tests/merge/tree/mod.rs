@@ -174,7 +174,7 @@ fn directory_relocation_colliding_with_modified_file() -> TestResult {
             }
             let actual_index = outcome
                 .index
-                .to_index(TreatAsUnresolved::git(), &objects, Default::default())?;
+                .to_index(TreatAsUnresolved::git(), None, &objects, Default::default())?;
             assert_eq!(
                 baseline::debug_entries(&actual_index),
                 baseline::debug_entries(&expected_index),
@@ -456,7 +456,9 @@ fn run_baseline() -> TestResult {
 
             phase = "default index";
             let conflicts_like_in_git = TreatAsUnresolved::git();
-            let actual_index = actual.index.to_index(conflicts_like_in_git, &odb, Default::default())?;
+            let actual_index = actual
+                .index
+                .to_index(conflicts_like_in_git, None, &odb, Default::default())?;
             let expected_index = {
                 let deviating_index_path = root.join(".git").join(format!("{case_name}.index"));
                 if deviating_index_path.exists() {

@@ -143,7 +143,7 @@ fn assert_git_result(
     expected_entries.retain(|(path, ..)| !stages.iter().any(|(stage_path, ..)| stage_path == path));
     expected_entries.extend(stages);
     expected_entries.sort_by(|a, b| (&a.0, a.3).cmp(&(&b.0, b.3)));
-    let actual_index = outcome.index(TreatAsUnresolved::git())?;
+    let actual_index = outcome.index(TreatAsUnresolved::git(), None)?;
     actual_index.verify_entries()?;
     assert_eq!(
         outcome.tree.write()?,

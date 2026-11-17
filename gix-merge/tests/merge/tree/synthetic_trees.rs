@@ -149,7 +149,7 @@ fn forced_crossing_renames_do_not_reinstall_discarded_subtrees() -> TestResult {
         let merged_tree_id = outcome.tree.write(|tree| repo.objects.write(tree))?;
         let index = outcome
             .index
-            .to_index(TreatAsUnresolved::git(), &repo.objects, Default::default())?;
+            .to_index(TreatAsUnresolved::git(), None, &repo.objects, Default::default())?;
         let tree_index = gix_index::State::from_tree(&merged_tree_id, &repo.objects, Default::default())?;
         assert_eq!(
             super::baseline::debug_entries(&index),
@@ -271,7 +271,7 @@ fn early_forced_directory_collisions_retain_content_stages() -> TestResult {
     );
     let index = outcome
         .index
-        .to_index(TreatAsUnresolved::git(), &repo.objects, Default::default())?;
+        .to_index(TreatAsUnresolved::git(), None, &repo.objects, Default::default())?;
     index.verify_entries()?;
     let stages: Vec<_> = index
         .entries()
@@ -526,7 +526,7 @@ fn symlink_ancestor_resolution_restores_the_whole_ancestor_entry() -> TestResult
                         unresolved,
                         "the symlink conflict remains a forced content resolution under {how:?}"
                     );
-                    let index = outcome.index.to_index(how, &repo.objects, Default::default())?;
+                    let index = outcome.index.to_index(how, None, &repo.objects, Default::default())?;
                     assert_eq!(
                         outcome.index.has_unmerged_entries(how),
                         unresolved,
@@ -588,7 +588,7 @@ fn symlink_ancestor_resolution_preserves_an_absent_ancestor_in_the_index() -> Te
             );
             for how in [TreatAsUnresolved::git(), TreatAsUnresolved::forced_resolution()] {
                 let unresolved = how.content_merge == ContentMerge::ForcedResolution;
-                let index = outcome.index.to_index(how, &repo.objects, Default::default())?;
+                let index = outcome.index.to_index(how, None, &repo.objects, Default::default())?;
                 let entries: Vec<_> = index
                     .entries()
                     .iter()
@@ -804,7 +804,7 @@ fn mode_conflicts_are_independent_of_content_resolution() -> TestResult {
                 outcome.has_unresolved_conflicts(how) && !outcome.index.has_unmerged_entries(how),
                 "reviewing a forced tree choice cannot resurrect discarded stages, even after filtering diagnostics"
             );
-            let index = outcome.index.to_index(how, &repo.objects, Default::default())?;
+            let index = outcome.index.to_index(how, None, &repo.objects, Default::default())?;
             let selected = gix_index::State::from_tree(&expected_tree_id, &repo.objects, Default::default())?;
             assert_eq!(
                 super::baseline::debug_entries(&index),
@@ -1081,9 +1081,10 @@ eight
                     "{context}: early and full merges agree whether selected content is unresolved"
                 );
                 for (mode, outcome) in [("full", &full), ("early", &early)] {
-                    let index = outcome
-                        .index
-                        .to_index(TreatAsUnresolved::git(), &repo.objects, Default::default())?;
+                    let index =
+                        outcome
+                            .index
+                            .to_index(TreatAsUnresolved::git(), None, &repo.objects, Default::default())?;
                     assert_eq!(
                         outcome.index.has_unmerged_entries(TreatAsUnresolved::git()),
                         retained,
@@ -1233,7 +1234,7 @@ fn forced_tree_choices_discard_content_from_replaced_directories() -> TestResult
                 ..TreatAsUnresolved::git()
             },
         ] {
-            let index = outcome.index.to_index(how, &repo.objects, Default::default())?;
+            let index = outcome.index.to_index(how, None, &repo.objects, Default::default())?;
             assert_eq!(
                 outcome.has_unresolved_conflicts(how),
                 outcome.index.has_unmerged_entries(how),
@@ -1311,7 +1312,7 @@ eight
     );
     let full_index = full
         .index
-        .to_index(TreatAsUnresolved::git(), &repo.objects, Default::default())?;
+        .to_index(TreatAsUnresolved::git(), None, &repo.objects, Default::default())?;
     let selected_index = gix_index::State::from_tree(&full_tree_id, &repo.objects, Default::default())?;
 
     // Early stopping occurs before that later topology choice. Its partial tree
@@ -1335,7 +1336,7 @@ eight
     );
     let early_index = early
         .index
-        .to_index(TreatAsUnresolved::git(), &repo.objects, Default::default())?;
+        .to_index(TreatAsUnresolved::git(), None, &repo.objects, Default::default())?;
     assert!(
         early.index.has_unmerged_entries(TreatAsUnresolved::git()),
         "the retained marker blob receives unresolved source stages"
@@ -1372,7 +1373,7 @@ eight
 
 #[test]
 fn index_plans_are_repeatable_owned_snapshots() -> TestResult {
-    use gix_index::entry::{Mode, Stage};
+    use gix_index::entry::{Mode, Stage, Stat};
     use gix_merge::tree::{ResolutionFailure, TreatAsUnresolved, treat_as_unresolved::ContentMerge};
 
     let repo = Repo::new()?;
@@ -1394,6 +1395,15 @@ fn index_plans_are_repeatable_owned_snapshots() -> TestResult {
         ("conflict", EntryKind::Blob, their_blob_id),
         ("kept", EntryKind::Blob, kept_blob_id),
     ])?;
+    let mut existing = gix_index::State::from_tree(&our_tree_id, &repo.objects, Default::default())?;
+    let stat = Stat {
+        size: 42,
+        ino: 7,
+        ..Stat::default()
+    };
+    for entry in existing.entries_mut() {
+        entry.stat = stat;
+    }
 
     for favor_ours in [false, true] {
         for how in [
@@ -1407,7 +1417,7 @@ fn index_plans_are_repeatable_owned_snapshots() -> TestResult {
             }
             let mut outcome = repo.merge((base_tree_id, our_tree_id, their_tree_id), options)?;
             let unmerged = !favor_ours || how.content_merge == ContentMerge::ForcedResolution;
-            let first = outcome.index.to_index(how, &repo.objects, Default::default())?;
+            let first = outcome.index.to_index(how, None, &repo.objects, Default::default())?;
             let entries: Vec<_> = first
                 .entries()
                 .iter()
@@ -1431,6 +1441,29 @@ fn index_plans_are_repeatable_owned_snapshots() -> TestResult {
                 entries, expected,
                 "the plan includes unchanged, added, and conflicted paths"
             );
+            let adapted = outcome
+                .index
+                .to_index(how, Some(&existing), &repo.objects, Default::default())?;
+            for entry in adapted.entries() {
+                assert_eq!(
+                    entry.stat,
+                    if entry.stage() == Stage::Unconflicted {
+                        stat
+                    } else {
+                        Stat::default()
+                    },
+                    "unchanged stage-zero entries retain stats while replacing them with conflict stages clears stats"
+                );
+            }
+            assert_eq!(
+                adapted.timestamp(),
+                existing.timestamp(),
+                "stat reuse retains the source timestamp"
+            );
+            assert!(
+                first.entries().iter().all(|entry| entry.stat == Stat::default()),
+                "tree-only construction still emits zero stat data"
+            );
             first.verify_entries()?;
             assert!(
                 first
@@ -1439,7 +1472,7 @@ fn index_plans_are_repeatable_owned_snapshots() -> TestResult {
                     .all(|entry| !entry.flags.contains(gix_index::entry::Flags::REMOVE)),
                 "fresh indexes do not retain marked-for-removal entries"
             );
-            let repeated = outcome.index.to_index(how, &repo.objects, Default::default())?;
+            let repeated = outcome.index.to_index(how, None, &repo.objects, Default::default())?;
             assert_eq!(
                 super::baseline::debug_entries(&first),
                 super::baseline::debug_entries(&repeated),
@@ -1472,7 +1505,7 @@ fn index_plans_are_repeatable_owned_snapshots() -> TestResult {
                 unmerged,
                 "the review verdict is immutable"
             );
-            let detached = plan.to_index(how, &repo.objects, Default::default())?;
+            let detached = plan.to_index(how, None, &repo.objects, Default::default())?;
             assert_eq!(
                 super::baseline::debug_entries(&first),
                 super::baseline::debug_entries(&detached),
@@ -1498,6 +1531,7 @@ fn index_plans_validate_final_paths_with_their_modes() -> TestResult {
             )?;
             let index = outcome.index.to_index(
                 gix_merge::tree::TreatAsUnresolved::git(),
+                None,
                 &repo.objects,
                 Default::default(),
             );
@@ -1533,6 +1567,7 @@ fn index_plans_validate_final_paths_with_their_modes() -> TestResult {
                 let outcome = repo.merge((invalid_base_tree_id, current, other), basic_merge_options().tree_merge)?;
                 let index = outcome.index.to_index(
                     gix_merge::tree::TreatAsUnresolved::git(),
+                    None,
                     &repo.objects,
                     Default::default(),
                 )?;
@@ -1589,6 +1624,7 @@ fn index_plans_reject_duplicate_and_overlapping_paths() -> TestResult {
         let outcome = repo.merge((tree_id, tree_id, tree_id), basic_merge_options().tree_merge)?;
         let index = outcome.index.to_index(
             gix_merge::tree::TreatAsUnresolved::git(),
+            None,
             &repo.objects,
             gix_validate::path::component::Options {
                 // `a.` is valid here; the overlapping paths must cause the rejection.

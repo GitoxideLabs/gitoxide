@@ -130,7 +130,7 @@ fn provided_submodule_history_matches_git_trees_and_index_stages() -> TestResult
             let tree_id = actual.tree.write(|tree| objects.write(tree))?;
             let index = actual
                 .index
-                .to_index(TreatAsUnresolved::git(), &objects, Default::default())?;
+                .to_index(TreatAsUnresolved::git(), None, &objects, Default::default())?;
             index.verify_entries()?;
             let mut expected_index = gix_index::State::from_tree(&expected.merged_tree, &objects, Default::default())?;
             if let Some(conflicts) = &expected.conflicts {
@@ -236,7 +236,7 @@ fn forward_history_wins_before_tree_favor_and_virtual_base_policy() -> TestResul
                     assert!(
                         actual
                             .index
-                            .to_index(TreatAsUnresolved::git(), &objects, Default::default())?
+                            .to_index(TreatAsUnresolved::git(), None, &objects, Default::default())?
                             .entries()
                             .iter()
                             .all(|entry| entry.stage() == gix_index::entry::Stage::Unconflicted),
@@ -292,7 +292,7 @@ fn unavailable_callback_facts_preserve_the_unmerged_gitlink() -> TestResult {
             );
             let index = actual
                 .index
-                .to_index(TreatAsUnresolved::git(), &objects, Default::default())?;
+                .to_index(TreatAsUnresolved::git(), None, &objects, Default::default())?;
             assert_eq!(
                 index
                     .entries()
@@ -351,7 +351,7 @@ fn incomparable_history_retains_conflicts_until_the_tree_policy_selects_an_entry
                 );
                 let index = actual
                     .index
-                    .to_index(TreatAsUnresolved::git(), &objects, Default::default())?;
+                    .to_index(TreatAsUnresolved::git(), None, &objects, Default::default())?;
                 let unmerged = index
                     .entries()
                     .iter()

@@ -140,16 +140,25 @@ pub mod tree {
 
         /// Create a fresh index from the recorded merge result, using `how` to select unmerged stages.
         /// Later edits to [`Self::tree`] do not change the recorded plan.
-        /// No existing index, cached stat information, or index extensions are retained.
-        pub fn index(&self, how: TreatAsUnresolved) -> crate::Result<gix_index::State> {
-            self.index.to_index(how, self.tree.repo, self.tree.validate)
+        /// With `existing`, reuse unchanged entries' stat data and adapt `TREE`/`UNTR` caches for the same worktree.
+        /// New, changed, and unmerged entries have zero stat data until checkout refreshes them.
+        pub fn index(
+            &self,
+            how: TreatAsUnresolved,
+            existing: Option<&gix_index::State>,
+        ) -> crate::Result<gix_index::State> {
+            self.index.to_index(how, existing, self.tree.repo, self.tree.validate)
         }
 
         /// Create an index-file in memory from the recorded merge result, using [`Self::index()`].
         /// The returned file targets the owning repository's index path, but is not written to disk.
-        pub fn index_file(&self, how: TreatAsUnresolved) -> crate::Result<gix_index::File> {
+        pub fn index_file(
+            &self,
+            how: TreatAsUnresolved,
+            existing: Option<&gix_index::State>,
+        ) -> crate::Result<gix_index::File> {
             Ok(gix_index::File::from_state(
-                self.index(how)?,
+                self.index(how, existing)?,
                 self.tree.repo.index_path(),
             ))
         }

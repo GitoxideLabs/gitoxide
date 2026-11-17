@@ -87,7 +87,7 @@ fn recursive_bases_match_git_with_and_without_commit_graph() -> TestResult {
                     outcome
                         .tree_merge
                         .index
-                        .to_index(TreatAsUnresolved::git(), &objects, Default::default())?;
+                        .to_index(TreatAsUnresolved::git(), None, &objects, Default::default())?;
                 let mut expected_index =
                     gix_index::State::from_tree(&expected.merged_tree, &objects, Default::default())?;
                 baseline::apply_git_index_entries(

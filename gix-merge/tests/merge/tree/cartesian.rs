@@ -186,7 +186,7 @@ fn records_status_quo_sha1() -> gix_testtools::TestResult {
                 .last()
                 .is_some_and(|conflict| conflict.is_unresolved(git_kind));
             let tree_id = outcome.tree.write(|tree| objects.write(tree))?;
-            let index = outcome.index.to_index(git_kind, &objects, Default::default())?;
+            let index = outcome.index.to_index(git_kind, None, &objects, Default::default())?;
             Ok(Outcome {
                 tree_id,
                 tree: flatten_tree(tree_id, &objects)?,
@@ -1035,7 +1035,7 @@ fn records_submodule_status_quo_sha1() -> gix_testtools::TestResult {
                 let tree_id = outcome.tree.write(|tree| objects.write(tree))?;
                 let tree = flatten_tree(tree_id, &objects)?;
                 if policy == "default" {
-                    let index = outcome.index.to_index(unresolved, &objects, Default::default())?;
+                    let index = outcome.index.to_index(unresolved, None, &objects, Default::default())?;
                     pretty_assertions::assert_eq!(
                         baseline::debug_entries(&index),
                         baseline::debug_entries(&git.index),

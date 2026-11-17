@@ -53,12 +53,10 @@ impl Stats {
         let mut non_printable = 0;
         while let Some(b) = iter.next() {
             if *b == b'\r' {
-                match iter.peek() {
-                    Some(n) if **n == b'\n' => {
-                        iter.next();
-                        crlf += 1;
-                    }
-                    _ => lone_cr += 1,
+                if iter.next_if(|n| **n == b'\n').is_some() {
+                    crlf += 1;
+                } else {
+                    lone_cr += 1;
                 }
                 continue;
             }

@@ -3,13 +3,18 @@ use gix_error::{ResultExt, corruption};
 
 impl Tree {
     /// Serialize this instance to `out`.
-    pub fn write_to(&self, mut out: impl std::io::Write) -> Result<(), std::io::Error> {
+    pub fn write_to(&self, out: impl std::io::Write) -> Result<(), std::io::Error> {
+        self.write_to_inner(out, false)
+    }
+
+    pub(crate) fn write_to_inner(&self, mut out: impl std::io::Write, invalidate: bool) -> Result<(), std::io::Error> {
         fn tree_entry(
             out: &mut impl std::io::Write,
             tree: &Tree,
             buf: &mut itoa::Buffer,
+            invalidate: bool,
         ) -> Result<(), std::io::Error> {
-            let num_entries = match tree.num_entries {
+            let num_entries = match tree.num_entries.filter(|_| !invalidate) {
                 Some(num_entries) => buf.format(num_entries),
                 None => buf.format(-1),
             };
@@ -21,12 +26,12 @@ impl Tree {
             let num_children = buf.format(tree.children.len());
             out.write_all(num_children.as_bytes())?;
             out.write_all(b"\n")?;
-            if tree.num_entries.is_some() {
+            if !invalidate && tree.num_entries.is_some() {
                 out.write_all(tree.id.as_bytes())?;
             }
 
             for child in &tree.children {
-                tree_entry(out, child, buf)?;
+                tree_entry(out, child, buf, invalidate)?;
             }
 
             Ok(())
@@ -36,7 +41,7 @@ impl Tree {
 
         let mut entries = Vec::<u8>::new();
         let mut num_buf = itoa::Buffer::new();
-        tree_entry(&mut entries, self, &mut num_buf)?;
+        tree_entry(&mut entries, self, &mut num_buf, invalidate)?;
 
         out.write_all(&signature)?;
         out.write_all(

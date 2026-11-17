@@ -68,7 +68,13 @@ impl IndexPlan {
     /// Create a fresh, fully expanded index for this merge using `objects` to read unchanged subtrees.
     ///
     /// Each path has either stage zero or its final unmerged stages, selected according to `how`.
-    /// No existing index, cached stat information, removal flags, or index extensions are retained.
+    /// If `existing` describes the same worktree, reuse unchanged stage-zero entries' stat data and
+    /// persistent flags, and adapt its `TREE` and `UNTR` caches by invalidating affected paths.
+    /// Its timestamp is retained for racy-stat detection. Without it, stat data is zero and extensions are absent
+    /// which affects Git status performance.
+    /// Cached sizes of racy retained entries are zeroed to force content checks after writing the index.
+    /// New, changed, and unmerged entries have zero stat data; checkout must populate new filesystem stats.
+    /// Removal flags, intent-to-add, and entry-position-dependent extensions are not inherited.
     /// All emitted paths are checked with `validate`, including mode-specific symlink protection.
     /// Null object IDs, duplicate entries, and overlapping stage-zero files are rejected. Unmerged source stages
     /// may appear below a stage-zero file, as in a rename/rename conflict whose source directory was replaced.
@@ -79,6 +85,7 @@ impl IndexPlan {
     pub fn to_index(
         &self,
         how: TreatAsUnresolved,
+        existing: Option<&gix_index::State>,
         objects: &impl gix_object::Find,
         validate: gix_validate::path::component::Options,
     ) -> Result<gix_index::State> {
@@ -157,6 +164,9 @@ impl IndexPlan {
                 }
             }
             resolved.insert(path);
+        }
+        if let Some(existing) = existing {
+            index.copy_metadata_from(existing)?;
         }
         Ok(index)
     }

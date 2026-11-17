@@ -517,6 +517,7 @@ fn materialize_conflict(
     let state = index_plan
         .to_index(
             gix::merge::tree::TreatAsUnresolved::git(),
+            None,
             repo,
             repo.checkout_options(Default::default())?.validate,
         )
@@ -3028,7 +3029,10 @@ fn reset_index_paths(repo: &gix::Repository, id: ObjectId, paths: &[BString]) ->
     index.sort_entries();
     index.remove_tree();
     index
-        .write(gix::index::write::Options::default())
+        .write(gix::index::write::Options {
+            extensions: gix::index::write::Extensions::None,
+            ..Default::default()
+        })
         .or_raise(|| message("could not update selected index paths"))
 }
 

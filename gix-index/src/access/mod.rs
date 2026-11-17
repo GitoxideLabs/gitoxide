@@ -13,6 +13,8 @@ use crate::{
 #[expect(dead_code, reason = "to be used for when we handle checkouts/resets better")]
 mod sparse;
 
+mod metadata;
+
 /// General information and entries
 impl State {
     /// Return the version used to store this state's information on disk.

@@ -309,7 +309,7 @@ fn fuzz(data: &[u8]) {
             .expect("the merged tree remains valid");
         let index = outcome
             .index
-            .to_index(TreatAsUnresolved::git(), &objects.db, Default::default())
+            .to_index(TreatAsUnresolved::git(), None, &objects.db, Default::default())
             .expect("the merge plan can populate a complete index");
         let unresolved = outcome.has_unresolved_conflicts(TreatAsUnresolved::git());
         let directory_diagnostic = outcome.conflicts.iter().any(|conflict| {
@@ -387,7 +387,7 @@ fn fuzz(data: &[u8]) {
         );
         let repeated = outcome
             .index
-            .to_index(TreatAsUnresolved::git(), &objects.db, Default::default())
+            .to_index(TreatAsUnresolved::git(), None, &objects.db, Default::default())
             .expect("the finalized plan can be materialized repeatedly");
         assert!(
             index

@@ -65,9 +65,10 @@ fn gitlinks_use_typed_merges_during_rename_normalization() -> TestResult {
                     case.case_name
                 );
                 let actual_tree_id = actual.tree.write(|tree| case.odb.write(tree))?;
-                let actual_index = actual
-                    .index
-                    .to_index(TreatAsUnresolved::git(), &case.odb, Default::default())?;
+                let actual_index =
+                    actual
+                        .index
+                        .to_index(TreatAsUnresolved::git(), None, &case.odb, Default::default())?;
                 actual_index.verify_entries()?;
                 assert!(
                     case.case_name.contains("-type-")

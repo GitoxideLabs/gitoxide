@@ -87,7 +87,7 @@ fn inferred_moves_back_to_a_rename_source_preserve_its_conflict_stages() -> Test
             let tree_id = actual.tree.write(|tree| objects.write(tree))?;
             let index = actual
                 .index
-                .to_index(TreatAsUnresolved::git(), &objects, Default::default())?;
+                .to_index(TreatAsUnresolved::git(), None, &objects, Default::default())?;
             index.verify_entries()?;
             let mut expected_index = gix_index::State::from_tree(&expected.merged_tree, &objects, Default::default())?;
             if let Some(conflicts) = &expected.conflicts {
@@ -165,7 +165,7 @@ fn forced_rename_choices_preserve_the_selected_file_directory_namespace() -> Tes
                 );
                 let index = actual
                     .index
-                    .to_index(TreatAsUnresolved::git(), &objects, Default::default())?;
+                    .to_index(TreatAsUnresolved::git(), None, &objects, Default::default())?;
                 index.verify_entries()?;
                 assert!(
                     !actual.has_unresolved_conflicts(TreatAsUnresolved::git()),
@@ -205,7 +205,7 @@ fn a_single_return_to_source_rename_matches_git_with_an_opposite_deletion() -> T
             let tree_id = actual.tree.write(|tree| objects.write(tree))?;
             let index = actual
                 .index
-                .to_index(TreatAsUnresolved::git(), &objects, Default::default())?;
+                .to_index(TreatAsUnresolved::git(), None, &objects, Default::default())?;
             let mut expected_index = gix_index::State::from_tree(&expected.merged_tree, &objects, Default::default())?;
             if let Some(conflicts) = &expected.conflicts {
                 baseline::apply_git_index_entries(conflicts, &mut expected_index);

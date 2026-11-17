@@ -47,7 +47,7 @@ fn local_submodule_history_respects_modified_graphs_and_linked_repositories() ->
                 expected_conflict,
                 "{layout} {direction}: submodule history availability matches Git's verdict"
             );
-            let index = outcome.index(TreatAsUnresolved::git())?;
+            let index = outcome.index(TreatAsUnresolved::git(), None)?;
             assert_eq!(
                 index
                     .entries()

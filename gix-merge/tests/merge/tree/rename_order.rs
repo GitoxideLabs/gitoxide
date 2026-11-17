@@ -39,7 +39,7 @@ fn merge_context_controls_ambiguous_rename_destinations() -> TestResult {
         let actual_tree_id = actual.tree.write(|tree| case.odb.write(tree))?;
         let actual_index = actual
             .index
-            .to_index(TreatAsUnresolved::git(), &case.odb, Default::default())?;
+            .to_index(TreatAsUnresolved::git(), None, &case.odb, Default::default())?;
         let mut expected_index =
             gix_index::State::from_tree(&case.merge_info.merged_tree, &case.odb, Default::default())?;
         if let Some(conflicts) = &case.merge_info.conflicts {

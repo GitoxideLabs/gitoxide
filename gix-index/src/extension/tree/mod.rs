@@ -3,6 +3,29 @@ use crate::extension::Signature;
 /// The signature for tree extensions
 pub const SIGNATURE: Signature = *b"TREE";
 
+impl crate::extension::Tree {
+    pub(crate) fn invalidate_path(&mut self, path: &bstr::BStr) {
+        use bstr::ByteSlice;
+
+        self.num_entries = None;
+        let (component, rest) = match path.find_byte(b'/') {
+            Some(slash) => (&path[..slash], Some(path[slash + 1..].as_bstr())),
+            None => (path, None),
+        };
+        if let Ok(index) = self
+            .children
+            .binary_search_by(|child| child.name.as_slice().cmp(component))
+        {
+            match rest {
+                Some(rest) => self.children[index].invalidate_path(rest),
+                None => {
+                    self.children.remove(index);
+                }
+            }
+        }
+    }
+}
+
 ///
 pub mod verify;
 

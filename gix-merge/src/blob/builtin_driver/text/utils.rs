@@ -56,8 +56,7 @@ pub fn regions(mut hunks: Vec<Hunk>, current: &[Token], other: &[Token]) -> Vec<
         let mut end = first.before.end;
         let mut group = vec![first];
         // Touching base ranges can conflict too, including insertions at a deletion's boundary.
-        while hunks.peek().is_some_and(|hunk| hunk.before.start <= end) {
-            let hunk = hunks.next().expect("a touching hunk was peeked");
+        while let Some(hunk) = hunks.next_if(|hunk| hunk.before.start <= end) {
             end = end.max(hunk.before.end);
             group.push(hunk);
         }

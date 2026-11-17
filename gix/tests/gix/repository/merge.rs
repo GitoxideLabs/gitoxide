@@ -108,7 +108,7 @@ fn final_index_is_independent_of_mutable_tree_and_diagnostics() -> TestResult {
         (Stage::Theirs, their_blob_id),
     ]
     .map(|(stage, blob_id)| (BString::from("file"), stage, Mode::FILE, blob_id.detach()));
-    let index = outcome.index(how)?;
+    let index = outcome.index(how, None)?;
     index.verify_entries()?;
     assert_eq!(
         entries(&index),
@@ -117,7 +117,7 @@ fn final_index_is_independent_of_mutable_tree_and_diagnostics() -> TestResult {
     );
 
     let index_on_disk = std::fs::read(repo.index_path())?;
-    let file = outcome.index_file(how)?;
+    let file = outcome.index_file(how, None)?;
     assert_eq!(
         std::fs::read(repo.index_path())?,
         index_on_disk,
@@ -136,9 +136,67 @@ fn final_index_is_independent_of_mutable_tree_and_diagnostics() -> TestResult {
         "the index file retains the final merge stages after the merge outcome is dropped"
     );
     assert_eq!(
-        entries(&plan.to_index(how, &repo, Default::default())?),
+        entries(&plan.to_index(how, None, &repo, Default::default())?),
         expected,
         "a detached plan can construct the same index after the merge outcome is dropped"
+    );
+    Ok(())
+}
+
+#[test]
+fn index_wrappers_reuse_existing_metadata_without_writing() -> TestResult {
+    use gix::merge::tree::TreatAsUnresolved;
+
+    let repo = named_repo("make_basic_repo.sh")?.with_object_memory();
+    let existing = repo.index()?;
+    let before = std::fs::read(repo.index_path())?;
+    let tree_id = repo.head_tree_id()?;
+    let outcome = repo.merge_trees(
+        tree_id,
+        tree_id,
+        tree_id,
+        Default::default(),
+        repo.tree_merge_options()?,
+    )?;
+    let how = TreatAsUnresolved::git();
+    let index = outcome.index(how, Some(&existing))?;
+    let file = outcome.index_file(how, Some(&existing))?;
+    for index in [&index, &*file] {
+        for (entry, old) in index.entries().iter().zip(existing.entries()) {
+            assert_eq!(
+                entry.path(index),
+                old.path(&existing),
+                "the recorded tree has the existing index's paths"
+            );
+            let mut expected_stat = old.stat;
+            if expected_stat.is_racy(existing.timestamp(), Default::default()) {
+                expected_stat.size = 0;
+            }
+            assert_eq!(
+                entry.stat, expected_stat,
+                "both wrappers retain unchanged entries' stat data with racy sizes smudged"
+            );
+        }
+        assert_eq!(
+            index.entries().len(),
+            existing.entries().len(),
+            "all entries are present"
+        );
+        assert_eq!(
+            index.tree(),
+            existing.tree(),
+            "the unchanged TREE cache survives both wrappers"
+        );
+        assert_eq!(
+            index.timestamp(),
+            existing.timestamp(),
+            "the old timestamp retains stat-race detection"
+        );
+    }
+    assert_eq!(
+        std::fs::read(repo.index_path())?,
+        before,
+        "constructing either result leaves the on-disk index untouched"
     );
     Ok(())
 }

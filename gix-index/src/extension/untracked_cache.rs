@@ -8,6 +8,51 @@ use crate::{
 };
 
 impl UntrackedCache {
+    pub(crate) fn invalidate_path(&mut self, path: &bstr::BStr) {
+        if self.directories.is_empty() {
+            return;
+        }
+        // Git's DIR_SHOW_OTHER_DIRECTORIES allows changed leaves to affect collapsed ancestor listings.
+        let invalidate_ancestors = self.dir_flags & (1 << 1) != 0;
+        let mut directory = 0;
+        let mut components = path.split(|byte| *byte == b'/').peekable();
+        while let Some(component) = components.next() {
+            let last = components.peek().is_none();
+            if invalidate_ancestors || last {
+                self.invalidate_directory(directory, last && component == self.exclude_filename_per_dir.as_slice());
+            }
+            let child = self.directories[directory]
+                .sub_directories
+                .iter()
+                .copied()
+                .find(|child| self.directories[*child].name.as_slice() == component);
+            match child {
+                Some(child) if !last => directory = child,
+                Some(child) => {
+                    self.invalidate_directory(child, true);
+                    break;
+                }
+                None => {
+                    self.invalidate_directory(directory, false);
+                    break;
+                }
+            }
+        }
+    }
+
+    fn invalidate_directory(&mut self, index: usize, recursively: bool) {
+        let directory = &mut self.directories[index];
+        directory.stat = None;
+        directory.untracked_entries.clear();
+        directory.check_only = false;
+        if recursively {
+            for position in 0..self.directories[index].sub_directories.len() {
+                let child = self.directories[index].sub_directories[position];
+                self.invalidate_directory(child, true);
+            }
+        }
+    }
+
     /// Something identifying the location and machine that this cache is for.
     pub fn identifier(&self) -> &bstr::BStr {
         self.identifier.as_ref()
@@ -36,6 +81,111 @@ impl UntrackedCache {
     /// A list of directories and sub-directories, with `directories[0]` being the root.
     pub fn directories(&self) -> &[Directory] {
         &self.directories
+    }
+
+    /// Serialize the `UNTR` extension to `out`, using `object_hash` for absent ignore-file IDs.
+    /// If `invalidate` is set, omit cached directory stats and listings without changing this instance.
+    pub(crate) fn write_to(
+        &self,
+        mut out: impl std::io::Write,
+        object_hash: gix_hash::Kind,
+        invalidate: bool,
+    ) -> std::io::Result<()> {
+        use gix_error::{ResultExt, corruption};
+
+        let mut data = Vec::new();
+        write_varint(&mut data, self.identifier.len());
+        data.extend_from_slice(&self.identifier);
+        for stat in [&self.info_exclude, &self.excludes_file] {
+            write_stat(
+                &mut data,
+                stat.as_ref().map_or(entry::Stat::default(), |stat| stat.stat),
+            );
+        }
+        data.extend_from_slice(&self.dir_flags.to_be_bytes());
+        for stat in [&self.info_exclude, &self.excludes_file] {
+            data.extend_from_slice(stat.as_ref().map_or(object_hash.null(), |stat| stat.id).as_bytes());
+        }
+        data.extend_from_slice(&self.exclude_filename_per_dir);
+        data.push(0);
+        write_varint(&mut data, self.directories.len());
+        for directory in &self.directories {
+            let untracked = if !invalidate && directory.stat.is_some() {
+                directory.untracked_entries.as_slice()
+            } else {
+                &[]
+            };
+            write_varint(&mut data, untracked.len());
+            write_varint(&mut data, directory.sub_directories.len());
+            data.extend_from_slice(&directory.name);
+            data.push(0);
+            for name in untracked {
+                data.extend_from_slice(name);
+                data.push(0);
+            }
+        }
+        if !self.directories.is_empty() {
+            let predicates: [&dyn Fn(&Directory) -> bool; 3] = [
+                &|directory| !invalidate && directory.stat.is_some(),
+                &|directory| !invalidate && directory.stat.is_some() && directory.check_only,
+                &|directory| directory.exclude_file_oid.is_some(),
+            ];
+            for is_set in predicates {
+                let bits: Vec<_> = self.directories.iter().map(is_set).collect();
+                gix_bitmap::ewah::Vec::from_bits(&bits)
+                    .ok_or_else(|| {
+                        std::io::Error::new(std::io::ErrorKind::InvalidInput, "UNTR has too many directories")
+                    })?
+                    .write_to(&mut data)?;
+            }
+            for directory in &self.directories {
+                if !invalidate && let Some(stat) = directory.stat {
+                    write_stat(&mut data, stat);
+                }
+            }
+            for directory in &self.directories {
+                if let Some(id) = directory.exclude_file_oid {
+                    data.extend_from_slice(id.as_bytes());
+                }
+            }
+            data.push(0);
+        }
+        out.write_all(&SIGNATURE)?;
+        out.write_all(
+            &u32::try_from(data.len())
+                .or_raise(|| corruption("untracked-cache extension exceeds 4GB"))
+                .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?
+                .to_be_bytes(),
+        )?;
+        out.write_all(&data)
+    }
+}
+
+fn write_varint(out: &mut Vec<u8>, mut value: usize) {
+    let mut buffer = [0u8; 10];
+    let mut position = buffer.len() - 1;
+    buffer[position] = (value & 0x7f) as u8;
+    while value > 0x7f {
+        value = (value >> 7) - 1;
+        position -= 1;
+        buffer[position] = 0x80 | (value & 0x7f) as u8;
+    }
+    out.extend_from_slice(&buffer[position..]);
+}
+
+fn write_stat(out: &mut Vec<u8>, stat: entry::Stat) {
+    for value in [
+        stat.ctime.secs,
+        stat.ctime.nsecs,
+        stat.mtime.secs,
+        stat.mtime.nsecs,
+        stat.dev,
+        stat.ino,
+        stat.uid,
+        stat.gid,
+        stat.size,
+    ] {
+        out.extend_from_slice(&value.to_be_bytes());
     }
 }
 
@@ -268,4 +418,84 @@ fn decode_directory_block<'a>(
     }
 
     data.into()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn directory_invalidation_respects_collapsed_listings_and_unknown_children() -> gix_error::TestResult {
+        let directory = |name: &str, sub_directories| super::Directory {
+            name: name.into(),
+            untracked_entries: vec!["untracked".into()],
+            sub_directories,
+            stat: Some(Default::default()),
+            exclude_file_oid: None,
+            check_only: true,
+        };
+        for dir_flags in [0, 6] {
+            let mut cache = super::UntrackedCache {
+                identifier: Default::default(),
+                info_exclude: None,
+                excludes_file: None,
+                exclude_filename_per_dir: ".gitignore".into(),
+                dir_flags,
+                directories: vec![
+                    directory("", vec![1, 2]),
+                    directory("affected", Vec::new()),
+                    directory("sibling", Vec::new()),
+                ],
+            };
+            cache.invalidate_path("affected/file".into());
+            assert_eq!(
+                cache.directories[0].stat.is_some(),
+                dir_flags == 0,
+                "only collapsed listings require invalidating known ancestors"
+            );
+            assert!(
+                cache.directories[1].stat.is_none()
+                    && cache.directories[1].untracked_entries.is_empty()
+                    && !cache.directories[1].check_only,
+                "the changed directory is invalidated"
+            );
+            assert!(
+                cache.directories[2].stat.is_some()
+                    && !cache.directories[2].untracked_entries.is_empty()
+                    && cache.directories[2].check_only,
+                "unaffected sibling caches are retained"
+            );
+            cache.invalidate_path("new/file".into());
+            assert!(
+                cache.directories[0].stat.is_none(),
+                "an unknown directory invalidates its deepest cached ancestor"
+            );
+            assert!(
+                cache.directories[2].stat.is_some(),
+                "unknown children do not discard unaffected siblings"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn varints_cover_single_byte_and_multi_byte_boundaries() -> gix_error::TestResult {
+        for (value, expected) in [
+            (0, &[0][..]),
+            (127, &[127][..]),
+            (128, &[0x80, 0][..]),
+            (255, &[0x80, 127][..]),
+            (256, &[0x81, 0][..]),
+        ] {
+            let mut data = Vec::new();
+            super::write_varint(&mut data, value);
+            assert_eq!(data, expected, "UNTR uses Git's offset-style varint encoding");
+        }
+        for value in [16383, 16384, u32::MAX as usize, usize::MAX] {
+            let mut data = Vec::new();
+            super::write_varint(&mut data, value);
+            let (decoded, rest) = crate::util::var_int(&data).expect("the encoded value fits in a u64");
+            assert_eq!(decoded, value as u64, "larger counts retain every bit");
+            assert!(rest.is_empty(), "the entire encoded count is consumed");
+        }
+        Ok(())
+    }
 }
