@@ -83,6 +83,8 @@ mod tests {
             footer: String::new(),
             content: content.into(),
             children: Vec::new(),
+            test_only: false,
+            contains_tests: false,
         }
     }
 
