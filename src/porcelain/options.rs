@@ -51,6 +51,9 @@ pub enum Subcommands {
 #[clap(subcommand_required = true)]
 #[clap(visible_alias = "t")]
 pub enum ToolCommands {
+    /// Compare source structure without displaying implementation bodies.
+    #[cfg(feature = "gitoxide-core-tools-diff")]
+    Diff(tools::Diff),
     /// Find all repositories in a given directory.
     Find {
         /// If set, print additional information to help understand why the traversal is slow.
@@ -94,6 +97,32 @@ pub mod tools {
     use std::path::PathBuf;
 
     use gix::bstr::BString;
+
+    #[cfg(feature = "gitoxide-core-tools-diff")]
+    #[derive(Debug, clap::Parser)]
+    pub struct Diff {
+        /// The old file, or /dev/null for an addition.
+        pub before: PathBuf,
+        /// The new file, or /dev/null for a deletion.
+        pub after: PathBuf,
+        /// Original source path, used for language detection when Git supplies temporary files.
+        #[arg(long)]
+        pub path: Option<PathBuf>,
+        /// Override language detection from the source path: rust, toml, or markdown.
+        #[arg(long)]
+        pub language: Option<gitoxide_core::structural_diff::Language>,
+        /// When to use terminal colors. Auto honors NO_COLOR and detects redirected output.
+        #[arg(long, value_enum, default_value = "auto")]
+        pub color: DiffColor,
+    }
+
+    #[cfg(feature = "gitoxide-core-tools-diff")]
+    #[derive(Debug, Clone, Copy, clap::ValueEnum)]
+    pub enum DiffColor {
+        Auto,
+        Always,
+        Never,
+    }
 
     #[cfg(feature = "gitoxide-core-tools-query")]
     #[derive(Debug, clap::Parser)]

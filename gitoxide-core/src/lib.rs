@@ -86,6 +86,8 @@ pub mod query;
 #[cfg(feature = "blocking-client")]
 pub mod remote;
 pub mod repository;
+#[cfg(feature = "structural-diff")]
+pub mod structural_diff;
 #[cfg(feature = "tracing")]
 pub mod trace;
 

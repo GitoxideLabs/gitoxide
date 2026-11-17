@@ -3,6 +3,7 @@ A selection of useful tools
 Usage: ein tool <COMMAND>
 
 Commands:
+  diff            Compare source structure without displaying implementation bodies
   find            Find all repositories in a given directory
   organize        Move all repositories found in a directory into a structure matching their clone URLs
   query           a database accelerated engine to extract information and query it [alias: q]

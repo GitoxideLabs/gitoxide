@@ -41,6 +41,34 @@ pub fn main() -> Result<()> {
         Subcommands::Init { directory } => core::repository::init(directory).map(|_| ()),
         #[cfg(feature = "gitoxide-core-tools")]
         Subcommands::Tool(tool) => match tool {
+            #[cfg(feature = "gitoxide-core-tools-diff")]
+            crate::porcelain::options::ToolCommands::Diff(crate::porcelain::options::tools::Diff {
+                before,
+                after,
+                path,
+                language,
+                color,
+            }) => {
+                use std::io::IsTerminal;
+
+                use crate::porcelain::options::tools::DiffColor;
+
+                let stdout = std::io::stdout();
+                core::structural_diff::diff(
+                    &before,
+                    &after,
+                    core::structural_diff::Options {
+                        language,
+                        path,
+                        color: match color {
+                            DiffColor::Auto => stdout.is_terminal() && std::env::var_os("NO_COLOR").is_none(),
+                            DiffColor::Always => true,
+                            DiffColor::Never => false,
+                        },
+                    },
+                    stdout.lock(),
+                )
+            }
             #[cfg(feature = "gitoxide-core-tools-query")]
             crate::porcelain::options::ToolCommands::Query(crate::porcelain::options::tools::Query {
                 object_cache_size_mb,

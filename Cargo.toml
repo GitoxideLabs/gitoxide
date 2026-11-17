@@ -49,6 +49,7 @@ max = [
     "fast",
     "gitoxide-core-tools-query",
     "gitoxide-core-tools-corpus",
+    "gitoxide-core-tools-diff",
     "gitoxide-core-blocking-client",
     "http-client-curl-openssl",
 ]
@@ -59,7 +60,7 @@ max = [
 ##
 ## This uses Rust's HTTP implementation.
 ##
-## As fast as possible, with progress line rendering and auto-configuration, all transports available but less mature pure Rust HTTP implementation, all `ein` tools, CLI colors and local-time support, JSON output, regex support for rev-specs.
+## As fast as possible, with progress line rendering and auto-configuration, all transports available but less mature pure Rust HTTP implementation, `ein` tools without C dependencies, CLI colors and local-time support, JSON output, regex support for rev-specs.
 max-pure = [
     "hashes",
     "max-control",
@@ -92,6 +93,7 @@ lean = [
     "http-client-curl-openssl",
     "gitoxide-core-tools-query",
     "gitoxide-core-tools-corpus",
+    "gitoxide-core-tools-diff",
     "gitoxide-core-tools",
     "gitoxide-core-blocking-client",
     "prodash-render-line",
@@ -122,6 +124,7 @@ lean-async = [
     "gitoxide-core-tools",
     "gitoxide-core-tools-query",
     "gitoxide-core-tools-corpus",
+    "gitoxide-core-tools-diff",
     "gitoxide-core-async-client",
     "prodash-render-line",
 ]
@@ -210,6 +213,9 @@ gitoxide-core-tools-query = ["gitoxide-core/query"]
 
 ## A program to run algorithms on a corpus of repositories, recording each run for later comparison.
 gitoxide-core-tools-corpus = ["gitoxide-core/corpus"]
+
+## A Git difftool that compares Rust, TOML, and Markdown structure. Requires a C compiler for tree-sitter.
+gitoxide-core-tools-diff = ["gitoxide-core-tools", "gitoxide-core/structural-diff"]
 
 ## A sub-command to generate archive from virtual worktree checkouts.
 gitoxide-core-tools-archive = ["gitoxide-core/archive"]

@@ -23,6 +23,8 @@ default = []
 organize = ["dep:dua-core", "dep:gix-url", "dep:parking_lot"]
 ## Derive the amount of time invested into a git repository akin to [git-hours](https://github.com/kimmobrunfeldt/git-hours).
 estimate-hours = ["dep:crossbeam-channel", "dep:smallvec"]
+## Compare source outlines using tree-sitter grammars (requires a C compiler).
+structural-diff = ["dep:tree-sitter", "dep:tree-sitter-rust", "dep:tree-sitter-toml-ng", "dep:tree-sitter-md", "dep:owo-colors", "dep:gix-imara-diff"]
 ## Gather information about repositories and store it in a database for easy querying.
 query = ["dep:rusqlite"]
 ## Run algorithms on a corpus of repositories and store their results for later comparison and intelligence gathering.
@@ -66,6 +68,14 @@ serde = { version = "1.0.114", optional = true, default-features = false, featur
 bytesize = "2.3.1"
 tempfile = "3.26.0"
 unicode-width = "0.2.2"
+
+# for structural diffs
+tree-sitter = { version = "0.26.13", optional = true }
+tree-sitter-rust = { version = "0.24.2", optional = true }
+tree-sitter-toml-ng = { version = "0.7.0", optional = true }
+tree-sitter-md = { version = "0.5.3", optional = true }
+owo-colors = { version = "4.3.0", optional = true }
+gix-imara-diff = { version = "^0.3.3", path = "../gix-imara-diff", optional = true }
 
 # for async-client
 async-trait = { version = "0.1.51", optional = true }
@@ -142,7 +152,8 @@ ignored = [
 checks = [
     { args = ["--features", "gix/sha1,blocking-client"] },
     { args = ["--features", "gix/sha1,async-client"] },
+    { args = ["--features", "gix/sha1,structural-diff"] },
 ]
 tests = [
-    { args = [] },
+    { args = ["--features", "structural-diff"] },
 ]

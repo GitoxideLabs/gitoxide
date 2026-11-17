@@ -12,6 +12,8 @@ There are two primary ways to use `gitoxide`:
     and the `ein` binary with workflow-enhancing tools. Both binaries may forever be unstable,
     *do not rely on them in scripts*.
 
+`ein tool diff` provides [structural diffs for Rust, TOML, and Markdown](docs/structural-diff.md), including Git difftool integration.
+
 [![asciicast](etc/gix-asciicast.svg)](https://asciinema.org/a/542159)
 
 [`gix`]: https://docs.rs/gix

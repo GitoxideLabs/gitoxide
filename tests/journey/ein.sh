@@ -30,6 +30,33 @@ title "Porcelain ${kind}"
   (when "using the 'tool' subcommand"
     title "ein tool"
     if test "$kind" = "max"; then
+    title "ein tool diff"
+    (when "using a structural Git difftool"
+      (sandbox
+        # Git supplies a temporary old file and a path containing spaces. Body-only
+        # changes must be reported through their declaration without exposing code.
+        git init -q
+        printf 'fn outer() { let body_only_before = 1; }\n' >"source file.rs"
+        git add "source file.rs"
+        git commit -q -m "initial source"
+        printf 'fn outer() { let body_only_after = 2; }\n' >"source file.rs"
+        export EIN_DIFF_EXE="$exe"
+        git config difftool.structural.cmd '"$EIN_DIFF_EXE" tool diff --color never --path "$BASE" "$LOCAL" "$REMOTE"'
+
+        it "works with Git's temporary paths and returns success for differences" && {
+          git difftool --no-prompt --tool=structural >actual
+          expect_run $SUCCESSFULLY grep -F 'fn outer()' actual
+          expect_run $SUCCESSFULLY grep '^~' actual
+        }
+        it "does not reveal either implementation" && {
+          expect_run 1 grep -E 'body_only_before|body_only_after' actual
+        }
+        it "produces no output for identical files" && {
+          "$exe" tool diff --color never "source file.rs" "source file.rs" >actual
+          expect_run $SUCCESSFULLY test ! -s actual
+        }
+      )
+    )
     title "ein tool query"
     (when "tracing a path through history"
       for object_format in sha1 sha256; do
