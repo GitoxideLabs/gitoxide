@@ -11,7 +11,7 @@ heading hierarchies without prose or code blocks. Changes to hidden content stil
 mark the containing item as modified.
 
 Lines starting with `+` and `-` show additions and deletions. `~` marks an item
-whose hidden content changed while its displayed declaration stayed the same.
+whose hidden content or descendants changed while its displayed declaration stayed the same.
 Changed declarations appear as an old `-` line and a new `+` line.
 
 ```shell

@@ -131,9 +131,14 @@ fn rust_item(node: Node<'_>, source: &str) -> Option<Item> {
             item.header = indented(source, node, node.start_byte()..body.start_byte()) + "{ … }";
         } else if body.kind() != "ordered_field_declaration_list" {
             item.header = indented(source, node, node.start_byte()..body.start_byte() + 1);
+            let closing_prefix = &source[line_start(source, body.end_byte() - 1)..body.end_byte() - 1];
             item.footer = format!(
                 "{}{}",
-                indentation(source, node),
+                if closing_prefix.chars().all(char::is_whitespace) {
+                    closing_prefix.to_owned()
+                } else {
+                    indentation(source, node)
+                },
                 sanitized(source, node, body.end_byte() - 1..node.end_byte())
             );
             item.children = rust_children(body, source);
@@ -191,7 +196,9 @@ fn markdown(root: Node<'_>, source: &str) -> Vec<Item> {
     let mut headings = Vec::new();
     markdown_headings(root, &mut headings);
     let mut items = Vec::new();
-    let preamble = &source[..headings.first().map_or(source.len(), Node::start_byte)];
+    let preamble = &source[..headings
+        .first()
+        .map_or(source.len(), |heading| line_start(source, heading.start_byte()))];
     if !preamble.trim().is_empty() {
         items.push(Item {
             kind: "document",
@@ -224,16 +231,34 @@ fn markdown_items(mut headings: &[Node<'_>], source: &str, end: usize) -> Vec<It
             .iter()
             .position(|next| heading_level(*next) <= heading_level(heading))
             .map_or(headings.len(), |position| position + 1);
-        let section_end = headings.get(next).map_or(end, Node::start_byte);
+        let section_end = headings
+            .get(next)
+            .map_or(end, |next| line_start(source, next.start_byte()));
+        let mut cursor = heading.walk();
+        let header_end = heading
+            .named_children(&mut cursor)
+            .filter(|child| child.kind() != "block_continuation")
+            .last()
+            .map_or(heading.end_byte(), |child| child.end_byte());
         items.push(Item {
             kind: "heading",
             name: heading
                 .child_by_field_name("heading_content")
-                .map(|content| text(source, content).trim().to_owned())
+                .map(|content| {
+                    let mut cursor = content.walk();
+                    let end = content
+                        .named_children(&mut cursor)
+                        .filter(|child| child.kind() != "block_continuation")
+                        .last()
+                        .map_or(content.end_byte(), |child| child.end_byte());
+                    source[content.start_byte()..end].trim().to_owned()
+                })
                 .unwrap_or_default(),
-            header: format!("{}{}", indentation(source, heading), text(source, heading).trim_end()),
+            header: source[line_start(source, heading.start_byte())..header_end]
+                .trim_end()
+                .to_owned(),
             footer: String::new(),
-            content: source[heading.start_byte()..section_end].to_owned(),
+            content: source[line_start(source, heading.start_byte())..section_end].to_owned(),
             children: markdown_items(&headings[1..next], source, section_end),
         });
         headings = &headings[next..];
@@ -262,12 +287,15 @@ fn text<'a>(source: &'a str, node: Node<'_>) -> &'a str {
 }
 
 fn indentation(source: &str, node: Node<'_>) -> String {
-    let start = source[..node.start_byte()].rfind('\n').map_or(0, |newline| newline + 1);
-    let prefix = &source[start..node.start_byte()];
+    let prefix = &source[line_start(source, node.start_byte())..node.start_byte()];
     prefix
         .chars()
         .map(|c| if c.is_whitespace() { c } else { ' ' })
         .collect()
+}
+
+fn line_start(source: &str, byte: usize) -> usize {
+    source[..byte].rfind('\n').map_or(0, |newline| newline + 1)
 }
 
 fn indented(source: &str, node: Node<'_>, range: Range<usize>) -> String {
@@ -354,6 +382,70 @@ Hidden prose
         assert!(
             guide.children[0].children[0].content.contains("Hidden prose"),
             "prose participates in comparison without appearing in the header"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn markdown_headings_keep_container_markers_without_next_line_continuations() -> gix_testtools::TestResult {
+        for (source, header, name) in [
+            (
+                "> # Quoted
+> secret_prose
+",
+                "> # Quoted",
+                "Quoted",
+            ),
+            (
+                "- # Listed
+
+  secret_prose
+",
+                "- # Listed",
+                "Listed",
+            ),
+            (
+                "> Guide
+> =====
+> secret_prose
+",
+                "> Guide
+> =====",
+                "Guide",
+            ),
+        ] {
+            let items = parse(source, Language::Markdown)?;
+            assert_eq!(
+                items.len(),
+                1,
+                "container markers are part of the heading, not a preamble"
+            );
+            assert_eq!(items[0].header, header, "only the source heading lines are displayed");
+            assert_eq!(
+                items[0].name, name,
+                "next-line continuation markers aren't part of the title"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn closing_braces_retain_source_indentation_unless_inline() -> gix_testtools::TestResult {
+        let items = parse(
+            "mod odd {
+    fn hidden() { secret(); }
+  }
+",
+            Language::Rust,
+        )?;
+        assert_eq!(
+            items[0].footer, "  }",
+            "a multiline closing brace retains its original indentation"
+        );
+        let items = parse("mod inline { fn hidden() { secret(); } }", Language::Rust)?;
+        assert_eq!(
+            items[0].footer, "}",
+            "an inline closing brace aligns with its container"
         );
         Ok(())
     }
