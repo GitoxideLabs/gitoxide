@@ -6,7 +6,7 @@ use std::fmt::Write as _;
 use gix_hash::ObjectId;
 use gix_merge::blob::builtin_driver::binary::ResolveWith;
 use gix_object::{
-    FindExt, Write,
+    FindExt, Write, WriteTo,
     tree::{EntryKind, EntryMode},
 };
 use gix_testtools::TestResult;
@@ -156,6 +156,354 @@ fn forced_crossing_renames_do_not_reinstall_discarded_subtrees() -> TestResult {
             super::baseline::debug_entries(&tree_index),
             "forced crossing renames keep the tree and index in agreement for current {current}"
         );
+    }
+    Ok(())
+}
+
+#[test]
+fn compatible_absences_keep_common_siblings_and_independent_directories() -> TestResult {
+    use gix_index::entry::{Mode, Stage};
+    use gix_merge::tree::{ResolveWith as TreeResolveWith, TreatAsUnresolved};
+    use gix_object::bstr::BString;
+
+    let repo = Repo::new()?;
+    let kept_blob_id = repo.blob("kept\n")?;
+    let base_blob_id = repo.blob("base\n")?;
+    let modified_blob_id = repo.blob("modified\n")?;
+    let removed_blob_id = repo.blob("removed\n")?;
+    let added_blob_id = repo.blob("added\n")?;
+    let base_tree_id = repo.tree_from_paths(&[
+        ("keep/a", EntryKind::Blob, kept_blob_id),
+        ("keep/b", EntryKind::Blob, kept_blob_id),
+        ("keep/conflict", EntryKind::Blob, base_blob_id),
+        ("old/file", EntryKind::Blob, removed_blob_id),
+    ])?;
+    let deleted_tree_id = repo.tree_from_paths(&[
+        ("keep/a", EntryKind::Blob, kept_blob_id),
+        ("keep/b", EntryKind::Blob, kept_blob_id),
+        ("new/file", EntryKind::Blob, added_blob_id),
+    ])?;
+    let modified_tree_id = repo.tree_from_paths(&[
+        ("keep/a", EntryKind::Blob, kept_blob_id),
+        ("keep/b", EntryKind::Blob, kept_blob_id),
+        ("keep/conflict", EntryKind::Blob, modified_blob_id),
+        ("old/file", EntryKind::Blob, removed_blob_id),
+    ])?;
+    for (current, other) in [(deleted_tree_id, modified_tree_id), (modified_tree_id, deleted_tree_id)] {
+        for policy in [None, Some(TreeResolveWith::Ancestor), Some(TreeResolveWith::Ours)] {
+            for fail_fast in [false, true] {
+                let mut options = basic_merge_options().tree_merge;
+                options.rewrites = None;
+                options.tree_conflicts = policy;
+                options.fail_on_conflict = fail_fast.then(TreatAsUnresolved::forced_resolution);
+                let mut outcome = repo.merge((base_tree_id, current, other), options)?;
+                let selected = match policy {
+                    None => Some(modified_blob_id),
+                    Some(TreeResolveWith::Ancestor) => Some(base_blob_id),
+                    Some(TreeResolveWith::Ours) => (current == modified_tree_id).then_some(modified_blob_id),
+                };
+                let mut expected_paths = vec![
+                    ("keep/a", EntryKind::Blob, kept_blob_id),
+                    ("keep/b", EntryKind::Blob, kept_blob_id),
+                    ("new/file", EntryKind::Blob, added_blob_id),
+                ];
+                if let Some(blob_id) = selected {
+                    expected_paths.push(("keep/conflict", EntryKind::Blob, blob_id));
+                }
+                let expected_tree_id = repo.tree_from_paths(&expected_paths)?;
+                let written_tree_id = outcome.tree.write(|tree| repo.objects.write(tree))?;
+                assert_eq!(
+                    written_tree_id, expected_tree_id,
+                    "common siblings and independent directory changes survive policy {policy:?}, stopping {fail_fast}, current {current}"
+                );
+                let expected_index = gix_index::State::from_tree(&expected_tree_id, &repo.objects, Default::default())?;
+                let mut expected: Vec<_> = expected_index
+                    .entries()
+                    .iter()
+                    .map(|entry| {
+                        (
+                            entry.path(&expected_index).to_owned(),
+                            entry.stage(),
+                            entry.mode,
+                            entry.id,
+                        )
+                    })
+                    .collect();
+                if policy.is_none() {
+                    expected.retain(|entry| entry.0 != "keep/conflict");
+                    expected.push((BString::from("keep/conflict"), Stage::Base, Mode::FILE, base_blob_id));
+                    expected.push((
+                        BString::from("keep/conflict"),
+                        if current == modified_tree_id {
+                            Stage::Ours
+                        } else {
+                            Stage::Theirs
+                        },
+                        Mode::FILE,
+                        modified_blob_id,
+                    ));
+                }
+                expected.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+                let index =
+                    outcome
+                        .index
+                        .to_index(TreatAsUnresolved::git(), None, &repo.objects, Default::default())?;
+                let actual: Vec<_> = index
+                    .entries()
+                    .iter()
+                    .map(|entry| (entry.path(&index).to_owned(), entry.stage(), entry.mode, entry.id))
+                    .collect();
+                assert_eq!(
+                    actual, expected,
+                    "only the modify/delete identity owns unmerged stages under policy {policy:?}, stopping {fail_fast}, current {current}"
+                );
+                assert_eq!(
+                    outcome.failed_on_first_unresolved_conflict, fail_fast,
+                    "the requested sensitivity stops both unresolved and forced modify/delete choices"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn ancestor_symlink_resolution_does_not_restore_a_discarded_subtree() -> TestResult {
+    use std::collections::BTreeSet;
+
+    use gix_index::entry::Stage;
+    use gix_merge::tree::{ResolveWith as TreeResolveWith, TreatAsUnresolved};
+
+    let repo = Repo::new()?;
+    let original_blob_id = repo.blob("binary payload 2\0\n")?;
+    let changed_blob_id = repo.blob("binary payload 7\0\n")?;
+    let base_tree_id = repo.tree_from_paths(&[("d/a", EntryKind::Link, original_blob_id)])?;
+    let our_tree_id = repo.tree("d", EntryKind::Link.into(), changed_blob_id)?;
+    let their_tree_id = repo.tree("d", EntryKind::Link.into(), original_blob_id)?;
+
+    // The identity rename d/a -> d competes with replacing its parent by a changed symlink.
+    for tree_resolution in [None, Some(TreeResolveWith::Ancestor), Some(TreeResolveWith::Ours)] {
+        for fail_fast in [false, true] {
+            for (current, other) in [(our_tree_id, their_tree_id), (their_tree_id, our_tree_id)] {
+                let mut options = basic_merge_options().tree_merge;
+                options.directory_renames = Default::default();
+                options
+                    .rewrites
+                    .as_mut()
+                    .expect("rename tracking is enabled")
+                    .percentage = Some(1.0);
+                options.symlink_conflicts = Some(ResolveWith::Ancestor);
+                options.tree_conflicts = tree_resolution;
+                options.fail_on_conflict = fail_fast.then(TreatAsUnresolved::git);
+                let mut outcome = repo.merge((base_tree_id, current, other), options)?;
+                let merged_tree_id = outcome.tree.write(|tree| repo.objects.write(tree))?;
+                let index =
+                    outcome
+                        .index
+                        .to_index(TreatAsUnresolved::git(), None, &repo.objects, Default::default())?;
+                let provisional = gix_index::State::from_tree(&merged_tree_id, &repo.objects, Default::default())?;
+                let unmerged: BTreeSet<_> = index
+                    .entries()
+                    .iter()
+                    .filter(|entry| entry.stage() != Stage::Unconflicted)
+                    .map(|entry| entry.path(&index))
+                    .collect();
+                assert!(
+                    index
+                        .entries()
+                        .iter()
+                        .filter(|entry| entry.stage() == Stage::Unconflicted)
+                        .map(|entry| (entry.path(&index), entry.mode, entry.id))
+                        .eq(provisional
+                            .entries()
+                            .iter()
+                            .filter(|entry| !unmerged.contains(entry.path(&provisional)))
+                            .map(|entry| (entry.path(&provisional), entry.mode, entry.id))),
+                    "discarded descendants cannot survive only in the emitted tree: tree resolution {tree_resolution:?}, fail fast {fail_fast}, current {current}"
+                );
+                if tree_resolution == Some(TreeResolveWith::Ancestor) && !fail_fast && current == our_tree_id {
+                    assert!(
+                        index.entries().is_empty(),
+                        "ancestor symlink selection discards both competing files"
+                    );
+                    assert_eq!(
+                        merged_tree_id,
+                        gix_testtools::object_hash().empty_tree(),
+                        "retaining an ancestor directory cannot resurrect its discarded child"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn directory_results_preserve_siblings_and_remain_editable() -> TestResult {
+    let repo = Repo::new()?;
+    let original_blob_id = repo.blob("original\n")?;
+    let our_blob_id = repo.blob("ours\n")?;
+    let their_blob_id = repo.blob("theirs\n")?;
+    let base_tree_id = repo.tree_from_paths(&[
+        ("a-", EntryKind::Blob, original_blob_id),
+        ("a/child", EntryKind::Blob, original_blob_id),
+        ("dir/a", EntryKind::Blob, original_blob_id),
+        ("dir/b", EntryKind::Blob, original_blob_id),
+        ("gone/last", EntryKind::Blob, original_blob_id),
+        ("old-file", EntryKind::Blob, original_blob_id),
+    ])?;
+    let our_tree_id = repo.tree_from_paths(&[
+        ("a-", EntryKind::Blob, original_blob_id),
+        ("a/child", EntryKind::Blob, original_blob_id),
+        ("dir/a", EntryKind::Blob, our_blob_id),
+        ("dir/b", EntryKind::Blob, original_blob_id),
+        ("old-file/ours", EntryKind::Blob, our_blob_id),
+    ])?;
+    let their_tree_id = repo.tree_from_paths(&[
+        ("a", EntryKind::Blob, their_blob_id),
+        ("a-", EntryKind::Blob, original_blob_id),
+        ("dir/a", EntryKind::Blob, original_blob_id),
+        ("dir/b", EntryKind::BlobExecutable, their_blob_id),
+        ("gone/last", EntryKind::Blob, original_blob_id),
+        ("new/nested/theirs", EntryKind::Blob, their_blob_id),
+        ("old-file", EntryKind::Blob, original_blob_id),
+    ])?;
+    let expected = [
+        ("a", EntryKind::Blob, their_blob_id),
+        ("a-", EntryKind::Blob, original_blob_id),
+        ("dir/a", EntryKind::Blob, our_blob_id),
+        ("dir/b", EntryKind::BlobExecutable, their_blob_id),
+        ("new/nested/theirs", EntryKind::Blob, their_blob_id),
+        ("old-file/ours", EntryKind::Blob, our_blob_id),
+    ];
+    let expected_tree_id = repo.tree_from_paths(&expected)?;
+    let expected_index = gix_index::State::from_tree(&expected_tree_id, &repo.objects, Default::default())?;
+    for (current, other) in [(our_tree_id, their_tree_id), (their_tree_id, our_tree_id)] {
+        let mut options = basic_merge_options().tree_merge;
+        options.rewrites = None;
+        let mut outcome = repo.merge((base_tree_id, current, other), options)?;
+        assert!(
+            outcome.conflicts.is_empty(),
+            "independent directory changes merge cleanly"
+        );
+        let index = outcome.index.to_index(
+            gix_merge::tree::TreatAsUnresolved::git(),
+            None,
+            &repo.objects,
+            Default::default(),
+        )?;
+        assert_eq!(
+            super::baseline::debug_entries(&index),
+            super::baseline::debug_entries(&expected_index),
+            "the index follows all directory replacements and sibling edits"
+        );
+        outcome
+            .tree
+            .upsert(["old-file", "extra"], EntryKind::Blob, their_blob_id)?;
+        let mut edited = expected.to_vec();
+        edited.push(("old-file/extra", EntryKind::Blob, their_blob_id));
+        assert_eq!(
+            outcome.tree.write(|tree| repo.objects.write(tree))?,
+            repo.tree_from_paths(&edited)?,
+            "editing the unwritten result retains siblings and prunes discarded directories"
+        );
+        outcome.tree.remove(["new", "nested", "theirs"])?;
+        edited.retain(|(path, _, _)| *path != "new/nested/theirs");
+        assert_eq!(
+            outcome.tree.write(|tree| repo.objects.write(tree))?,
+            repo.tree_from_paths(&edited)?,
+            "editing after writing retains the result and prunes the newly emptied directory"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn duplicate_input_names_keep_one_final_identity() -> TestResult {
+    let repo = Repo::new()?;
+    let original_blob_id = repo.blob("original\n")?;
+    let modified_blob_id = repo.blob("modified\n")?;
+    let added_blob_id = repo.blob("added\n")?;
+    let punctuation_blob_id = repo.blob("punctuation\n")?;
+    let child_tree_id = repo.tree("child", EntryKind::Blob.into(), modified_blob_id)?;
+    let base_tree_id = repo.tree("x", EntryKind::Blob.into(), original_blob_id)?;
+    let entry = |filename: &str, kind: EntryKind, oid| gix_object::tree::Entry {
+        filename: filename.into(),
+        mode: kind.into(),
+        oid,
+    };
+    // The malformed side's last duplicate is the collected identity, even when
+    // it equals the ancestor or a directory hides behind punctuation-sorted files.
+    for (case, entries, expected_entries) in [
+        (
+            "modified file",
+            vec![
+                entry("x", EntryKind::Blob, original_blob_id),
+                entry("x", EntryKind::Blob, modified_blob_id),
+            ],
+            vec![
+                ("x", EntryKind::Blob, modified_blob_id),
+                ("y", EntryKind::Blob, added_blob_id),
+            ],
+        ),
+        (
+            "unchanged last file",
+            vec![
+                entry("x", EntryKind::Blob, modified_blob_id),
+                entry("x", EntryKind::Blob, original_blob_id),
+            ],
+            vec![
+                ("x", EntryKind::Blob, original_blob_id),
+                ("y", EntryKind::Blob, added_blob_id),
+            ],
+        ),
+        (
+            "punctuation-hidden directory",
+            vec![
+                entry("x", EntryKind::Blob, original_blob_id),
+                entry("x-", EntryKind::Blob, punctuation_blob_id),
+                entry("x", EntryKind::Tree, child_tree_id),
+            ],
+            vec![
+                ("x-", EntryKind::Blob, punctuation_blob_id),
+                ("x/child", EntryKind::Blob, modified_blob_id),
+                ("y", EntryKind::Blob, added_blob_id),
+            ],
+        ),
+    ] {
+        let mut tree_buf = Vec::new();
+        for entry in entries {
+            gix_object::Tree { entries: vec![entry] }.write_to(&mut tree_buf)?;
+        }
+        let duplicate_tree_id = repo.objects.write_buf(gix_object::Kind::Tree, &tree_buf)?;
+        let expected_tree_id = repo.tree_from_paths(&expected_entries)?;
+        let expected_index = gix_index::State::from_tree(&expected_tree_id, &repo.objects, Default::default())?;
+        for rewrites in [None, basic_merge_options().tree_merge.rewrites] {
+            for (current, other) in [
+                (duplicate_tree_id, expected_tree_id),
+                (expected_tree_id, duplicate_tree_id),
+            ] {
+                let mut options = basic_merge_options().tree_merge;
+                options.rewrites = rewrites;
+                let mut outcome = repo.merge((base_tree_id, current, other), options)?;
+                assert_eq!(
+                    outcome.tree.write(|tree| repo.objects.write(tree))?,
+                    expected_tree_id,
+                    "{case}: the last duplicate wins without retaining two entries in the result"
+                );
+                let index = outcome.index.to_index(
+                    gix_merge::tree::TreatAsUnresolved::git(),
+                    None,
+                    &repo.objects,
+                    Default::default(),
+                )?;
+                assert_eq!(
+                    super::baseline::debug_entries(&index),
+                    super::baseline::debug_entries(&expected_index),
+                    "{case}: the index and written tree keep the same unique identities in either orientation"
+                );
+            }
+        }
     }
     Ok(())
 }

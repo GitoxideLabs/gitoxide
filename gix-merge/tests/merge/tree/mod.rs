@@ -221,25 +221,31 @@ fn directory_rename_destination_already_consumed() -> TestResult {
             basic_merge_options().tree_merge,
         )?;
         assert_no_unknown_conflicts(&outcome, "directory and file renames sharing a destination");
-        for (path, content) in [
-            ("a/a", "anchor"),
-            ("a/d/d", "nested"),
-            ("a~", "file"),
-            ("b/a/f", "fresh"),
-            ("d/a", "anchor"),
-            ("d~", "anchor"),
+        let actual_tree_id = outcome.tree.write(|tree| objects.write(tree))?;
+        let actual = gix_index::State::from_tree(&actual_tree_id, &objects, Default::default())?;
+        for (path, content, mode) in [
+            ("a/a", "anchor", gix_index::entry::Mode::FILE),
+            ("a/d/d", "nested", gix_index::entry::Mode::FILE),
+            ("a~", "file", gix_index::entry::Mode::FILE),
+            ("b/a/f", "fresh", gix_index::entry::Mode::FILE_EXECUTABLE),
+            ("d/a", "anchor", gix_index::entry::Mode::FILE_EXECUTABLE),
+            ("d~", "anchor", gix_index::entry::Mode::FILE),
         ] {
-            let entry = outcome
-                .tree
-                .get(path.split('/'))
+            let entry = actual
+                .entry_by_path_and_stage(path.into(), gix_index::entry::Stage::Unconflicted)
                 .expect("all colliding entries survive");
             assert_eq!(
-                entry.oid,
+                entry.id,
                 gix_object::compute_hash(gix_testtools::object_hash(), gix_object::Kind::Blob, content.as_bytes())?,
                 "the merge preserves {path} after its destination node was consumed"
             );
+            assert_eq!(entry.mode, mode, "the merge preserves the mode at {path}");
         }
-        outcome.tree.write(|tree| objects.write(tree))?;
+        assert_eq!(
+            actual.entries().len(),
+            6,
+            "all retained paths are accounted for without duplicates"
+        );
     }
     Ok(())
 }
@@ -289,31 +295,31 @@ fn rename_add_after_destination_was_consumed() -> TestResult {
             options,
         )?;
         assert_no_unknown_conflicts(&outcome, "rename/add after its destination was consumed");
-        let actual_tree_id = outcome.tree.clone().write(|tree| objects.write(tree))?;
+        let actual_tree_id = outcome.tree.write(|tree| objects.write(tree))?;
+        let actual = gix_index::State::from_tree(&actual_tree_id, &objects, Default::default())?;
         for (path, mode, object_id) in [
-            ("a/h", gix_object::tree::EntryKind::Commit, added_commit_id),
-            ("c/a/h", gix_object::tree::EntryKind::Commit, commit_id),
-            ("c/h/h", gix_object::tree::EntryKind::Commit, commit_id),
-            ("h/h", gix_object::tree::EntryKind::Blob, blob_id),
+            ("a/h", gix_index::entry::Mode::COMMIT, added_commit_id),
+            ("c/a/h", gix_index::entry::Mode::COMMIT, commit_id),
+            ("c/h/h", gix_index::entry::Mode::COMMIT, commit_id),
+            ("h/h", gix_index::entry::Mode::FILE, blob_id),
         ] {
-            let entry = outcome.tree.get(path.split('/')).unwrap_or_else(|| {
-                panic!(
-                    "the renamed entry {path} survives:\n{}\nConflicts: {:#?}",
-                    baseline::visualize_tree(&actual_tree_id, &objects, None),
-                    outcome.conflicts,
-                )
-            });
-            assert_eq!(entry.mode.kind(), mode, "the merge preserves the mode at {path}");
-            assert_eq!(entry.oid, *object_id, "the merge preserves the object at {path}");
+            let entry = actual
+                .entry_by_path_and_stage(path.into(), gix_index::entry::Stage::Unconflicted)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "the renamed entry {path} survives:\n{}\nConflicts: {:#?}",
+                        baseline::visualize_tree(&actual_tree_id, &objects, None),
+                        outcome.conflicts,
+                    )
+                });
+            assert_eq!(entry.mode, mode, "the merge preserves the mode at {path}");
+            assert_eq!(entry.id, *object_id, "the merge preserves the object at {path}");
         }
         assert_eq!(
-            gix_index::State::from_tree(&actual_tree_id, &objects, Default::default())?
-                .entries()
-                .len(),
+            actual.entries().len(),
             4,
             "the normalized result matches Git without duplicate conflict paths"
         );
-        outcome.tree.write(|tree| objects.write(tree))?;
     }
     Ok(())
 }

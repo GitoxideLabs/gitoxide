@@ -79,13 +79,8 @@ pub fn tree<'objects>(
             failed_on_first_unresolved_conflict: false,
         });
     }
-    let collected = Collected::collect([base_tree, our_tree, their_tree], objects, options.rewrites.is_some())?;
-    let mut base_buf = Vec::new();
-    let ancestor_tree = if base_tree == base_tree.kind().empty_tree() {
-        gix_object::Tree::default()
-    } else {
-        objects.find_tree(base_tree, &mut base_buf)?.to_owned()
-    };
+    let mut collected = Collected::collect([base_tree, our_tree, their_tree], objects, options.rewrites.is_some())?;
+    collected.compact_unchanged_for_blob_edits(options.rewrites.is_none());
     let mut changes: [change::Changes; 2] = Default::default();
     // Rename candidates come from the same inputs as ordinary entry decisions.
     if let Some(rewrites) = options.rewrites {
@@ -230,13 +225,31 @@ pub fn tree<'objects>(
         }
     }
     // The path state owns all decisions; unchanged input entries can remain in the sparse editor.
+    // Installing a retained subtree can restore children that were removed earlier.
+    let editor_side = if collected.malformed_names
+        || paths.malformed_names
+        || paths.entries.values().any(|node| {
+            matches!(node.result, PathResolution::Present(entry) if entry.mode.is_tree()
+                && Some(Entry { mode: entry.mode.kind().into(), ..entry }) != node.inputs[1])
+        }) {
+        0
+    } else {
+        1
+    };
+    let editor_tree_id = [base_tree, our_tree][editor_side];
+    let mut tree_buf = Vec::new();
+    let root_tree = if editor_tree_id == editor_tree_id.kind().empty_tree() {
+        gix_object::Tree::default()
+    } else {
+        objects.find_tree(editor_tree_id, &mut tree_buf)?.to_owned()
+    };
     // Remove discarded inputs before inserting results, so descendant removals cannot disturb a new parent leaf.
-    let mut editor = tree::Editor::new(ancestor_tree, objects, base_tree.kind());
+    let mut editor = tree::Editor::new(root_tree, objects, base_tree.kind());
     for (path, node) in &paths.entries {
         if node.result == PathResolution::Absent
-            && let Some(base) = node.inputs[0]
+            && let Some(input) = node.inputs[editor_side]
         {
-            if base.mode.is_no_tree() {
+            if input.mode.is_no_tree() {
                 editor.remove_if_leaf(path.split(|&byte| byte == b'/'))?;
             } else if !paths.has_live_descendants(path.as_bstr()) {
                 editor.remove(path.split(|&byte| byte == b'/'))?;
@@ -244,7 +257,7 @@ pub fn tree<'objects>(
         }
     }
     for (path, node) in &paths.trivial {
-        if node.entry().is_none() && node.inputs[0].is_some() {
+        if node.entry().is_none() && node.inputs[editor_side].is_some() {
             editor.remove_if_leaf(path.split(|&byte| byte == b'/'))?;
         }
     }
@@ -257,7 +270,7 @@ pub fn tree<'objects>(
                 mode: entry.mode.kind().into(),
                 ..entry
             };
-            if Some(canonical) != node.inputs[0] {
+            if Some(canonical) != node.inputs[editor_side] {
                 editor.upsert(path.split(|&byte| byte == b'/'), entry.mode.kind(), entry.id)?;
             }
         }
@@ -268,13 +281,15 @@ pub fn tree<'objects>(
             mode: entry.mode.kind().into(),
             ..entry
         });
-        if entry != node.inputs[0] {
-            if let Some(entry) = entry {
-                if paths.has_live_descendants(path.as_bstr()) {
-                    bail!(message!("Tree merge retained a file and descendants at {path:?}"));
-                }
-                editor.upsert(path.split(|&byte| byte == b'/'), entry.mode.kind(), entry.id)?;
+        if entry != node.inputs[editor_side]
+            && let Some(entry) = entry
+        {
+            if paths.has_live_descendants(path.as_bstr()) {
+                bail!(message!("Tree merge retained a file and descendants at {path:?}"));
             }
+            editor.upsert(path.split(|&byte| byte == b'/'), entry.mode.kind(), entry.id)?;
+        }
+        if entry != node.inputs[0] {
             index.record(path.clone().into_owned(), entry, None);
         }
     }

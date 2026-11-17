@@ -206,6 +206,7 @@ pub(super) struct State<'input> {
     reserved: BTreeSet<BString>,
     /// Surviving descendants after normalization, maintained as paths are resolved or restored.
     live: Option<HashMap<BString, usize>>,
+    pub(super) malformed_names: bool,
     buffers: [Vec<u8>; 3],
 }
 
@@ -225,6 +226,7 @@ impl Trivial {
 pub(super) struct Collected {
     pub names: Vec<u8>,
     pub nested_names: bool,
+    pub malformed_names: bool,
     pub entries: Vec<(Range<usize>, [Option<Entry>; 3])>,
     pub unchanged: Vec<(Range<usize>, Entry)>,
 }
@@ -238,9 +240,11 @@ impl Collected {
             trees.map(|tree_id| Some(tree_id.to_owned())),
             objects,
             &mut collected.names,
+            &mut collected.unchanged,
             &mut buffers,
             ordered,
             &mut collected.nested_names,
+            &mut collected.malformed_names,
         )?
         .into_iter()
         .rev()
@@ -260,9 +264,11 @@ impl Collected {
                         tree_ids,
                         objects,
                         &mut collected.names,
+                        &mut collected.unchanged,
                         &mut buffers,
                         ordered,
                         &mut collected.nested_names,
+                        &mut collected.malformed_names,
                     )?
                     .into_iter()
                     .rev(),
@@ -272,6 +278,28 @@ impl Collected {
         }
         collected.names.shrink_to_fit();
         Ok(collected)
+    }
+
+    pub(super) fn compact_unchanged_for_blob_edits(&mut self, allow_absent: bool) {
+        if self.nested_names
+            || self.malformed_names
+            || !self.entries.iter().all(|(_, inputs)| {
+                inputs
+                    .iter()
+                    .all(|entry| entry.map_or(allow_absent, |entry| entry.mode.is_blob()))
+                    || inputs
+                        .iter()
+                        .all(|entry| entry.map_or(allow_absent, |entry| entry.mode.is_tree()))
+            })
+        {
+            return;
+        }
+        let parent = |name: &Range<usize>| {
+            let path = self.names[name.clone()].as_bstr();
+            path.rfind_byte(b'/').map_or("".into(), |slash| path[..slash].as_bstr())
+        };
+        // Compatible changes without renames cannot touch these identities; one sibling keeps their parent live.
+        self.unchanged.dedup_by(|(a, _), (b, _)| parent(a) == parent(b));
     }
 }
 
@@ -394,14 +422,17 @@ impl<'input> State<'input> {
             Resolution::Absent => false,
         };
         let mut names = Vec::new();
+        let mut unchanged = Vec::new();
         let children = read_children(
             path,
             directory_ids(node.inputs),
             objects,
             &mut names,
+            &mut unchanged,
             &mut self.buffers,
             false,
             &mut false,
+            &mut self.malformed_names,
         )?;
         let node = self
             .entries
@@ -412,7 +443,10 @@ impl<'input> State<'input> {
             self.set_result(path, None);
         }
         let mut opaque_children = Vec::new();
-        for (name, inputs) in children {
+        for (name, inputs) in children
+            .into_iter()
+            .chain(unchanged.into_iter().map(|(name, entry)| (name, [Some(entry); 3])))
+        {
             let path = names[name].as_bstr().to_owned();
             debug_assert!(
                 !self.entries.contains_key(path.as_bstr())
@@ -678,7 +712,11 @@ struct Siblings<'a> {
 impl<'a> Siblings<'a> {
     fn check_order(&mut self, previous: Option<gix_object::tree::EntryRef<'a>>, next: gix_object::tree::EntryRef<'a>) {
         self.malformed |= previous.is_some_and(|previous| {
-            previous >= next || (previous.mode.is_tree() != next.mode.is_tree() && previous.filename == next.filename)
+            if previous.mode.is_no_tree() && next.mode.is_no_tree() {
+                previous.filename >= next.filename
+            } else {
+                previous >= next || previous.filename == next.filename
+            }
         });
     }
 
@@ -700,29 +738,46 @@ impl<'a> Siblings<'a> {
         }
     }
 
+    fn take_front(&mut self) -> Result<Option<gix_object::tree::EntryRef<'a>>> {
+        let Some(front) = self.front else { return Ok(None) };
+        self.advance()?;
+        self.check_hidden_duplicate(front)?;
+        Ok(Some(front))
+    }
+
+    fn check_hidden_duplicate(&mut self, front: gix_object::tree::EntryRef<'a>) -> Result<()> {
+        let can_hide = |entry: gix_object::tree::EntryRef<'_>| {
+            entry.filename.starts_with(front.filename)
+                && entry
+                    .filename
+                    .get(front.filename.len())
+                    .is_some_and(|byte| *byte < b'/')
+        };
+        // A second entry with the same name can only hide in this punctuation gap.
+        if front.mode.is_no_tree() && self.front.is_some_and(can_hide) {
+            for entry in self.remaining {
+                let entry = entry?;
+                if entry.filename == front.filename {
+                    self.malformed = true;
+                    break;
+                }
+                if !can_hide(entry) {
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn take(&mut self, name: &BStr) -> Result<Option<gix_object::tree::EntryRef<'a>>> {
         let Some(front) = self.front else { return Ok(None) };
+        if front.filename == name {
+            return self.take_front();
+        }
         // A directory named `a` can hide behind files such as `a-` and `a.`.
         let can_hide = |entry: gix_object::tree::EntryRef<'_>| {
             entry.filename.starts_with(name) && entry.filename.get(name.len()).is_some_and(|byte| *byte < b'/')
         };
-        if front.filename == name {
-            self.advance()?;
-            // A second entry with the same name can only hide in this punctuation gap.
-            if front.mode.is_no_tree() && self.front.is_some_and(can_hide) {
-                for entry in self.remaining {
-                    let entry = entry?;
-                    if entry.filename == name {
-                        self.malformed = true;
-                        break;
-                    }
-                    if !can_hide(entry) {
-                        break;
-                    }
-                }
-            }
-            return Ok(Some(front));
-        }
         if !can_hide(front) {
             return Ok(None);
         }
@@ -748,38 +803,114 @@ impl<'a> Siblings<'a> {
     }
 }
 
+fn advance_common_fronts(siblings: &mut [Siblings<'_>; 3], sources: [usize; 3], same_hash: bool) -> Result<bool> {
+    if !same_hash || siblings.iter().any(|cursor| !cursor.consumed.is_empty()) {
+        for cursor in siblings {
+            cursor.take_front()?;
+        }
+        return Ok(false);
+    }
+    let bytes = siblings[0].remaining.remaining_bytes();
+    siblings[0].take_front()?;
+    let Some(next) = siblings[0].front else {
+        for cursor in &mut siblings[1..] {
+            cursor.take_front()?;
+        }
+        return Ok(false);
+    };
+    let consumed = bytes.len() - siblings[0].remaining.remaining_bytes().len();
+    let filename_start = next.filename.as_ptr() as usize - bytes.as_ptr() as usize;
+    let encoded = &bytes[..consumed];
+    let mut all_match = true;
+    for (side, cursor) in siblings.iter_mut().enumerate().skip(1) {
+        if sources[side] != side {
+            continue;
+        }
+        let bytes = cursor.remaining.remaining_bytes();
+        if bytes.get(..consumed) == Some(encoded) {
+            let previous = cursor.front;
+            // Equal encodings retain the validated leader's bounds, mode, and object ID.
+            let next = gix_object::tree::EntryRef {
+                filename: bytes[filename_start..filename_start + next.filename.len()].as_bstr(),
+                ..next
+            };
+            cursor.front = Some(next);
+            cursor.remaining = gix_object::TreeRefIter::from_bytes(&bytes[consumed..], next.oid.kind());
+            cursor.check_order(previous, next);
+            if let Some(previous) = previous {
+                cursor.check_hidden_duplicate(previous)?;
+            }
+        } else {
+            cursor.take_front()?;
+            all_match = false;
+        }
+    }
+    Ok(all_match)
+}
+
 #[expect(clippy::type_complexity)]
 fn read_children_stream(
     prefix: &BStr,
     tree_ids: [Option<ObjectId>; 3],
     iterators: [gix_object::TreeRefIter<'_>; 3],
     names: &mut Vec<u8>,
+    unchanged: &mut Vec<(Range<usize>, Entry)>,
 ) -> Result<Option<Vec<(Range<usize>, [Option<Entry>; 3])>>> {
-    let mut siblings: [Siblings<'_>; 3] = std::array::from_fn(|_| Siblings::default());
-    for (cursor, remaining) in siblings.iter_mut().zip(iterators) {
-        cursor.remaining = remaining;
-        cursor.advance()?;
-    }
     let sources: [usize; 3] = std::array::from_fn(|side| {
         tree_ids[..side]
             .iter()
             .position(|tree_id| *tree_id == tree_ids[side])
             .unwrap_or(side)
     });
+    let same_hash =
+        tree_ids[0].is_some_and(|base| tree_ids.iter().flatten().all(|tree_id| tree_id.kind() == base.kind()));
+    let mut siblings: [Siblings<'_>; 3] = std::array::from_fn(|_| Siblings::default());
+    for (side, (cursor, remaining)) in siblings.iter_mut().zip(iterators).enumerate() {
+        if sources[side] == side {
+            cursor.remaining = remaining;
+            cursor.advance()?;
+        }
+    }
     let prefix = child_prefix(prefix);
     let mut output: Vec<(Range<usize>, [Option<Entry>; 3])> = Vec::new();
-    while let Some(first) = siblings
-        .iter()
-        .filter_map(|cursor| cursor.front)
-        .min_by_key(|entry| entry.filename)
-    {
+    let mut known_common = false;
+    loop {
         if siblings.iter().any(|cursor| cursor.malformed) {
             return Ok(None);
         }
+        let common = siblings[0].front.filter(|entry| {
+            entry.mode == entry.mode.kind().into()
+                && (known_common
+                    || ((sources[1] != 1 || siblings[1].front == Some(*entry))
+                        && (sources[2] != 2 || siblings[2].front == Some(*entry))))
+        });
+        let Some(first) = common.or_else(|| {
+            siblings
+                .iter()
+                .filter_map(|cursor| cursor.front)
+                .min_by_key(|entry| entry.filename)
+        }) else {
+            break;
+        };
         let filename = first.filename;
         if filename.is_empty() || filename.contains(&b'/') {
             return Ok(None);
         }
+        if let Some(entry) = common {
+            known_common = advance_common_fronts(&mut siblings, sources, same_hash)?;
+            let start = names.len();
+            names.extend_from_slice(&prefix);
+            names.extend_from_slice(filename);
+            unchanged.push((
+                start..names.len(),
+                Entry {
+                    mode: entry.mode,
+                    id: entry.oid.to_owned(),
+                },
+            ));
+            continue;
+        }
+        known_common = false;
         let mut inputs = [None; 3];
         for (side, cursor) in siblings.iter_mut().enumerate() {
             if let Some(entry) = cursor.take(filename)? {
@@ -797,15 +928,17 @@ fn read_children_stream(
     Ok((!siblings.iter().any(|cursor| cursor.malformed)).then_some(output))
 }
 
-#[expect(clippy::type_complexity)]
+#[expect(clippy::too_many_arguments, clippy::type_complexity)]
 fn read_children(
     prefix: &BStr,
     tree_ids: [Option<ObjectId>; 3],
     objects: &impl gix_object::Find,
     names: &mut Vec<u8>,
+    unchanged: &mut Vec<(Range<usize>, Entry)>,
     buffers: &mut [Vec<u8>; 3],
     ordered: bool,
     nested_names: &mut bool,
+    malformed_names: &mut bool,
 ) -> Result<Vec<(Range<usize>, [Option<Entry>; 3])>> {
     let mut iterators = [gix_object::TreeRefIter::default(); 3];
     for (side, (tree_id, buf)) in tree_ids.into_iter().zip(buffers.iter_mut()).enumerate() {
@@ -818,10 +951,13 @@ fn read_children(
             .or_raise(|| message!("Could not collect merge input tree at {prefix:?}"))?;
     }
     let start = names.len();
-    if let Some(children) = read_children_stream(prefix, tree_ids, iterators, names)? {
+    let unchanged_start = unchanged.len();
+    if let Some(children) = read_children_stream(prefix, tree_ids, iterators, names, unchanged)? {
         return Ok(children);
     }
     names.truncate(start);
+    unchanged.truncate(unchanged_start);
+    *malformed_names = true;
     // Preserve last-duplicate identity and sorted traversal for malformed input trees.
     read_children_buffered(prefix, tree_ids, objects, names, buffers, ordered, nested_names)
 }
@@ -929,25 +1065,55 @@ mod tests {
     use gix_error::TestResult;
     use gix_object::{FindExt, Write, WriteTo, tree::EntryKind};
 
-    use super::{Collected, Entry, Path, Resolution, Stage, State, read_children, read_children_stream};
-
-    fn write_unsorted_tree(
-        objects: &impl Write,
-        entries: Vec<gix_object::tree::Entry>,
-    ) -> TestResult<gix_hash::ObjectId> {
-        let mut data = Vec::new();
-        // Serialize entries individually to preserve malformed ordering despite the tree writer's assertion.
-        for entry in entries {
-            gix_object::Tree { entries: vec![entry] }.write_to(&mut data)?;
-        }
-        Ok(objects.write_buf(gix_object::Kind::Tree, &data)?)
-    }
+    use super::{
+        Collected, Entry, Path, Resolution, Siblings, Stage, State, advance_common_fronts, read_children,
+        read_children_stream,
+    };
 
     fn leaf() -> Entry {
         Entry {
             mode: EntryKind::Blob.into(),
             id: gix_testtools::object_hash().null(),
         }
+    }
+
+    fn write_tree_entries(
+        objects: &impl Write,
+        entries: impl IntoIterator<Item = gix_object::tree::Entry>,
+    ) -> TestResult<gix_hash::ObjectId> {
+        let mut bytes = Vec::new();
+        // Single-entry serialization preserves deliberate duplicates and unsorted fixture order.
+        for entry in entries {
+            gix_object::Tree { entries: vec![entry] }.write_to(&mut bytes)?;
+        }
+        Ok(objects.write_buf(gix_object::Kind::Tree, &bytes)?)
+    }
+
+    fn encoded_tree_entry(mode: &[u8], name: &str, id: &gix_hash::oid) -> Vec<u8> {
+        let mut bytes = mode.to_vec();
+        bytes.push(b' ');
+        bytes.extend_from_slice(name.as_bytes());
+        bytes.push(0);
+        bytes.extend_from_slice(id.as_bytes());
+        bytes
+    }
+
+    fn common_sibling_bytes(hash: gix_hash::Kind) -> [Vec<u8>; 3] {
+        ["x", "y", "z"].map(|tail| {
+            ["a", "b", tail]
+                .into_iter()
+                .flat_map(|name| encoded_tree_entry(b"100644", name, &hash.null()))
+                .collect()
+        })
+    }
+
+    fn sibling_cursors(data: &[Vec<u8>; 3], hash: gix_hash::Kind) -> TestResult<[Siblings<'_>; 3]> {
+        let mut cursors = std::array::from_fn(|_| Siblings::default());
+        for (cursor, bytes) in cursors.iter_mut().zip(data) {
+            cursor.remaining = gix_object::TreeRefIter::from_bytes(bytes, hash);
+            cursor.advance()?;
+        }
+        Ok(cursors)
     }
 
     #[test]
@@ -961,6 +1127,156 @@ mod tests {
                 "the known empty tree requires no object lookup"
             );
         }
+        Ok(())
+    }
+
+    fn unchanged_sibling_fixture(inputs: [Option<Entry>; 3]) -> Collected {
+        let mut collected = Collected::default();
+        for path in ["dir/a", "dir/b", "other/a", "other/b", "dir/c", "dir/d"] {
+            let start = collected.names.len();
+            collected.names.extend_from_slice(path.as_bytes());
+            collected.unchanged.push((start..collected.names.len(), leaf()));
+        }
+        let start = collected.names.len();
+        collected.names.extend_from_slice(b"dir/changed");
+        collected.entries.push((start..collected.names.len(), inputs));
+        collected
+    }
+
+    #[test]
+    fn compact_blob_edits_keep_a_live_unchanged_sibling_for_each_parent() -> TestResult {
+        let mut collected = unchanged_sibling_fixture([Some(leaf()); 3]);
+        assert_eq!(
+            collected.unchanged.len(),
+            6,
+            "collection retains every identity until explicitly compacted"
+        );
+        let start = collected.names.len();
+        collected.names.extend_from_slice(b"dir");
+        collected.entries.push((
+            start..collected.names.len(),
+            [Some(Entry {
+                mode: EntryKind::Tree.into(),
+                id: gix_testtools::object_hash().empty_tree(),
+            }); 3],
+        ));
+        collected.compact_unchanged_for_blob_edits(false);
+        assert_eq!(
+            collected
+                .unchanged
+                .iter()
+                .map(|(name, _)| collected.names[name.clone()].as_bstr())
+                .collect::<Vec<_>>(),
+            ["dir/a", "other/a", "dir/c"],
+            "each consecutive sibling group retains its first nonempty-directory witness"
+        );
+        let mut state = State::new(&collected.names, collected.entries, collected.unchanged, false);
+        state.prepare_resolution();
+        state.set_result("dir/changed".into(), None);
+        state.set_result("dir".into(), None);
+        for parent in ["dir", "other"] {
+            assert!(
+                state.has_live_descendants(parent.into()),
+                "unchanged descendants keep {parent} live without the modified entry"
+            );
+        }
+        assert!(
+            !state.has_live_descendants("missing".into()),
+            "witnesses do not invent other directories"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn compact_blob_edits_preserve_every_identity_when_topology_or_names_can_change() -> TestResult {
+        let tree = Entry {
+            mode: EntryKind::Tree.into(),
+            ..leaf()
+        };
+        let link = Entry {
+            mode: EntryKind::Link.into(),
+            ..leaf()
+        };
+        let commit = Entry {
+            mode: EntryKind::Commit.into(),
+            ..leaf()
+        };
+        for (inputs, nested, malformed, compatible_absence) in [
+            ([Some(leaf()); 3], true, false, false),
+            ([Some(leaf()); 3], false, true, false),
+            ([Some(leaf()), None, Some(leaf())], false, false, true),
+            ([Some(tree), None, Some(tree)], false, false, true),
+            ([None, Some(leaf()), None], false, false, true),
+            ([None, Some(tree), None], false, false, true),
+            ([Some(tree), Some(leaf()), Some(leaf())], false, false, false),
+            ([Some(link); 3], false, false, false),
+            ([Some(commit); 3], false, false, false),
+        ] {
+            for allow_absent in [false, true] {
+                let mut collected = unchanged_sibling_fixture(inputs);
+                collected.nested_names = nested;
+                collected.malformed_names = malformed;
+                collected.compact_unchanged_for_blob_edits(allow_absent);
+                assert_eq!(
+                    collected.unchanged.len(),
+                    if allow_absent && compatible_absence { 3 } else { 6 },
+                    "only compatible absences without rewrites can omit identities for {inputs:?}, nested {nested}, malformed {malformed}, allow absent {allow_absent}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn buffered_collection_marks_initial_and_later_opaque_expansions() -> TestResult {
+        let objects = gix_odb::memory::Proxy::new(gix_object::find::Never, gix_testtools::object_hash());
+        let blob_id = objects.write_buf(gix_object::Kind::Blob, b"payload")?;
+        let subtree_id = write_tree_entries(
+            &objects,
+            ["b", "a"].map(|path| gix_object::tree::Entry {
+                filename: path.into(),
+                mode: EntryKind::Blob.into(),
+                oid: blob_id,
+            }),
+        )?;
+        let collected = Collected::collect([&subtree_id; 3], &objects, true)?;
+        assert!(
+            collected.malformed_names,
+            "unsorted initial siblings require buffered collection"
+        );
+        assert!(
+            !collected.nested_names,
+            "ordering is tracked separately from separators"
+        );
+        assert_eq!(
+            collected.unchanged.len(),
+            2,
+            "general collection retains all unchanged identities"
+        );
+        let root_tree_id = objects.write(&gix_object::Tree {
+            entries: vec![gix_object::tree::Entry {
+                filename: "dir".into(),
+                mode: EntryKind::Tree.into(),
+                oid: subtree_id,
+            }],
+        })?;
+        let collected = Collected::collect([&root_tree_id; 3], &objects, true)?;
+        assert!(!collected.malformed_names, "an opaque subtree has not been read yet");
+        let mut state = State::new(&collected.names, collected.entries, collected.unchanged, false);
+        assert!(!state.malformed_names, "state tracks only reads made after collection");
+        state.ensure_path("dir/a".into(), &objects)?;
+        assert!(
+            state.malformed_names,
+            "later namespace expansion exposes malformed sibling ordering"
+        );
+        assert_eq!(
+            state.entries[BStr::new("dir/a")].inputs,
+            [Some(Entry {
+                mode: EntryKind::Blob.into(),
+                id: blob_id,
+            }); 3],
+            "fallback expansion preserves every original version"
+        );
         Ok(())
     }
 
@@ -1119,6 +1435,7 @@ mod tests {
         };
         let base_tree_id = objects.write(&gix_object::Tree {
             entries: vec![
+                entry("same", EntryKind::Blob, blob_id),
                 entry("t-1", EntryKind::Blob, blob_id),
                 entry("t-2", EntryKind::Blob, blob_id),
                 entry("t", EntryKind::Tree, empty_tree_id),
@@ -1126,7 +1443,10 @@ mod tests {
             ],
         })?;
         let our_tree_id = objects.write(&gix_object::Tree {
-            entries: vec![entry("t", EntryKind::Blob, blob_id)],
+            entries: vec![
+                entry("same", EntryKind::Blob, blob_id),
+                entry("t", EntryKind::Blob, blob_id),
+            ],
         })?;
         let mut buffers: [Vec<u8>; 2] = Default::default();
         let [base_buffer, our_buffer] = &mut buffers;
@@ -1136,13 +1456,25 @@ mod tests {
             gix_object::TreeRefIter::default(),
         ];
         let mut names = Vec::new();
+        let mut unchanged = Vec::new();
         let children = read_children_stream(
             "".into(),
             [Some(base_tree_id), Some(our_tree_id), Some(base_tree_id)],
             iterators,
             &mut names,
+            &mut unchanged,
         )?
         .expect("valid punctuation-sensitive trees use streaming collection");
+        assert_eq!(
+            unchanged.len(),
+            1,
+            "matching canonical fronts bypass full input collection"
+        );
+        assert_eq!(names[unchanged[0].0.clone()].as_bstr(), "same");
+        assert_eq!(
+            unchanged[0].1.id, blob_id,
+            "identical trees share one unchanged identity"
+        );
         assert_eq!(
             children
                 .iter()
@@ -1155,6 +1487,234 @@ mod tests {
         assert_eq!(inputs[0], inputs[2], "identical input trees share the directory entry");
         assert_eq!(inputs[0].expect("the base contains t").id, empty_tree_id);
         assert_eq!(inputs[1].expect("ours contains t").id, blob_id);
+        Ok(())
+    }
+
+    #[test]
+    fn file_only_order_checks_preserve_punctuation_and_duplicate_validation() -> TestResult {
+        let blob_id = gix_testtools::object_hash().null();
+        let entry = |name: &'static str, kind: EntryKind| gix_object::tree::EntryRef {
+            filename: BStr::new(name),
+            mode: kind.into(),
+            oid: &blob_id,
+        };
+        for (previous, next, malformed) in [("a", "a-", false), ("a.", "a", true), ("a", "a", true)] {
+            let mut siblings = Siblings::default();
+            siblings.check_order(
+                Some(entry(previous, EntryKind::BlobExecutable)),
+                entry(next, EntryKind::Blob),
+            );
+            assert_eq!(
+                siblings.malformed, malformed,
+                "all file modes retain byte-oriented order and reject duplicate names: {previous:?}, {next:?}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn raw_common_front_reuse_keeps_buffer_local_names_and_pending_lookahead() -> TestResult {
+        let hash = gix_testtools::object_hash();
+        let data = common_sibling_bytes(hash);
+        let mut cursors = sibling_cursors(&data, hash)?;
+        assert!(
+            advance_common_fronts(&mut cursors, [0, 1, 2], true)?,
+            "identical next encodings prove all three new fronts match"
+        );
+        for (cursor, bytes) in cursors.iter().zip(&data) {
+            let expected = gix_object::TreeRefIter::from_bytes(bytes, hash)
+                .nth(1)
+                .transpose()?
+                .expect("each input contains its second entry");
+            let actual = cursor.front.expect("reused fronts remain present");
+            assert_eq!(actual, expected, "reuse retains the decoded mode, name, and object ID");
+            assert!(
+                std::ptr::eq(actual.filename.as_ptr(), expected.filename.as_ptr()),
+                "each front's filename still belongs to its own tree buffer"
+            );
+        }
+        let mut cursors = sibling_cursors(&data, hash)?;
+        let consumed = gix_object::TreeRefIter::from_bytes(&data[1], hash)
+            .nth(1)
+            .transpose()?
+            .expect("lookahead previously consumed the second entry");
+        let consumed_offset = consumed.filename.as_ptr() as usize - cursors[1].origin;
+        cursors[1].consumed.push(consumed_offset);
+        assert!(
+            !advance_common_fronts(&mut cursors, [0, 1, 2], true)?,
+            "pending lookahead disables raw reuse"
+        );
+        assert_eq!(
+            cursors[1]
+                .front
+                .expect("the cursor advances beyond the consumed entry")
+                .filename,
+            "y",
+            "ordinary advancement still skips the previously consumed entry"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn raw_common_front_reuse_requires_identical_mode_encoding_and_hash_kind() -> TestResult {
+        let hash = gix_testtools::object_hash();
+        let first_len = encoded_tree_entry(b"100644", "a", &hash.null()).len();
+        for same_hash in [true, false] {
+            let mut data = common_sibling_bytes(hash);
+            if same_hash {
+                data[1].insert(first_len, b'0');
+            }
+            let mut cursors = sibling_cursors(&data, hash)?;
+            assert!(
+                !advance_common_fronts(&mut cursors, [0, 1, 2], same_hash)?,
+                "a different raw mode encoding or hash kind uses ordinary decoding"
+            );
+            assert_eq!(
+                cursors[0].front, cursors[1].front,
+                "the leading zero decodes to the same logical blob entry"
+            );
+            assert_eq!(cursors[0].front, cursors[2].front);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn raw_common_front_reuse_preserves_follower_decode_error_order() -> TestResult {
+        let hash = gix_testtools::object_hash();
+        for malformed in [b"100644 b\0".as_slice(), b"invalid b\0".as_slice()] {
+            let mut data = common_sibling_bytes(hash);
+            data[1] = encoded_tree_entry(b"100644", "a", &hash.null());
+            data[1].extend_from_slice(malformed);
+            let mut cursors = sibling_cursors(&data, hash)?;
+            assert!(
+                advance_common_fronts(&mut cursors, [0, 1, 2], true).is_err(),
+                "a short or corrupt follower still reports its decoding error"
+            );
+            assert_eq!(
+                cursors[2]
+                    .front
+                    .expect("later cursors remain untouched after an error")
+                    .filename,
+                "a",
+                "the failing follower stops advancement in original cursor order"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn raw_common_front_reuse_preserves_hidden_tree_file_duplicate_checks() -> TestResult {
+        let hash = gix_testtools::object_hash();
+        let data = ["x", "y", "z"].map(|tail| {
+            [
+                encoded_tree_entry(b"100644", "a", &hash.null()),
+                encoded_tree_entry(b"100644", "a-", &hash.null()),
+                encoded_tree_entry(b"40000", "a", &hash.empty_tree()),
+                encoded_tree_entry(b"100644", tail, &hash.null()),
+            ]
+            .concat()
+        });
+        let mut cursors = sibling_cursors(&data, hash)?;
+        assert!(advance_common_fronts(&mut cursors, [0, 1, 2], true)?);
+        assert!(
+            cursors.iter().all(|cursor| cursor.malformed),
+            "every physical tree still detects the same-name directory hidden after punctuation"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn common_fronts_propagate_later_decode_errors_without_buffered_fallback() -> TestResult {
+        let objects = gix_odb::memory::Proxy::new(gix_object::find::Never, gix_testtools::object_hash());
+        let blob_id = objects.write_buf(gix_object::Kind::Blob, b"payload")?;
+        let mut bytes = Vec::new();
+        gix_object::Tree {
+            entries: ["a", "b"]
+                .map(|name| gix_object::tree::Entry {
+                    filename: name.into(),
+                    mode: EntryKind::Blob.into(),
+                    oid: blob_id,
+                })
+                .into(),
+        }
+        .write_to(&mut bytes)?;
+        bytes.extend_from_slice(b"100644 c\0");
+        let tree_id = objects.write_buf(gix_object::Kind::Tree, &bytes)?;
+        let mut names = Vec::new();
+        let mut unchanged = Vec::new();
+        let mut malformed_names = false;
+        let result = read_children(
+            "".into(),
+            [Some(tree_id); 3],
+            &objects,
+            &mut names,
+            &mut unchanged,
+            &mut Default::default(),
+            true,
+            &mut false,
+            &mut malformed_names,
+        );
+        assert!(
+            result.is_err(),
+            "a truncated object ID after common siblings remains a decode error"
+        );
+        assert!(!malformed_names, "decode errors never switch to buffered traversal");
+        assert_eq!(
+            unchanged.len(),
+            1,
+            "the first common sibling was consumed before the failure"
+        );
+        assert_eq!(names[unchanged[0].0.clone()].as_bstr(), "a");
+        Ok(())
+    }
+
+    #[test]
+    fn buffered_fallback_rolls_back_common_siblings_and_preserves_previous_names() -> TestResult {
+        let objects = gix_odb::memory::Proxy::new(gix_object::find::Never, gix_testtools::object_hash());
+        let blob_id = objects.write_buf(gix_object::Kind::Blob, b"payload")?;
+        let tree_id = write_tree_entries(
+            &objects,
+            ["keep", "z", "a"].map(|name| gix_object::tree::Entry {
+                filename: name.into(),
+                mode: EntryKind::Blob.into(),
+                oid: blob_id,
+            }),
+        )?;
+        let mut names = b"previous".to_vec();
+        let mut unchanged = vec![(0..names.len(), leaf())];
+        let mut malformed_names = false;
+        let children = read_children(
+            "parent".into(),
+            [Some(tree_id); 3],
+            &objects,
+            &mut names,
+            &mut unchanged,
+            &mut Default::default(),
+            true,
+            &mut false,
+            &mut malformed_names,
+        )?;
+        assert!(
+            malformed_names,
+            "the later unsorted sibling requires buffered collection"
+        );
+        assert_eq!(
+            unchanged,
+            [(0..8, leaf())],
+            "only earlier directories retain compact identities"
+        );
+        assert_eq!(
+            children
+                .iter()
+                .map(|(name, _)| names[name.clone()].as_bstr())
+                .collect::<Vec<_>>(),
+            ["parent/a", "parent/keep", "parent/z"],
+            "fallback returns every sibling once after discarding streamed common entries"
+        );
+        assert_eq!(
+            names, b"previousparent/aparent/keepparent/z",
+            "fallback also discards streamed names without truncating previous directories"
+        );
         Ok(())
     }
 
@@ -1194,25 +1754,30 @@ mod tests {
                 true,
             ),
         ] {
-            let base_tree_id = write_unsorted_tree(&objects, entries)?;
+            let base_tree_id = write_tree_entries(&objects, entries)?;
             let our_tree_id = objects.write(&gix_object::Tree {
                 entries: vec![entry("a", EntryKind::Blob, original_blob_id)],
             })?;
             for ordered in [false, true] {
                 let mut names = Vec::new();
+                let mut unchanged = Vec::new();
                 let mut buffers = Default::default();
                 let mut nested_names = false;
+                let mut malformed_names = false;
                 let children = read_children(
                     "parent".into(),
                     [Some(base_tree_id), Some(our_tree_id), Some(base_tree_id)],
                     &objects,
                     &mut names,
+                    &mut unchanged,
                     &mut buffers,
                     ordered,
                     &mut nested_names,
+                    &mut malformed_names,
                 )?;
                 let mut actual: Vec<_> = children
                     .into_iter()
+                    .chain(unchanged.into_iter().map(|(name, entry)| (name, [Some(entry); 3])))
                     .map(|(name, inputs)| {
                         assert_eq!(inputs[0], inputs[2], "identical trees share original input entries");
                         (
@@ -1233,6 +1798,10 @@ mod tests {
                 assert_eq!(
                     nested_names, nested,
                     "separator-containing filenames disable compact resolution"
+                );
+                assert!(
+                    malformed_names,
+                    "duplicates, unsorted entries, and separators use buffered collection"
                 );
             }
         }

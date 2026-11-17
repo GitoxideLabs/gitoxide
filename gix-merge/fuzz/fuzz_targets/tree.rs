@@ -271,7 +271,14 @@ fn fuzz(data: &[u8]) {
     let mut diff_resource_cache = new_diff_resource_cache();
     let mut blob_merge = new_blob_merge_platform();
 
-    for (current, other) in [(ours, theirs), (theirs, ours)] {
+    for (current, other, rewrites) in [
+        (ours, theirs, options.rewrites),
+        (theirs, ours, options.rewrites),
+        (ours, theirs, None),
+        (theirs, ours, None),
+    ] {
+        let mut options = options.clone();
+        options.rewrites = rewrites;
         let outcome = gix_merge::tree(
             &base,
             &current,
@@ -287,7 +294,7 @@ fn fuzz(data: &[u8]) {
             &mut diff_resource_cache,
             &mut blob_merge,
             gix_merge::tree::Context::default(),
-            options.clone(),
+            options,
         );
         let mut outcome = match outcome {
             Ok(outcome) => outcome,
