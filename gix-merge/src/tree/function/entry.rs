@@ -153,9 +153,9 @@ pub(super) fn merge(
     blob_merge: &mut blob::Platform,
     buf: &mut Vec<u8>,
     write_blob_to_odb: &mut impl FnMut(&[u8]) -> Result<ObjectId>,
-    ours @ (_, our_id, our_mode): (&BString, ObjectId, EntryMode),
-    theirs @ (_, their_id, their_mode): (&BString, ObjectId, EntryMode),
-    (base_location, base): (&BString, Option<(ObjectId, EntryMode)>),
+    ours @ (_, our_id, our_mode): (&BStr, ObjectId, EntryMode),
+    theirs @ (_, their_id, their_mode): (&BStr, ObjectId, EntryMode),
+    (base_location, base): (&BStr, Option<(ObjectId, EntryMode)>),
     (extra_markers, side, outer_side): (u8, ConflictMapping, ConflictMapping),
     context: &mut crate::tree::Context<'_>,
     options: &Options,
@@ -311,9 +311,9 @@ fn perform_blob_merge(
     blob_merge: &mut crate::blob::Platform,
     buf: &mut Vec<u8>,
     write_blob_to_odb: &mut impl FnMut(&[u8]) -> Result<ObjectId>,
-    (our_location, our_id, our_mode): (&BString, ObjectId, EntryMode),
-    (their_location, their_id, their_mode): (&BString, ObjectId, EntryMode),
-    (previous_location, previous_id, previous_mode): (&BString, ObjectId, EntryMode),
+    (our_location, our_id, our_mode): (&BStr, ObjectId, EntryMode),
+    (their_location, their_id, their_mode): (&BStr, ObjectId, EntryMode),
+    (previous_location, previous_id, previous_mode): (&BStr, ObjectId, EntryMode),
     (extra_markers, outer_side): (u8, ConflictMapping),
     options: &Options,
 ) -> Result<(ObjectId, crate::blob::Resolution, builtin_merge::Pick)> {
@@ -343,7 +343,7 @@ fn perform_blob_merge(
         ConflictMapping::Original => (ResourceKind::CurrentOrOurs, ResourceKind::OtherOrTheirs),
         ConflictMapping::Swapped => (ResourceKind::OtherOrTheirs, ResourceKind::CurrentOrOurs),
     };
-    fn combined(side: &BStr, location: &BString) -> BString {
+    fn combined(side: &BStr, location: &BStr) -> BString {
         let mut buf = side.to_owned();
         buf.push_byte(b':');
         buf.push_str(location);
@@ -370,19 +370,13 @@ fn perform_blob_merge(
             other: other.as_ref().map(|n| n.as_bstr()),
         }
     };
-    let mut prep = blob_merge.prepare_tree_merge(current_location.as_bstr(), objects, options.blob_merge, |cache| {
-        cache.set_resource(Some(our_id), our_mode.kind(), our_location.as_bstr(), our_kind, objects)?;
-        cache.set_resource(
-            Some(their_id),
-            their_mode.kind(),
-            their_location.as_bstr(),
-            their_kind,
-            objects,
-        )?;
+    let mut prep = blob_merge.prepare_tree_merge(current_location, objects, options.blob_merge, |cache| {
+        cache.set_resource(Some(our_id), our_mode.kind(), our_location, our_kind, objects)?;
+        cache.set_resource(Some(their_id), their_mode.kind(), their_location, their_kind, objects)?;
         cache.set_resource(
             Some(previous_id),
             previous_mode.kind(),
-            previous_location.as_bstr(),
+            previous_location,
             ResourceKind::CommonAncestorOrBase,
             objects,
         )

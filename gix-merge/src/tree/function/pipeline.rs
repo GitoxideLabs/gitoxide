@@ -1,6 +1,9 @@
 //! Three-input tree merging: normalize identities, resolve paths, then construct the result.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, BTreeSet},
+};
 
 use bstr::{BStr, BString, ByteSlice};
 use gix_diff::tree_with_rewrites::Change;
@@ -11,7 +14,7 @@ use super::{
     change,
     entry::{self, ResolutionPolicy, merge_modes},
     normalize::{self, Event},
-    path::{Entry, EntryMerge, Resolution as PathResolution, Stage, State},
+    path::{Collected, Entry, EntryMerge, Resolution as PathResolution, Stage, State},
 };
 use crate::tree::{Conflict, ConflictMapping, IndexPlan, Options, Outcome, Resolution, ResolutionFailure, ResolveWith};
 
@@ -76,47 +79,44 @@ pub fn tree<'objects>(
             failed_on_first_unresolved_conflict: false,
         });
     }
-    let mut paths = State::collect([base_tree, our_tree, their_tree], objects)?;
+    let collected = Collected::collect([base_tree, our_tree, their_tree], objects, options.rewrites.is_some())?;
     let mut base_buf = Vec::new();
     let ancestor_tree = if base_tree == base_tree.kind().empty_tree() {
         gix_object::Tree::default()
     } else {
         objects.find_tree(base_tree, &mut base_buf)?.to_owned()
     };
-    let mut side_buf = Vec::new();
-    let destination_orders = if options.rewrites.is_some() {
-        change::destination_orders(&paths)
-    } else {
-        Default::default()
-    };
-    let mut ours = change::collect(
-        base_tree,
-        our_tree,
-        &base_buf,
-        &mut side_buf,
-        objects,
-        diff_resource_cache,
-        diff_state,
-        options.rewrites,
-        options.directory_renames,
-        &destination_orders[0],
-    )?;
-    let mut theirs = change::collect(
-        base_tree,
-        their_tree,
-        &base_buf,
-        &mut side_buf,
-        objects,
-        diff_resource_cache,
-        diff_state,
-        options.rewrites,
-        options.directory_renames,
-        &destination_orders[1],
-    )?;
+    let mut changes: [change::Changes; 2] = Default::default();
+    // Ordinary entries are already collected; only rename normalization needs the diffs.
+    if options.rewrites.is_some() {
+        let destination_orders = change::destination_orders(&collected);
+        let mut side_buf = Vec::new();
+        for (index, side_tree) in [our_tree, their_tree].into_iter().enumerate() {
+            changes[index] = change::collect(
+                base_tree,
+                side_tree,
+                &base_buf,
+                &mut side_buf,
+                objects,
+                diff_resource_cache,
+                diff_state,
+                options.rewrites,
+                options.directory_renames,
+                &destination_orders[index],
+            )?;
+        }
+    }
+    let [mut ours, mut theirs] = changes;
     change::retain_relevant_directory_renames(&mut ours, &theirs.entries);
     change::retain_relevant_directory_renames(&mut theirs, &ours.entries);
     let directories = [ours.directories, theirs.directories];
     let changes = [ours.entries, theirs.entries];
+    let mut paths = State::new(
+        &collected.names,
+        collected.entries,
+        collected.unchanged,
+        options.fail_on_conflict.is_none() && !collected.nested_names,
+    );
     let policy = ResolutionPolicy::new(&options);
     let mut normalized = normalize::run(
         &mut paths,
@@ -131,6 +131,7 @@ pub fn tree<'objects>(
         &options,
         policy,
     )?;
+    paths.prepare_resolution();
     if !normalized.events.iter().any(|event| event.should_stop(&options)) {
         resolve_paths(
             &mut paths,
@@ -143,7 +144,9 @@ pub fn tree<'objects>(
             |location, stages, blob_merge| {
                 let ours = stages[1].as_ref().expect("content merging requires both sides");
                 let theirs = stages[2].as_ref().expect("content merging requires both sides");
-                let base_location = stages[0].as_ref().map_or(location, |stage| &stage.source);
+                let base_location = stages[0]
+                    .as_ref()
+                    .map_or(location.as_bstr(), |stage| stage.source.as_ref());
                 entry::merge(
                     labels,
                     objects,
@@ -173,7 +176,7 @@ pub fn tree<'objects>(
             };
             // Binary merges can reuse an input ID, so retained conflicts also need their index owner.
             if event.affected_paths.iter().any(|path| {
-                paths.entries.get(path).is_some_and(|node| {
+                paths.entries.get(path.as_bstr()).is_some_and(|node| {
                     matches!(node.result, PathResolution::Present(entry) if entry.id == merged_blob.merged_blob_id)
                         && (merged_blob.resolution == crate::blob::Resolution::Complete || node.unmerged.is_some())
                 })
@@ -204,8 +207,11 @@ pub fn tree<'objects>(
     }
     if stopped {
         for path in paths.paths_bottom_up() {
-            if paths.entries[&path].result == PathResolution::Pending {
-                let node = paths.entries.get_mut(&path).expect("the pending path is indexed");
+            if paths.entries[path.as_bstr()].result == PathResolution::Pending {
+                let node = paths
+                    .entries
+                    .get_mut(path.as_bstr())
+                    .expect("the pending path is indexed");
                 if node.unmerged.is_none() && node.path_conflict && policy.tree_resolution().is_none() {
                     node.set_unmerged(
                         node.stages
@@ -215,12 +221,12 @@ pub fn tree<'objects>(
                     );
                 }
                 let unmerged = node.unmerged.take();
-                let entry = paths.entries[&path].inputs[0]
+                let entry = paths.entries[path.as_bstr()].inputs[0]
                     .filter(|entry| entry.mode.is_no_tree() && !paths.has_live_descendants(path.as_bstr()));
-                set_result(&mut paths, &path, entry);
+                paths.set_result(path.as_bstr(), entry);
                 paths
                     .entries
-                    .get_mut(&path)
+                    .get_mut(path.as_bstr())
                     .expect("the pending path remains indexed")
                     .unmerged = unmerged;
             }
@@ -240,6 +246,11 @@ pub fn tree<'objects>(
             }
         }
     }
+    for (path, node) in &paths.trivial {
+        if node.entry().is_none() && node.inputs[0].is_some() {
+            editor.remove_if_leaf(path.split(|&byte| byte == b'/'))?;
+        }
+    }
     for (path, node) in &paths.entries {
         if let PathResolution::Present(entry) = node.result {
             if entry.mode.is_no_tree() && paths.has_live_descendants(path.as_bstr()) {
@@ -255,6 +266,21 @@ pub fn tree<'objects>(
         }
     }
     let mut index = IndexPlan::new(base_tree);
+    for (path, node) in &paths.trivial {
+        let entry = node.entry().map(|entry| Entry {
+            mode: entry.mode.kind().into(),
+            ..entry
+        });
+        if entry != node.inputs[0] {
+            if let Some(entry) = entry {
+                if paths.has_live_descendants(path.as_bstr()) {
+                    bail!(message!("Tree merge retained a file and descendants at {path:?}"));
+                }
+                editor.upsert(path.split(|&byte| byte == b'/'), entry.mode.kind(), entry.id)?;
+            }
+            index.record(path.clone().into_owned(), entry, None);
+        }
+    }
     for (path, node) in &paths.entries {
         let mut unmerged = node.unmerged.clone();
         if let Some(owner) = &mut unmerged
@@ -275,7 +301,7 @@ pub fn tree<'objects>(
             _ => None,
         };
         if entry != node.inputs[0].filter(|entry| entry.mode.is_no_tree()) || unmerged.is_some() {
-            index.record(path.clone(), entry, unmerged);
+            index.record(path.clone().into_owned(), entry, unmerged);
         }
     }
     let mut conflicts = Vec::with_capacity(normalized.events.len());
@@ -301,23 +327,24 @@ pub fn tree<'objects>(
 
 #[expect(clippy::too_many_arguments)]
 fn resolve_paths(
-    paths: &mut State,
+    paths: &mut State<'_>,
     events: &mut Vec<Event>,
     renames: &BTreeMap<BString, [Option<Change>; 2]>,
     labels: crate::blob::builtin_driver::text::Labels<'_>,
     options: &Options,
     objects: &impl gix_object::FindObjectOrHeader,
     blob_merge: &mut crate::blob::Platform,
-    mut merge: impl FnMut(&BString, &[Option<Stage>; 3], &mut crate::blob::Platform) -> Result<Option<entry::Outcome>>,
+    mut merge: impl FnMut(&BStr, &[Option<Stage<'_>>; 3], &mut crate::blob::Platform) -> Result<Option<entry::Outcome>>,
 ) -> Result {
     let policy = ResolutionPolicy::new(options);
     let mut checked_events = 0;
-    for location in paths.paths_bottom_up() {
+    for path in paths.paths_bottom_up() {
+        let location = path.as_ref();
         if events[checked_events..].iter().any(|event| event.should_stop(options)) {
             break;
         }
         checked_events = events.len();
-        let node = &paths.entries[&location];
+        let node = &paths.entries[location.as_bstr()];
         if node.result != PathResolution::Pending {
             let stages = node.stages.clone();
             let retained: Vec<_> = stages
@@ -327,7 +354,7 @@ fn resolve_paths(
                 .filter(|merge| matches!(node.result, PathResolution::Present(entry) if merge.matches_entry(entry)))
                 .collect();
             for merge in retained {
-                retain_merge(paths, events, &location, &stages, merge);
+                retain_merge(paths, events, location.as_bstr(), &stages, merge);
             }
             continue;
         }
@@ -340,42 +367,44 @@ fn resolve_paths(
                 .filter(|entry| entry.mode.is_no_tree())
         });
         let [_, ours, theirs] = leaves;
-        set_result(paths, &location, None);
+        paths.set_result(location.as_bstr(), None);
 
-        if let Some(side) = paths.entries[&location].trivial_choice() {
+        if let Some(side) = paths.entries[location.as_bstr()].trivial_choice() {
             let result = leaves[side];
             if result.is_none() || !paths.has_live_descendants(location.as_bstr()) {
-                set_result(paths, &location, result);
+                paths.set_result(location.as_bstr(), result);
                 if let Some(content) = stages[side].as_ref().and_then(|stage| stage.merge.as_deref().copied()) {
-                    retain_merge(paths, events, &location, &stages, content);
+                    retain_merge(paths, events, location.as_bstr(), &stages, content);
                 }
                 continue;
             }
         }
 
-        let mut output_location = location.clone();
+        let mut output_location = Cow::Borrowed(location);
         let mut directory_conflict = None;
         if paths.has_live_descendants(location.as_bstr()) && (ours.is_some() || theirs.is_some()) {
             let side = match (ours, theirs) {
                 (Some(_), None) => 1,
                 (None, Some(_)) => 2,
-                _ if paths.entries[&location].directory_mask & 2 != 0 => 2,
+                _ if paths.entries[location.as_bstr()].directory_mask & 2 != 0 => 2,
                 _ => 1,
             };
-            output_location = paths.reserve_unique(
-                location.as_bstr(),
-                if side == 1 {
-                    labels.current.unwrap_or_default()
-                } else {
-                    labels.other.unwrap_or_default()
-                },
-                objects,
-            )?;
+            output_location = paths
+                .reserve_unique(
+                    location.as_bstr(),
+                    if side == 1 {
+                        labels.current.unwrap_or_default()
+                    } else {
+                        labels.other.unwrap_or_default()
+                    },
+                    objects,
+                )?
+                .into();
             let mut conflict = event(
-                &location,
+                location,
                 &stages,
                 Err(ResolutionFailure::OursDirectoryTheirsNonDirectoryTheirsRenamed {
-                    renamed_unique_path_of_theirs: output_location.clone(),
+                    renamed_unique_path_of_theirs: output_location.clone().into_owned(),
                 }),
                 if side == 1 {
                     ConflictMapping::Swapped
@@ -388,8 +417,8 @@ fn resolve_paths(
                 if choice == ResolveWith::Ours && side == 1 && ours.is_some() && theirs.is_some() {
                     resolve_leaf(
                         paths,
-                        &location,
-                        &location,
+                        location,
+                        location,
                         &stages,
                         path_conflict,
                         events,
@@ -401,30 +430,33 @@ fn resolve_paths(
                         &mut merge,
                     )?;
                     merged_file = Some((
-                        paths.entries[&location].result,
-                        paths.entries[&location].unmerged.clone(),
+                        paths.entries[location.as_bstr()].result,
+                        paths.entries[location.as_bstr()].unmerged.clone(),
                     ));
                 }
-                let content = force_path(paths, &location, choice, renames);
+                let content = force_path(paths, location, choice, renames);
                 if let Some((result, unmerged)) = merged_file {
-                    let node = paths.entries.get_mut(&location).expect("the selected file is indexed");
-                    node.result = result;
+                    paths.set_resolution(location.as_bstr(), result);
+                    let node = paths
+                        .entries
+                        .get_mut(location.as_bstr())
+                        .expect("the selected file is indexed");
                     node.unmerged = unmerged;
                 }
                 events.push(conflict);
                 for (location, content) in content {
-                    retain_merge(paths, events, &location, &stages, content);
+                    retain_merge(paths, events, location.as_bstr(), &stages, content);
                 }
                 continue;
             }
-            relocate_events(events, &location, &output_location);
-            conflict.relocate(&location, std::slice::from_ref(&output_location));
+            relocate_events(events, location, &output_location);
+            conflict.relocate(location, &[output_location.clone().into_owned()]);
             directory_conflict = Some((side, conflict));
         }
         let content_clean = resolve_leaf(
             paths,
             &output_location,
-            &location,
+            location,
             &stages,
             path_conflict,
             events,
@@ -437,17 +469,17 @@ fn resolve_paths(
         )?;
         if let Some((side, conflict)) = directory_conflict {
             // Renormalization can make the file disappear, removing the D/F conflict too.
-            if content_clean && paths.entries[&output_location].result == PathResolution::Absent {
+            if content_clean && paths.entries[output_location.as_bstr()].result == PathResolution::Absent {
                 continue;
             }
             let mut entries = leaves;
-            if content_clean && let PathResolution::Present(entry) = paths.entries[&output_location].result {
+            if content_clean && let PathResolution::Present(entry) = paths.entries[output_location.as_bstr()].result {
                 // A clean content merge leaves only the file-owning side unresolved at a D/F destination.
                 entries = [None; 3];
                 entries[side] = Some(entry);
             }
             if policy.tree_resolution().is_none()
-                && let Some(node) = paths.entries.get_mut(&output_location)
+                && let Some(node) = paths.entries.get_mut(output_location.as_bstr())
                 && matches!(node.result, PathResolution::Present(entry) if entry.mode.is_no_tree())
             {
                 node.set_unmerged(entries, None);
@@ -460,10 +492,10 @@ fn resolve_paths(
 
 #[expect(clippy::too_many_arguments)]
 fn resolve_leaf(
-    paths: &mut State,
-    location: &BString,
-    original_location: &BString,
-    stages: &[Option<Stage>; 3],
+    paths: &mut State<'_>,
+    location: &BStr,
+    original_location: &BStr,
+    stages: &[Option<Stage<'_>>; 3],
     path_conflict: bool,
     events: &mut Vec<Event>,
     renames: &BTreeMap<BString, [Option<Change>; 2]>,
@@ -471,7 +503,7 @@ fn resolve_leaf(
     policy: ResolutionPolicy,
     objects: &impl gix_object::FindObjectOrHeader,
     blob_merge: &mut crate::blob::Platform,
-    merge: &mut impl FnMut(&BString, &[Option<Stage>; 3], &mut crate::blob::Platform) -> Result<Option<entry::Outcome>>,
+    merge: &mut impl FnMut(&BStr, &[Option<Stage<'_>>; 3], &mut crate::blob::Platform) -> Result<Option<entry::Outcome>>,
 ) -> Result<bool> {
     let [base, ours, theirs] = stages.each_ref().map(|stage| {
         stage
@@ -490,7 +522,7 @@ fn resolve_leaf(
             {
                 paths
                     .entries
-                    .entry(location.clone())
+                    .entry(Cow::Owned(location.to_owned()))
                     .or_default()
                     .set_unmerged([base, None, None], None);
             }
@@ -510,7 +542,7 @@ fn resolve_leaf(
                     },
                     objects,
                 )? {
-                    set_result(paths, location, None);
+                    paths.set_result(location, None);
                     return Ok(true);
                 }
                 let conflict = event(
@@ -529,7 +561,7 @@ fn resolve_leaf(
                     select_stage(paths, location, stages[side].as_ref(), &mut retained_merges);
                     paths
                         .entries
-                        .get_mut(location)
+                        .get_mut(location.as_bstr())
                         .expect("the modified path is indexed")
                         .set_unmerged([Some(base), ours, theirs], None);
                 }
@@ -548,7 +580,7 @@ fn resolve_leaf(
                 if path_conflict && policy.tree_resolution().is_none() {
                     paths
                         .entries
-                        .get_mut(location)
+                        .get_mut(location.as_bstr())
                         .expect("the conflicted path is indexed")
                         .set_unmerged([base, ours, theirs], None);
                 }
@@ -560,9 +592,9 @@ fn resolve_leaf(
                     ours.mode.is_blob() || !theirs.mode.is_blob(),
                     theirs.mode.is_blob() || !ours.mode.is_blob(),
                 ];
-                let mut destinations = [location.clone(), location.clone()];
+                let mut destinations = [location.to_owned(), location.to_owned()];
                 if policy.is_virtual() && policy.tree_resolution() == Some(ResolveWith::Ancestor) {
-                    set_result(paths, location, base);
+                    paths.set_result(location, base);
                 } else if let Some(choice) = policy.tree_resolution() {
                     retained_merges.extend(force_path(paths, original_location, choice, renames));
                 } else {
@@ -575,7 +607,7 @@ fn resolve_leaf(
                         }
                         select_stage(
                             paths,
-                            &destinations[side],
+                            destinations[side].as_bstr(),
                             stages[side + 1].as_ref(),
                             &mut retained_merges,
                         );
@@ -585,7 +617,7 @@ fn resolve_leaf(
                             base.filter(|base| merge_modes(base.mode, [ours, theirs][side].mode, None).is_some());
                         paths
                             .entries
-                            .get_mut(&destinations[side])
+                            .get_mut(destinations[side].as_bstr())
                             .expect("the split path is indexed")
                             .set_unmerged(entries, None);
                     }
@@ -609,11 +641,11 @@ fn resolve_leaf(
                 if let Some(choice) = merged.force {
                     retained_merges.extend(force_path(paths, original_location, choice, renames));
                 } else {
-                    set_result(paths, location, Some(merged.entry));
+                    paths.set_result(location, Some(merged.entry));
                     if (path_conflict || merged.has_tree_conflict()) && policy.tree_resolution().is_none() {
                         paths
                             .entries
-                            .get_mut(location)
+                            .get_mut(location.as_bstr())
                             .expect("the tree conflict path is indexed")
                             .set_unmerged([base, Some(ours), Some(theirs)], None);
                     } else if let Some(resolution) = merged.content_resolution()
@@ -621,7 +653,7 @@ fn resolve_leaf(
                     {
                         paths
                             .entries
-                            .get_mut(location)
+                            .get_mut(location.as_bstr())
                             .expect("the content merge path is indexed")
                             .set_unmerged([base, Some(ours), Some(theirs)], Some(resolution));
                     }
@@ -631,7 +663,7 @@ fn resolve_leaf(
                             .flatten()
                             .filter_map(|stage| stage.merge.as_deref().copied())
                             .filter(|content| content.matches_entry(merged.entry))
-                            .map(|content| (location.clone(), content)),
+                            .map(|content| (location.to_owned(), content)),
                     );
                 }
                 if let Some(resolution) = merged.resolution() {
@@ -641,34 +673,34 @@ fn resolve_leaf(
         }
     }
     for (location, content) in retained_merges {
-        retain_merge(paths, events, &location, stages, content);
+        retain_merge(paths, events, location.as_bstr(), stages, content);
     }
     Ok(content_clean)
 }
 
 fn select_stage(
-    paths: &mut State,
-    location: &BString,
-    stage: Option<&Stage>,
+    paths: &mut State<'_>,
+    location: &BStr,
+    stage: Option<&Stage<'_>>,
     content: &mut Vec<(BString, EntryMerge)>,
 ) {
-    set_result(paths, location, stage.map(|stage| stage.entry));
+    paths.set_result(location, stage.map(|stage| stage.entry));
     content.extend(
         stage
             .and_then(|stage| stage.merge.as_deref().copied())
-            .map(|content| (location.clone(), content)),
+            .map(|content| (location.to_owned(), content)),
     );
 }
 
 /// Preserve source-merge conflicts only when their normalized entry is selected for the result.
 fn retain_merge(
-    paths: &mut State,
+    paths: &mut State<'_>,
     events: &mut Vec<Event>,
-    location: &BString,
-    stages: &[Option<Stage>; 3],
+    location: &BStr,
+    stages: &[Option<Stage<'_>>; 3],
     retained: EntryMerge,
 ) {
-    let node = paths.entries.entry(location.clone()).or_default();
+    let node = paths.entries.entry(Cow::Owned(location.to_owned())).or_default();
     if !retained.forced {
         match &mut node.unmerged {
             Some(unmerged) => {
@@ -704,7 +736,7 @@ fn retain_merge(
                     entry,
                     source: stages[side]
                         .as_ref()
-                        .map_or_else(|| location.clone(), |stage| stage.source.clone()),
+                        .map_or_else(|| Cow::Owned(location.to_owned()), |stage| stage.source.clone()),
                     merge: None,
                 })
             });
@@ -744,19 +776,15 @@ fn retain_merge(
     ));
 }
 
-fn set_result(paths: &mut State, path: &BString, entry: Option<Entry>) {
-    paths.entries.entry(path.clone()).or_default().set_result(entry);
-}
-
 /// Selecting an input restores every affected rename source from that same immutable input.
 fn force_path(
-    paths: &mut State,
-    path: &BString,
+    paths: &mut State<'_>,
+    path: &BStr,
     choice: ResolveWith,
     renames: &BTreeMap<BString, [Option<Change>; 2]>,
 ) -> Vec<(BString, EntryMerge)> {
     let input = if choice == ResolveWith::Ancestor { 0 } else { 1 };
-    let mut pending = vec![path.clone()];
+    let mut pending = vec![path.to_owned()];
     let mut restored = BTreeSet::new();
     let mut retained_entries = Vec::new();
     while let Some(path) = pending.pop() {
@@ -765,7 +793,7 @@ fn force_path(
         }
         let path = &path;
         let retained = (choice == ResolveWith::Ours)
-            .then(|| paths.entries.get(path)?.stages[1].clone())
+            .then(|| paths.entries.get(path.as_bstr())?.stages[1].clone())
             .flatten()
             .filter(|stage| stage.entry.mode.is_no_tree())
             .map(|stage| {
@@ -773,9 +801,9 @@ fn force_path(
                     renames[0].is_none()
                         && renames[1]
                             .as_ref()
-                            .is_some_and(|rename| rename.source_location() == stage.source)
+                            .is_some_and(|rename| rename.source_location() == stage.source.as_ref())
                 }) {
-                    stage.source.clone()
+                    stage.source.clone().into_owned()
                 } else {
                     path.clone()
                 };
@@ -783,15 +811,15 @@ fn force_path(
             });
         let selected_directory = paths
             .entries
-            .get(path)
+            .get(path.as_bstr())
             .is_some_and(|node| node.inputs[input].is_some_and(|entry| entry.mode.is_tree()));
         let originals: Vec<_> = paths
             .entries
-            .get(path)
+            .get(path.as_bstr())
             .into_iter()
             .flat_map(|node| node.stages.iter().flatten())
-            .map(|stage| stage.source.clone())
-            .filter(|source| source != path)
+            .map(|stage| stage.source.clone().into_owned())
+            .filter(|source| source.as_bstr() != path.as_bstr())
             .collect();
         for source in originals {
             restore_subtree(paths, source.as_bstr(), input, &mut pending);
@@ -823,39 +851,45 @@ fn force_path(
     // rejected rename can restore an input at the same location.
     let mut content = Vec::new();
     for (location, stage) in retained_entries {
-        if location != stage.source
-            && let Some(original) = paths.entries.get_mut(&stage.source)
-        {
-            original.set_result(None);
+        if location.as_bstr() != stage.source.as_ref() && paths.entries.contains_key(stage.source.as_ref()) {
+            paths.set_result(stage.source.as_ref(), None);
         }
-        set_result(paths, &location, Some(stage.entry));
+        paths.set_result(location.as_bstr(), Some(stage.entry));
         content.extend(stage.merge.map(|content| (location, *content)));
     }
     content
 }
 
-fn restore_subtree(paths: &mut State, path: &BStr, input: usize, pending: &mut Vec<BString>) {
+fn restore_subtree(paths: &mut State<'_>, path: &BStr, input: usize, pending: &mut Vec<BString>) {
     let selected_directory = paths
         .entries
-        .get(path)
+        .get(path.as_bstr())
         .is_some_and(|node| node.inputs[input].is_some_and(|entry| entry.mode.is_tree()));
-    if let Some(node) = paths.entries.get_mut(path) {
-        node.restore_input(input);
-    }
+    paths.restore_input(path, input);
     // Retaining a directory does not reverse independent clean changes to its children.
     if !selected_directory {
         let mut prefix = path.to_owned();
         prefix.push(b'/');
-        for (candidate, node) in paths.entries.range_mut(prefix.clone()..) {
-            if !candidate.starts_with(prefix.as_bytes()) {
-                break;
-            }
-            node.restore_input(input);
+        let mut children: Vec<_> = paths
+            .entries
+            .range(Cow::Owned(prefix.clone())..)
+            .take_while(|(candidate, _)| candidate.starts_with(prefix.as_bytes()))
+            .map(|(candidate, _)| candidate.clone())
+            .collect();
+        children.extend(
+            paths
+                .trivial
+                .range(Cow::Owned(prefix.clone())..)
+                .take_while(|(candidate, _)| candidate.starts_with(prefix.as_bytes()))
+                .map(|(candidate, _)| candidate.clone()),
+        );
+        for child in children {
+            paths.restore_input(child.as_bstr(), input);
         }
     }
     if !paths
         .entries
-        .get(path)
+        .get(path.as_bstr())
         .is_some_and(|node| matches!(node.result, PathResolution::Present(_)))
         && !paths.has_live_descendants(path)
     {
@@ -865,22 +899,23 @@ fn restore_subtree(paths: &mut State, path: &BStr, input: usize, pending: &mut V
     // Restore the selected input's directory topology along with the source.
     for (end, byte) in path.iter().enumerate() {
         if *byte == b'/'
-            && let Some(parent) = paths.entries.get_mut(path[..end].as_bstr())
+            && let Some(parent) = paths.entries.get(path[..end].as_bstr())
             && parent.inputs[input].is_some_and(|entry| entry.mode.is_tree())
             && matches!(parent.result, PathResolution::Present(entry) if entry.mode.is_no_tree())
         {
-            parent.restore_input(input);
+            paths.restore_input(path[..end].as_bstr(), input);
             pending.push(path[..end].into());
         }
     }
 }
 
-fn relocate_events(events: &mut [Event], previous: &BString, destination: &BString) {
+fn relocate_events(events: &mut [Event], previous: &BStr, destination: &BStr) {
+    let destination = destination.to_owned();
     for event in events {
-        if &event.location == previous {
+        if event.location == previous {
             event.location = destination.clone();
         }
-        event.relocate(previous, std::slice::from_ref(destination));
+        event.relocate(previous, std::slice::from_ref(&destination));
         match &mut event.resolution {
             Err(ResolutionFailure::DirectoryRename { final_location, .. })
             | Ok(Resolution::SourceLocationAffectedByRename { final_location })
@@ -894,33 +929,33 @@ fn relocate_events(events: &mut [Event], previous: &BString, destination: &BStri
 }
 
 fn event(
-    location: &BString,
-    stages: &[Option<Stage>; 3],
+    location: &BStr,
+    stages: &[Option<Stage<'_>>; 3],
     resolution: std::result::Result<Resolution, ResolutionFailure>,
     mapping: ConflictMapping,
 ) -> Event {
     Event {
-        location: location.clone(),
+        location: location.to_owned(),
         resolution,
         changes: [
             change_for_stage(location, stages, 1),
             change_for_stage(location, stages, 2),
         ],
         mapping,
-        affected_paths: vec![location.clone()],
+        affected_paths: vec![location.to_owned()],
     }
 }
 
-fn change_for_stage(location: &BString, stages: &[Option<Stage>; 3], side: usize) -> Change {
+fn change_for_stage(location: &BStr, stages: &[Option<Stage<'_>>; 3], side: usize) -> Change {
     match (&stages[0], &stages[side]) {
         (Some(base), Some(stage)) if base.source != stage.source => Change::Rewrite {
-            source_location: base.source.clone(),
+            source_location: base.source.clone().into_owned(),
             source_entry_mode: base.entry.mode,
             source_id: base.entry.id,
             source_relation: None,
             entry_mode: stage.entry.mode,
             id: stage.entry.id,
-            location: stage.source.clone(),
+            location: stage.source.clone().into_owned(),
             relation: None,
             similarity: None,
             copy: false,
@@ -930,18 +965,18 @@ fn change_for_stage(location: &BString, stages: &[Option<Stage>; 3], side: usize
             previous_id: base.entry.id,
             entry_mode: stage.entry.mode,
             id: stage.entry.id,
-            location: stage.source.clone(),
+            location: stage.source.clone().into_owned(),
         },
         (Some(base), None) => Change::Deletion {
             entry_mode: base.entry.mode,
             id: base.entry.id,
-            location: base.source.clone(),
+            location: base.source.clone().into_owned(),
             relation: None,
         },
         (None, Some(stage)) => Change::Addition {
             entry_mode: stage.entry.mode,
             id: stage.entry.id,
-            location: stage.source.clone(),
+            location: stage.source.clone().into_owned(),
             relation: None,
         },
         (None, None) => {
@@ -954,7 +989,7 @@ fn change_for_stage(location: &BString, stages: &[Option<Stage>; 3], side: usize
             Change::Deletion {
                 entry_mode: entry.mode,
                 id: entry.id,
-                location: location.clone(),
+                location: location.to_owned(),
                 relation: None,
             }
         }
@@ -1017,19 +1052,19 @@ mod tests {
                     None,
                     Some(Stage {
                         entry: selected,
-                        source: "source".into(),
+                        source: bstr::BStr::new("source").into(),
                         merge: Some(Box::new(retained)),
                     }),
                     None,
                 ];
                 let mut paths = State::default();
                 let mut pending = Vec::new();
-                select_stage(&mut paths, &location, stages[1].as_ref(), &mut pending);
+                select_stage(&mut paths, location.as_bstr(), stages[1].as_ref(), &mut pending);
                 let mut events = Vec::new();
                 for (path, merge) in pending {
-                    retain_merge(&mut paths, &mut events, &path, &stages, merge);
+                    retain_merge(&mut paths, &mut events, path.as_bstr(), &stages, merge);
                 }
-                let result = &paths.entries[&location];
+                let result = &paths.entries[location.as_bstr()];
                 assert_eq!(
                     result.result,
                     PathResolution::Present(selected),

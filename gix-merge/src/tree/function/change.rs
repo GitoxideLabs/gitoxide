@@ -1,6 +1,6 @@
 //! Discover rename identities from the two base-to-side diffs before resolving paths.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use bstr::{BStr, ByteSlice};
 use gix_diff::{
@@ -8,7 +8,7 @@ use gix_diff::{
     tree_with_rewrites::{Change, ChangeRef},
 };
 use gix_error::{Result, ResultExt, message};
-use gix_object::{FindExt, tree::EntryMode};
+use gix_object::FindExt;
 
 #[derive(Default)]
 pub(super) struct Changes {
@@ -20,7 +20,7 @@ pub(super) struct Changes {
 /// Directories added on one side, or unchanged on the opposite side, are deferred
 /// until after the initial traversal. Directory-rename relevance requires immediate
 /// traversal instead, including in their nested directories.
-pub(super) fn destination_orders(paths: &super::path::State) -> [Vec<&BStr>; 2] {
+pub(super) fn destination_orders(collected: &super::path::Collected) -> [Vec<&BStr>; 2] {
     #[derive(Clone, Copy, Default)]
     struct Directory {
         // Surviving side below a removed directory, or all bits once additions
@@ -33,9 +33,15 @@ pub(super) fn destination_orders(paths: &super::path::State) -> [Vec<&BStr>; 2] 
         path.rfind_byte(b'/').map_or("".into(), |slash| path[..slash].as_bstr())
     }
 
+    let traversal = || {
+        collected
+            .entries
+            .iter()
+            .map(|(name, inputs)| (collected.names[name.clone()].as_bstr(), inputs))
+    };
     let mut additions = HashMap::<&BStr, u8>::new();
-    for (path, node) in &paths.entries {
-        let files = node.inputs.iter().enumerate().fold(0, |mask, (side, entry)| {
+    for (path, inputs) in traversal() {
+        let files = inputs.iter().enumerate().fold(0, |mask, (side, entry)| {
             mask | if entry.is_some_and(|entry| entry.mode.is_no_tree()) {
                 1 << side
             } else {
@@ -46,22 +52,28 @@ pub(super) fn destination_orders(paths: &super::path::State) -> [Vec<&BStr>; 2] 
             *additions.entry(parent(path.as_bstr())).or_default() |= files;
         }
     }
-    let mut directories = BTreeMap::<&BStr, Directory>::new();
+    let mut directories = HashMap::<&BStr, Directory>::new();
     let mut deferred = [Vec::new(), Vec::new()];
-    let traversal = input_traversal(paths);
-    for &path in &traversal {
-        let node = &paths.entries[path];
-        if node.directory_mask == 0 {
+    // Collection already established the three-input callback order.
+    for (path, inputs) in traversal() {
+        let directory_mask = inputs.iter().enumerate().fold(0, |mask, (side, entry)| {
+            mask | if entry.is_some_and(|entry| entry.mode.is_tree()) {
+                1 << side
+            } else {
+                0
+            }
+        });
+        if directory_mask == 0 {
             continue;
         }
         let mut directory = directories.get(parent(path.as_bstr())).copied().unwrap_or_default();
-        if directory.rename_mask != 7 && matches!(node.directory_mask, 3 | 5) {
-            directory.rename_mask = node.directory_mask & 6;
+        if directory.rename_mask != 7 && matches!(directory_mask, 3 | 5) {
+            directory.rename_mask = directory_mask & 6;
         }
         for side in 1..=2 {
-            let unchanged_opposite = node.inputs[0].is_some() && node.inputs[0] == node.inputs[3 - side];
+            let unchanged_opposite = inputs[0].is_some() && inputs[0] == inputs[3 - side];
             let new_directory =
-                node.directory_mask == 1 << side && node.inputs.iter().flatten().all(|entry| entry.mode.is_tree());
+                directory_mask == 1 << side && inputs.iter().flatten().all(|entry| entry.mode.is_tree());
             if directory.deferred[side - 1] == 0 && directory.rename_mask != 7 && (unchanged_opposite || new_directory)
             {
                 deferred[side - 1].push(path.as_bstr());
@@ -80,15 +92,12 @@ pub(super) fn destination_orders(paths: &super::path::State) -> [Vec<&BStr>; 2] 
     let deferred_orders = deferred.map(|paths| deferred_directory_order(&paths));
     std::array::from_fn(|index| {
         let side = index + 1;
-        let mut destinations: Vec<_> = traversal
-            .iter()
-            .copied()
-            .filter(|path| {
-                let node = &paths.entries[*path];
-                node.inputs[side].is_some_and(|entry| entry.mode.is_no_tree()) && node.inputs[side] != node.inputs[0]
+        let mut destinations: Vec<_> = traversal()
+            .filter_map(|(path, inputs)| {
+                (inputs[side].is_some_and(|entry| entry.mode.is_no_tree()) && inputs[side] != inputs[0]).then_some(path)
             })
             .collect();
-        destinations.sort_by_key(|path| {
+        destinations.sort_by_cached_key(|path| {
             let group = directories
                 .get(parent(path))
                 .map_or(0, |directory| directory.deferred[index]);
@@ -103,65 +112,6 @@ pub(super) fn destination_orders(paths: &super::path::State) -> [Vec<&BStr>; 2] 
         }
         destinations
     })
-}
-
-/// Match `traverse_trees()`: each input is tree-ordered, but the next callback is
-/// the raw-name minimum of its three current entries. Matching names are consumed
-/// even when one input has to look past punctuation-sorted siblings to find them.
-fn input_traversal(paths: &super::path::State) -> Vec<&BStr> {
-    let mut children = HashMap::<&BStr, Vec<_>>::new();
-    for (path, modes) in paths.input_modes() {
-        let parent = path.rfind_byte(b'/').map_or("".into(), |slash| path[..slash].as_bstr());
-        children.entry(parent).or_default().push((path, modes));
-    }
-    // Common siblings can block a front even though they need no resolution.
-    // Keep those placeholders until consumed, without expanding their opaque trees.
-    let mut pending: Vec<&BStr> = vec!["".into()];
-    let mut traversal = Vec::with_capacity(paths.entries.len());
-    while let Some(path) = pending.pop() {
-        if !path.is_empty() && paths.entries.contains_key(path) {
-            traversal.push(path);
-        }
-        let Some(children) = children.remove(path) else {
-            continue;
-        };
-        let sides: [Vec<_>; 3] = std::array::from_fn(|side| {
-            let mut entries: Vec<_> = (0..children.len())
-                .filter(|&idx| children[idx].1[side].is_some())
-                .collect();
-            entries.sort_by(|&a, &b| {
-                let name = |idx: usize| {
-                    children[idx]
-                        .0
-                        .iter()
-                        .copied()
-                        .chain(children[idx].1[side].filter(EntryMode::is_tree).map(|_| b'/'))
-                };
-                name(a).cmp(name(b))
-            });
-            entries
-        });
-        let mut consumed = vec![false; children.len()];
-        let mut cursors = [0; 3];
-        let mut order = Vec::with_capacity(children.len());
-        loop {
-            for side in 0..3 {
-                while sides[side].get(cursors[side]).is_some_and(|&idx| consumed[idx]) {
-                    cursors[side] += 1;
-                }
-            }
-            let Some(next) = (0..3)
-                .filter_map(|side| sides[side].get(cursors[side]).copied())
-                .min_by_key(|&idx| children[idx].0)
-            else {
-                break;
-            };
-            consumed[next] = true;
-            order.push(children[next].0);
-        }
-        pending.extend(order.into_iter().rev());
-    }
-    traversal
 }
 
 /// ORT drains pending directories in Git's `hashmap` iteration order. This order

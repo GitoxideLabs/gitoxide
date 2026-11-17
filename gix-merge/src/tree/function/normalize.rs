@@ -5,7 +5,10 @@
 //! Normalized stages keep their original input paths. Diagnostic events describe decisions,
 //! while resolved paths own the final index entries.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, BTreeSet, HashMap},
+};
 
 use bstr::{BStr, BString, ByteSlice};
 use gix_diff::tree_with_rewrites::Change;
@@ -32,13 +35,13 @@ pub(super) struct Event {
 }
 
 impl Event {
-    pub fn affects(&self, path: &BString) -> bool {
-        self.affected_paths.contains(path)
+    pub fn affects(&self, path: &BStr) -> bool {
+        self.affected_paths.iter().any(|candidate| candidate.as_bstr() == path)
     }
 
-    pub fn relocate(&mut self, previous: &BString, destinations: &[BString]) {
+    pub fn relocate(&mut self, previous: &BStr, destinations: &[BString]) {
         if self.affects(previous) {
-            self.affected_paths.retain(|path| path != previous);
+            self.affected_paths.retain(|path| path.as_bstr() != previous);
             self.affected_paths.extend_from_slice(destinations);
             self.affected_paths.sort();
             self.affected_paths.dedup();
@@ -79,9 +82,9 @@ impl Rename {
     }
 }
 
-struct Forced {
+struct Forced<'input> {
     paths: Vec<BString>,
-    merged: Option<(BString, Stage)>,
+    merged: Option<(BString, Stage<'input>)>,
 }
 
 struct Context<'a, 'labels, 'ctx, O, W> {
@@ -97,7 +100,7 @@ struct Context<'a, 'labels, 'ctx, O, W> {
 
 #[expect(clippy::too_many_arguments)]
 pub(super) fn run(
-    state: &mut State,
+    state: &mut State<'_>,
     changes: [&[Change]; 2],
     directories: [&[gix_diff::tree_with_rewrites::DirectoryRename]; 2],
     labels: Labels<'_>,
@@ -151,6 +154,16 @@ pub(super) fn run(
             }
         }
     }
+    let original_changes = std::array::from_fn(|side| {
+        if sources
+            .values()
+            .any(|renames| renames[side].is_none() && renames[1 - side].is_some())
+        {
+            index_changes(changes[side])
+        } else {
+            HashMap::new()
+        }
+    });
     let mut context = Context {
         labels,
         objects,
@@ -162,12 +175,22 @@ pub(super) fn run(
         policy,
     };
     for (source, [ours, theirs]) in sources {
+        for path in std::iter::once(&source).chain(ours.iter().chain(theirs.iter()).map(|rename| &rename.destination)) {
+            if state.trivial.contains_key(path.as_bstr()) {
+                state.materialize(path.as_bstr());
+                state
+                    .entries
+                    .get_mut(path.as_bstr())
+                    .expect("the rename input has been materialized")
+                    .invalidate();
+            }
+        }
         match (ours, theirs) {
             (Some(ours), Some(theirs)) => {
                 context.both(state, &source, ours, theirs, &mut outcome, &mut forced)?;
             }
             (Some(rename), None) | (None, Some(rename)) => {
-                context.one(state, &source, rename, changes, &mut outcome, &mut forced)?;
+                context.one(state, &source, rename, &original_changes, &mut outcome, &mut forced)?;
             }
             (None, None) => unreachable!("a source is inserted with a rename"),
         }
@@ -182,7 +205,7 @@ pub(super) fn run(
             {
                 continue;
             }
-            let stages = &state.entries[&event.location].stages;
+            let stages = &state.entries[event.location.as_bstr()].stages;
             if let [base, Some(ours), Some(theirs)] = stages
                 && !ours.entry.mode.is_tree()
                 && !theirs.entry.mode.is_tree()
@@ -193,9 +216,13 @@ pub(super) fn run(
                     *merged_blob = merged.content_merge();
                 }
                 forced.push(Forced {
-                    paths: vec![event.location.clone(), ours.source.clone(), theirs.source.clone()],
+                    paths: vec![
+                        event.location.clone(),
+                        ours.source.clone().into_owned(),
+                        theirs.source.clone().into_owned(),
+                    ],
                     merged: Some((
-                        ours.source.clone(),
+                        ours.source.clone().into_owned(),
                         merged_stage(
                             ours.clone(),
                             merged.entry,
@@ -215,8 +242,12 @@ pub(super) fn run(
         for (destination, renames) in &outcome.renames {
             if let [Some(ours), Some(theirs)] = renames
                 && ours.source_location() != theirs.source_location()
-                && state.entries[destination].stages[1].as_ref().map(|stage| stage.entry)
-                    != state.entries[destination].stages[2].as_ref().map(|stage| stage.entry)
+                && state.entries[destination.as_bstr()].stages[1]
+                    .as_ref()
+                    .map(|stage| stage.entry)
+                    != state.entries[destination.as_bstr()].stages[2]
+                        .as_ref()
+                        .map(|stage| stage.entry)
             {
                 outcome.events.push(Event {
                     resolution: Err(ResolutionFailure::OursRenamedTheirsRenamedToSameLocation),
@@ -237,7 +268,7 @@ pub(super) fn run(
         }
         let mut retained = Vec::new();
         for plan in forced {
-            let merged = force_originals(state, &outcome.renames, choice, plan);
+            let merged = force_originals(state, &outcome.renames, choice, plan, objects)?;
             if choice == ResolveWith::Ours {
                 retained.extend(merged);
             }
@@ -245,11 +276,11 @@ pub(super) fn run(
         // Overlapping rename groups can restore the same path. Apply their retained
         // content only after every topology choice has restored its original entries.
         for (location, _) in &retained {
-            if let Some(original) = state.entries[location].stages[1]
+            if let Some(original) = state.entries[location.as_bstr()].stages[1]
                 .as_ref()
-                .map(|stage| stage.source.clone())
+                .map(|stage| stage.source.clone().into_owned())
                 && original != *location
-                && let Some(node) = state.entries.get_mut(&original)
+                && let Some(node) = state.entries.get_mut(original.as_bstr())
             {
                 node.set_result(None);
             }
@@ -257,14 +288,14 @@ pub(super) fn run(
             prefix.push(b'/');
             for (_, node) in state
                 .entries
-                .range_mut(prefix.clone()..)
+                .range_mut(Cow::Owned(prefix.clone())..)
                 .take_while(|(path, _)| path.starts_with(prefix.as_bytes()))
             {
                 node.set_result(None);
             }
         }
         for (location, stage) in retained {
-            let node = state.entries.entry(location).or_default();
+            let node = state.entries.entry(Cow::Owned(location)).or_default();
             node.set_stage(1, Some(stage.clone()));
             node.set_result(Some(stage.entry));
             if let Some(content) = stage.merge
@@ -280,9 +311,9 @@ pub(super) fn run(
 impl<O: gix_object::FindObjectOrHeader, W: FnMut(&[u8]) -> Result<ObjectId>> Context<'_, '_, '_, O, W> {
     fn merge(
         &mut self,
-        base: Option<&Stage>,
-        ours: &Stage,
-        theirs: &Stage,
+        base: Option<&Stage<'_>>,
+        ours: &Stage<'_>,
+        theirs: &Stage<'_>,
         extra_markers: u8,
     ) -> Result<Option<entry::Outcome>> {
         entry::merge(
@@ -304,14 +335,14 @@ impl<O: gix_object::FindObjectOrHeader, W: FnMut(&[u8]) -> Result<ObjectId>> Con
         )
     }
 
-    fn both(
+    fn both<'input>(
         &mut self,
-        state: &mut State,
+        state: &mut State<'input>,
         source: &BString,
         ours: Rename,
         theirs: Rename,
         outcome: &mut Outcome,
-        forced: &mut Vec<Forced>,
+        forced: &mut Vec<Forced<'input>>,
     ) -> Result {
         let Some(base) = leaf_stage(state, source, 0) else {
             return Ok(());
@@ -326,7 +357,7 @@ impl<O: gix_object::FindObjectOrHeader, W: FnMut(&[u8]) -> Result<ObjectId>> Con
         let force_location = relocated && self.options.directory_renames == DirectoryRenames::Conflict;
         let source_stages = [Some(base.entry), Some(our_stage.entry), Some(their_stage.entry)];
         if ours.destination == theirs.destination {
-            let node = state.entries.entry(ours.destination.clone()).or_default();
+            let node = state.entries.entry(Cow::Owned(ours.destination.clone())).or_default();
             node.set_stage(0, Some(base.clone()));
             remove_source(state, source, &ours.destination, &[0, 1, 2]);
             if force_location && self.policy.forced_resolution().is_some() {
@@ -356,7 +387,7 @@ impl<O: gix_object::FindObjectOrHeader, W: FnMut(&[u8]) -> Result<ObjectId>> Con
             None => (our_stage.entry, their_stage.entry),
         };
         for (rename, stage, entry) in [(&ours, our_stage, our_entry), (&theirs, their_stage, their_entry)] {
-            let node = state.entries.entry(rename.destination.clone()).or_default();
+            let node = state.entries.entry(Cow::Owned(rename.destination.clone())).or_default();
             let stage = match &merged {
                 Some(merged) => merged_stage(stage, entry, merged, source_stages),
                 None => stage,
@@ -369,7 +400,7 @@ impl<O: gix_object::FindObjectOrHeader, W: FnMut(&[u8]) -> Result<ObjectId>> Con
         }
         state
             .entries
-            .get_mut(source)
+            .get_mut(source.as_bstr())
             .expect("the rename source remains indexed")
             .path_conflict = true;
         let merged_blob = merged.as_ref().and_then(entry::Outcome::content_merge);
@@ -393,14 +424,14 @@ impl<O: gix_object::FindObjectOrHeader, W: FnMut(&[u8]) -> Result<ObjectId>> Con
         Ok(())
     }
 
-    fn one(
+    fn one<'input>(
         &mut self,
-        state: &mut State,
+        state: &mut State<'input>,
         source: &BString,
         rename: Rename,
-        changes: [&[Change]; 2],
+        changes: &[HashMap<&BStr, &Change>; 2],
         outcome: &mut Outcome,
-        forced: &mut Vec<Forced>,
+        forced: &mut Vec<Forced<'input>>,
     ) -> Result {
         let Some(base) = leaf_stage(state, source, 0) else {
             return Ok(());
@@ -420,7 +451,7 @@ impl<O: gix_object::FindObjectOrHeader, W: FnMut(&[u8]) -> Result<ObjectId>> Con
         let mut global_changes = [rename.original.clone(), rename.original.clone()];
         global_changes[rename.side - 1] = rename.original.clone();
         global_changes[other - 1] =
-            original_change(state, changes[other - 1], source, other).unwrap_or_else(|| rename.original.clone());
+            original_change(state, &changes[other - 1], source, other).unwrap_or_else(|| rename.original.clone());
         let mut merged = None;
         if let Some(opposite) = &opposite_source
             && !type_changed
@@ -456,14 +487,14 @@ impl<O: gix_object::FindObjectOrHeader, W: FnMut(&[u8]) -> Result<ObjectId>> Con
                     source_entries[rename.side] = None;
                     state
                         .entries
-                        .get_mut(source)
+                        .get_mut(source.as_bstr())
                         .expect("the source is indexed")
                         .set_unmerged(source_entries, merged.content_resolution());
                     let mut destination_entries = [None; 3];
                     destination_entries[rename.side] = Some(renamed.entry);
                     state
                         .entries
-                        .get_mut(&rename.destination)
+                        .get_mut(rename.destination.as_bstr())
                         .expect("the rename destination is indexed")
                         .set_unmerged(destination_entries, merged.content_resolution());
                     outcome.events.push(event);
@@ -476,14 +507,14 @@ impl<O: gix_object::FindObjectOrHeader, W: FnMut(&[u8]) -> Result<ObjectId>> Con
                 let mut source_stages = [Some(base.entry), None, None];
                 source_stages[rename.side] = Some(renamed.entry);
                 source_stages[other] = opposite_source.as_ref().map(|stage| stage.entry);
-                let node = state.entries.entry(rename.destination.clone()).or_default();
+                let node = state.entries.entry(Cow::Owned(rename.destination.clone())).or_default();
                 node.set_stage(
                     rename.side,
                     Some(merged_stage(renamed.clone(), merged.entry, merged, source_stages)),
                 );
             }
         } else if opposite_source.as_ref().map(|stage| stage.entry) != Some(base.entry) {
-            let node = state.entries.entry(rename.destination.clone()).or_default();
+            let node = state.entries.entry(Cow::Owned(rename.destination.clone())).or_default();
             node.set_stage(0, Some(base.clone()));
             if !type_changed {
                 node.set_stage(other, opposite_source.clone());
@@ -502,7 +533,7 @@ impl<O: gix_object::FindObjectOrHeader, W: FnMut(&[u8]) -> Result<ObjectId>> Con
         }
 
         if deleted || (type_changed && !destination_collision) {
-            let node = state.entries.entry(rename.destination.clone()).or_default();
+            let node = state.entries.entry(Cow::Owned(rename.destination.clone())).or_default();
             node.path_conflict = true;
             node.invalidate();
             let failure = if deleted {
@@ -581,14 +612,19 @@ impl<O: gix_object::FindObjectOrHeader, W: FnMut(&[u8]) -> Result<ObjectId>> Con
     }
 }
 
-fn leaf_stage(state: &State, location: &BString, side: usize) -> Option<Stage> {
-    state.entries.get(location)?.stages[side]
+fn leaf_stage<'input>(state: &State<'input>, location: &BString, side: usize) -> Option<Stage<'input>> {
+    state.entries.get(location.as_bstr())?.stages[side]
         .as_ref()
         .filter(|stage| !stage.entry.mode.is_tree())
         .cloned()
 }
 
-fn merged_stage(stage: Stage, entry: Entry, merged: &entry::Outcome, source_stages: [Option<Entry>; 3]) -> Stage {
+fn merged_stage<'input>(
+    stage: Stage<'input>,
+    entry: Entry,
+    merged: &entry::Outcome,
+    source_stages: [Option<Entry>; 3],
+) -> Stage<'input> {
     let merge = merged
         .retained_merge(entry, source_stages)
         .map(Box::new)
@@ -596,11 +632,11 @@ fn merged_stage(stage: Stage, entry: Entry, merged: &entry::Outcome, source_stag
     Stage { entry, merge, ..stage }
 }
 
-fn remove_source(state: &mut State, source: &BString, destination: &BString, sides: &[usize]) {
+fn remove_source(state: &mut State<'_>, source: &BString, destination: &BString, sides: &[usize]) {
     if source == destination {
         return;
     }
-    if let Some(node) = state.entries.get_mut(source) {
+    if let Some(node) = state.entries.get_mut(source.as_bstr()) {
         for &side in sides {
             if node.stages[side]
                 .as_ref()
@@ -639,14 +675,26 @@ fn attach_relocated_content<const N: usize>(
     }
 }
 
-fn original_change(state: &State, changes: &[Change], path: &BString, side: usize) -> Option<Change> {
-    if let Some(change) = changes
-        .iter()
-        .find(|change| change.source_location() == path && !change.entry_mode().is_tree())
-    {
-        return Some(change.clone());
+fn index_changes(changes: &[Change]) -> HashMap<&BStr, &Change> {
+    let mut indexed = HashMap::with_capacity(changes.len());
+    for change in changes {
+        if !change.entry_mode().is_tree() {
+            indexed.entry(change.source_location()).or_insert(change);
+        }
     }
-    let node = state.entries.get(path)?;
+    indexed
+}
+
+fn original_change(
+    state: &State<'_>,
+    changes: &HashMap<&BStr, &Change>,
+    path: &BString,
+    side: usize,
+) -> Option<Change> {
+    if let Some(change) = changes.get(path.as_bstr()) {
+        return Some((**change).clone());
+    }
+    let node = state.entries.get(path.as_bstr())?;
     match (node.inputs[0], node.inputs[side]) {
         (Some(base), Some(current)) => Some(Change::Modification {
             location: path.to_owned(),
@@ -671,12 +719,13 @@ fn original_change(state: &State, changes: &[Change], path: &BString, side: usiz
     }
 }
 
-fn force_originals(
-    state: &mut State,
+fn force_originals<'input>(
+    state: &mut State<'_>,
     renames: &BTreeMap<BString, [Option<Change>; 2]>,
     choice: ResolveWith,
-    mut plan: Forced,
-) -> Option<(BString, Stage)> {
+    mut plan: Forced<'input>,
+    objects: &impl gix_object::Find,
+) -> Result<Option<(BString, Stage<'input>)>> {
     if choice == ResolveWith::Ours
         && let Some((location, _)) = &plan.merged
     {
@@ -700,6 +749,10 @@ fn force_originals(
             }
         }
     }
+    // Include rename sources discovered above before restoring their entire namespace.
+    for path in &plan.paths {
+        state.ensure_subtree(path.as_bstr(), objects)?;
+    }
     let side = usize::from(choice == ResolveWith::Ours);
     // Retained directories must not resurrect descendants independently renamed away.
     let selected_leaves: Vec<_> = plan
@@ -708,14 +761,14 @@ fn force_originals(
         .filter(|path| {
             state
                 .entries
-                .get(*path)
+                .get(path.as_bstr())
                 .and_then(|node| node.inputs[side])
                 .is_some_and(|entry| !entry.mode.is_tree())
         })
         .cloned()
         .collect();
     for path in &plan.paths {
-        if let Some(node) = state.entries.get_mut(path) {
+        if let Some(node) = state.entries.get_mut(path.as_bstr()) {
             node.restore_input(side);
         }
     }
@@ -723,13 +776,13 @@ fn force_originals(
         parent.push(b'/');
         for (_, node) in state
             .entries
-            .range_mut(parent.clone()..)
+            .range_mut(Cow::Owned(parent.clone())..)
             .take_while(|(path, _)| path.starts_with(parent.as_bytes()))
         {
             node.set_result(None);
         }
     }
-    plan.merged
+    Ok(plan.merged)
 }
 
 fn below(path: &BStr, parent: &BStr) -> bool {
@@ -739,14 +792,14 @@ fn below(path: &BStr, parent: &BStr) -> bool {
 
 #[expect(clippy::too_many_arguments)]
 fn relocate_directories(
-    state: &mut State,
+    state: &mut State<'_>,
     changes: [&[Change]; 2],
     inferred: [&[gix_diff::tree_with_rewrites::DirectoryRename]; 2],
     objects: &impl gix_object::Find,
     options: &Options,
     policy: ResolutionPolicy,
     outcome: &mut Outcome,
-    forced: &mut Vec<Forced>,
+    forced: &mut Vec<Forced<'_>>,
 ) -> Result<BTreeMap<(usize, BString), BString>> {
     let mut destinations = BTreeMap::new();
     if options.directory_renames == DirectoryRenames::Disabled {
@@ -824,7 +877,7 @@ fn relocate_directories(
     let mut reported = BTreeSet::new();
     for (side, change, rewrite, location) in planned {
         state.ensure_path(location.as_bstr(), objects)?;
-        let blocked = state.entries.get(&location).is_some_and(|node| {
+        let blocked = state.entries.get(location.as_bstr()).is_some_and(|node| {
             node.stages[side].is_some()
                 || (node.inputs[0].is_some_and(|entry| !entry.mode.is_tree()) && change.source_location() != location)
         });
@@ -854,6 +907,7 @@ fn relocate_directories(
             continue;
         }
         state.ensure_subtree(location.as_bstr(), objects)?;
+        state.ensure_path(change.location(), objects)?;
         let Some(stage) = state
             .entries
             .get_mut(change.location())
@@ -884,13 +938,13 @@ fn relocate_directories(
             affected_paths: vec![location.clone()],
             location: location.clone(),
         });
-        let node = state.entries.entry(location.clone()).or_default();
+        let node = state.entries.entry(Cow::Owned(location.clone())).or_default();
         node.set_stage(side, Some(stage));
         node.path_conflict |= options.directory_renames == DirectoryRenames::Conflict;
         let mut parent = location.as_bstr();
         while let Some(slash) = parent.rfind_byte(b'/') {
             parent = parent[..slash].as_bstr();
-            let node = state.entries.entry(parent.to_owned()).or_default();
+            let node = state.entries.entry(Cow::Owned(parent.to_owned())).or_default();
             // The inferred directory replaces inherited files, but modifications on
             // either side must survive through ordinary file/directory resolution.
             for input in [1, 2] {
@@ -902,6 +956,7 @@ fn relocate_directories(
                 }
             }
             node.directory_mask |= 1 << side;
+            node.invalidate();
         }
         destinations.insert((side, change.location().to_owned()), location.clone());
         if options.directory_renames == DirectoryRenames::Conflict && policy.forced_resolution().is_some() {
@@ -919,4 +974,67 @@ fn directory_change<'a>(changes: &'a [Change], source: &BString) -> &'a Change {
         .iter()
         .find(|change| change.entry_mode().is_tree() && change.source_location() == source)
         .expect("directory inference starts from a removed tree")
+}
+
+#[cfg(test)]
+mod tests {
+    use bstr::{BStr, BString};
+    use gix_error::TestResult;
+    use gix_object::tree::EntryKind;
+
+    use super::{Change, Entry, State, index_changes, original_change};
+
+    #[test]
+    fn original_changes_preserve_the_first_leaf_and_immutable_inputs() -> TestResult {
+        let blob_id = gix_testtools::object_hash().null();
+        let path: BString = "source".into();
+        let tree_change = Change::Deletion {
+            location: path.clone(),
+            relation: None,
+            entry_mode: EntryKind::Tree.into(),
+            id: blob_id,
+        };
+        let first = Change::Deletion {
+            location: path.clone(),
+            relation: None,
+            entry_mode: EntryKind::Blob.into(),
+            id: blob_id,
+        };
+        let later = Change::Addition {
+            location: path.clone(),
+            relation: None,
+            entry_mode: EntryKind::BlobExecutable.into(),
+            id: blob_id,
+        };
+        let changes = [tree_change, first.clone(), later];
+        let changes = index_changes(&changes);
+        let mut state = State::default();
+        assert_eq!(
+            original_change(&state, &changes, &path, 1),
+            Some(first),
+            "tree boundaries are skipped and the first leaf change retains its identity"
+        );
+        let node = state.entries.entry(BStr::new("untouched").into()).or_default();
+        let base = Entry {
+            mode: EntryKind::Blob.into(),
+            id: blob_id,
+        };
+        let current = Entry {
+            mode: EntryKind::BlobExecutable.into(),
+            id: blob_id,
+        };
+        node.inputs = [Some(base), Some(current), None];
+        assert_eq!(
+            original_change(&state, &changes, &"untouched".into(), 1),
+            Some(Change::Modification {
+                location: "untouched".into(),
+                previous_entry_mode: base.mode,
+                previous_id: base.id,
+                entry_mode: current.mode,
+                id: current.id,
+            }),
+            "original input versions survive even when normalization has removed their stages"
+        );
+        Ok(())
+    }
 }

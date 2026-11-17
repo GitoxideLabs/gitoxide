@@ -161,6 +161,98 @@ fn forced_crossing_renames_do_not_reinstall_discarded_subtrees() -> TestResult {
 }
 
 #[test]
+fn forced_rename_restores_a_file_without_retaining_its_replacement_directory() -> TestResult {
+    let repo = Repo::new()?;
+    let base_blob_id = repo.blob("binary base\0\n")?;
+    let changed_blob_id = repo.blob("binary changed\0\n")?;
+    let commit_id = gix_object::compute_hash(gix_testtools::object_hash(), gix_object::Kind::Commit, b"original")?;
+    let unrelated_blob_id = repo.blob("binary unrelated\0\n")?;
+    let added_blob_id = repo.blob("binary added\0\n")?;
+    let base_tree_id = repo.tree_from_paths(&[
+        // Renaming this to `e/e/e` forces restoration of the replacement at `a` and its rename source `h`.
+        ("a/b", EntryKind::Blob, added_blob_id),
+        ("a/h/a", EntryKind::Commit, commit_id),
+        ("g/e/e", EntryKind::Blob, unrelated_blob_id),
+        ("h", EntryKind::BlobExecutable, changed_blob_id),
+    ])?;
+    let our_tree_id = repo.tree_from_paths(&[
+        ("a", EntryKind::BlobExecutable, base_blob_id),
+        ("g/e/e", EntryKind::Blob, unrelated_blob_id),
+        ("h", EntryKind::BlobExecutable, changed_blob_id),
+    ])?;
+    let their_tree_id = repo.tree_from_paths(&[
+        ("a", EntryKind::BlobExecutable, changed_blob_id),
+        ("e/e/e", EntryKind::Blob, added_blob_id),
+        ("g/e/e", EntryKind::Blob, unrelated_blob_id),
+        ("h/a/a", EntryKind::Link, base_blob_id),
+    ])?;
+    let mut options = basic_merge_options().tree_merge;
+    options.rewrites = Some(gix_diff::Rewrites {
+        percentage: Some(1.0),
+        limit: 0,
+        ..Default::default()
+    });
+    options.tree_conflicts = Some(gix_merge::tree::ResolveWith::Ours);
+    options.symlink_conflicts = Some(ResolveWith::Ours);
+    options.blob_merge.resolve_binary_with = Some(ResolveWith::Theirs);
+    for (current_tree_id, other_tree_id) in [(our_tree_id, their_tree_id), (their_tree_id, our_tree_id)] {
+        let mut outcome = repo.merge((base_tree_id, current_tree_id, other_tree_id), options.clone())?;
+        let merged_tree_id = outcome.tree.write(|tree| repo.objects.write(tree))?;
+        let index = outcome.index.to_index(
+            gix_merge::tree::TreatAsUnresolved::git(),
+            None,
+            &repo.objects,
+            Default::default(),
+        )?;
+        index.verify_entries()?;
+        let provisional = gix_index::State::from_tree(&merged_tree_id, &repo.objects, Default::default())?;
+        assert!(
+            index
+                .entries()
+                .iter()
+                .map(|entry| (entry.path(&index), entry.mode, entry.id))
+                .eq(provisional
+                    .entries()
+                    .iter()
+                    .map(|entry| (entry.path(&provisional), entry.mode, entry.id))),
+            "forcing the rename keeps the emitted tree and resolved index consistent"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn nested_filenames_still_receive_structural_resolution() -> TestResult {
+    let repo = Repo::new()?;
+    let base_blob_id = repo.blob("base\n")?;
+    let changed_blob_id = repo.blob("changed\n")?;
+    let base_tree_id = repo.tree("prefix", EntryKind::Blob.into(), base_blob_id)?;
+    let our_tree_id = repo.tree("prefix", EntryKind::Blob.into(), changed_blob_id)?;
+    let their_tree_id = repo.objects.write(&gix_object::Tree {
+        entries: ["prefix", "prefix/child"]
+            .map(|filename| gix_object::tree::Entry {
+                mode: EntryKind::Blob.into(),
+                filename: filename.into(),
+                oid: base_blob_id,
+            })
+            .into(),
+    })?;
+    let mut options = basic_merge_options().tree_merge;
+    options.rewrites = None;
+    let mut outcome = repo.merge((base_tree_id, our_tree_id, their_tree_id), options)?;
+    let expected_tree_id = repo.tree_from_paths(&[
+        ("prefix/child", EntryKind::Blob, base_blob_id),
+        ("prefix~", EntryKind::Blob, changed_blob_id),
+    ])?;
+    assert_eq!(
+        outcome.tree.write(|tree| repo.objects.write(tree))?,
+        expected_tree_id,
+        "a filename containing a separator cannot bypass directory/file conflict resolution"
+    );
+    Ok(())
+}
+
+#[test]
 fn renamed_gitlink_colliding_with_a_replacement_gitlink() -> TestResult {
     use gix_merge::tree::{Resolution, ResolutionFailure, ResolveWith};
 
@@ -1405,13 +1497,15 @@ fn index_plans_are_repeatable_owned_snapshots() -> TestResult {
         entry.stat = stat;
     }
 
-    for favor_ours in [false, true] {
+    let rewrites = basic_merge_options().tree_merge.rewrites;
+    for (favor_ours, rewrites) in [(false, None), (true, None), (false, rewrites), (true, rewrites)] {
         for how in [
             TreatAsUnresolved::git(),
             TreatAsUnresolved::forced_resolution(),
             TreatAsUnresolved::undecidable(),
         ] {
             let mut options = basic_merge_options().tree_merge;
+            options.rewrites = rewrites;
             if favor_ours {
                 options.blob_merge.text.conflict = gix_merge::blob::builtin_driver::text::Conflict::ResolveWithOurs;
             }
