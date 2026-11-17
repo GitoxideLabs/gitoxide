@@ -204,3 +204,51 @@ fn forced_color_styles_markers_without_revealing_hidden_content() -> TestResult 
     assert!(!out.contains("secret_"), "color formatting uses only structural output");
     Ok(())
 }
+
+#[test]
+fn context_counts_siblings_at_each_depth_and_keeps_ancestors() -> TestResult {
+    let out = render(
+        "context-before.rs",
+        "context-after.rs",
+        Options {
+            context: vec![0, 1],
+            ..Options::default()
+        },
+    )?;
+    for visible in ["impl Widget", "fn previous", "fn changed", "fn next"] {
+        assert!(
+            out.contains(visible),
+            "changed ancestors and one sibling each way stay visible: {out}"
+        );
+    }
+    for hidden in ["Unrelated", "Tail", "fn first", "fn last", "secret_"] {
+        assert!(!out.contains(hidden), "context does not expand beyond its level: {out}");
+    }
+    assert!(out.contains('…'), "omitted siblings are marked");
+
+    let out = render(
+        "context-before.rs",
+        "context-after.rs",
+        Options {
+            context: vec![1, 0],
+            ..Options::default()
+        },
+    )?;
+    assert!(
+        out.contains("struct Unrelated"),
+        "root context is independent of method context"
+    );
+    assert!(
+        out.contains("struct Tail"),
+        "context includes both neighboring siblings"
+    );
+    assert!(
+        !out.contains("hidden_field"),
+        "unchanged context containers stay collapsed"
+    );
+    assert!(
+        !out.contains("fn previous"),
+        "zero method context shows changed methods only"
+    );
+    Ok(())
+}

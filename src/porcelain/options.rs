@@ -111,6 +111,10 @@ pub mod tools {
         /// Override language detection from the source path: rust, toml, or markdown.
         #[arg(long)]
         pub language: Option<gitoxide_core::structural_diff::Language>,
+        /// Unchanged siblings per nesting depth, e.g. 0,2 for no root peers and two methods.
+        /// The last count applies to all deeper levels.
+        #[arg(long, short = 'U', value_delimiter = ',', default_value = "1")]
+        pub context: Vec<usize>,
         /// When to use terminal colors. Auto honors NO_COLOR and detects redirected output.
         #[arg(long, value_enum, default_value = "auto")]
         pub color: DiffColor,

@@ -46,6 +46,8 @@ pub struct Options {
     pub path: Option<PathBuf>,
     /// Emit ANSI colors with `owo-colors`.
     pub color: bool,
+    /// Unchanged siblings on each side, per nesting depth. Repeat the last value; empty means one.
+    pub context: Vec<usize>,
 }
 
 /// Compare two files without exposing implementation bodies. Differences are successful output.
@@ -84,7 +86,7 @@ pub fn diff(before: &Path, after: &Path, options: Options, mut out: impl Write) 
         return Ok(());
     }
     let mut body = Vec::new();
-    render(&before_items, &after_items, &options, &mut body)?;
+    render(&before_items, &after_items, 0, &options, &mut body)?;
     if body.is_empty() {
         return Ok(());
     }
@@ -105,37 +107,75 @@ fn read(path: &Path) -> Result<String> {
     std::fs::read_to_string(path).or_raise(|| message!("Could not read {}", path.display()))
 }
 
-fn render(before: &[Item], after: &[Item], options: &Options, out: &mut impl Write) -> Result<()> {
+type Pair<'a> = (Option<&'a Item>, Option<&'a Item>);
+
+fn align<'a>(before: &'a [Item], after: &'a [Item]) -> Vec<Pair<'a>> {
     let mut input = InternedInput::default();
     input.update_before(before.iter().map(|item| (item.kind, item.name.as_str())));
     input.update_after(after.iter().map(|item| (item.kind, item.name.as_str())));
     let mut diff = Diff::compute(Algorithm::Histogram, &input);
     diff.postprocess_no_heuristic(&input);
+    let mut pairs = Vec::new();
     let (mut left, mut right) = (0, 0);
     for hunk in diff.hunks() {
         while left < hunk.before.start as usize {
-            paired(&before[left], &after[right], options, out)?;
+            pairs.push((Some(&before[left]), Some(&after[right])));
             left += 1;
             right += 1;
         }
         for item in &before[hunk.before.start as usize..hunk.before.end as usize] {
-            entire(item, '-', options, out)?;
+            pairs.push((Some(item), None));
         }
         for item in &after[hunk.after.start as usize..hunk.after.end as usize] {
-            entire(item, '+', options, out)?;
+            pairs.push((None, Some(item)));
         }
         left = hunk.before.end as usize;
         right = hunk.after.end as usize;
     }
     while left < before.len() {
-        paired(&before[left], &after[right], options, out)?;
+        pairs.push((Some(&before[left]), Some(&after[right])));
         left += 1;
         right += 1;
+    }
+    pairs
+}
+
+fn render(before: &[Item], after: &[Item], depth: usize, options: &Options, out: &mut impl Write) -> Result<()> {
+    let pairs = align(before, after);
+    let context = options
+        .context
+        .get(depth)
+        .or_else(|| options.context.last())
+        .copied()
+        .unwrap_or(1);
+    let mut visible = vec![false; pairs.len()];
+    for (index, pair) in pairs.iter().enumerate() {
+        if !matches!(pair, (Some(before), Some(after)) if before.content == after.content) {
+            let end = index.saturating_add(context).saturating_add(1).min(pairs.len());
+            visible[index.saturating_sub(context)..end].fill(true);
+        }
+    }
+    let mut skipping = false;
+    for ((before, after), visible) in pairs.into_iter().zip(visible) {
+        if !visible {
+            if !skipping && let Some(item) = after.or(before) {
+                omitted(item, options, out)?;
+            }
+            skipping = true;
+            continue;
+        }
+        skipping = false;
+        match (before, after) {
+            (Some(before), Some(after)) => paired(before, after, depth, options, out)?,
+            (Some(before), None) => entire(before, '-', options, out)?,
+            (None, Some(after)) => entire(after, '+', options, out)?,
+            (None, None) => unreachable!("each aligned entry has at least one side"),
+        }
     }
     Ok(())
 }
 
-fn paired(before: &Item, after: &Item, options: &Options, out: &mut impl Write) -> Result<()> {
+fn paired(before: &Item, after: &Item, depth: usize, options: &Options, out: &mut impl Write) -> Result<()> {
     if before.header != after.header {
         lines(&before.header, '-', options, out)?;
         lines(&after.header, '+', options, out)?;
@@ -143,7 +183,13 @@ fn paired(before: &Item, after: &Item, options: &Options, out: &mut impl Write) 
         let changed = before.content != after.content;
         lines(&after.header, if changed { '~' } else { ' ' }, options, out)?;
     }
-    render(&before.children, &after.children, options, out)?;
+    if before.content == after.content {
+        if let Some(child) = after.children.first() {
+            omitted(child, options, out)?;
+        }
+    } else {
+        render(&before.children, &after.children, depth + 1, options, out)?;
+    }
     if before.footer != after.footer {
         lines(&before.footer, '-', options, out)?;
         lines(&after.footer, '+', options, out)?;
@@ -151,6 +197,11 @@ fn paired(before: &Item, after: &Item, options: &Options, out: &mut impl Write) 
         lines(&after.footer, ' ', options, out)?;
     }
     Ok(())
+}
+
+fn omitted(item: &Item, options: &Options, out: &mut impl Write) -> Result<()> {
+    let indent: String = item.header.chars().take_while(|ch| matches!(ch, ' ' | '\t')).collect();
+    lines(&format!("{indent}…"), ' ', options, out)
 }
 
 fn entire(item: &Item, marker: char, options: &Options, out: &mut impl Write) -> Result<()> {

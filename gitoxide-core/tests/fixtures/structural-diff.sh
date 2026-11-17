@@ -121,3 +121,19 @@ cp body-after.rs temporary-after
 cp body-before.rs unsupported.txt
 printf '%s\n' 'fn malformed() { secret_unclosed_body();' >malformed.rs
 : >empty.rs
+
+# Context counts sibling declarations independently at each nesting level.
+cat >context-before.rs <<'EOF'
+struct Unrelated {
+    hidden_field: u32,
+}
+impl Widget {
+    fn first() {}
+    fn previous() {}
+    fn changed() { secret_before(); }
+    fn next() {}
+    fn last() {}
+}
+struct Tail;
+EOF
+sed 's/secret_before/secret_after/' context-before.rs >context-after.rs

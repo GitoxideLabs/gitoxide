@@ -31,6 +31,18 @@ Differences exit successfully, as expected by Git difftool; unsupported language
 invalid source, and unreadable inputs return an error. There is no fallback to
 printing raw source for unsupported or invalid inputs.
 
+## Structural context
+
+`--context 1` (or `-U 1`) shows one unchanged sibling on either side of a change
+at every nesting depth. Context counts declarations, keys, or headings, not lines.
+Ancestors of changed items are always shown. Unchanged context containers keep
+their contents collapsed; `…` marks omitted siblings or children.
+
+Supply comma-separated counts for independent depths. `--context 0,2` shows no
+unchanged file-level declarations and two peers around changed members inside a
+type, implementation, module, TOML table, or Markdown section. The final count
+applies at all deeper levels. `--context 0` shows only changes and their ancestors.
+
 ## Use with Git difftool
 
 Configure the tool in the current repository:
