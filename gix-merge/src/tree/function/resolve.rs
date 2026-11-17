@@ -391,6 +391,18 @@ pub fn tree<'objects>(
                         // which local change represents each logical side, edit the result, and record any conflict. The
                         // common tail applies the chosen dispositions to both scheduled changes.
                         match (ours, theirs) {
+                            // A modified or explicitly renamed file blocks inferred directory relocation; retain the
+                            // addition or rename at its original path instead of merging at the occupied destination.
+                            (
+                                Change::Rewrite { .. } | Change::Modification { .. },
+                                Change::Addition { .. } | Change::Rewrite { .. },
+                            ) if rewritten_location.is_some()
+                                && (matches!(match_kind, Some(MatchKind::EraseLeaf))
+                                    || matches!(ours, Change::Modification { .. })) =>
+                            {
+                                apply_change_and_mark(&mut editor, ours, &mut ours_disposition)?;
+                                apply_change_and_mark(&mut editor, theirs, &mut theirs_disposition)?;
+                            }
                             // Modify/rename: carry the modification to the rename destination, merging content if the
                             // rename also changed it. Incompatible entry types retain both paths unless policy chooses a
                             // side. For example, ours modifies `file` while theirs only renames it to `moved`; if theirs
@@ -747,16 +759,6 @@ pub fn tree<'objects>(
                                     && !matches!(resolve_tree_conflicts, Some(ResolveWith::Ancestor)) =>
                             {
                                 push_deferred((theirs.clone(), Some(ours_idx)), their_changes, theirs_idx);
-                            }
-                            // A modified or explicitly renamed file blocks inferred directory relocation; retain the
-                            // addition at its original path instead of retrying that same relocation indefinitely.
-                            (Change::Rewrite { .. } | Change::Modification { .. }, Change::Addition { .. })
-                                if rewritten_location.is_some()
-                                    && (matches!(match_kind, Some(MatchKind::EraseLeaf))
-                                        || matches!(ours, Change::Modification { .. })) =>
-                            {
-                                apply_change_and_mark(&mut editor, ours, &mut ours_disposition)?;
-                                apply_change_and_mark(&mut editor, theirs, &mut theirs_disposition)?;
                             }
                             // A rewritten non-tree blocks a directory introduced by the other side. Preserve the
                             // directory and relocate the blocking entry to a unique, side-qualified path. For example,

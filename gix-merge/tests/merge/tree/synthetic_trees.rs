@@ -95,6 +95,72 @@ impl Repo {
 }
 
 #[test]
+fn renamed_gitlink_colliding_with_a_replacement_gitlink() -> TestResult {
+    use gix_merge::tree::{ResolveWith, TreatAsUnresolved};
+
+    let repo = Repo::new()?;
+    let original_commit_id =
+        gix_object::compute_hash(gix_testtools::object_hash(), gix_object::Kind::Commit, b"original")?;
+    let replacement_commit_id =
+        gix_object::compute_hash(gix_testtools::object_hash(), gix_object::Kind::Commit, b"replacement")?;
+    let original_blob_id = repo.blob("original file")?;
+    let new_blob_id = repo.blob("new file")?;
+    let link_blob_id = repo.blob("target")?;
+    let write_tree = |entries: &[(&str, EntryKind, ObjectId)]| -> TestResult<ObjectId> {
+        let mut editor =
+            gix_object::tree::Editor::new(gix_object::Tree::empty(), &repo.objects, gix_testtools::object_hash());
+        for (path, kind, id) in entries {
+            editor.upsert(path.split('/'), *kind, *id)?;
+        }
+        Ok(editor.write(|tree| repo.objects.write(tree))?)
+    };
+    // Reduced from clusterfuzz-testcase-gix-merge-tree-4702732561481728: the gitlink
+    // moved to a/a follows the other side's a -> c directory rename and collides at c/a.
+    let base_tree_id = write_tree(&[
+        ("c/a", EntryKind::Blob, original_blob_id),
+        ("b/a/f", EntryKind::Commit, original_commit_id),
+        ("a/c/c", EntryKind::Link, link_blob_id),
+    ])?;
+    let renamed_tree_id = write_tree(&[
+        ("b", EntryKind::Blob, new_blob_id),
+        ("a/a", EntryKind::Commit, original_commit_id),
+        ("c/a", EntryKind::Blob, original_blob_id),
+        ("a/c/c", EntryKind::Link, link_blob_id),
+    ])?;
+    let replaced_tree_id = write_tree(&[
+        ("c/a", EntryKind::Commit, replacement_commit_id),
+        ("b/a/f", EntryKind::Commit, original_commit_id),
+        ("c/c/c", EntryKind::Link, link_blob_id),
+    ])?;
+    let expected_tree_id = write_tree(&[
+        ("a/a", EntryKind::Commit, original_commit_id),
+        ("b", EntryKind::Blob, new_blob_id),
+        ("c/a", EntryKind::Commit, replacement_commit_id),
+        ("c/c/c", EntryKind::Link, link_blob_id),
+    ])?;
+    for (current_tree_id, other_tree_id) in [(renamed_tree_id, replaced_tree_id), (replaced_tree_id, renamed_tree_id)] {
+        for tree_conflicts in [None, Some(ResolveWith::Ours), Some(ResolveWith::Ancestor)] {
+            let mut options = basic_merge_options().tree_merge;
+            options
+                .rewrites
+                .as_mut()
+                .expect("rename tracking is enabled")
+                .percentage = Some(1.0);
+            options.tree_conflicts = tree_conflicts;
+            options.fail_on_conflict = Some(TreatAsUnresolved::git());
+            let mut outcome = repo.merge((base_tree_id, current_tree_id, other_tree_id), options)?;
+            super::assert_no_unknown_conflicts(&outcome, "a renamed gitlink colliding with a replacement gitlink");
+            assert_eq!(
+                outcome.tree.write(|tree| repo.objects.write(tree))?,
+                expected_tree_id,
+                "like Git, a blocked directory relocation keeps both gitlinks at their explicit paths under {tree_conflicts:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn virtual_blob_merges_preserve_explicit_tree_policy() -> TestResult {
     use gix_merge::tree::ResolveWith;
 
