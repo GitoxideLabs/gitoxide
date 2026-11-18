@@ -9,7 +9,7 @@ git init -q -b main
 mkdir -p src
 cat >src/modified.rs <<'EOF'
 impl Widget {
-    pub fn old(value: i32) -> i32 {
+    pub fn old(limit: usize, value: i32) -> i32 {
         let secret_before = value + 1;
         secret_before
     }
@@ -44,7 +44,7 @@ git branch base
 
 cat >src/modified.rs <<'EOF'
 impl Widget {
-    pub fn new(value: u32) -> u32 {
+    pub fn new(limit: usize, value: u32) -> u32 {
         let secret_after = value + 2;
         secret_after
     }

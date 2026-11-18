@@ -1686,7 +1686,10 @@ views.
   Otherwise the trees use the wider text connectors. Hit regions follow the
   chosen layout, including after scrolling or panning.
   Rust shows modules, structs, named and tuple fields, traits, implementations, and function
-  signatures. TOML shows tables and keys; Markdown shows heading hierarchies.
+  signatures. Modified Rust functions and methods collapse runs of unchanged
+  parameters to an ellipsis, keeping changed parameters in order along with
+  the return type and any `where` clause. TOML shows tables and keys. Markdown
+  shows heading hierarchies.
   Hidden body, value, or prose changes mark their owning declaration with `~`;
   executable code and opaque macro token trees remain hidden. Tix parses
   these outlines with Tree-sitter.

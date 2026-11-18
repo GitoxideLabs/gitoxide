@@ -23,7 +23,7 @@ use crate::{
 
 pub(crate) mod outline;
 
-use outline::{Change, Language, Options, PreparedDiff};
+use outline::{Change, Language, Options, PreparedDiff, RenderOptions};
 
 pub(crate) struct Diff {
     title: BString,
@@ -441,7 +441,13 @@ impl Diff {
             }));
             match &file.outline {
                 Ok(outline) => {
-                    let rendered = outline.render(options);
+                    let rendered = outline.render_with(
+                        options,
+                        RenderOptions {
+                            omit_unchanged_parameters: true,
+                            ..RenderOptions::default()
+                        },
+                    );
                     if rendered.is_empty() {
                         rows.push((
                             Line::styled("No structural changes.", Style::default().add_modifier(Modifier::DIM)),
@@ -1685,6 +1691,10 @@ mod tests {
             "declaration matching starts enabled"
         );
         assert!(original.contains("[-i32-]{+u32+}"), "word changes start enabled");
+        assert!(
+            original.contains("(…, value: ") && !original.contains("limit: usize"),
+            "paired signatures collapse unchanged arguments and keep the changed parameter"
+        );
         {
             let colors = Palette::default();
             let mut view = View::new(&diff, &mut options, &colors, false);
