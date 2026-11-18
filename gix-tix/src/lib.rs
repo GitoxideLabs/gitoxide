@@ -62,7 +62,7 @@ use crossterm::{
         PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
-    style::{Print, ResetColor},
+    style::{Colored, Print, ResetColor},
     terminal::{self, Clear, ClearType},
 };
 use gix::{
@@ -1515,6 +1515,7 @@ fn event_loop(
     );
 
     app.graphics_enabled = terminal.backend().enabled();
+    app.structural_diff_settings.colored = !Colored::ansi_color_disabled_memoized();
     app.set_enhanced_keyboard(enhanced_keyboard);
     let mut tree_selection_refs = None;
     app.set_configured_author(configured_author);
@@ -4275,7 +4276,7 @@ fn event_loop(
                                     terminal,
                                     DiffView::Structural(structural_diff::View::new(
                                         &diff,
-                                        &mut app.structural_diff_options,
+                                        &mut app.structural_diff_settings,
                                         &colors,
                                         graphics,
                                     )),
@@ -4319,7 +4320,7 @@ fn event_loop(
                                     terminal,
                                     DiffView::Structural(structural_diff::View::new(
                                         &diff,
-                                        &mut app.structural_diff_options,
+                                        &mut app.structural_diff_settings,
                                         &colors,
                                         graphics,
                                     )),
@@ -8502,6 +8503,7 @@ fn show_diff_view(
     let mut offset = 0usize;
     let mut horizontal_offset = 0usize;
     let mut focused = true;
+    let ansi_color_disabled = Colored::ansi_color_disabled_memoized();
     loop {
         if interrupt::requested() {
             return Ok(true);
@@ -8521,15 +8523,21 @@ fn show_diff_view(
         offset = offset.min(max);
         let page = page - usize::from(page > 1 && diff.sticky_header_index(offset).is_some());
         horizontal_offset = horizontal_offset.min(horizontal_max);
-        terminal
-            .draw(|frame| {
-                if let Some((picker, focused)) = picker {
-                    worktrunk::draw(frame, list_area, picker, focused);
-                }
-                diff.draw(frame, diff_area, offset, horizontal_offset);
-                prepare_terminal_frame(frame);
-            })
-            .or_raise(|| message("could not draw file diff"))?;
+        let override_no_color = ansi_color_disabled && matches!(&diff, DiffView::Structural(view) if view.colored());
+        if override_no_color {
+            Colored::set_ansi_color_disabled(false);
+        }
+        let drawn = terminal.draw(|frame| {
+            if let Some((picker, focused)) = picker {
+                worktrunk::draw(frame, list_area, picker, focused);
+            }
+            diff.draw(frame, diff_area, offset, horizontal_offset);
+            prepare_terminal_frame(frame);
+        });
+        if override_no_color {
+            Colored::set_ansi_color_disabled(true);
+        }
+        drawn.or_raise(|| message("could not draw file diff"))?;
         let Some(event) = read_terminal_event().or_raise(|| message("could not read file diff input"))? else {
             continue;
         };

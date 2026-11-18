@@ -392,6 +392,38 @@ fn text_only_structural_diffs_use_the_light_terminal_theme() -> gix_error::TestR
 }
 
 #[test]
+fn structural_diff_color_can_be_enabled_from_no_color_and_persists() -> gix_error::TestResult {
+    let repository = structural_fixture()?;
+    let (mut terminal, _) = Pty::spawn_with_no_color(repository.path(), true, true)?;
+    terminal.wait_for(|output| contains(output, b"second") && contains(output, b"\x1b_Ga=p,"))?;
+    let opened = terminal.output.len();
+    terminal.master.write_all(b"\x1b[13;2u")?;
+    terminal.wait_for(|output| contains(&output[opened..], b"v color:off"))?;
+    let plain = &terminal.output[opened..];
+    assert!(contains(plain, b"{+u32+}"), "plain output includes word markers");
+    assert!(
+        emitted_rgb_colors(plain, "48;2;").is_empty(),
+        "NO_COLOR suppresses declaration tinting"
+    );
+    let toggled = terminal.output.len();
+    terminal.master.write_all(b"v")?;
+    terminal.wait_for(|output| !emitted_rgb_colors(&output[toggled..], "48;2;").is_empty())?;
+    let back = terminal.output.len();
+    terminal.master.write_all(b"q")?;
+    terminal.wait_for(|output| contains(&output[back..], b"second"))?;
+    let reopened = terminal.output.len();
+    terminal.master.write_all(b"\x1b[13;2u")?;
+    terminal.wait_for(|output| contains(&output[reopened..], b"v color:on"))?;
+    assert!(
+        !contains(&terminal.output[reopened..], b"{+u32+}"),
+        "color mode uses styling for word changes"
+    );
+    terminal.master.write_all(b"qqq")?;
+    assert!(terminal.wait_for_exit()?.success(), "the colored view exits normally");
+    Ok(())
+}
+
+#[test]
 fn terminal_hangup_exits_without_a_signal() -> gix_error::TestResult {
     let repository = fixture()?;
     // Without a controlling terminal, closing the master generates no SIGHUP.
@@ -640,6 +672,14 @@ struct Pty {
 
 impl Pty {
     fn spawn(repository: &Path, controlling_terminal: bool) -> gix_error::TestResult<(Self, Termios)> {
+        Self::spawn_with_no_color(repository, controlling_terminal, false)
+    }
+
+    fn spawn_with_no_color(
+        repository: &Path,
+        controlling_terminal: bool,
+        no_color: bool,
+    ) -> gix_error::TestResult<(Self, Termios)> {
         let master = rustix::pty::openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY)?;
         rustix::io::fcntl_setfd(&master, rustix::io::FdFlags::CLOEXEC)?;
         rustix::pty::grantpt(&master)?;
@@ -683,6 +723,9 @@ impl Pty {
         command.env_remove(NO_CONTROLLING_TERMINAL);
         if !controlling_terminal {
             command.env(NO_CONTROLLING_TERMINAL, "1");
+        }
+        if no_color {
+            command.env("NO_COLOR", "1");
         }
         Ok((
             Self {

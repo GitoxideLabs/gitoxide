@@ -705,7 +705,7 @@ pub(crate) struct App {
     pub(crate) worktree_changes: ChangesView,
     pub(crate) worktree_watch_error: Option<String>,
     pub(crate) changes_parent: usize,
-    pub(crate) structural_diff_options: crate::structural_diff::outline::Options,
+    pub(crate) structural_diff_settings: crate::structural_diff::Settings,
     pub(crate) commit_offset: usize,
     pub(crate) commit_pane_background: Option<(u8, u8, u8)>,
     commit_page: usize,
@@ -846,10 +846,13 @@ impl App {
             worktree_changes: ChangesView::default(),
             worktree_watch_error: None,
             changes_parent: 0,
-            structural_diff_options: crate::structural_diff::outline::Options {
-                context: vec![0],
-                find_renames: true,
-                word_diff: true,
+            structural_diff_settings: crate::structural_diff::Settings {
+                options: crate::structural_diff::outline::Options {
+                    context: vec![0],
+                    find_renames: true,
+                    word_diff: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             },
             commit_offset: 0,

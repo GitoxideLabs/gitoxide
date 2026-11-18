@@ -444,8 +444,8 @@ impl Diff {
                     let rendered = outline.render_with(
                         options,
                         RenderOptions {
+                            omit_word_delimiters: colors.colored,
                             omit_unchanged_parameters: true,
-                            ..RenderOptions::default()
                         },
                     );
                     if rendered.is_empty() {
@@ -472,10 +472,10 @@ impl Diff {
 }
 
 fn structural_line(line: outline::Line, colors: &Palette) -> Line<'static> {
-    let mut spans = vec![Span::styled(
-        line.change.marker().to_string(),
-        colors.marker(line.change),
-    )];
+    let mut spans = Vec::with_capacity(line.fragments.len() + usize::from(!colors.colored));
+    if !colors.colored {
+        spans.push(Span::raw(line.change.marker().to_string()));
+    }
     let mut column = 0;
     for fragment in line.fragments {
         let mut text = String::new();
@@ -505,9 +505,24 @@ struct FileLink {
     target: usize,
 }
 
+#[derive(Debug)]
+pub(crate) struct Settings {
+    pub(crate) options: Options,
+    pub(crate) colored: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            options: Options::default(),
+            colored: true,
+        }
+    }
+}
+
 pub(crate) struct View<'a> {
     diff: &'a Diff,
-    options: &'a mut Options,
+    settings: &'a mut Settings,
     lines: DiffRows,
     max_width: usize,
     tree_width: usize,
@@ -519,18 +534,19 @@ pub(crate) struct View<'a> {
     tree_rows: Vec<(usize, usize)>,
     tree_visible: bool,
     tree_scroll: Option<(usize, usize)>,
-    colors: &'a Palette,
+    theme: &'a Palette,
 }
 
 impl<'a> View<'a> {
-    pub(crate) fn new(diff: &'a Diff, options: &'a mut Options, colors: &'a Palette, graphics: bool) -> Self {
-        let (lines, file_links, directories) = diff.render(options, colors, graphics);
+    pub(crate) fn new(diff: &'a Diff, settings: &'a mut Settings, theme: &'a Palette, graphics: bool) -> Self {
+        let colors = if settings.colored { theme } else { &Palette::PLAIN };
+        let (lines, file_links, directories) = diff.render(&settings.options, colors, graphics);
         let file_headers = file_header_rows(&lines);
         let (tree_width, max_width) = measure_widths(&lines, &file_headers, &directories);
         let tree_rows = file_tree_rows(&file_links);
         Self {
             diff,
-            options,
+            settings,
             lines,
             max_width,
             tree_width,
@@ -542,8 +558,16 @@ impl<'a> View<'a> {
             tree_rows,
             tree_visible: false,
             tree_scroll: None,
-            colors,
+            theme,
         }
+    }
+
+    pub(crate) fn colored(&self) -> bool {
+        self.settings.colored
+    }
+
+    fn colors(&self) -> &Palette {
+        if self.colored() { self.theme } else { &Palette::PLAIN }
     }
 
     pub(crate) fn line_count(&self) -> usize {
@@ -711,18 +735,21 @@ impl<'a> View<'a> {
             self.tree_scroll = None;
             return true;
         }
+        let options = &mut self.settings.options;
         match key.code {
-            KeyCode::Char('r') => self.options.find_renames = !self.options.find_renames,
-            KeyCode::Char('w') => self.options.word_diff = !self.options.word_diff,
-            KeyCode::Char('p') => self.options.production_only = !self.options.production_only,
+            KeyCode::Char('v') => self.settings.colored = !self.settings.colored,
+            KeyCode::Char('r') => options.find_renames = !options.find_renames,
+            KeyCode::Char('w') => options.word_diff = !options.word_diff,
+            KeyCode::Char('p') => options.production_only = !options.production_only,
             KeyCode::Char('c') => {
-                let context = usize::from(self.options.context.first() == Some(&0));
-                self.options.context.clear();
-                self.options.context.push(context);
+                let context = usize::from(options.context.first() == Some(&0));
+                options.context.clear();
+                options.context.push(context);
             }
             _ => return false,
         }
-        (self.lines, self.file_links, self.directories) = self.diff.render(self.options, self.colors, self.graphics);
+        (self.lines, self.file_links, self.directories) =
+            self.diff.render(&self.settings.options, self.colors(), self.graphics);
         self.file_headers = file_header_rows(&self.lines);
         self.tree_rows = file_tree_rows(&self.file_links);
         self.tree_scroll = None;
@@ -740,12 +767,15 @@ impl<'a> View<'a> {
         } else {
             ("prod", "renames")
         };
+        let options = &self.settings.options;
+        let colors = self.colors();
         let footer = format!(
-            "c context:{} · p {production}:{} · r {renames}:{} · w words:{} · Tab tree · ↑↓/jk · g/G · h/l · Enter/q/Esc",
-            self.options.context.first().copied().unwrap_or(1),
-            if self.options.production_only { "on" } else { "off" },
-            if self.options.find_renames { "on" } else { "off" },
-            if self.options.word_diff { "on" } else { "off" },
+            "v color:{} · c context:{} · p {production}:{} · r {renames}:{} · w words:{} · Tab tree · ↑↓/jk · g/G · h/l · Enter/q/Esc",
+            if self.colored() { "on" } else { "off" },
+            options.context.first().copied().unwrap_or(1),
+            if options.production_only { "on" } else { "off" },
+            if options.find_renames { "on" } else { "off" },
+            if options.word_diff { "on" } else { "off" },
         );
         crate::ui::draw_diff(
             frame,
@@ -753,9 +783,9 @@ impl<'a> View<'a> {
             &self.diff.title.to_str_lossy(),
             self.lines
                 .iter()
-                .map(|(line, language)| self.colors.highlight(line, *language)),
+                .map(|(line, language)| colors.highlight(line, *language)),
             self.sticky_header_index(offset)
-                .map(|index| self.colors.highlight(&self.lines[index].0, None)),
+                .map(|index| colors.highlight(&self.lines[index].0, None)),
             (offset, horizontal_offset),
             &footer,
         );
@@ -765,13 +795,14 @@ impl<'a> View<'a> {
 
     fn draw_tree(&self, frame: &mut Frame<'_>, tree: Rect, offset: usize) {
         let visible = self.visible_files(tree, offset);
+        let colors = self.colors();
         let lines = self
             .lines
             .iter()
             .take(self.tree_line_count())
             .enumerate()
             .map(|(row, (line, _))| {
-                let mut line = self.colors.highlight(line, None);
+                let mut line = colors.highlight(line, None);
                 if let Ok(index) = self.file_links.binary_search_by_key(&row, |link| link.row)
                     && let link = &self.file_links[index]
                     && visible.contains(&link.target)
@@ -795,9 +826,7 @@ impl<'a> View<'a> {
         );
         self.tag_tree(frame, area, tree_offset, 0);
         frame.render_widget(
-            Block::default()
-                .borders(Borders::RIGHT)
-                .border_style(self.colors.metadata),
+            Block::default().borders(Borders::RIGHT).border_style(colors.metadata),
             tree,
         );
     }
@@ -857,11 +886,13 @@ fn file_header_rows(lines: &[(Line<'_>, Option<Language>)]) -> Vec<(usize, usize
     lines
         .iter()
         .enumerate()
-        .filter_map(|(index, (line, _))| {
-            line.spans
-                .first()
-                .is_some_and(|span| span.content.starts_with("diff --git "))
-                .then_some((index, index))
+        .filter_map(|(index, (line, language))| {
+            (language.is_none()
+                && line
+                    .spans
+                    .first()
+                    .is_some_and(|span| span.content.starts_with("diff --git ")))
+            .then_some((index, index))
         })
         .collect()
 }
@@ -945,10 +976,16 @@ mod tests {
     fn changed_declarations_have_a_background_and_stronger_word_emphasis() -> TestResult {
         let outline = PreparedDiff::new("fn f(arg: i32) {}", "fn f(arg: u32) {}", Language::Rust)?;
         let changed = outline
-            .render(&Options {
-                word_diff: true,
-                ..Options::default()
-            })
+            .render_with(
+                &Options {
+                    word_diff: true,
+                    ..Options::default()
+                },
+                RenderOptions {
+                    omit_word_delimiters: true,
+                    ..RenderOptions::default()
+                },
+            )
             .into_iter()
             .find(|line| line.change == Change::Modified)
             .expect("the changed signature has a modified row");
@@ -958,7 +995,7 @@ mod tests {
             line.style.bg.is_some(),
             "changed declarations have a subtle line background"
         );
-        for word in ["[-i32-]", "{+u32+}"] {
+        for word in ["i32", "u32"] {
             let span = line
                 .spans
                 .iter()
@@ -973,12 +1010,53 @@ mod tests {
     }
 
     #[test]
+    fn color_toggle_restores_text_markers_and_disables_diff_colors() -> TestResult {
+        let repository = repository()?;
+        let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
+        let mut settings = crate::App::new(24).structural_diff_settings;
+        let theme = Palette::new([220; 3], [20; 3], None);
+        let mut view = View::new(&diff, &mut settings, &theme, false);
+        let colored = text(&view.lines);
+        assert!(
+            colored.contains("value: i32u32"),
+            "highlighted fragments keep both values: {colored}"
+        );
+        assert!(
+            !colored.contains("[-i32-]") && !colored.lines().any(|line| line.starts_with('~')),
+            "colored declarations omit word and line markers"
+        );
+        let key = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE);
+        assert!(view.key(key));
+        let plain = text(&view.lines);
+        assert!(
+            plain.contains("[-i32-]{+u32+}") && plain.lines().any(|line| line.starts_with('~')),
+            "plain declarations keep textual markers"
+        );
+        assert!(
+            view.lines.iter().all(|(line, _)| line.style.fg.is_none()
+                && line.style.bg.is_none_or(|color| color == ratatui::style::Color::Reset)
+                && line
+                    .spans
+                    .iter()
+                    .all(|span| span.style.fg.is_none() && span.style.bg.is_none())),
+            "plain rows and word changes have no colors"
+        );
+        assert!(view.key(key));
+        assert_eq!(
+            text(&view.lines),
+            colored,
+            "turning color back on restores the marker-free view"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn tab_shows_and_hides_a_file_tree_beside_the_diff() -> TestResult {
         let repository = repository()?;
         let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
-        let mut options = Options::default();
+        let mut settings = Settings::default();
         let colors = Palette::default();
-        let mut view = View::new(&diff, &mut options, &colors, false);
+        let mut view = View::new(&diff, &mut settings, &colors, false);
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 12))?;
         let offset = view.last_file_header();
         for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT, KeyModifiers::SHIFT] {
@@ -1020,9 +1098,9 @@ mod tests {
     fn tree_panel_highlights_visible_files_and_keeps_click_targets_current() -> TestResult {
         let repository = production_repository()?;
         let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
-        let mut options = Options::default();
+        let mut settings = Settings::default();
         let colors = Palette::default();
-        let mut review = crate::DiffView::Structural(View::new(&diff, &mut options, &colors, false));
+        let mut review = crate::DiffView::Structural(View::new(&diff, &mut settings, &colors, false));
         assert!(review.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
         let area = Rect::new(3, 2, 120, 80);
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(125, 84))?;
@@ -1120,9 +1198,9 @@ mod tests {
             .expect("the fixture changes an integration test");
         let filename = "a_long_integration_test_filename_that_needs_more_than_forty_eight_columns.rs";
         file.path.path = format!("tests/{filename}").into();
-        let mut options = Options::default();
+        let mut settings = Settings::default();
         let colors = Palette::default();
-        let mut view = View::new(&diff, &mut options, &colors, true);
+        let mut view = View::new(&diff, &mut settings, &colors, true);
         assert!(view.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
         let area = Rect::new(0, 0, 140, 40);
         let link = view
@@ -1155,9 +1233,9 @@ mod tests {
     fn tree_panel_scrolls_independently_and_follows_the_current_file() -> TestResult {
         let repository = production_repository()?;
         let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
-        let mut options = Options::default();
+        let mut settings = Settings::default();
         let colors = Palette::default();
-        let mut view = View::new(&diff, &mut options, &colors, false);
+        let mut view = View::new(&diff, &mut settings, &colors, false);
         assert!(view.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
         let area = Rect::new(2, 2, 120, 7);
         let [tree, patch] = view.areas(area);
@@ -1224,10 +1302,10 @@ mod tests {
     fn context_starts_at_zero_and_can_be_toggled_across_views() -> TestResult {
         let repository = production_repository()?;
         let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
-        let mut options = crate::App::new(24).structural_diff_options;
+        let mut settings = crate::App::new(24).structural_diff_settings;
         let colors = Palette::default();
         {
-            let mut view = View::new(&diff, &mut options, &colors, false);
+            let mut view = View::new(&diff, &mut settings, &colors, false);
             let original = text(&view.lines);
             assert!(
                 !original.contains("fn unchanged()"),
@@ -1278,7 +1356,7 @@ mod tests {
                 "context can be enabled again"
             );
         }
-        let reopened = View::new(&diff, &mut options, &colors, false);
+        let reopened = View::new(&diff, &mut settings, &colors, false);
         assert!(
             text(&reopened.lines).contains("fn unchanged()"),
             "reopening preserves the selected context"
@@ -1290,9 +1368,9 @@ mod tests {
     fn file_tree_click_targets_follow_scrolling_panning_and_live_settings() -> TestResult {
         let repository = production_repository()?;
         let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
-        let mut options = Options::default();
+        let mut settings = Settings::default();
         let colors = Palette::default();
-        let mut review = crate::DiffView::Structural(View::new(&diff, &mut options, &colors, false));
+        let mut review = crate::DiffView::Structural(View::new(&diff, &mut settings, &colors, false));
         let area = Rect::new(4, 3, 100, 7);
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(110, 12))?;
         for key in [None, Some('p'), Some('c'), Some('w'), Some('r'), Some('c'), Some('p')] {
@@ -1411,9 +1489,9 @@ mod tests {
             "2\t2\tsrc/mixed.rs",
             "the fixture modifies two lines in this file"
         );
-        let mut options = Options::default();
+        let mut settings = Settings::default();
         let colors = Palette::default();
-        let mut view = View::new(&diff, &mut options, &colors, false);
+        let mut view = View::new(&diff, &mut settings, &colors, false);
         let area = Rect::new(2, 3, 120, 24);
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(125, 30))?;
         for (filtered, expected) in [(false, "src/  +4 -4"), (true, "src/  +2 -2")] {
@@ -1484,9 +1562,9 @@ mod tests {
     fn file_headers_stick_only_after_reaching_the_viewport_top() -> TestResult {
         let repository = repository()?;
         let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
-        let mut options = Options::default();
+        let mut settings = Settings::default();
         let colors = Palette::new([220; 3], [20; 3], None);
-        let mut view = View::new(&diff, &mut options, &colors, false);
+        let mut view = View::new(&diff, &mut settings, &colors, false);
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(160, 7))?;
         let row = |terminal: &ratatui::Terminal<ratatui::backend::TestBackend>, y| {
             (0..160)
@@ -1629,8 +1707,8 @@ mod tests {
         let area = Rect::new(2, 3, 100, 10);
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(105, 15))?;
         for (graphics, indent) in [(false, 12), (true, 3)] {
-            let mut options = Options::default();
-            let mut view = View::new(&diff, &mut options, &colors, graphics);
+            let mut settings = Settings::default();
+            let mut view = View::new(&diff, &mut settings, &colors, graphics);
             let link = view
                 .file_links
                 .iter()
@@ -1680,12 +1758,15 @@ mod tests {
     fn live_options_change_declarations_and_keep_file_renames_enabled() -> TestResult {
         let repository = repository()?;
         let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
-        let mut options = Options {
-            find_renames: true,
-            word_diff: true,
-            ..Options::default()
+        let mut settings = Settings {
+            options: Options {
+                find_renames: true,
+                word_diff: true,
+                ..Options::default()
+            },
+            colored: false,
         };
-        let original = text(&diff.render(&options, &Palette::default(), false).0);
+        let original = text(&diff.render(&settings.options, &Palette::PLAIN, false).0);
         assert!(
             original.contains("[renamed: old -> new]"),
             "declaration matching starts enabled"
@@ -1697,7 +1778,7 @@ mod tests {
         );
         {
             let colors = Palette::default();
-            let mut view = View::new(&diff, &mut options, &colors, false);
+            let mut view = View::new(&diff, &mut settings, &colors, false);
             assert!(view.key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)));
             let output = text(&view.lines);
             assert!(
@@ -1730,11 +1811,11 @@ mod tests {
             assert!(!output.contains("[-i32-]"), "w redraws separate declaration lines");
         }
         assert!(
-            !options.word_diff,
+            !settings.options.word_diff,
             "settings outlive the view and can be reused for the next commit"
         );
         assert!(
-            !text(&View::new(&diff, &mut options, &Palette::default(), false).lines).contains("[-i32-]"),
+            !text(&View::new(&diff, &mut settings, &Palette::default(), false).lines).contains("[-i32-]"),
             "reopening retains the word setting"
         );
         Ok(())
@@ -1744,11 +1825,11 @@ mod tests {
     fn production_only_hides_non_production_files_and_declarations() -> TestResult {
         let repository = production_repository()?;
         let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
-        let mut options = Options::default();
+        let mut settings = Settings::default();
         let colors = Palette::default();
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(160, 24))?;
         {
-            let mut view = View::new(&diff, &mut options, &colors, false);
+            let mut view = View::new(&diff, &mut settings, &colors, false);
             terminal.draw(|frame| view.draw(frame, frame.area(), 0, 0))?;
             assert!(
                 text(&view.lines).starts_with("Changed files (13)"),
@@ -1850,8 +1931,11 @@ mod tests {
             );
             view.key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
         }
-        assert!(options.production_only, "the production setting outlives the view");
-        let view = View::new(&diff, &mut options, &colors, false);
+        assert!(
+            settings.options.production_only,
+            "the production setting outlives the view"
+        );
+        let view = View::new(&diff, &mut settings, &colors, false);
         assert!(
             text(&view.lines).starts_with("Changed files (5)"),
             "reopening retains the filter"
@@ -1998,7 +2082,7 @@ mod tests {
                 title: "staged".into(),
                 files: vec![staged],
             }
-            .render(&options, &Palette::default(), false)
+            .render(&options, &Palette::PLAIN, false)
             .0,
         );
         assert!(
@@ -2018,7 +2102,7 @@ mod tests {
                 title: "unstaged".into(),
                 files: vec![unstaged],
             }
-            .render(&options, &Palette::default(), false)
+            .render(&options, &Palette::PLAIN, false)
             .0,
         );
         assert!(
@@ -2046,7 +2130,7 @@ mod tests {
                 title: "untracked".into(),
                 files: vec![untracked],
             }
-            .render(&options, &Palette::default(), false)
+            .render(&options, &Palette::PLAIN, false)
             .0,
         );
         assert!(

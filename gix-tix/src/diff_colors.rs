@@ -10,8 +10,8 @@ use crate::{
 
 #[derive(Clone, Copy)]
 pub(crate) struct Palette {
+    pub(crate) colored: bool,
     rows: [Style; 4],
-    markers: [Style; 4],
     emphasized: [Style; 2],
     syntax: [[Color; 6]; 4],
     pub(crate) header: Style,
@@ -29,8 +29,8 @@ impl Default for Palette {
         let removed = context.fg(Color::Red);
         let modified = context.fg(Color::Yellow);
         Self {
+            colored: true,
             rows: [context, added, removed, modified],
-            markers: [context, added, removed, modified],
             emphasized: [added, removed].map(|style| style.add_modifier(Modifier::BOLD | Modifier::UNDERLINED)),
             syntax: [[
                 Color::Magenta,
@@ -51,6 +51,22 @@ impl Default for Palette {
 }
 
 impl Palette {
+    pub(crate) const PLAIN: Self = {
+        let plain = Style::new();
+        Self {
+            colored: false,
+            rows: [plain; 4],
+            emphasized: [plain; 2],
+            syntax: [[Color::Reset; 6]; 4],
+            header: plain.add_modifier(Modifier::BOLD),
+            metadata: plain,
+            warning: plain,
+            positive: plain,
+            negative: plain,
+            type_changed: plain,
+        }
+    };
+
     pub(crate) fn new(foreground: [u8; 3], background: [u8; 3], ansi: Option<&[[u8; 3]; 16]>) -> Self {
         let foreground = readable(foreground, background, foreground);
         let source = |color| crate::kitty::rgb(color, foreground, ansi);
@@ -63,22 +79,14 @@ impl Palette {
         };
         let backgrounds = [
             background,
-            blend(background, source(Color::Green), 12),
-            blend(background, source(Color::Red), 12),
-            blend(background, source(Color::Yellow), 7),
+            blend(background, source(Color::Green), 32),
+            blend(background, source(Color::Red), 32),
+            blend(background, source(Color::Yellow), 24),
         ];
         let mut rows = backgrounds.map(text_on);
         rows[0].bg = None;
-        let marker_colors = [
-            foreground,
-            source(Color::Green),
-            source(Color::Red),
-            source(Color::Yellow),
-        ];
-        let markers =
-            std::array::from_fn(|index| Style::default().fg(foreground_on(marker_colors[index], backgrounds[index])));
         let emphasized = [Color::Green, Color::Red]
-            .map(|color| text_on(blend(background, source(color), 35)).add_modifier(Modifier::BOLD));
+            .map(|color| text_on(blend(background, source(color), 50)).add_modifier(Modifier::BOLD));
         let syntax = backgrounds.map(|background| {
             [
                 Color::Magenta,
@@ -93,8 +101,8 @@ impl Palette {
         let flat = |color| Style::default().fg(foreground_on(source(color), background));
         let header_background = blend(background, source(Color::Blue), 9);
         Self {
+            colored: true,
             rows,
-            markers,
             emphasized,
             syntax,
             header: text_on(header_background)
@@ -110,10 +118,6 @@ impl Palette {
 
     pub(crate) fn row(&self, change: Change) -> Style {
         self.rows[change_index(change)]
-    }
-
-    pub(crate) fn marker(&self, change: Change) -> Style {
-        self.markers[change_index(change)]
     }
 
     pub(crate) fn emphasis(&self, change: Change) -> Style {
@@ -138,18 +142,14 @@ impl Palette {
     pub(crate) fn highlight<'a>(&self, line: &'a Line<'_>, language: Option<Language>) -> Line<'a> {
         let mut spans = Vec::new();
         let mut previous_word = "";
-        let row = self
-            .rows
-            .iter()
-            .position(|row| row.bg == line.style.bg)
-            .unwrap_or_default();
-        for (index, span) in line.spans.iter().enumerate() {
-            let Some(language) = language.filter(|_| {
-                index != 0 && span.style.bg.is_none() && !span.style.add_modifier.contains(Modifier::UNDERLINED)
-            }) else {
-                if index != 0 {
-                    previous_word = "";
-                }
+        let row = self.rows.iter().position(|row| *row == line.style).unwrap_or_default();
+        // On ANSI-only terminals keep a changed row's foreground when there is no tinted background.
+        let language = language.filter(|_| self.colored && (row == 0 || line.style.bg.is_some()));
+        for span in &line.spans {
+            let Some(language) =
+                language.filter(|_| span.style.bg.is_none() && !span.style.add_modifier.contains(Modifier::UNDERLINED))
+            else {
+                previous_word = "";
                 spans.push(Span::styled(span.content.as_ref(), span.style));
                 continue;
             };
