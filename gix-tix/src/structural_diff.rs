@@ -259,7 +259,7 @@ struct FileTree {
 struct DirectoryStat {
     row: usize,
     columns: Range<usize>,
-    summary: String,
+    counts: String,
 }
 
 impl FileTree {
@@ -284,15 +284,15 @@ impl FileTree {
             let name = quoted(name.as_bstr(), "");
             let indent = format!("{prefix}{}", branch(last));
             let start = Span::raw(indent.as_str()).width();
-            let mut summary = format!("{name}/  +{} -{}", tree.added, tree.removed);
+            let mut counts = format!("  +{} -{}", tree.added, tree.removed);
             if tree.without_counts != 0 {
-                write!(summary, " · {} without line counts", tree.without_counts)
+                write!(counts, " · {} without line counts", tree.without_counts)
                     .expect("writing to a String cannot fail");
             }
             directories.push(DirectoryStat {
                 row: lines.len(),
                 columns: start..start + Span::raw(name.as_str()).width() + 1,
-                summary,
+                counts,
             });
             lines.push(Line::from(vec![
                 Span::styled(indent, colors.metadata),
@@ -408,6 +408,7 @@ impl Diff {
                 file_links.push(FileLink {
                     row,
                     columns: line.spans.iter().take(2).map(Span::width).sum::<usize>()..line.width(),
+                    label_spans: line.spans.len(),
                     target,
                 });
                 if let Some((added, removed)) = file.path.lines {
@@ -488,6 +489,7 @@ fn structural_line(line: outline::Line, colors: &Palette) -> Line<'static> {
 struct FileLink {
     row: usize,
     columns: Range<usize>,
+    label_spans: usize,
     target: usize,
 }
 
@@ -496,6 +498,7 @@ pub(crate) struct View<'a> {
     options: &'a mut Options,
     lines: DiffRows,
     max_width: usize,
+    tree_width: usize,
     file_headers: Vec<(usize, usize)>,
     file_links: Vec<FileLink>,
     directories: Vec<DirectoryStat>,
@@ -510,14 +513,15 @@ pub(crate) struct View<'a> {
 impl<'a> View<'a> {
     pub(crate) fn new(diff: &'a Diff, options: &'a mut Options, colors: &'a Palette, graphics: bool) -> Self {
         let (lines, file_links, directories) = diff.render(options, colors, graphics);
-        let max_width = lines.iter().map(|(line, _)| line.width()).max().unwrap_or_default();
         let file_headers = file_header_rows(&lines);
+        let (tree_width, max_width) = measure_widths(&lines, &file_headers, &directories);
         let tree_rows = file_tree_rows(&file_links);
         Self {
             diff,
             options,
             lines,
             max_width,
+            tree_width,
             file_headers,
             file_links,
             directories,
@@ -553,7 +557,9 @@ impl<'a> View<'a> {
     }
 
     pub(crate) fn areas(&self, area: Rect) -> [Rect; 2] {
-        let width = (area.width / 3).min(48);
+        let width = u16::try_from(self.tree_width.saturating_add(1))
+            .unwrap_or(u16::MAX)
+            .min(area.width.saturating_sub(1));
         if !self.tree_visible || width < 2 {
             return [Rect::default(), area];
         }
@@ -564,9 +570,7 @@ impl<'a> View<'a> {
     }
 
     fn tree_line_count(&self) -> usize {
-        self.file_headers
-            .first()
-            .map_or(self.lines.len(), |&(start, _)| start.saturating_sub(1))
+        tree_line_count(&self.lines, &self.file_headers)
     }
 
     fn visible_files(&self, area: Rect, offset: usize) -> Range<usize> {
@@ -659,11 +663,36 @@ impl<'a> View<'a> {
         self.pointer = pointer;
     }
 
-    fn directory_summary(&self, area: Rect, offset: usize, horizontal_offset: usize) -> Option<&str> {
-        let (row, column) = self.tree_cell(self.pointer?, area, offset, horizontal_offset)?;
-        let index = self.directories.binary_search_by_key(&row, |dir| dir.row).ok()?;
+    fn draw_directory_counts(&self, frame: &mut Frame<'_>, area: Rect, offset: usize, horizontal_offset: usize) {
+        let Some(pointer) = self.pointer else {
+            return;
+        };
+        let Some((row, column)) = self.tree_cell(pointer, area, offset, horizontal_offset) else {
+            return;
+        };
+        let Ok(index) = self.directories.binary_search_by_key(&row, |dir| dir.row) else {
+            return;
+        };
         let dir = &self.directories[index];
-        dir.columns.contains(&column).then_some(dir.summary.as_str())
+        if !dir.columns.contains(&column) {
+            return;
+        }
+        let [tree, diff] = self.areas(area);
+        let right = if tree.contains(pointer) {
+            tree.right() - 1
+        } else {
+            diff.right()
+        };
+        let x = usize::from(pointer.x) + dir.columns.end - column;
+        if x < usize::from(right) {
+            frame.buffer_mut().set_stringn(
+                x as u16,
+                pointer.y,
+                &dir.counts,
+                usize::from(right) - x,
+                Style::default(),
+            );
+        }
     }
 
     pub(crate) fn key(&mut self, key: KeyEvent) -> bool {
@@ -690,18 +719,12 @@ impl<'a> View<'a> {
         self.file_headers = file_header_rows(&self.lines);
         self.tree_rows = file_tree_rows(&self.file_links);
         self.tree_scroll = None;
-        self.max_width = self
-            .lines
-            .iter()
-            .map(|(line, _)| line.width())
-            .max()
-            .unwrap_or_default();
+        (self.tree_width, self.max_width) = measure_widths(&self.lines, &self.file_headers, &self.directories);
         true
     }
 
     pub(crate) fn draw(&self, frame: &mut Frame<'_>, area: Rect, offset: usize, horizontal_offset: usize) {
-        let directory_summary = self.directory_summary(area, offset, horizontal_offset);
-        let [tree, area] = self.areas(area);
+        let [tree, diff] = self.areas(area);
         if tree.width != 0 {
             self.draw_tree(frame, tree, offset);
         }
@@ -719,7 +742,7 @@ impl<'a> View<'a> {
         );
         crate::ui::draw_diff(
             frame,
-            area,
+            diff,
             &self.diff.title.to_str_lossy(),
             self.lines
                 .iter()
@@ -727,9 +750,10 @@ impl<'a> View<'a> {
             self.sticky_header_index(offset)
                 .map(|index| self.colors.highlight(&self.lines[index].0, None)),
             (offset, horizontal_offset),
-            directory_summary.unwrap_or(&footer),
+            &footer,
         );
-        self.tag_tree(frame, area, offset, horizontal_offset);
+        self.tag_tree(frame, diff, offset, horizontal_offset);
+        self.draw_directory_counts(frame, area, offset, horizontal_offset);
     }
 
     fn draw_tree(&self, frame: &mut Frame<'_>, tree: Rect, offset: usize) {
@@ -740,18 +764,16 @@ impl<'a> View<'a> {
             .take(self.tree_line_count())
             .enumerate()
             .map(|(row, (line, _))| {
-                let line = self.colors.highlight(line, None);
-                if self
-                    .file_links
-                    .binary_search_by_key(&row, |link| link.row)
-                    .ok()
-                    .is_some_and(|index| visible.contains(&self.file_links[index].target))
+                let mut line = self.colors.highlight(line, None);
+                if let Ok(index) = self.file_links.binary_search_by_key(&row, |link| link.row)
+                    && let link = &self.file_links[index]
+                    && visible.contains(&link.target)
                 {
-                    let style = line.style.add_modifier(Modifier::BOLD | Modifier::REVERSED);
-                    line.style(style)
-                } else {
-                    line
+                    for span in &mut line.spans[..link.label_spans] {
+                        span.style = span.style.add_modifier(Modifier::BOLD | Modifier::REVERSED);
+                    }
                 }
+                line
             });
         let area = Rect::new(tree.x, tree.y, tree.width.saturating_sub(1), tree.height);
         let tree_offset = self.tree_offset(tree, offset);
@@ -798,6 +820,28 @@ impl<'a> View<'a> {
             crate::ui::tag_graph(frame, Rect::new(area.x, y, area.width, 1), &tiles, 0);
         }
     }
+}
+
+fn tree_line_count(lines: &DiffRows, file_headers: &[(usize, usize)]) -> usize {
+    file_headers
+        .first()
+        .map_or(lines.len(), |&(start, _)| start.saturating_sub(1))
+}
+
+fn measure_widths(lines: &DiffRows, file_headers: &[(usize, usize)], directories: &[DirectoryStat]) -> (usize, usize) {
+    let (tree, diff) = lines.split_at(tree_line_count(lines, file_headers));
+    let tree_width = tree
+        .iter()
+        .map(|(line, _)| line.width())
+        .chain(
+            directories
+                .iter()
+                .map(|dir| dir.columns.end + Span::raw(dir.counts.as_str()).width()),
+        )
+        .max()
+        .unwrap_or_default();
+    let diff_width = diff.iter().map(|(line, _)| line.width()).max().unwrap_or_default();
+    (tree_width, tree_width.max(diff_width))
 }
 
 fn file_tree_rows(links: &[FileLink]) -> Vec<(usize, usize)> {
@@ -1012,6 +1056,20 @@ mod tests {
                         visible.contains(&link.target),
                         "only files visible in the diff are highlighted"
                     );
+                    let counts_start = tree.x + u16::try_from(link.columns.end)?;
+                    let counts_end = tree.x + u16::try_from(view.lines[link.row].0.width())?;
+                    for x in counts_start..counts_end {
+                        let cell = &terminal.backend().buffer()[(x, mouse.row)];
+                        assert_eq!(
+                            cell.bg,
+                            ratatui::style::Color::Reset,
+                            "diffstats use the terminal background"
+                        );
+                        assert!(
+                            !cell.modifier.contains(Modifier::REVERSED),
+                            "the entry highlight stops before the diffstat"
+                        );
+                    }
                     highlighted += usize::from(selected);
                     assert_eq!(
                         review.mouse(mouse, area, offset, 20),
@@ -1045,6 +1103,48 @@ mod tests {
                 );
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn tree_panel_fits_the_longest_filename_and_counts_as_space_allows() -> TestResult {
+        let repository = production_repository()?;
+        let mut diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
+        let file = diff
+            .files
+            .iter_mut()
+            .find(|file| file.path.path == "tests/integration.rs")
+            .expect("the fixture changes an integration test");
+        let filename = "a_long_integration_test_filename_that_needs_more_than_forty_eight_columns.rs";
+        file.path.path = format!("tests/{filename}").into();
+        let mut options = Options::default();
+        let colors = Palette::default();
+        let mut view = View::new(&diff, &mut options, &colors, true);
+        assert!(view.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
+        let area = Rect::new(0, 0, 140, 40);
+        let link = view
+            .file_links
+            .iter()
+            .find(|link| view.lines[link.row].0.spans[2].content == filename)
+            .expect("the tree lists the long filename");
+        let line = &view.lines[link.row].0;
+        let [tree, patch] = view.areas(area);
+        assert_eq!(
+            usize::from(tree.width),
+            line.width() + 1,
+            "the sidebar fits the longest rendered entry plus the divider"
+        );
+        assert!(patch.width > 0, "the diff gets the remaining space");
+        let [small_tree, small_patch] = view.areas(Rect::new(0, 0, 40, 30));
+        assert!(
+            small_tree.width < tree.width && small_patch.width > 0,
+            "the panel fits smaller terminals without consuming the diff"
+        );
+        assert!(view.key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)));
+        assert!(
+            view.areas(area)[0].width < tree.width,
+            "the width follows the filtered tree contents"
+        );
         Ok(())
     }
 
@@ -1312,6 +1412,7 @@ mod tests {
         let colors = Palette::default();
         let mut view = View::new(&diff, &mut options, &colors, false);
         let area = Rect::new(2, 3, 120, 24);
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(125, 30))?;
         for (filtered, expected) in [(false, "src/  +4 -4"), (true, "src/  +2 -2")] {
             if filtered {
                 assert!(view.key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)));
@@ -1324,27 +1425,39 @@ mod tests {
             let dir = view
                 .directories
                 .iter()
-                .find(|dir| dir.summary.starts_with("src/ "))
+                .find(|dir| view.lines[dir.row].0.spans[1].content == "src/")
                 .expect("src contains changes");
             let row = u16::try_from(dir.row)?;
             let column = u16::try_from(dir.columns.start)?;
-            view.set_pointer(Some(Position::new(area.x + column, area.y + 1 + row)));
-            assert_eq!(
-                view.directory_summary(area, 0, 0),
-                Some(expected),
-                "the overview aggregates only visible descendants"
-            );
-            assert!(view.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
-            assert_eq!(
-                view.directory_summary(area, 0, 0),
-                Some(expected),
-                "the sidebar has the same directory totals"
-            );
+            let y = area.y + 1 + row;
+            for sidebar in [false, true] {
+                if sidebar {
+                    assert!(view.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
+                }
+                view.set_pointer(Some(Position::new(area.x + column, y)));
+                terminal.draw(|frame| view.draw(frame, area, 0, 0))?;
+                let buffer = terminal.backend().buffer();
+                let row: String = (area.x + column..area.right())
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect();
+                assert!(
+                    row.starts_with(expected),
+                    "the hovered label and its visible descendants' totals share a row: {row}"
+                );
+                assert!(
+                    !(area.x..area.right())
+                        .map(|x| buffer[(x, area.bottom() - 1)].symbol())
+                        .collect::<String>()
+                        .contains(expected),
+                    "hover keeps the footer available for shortcuts"
+                );
+            }
             view.set_pointer(None);
-            assert!(
-                view.directory_summary(area, 0, 0).is_none(),
-                "losing the pointer hides the total"
-            );
+            terminal.draw(|frame| view.draw(frame, area, 0, 0))?;
+            let row: String = (area.x..area.right())
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                .collect();
+            assert!(!row.contains(expected), "leaving the directory hides its totals");
             assert!(view.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
         }
         Ok(())
