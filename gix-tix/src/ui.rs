@@ -2822,6 +2822,10 @@ pub(crate) struct PrefixPopupRows {
     pub(crate) items: Vec<crate::app::prefix::Item>,
 }
 
+pub(crate) fn hint_popup(hints: Vec<Vec<Span<'static>>>, content_width: usize) -> PrefixPopupRows {
+    wrap_prefix_popup_rows(vec![hints.into_iter().map(PrefixItem::from).collect()], content_width)
+}
+
 pub(crate) fn command_popup(
     commands: &[Command],
     group: CommandGroup,

@@ -1689,21 +1689,22 @@ views.
   Hidden body, value, or prose changes mark their owning declaration with `~`;
   executable code and opaque macro token trees remain hidden. Tix parses
   these outlines with Tree-sitter.
-- Inside structural mode, `r` toggles declaration rename matching and `w`
-  toggles word changes within paired signatures. Both start enabled and remain
-  set for later structural views in the same invocation. They redraw cached
-  outlines without reading Git objects or reparsing inputs; file rename
-  detection remains enabled under either setting. Repeated or modified setting
-  keys do not toggle the settings. Arrows/`j`/`k`, page keys, and `g`/`G` or
-  `Home`/`End` move through the complete diff; `h`/`l` pans long lines.
-  `Enter`, `q`, or `Escape` returns to Tix with its selection intact.
-- Inside structural mode, `c` toggles context between zero and one unchanged
-  sibling before and after a change at every nesting depth. Zero is the default.
-  The footer displays the active value, which persists for later structural
-  views in the same invocation. Only unmodified presses toggle it; repeats,
-  releases, and modified keys leave it unchanged. Redraw cached outlines and
-  refresh frozen headers and file-tree jump targets without reading sources or
-  reparsing inputs.
+- The structural diff status bar shows the current row and total, `v` View,
+  `?` Help, and `q` Back. Prefixes reverse their label and show a wrapping
+  popout above the status bar, including when the file panel is open.
+  `v` opens View settings. `c` toggles colors, `x` toggles context between
+  zero and one unchanged sibling on each side at each depth, `p` toggles
+  production-only review, `r` toggles declaration renames, and `w` toggles
+  word changes. Context starts at zero, with renames and words enabled.
+  The popout shows active settings and stays open for consecutive changes.
+  Only unmodified presses toggle settings. Setting changes persist across
+  views in the same invocation and redraw cached outlines and file indices.
+  File rename detection remains enabled. `?` opens navigation help. Arrows,
+  `j`/`k`, page keys, and `g`/`G` or `Home`/`End` move through the diff.
+  `h`/`l` pans long lines. Press the active prefix again or `Escape` to close
+  its popout. Scrolling dismisses it. A mouse press dismisses it before clicks
+  can reach the diff. `Enter`, `q`, or `Escape` with the popout closed returns
+  to Tix with its selection intact.
 - `Tab` shows or hides a file-tree panel to the left of structural review. It
   starts hidden in each view and fits the widest displayed path, including its
   diffstat or potential hover totals. It leaves at least one column for the diff
@@ -1738,7 +1739,7 @@ views.
   final sections can be placed at the top; `End`/`G` still shows the final page.
   Cache jump targets with the detached rows so clicking requires no source reads
   or parsing.
-- `p` toggles production-only structural review. It starts disabled and remains
+- `v p` toggles production-only structural review. It starts disabled and remains
   set for later views in the same invocation. Hide tests, benchmarks, examples,
   and fixtures in conventional directories, including their singular names,
   and Rust helper filenames such as `tests.rs`, `test_*.rs`, `*_test.rs`, and
@@ -1754,7 +1755,7 @@ views.
   mode changes or renames with production declarations. Renames across the
   production boundary remain visible; copies into non-production paths are
   hidden. An entirely filtered diff says `No production file changes.`
-  The footer shows the active setting. Unmodified presses toggle it; repeats,
+  The View popout shows the active setting. Unmodified presses toggle it; repeats,
   releases, and modified keys do not. Filtering redraws cached outlines without
   source reads, parsing, terminal queries, or additional copies of source text.
 - Structural mode uses lexical syntax foregrounds and distinct red, green,
@@ -1762,7 +1763,7 @@ views.
   words use stronger red/green backgrounds and bold text. In color mode the
   declaration markers and word-change delimiters are omitted. File-tree
   statuses, line counts, and patch metadata use the same terminal palette.
-- `v` toggles structural diff colors and updates the footer. Plain mode shows
+- `v c` toggles structural diff colors and updates the View popout. Plain mode shows
   declaration markers and word-change delimiters. The choice persists for
   later structural views in the same invocation. A nonempty `NO_COLOR` starts
   the view in plain mode. The toggle redraws cached outlines and tree rows.

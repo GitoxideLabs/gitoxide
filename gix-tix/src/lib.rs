@@ -8546,7 +8546,10 @@ fn show_diff_view(
                 TerminalEvent::Mouse(mouse) if focused => {
                     view.set_pointer(Some(Position::new(mouse.column, mouse.row)));
                 }
-                TerminalEvent::FocusLost => view.set_pointer(None),
+                TerminalEvent::FocusLost => {
+                    view.set_pointer(None);
+                    view.close_prefix();
+                }
                 _ => {}
             }
         }
@@ -8561,6 +8564,18 @@ fn show_diff_view(
             }
             TerminalEvent::Resize(_, _) => continue,
             TerminalEvent::Mouse(mouse) if focused => {
+                if let DiffView::Structural(view) = &mut diff {
+                    match mouse.kind {
+                        MouseEventKind::Down(_) if view.close_prefix() => continue,
+                        MouseEventKind::ScrollUp
+                        | MouseEventKind::ScrollDown
+                        | MouseEventKind::ScrollLeft
+                        | MouseEventKind::ScrollRight => {
+                            view.close_prefix();
+                        }
+                        _ => {}
+                    }
+                }
                 if !diff.scroll_tree(mouse, diff_area, offset)
                     && let Some(position) = diff.mouse(mouse, diff_area, offset, horizontal_offset)
                 {

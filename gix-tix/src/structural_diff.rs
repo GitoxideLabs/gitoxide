@@ -11,14 +11,16 @@ use ratatui::{
     layout::{Position, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 
 use crate::{
     FileChange, OBJECT_CACHE_SIZE,
     app::{ChangeKind, PathChange, TreeDiffTarget},
+    command_menu::CommandGroup,
     diff_colors::Palette,
     graph_tiles::Tile,
+    ui,
 };
 
 pub(crate) mod outline;
@@ -511,6 +513,23 @@ pub(crate) struct Settings {
     pub(crate) colored: bool,
 }
 
+#[derive(Clone, Copy)]
+enum ViewOption {
+    Color,
+    Context,
+    Production,
+    Renames,
+    Words,
+}
+
+const VIEW_OPTIONS: [(char, ViewOption); 5] = [
+    ('c', ViewOption::Color),
+    ('x', ViewOption::Context),
+    ('p', ViewOption::Production),
+    ('r', ViewOption::Renames),
+    ('w', ViewOption::Words),
+];
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -534,6 +553,7 @@ pub(crate) struct View<'a> {
     tree_rows: Vec<(usize, usize)>,
     tree_visible: bool,
     tree_scroll: Option<(usize, usize)>,
+    prefix: Option<CommandGroup>,
     theme: &'a Palette,
 }
 
@@ -558,6 +578,7 @@ impl<'a> View<'a> {
             tree_rows,
             tree_visible: false,
             tree_scroll: None,
+            prefix: None,
             theme,
         }
     }
@@ -727,26 +748,54 @@ impl<'a> View<'a> {
     }
 
     pub(crate) fn key(&mut self, key: KeyEvent) -> bool {
-        if key.kind != KeyEventKind::Press || !key.modifiers.is_empty() {
+        if key.kind == KeyEventKind::Release {
             return false;
         }
-        if key.code == KeyCode::Tab {
-            self.tree_visible = !self.tree_visible;
-            self.tree_scroll = None;
+        if let Some(group @ (CommandGroup::View | CommandGroup::Information)) = crate::prefix_input::prefix_group(key) {
+            if key.kind == KeyEventKind::Press {
+                self.prefix = (self.prefix != Some(group)).then_some(group);
+            }
             return true;
         }
+        if key.modifiers.is_empty() {
+            if key.code == KeyCode::Tab {
+                if key.kind == KeyEventKind::Press {
+                    self.close_prefix();
+                    self.tree_visible = !self.tree_visible;
+                    self.tree_scroll = None;
+                }
+                return key.kind == KeyEventKind::Press;
+            }
+            if self.prefix == Some(CommandGroup::View)
+                && let KeyCode::Char(letter) = key.code
+                && let Some((_, option)) = VIEW_OPTIONS.iter().find(|(shortcut, _)| *shortcut == letter)
+            {
+                if key.kind == KeyEventKind::Press {
+                    self.toggle(*option);
+                }
+                return true;
+            }
+        }
+        let closed = self.close_prefix();
+        key.code == KeyCode::Esc && (closed || key.kind == KeyEventKind::Repeat)
+    }
+
+    pub(crate) fn close_prefix(&mut self) -> bool {
+        self.prefix.take().is_some()
+    }
+
+    fn toggle(&mut self, option: ViewOption) {
         let options = &mut self.settings.options;
-        match key.code {
-            KeyCode::Char('v') => self.settings.colored = !self.settings.colored,
-            KeyCode::Char('r') => options.find_renames = !options.find_renames,
-            KeyCode::Char('w') => options.word_diff = !options.word_diff,
-            KeyCode::Char('p') => options.production_only = !options.production_only,
-            KeyCode::Char('c') => {
+        match option {
+            ViewOption::Color => self.settings.colored = !self.settings.colored,
+            ViewOption::Renames => options.find_renames = !options.find_renames,
+            ViewOption::Words => options.word_diff = !options.word_diff,
+            ViewOption::Production => options.production_only = !options.production_only,
+            ViewOption::Context => {
                 let context = usize::from(options.context.first() == Some(&0));
                 options.context.clear();
                 options.context.push(context);
             }
-            _ => return false,
         }
         (self.lines, self.file_links, self.directories) =
             self.diff.render(&self.settings.options, self.colors(), self.graphics);
@@ -754,7 +803,87 @@ impl<'a> View<'a> {
         self.tree_rows = file_tree_rows(&self.file_links);
         self.tree_scroll = None;
         (self.tree_width, self.max_width) = measure_widths(&self.lines, &self.file_headers, &self.directories);
-        true
+    }
+
+    fn view_hints(&self) -> Vec<Vec<Span<'static>>> {
+        let options = &self.settings.options;
+        let mut hints: Vec<_> = VIEW_OPTIONS
+            .into_iter()
+            .map(|(key, option)| {
+                let (label, enabled) = match option {
+                    ViewOption::Color if self.colored() => ("color on", true),
+                    ViewOption::Color => ("color off", false),
+                    ViewOption::Context if options.context.first() == Some(&0) => ("context 0", true),
+                    ViewOption::Context => ("context 1", true),
+                    ViewOption::Production if options.production_only => ("production only on", true),
+                    ViewOption::Production => ("production only off", false),
+                    ViewOption::Renames if options.find_renames => ("renames on", true),
+                    ViewOption::Renames => ("renames off", false),
+                    ViewOption::Words if options.word_diff => ("words on", true),
+                    ViewOption::Words => ("words off", false),
+                };
+                ui::shortcut(label, key, enabled)
+            })
+            .collect();
+        hints.push(vec![Span::raw("Tab files")]);
+        hints
+    }
+
+    fn draw_status(&self, frame: &mut Frame<'_>, area: Rect, offset: usize) {
+        if area.is_empty() {
+            return;
+        }
+        let footer = Rect::new(area.x, area.bottom() - 1, area.width, 1);
+        let mut spans = vec![Span::raw(format!("#{}/{}", offset + 1, self.lines.len()))];
+        let mut anchor = None;
+        for (group, label) in [(CommandGroup::View, "view"), (CommandGroup::Information, "? help")] {
+            spans.push(Span::raw(" · "));
+            let mut label = ui::shortcut(label, group.prefix(), true);
+            if self.prefix == Some(group) {
+                anchor = Some(spans.iter().map(Span::width).sum());
+                ui::emphasize_prefix(&mut label);
+            }
+            spans.extend(label);
+        }
+        spans.push(Span::raw(" · "));
+        spans.extend(ui::shortcut("q back", 'q', true));
+        let monochrome = |spans: &mut [Span<'_>]| {
+            if !self.colored() {
+                for span in spans {
+                    span.style.fg = None;
+                    span.style.bg = None;
+                }
+            }
+        };
+        monochrome(&mut spans);
+        frame.render_widget(Clear, footer);
+        frame.render_widget(Paragraph::new(Line::from(spans)), footer);
+        if let Some(anchor) = anchor {
+            let mut hints = if self.prefix == Some(CommandGroup::View) {
+                self.view_hints()
+            } else {
+                [
+                    "↑↓/jk scroll",
+                    "wheel scroll",
+                    "PgUp/PgDn or Ctrl+b/f page",
+                    "Ctrl+u/d half page",
+                    "Home/End or g/G ends",
+                    "h/l pan",
+                    "Tab files",
+                    "click filename to jump",
+                    "<enter>/q back",
+                    "Esc close help",
+                ]
+                .into_iter()
+                .map(|hint| vec![Span::raw(hint)])
+                .collect()
+            };
+            for hint in &mut hints {
+                monochrome(hint);
+            }
+            let popup = ui::hint_popup(hints, usize::from(footer.width.saturating_sub(2)));
+            ui::render_prefix_popup(frame, area, footer, anchor, popup, None);
+        }
     }
 
     pub(crate) fn draw(&self, frame: &mut Frame<'_>, area: Rect, offset: usize, horizontal_offset: usize) {
@@ -762,22 +891,8 @@ impl<'a> View<'a> {
         if tree.width != 0 {
             self.draw_tree(frame, tree, offset);
         }
-        let (production, renames) = if tree.width == 0 {
-            ("production only", "declaration renames")
-        } else {
-            ("prod", "renames")
-        };
-        let options = &self.settings.options;
         let colors = self.colors();
-        let footer = format!(
-            "v color:{} · c context:{} · p {production}:{} · r {renames}:{} · w words:{} · Tab tree · ↑↓/jk · g/G · h/l · Enter/q/Esc",
-            if self.colored() { "on" } else { "off" },
-            options.context.first().copied().unwrap_or(1),
-            if options.production_only { "on" } else { "off" },
-            if options.find_renames { "on" } else { "off" },
-            if options.word_diff { "on" } else { "off" },
-        );
-        crate::ui::draw_diff(
+        ui::draw_diff(
             frame,
             diff,
             &self.diff.title.to_str_lossy(),
@@ -787,10 +902,11 @@ impl<'a> View<'a> {
             self.sticky_header_index(offset)
                 .map(|index| colors.highlight(&self.lines[index].0, None)),
             (offset, horizontal_offset),
-            &footer,
+            "",
         );
         self.tag_tree(frame, diff, offset, horizontal_offset);
         self.draw_directory_counts(frame, area, offset, horizontal_offset);
+        self.draw_status(frame, area, offset);
     }
 
     fn draw_tree(&self, frame: &mut Frame<'_>, tree: Rect, offset: usize) {
@@ -815,15 +931,7 @@ impl<'a> View<'a> {
             });
         let area = Rect::new(tree.x, tree.y, tree.width.saturating_sub(1), tree.height);
         let tree_offset = self.tree_offset(tree, offset);
-        crate::ui::draw_diff(
-            frame,
-            area,
-            "Files",
-            lines,
-            None,
-            (tree_offset, 0),
-            "Tab hide · wheel scroll",
-        );
+        crate::ui::draw_diff(frame, area, "Files", lines, None, (tree_offset, 0), "");
         self.tag_tree(frame, area, tree_offset, 0);
         frame.render_widget(
             Block::default().borders(Borders::RIGHT).border_style(colors.metadata),
@@ -1025,8 +1133,7 @@ mod tests {
             !colored.contains("[-i32-]") && !colored.lines().any(|line| line.starts_with('~')),
             "colored declarations omit word and line markers"
         );
-        let key = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE);
-        assert!(view.key(key));
+        view.toggle(ViewOption::Color);
         let plain = text(&view.lines);
         assert!(
             plain.contains("[-i32-]{+u32+}") && plain.lines().any(|line| line.starts_with('~')),
@@ -1041,11 +1148,108 @@ mod tests {
                     .all(|span| span.style.fg.is_none() && span.style.bg.is_none())),
             "plain rows and word changes have no colors"
         );
-        assert!(view.key(key));
+        view.toggle(ViewOption::Color);
         assert_eq!(
             text(&view.lines),
             colored,
             "turning color back on restores the marker-free view"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn prefix_popouts_keep_the_status_compact_and_accept_consecutive_settings() -> TestResult {
+        let repository = repository()?;
+        let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
+        let mut settings = crate::App::new(24).structural_diff_settings;
+        let colors = Palette::default();
+        let mut view = View::new(&diff, &mut settings, &colors, false);
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(43, 12))?;
+        let press = |letter| KeyEvent::new(KeyCode::Char(letter), KeyModifiers::NONE);
+        let row = |terminal: &ratatui::Terminal<ratatui::backend::TestBackend>, y| {
+            (0..43)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                .collect::<String>()
+        };
+        terminal.draw(|frame| view.draw(frame, frame.area(), 0, 0))?;
+        let footer = row(&terminal, 11);
+        assert!(
+            footer.contains(" · view · ? help · q back"),
+            "position and prefix hints fit on a compact status row"
+        );
+        assert!(
+            !footer.contains("context") && !footer.contains("scroll"),
+            "settings and help stay in their popouts"
+        );
+        assert!(
+            !view.key(press('c')) && view.colored(),
+            "a setting key by itself does not act"
+        );
+        assert!(
+            view.key(press('v')) && view.colored(),
+            "opening View does not toggle a setting"
+        );
+        assert!(view.key(KeyEvent::new_with_kind(
+            KeyCode::Char('v'),
+            KeyModifiers::NONE,
+            KeyEventKind::Repeat
+        )));
+        assert!(view.key(press('x')), "View accepts its context shortcut");
+        assert_eq!(view.settings.options.context, [1]);
+        assert!(view.key(KeyEvent::new_with_kind(
+            KeyCode::Char('x'),
+            KeyModifiers::NONE,
+            KeyEventKind::Repeat
+        )));
+        assert_eq!(
+            view.settings.options.context,
+            [1],
+            "repeated suffix events do not retoggle the setting"
+        );
+        terminal.draw(|frame| view.draw(frame, frame.area(), 0, 0))?;
+        let items = (7..11).map(|y| row(&terminal, y)).collect::<Vec<_>>().join("\n");
+        for hint in [
+            "color on",
+            "context 1",
+            "production only off",
+            "renames on",
+            "words on",
+            "Tab files",
+        ] {
+            assert!(
+                items.contains(hint),
+                "the popout keeps {hint} visible, including when it wraps"
+            );
+        }
+        let (prefix, _) = footer.split_once("view").expect("View has a footer label");
+        let anchor = u16::try_from(prefix.chars().count())?;
+        assert!(
+            terminal.backend().buffer()[(anchor, 11)]
+                .modifier
+                .contains(Modifier::REVERSED),
+            "the open prefix label is reversed"
+        );
+        assert!(
+            view.key(press('c')) && !view.colored(),
+            "View stays open for consecutive settings"
+        );
+        assert!(
+            view.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            "Escape dismisses the prefix"
+        );
+        assert!(!view.key(press('x')), "the prefix is closed after dismissal");
+        assert!(
+            view.key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::SHIFT)),
+            "Shift+/ opens Help"
+        );
+        terminal.draw(|frame| view.draw(frame, frame.area(), 0, 0))?;
+        assert!(
+            (0..11).any(|y| row(&terminal, y).contains("click filename to jump")),
+            "Help displays navigation instead of settings"
+        );
+        assert!(
+            !view.key(press('j')) && view.prefix.is_none(),
+            "scrolling closes Help and continues to the diff"
         );
         Ok(())
     }
@@ -1104,9 +1308,15 @@ mod tests {
         assert!(review.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
         let area = Rect::new(3, 2, 120, 80);
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(125, 84))?;
-        for key in [None, Some('c'), Some('w'), Some('r'), Some('p')] {
-            if let Some(key) = key {
-                assert!(review.key(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE)));
+        for option in [
+            None,
+            Some(ViewOption::Context),
+            Some(ViewOption::Words),
+            Some(ViewOption::Renames),
+            Some(ViewOption::Production),
+        ] {
+            if let (Some(option), crate::DiffView::Structural(view)) = (option, &mut review) {
+                view.toggle(option);
             }
             let crate::DiffView::Structural(view) = &review else {
                 unreachable!("this test reviews a structural diff")
@@ -1221,7 +1431,7 @@ mod tests {
             small_tree.width < tree.width && small_patch.width > 0,
             "the panel fits smaller terminals without consuming the diff"
         );
-        assert!(view.key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)));
+        view.toggle(ViewOption::Production);
         assert!(
             view.areas(area)[0].width < tree.width,
             "the width follows the filtered tree contents"
@@ -1279,7 +1489,7 @@ mod tests {
             target_row >= followed && target_row < followed + usize::from(tree.height - 2),
             "moving to another file brings its highlighted entry into view"
         );
-        assert!(view.key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)));
+        view.toggle(ViewOption::Production);
         assert!(
             view.tree_scroll.is_none(),
             "filtering discards obsolete tree scroll coordinates"
@@ -1311,50 +1521,20 @@ mod tests {
                 !original.contains("fn unchanged()"),
                 "zero context hides unchanged siblings by default"
             );
-            for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT, KeyModifiers::SHIFT] {
-                assert!(
-                    !view.key(KeyEvent::new(KeyCode::Char('c'), modifiers)),
-                    "modified context keys leave the setting unchanged"
-                );
-            }
-            for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
-                assert!(
-                    !view.key(KeyEvent::new_with_kind(KeyCode::Char('c'), KeyModifiers::NONE, kind)),
-                    "holding or releasing c does not toggle context"
-                );
-            }
-            assert!(
-                view.key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)),
-                "c adds one context line"
-            );
+            view.toggle(ViewOption::Context);
             let output = text(&view.lines);
             assert!(
                 output.contains("fn unchanged()"),
                 "one context line shows unchanged siblings"
             );
             assert!(output.contains("test_helper"), "changed declarations remain visible");
-            let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(160, 24))?;
-            terminal.draw(|frame| view.draw(frame, frame.area(), 0, 0))?;
-            let footer: String = (0..160)
-                .map(|x| terminal.backend().buffer()[(x, 23)].symbol())
-                .collect();
-            assert!(
-                footer.contains("c context:1"),
-                "the footer displays the active context count"
-            );
-            assert!(
-                view.key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)),
-                "c returns to zero context"
-            );
+            view.toggle(ViewOption::Context);
             assert_eq!(
                 text(&view.lines),
                 original,
                 "restoring context reproduces the original diff"
             );
-            assert!(
-                view.key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)),
-                "context can be enabled again"
-            );
+            view.toggle(ViewOption::Context);
         }
         let reopened = View::new(&diff, &mut settings, &colors, false);
         assert!(
@@ -1373,9 +1553,17 @@ mod tests {
         let mut review = crate::DiffView::Structural(View::new(&diff, &mut settings, &colors, false));
         let area = Rect::new(4, 3, 100, 7);
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(110, 12))?;
-        for key in [None, Some('p'), Some('c'), Some('w'), Some('r'), Some('c'), Some('p')] {
-            if let Some(key) = key {
-                assert!(review.key(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE)));
+        for option in [
+            None,
+            Some(ViewOption::Production),
+            Some(ViewOption::Context),
+            Some(ViewOption::Words),
+            Some(ViewOption::Renames),
+            Some(ViewOption::Context),
+            Some(ViewOption::Production),
+        ] {
+            if let (Some(option), crate::DiffView::Structural(view)) = (option, &mut review) {
+                view.toggle(option);
             }
             let crate::DiffView::Structural(view) = &review else {
                 unreachable!("this test reviews a structural diff")
@@ -1496,7 +1684,7 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(125, 30))?;
         for (filtered, expected) in [(false, "src/  +4 -4"), (true, "src/  +2 -2")] {
             if filtered {
-                assert!(view.key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)));
+                view.toggle(ViewOption::Production);
             }
             let output = text(&view.lines[..view.tree_line_count()]);
             assert!(
@@ -1573,9 +1761,16 @@ mod tests {
                 .trim_end()
                 .to_owned()
         };
-        for key in [None, Some('p'), Some('c'), Some('w'), Some('r'), Some('c')] {
-            if let Some(key) = key {
-                assert!(view.key(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE)));
+        for option in [
+            None,
+            Some(ViewOption::Production),
+            Some(ViewOption::Context),
+            Some(ViewOption::Words),
+            Some(ViewOption::Renames),
+            Some(ViewOption::Context),
+        ] {
+            if let Some(option) = option {
+                view.toggle(option);
             }
             terminal.draw(|frame| view.draw(frame, frame.area(), 0, 0))?;
             assert!(
@@ -1779,7 +1974,7 @@ mod tests {
         {
             let colors = Palette::default();
             let mut view = View::new(&diff, &mut settings, &colors, false);
-            assert!(view.key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)));
+            view.toggle(ViewOption::Renames);
             let output = text(&view.lines);
             assert!(
                 !output.contains("[renamed:"),
@@ -1789,20 +1984,8 @@ mod tests {
                 output.contains("R moved.rs ← src/old.rs"),
                 "file rename detection is independent of the live setting"
             );
-            assert!(
-                !view.key(KeyEvent::new_with_kind(
-                    KeyCode::Char('r'),
-                    KeyModifiers::NONE,
-                    KeyEventKind::Repeat
-                )),
-                "holding a setting key does not oscillate it"
-            );
-            assert!(
-                !view.key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL)),
-                "modified keys do not toggle settings"
-            );
-            view.key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
-            view.key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+            view.toggle(ViewOption::Renames);
+            view.toggle(ViewOption::Words);
             let output = text(&view.lines);
             assert!(
                 output.contains("[renamed: old -> new]"),
@@ -1835,22 +2018,7 @@ mod tests {
                 text(&view.lines).starts_with("Changed files (13)"),
                 "all files are visible by default"
             );
-            for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT, KeyModifiers::SHIFT] {
-                assert!(
-                    !view.key(KeyEvent::new(KeyCode::Char('p'), modifiers)),
-                    "modified keys leave the setting intact"
-                );
-            }
-            for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
-                assert!(
-                    !view.key(KeyEvent::new_with_kind(KeyCode::Char('p'), KeyModifiers::NONE, kind)),
-                    "holding a setting key does not oscillate it"
-                );
-            }
-            assert!(
-                view.key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
-                "p enables production-only review"
-            );
+            view.toggle(ViewOption::Production);
             let output = text(&view.lines);
             terminal.draw(|frame| view.draw(frame, frame.area(), 0, 0))?;
             let buffer = terminal.backend().buffer();
@@ -1914,13 +2082,13 @@ mod tests {
                 output.contains("Outline unavailable:"),
                 "unknown file types retain an explicit outline status"
             );
-            view.key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
-            view.key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+            view.toggle(ViewOption::Renames);
+            view.toggle(ViewOption::Words);
             assert!(
                 !text(&view.lines).contains("test-only.rs"),
                 "other settings preserve the production filter"
             );
-            assert!(view.key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)));
+            view.toggle(ViewOption::Production);
             assert!(
                 text(&view.lines).starts_with("Changed files (13)"),
                 "p restores the complete diff"
@@ -1929,7 +2097,7 @@ mod tests {
                 text(&view.lines).contains("integration.rs"),
                 "hidden files are cached for restoration"
             );
-            view.key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
+            view.toggle(ViewOption::Production);
         }
         assert!(
             settings.options.production_only,
@@ -1939,14 +2107,6 @@ mod tests {
         assert!(
             text(&view.lines).starts_with("Changed files (5)"),
             "reopening retains the filter"
-        );
-        terminal.draw(|frame| view.draw(frame, frame.area(), 0, 0))?;
-        let footer: String = (0..160)
-            .map(|x| terminal.backend().buffer()[(x, 23)].symbol())
-            .collect();
-        assert!(
-            footer.contains("p production only:on"),
-            "the active shortcut is discoverable"
         );
         Ok(())
     }
