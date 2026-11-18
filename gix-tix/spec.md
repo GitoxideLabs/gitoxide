@@ -1761,19 +1761,24 @@ views.
   The footer shows the active setting. Unmodified presses toggle it; repeats,
   releases, and modified keys do not. Filtering redraws cached outlines without
   source reads, parsing, terminal queries, or additional copies of source text.
-- Structural mode colors declarations with lexical syntax foregrounds, subtle
-  red/green backgrounds for removals/additions, and a faint yellow background
-  for modifications. Changed words have stronger red/green backgrounds and
-  bold text. File-tree statuses and patch metadata use the same terminal palette.
+- Structural mode uses lexical syntax foregrounds and distinct red, green,
+  and yellow backgrounds for removed, added, and modified declarations. Changed
+  words use stronger red/green backgrounds and bold text. In color mode the
+  declaration markers and word-change delimiters are omitted. File-tree
+  statuses, line counts, and patch metadata use the same terminal palette.
+- `v` toggles structural diff colors and updates the footer. Plain mode shows
+  declaration markers and word-change delimiters. The choice persists for
+  later structural views in the same invocation. A nonempty `NO_COLOR` starts
+  the view in plain mode. The toggle redraws cached outlines and tree rows.
   Foregrounds retain at least 4.5:1 contrast against their sampled backgrounds,
   including syntax colors and word emphasis. Both light and dark themes use
   the actual terminal foreground/background and its queried ANSI colors.
-  Missing default-color replies retain named ANSI foregrounds and bold,
+  Missing default-color replies use named ANSI foregrounds and bold,
   underlined word emphasis without guessing a background. Missing ANSI replies
   use standard ANSI RGB values against the detected default colors.
   Only the visible page is syntax-colored, using borrowed display text;
   cached outlines and rows retain no syntax-token strings. Coloring preserves
-  source text and word-change delimiters and does not expose hidden bodies.
+  source text and does not expose hidden bodies.
   Colors are sampled at startup; changing the terminal theme requires restarting Tix.
 - Structural preparation uses a fresh bounded repository and the selected
   old/new resources, including the active merge parent, branch comparison,
