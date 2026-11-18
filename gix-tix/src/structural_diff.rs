@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, ops::Range, path::Path};
 
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind};
 use gix::{
     Result,
     bstr::{BStr, BString, ByteSlice},
@@ -11,6 +11,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
+    widgets::{Block, Borders},
 };
 
 use crate::{
@@ -428,6 +429,9 @@ pub(crate) struct View<'a> {
     max_width: usize,
     file_headers: Vec<(usize, usize)>,
     file_links: Vec<FileLink>,
+    tree_rows: Vec<(usize, usize)>,
+    tree_visible: bool,
+    tree_scroll: Option<(usize, usize)>,
     colors: &'a Palette,
 }
 
@@ -436,6 +440,7 @@ impl<'a> View<'a> {
         let (lines, file_links) = diff.render(options, colors);
         let max_width = lines.iter().map(|(line, _)| line.width()).max().unwrap_or_default();
         let file_headers = file_header_rows(&lines);
+        let tree_rows = file_tree_rows(&file_links);
         Self {
             diff,
             options,
@@ -443,6 +448,9 @@ impl<'a> View<'a> {
             max_width,
             file_headers,
             file_links,
+            tree_rows,
+            tree_visible: false,
+            tree_scroll: None,
             colors,
         }
     }
@@ -469,9 +477,96 @@ impl<'a> View<'a> {
         link.columns.contains(&column).then_some(link.target)
     }
 
+    pub(crate) fn areas(&self, area: Rect) -> [Rect; 2] {
+        let width = (area.width / 3).min(48);
+        if !self.tree_visible || width < 2 {
+            return [Rect::default(), area];
+        }
+        [
+            Rect::new(area.x, area.y, width, area.height),
+            Rect::new(area.x + width, area.y, area.width - width, area.height),
+        ]
+    }
+
+    fn tree_line_count(&self) -> usize {
+        self.file_headers
+            .first()
+            .map_or(self.lines.len(), |&(start, _)| start.saturating_sub(1))
+    }
+
+    fn visible_files(&self, area: Rect, offset: usize) -> Range<usize> {
+        let height = usize::from(area.height.saturating_sub(2));
+        if height == 0 {
+            return 0..0;
+        }
+        let frozen = usize::from(height > 1 && self.sticky_header_index(offset).is_some());
+        let end = offset.saturating_add(height - frozen).min(self.lines.len());
+        let index = self
+            .file_headers
+            .partition_point(|&(start, _)| start <= offset)
+            .saturating_sub(1);
+        let start = self.file_headers.get(index).map_or(end, |&(start, _)| start);
+        start..end
+    }
+
+    fn tree_offset(&self, area: Rect, offset: usize) -> usize {
+        let page = usize::from(area.height.saturating_sub(2)).max(1);
+        let max = self.tree_line_count().saturating_sub(page);
+        if let Some((diff_offset, tree_offset)) = self.tree_scroll
+            && diff_offset == offset
+        {
+            return tree_offset.min(max);
+        }
+        let visible = self.visible_files(area, offset);
+        let index = self.tree_rows.partition_point(|&(target, _)| target < visible.start);
+        let row = self
+            .tree_rows
+            .get(index)
+            .filter(|&&(target, _)| visible.contains(&target))
+            .map_or(0, |&(_, row)| row);
+        row.saturating_sub(page / 2).min(max)
+    }
+
+    pub(crate) fn scroll_tree(&mut self, mouse: MouseEvent, area: Rect, offset: usize) -> bool {
+        let [tree, _] = self.areas(area);
+        if !tree.contains(ratatui::layout::Position::new(mouse.column, mouse.row)) {
+            return false;
+        }
+        let current = self.tree_offset(tree, offset);
+        let next = match mouse.kind {
+            MouseEventKind::ScrollUp => current.saturating_sub(1),
+            MouseEventKind::ScrollDown => current.saturating_add(1),
+            _ => return false,
+        };
+        let max = self
+            .tree_line_count()
+            .saturating_sub(usize::from(tree.height.saturating_sub(2)).max(1));
+        self.tree_scroll = Some((offset, next.min(max)));
+        true
+    }
+
+    pub(crate) fn tree_target(&self, mouse: MouseEvent, tree: Rect, offset: usize) -> Option<usize> {
+        if !tree.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
+            || mouse.kind != MouseEventKind::Down(MouseButton::Left)
+            || !mouse.modifiers.is_empty()
+            || mouse.row <= tree.y
+            || mouse.row >= tree.bottom().saturating_sub(1)
+            || mouse.column >= tree.right().saturating_sub(1)
+        {
+            return None;
+        }
+        let row = self.tree_offset(tree, offset) + usize::from(mouse.row - tree.y - 1);
+        self.file_target(row, usize::from(mouse.column - tree.x))
+    }
+
     pub(crate) fn key(&mut self, key: KeyEvent) -> bool {
         if key.kind != KeyEventKind::Press || !key.modifiers.is_empty() {
             return false;
+        }
+        if key.code == KeyCode::Tab {
+            self.tree_visible = !self.tree_visible;
+            self.tree_scroll = None;
+            return true;
         }
         match key.code {
             KeyCode::Char('r') => self.options.find_renames = !self.options.find_renames,
@@ -486,6 +581,8 @@ impl<'a> View<'a> {
         }
         (self.lines, self.file_links) = self.diff.render(self.options, self.colors);
         self.file_headers = file_header_rows(&self.lines);
+        self.tree_rows = file_tree_rows(&self.file_links);
+        self.tree_scroll = None;
         self.max_width = self
             .lines
             .iter()
@@ -496,8 +593,17 @@ impl<'a> View<'a> {
     }
 
     pub(crate) fn draw(&self, frame: &mut Frame<'_>, area: Rect, offset: usize, horizontal_offset: usize) {
+        let [tree, area] = self.areas(area);
+        if tree.width != 0 {
+            self.draw_tree(frame, tree, offset);
+        }
+        let (production, renames) = if tree.width == 0 {
+            ("production only", "declaration renames")
+        } else {
+            ("prod", "renames")
+        };
         let footer = format!(
-            "c context:{} · p production only:{} · r declaration renames:{} · w words:{} · ↑↓/jk · g/G ends · h/l · Enter/q/Esc",
+            "c context:{} · p {production}:{} · r {renames}:{} · w words:{} · Tab tree · ↑↓/jk · g/G · h/l · Enter/q/Esc",
             self.options.context.first().copied().unwrap_or(1),
             if self.options.production_only { "on" } else { "off" },
             if self.options.find_renames { "on" } else { "off" },
@@ -516,6 +622,50 @@ impl<'a> View<'a> {
             &footer,
         );
     }
+
+    fn draw_tree(&self, frame: &mut Frame<'_>, tree: Rect, offset: usize) {
+        let visible = self.visible_files(tree, offset);
+        let lines = self
+            .lines
+            .iter()
+            .take(self.tree_line_count())
+            .enumerate()
+            .map(|(row, (line, _))| {
+                let line = self.colors.highlight(line, None);
+                if self
+                    .file_links
+                    .binary_search_by_key(&row, |link| link.row)
+                    .ok()
+                    .is_some_and(|index| visible.contains(&self.file_links[index].target))
+                {
+                    let style = line.style.add_modifier(Modifier::BOLD | Modifier::REVERSED);
+                    line.style(style)
+                } else {
+                    line
+                }
+            });
+        crate::ui::draw_diff(
+            frame,
+            Rect::new(tree.x, tree.y, tree.width.saturating_sub(1), tree.height),
+            "Files",
+            lines,
+            None,
+            (self.tree_offset(tree, offset), 0),
+            "Tab hide · wheel scroll",
+        );
+        frame.render_widget(
+            Block::default()
+                .borders(Borders::RIGHT)
+                .border_style(self.colors.metadata),
+            tree,
+        );
+    }
+}
+
+fn file_tree_rows(links: &[FileLink]) -> Vec<(usize, usize)> {
+    let mut rows: Vec<_> = links.iter().map(|link| (link.target, link.row)).collect();
+    rows.sort_unstable();
+    rows
 }
 
 fn file_header_rows(lines: &[(Line<'_>, Option<Language>)]) -> Vec<(usize, usize)> {
@@ -632,6 +782,198 @@ mod tests {
             assert_ne!(
                 span.style.bg, line.style.bg,
                 "{word} has stronger emphasis than its row"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn tab_shows_and_hides_a_file_tree_beside_the_diff() -> TestResult {
+        let repository = repository()?;
+        let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
+        let mut options = Options::default();
+        let colors = Palette::default();
+        let mut view = View::new(&diff, &mut options, &colors);
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 12))?;
+        let offset = view.last_file_header();
+        for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT, KeyModifiers::SHIFT] {
+            assert!(
+                !view.key(KeyEvent::new(KeyCode::Tab, modifiers)),
+                "only an unmodified Tab toggles the panel"
+            );
+        }
+        for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
+            assert!(
+                !view.key(KeyEvent::new_with_kind(KeyCode::Tab, KeyModifiers::NONE, kind)),
+                "holding or releasing Tab does not toggle the panel"
+            );
+        }
+        assert!(
+            view.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+            "Tab opens the file tree panel"
+        );
+        terminal.draw(|frame| view.draw(frame, frame.area(), offset, 0))?;
+        let row: String = (0..40).map(|x| terminal.backend().buffer()[(x, 0)].symbol()).collect();
+        assert!(
+            row.starts_with("Files"),
+            "the tree reappears to the left of the current file"
+        );
+        assert!(
+            view.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+            "a second Tab hides the panel"
+        );
+        terminal.draw(|frame| view.draw(frame, frame.area(), offset, 0))?;
+        let row: String = (0..120).map(|x| terminal.backend().buffer()[(x, 0)].symbol()).collect();
+        assert!(
+            row.starts_with("Structural diff"),
+            "hiding restores the full-width diff"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tree_panel_highlights_visible_files_and_keeps_click_targets_current() -> TestResult {
+        let repository = production_repository()?;
+        let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
+        let mut options = Options::default();
+        let colors = Palette::default();
+        let mut review = crate::DiffView::Structural(View::new(&diff, &mut options, &colors));
+        assert!(review.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
+        let area = Rect::new(3, 2, 120, 80);
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(125, 84))?;
+        for key in [None, Some('c'), Some('w'), Some('r'), Some('p')] {
+            if let Some(key) = key {
+                assert!(review.key(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE)));
+            }
+            let crate::DiffView::Structural(view) = &review else {
+                unreachable!("this test reviews a structural diff")
+            };
+            let [tree, patch] = view.areas(area);
+            assert_eq!(patch.x, tree.right(), "the panel and diff do not overlap");
+            assert_eq!(patch.right(), area.right(), "the diff keeps the remaining width");
+            for offset in [view.file_headers[0].0, view.last_file_header()] {
+                terminal.draw(|frame| review.draw(frame, area, offset, 0))?;
+                let visible = view.visible_files(patch, offset);
+                let tree_offset = view.tree_offset(tree, offset);
+                let mut highlighted = 0;
+                for link in &view.file_links {
+                    if link.row < tree_offset || link.row >= tree_offset + usize::from(tree.height - 2) {
+                        continue;
+                    }
+                    let mouse = MouseEvent {
+                        kind: MouseEventKind::Down(MouseButton::Left),
+                        column: tree.x + u16::try_from(link.columns.start)?,
+                        row: tree.y + 1 + u16::try_from(link.row - tree_offset)?,
+                        modifiers: KeyModifiers::NONE,
+                    };
+                    let selected = terminal.backend().buffer()[(mouse.column, mouse.row)]
+                        .modifier
+                        .contains(Modifier::REVERSED);
+                    assert_eq!(
+                        selected,
+                        visible.contains(&link.target),
+                        "only files visible in the diff are highlighted"
+                    );
+                    highlighted += usize::from(selected);
+                    assert_eq!(
+                        review.mouse(mouse, area, offset, 20),
+                        Some((link.target, 0)),
+                        "panel clicks use their own coordinates and clear diff panning"
+                    );
+                }
+                assert!(highlighted > 0, "the current file is highlighted");
+                if offset == view.file_headers[0].0 {
+                    assert!(highlighted > 1, "all simultaneously visible files are highlighted");
+                }
+                assert_eq!(
+                    review.mouse(
+                        MouseEvent {
+                            kind: MouseEventKind::ScrollRight,
+                            column: patch.x,
+                            row: patch.y + 1,
+                            modifiers: KeyModifiers::NONE
+                        },
+                        area,
+                        offset,
+                        0
+                    ),
+                    Some((
+                        offset,
+                        view.max_width()
+                            .saturating_sub(usize::from(patch.width))
+                            .min(usize::from(patch.width))
+                    )),
+                    "horizontal diff scrolling uses the reduced viewport width"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn tree_panel_scrolls_independently_and_follows_the_current_file() -> TestResult {
+        let repository = production_repository()?;
+        let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
+        let mut options = Options::default();
+        let colors = Palette::default();
+        let mut view = View::new(&diff, &mut options, &colors);
+        assert!(view.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
+        let area = Rect::new(2, 2, 120, 7);
+        let [tree, patch] = view.areas(area);
+        let offset = view.last_file_header();
+        let current = view.tree_offset(tree, offset);
+        let mouse = MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: tree.x + 1,
+            row: tree.y + 1,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert!(
+            view.scroll_tree(mouse, area, offset),
+            "wheels over the panel scroll its tree"
+        );
+        assert_eq!(
+            view.tree_offset(tree, offset),
+            current.saturating_sub(1),
+            "manual scrolling is retained while the diff is stationary"
+        );
+        assert!(
+            !view.scroll_tree(
+                MouseEvent {
+                    column: patch.x,
+                    ..mouse
+                },
+                area,
+                offset
+            ),
+            "wheels over the diff do not scroll the panel"
+        );
+        let first = view.file_headers[0].0;
+        let target_row = view
+            .tree_rows
+            .iter()
+            .find(|&&(target, _)| target == first)
+            .expect("each file has a tree row")
+            .1;
+        let followed = view.tree_offset(tree, first);
+        assert!(
+            target_row >= followed && target_row < followed + usize::from(tree.height - 2),
+            "moving to another file brings its highlighted entry into view"
+        );
+        assert!(view.key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)));
+        assert!(
+            view.tree_scroll.is_none(),
+            "filtering discards obsolete tree scroll coordinates"
+        );
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 7))?;
+        for width in [1, 3, 6, 20, 120] {
+            let bounds = Rect::new(0, 0, width, 7);
+            terminal.draw(|frame| view.draw(frame, bounds, first.min(view.last_file_header()), 0))?;
+            let [tree, patch] = view.areas(bounds);
+            assert_eq!(
+                tree.width + patch.width,
+                bounds.width,
+                "resizing retains a usable diff area"
             );
         }
         Ok(())
