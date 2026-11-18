@@ -127,6 +127,7 @@ impl PreparedDiff {
     }
 
     /// Render the cached outlines with the current settings. Identical outlines emit no rows.
+    #[cfg(test)]
     pub fn render(&self, options: &Options) -> Vec<Line> {
         self.render_with(options, RenderOptions::default())
     }
