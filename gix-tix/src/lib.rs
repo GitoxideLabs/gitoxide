@@ -208,12 +208,13 @@ fn sync_worktree_monitor(
         },
         ..current.options().clone()
     };
+    let loss_debounce = current.repository_monitor().loss_debounce();
     let repository = open().or_raise(|| message("could not reopen repository for filesystem monitoring"))?;
     drop(monitor.take());
-    *monitor = Some(
-        gix::status::Monitor::new(&repository, options)
-            .or_raise(|| message("could not create replacement filesystem monitor"))?,
-    );
+    let mut replacement = gix::status::Monitor::new(&repository, options)
+        .or_raise(|| message("could not create replacement filesystem monitor"))?;
+    replacement.set_loss_debounce(loss_debounce)?;
+    *monitor = Some(replacement);
     Ok(())
 }
 
@@ -1167,6 +1168,7 @@ fn event_loop(
                 ..Default::default()
             },
         )?;
+        monitor.set_loss_debounce(Some(Duration::from_millis(250)))?;
         let initial = monitor.service(Instant::now(), || Ok(view_repository.clone()));
         app.update_monitor_error(&initial);
         for error in initial.errors {
@@ -13550,13 +13552,15 @@ added
                 max_latency: Duration::from_millis(84),
                 retry_interval: Duration::from_secs(2),
             };
-            let initial = gix::status::Monitor::new(
+            let mut initial = gix::status::Monitor::new(
                 &test_repository::open(&fixture)?,
                 gix::status::monitor::Options {
                     repository: options,
                     ..Default::default()
                 },
             )?;
+            let quiet = Some(Duration::from_millis(63));
+            initial.set_loss_debounce(quiet)?;
             let options = initial.repository_monitor().options().clone();
             let mut monitor = Some(initial);
             sync_worktree_monitor(&mut monitor, true, false, || {
@@ -13578,11 +13582,16 @@ added
                     opens += 1;
                     test_repository::open(&fixture)
                 })?;
-                let actual = monitor
+                let repository_monitor = monitor
                     .as_ref()
                     .expect("successful replacement restores monitoring")
-                    .repository_monitor()
-                    .options();
+                    .repository_monitor();
+                assert_eq!(
+                    repository_monitor.loss_debounce(),
+                    quiet,
+                    "replacement keeps the loss quiet period"
+                );
+                let actual = repository_monitor.options();
                 assert_eq!(
                     actual.worktree_coverage,
                     enabled.then_some(gix::notify::WorktreeCoverage::IgnoreAware),

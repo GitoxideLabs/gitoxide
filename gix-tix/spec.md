@@ -2346,10 +2346,13 @@ views.
 - Worktree updates retain the history selection and restore changed-path
   selection by raw path and relative viewport position. They never select the
   newest commit merely because status changed.
-- Native event queues and service batches are bounded by count and bytes. Queue
-  overflow and backend coverage loss request a complete refresh. Worktree events
-  are published on the next service call; metadata transactions wait for 100 ms of
-  quiet, capped at 250 ms from their first event. Monitoring failures retry after
+- Native event queues and service batches are bounded by count and bytes. macOS
+  ignores coalesced subtrees outside logical watch coverage. Queue overflow and
+  other recoverable loss request one complete refresh after 250 ms without another
+  loss report. The affected coverage remains unreliable while waiting. Worktree
+  events under normal coverage are published on the next service call. Metadata
+  transactions wait for 100 ms of quiet, capped at 250 ms from their first event.
+  Monitor failures that need registration repair bypass the quiet period and retry after
   five seconds while still needed. Updates follow native notifications and reported
   coverage loss. Initial registration and runtime monitoring failures remain
   visible in the worktree changes pane through successful status reloads and
@@ -2362,9 +2365,10 @@ views.
   missing permitted files, repository-local ignore rules, and local attribute
   sources are observed. Their changes refresh both the subscriptions and
   dependent views. Creating a missing parent directory causes subscriptions to
-  follow it down to the intended file, staying within those roots. External
-  configuration and global ignore or attribute files add no subscriptions;
-  reopening repositories reads current configuration naturally.
+  follow it down to the intended file, staying within those roots. Ignore-aware
+  monitoring also observes the global ignore file. On macOS it uses a separate
+  file watcher for external ignore paths. Reopening repositories reads current
+  external configuration and attributes naturally.
 - Refresh status remains hidden for 500 ms so quick background work does not
   flicker the footer.
 - A filesystem history refresh is presented immediately as one complete frame,
