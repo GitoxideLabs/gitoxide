@@ -79,14 +79,14 @@ impl Palette {
         };
         let backgrounds = [
             background,
-            blend(background, source(Color::Green), 32),
-            blend(background, source(Color::Red), 32),
-            blend(background, source(Color::Yellow), 24),
+            blend(background, source(Color::Green), 12),
+            blend(background, source(Color::Red), 12),
+            blend(background, source(Color::Yellow), 7),
         ];
         let mut rows = backgrounds.map(text_on);
         rows[0].bg = None;
         let emphasized = [Color::Green, Color::Red]
-            .map(|color| text_on(blend(background, source(color), 50)).add_modifier(Modifier::BOLD));
+            .map(|color| text_on(blend(background, source(color), 35)).add_modifier(Modifier::BOLD));
         let syntax = backgrounds.map(|background| {
             [
                 Color::Magenta,
@@ -144,7 +144,7 @@ impl Palette {
         let mut previous_word = "";
         let row = self.rows.iter().position(|row| *row == line.style).unwrap_or_default();
         // On ANSI-only terminals keep a changed row's foreground when there is no tinted background.
-        let language = language.filter(|_| self.colored && (row == 0 || line.style.bg.is_some()));
+        let syntax_colors = self.colored && (row == 0 || line.style.bg.is_some());
         for span in &line.spans {
             let Some(language) =
                 language.filter(|_| span.style.bg.is_none() && !span.style.add_modifier.contains(Modifier::UNDERLINED))
@@ -154,10 +154,11 @@ impl Palette {
                 continue;
             };
             if language == Language::Markdown {
-                spans.push(Span::styled(
-                    span.content.as_ref(),
-                    span.style.fg(self.syntax[row][2]).add_modifier(Modifier::BOLD),
-                ));
+                let mut style = span.style.add_modifier(Modifier::BOLD);
+                if syntax_colors {
+                    style = style.fg(self.syntax[row][Token::Name as usize]);
+                }
+                spans.push(Span::styled(span.content.as_ref(), style));
                 continue;
             }
             let mut rest = span.content.as_ref();
@@ -177,8 +178,12 @@ impl Palette {
                 let text = &rest[..length];
                 let mut style = span.style;
                 if let Some(kind) = kind {
-                    style = style.fg(self.syntax[row][kind as usize]);
-                    if matches!(kind, Token::Keyword) {
+                    if syntax_colors {
+                        style = style.fg(self.syntax[row][kind as usize]);
+                    }
+                    if matches!(kind, Token::Keyword | Token::Name)
+                        || (matches!(kind, Token::Type) && text.starts_with(char::is_uppercase))
+                    {
                         style = style.add_modifier(Modifier::BOLD);
                     }
                 }
@@ -246,7 +251,7 @@ fn readable(color: [u8; 3], background: [u8; 3], foreground: [u8; 3]) -> [u8; 3]
 enum Token {
     Keyword,
     Type,
-    Function,
+    Name,
     String,
     Number,
     Comment,
@@ -262,6 +267,24 @@ fn token(text: &str, language: Language, previous_word: &str) -> (usize, Option<
     }
     if text.starts_with("/*") {
         return (text.find("*/").map_or(text.len(), |end| end + 2), Some(Token::Comment));
+    }
+    if language == Language::Toml {
+        if first == '"' {
+            return (quoted_length(text, first), Some(Token::Name));
+        }
+        if first == '\'' {
+            return (
+                text[1..].find('\'').map_or(text.len(), |end| end + 2),
+                Some(Token::Name),
+            );
+        }
+        let length = text
+            .bytes()
+            .take_while(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+            .count();
+        if length != 0 {
+            return (length, Some(Token::Name));
+        }
     }
     if first == '"' {
         return (quoted_length(text, first), Some(Token::String));
@@ -291,16 +314,22 @@ fn token(text: &str, language: Language, previous_word: &str) -> (usize, Option<
         );
     }
     if first.is_alphabetic() || first == '_' {
-        let length = text
-            .char_indices()
-            .find(|(_, character)| !identifier(*character))
-            .map_or(text.len(), |(index, _)| index);
+        let name = text
+            .strip_prefix("r#")
+            .filter(|name| name.starts_with(|ch: char| ch.is_alphabetic() || ch == '_'))
+            .unwrap_or(text);
+        let length = text.len() - name.len()
+            + name
+                .char_indices()
+                .find(|(_, character)| !identifier(*character))
+                .map_or(name.len(), |(index, _)| index);
         let word = &text[..length];
-        let kind = if language == Language::Toml {
-            Some(Token::Function)
-        } else if matches!(
+        let following = text[length..].trim_start();
+        let kind = if matches!(
             word,
-            "as" | "async"
+            "Self"
+                | "as"
+                | "async"
                 | "await"
                 | "break"
                 | "const"
@@ -318,6 +347,8 @@ fn token(text: &str, language: Language, previous_word: &str) -> (usize, Option<
                 | "in"
                 | "let"
                 | "loop"
+                | "macro"
+                | "macro_rules"
                 | "match"
                 | "mod"
                 | "move"
@@ -339,8 +370,24 @@ fn token(text: &str, language: Language, previous_word: &str) -> (usize, Option<
                 | "while"
         ) {
             Some(Token::Keyword)
-        } else if previous_word == "fn" || text[length..].trim_start().starts_with(['(', '!']) {
-            Some(Token::Function)
+        } else if word.starts_with("r#")
+            || matches!(
+                previous_word,
+                "fn" | "mod"
+                    | "struct"
+                    | "enum"
+                    | "trait"
+                    | "union"
+                    | "type"
+                    | "const"
+                    | "static"
+                    | "macro"
+                    | "macro_rules"
+            )
+            || following.starts_with(['(', '!', '{', '='])
+            || following.strip_prefix(':').is_some_and(|rest| !rest.starts_with(':'))
+        {
+            Some(Token::Name)
         } else if first.is_uppercase()
             || matches!(
                 word,
@@ -364,6 +411,8 @@ fn token(text: &str, language: Language, previous_word: &str) -> (usize, Option<
             )
         {
             Some(Token::Type)
+        } else if previous_word.is_empty() && matches!(following, "" | ",") {
+            Some(Token::Name)
         } else {
             None
         };
@@ -372,7 +421,11 @@ fn token(text: &str, language: Language, previous_word: &str) -> (usize, Option<
     (
         text.char_indices()
             .skip(1)
-            .find(|(_, character)| character.is_alphanumeric() || matches!(character, '_' | '"' | '\'' | '/'))
+            .find(|(_, character)| {
+                character.is_alphanumeric()
+                    || matches!(character, '_' | '"' | '\'' | '/')
+                    || (language == Language::Toml && *character == '-')
+            })
             .map_or(text.len(), |(index, _)| index),
         None,
     )
@@ -445,10 +498,66 @@ mod tests {
                 palette.rows[1].bg, palette.rows[2].bg,
                 "theme red and green produce different tints"
             );
+            assert_eq!(
+                palette.row(Change::Added).bg.map(rgb),
+                Some(blend(background, ansi[2], 12)),
+                "the row tint stays close to the terminal background"
+            );
+            assert_eq!(
+                palette.emphasis(Change::Added).bg.map(rgb),
+                Some(blend(background, ansi[2], 35)),
+                "changed words are still more distinct than their row"
+            );
             assert!(
                 palette.rows[0].bg.is_none(),
                 "unchanged rows preserve terminal background transparency"
             );
+        }
+    }
+
+    #[test]
+    fn names_and_keywords_are_bold_across_palettes() {
+        for palette in [
+            Palette::new([220; 3], [20; 3], None),
+            Palette::default(),
+            Palette::PLAIN,
+        ] {
+            for (source, language, bold) in [
+                (
+                    "pub fn r#type<T>(arg: Wrapper<T>) -> i32 { … }",
+                    Language::Rust,
+                    ["pub", "fn", "r#type", "arg", "Wrapper"].as_slice(),
+                ),
+                ("mod nested {", Language::Rust, &["mod", "nested"]),
+                ("struct Data {", Language::Rust, &["struct", "Data"]),
+                ("status: u8,", Language::Rust, &["status"]),
+                ("[package.'quoted-key']", Language::Toml, &["package", "'quoted-key'"]),
+                ("default-features = …", Language::Toml, &["default-features"]),
+                ("# Project", Language::Markdown, &["# Project"]),
+            ] {
+                let line = Line::raw(source).style(palette.row(Change::Added));
+                let highlighted = palette.highlight(&line, Some(language));
+                assert_eq!(
+                    highlighted.to_string(),
+                    source,
+                    "emphasis preserves the declaration text"
+                );
+                for name in bold {
+                    assert!(
+                        highlighted
+                            .spans
+                            .iter()
+                            .any(|span| span.content == *name && span.style.add_modifier.contains(Modifier::BOLD)),
+                        "{name} is bold in {source}"
+                    );
+                }
+                if line.style.bg.is_none() {
+                    assert!(
+                        highlighted.style == line.style && highlighted.spans.iter().all(|span| span.style.fg.is_none()),
+                        "the fallback keeps the row's foreground across tokens"
+                    );
+                }
+            }
         }
     }
 
