@@ -93,7 +93,7 @@ fn tab_reopens_the_file_tree_beside_a_scrolled_structural_diff() -> gix_error::T
     terminal.wait_for(|output| contains(output, b"second") && contains(output, b"\x1b_Ga=p,"))?;
     let opened = terminal.output.len();
     terminal.master.write_all(b"\x1b[13;2u")?;
-    terminal.wait_for(|output| contains(&output[opened..], b"declaration renames:on"))?;
+    terminal.wait_for(|output| contains(&output[opened..], b" back"))?;
     let scrolled = terminal.output.len();
     terminal.master.write_all(b"\x1b[F")?;
     terminal.wait_for(|output| contains(&output[scrolled..], b"69"))?;
@@ -126,7 +126,7 @@ fn mouse_clicks_and_wheels_navigate_the_structural_diff() -> gix_error::TestResu
     terminal.wait_for(|output| contains(output, b"second") && contains(output, b"\x1b_Ga=p,"))?;
     let opened = terminal.output.len();
     terminal.master.write_all(b"\x1b[13;2u")?;
-    terminal.wait_for(|output| contains(&output[opened..], b"declaration renames:on"))?;
+    terminal.wait_for(|output| contains(&output[opened..], b" back"))?;
     let hovered = terminal.output.len();
     terminal.master.write_all(b"\x1b[<35;5;3M")?;
     // The cell diff can skip unchanged spaces and emit color escapes before the counts.
@@ -177,13 +177,9 @@ fn shift_enter_scrolls_the_continuous_structural_diff_and_keeps_live_settings() 
     terminal.wait_for(|output| contains(output, b"second") && contains(output, b"\x1b_Ga=p,"))?;
     let view_start = terminal.output.len();
     terminal.master.write_all(b"\x1b[13;2u")?;
-    terminal.wait_for(|output| contains(&output[view_start..], b"r declaration renames:on"))?;
+    terminal.wait_for(|output| contains(&output[view_start..], b" back"))?;
     let first_page = &terminal.output[view_start..];
     assert!(contains(first_page, b"src/"), "the file tree starts the built-in view");
-    assert!(
-        contains(first_page, b"c context:0"),
-        "the first structural view starts with zero context"
-    );
     assert!(
         contains(first_page, b"---") && contains(first_page, b"+++") && contains(first_page, b"b/src/api.rs"),
         "patch headers follow the file tree on the same page"
@@ -204,6 +200,9 @@ fn shift_enter_scrolls_the_continuous_structural_diff_and_keeps_live_settings() 
         !contains(first_page, b"secret_"),
         "structural output keeps implementation text hidden"
     );
+    let helps = terminal.output.len();
+    terminal.master.write_all(b"?")?;
+    terminal.wait_for(|output| contains(&output[helps..], b"click filename to jump"))?;
     let last_page = terminal.output.len();
     terminal.master.write_all(b"\x1b[F")?;
     // The last row reuses the already drawn 'added_0' prefix and only writes '69'.
@@ -211,26 +210,18 @@ fn shift_enter_scrolls_the_continuous_structural_diff_and_keeps_live_settings() 
     let first_page = terminal.output.len();
     terminal.master.write_all(b"\x1b[H")?;
     terminal.wait_for(|output| contains(&output[first_page..], b"files ("))?;
-    let words_changed = terminal.output.len();
-    terminal.master.write_all(b"w")?;
-    // Syntax styles split declarations into several writes; the footer changes on -> off.
-    terminal.wait_for(|output| contains(&output[words_changed..], b"ff"))?;
-    let renames_changed = terminal.output.len();
-    terminal.master.write_all(b"r")?;
-    // Cell diffs emit the changed suffix of 'on' -> 'off', not the entire footer.
-    terminal.wait_for(|output| contains(&output[renames_changed..], b"ff"))?;
     let back = terminal.output.len();
-    terminal.master.write_all(b"cq")?;
+    terminal.master.write_all(b"vwrxq")?;
     terminal.wait_for(|output| contains(&output[back..], b"second"))?;
     let reopened = terminal.output.len();
-    terminal.master.write_all(b"\x1b[13;2u")?;
-    terminal.wait_for(|output| contains(&output[reopened..], b"declaration renames:off"))?;
+    terminal.master.write_all(b"\x1b[13;2uv")?;
+    terminal.wait_for(|output| contains(&output[reopened..], b"ords off"))?;
     assert!(
-        contains(&terminal.output[reopened..], b"words:off"),
+        contains(&terminal.output[reopened..], b"enames off"),
         "settings persist when reopening the view"
     );
     assert!(
-        contains(&terminal.output[reopened..], b"c context:1"),
+        contains(&terminal.output[reopened..], b"t 1"),
         "the context key is routed to structural mode and persists when reopening"
     );
     terminal.master.write_all(b"\r")?;
@@ -257,7 +248,7 @@ fn production_only_shortcut_filters_the_tree_and_survives_reopening() -> gix_err
     terminal.wait_for(|output| contains(output, b"second") && contains(output, b"\x1b_Ga=p,"))?;
     let opened = terminal.output.len();
     terminal.master.write_all(b"\x1b[13;2u")?;
-    terminal.wait_for(|output| contains(&output[opened..], b"p production only:off"))?;
+    terminal.wait_for(|output| contains(&output[opened..], b" back"))?;
     assert!(
         contains(&terminal.output[opened..], b"integration.rs"),
         "the initial tree contains test files"
@@ -266,11 +257,11 @@ fn production_only_shortcut_filters_the_tree_and_survives_reopening() -> gix_err
     terminal.master.write_all(b"\x1b[F")?;
     terminal.wait_for(|output| contains(&output[last_page..], b"Outline unavailable:"))?;
     let filtered = terminal.output.len();
-    terminal.master.write_all(b"pq")?;
+    terminal.master.write_all(b"vpq")?;
     terminal.wait_for(|output| contains(&output[filtered..], b"second"))?;
     let reopened = terminal.output.len();
     terminal.master.write_all(b"\x1b[13;2u")?;
-    terminal.wait_for(|output| contains(&output[reopened..], b"p production only:on"))?;
+    terminal.wait_for(|output| contains(&output[reopened..], b" back"))?;
     let output = &terminal.output[reopened..];
     assert!(
         contains(output, b"Changed files (5)"),
@@ -282,11 +273,11 @@ fn production_only_shortcut_filters_the_tree_and_survives_reopening() -> gix_err
         "filtering and reopening never query terminal colors"
     );
     let back = terminal.output.len();
-    terminal.master.write_all(b"pq")?;
+    terminal.master.write_all(b"vpq")?;
     terminal.wait_for(|output| contains(&output[back..], b"second"))?;
     let restored = terminal.output.len();
     terminal.master.write_all(b"\x1b[13;2u")?;
-    terminal.wait_for(|output| contains(&output[restored..], b"p production only:off"))?;
+    terminal.wait_for(|output| contains(&output[restored..], b" back"))?;
     assert!(
         contains(&terminal.output[restored..], b"Changed files (13)"),
         "p restores the complete file tree"
@@ -359,7 +350,7 @@ fn text_only_structural_diffs_use_the_light_terminal_theme() -> gix_error::TestR
     );
     let view_start = terminal.output.len();
     terminal.master.write_all(b"\x1b[13;2u")?;
-    terminal.wait_for(|output| contains(&output[view_start..], b"r declaration renames:on"))?;
+    terminal.wait_for(|output| contains(&output[view_start..], b" back"))?;
     let view_output = &terminal.output[view_start..];
     assert!(
         emitted_rgb_colors(view_output, "38;2;").contains(&terminal.foreground),
@@ -398,7 +389,7 @@ fn structural_diff_color_can_be_enabled_from_no_color_and_persists() -> gix_erro
     terminal.wait_for(|output| contains(output, b"second") && contains(output, b"\x1b_Ga=p,"))?;
     let opened = terminal.output.len();
     terminal.master.write_all(b"\x1b[13;2u")?;
-    terminal.wait_for(|output| contains(&output[opened..], b"v color:off"))?;
+    terminal.wait_for(|output| contains(&output[opened..], b" back"))?;
     let plain = &terminal.output[opened..];
     assert!(contains(plain, b"{+u32+}"), "plain output includes word markers");
     assert!(
@@ -406,14 +397,18 @@ fn structural_diff_color_can_be_enabled_from_no_color_and_persists() -> gix_erro
         "NO_COLOR suppresses declaration tinting"
     );
     let toggled = terminal.output.len();
-    terminal.master.write_all(b"v")?;
+    terminal.master.write_all(b"vc")?;
     terminal.wait_for(|output| !emitted_rgb_colors(&output[toggled..], "48;2;").is_empty())?;
     let back = terminal.output.len();
     terminal.master.write_all(b"q")?;
     terminal.wait_for(|output| contains(&output[back..], b"second"))?;
     let reopened = terminal.output.len();
     terminal.master.write_all(b"\x1b[13;2u")?;
-    terminal.wait_for(|output| contains(&output[reopened..], b"v color:on"))?;
+    terminal.wait_for(|output| contains(&output[reopened..], b" back"))?;
+    assert!(
+        !emitted_rgb_colors(&terminal.output[reopened..], "48;2;").is_empty(),
+        "the color setting persists when reopening the diff"
+    );
     assert!(
         !contains(&terminal.output[reopened..], b"{+u32+}"),
         "color mode uses styling for word changes"
@@ -512,10 +507,11 @@ fn check_shutdown(signal: Option<Signal>, view: View) -> gix_error::TestResult {
         let marker = match view {
             View::BuiltinDiff => b"/q/Esc back".as_slice(),
             View::PagerAcknowledgement => b"TIX_TEST_PAGER_FINISHED",
-            View::StructuralDiff => b"r declaration renames:on",
+            // The colored mnemonic can end with a cursor move before the label.
+            View::StructuralDiff => b"back",
             View::Graph => unreachable!("only diff views need more input"),
         };
-        terminal.wait_for(|output| contains(output, marker))?;
+        terminal.wait_for(|output| contains(&output[viewer_start..], marker))?;
     }
     // Leave the UI waiting for input; termination must not need another keystroke.
     let idle_until = Instant::now() + Duration::from_millis(300);

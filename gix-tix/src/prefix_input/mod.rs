@@ -229,7 +229,7 @@ impl State {
     }
 }
 
-fn prefix_group(key: KeyEvent) -> Option<CommandGroup> {
+pub(crate) fn prefix_group(key: KeyEvent) -> Option<CommandGroup> {
     if key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) {
         return None;
     }
