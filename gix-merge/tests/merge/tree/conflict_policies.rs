@@ -38,6 +38,7 @@ fn merge(
         &mut new_blob_merge_platform(&case.root, 0),
         &case.odb,
         &mut |commit_id| commit_id.to_hex_with_len(7).to_string(),
+        gix_merge::tree::Context::default(),
         options,
     )?
     .tree_merge)

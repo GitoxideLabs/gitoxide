@@ -1,12 +1,9 @@
-use std::{
-    cmp::Ordering,
-    collections::{HashMap, hash_map},
-    fmt::Formatter,
-};
+use std::{cmp::Ordering, fmt::Formatter};
 
 use bstr::{BStr, BString, ByteSlice, ByteVec};
 use gix_error::{Result, bail, validation};
 use gix_hash::ObjectId;
+use gix_hashtable::hash_map::{EntryRef, HashMap};
 
 use crate::{
     Tree, tree,
@@ -378,10 +375,10 @@ impl Editor<'_> {
                 matches!(edit, EditMode::Remove(RemoveMode::LeafOnly | RemoveMode::IfLeaf))
                     && tree_to_lookup.is_some_and(|id| id.is_empty_tree());
             push_path_component(&mut path_buf, name);
-            cursor = match self.trees.entry(path_buf.clone()) {
-                hash_map::Entry::Occupied(e) => e.into_mut(),
-                hash_map::Entry::Vacant(_) if stop_at_unedited_empty_tree => break,
-                hash_map::Entry::Vacant(e) => e.insert(
+            cursor = match self.trees.entry_ref(path_buf.as_bstr()) {
+                EntryRef::Occupied(e) => e.into_mut(),
+                EntryRef::Vacant(_) if stop_at_unedited_empty_tree => break,
+                EntryRef::Vacant(e) => e.insert(
                     if let Some(tree_id) = tree_to_lookup.filter(|tree_id| !tree_id.is_empty_tree()) {
                         self.find.find_tree(&tree_id, &mut self.tree_buf)?.into()
                     } else {

@@ -6,6 +6,45 @@ use crate::blob::{Platform, ResourceKind, platform::Resource};
 
 /// Preparation
 impl Platform {
+    /// Compare two regular-file versions after normalization, without running a merge driver.
+    pub(crate) fn unchanged_after_renormalization(
+        &mut self,
+        rela_path: &BStr,
+        (base_blob_id, base_mode): (gix_hash::ObjectId, gix_object::tree::EntryMode),
+        (side_blob_id, side_mode): (gix_hash::ObjectId, gix_object::tree::EntryMode),
+        side: ResourceKind,
+        objects: &impl gix_object::FindObjectOrHeader,
+    ) -> Result<bool> {
+        if self.filter_mode != crate::blob::pipeline::Mode::Renormalize
+            || !base_mode.is_blob()
+            || base_mode.kind() != side_mode.kind()
+        {
+            return Ok(false);
+        }
+        self.set_resource(
+            Some(base_blob_id),
+            base_mode.kind(),
+            rela_path,
+            ResourceKind::CommonAncestorOrBase,
+            objects,
+        )?;
+        self.set_resource(Some(side_blob_id), side_mode.kind(), rela_path, side, objects)?;
+        let base = self
+            .ancestor
+            .as_ref()
+            .expect("the base resource was configured successfully");
+        let side = match side {
+            ResourceKind::CurrentOrOurs => &self.current,
+            ResourceKind::OtherOrTheirs => &self.other,
+            ResourceKind::CommonAncestorOrBase => unreachable!("the side must differ from the base"),
+        }
+        .as_ref()
+        .expect("the side resource was configured successfully");
+        Ok(base.data == Some(crate::blob::pipeline::Data::Buffer)
+            && side.data == Some(crate::blob::pipeline::Data::Buffer)
+            && base.buffer == side.buffer)
+    }
+
     /// Store enough information about a resource to eventually use it in a merge, where…
     ///
     /// * `id` is the hash of the resource. If it is `None`, it should either

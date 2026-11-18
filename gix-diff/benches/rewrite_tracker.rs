@@ -571,6 +571,7 @@ fn run_tracker(scenario: &Scenario) -> Outcome {
                 }
                 Ok(())
             },
+            Default::default(),
         )
         .expect("benchmark rewrite tracking should succeed");
 

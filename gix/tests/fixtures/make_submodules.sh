@@ -239,6 +239,22 @@ git clone with-submodules not-a-submodule
   git add m1 && git commit -m "no submodule in index and commit, but in configuration"
 )
 
+# Path discovery must skip an absent field, but reject a present invalid one.
+# The unrelated section comes first so a later valid path cannot hide its error.
+for case in missing implicit empty absolute escaping; do
+  root="path-$case"
+  git init "$root"
+  git -C "$root" read-tree --empty
+  case "$case" in
+    missing) field='url = ./unused' ;;
+    implicit) field='path' ;;
+    empty) field='path =' ;;
+    absolute) field='path = /outside' ;;
+    escaping) field='path = ../outside' ;;
+  esac
+  printf '[submodule "unrelated"]\n    %s\n[submodule "module"]\n    path = module\n' "$field" >"$root/.gitmodules"
+done
+
 git init unborn
 
 # Opening repositories through this symlink exercises preservation of the

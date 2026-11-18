@@ -26,7 +26,7 @@ git mv b a
 mkdir -p b/a
 printf fresh >b/a/f
 printf anchor >d/a
-chmod +x b/a/f d/a
-git add .
+# Record executable modes even when the filesystem does not expose them to Git.
+git add --chmod=+x b/a/f d/a
 git commit -m 'rename file to the shared destination and add descendants'
 git rev-parse base^{tree} ours^{tree} theirs^{tree} >trees

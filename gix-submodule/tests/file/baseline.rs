@@ -53,7 +53,7 @@ fn common_values_and_names_by_path() -> TestResult {
     for module in &modules {
         for name in module.names() {
             let path = module.path(name)?;
-            assert_eq!(module.name_by_path(path.as_ref()).expect("found"), name);
+            assert_eq!(module.name_by_path(path.as_ref())?.expect("found"), name);
         }
     }
     Ok(())

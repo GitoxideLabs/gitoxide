@@ -111,8 +111,8 @@ pub(crate) mod function {
                     .map(|opt| {
                         opt.map(|submodules| {
                             submodules
-                                .map(|sm| sm.path().map(move |path| (path, sm)))
-                                .collect::<std::result::Result<Vec<_>, _>>()
+                                .filter_map(|sm| sm.try_path().map(|path| path.map(move |path| (path, sm))).transpose())
+                                .collect::<Result<Vec<_>>>()
                         })
                     })
                     .transpose()

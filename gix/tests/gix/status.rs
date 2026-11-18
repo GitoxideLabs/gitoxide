@@ -515,6 +515,24 @@ mod into_iter {
     }
 
     #[test]
+    fn submodule_discovery_skips_missing_paths_but_propagates_invalid_ones() -> TestResult {
+        for case in ["missing", "implicit", "empty", "absolute", "escaping"] {
+            let repo = submodule_repo(&format!("path-{case}"))?;
+            let status = gix::status::index_worktree::BuiltinSubmoduleStatus::new(
+                repo.into_sync(),
+                Submodule::AsConfigured { check_dirty: false },
+            );
+            if case == "missing" {
+                status?;
+            } else {
+                let err = status.err().expect("invalid paths must fail discovery");
+                assert!(err.is_validation(), "{case}: status preserves path-validation errors");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn submodule_status_preserves_missing_configured_worktree() -> TestResult {
         use gix::status::plumbing::index_as_worktree::traits::SubmoduleStatus;
 

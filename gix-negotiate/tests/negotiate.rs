@@ -94,7 +94,7 @@ fn missing_parents_are_skipped_like_shallow_boundaries() -> TestResult {
 #[test]
 fn size_of_entry() {
     let actual = std::mem::size_of::<gix_revwalk::graph::Commit<gix_negotiate::Metadata>>();
-    let sha1 = 56;
+    let sha1 = 64;
     let sha256_extra = 16;
     let expected = sha1 + sha256_extra;
     assert!(

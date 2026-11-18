@@ -7,7 +7,8 @@ use crate::{
     File,
     file::{
         BASE_GRAPHS_LIST_CHUNK_ID, COMMIT_DATA_CHUNK_ID, COMMIT_DATA_ENTRY_SIZE_SANS_HASH,
-        EXTENDED_EDGES_LIST_CHUNK_ID, FAN_LEN, HEADER_LEN, OID_FAN_CHUNK_ID, OID_LOOKUP_CHUNK_ID, SIGNATURE,
+        EXTENDED_EDGES_LIST_CHUNK_ID, FAN_LEN, GENERATION_DATA_CHUNK_ID, GENERATION_OVERFLOW_CHUNK_ID, HEADER_LEN,
+        OID_FAN_CHUNK_ID, OID_LOOKUP_CHUNK_ID, SIGNATURE,
     },
 };
 
@@ -137,6 +138,25 @@ impl File {
             .ok()
             .transpose()?;
 
+        let generation_data_offset = chunks
+            .validated_usize_offset_by_id(GENERATION_DATA_CHUNK_ID, |range| -> Result<_> {
+                if range.len() / 4 != commit_data_count as usize || range.len() % 4 != 0 {
+                    bail!("Commit-graph generation data must contain one u32 per commit".corrupted());
+                }
+                Ok(range.start)
+            })
+            .ok()
+            .transpose()?;
+        let generation_overflow_range = chunks
+            .validated_usize_offset_by_id(GENERATION_OVERFLOW_CHUNK_ID, |range| -> Result<_> {
+                if range.len() % 8 != 0 {
+                    bail!("Commit-graph generation overflow data must contain whole u64 values".corrupted());
+                }
+                Ok(range)
+            })
+            .ok()
+            .transpose()?;
+
         let trailer = &data[chunks.highest_offset() as usize..];
         if trailer.len() != object_hash.len_in_bytes() {
             bail!(
@@ -172,6 +192,8 @@ impl File {
             base_graph_count,
             base_graphs_list_offset,
             commit_data_offset,
+            generation_data_offset,
+            generation_overflow_range,
             data,
             extra_edges_list_range,
             fan,

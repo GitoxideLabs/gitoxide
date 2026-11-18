@@ -107,20 +107,21 @@ pub mod commit {
 pub mod tree {
     use gix_merge::blob::builtin_driver;
     pub use gix_merge::tree::{
-        Conflict, ContentMerge, DirectoryRenames, Resolution, ResolutionFailure, TreatAsUnresolved,
-        apply_index_entries, treat_as_unresolved,
+        Conflict, ContentMerge, DirectoryRenames, IndexPlan, Resolution, ResolutionFailure, TreatAsUnresolved,
+        treat_as_unresolved,
     };
 
     /// The outcome produced by [`Repository::merge_trees()`](crate::Repository::merge_trees()).
     #[derive(Clone)]
     pub struct Outcome<'repo> {
-        /// The ready-made (but unwritten) *base* tree, including all non-conflicting changes, and the changes that had
-        /// conflicts which could be resolved automatically.
-        ///
-        /// This means, if all of their changes were conflicting, this will be equivalent to the *base* tree.
+        /// The unwritten merge result, including provisional files with conflict markers and paths
+        /// chosen to preserve conflicting versions. Use [`Self::index()`] for its unmerged stages.
         pub tree: crate::object::tree::Editor<'repo>,
+        /// The owned plan for constructing the merge result's index, independently of conflict diagnostics.
+        pub index: IndexPlan,
         /// The set of conflicts we encountered. Can be empty to indicate there was no conflict.
         /// Note that conflicts might have been auto-resolved, but they are listed here for completeness.
+        /// These are diagnostics: editing this list does not change the tree, index, or conflict verdict.
         /// Use [`has_unresolved_conflicts()`](Outcome::has_unresolved_conflicts()) to see if any action is needed
         /// before using [`tree`](Outcome::tree).
         pub conflicts: Vec<Conflict>,
@@ -132,25 +133,34 @@ pub mod tree {
     impl Outcome<'_> {
         /// Return `true` if there is any conflict that would still need to be resolved as they would yield undesirable trees.
         /// This is based on `how` to determine what should be considered unresolved.
+        /// A strict policy can flag forced tree resolutions even when no unmerged index stages remain.
         pub fn has_unresolved_conflicts(&self, how: TreatAsUnresolved) -> bool {
-            self.conflicts.iter().any(|c| c.is_unresolved(how))
+            self.index.has_unresolved_conflicts(how)
         }
 
-        /// Returns `true` if `index` changed as we applied conflicting stages to it, using `how` to determine if a
-        /// conflict should be considered unresolved.
-        ///
-        /// `removal_mode` decides how unconflicted entries should be removed if they are superseded by
-        /// their conflicted counterparts.
-        ///
-        /// It's important that `index` is at the state of [`Self::tree`].
-        /// Note that in practice, whenever there is a single [conflict](Conflict), this function will return `true`.
-        pub fn index_changed_after_applying_conflicts(
+        /// Create a fresh index from the recorded merge result, using `how` to select unmerged stages.
+        /// Later edits to [`Self::tree`] do not change the recorded plan.
+        /// With `existing`, reuse unchanged entries' stat data and adapt `TREE`/`UNTR` caches for the same worktree.
+        /// New, changed, and unmerged entries have zero stat data until checkout refreshes them.
+        pub fn index(
             &self,
-            index: &mut gix_index::State,
             how: TreatAsUnresolved,
-            removal_mode: apply_index_entries::RemovalMode,
-        ) -> bool {
-            apply_index_entries(&self.conflicts, how, index, removal_mode)
+            existing: Option<&gix_index::State>,
+        ) -> crate::Result<gix_index::State> {
+            self.index.to_index(how, existing, self.tree.repo, self.tree.validate)
+        }
+
+        /// Create an index-file in memory from the recorded merge result, using [`Self::index()`].
+        /// The returned file targets the owning repository's index path, but is not written to disk.
+        pub fn index_file(
+            &self,
+            how: TreatAsUnresolved,
+            existing: Option<&gix_index::State>,
+        ) -> crate::Result<gix_index::File> {
+            Ok(gix_index::File::from_state(
+                self.index(how, existing)?,
+                self.tree.repo.index_path(),
+            ))
         }
     }
 

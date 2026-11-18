@@ -307,7 +307,7 @@ fn merge_trees(repo: &gix::Repository, base: ObjectId, ours: ObjectId, theirs: O
         TreeRewrite::Conflict {
             ours,
             merged,
-            conflicts: outcome.conflicts,
+            index_plan: outcome.index,
         }
     } else {
         TreeRewrite::Complete(merged)

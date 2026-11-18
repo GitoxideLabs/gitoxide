@@ -159,3 +159,54 @@ fn unreliable_generations_are_ignored() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn missing_parents_are_errors_unless_the_graph_represents_a_shallow_boundary() -> TestResult {
+    let root = gix_testtools::scripted_fixture_read_only("make_ancestor_missing_parent_repo.sh")?;
+    let odb = odb_at(root.join(".git/objects"))?;
+    let base_commit_id = tag_commit_id(&root, "base")?;
+    let tip_commit_id = tag_commit_id(&root, "tip")?;
+    let parent_commit_id = tag_commit_id(&root, "parent")?;
+    for (ancestor_commit_id, descendant_commit_id, direction) in [
+        (base_commit_id, tip_commit_id, "base-tip"),
+        (tip_commit_id, base_commit_id, "tip-base"),
+    ] {
+        assert_eq!(
+            std::fs::read_to_string(root.join(format!("{direction}.status")))?.trim(),
+            "128",
+            "Git cannot decide ancestry with a traversed missing parent"
+        );
+        assert!(
+            std::fs::read_to_string(root.join(format!("{direction}.stderr")))?.contains(&parent_commit_id.to_string()),
+            "Git's fatal error identifies the missing parent"
+        );
+        let mut graph = gix_revision::Graph::new(&odb, None);
+        let err = is_ancestor(ancestor_commit_id, descendant_commit_id, &mut graph)
+            .expect_err("an absent parent is corruption, not an unrelated history");
+        assert!(
+            err.is_not_found(),
+            "the missing parent retains its not-found classification"
+        );
+        assert!(
+            err.to_string().contains(&parent_commit_id.to_string()),
+            "the error identifies the missing parent"
+        );
+        assert_eq!(
+            gix_revision::merge_base(ancestor_commit_id, &[descendant_commit_id], &mut graph)?,
+            None,
+            "ordinary merge-base traversal still treats missing parents as the end of available history"
+        );
+
+        assert_eq!(
+            std::fs::read_to_string(root.join(format!("shallow-{direction}.status")))?.trim(),
+            "1",
+            "Git treats the intentional shallow boundary as an unrelated history"
+        );
+        graph.get_or_insert_full_commit(tip_commit_id, |commit| commit.parents.clear())?;
+        assert!(
+            !is_ancestor(ancestor_commit_id, descendant_commit_id, &mut graph)?,
+            "callers can represent intentional shallow roots by clearing their parents"
+        );
+    }
+    Ok(())
+}

@@ -105,12 +105,11 @@ impl Directories {
             let Some((dest, _)) = winners.next() else {
                 continue;
             };
-            // shortcut: ties stay unpaired; expose them when merge gains directory-split diagnostics.
             if winners.next().is_some() {
                 continue;
             }
             let Some(dest) = self.find(dest.as_bstr(), false) else {
-                // shortcut: root destinations stay unpaired until tree changes can represent the root.
+                // A tree change cannot represent the repository root.
                 continue;
             };
             renames.insert(source, dest);

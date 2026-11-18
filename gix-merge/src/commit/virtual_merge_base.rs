@@ -22,7 +22,7 @@ pub(super) mod function {
     /// Note that `first_commit` and `second_commit` are expected to have been popped off `others`, so `first_commit`
     /// was the last provided merge-base of function that provides multiple merge-bases for a pair of commits.
     ///
-    /// The parameters `graph`, `diff_resource_cache`, `blob_merge`, `objects`, `abbreviate_hash` and `options` are passed
+    /// The parameters `graph`, `diff_resource_cache`, `blob_merge`, `objects`, `abbreviate_hash`, `context` and `options` are passed
     /// directly to [`tree()`](crate::tree()) for merging the trees of two merge-bases at a time.
     /// Note that most of `options` are overwritten to match the requirements of a merge-base merge.
     #[expect(clippy::too_many_arguments)]
@@ -35,6 +35,7 @@ pub(super) mod function {
         blob_merge: &mut crate::blob::Platform,
         objects: &'objects (impl gix_object::FindObjectOrHeader + gix_object::Write),
         abbreviate_hash: &mut dyn FnMut(&gix_hash::oid) -> String,
+        mut context: crate::tree::Context<'_>,
         mut options: crate::tree::Options,
     ) -> Result<super::Outcome> {
         let mut merged_commit_id = first_commit;
@@ -62,8 +63,8 @@ pub(super) mod function {
         };
         let mut virtual_merge_bases = Vec::new();
         let mut tree_id = None;
+        options.marker_size_multiplier += 1;
         while let Some(next_commit_id) = others.pop() {
-            options.marker_size_multiplier += 1;
             let mut out = crate::commit(
                 merged_commit_id,
                 next_commit_id,
@@ -73,6 +74,7 @@ pub(super) mod function {
                 blob_merge,
                 objects,
                 abbreviate_hash,
+                context.reborrow(),
                 crate::commit::Options {
                     allow_missing_merge_base: false,
                     tree_merge: options.clone(),

@@ -205,6 +205,7 @@ five
             &mut new_cache(&root),
             &objects,
             |_| Ok::<_, std::convert::Infallible>(()),
+            Default::default(),
         )?;
         if deleted {
             assert!(
@@ -291,6 +292,7 @@ fn incompatible_sizes_skip_payloads() -> TestResult {
         &mut new_cache(&root),
         &objects,
         |_| Ok::<_, std::convert::Infallible>(()),
+        Default::default(),
     )?;
     assert_eq!(changes, 5, "all additions and deletions remain visible");
     assert_eq!(

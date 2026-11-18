@@ -12,19 +12,18 @@ pub(crate) fn sync(input: TokenStream) -> TokenStream {
                 output.extend([TokenTree::Group(replacement)]);
             }
             TokenTree::Ident(ident) if ident == "async" => {
-                if matches!(tokens.peek(), Some(TokenTree::Ident(ident)) if ident == "move") {
-                    let move_token = tokens.next();
-                    if matches!(tokens.peek(), Some(TokenTree::Punct(punct)) if punct.as_char() == '|') {
-                        output.extend(move_token);
-                    }
+                if let Some(move_token) =
+                    tokens.next_if(|token| matches!(token, TokenTree::Ident(ident) if ident == "move"))
+                    && matches!(tokens.peek(), Some(TokenTree::Punct(punct)) if punct.as_char() == '|')
+                {
+                    output.extend([move_token]);
                 }
             }
             TokenTree::Punct(punct)
                 if punct.as_char() == '.'
-                    && matches!(tokens.peek(), Some(TokenTree::Ident(ident)) if ident == "await") =>
-            {
-                tokens.next();
-            }
+                    && tokens
+                        .next_if(|token| matches!(token, TokenTree::Ident(ident) if ident == "await"))
+                        .is_some() => {}
             token => output.extend([token]),
         }
     }

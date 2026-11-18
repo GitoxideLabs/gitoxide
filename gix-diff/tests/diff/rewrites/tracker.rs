@@ -18,6 +18,77 @@ use crate::{
 };
 
 #[test]
+fn explicit_destination_order_preserves_the_generic_default() -> TestResult {
+    for reversed in [false, true] {
+        for merge_order in [false, true] {
+            let mut tracker = util::new_tracker(Rewrites {
+                percentage: None,
+                ..Default::default()
+            });
+            let mut changes = [
+                (Change::deletion(), "one/name"),
+                (Change::deletion(), "two/name"),
+                (Change::addition(), "dst/name"),
+                (Change::addition(), "flat"),
+            ];
+            if reversed {
+                changes.reverse();
+            }
+            for (change, path) in changes {
+                tracker.try_push_change(change, path.into());
+            }
+            let mut pairs = Vec::new();
+            let mut collect = |destination: rewrites::tracker::visit::Destination<'_, Change>,
+                               source: Option<Source<'_, Change>>| {
+                pairs.push((
+                    source
+                        .expect("every identical destination has a source")
+                        .location
+                        .to_string(),
+                    destination.location.to_string(),
+                ));
+                std::ops::ControlFlow::Continue(())
+            };
+            let mut platform = util::new_platform_no_worktree();
+            if merge_order {
+                tracker.emit(
+                    &mut collect,
+                    &mut platform,
+                    &gix_object::find::Never,
+                    |_| Ok::<_, std::io::Error>(()),
+                    rewrites::tracker::Context {
+                        destination_order: &["flat".into(), "dst/name".into()],
+                    },
+                )?;
+            } else {
+                tracker.emit(
+                    &mut collect,
+                    &mut platform,
+                    &gix_object::find::Never,
+                    |_| Ok::<_, std::io::Error>(()),
+                    Default::default(),
+                )?;
+            }
+            pairs.sort();
+            let destinations = if merge_order {
+                ["flat", "dst/name"]
+            } else {
+                ["dst/name", "flat"]
+            };
+            assert_eq!(
+                pairs,
+                vec![
+                    ("one/name".to_owned(), destinations[0].to_owned()),
+                    ("two/name".to_owned(), destinations[1].to_owned())
+                ],
+                "caller traversal context changes matching order without depending on insertion order"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn optional_ids_require_content_to_match() -> TestResult {
     #[derive(Clone)]
     struct OptionalId(Option<gix_hash::ObjectId>, ChangeKind);
@@ -67,6 +138,7 @@ fn optional_ids_require_content_to_match() -> TestResult {
                         &mut platform,
                         &gix_object::find::Never,
                         |_| Ok::<_, std::io::Error>(()),
+                        Default::default(),
                     )?;
                     assert_eq!(emitted, if expect_match { 1 } else { 2 });
                 }
@@ -145,6 +217,7 @@ fn unavailable_destination_id_can_match_only_with_available_content() -> TestRes
             &mut platform,
             &objects,
             |_push| Ok::<_, std::io::Error>(()),
+            Default::default(),
         )?;
         assert_eq!(
             emitted,
@@ -215,6 +288,7 @@ fn unavailable_empty_ids_respect_track_empty_and_missing_resources() -> TestResu
                     &mut platform,
                     &gix_object::find::Never,
                     |_push| Ok::<_, std::io::Error>(()),
+                    Default::default(),
                 )?;
                 assert_eq!(
                     emitted,
@@ -1234,6 +1308,7 @@ mod util {
                     }
                     Ok(())
                 },
+                Default::default(),
             )
             .expect("emit doesn't fail")
     }

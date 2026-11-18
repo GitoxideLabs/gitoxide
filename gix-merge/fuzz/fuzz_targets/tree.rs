@@ -1,6 +1,9 @@
 #![no_main]
 
-use std::{collections::BTreeMap, path::Path as FsPath};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path as FsPath,
+};
 
 use gix_diff::Rewrites;
 use gix_hash::ObjectId;
@@ -268,7 +271,14 @@ fn fuzz(data: &[u8]) {
     let mut diff_resource_cache = new_diff_resource_cache();
     let mut blob_merge = new_blob_merge_platform();
 
-    for (current, other) in [(ours, theirs), (theirs, ours)] {
+    for (current, other, rewrites) in [
+        (ours, theirs, options.rewrites),
+        (theirs, ours, options.rewrites),
+        (ours, theirs, None),
+        (theirs, ours, None),
+    ] {
+        let mut options = options.clone();
+        options.rewrites = rewrites;
         let outcome = gix_merge::tree(
             &base,
             &current,
@@ -283,7 +293,8 @@ fn fuzz(data: &[u8]) {
             &mut diff_state,
             &mut diff_resource_cache,
             &mut blob_merge,
-            options.clone(),
+            gix_merge::tree::Context::default(),
+            options,
         );
         let mut outcome = match outcome {
             Ok(outcome) => outcome,
@@ -299,10 +310,105 @@ fn fuzz(data: &[u8]) {
             }
             Err(err) => panic!("generated trees and objects are valid: {err:?}"),
         };
-        outcome
+        let merged_tree_id = outcome
             .tree
             .write(|tree| objects.db.write(tree))
             .expect("the merged tree remains valid");
+        let index = outcome
+            .index
+            .to_index(TreatAsUnresolved::git(), None, &objects.db, Default::default())
+            .expect("the merge plan can populate a complete index");
+        let unresolved = outcome.has_unresolved_conflicts(TreatAsUnresolved::git());
+        let directory_diagnostic = outcome.conflicts.iter().any(|conflict| {
+            matches!(
+                conflict.resolution,
+                Err(gix_merge::tree::ResolutionFailure::DirectoryRenameSplit { .. }
+                    | gix_merge::tree::ResolutionFailure::DirectoryRenameBlocked { .. }
+                    | gix_merge::tree::ResolutionFailure::DirectoryRenameCollision { .. })
+            )
+        });
+        assert_eq!(
+            outcome.index.has_unmerged_entries(TreatAsUnresolved::git()) || directory_diagnostic,
+            unresolved,
+            "unresolved conflicts need unmerged stages or a directory diagnostic"
+        );
+        index
+            .verify_entries()
+            .expect("conflict entries remain sorted without duplicates");
+        assert!(
+            index
+                .entries()
+                .iter()
+                .all(|entry| !entry.flags.contains(gix_index::entry::Flags::REMOVE)),
+            "a fresh index never contains entries marked for removal"
+        );
+        for entries in index.entries().windows(2) {
+            if entries[0].path(&index) == entries[1].path(&index) {
+                assert!(
+                    entries
+                        .iter()
+                        .all(|entry| entry.stage() != gix_index::entry::Stage::Unconflicted),
+                    "an unmerged path cannot also retain a stage-zero entry"
+                );
+            }
+        }
+        let provisional = gix_index::State::from_tree(&merged_tree_id, &objects.db, Default::default())
+            .expect("the merged tree can independently populate an index");
+        let unmerged_paths: BTreeSet<_> = index
+            .entries()
+            .iter()
+            .filter(|entry| entry.stage() != gix_index::entry::Stage::Unconflicted)
+            .map(|entry| entry.path(&index))
+            .collect();
+        assert!(
+            index
+                .entries()
+                .iter()
+                .filter(|entry| entry.stage() == gix_index::entry::Stage::Unconflicted)
+                .map(|entry| (entry.path(&index), entry.mode, entry.id))
+                .eq(provisional
+                    .entries()
+                    .iter()
+                    .filter(|entry| !unmerged_paths.contains(entry.path(&provisional)))
+                    .map(|entry| (entry.path(&provisional), entry.mode, entry.id))),
+            "the plan's complete resolved entries match the independently emitted tree: configuration {configuration}, \
+             base {base}, current {current}, other {other}, \
+             index {:?}, tree {:?}",
+            index
+                .entries()
+                .iter()
+                .map(|entry| (entry.path(&index), entry.stage(), entry.mode, entry.id))
+                .collect::<Vec<_>>(),
+            provisional
+                .entries()
+                .iter()
+                .map(|entry| (entry.path(&provisional), entry.mode, entry.id))
+                .collect::<Vec<_>>()
+        );
+        outcome.conflicts.reverse();
+        outcome.conflicts.clear();
+        assert_eq!(
+            outcome.has_unresolved_conflicts(TreatAsUnresolved::git()),
+            unresolved,
+            "editing diagnostics cannot change the merge verdict"
+        );
+        let repeated = outcome
+            .index
+            .to_index(TreatAsUnresolved::git(), None, &objects.db, Default::default())
+            .expect("the finalized plan can be materialized repeatedly");
+        assert!(
+            index
+                .entries()
+                .iter()
+                .map(|entry| (entry.path(&index), entry.stage(), entry.mode, entry.id))
+                .eq(repeated.entries().iter().map(|entry| (
+                    entry.path(&repeated),
+                    entry.stage(),
+                    entry.mode,
+                    entry.id
+                ))),
+            "repeated materialization is independent of mutable diagnostic conflicts"
+        );
     }
 }
 

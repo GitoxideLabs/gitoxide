@@ -1,5 +1,8 @@
 use gix_error::Result;
-use std::{collections::HashSet, path::Path};
+use std::{
+    collections::HashSet,
+    path::{Component, Path},
+};
 
 use bstr::{BStr, BString, ByteSlice};
 use gix_error::{OptionExt, ResultExt, bail, message, validation};
@@ -93,20 +96,24 @@ impl File {
     /// Given the `relative_path` (as seen from the root of the worktree) of a submodule with possibly platform-specific
     /// component separators, find the submodule's name associated with this path, or `None` if none was found.
     ///
-    /// Note that this does a linear search and compares `relative_path` in a normalized form to the same form of the path
-    /// associated with the submodule.
-    pub fn name_by_path(&self, relative_path: &BStr) -> Option<&BStr> {
-        self.names()
-            .filter_map(|n| self.path(n).ok().map(|p| (n, p)))
-            .find_map(|(n, p)| (p == relative_path).then_some(n))
+    /// This does a linear search, comparing the configured path bytes without changing their spelling.
+    /// Submodules without a configured path are skipped, but invalid paths encountered during the search
+    /// cause an error, as described in [`try_path()`](Self::try_path()).
+    pub fn name_by_path(&self, relative_path: &BStr) -> Result<Option<&BStr>> {
+        for name in self.names() {
+            if self.try_path(name)?.is_some_and(|path| path == relative_path) {
+                return Ok(Some(name));
+            }
+        }
+        Ok(None)
     }
 }
 
 /// Per-Submodule Access
 impl File {
     /// Return the path relative to the root directory of the working tree at which the submodule is expected to be checked out.
-    /// It's an error if the path doesn't exist as it's the only way to associate a path in the index with additional submodule
-    /// information, like the URL to fetch from.
+    /// It's an error if the path field is missing as it's the only way to associate a path in the index with additional submodule
+    /// information, like the URL to fetch from. Use [`try_path()`](Self::try_path()) if the field is optional.
     /// Invalid path bytes are stored as `input` in [`gix_error::Message::values`].
     /// After [wrapping](gix_error::Error::from_error()), inspect them with [metadata](gix_error::Error::metadata()).
     ///
@@ -115,20 +122,37 @@ impl File {
     /// Git currently allows absolute paths to be used when adding submodules, but fails later as it can't find the submodule by
     /// relative path anymore. Let's play it safe here.
     pub fn path(&self, name: &BStr) -> Result<BString> {
-        let path_bstr = self.config.string_by("submodule", Some(name), "path").ok_or_raise(|| {
+        self.try_path(name)?.ok_or_raise(|| {
+            message!("The submodule '{name}' was missing its 'path' field or it was empty").validation()
+        })
+    }
+
+    /// Return the configured checkout path relative to the working tree, or `None` if the path field is missing.
+    ///
+    /// A present field must have an explicit, non-empty path without a root or drive prefix.
+    /// Invalid paths produce the same validation errors and metadata as in [`path()`](Self::path()).
+    /// The configured path spelling is preserved and the checkout need not exist.
+    pub fn try_path(&self, name: &BStr) -> Result<Option<BString>> {
+        let Some(path_bstr) = self.config.string_implicit_by("submodule", Some(name), "path") else {
+            return Ok(None);
+        };
+        let path_bstr = path_bstr.ok_or_raise(|| {
             message!("The submodule '{name}' was missing its 'path' field or it was empty").validation()
         })?;
         if path_bstr.is_empty() {
             bail!("The submodule '{name}' was missing its 'path' field or it was empty".validation());
         }
         let path = gix_path::from_bstr(path_bstr.as_bstr())?;
-        if path.is_absolute() {
+        if matches!(
+            path.components().next(),
+            Some(Component::RootDir | Component::Prefix(_))
+        ) {
             bail!(validation(format!("The path of submodule '{name}' needs to be relative")).with_input(path_bstr));
         }
         if gix_path::normalize(path, "".as_ref()).is_none() {
             bail!(validation("The path would lead outside of the repository worktree").with_input(path_bstr));
         }
-        Ok(path_bstr)
+        Ok(Some(path_bstr))
     }
 
     /// Retrieve the `url` field of the submodule named `name`. It's an error if it doesn't exist or is empty.

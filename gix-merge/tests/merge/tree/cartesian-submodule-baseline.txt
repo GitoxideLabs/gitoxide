@@ -4,13 +4,14 @@ Model: 14 atomic gitlink states, 105 unordered pairs, 210 directional merges.
 Policies exercised: default, ours, ancestor (630 merges).
 Unknown classifications: 0 (asserted).
 Git/gix exact tree agreement: 210/210
+Git/gix exact index agreement: 210/210
 Git/gix path-and-mode agreement: 210/210
 Git/gix unresolved-conflict agreement: 210/210
 Default SubmoduleMerge classifications: 12
 Ours SubmoduleMerge classifications: 12
 Ancestor SubmoduleMerge classifications: 12
-Default SubmoduleAddAdd classifications: 15
-Ours SubmoduleAddAdd classifications: 15
+Default SubmoduleAddAdd classifications: 14
+Ours SubmoduleAddAdd classifications: 14
 Ancestor SubmoduleAddAdd classifications: 14
 
 ## Git/gix differences (0)

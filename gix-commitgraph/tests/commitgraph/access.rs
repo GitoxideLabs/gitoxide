@@ -87,6 +87,123 @@ fn generation_numbers_overflow_is_handled_in_chained_graph() {
 }
 
 #[test]
+fn corrected_commit_dates_include_overflow_offsets_in_every_layer() -> gix_testtools::TestResult {
+    let names = ["future-1", "old-1", "future-2", "old-2", "extra"];
+    let (graph, refs) = graph_and_expected("generation_number_overflow.sh", &names);
+    assert!(
+        graph.corrected_commit_dates_available(),
+        "every split layer has generation version 2"
+    );
+    for (name, expected) in names.into_iter().zip(4_147_483_646..=4_147_483_650) {
+        assert_eq!(
+            graph
+                .commit_by_id(refs[name].id())
+                .expect("fixture ref is in graph")
+                .corrected_commit_date()?,
+            Some(expected),
+            "{name}: corrected dates increase even when raw timestamps go backwards"
+        );
+    }
+
+    let (legacy, refs) = graph_and_expected_named("single_commit_huge_dates.sh", "v1", &["HEAD"]);
+    assert!(
+        !legacy.corrected_commit_dates_available(),
+        "version 1 contains only topological generations"
+    );
+    assert_eq!(
+        legacy
+            .commit_by_id(refs["HEAD"].id())
+            .expect("HEAD is in graph")
+            .corrected_commit_date()?,
+        None
+    );
+    Ok(())
+}
+
+#[test]
+fn malformed_corrected_date_chunks_and_offsets_are_corruption() -> gix_testtools::TestResult {
+    let root = gix_testtools::scripted_fixture_read_only("generation_number_overflow.sh")?;
+    let data = std::fs::read_dir(root.join(".git/objects/info/commit-graphs"))?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<std::io::Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|path| path.extension().is_some_and(|extension| extension == "graph"))
+        .map(std::fs::read)
+        .collect::<std::io::Result<Vec<_>>>()?
+        .into_iter()
+        .find(|data| crate::chunk_range(data, *b"GDO2").is_ok())
+        .expect("the fixture contains overflowing offsets");
+    let table_end = 8 + usize::from(data[6]) * gix_chunk::file::Index::ENTRY_SIZE;
+    for kind in [*b"GDA2", *b"GDO2"] {
+        let mut truncated = data.clone();
+        let range = crate::chunk_range(&data, kind)?;
+        truncated.remove(range.end - 1);
+        for entry in truncated[8..table_end + gix_chunk::file::Index::ENTRY_SIZE]
+            .as_chunks_mut::<{ gix_chunk::file::Index::ENTRY_SIZE }>()
+            .0
+            .iter_mut()
+        {
+            let offset = u64::from_be_bytes(entry[4..].try_into()?);
+            if offset >= range.end as u64 {
+                entry[4..].copy_from_slice(&(offset - 1).to_be_bytes());
+            }
+        }
+        let err =
+            crate::mapped_file(&truncated, "commit-graph").expect_err("generation chunks have fixed-width records");
+        assert!(err.is_corrupted(), "partial generation records are corruption: {err}");
+        assert!(
+            err.to_string().contains("generation"),
+            "the malformed generation chunk was rejected: {err}"
+        );
+    }
+
+    let generation_data = crate::chunk_range(&data, *b"GDA2")?;
+    let overflow = crate::chunk_range(&data, *b"GDO2")?;
+    let file = crate::mapped_file(&data, "commit-graph")?;
+    let position = file
+        .iter_commits()
+        .position(|commit| commit.committer_timestamp() > 0)
+        .expect("a positive date makes addition overflow observable");
+    let offset = generation_data.start + position * 4;
+    for case in ["missing", "out-of-bounds", "overflow", "zero"] {
+        let mut malformed = data.clone();
+        malformed[offset..offset + 4].copy_from_slice(&0x8000_0000u32.to_be_bytes());
+        match case {
+            "missing" => {
+                let entry = malformed[8..table_end]
+                    .as_chunks_mut::<{ gix_chunk::file::Index::ENTRY_SIZE }>()
+                    .0
+                    .iter_mut()
+                    .find(|entry| &entry[..4] == b"GDO2")
+                    .expect("overflow chunk exists");
+                entry[..4].copy_from_slice(b"MISS");
+            }
+            "out-of-bounds" => malformed[offset..offset + 4].copy_from_slice(&u32::MAX.to_be_bytes()),
+            "overflow" => malformed[overflow.start..overflow.start + 8].copy_from_slice(&u64::MAX.to_be_bytes()),
+            "zero" => {
+                malformed[offset..offset + 4].fill(0);
+                let hash_len = file.object_hash().len_in_bytes();
+                let timestamp = crate::chunk_range(&data, *b"CDAT")?.start + position * (hash_len + 16) + hash_len + 8;
+                let generation = u32::from_be_bytes(malformed[timestamp..timestamp + 4].try_into()?) & !3;
+                malformed[timestamp..timestamp + 4].copy_from_slice(&generation.to_be_bytes());
+                malformed[timestamp + 4..timestamp + 8].fill(0);
+            }
+            _ => unreachable!(),
+        }
+        let graph = crate::mapped_file(&malformed, "commit-graph")?;
+        let err = graph
+            .commit_at(gix_commitgraph::file::Position(position.try_into()?))
+            .corrected_commit_date()
+            .expect_err("malformed corrected dates are rejected on access");
+        assert!(
+            err.is_corrupted(),
+            "{case}: malformed generation offsets are corruption: {err}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn octopus_merges() {
     let (cg, refs) = graph_and_expected(
         "octopus_merges.sh",

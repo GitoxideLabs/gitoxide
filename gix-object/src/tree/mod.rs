@@ -45,7 +45,7 @@ pub struct Editor<'a> {
     /// All trees we currently hold in memory. Each of these may change while adding and removing entries.
     /// null-object-ids mark tree-entries whose value we don't know yet, they are placeholders that will be
     /// dropped when writing at the latest.
-    trees: std::collections::HashMap<BString, Tree>,
+    trees: gix_hashtable::hash_map::HashMap<BString, Tree, std::hash::RandomState>,
     /// A buffer to build up paths when finding the tree to edit.
     path_buf: RefCell<BString>,
     /// Our buffer for storing tree-data in, right before decoding it.

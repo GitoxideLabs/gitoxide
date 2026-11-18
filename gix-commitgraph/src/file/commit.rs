@@ -3,7 +3,7 @@ use crate::{
     File, Position,
     file::{self, EXTENDED_EDGES_MASK, LAST_EXTENDED_EDGE_MASK, NO_PARENT},
 };
-use gix_error::{Result, message};
+use gix_error::{OptionExt, Result, bail, corruption, message};
 use std::{
     fmt::{Debug, Formatter},
     slice::Iter,
@@ -36,9 +36,6 @@ impl<'a> Commit<'a> {
             root_tree_id: gix_hash::oid::from_bytes_unchecked(&bytes[..file.hash_len]),
             parent1: ParentEdge::from_raw(read_u32(&bytes[file.hash_len..][..4])),
             parent2: ParentEdge::from_raw(read_u32(&bytes[file.hash_len + 4..][..4])),
-            // TODO: Add support for corrected commit date offset overflow.
-            //      See https://github.com/git/git/commit/e8b63005c48696a26f976f5f9b0ccaf1983e439d and
-            //          https://github.com/git/git/commit/f90fca638e99a031dce8e3aca72427b2f9b4bb38 for more details and hints at a test.
             generation: read_u32(&bytes[file.hash_len + 8..][..4]) >> 2,
             commit_timestamp: u64::from_be_bytes(bytes[file.hash_len + 8..][..8].try_into().unwrap())
                 & 0x0003_ffff_ffff,
@@ -58,6 +55,43 @@ impl<'a> Commit<'a> {
     /// number that is the max of their parents' generation numbers + 1.
     pub fn generation(&self) -> u32 {
         self.generation
+    }
+
+    /// Return the corrected commit date, if this file contains generation numbers version 2.
+    ///
+    /// This is the maximum of one, the commit timestamp, and each parent's corrected date plus one.
+    /// It preserves topological order even when timestamps go backwards. Check
+    /// [`Graph::corrected_commit_dates_available()`][crate::Graph::corrected_commit_dates_available]
+    /// before comparing dates from different files in a split graph.
+    /// Malformed overflow offsets, zero dates, and dates that overflow `u64` are reported as corruption.
+    pub fn corrected_commit_date(&self) -> Result<Option<u64>> {
+        let Some(start) = self.file.generation_data_offset else {
+            return Ok(None);
+        };
+        let offset = read_u32(&self.file.data[start + self.pos.0 as usize * 4..][..4]);
+        let offset = if offset & 0x8000_0000 == 0 {
+            u64::from(offset)
+        } else {
+            let data = self
+                .file
+                .generation_overflow_range
+                .as_ref()
+                .map(|range| &self.file.data[range.clone()])
+                .ok_or_raise(|| corruption("Commit-graph requires missing generation overflow data"))?;
+            let position = (offset & 0x7fff_ffff) as usize;
+            if position >= data.len() / 8 {
+                bail!(corruption("Commit-graph generation overflow position is out of bounds"));
+            }
+            u64::from_be_bytes(data[position * 8..][..8].try_into().expect("eight bytes"))
+        };
+        let date = self
+            .commit_timestamp
+            .checked_add(offset)
+            .ok_or_raise(|| corruption("Commit-graph corrected commit date overflows u64"))?;
+        if date == 0 {
+            bail!(corruption("Commit-graph corrected commit date must be positive"));
+        }
+        Ok(Some(date))
     }
 
     /// Returns an iterator over the parent positions for lookup in the owning [Graph][crate::Graph].

@@ -219,6 +219,7 @@ where
                 }
                 Ok::<_, std::convert::Infallible>(())
             },
+            Default::default(),
         )?;
 
         if let Some(err) = cb_err {

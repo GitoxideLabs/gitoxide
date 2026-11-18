@@ -16,6 +16,7 @@ imara-diff = { package = "gix-imara-diff", version = "^0.3.3", path = "../../gix
 gix-diff = { path = "../../gix-diff" }
 gix-filter = { path = "../../gix-filter" }
 gix-hash = { path = "../../gix-hash", features = ["sha1"] }
+gix-index = { path = "../../gix-index" }
 gix-merge = { path = "..", features = ["sha1"] }
 gix-object = { path = "../../gix-object" }
 gix-odb = { path = "../../gix-odb" }

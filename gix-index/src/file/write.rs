@@ -7,9 +7,8 @@ impl File {
     /// Also returns the checksum written to the trailer, which is null if [`write::Options::skip_hash`] is set.
     /// Unlike [`File::checksum()`], this preserves the on-disk representation of an omitted checksum.
     ///
-    /// Note that the `tree` (tree-cache) extension is written as-is and is **not** recomputed or
-    /// invalidated to match the current entries; see [`File::write()`] for the implications and the
-    /// recommended workaround.
+    /// Cache extensions are invalidated by default, without mutating the in-memory caches.
+    /// See [`File::write()`] for how to retain valid caches after changing entries.
     pub fn write_to(
         &self,
         mut out: impl std::io::Write,
@@ -34,27 +33,19 @@ impl File {
     ///
     /// The checksum is updated after a successful write, or cleared if [`write::Options::skip_hash`] is set.
     ///
-    /// ### The `tree` (tree-cache) extension is written as-is
+    /// ### Cache extensions
     ///
-    /// The `tree` extension (tree-cache) is serialized from its current in-memory state; it is
-    /// **not** recomputed or invalidated to match the entries. So if entries were modified since the
-    /// index was read, the tree-cache is written back still marked valid even though it is now stale.
+    /// By default, [`write::Extensions::All`] writes all supported optional extensions, but conservatively invalidates
+    /// the tree-cache and untracked cache so Git recomputes them. The in-memory caches are left untouched.
     ///
-    /// Git uses the tree-cache to skip unchanged directories when building a tree (on `git commit` /
-    /// `git write-tree`), so a stale-but-valid tree-cache can make a later commit capture outdated
-    /// subtree content; more generally, `git status` and later commits can disagree about what is
-    /// staged.
+    /// [`write::Extensions::AllUnconditionally`] and [`write::Extensions::Given`] write selected caches
+    /// as-is. They must already match the current entries and worktree: a stale tree-cache can cause
+    /// `git commit` or `git write-tree` to capture outdated subtree content, and a stale untracked cache
+    /// can hide files whose tracked status changed.
     ///
-    /// Until the tree-cache is updated on write (see [issue #2421]), remove it with
-    /// [`State::remove_tree()`](crate::State::remove_tree()) before writing whenever entries were
-    /// changed:
-    ///
-    /// ```ignore
-    /// index.remove_tree();
-    /// index.write(gix_index::write::Options::default())?;
-    /// ```
-    ///
-    /// [issue #2421]: https://github.com/GitoxideLabs/gitoxide/issues/2421
+    /// A newly constructed index can use [`State::copy_metadata_from()`](crate::State::copy_metadata_from())
+    /// with its original state to retain and selectively invalidate both caches before writing with
+    /// [`write::Extensions::AllUnconditionally`].
     pub fn write(&mut self, options: write::Options) -> Result {
         use gix_error::{ErrorExt, ResultExt, bail, message};
 

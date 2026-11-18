@@ -1347,6 +1347,64 @@ mod tests {
     }
 
     #[test]
+    fn rebase_pauses_for_directory_rename_splits_with_only_stage_zero() -> gix_testtools::TestResult {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_directory_rename_split.sh")?;
+        let root = fixture.path();
+        let repo = crate::test_repository::open(root)?;
+        let base_commit_id = repo.rev_parse_single("HEAD^")?.detach();
+        let split_commit_id = repo.rev_parse_single("main")?.detach();
+        let prepared = prepare(
+            &repo,
+            &Todo {
+                onto: Some("main".into()),
+                ..autosquash_args(base_commit_id)
+            },
+        )?;
+        let err = apply_document(repo, &prepared.document, Some(None))
+            .expect_err("materializing a directory rename split pauses the rebase");
+        assert!(
+            format!("{err:#}").contains("stopped at a materialized conflict"),
+            "the conflict was saved: {err:#}"
+        );
+
+        let repo = crate::test_repository::open(root)?;
+        let mut output = Vec::new();
+        status(&repo, true, &mut output)?;
+        assert!(
+            output.starts_with(b"state ready\n"),
+            "a saved conflict without unmerged entries is ready to continue"
+        );
+        assert!(
+            git(root, &["ls-files", "--unmerged"])?.is_empty(),
+            "all entries are stage zero"
+        );
+        assert_eq!(
+            String::from_utf8(git(root, &["ls-files"])?)?
+                .lines()
+                .collect::<Vec<_>>(),
+            ["left/first", "old/added", "right/second"],
+            "the provisional index retains the split and the new file"
+        );
+        assert_eq!(
+            std::fs::read(root.join("old/added"))?,
+            b"added\n",
+            "the new file is available in the paused worktree"
+        );
+
+        continue_rebase(repo.clone(), None)?;
+        assert!(
+            rebase::session::load(&repo)?.is_none(),
+            "accepting the provisional placement completes the rebase"
+        );
+        assert_eq!(
+            repo.rev_parse_single("topic^")?,
+            split_commit_id,
+            "the addition was replayed onto the split"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn successful_apply_does_not_create_a_continuation_file() -> gix_testtools::Result {
         let (_fixture, repo) = repository()?;
         let prepared = prepare(

@@ -68,7 +68,7 @@ fn legacy_names_can_be_used_for_lookup() -> TestResult {
         assert!(modules.path(name).is_ok(), "every enumerated name resolves its path");
     }
     assert_eq!(
-        modules.name_by_path("merged".into()),
+        modules.name_by_path("merged".into())?,
         Some("foo".into()),
         "legacy [submodule.Foo] and quoted [submodule \"foo\"] share the canonical name foo, so the later quoted section supplies the path merged"
     );
@@ -260,6 +260,95 @@ mod path {
     fn valid() -> gix_testtools::TestResult {
         let module = submodule("[submodule.a]\n path = relative/path/submodule");
         assert_eq!(module.path("a".into())?, "relative/path/submodule");
+        assert_eq!(
+            module.try_path("a".into())?,
+            Some("relative/path/submodule".into()),
+            "optional access preserves the configured path"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn missing_path_is_optional_but_remains_required_by_path() -> gix_testtools::TestResult {
+        let module = submodule("[submodule.a]\n");
+        for name in ["a", "unknown"] {
+            assert_eq!(module.try_path(name.into())?, None, "absent path fields are optional");
+            assert!(
+                module
+                    .path(name.into())
+                    .expect_err("path() requires the field")
+                    .is_validation(),
+                "strict access continues to report a missing field"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn optional_path_rejects_invalid_values() -> gix_testtools::TestResult {
+        for field in ["path", "path =", "path = /outside", "path = ../outside"]
+            .into_iter()
+            .chain(cfg!(windows).then_some("path = C:outside"))
+        {
+            let module = submodule(&format!(
+                "[submodule.a]
+                    {field}
+                "
+            ));
+            let err = module
+                .try_path("a".into())
+                .expect_err("present but invalid paths are errors");
+            assert!(
+                err.is_validation(),
+                "{field}: validation errors must not become missing paths"
+            );
+            assert_eq!(
+                err.to_string(),
+                module
+                    .path("a".into())
+                    .expect_err("strict access also rejects the path")
+                    .to_string(),
+                "{field}: both accessors retain the same validation diagnostic"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn name_by_path_skips_missing_fields_but_propagates_invalid_ones() -> gix_testtools::TestResult {
+        for field in [
+            "url = ./unused",
+            "path",
+            "path =",
+            "path = /outside",
+            "path = ../outside",
+        ] {
+            let module = submodule(&format!(
+                "[submodule.unrelated]
+                    {field}
+                [submodule.module]
+                    path = module
+                "
+            ));
+            let found = module.name_by_path("module".into());
+            if field.starts_with("url") {
+                assert_eq!(
+                    found?,
+                    Some("module".into()),
+                    "pathless sections do not obstruct lookup"
+                );
+                assert_eq!(
+                    module.name_by_path("unknown".into())?,
+                    None,
+                    "unmatched paths are absent"
+                );
+            } else {
+                assert!(
+                    found.expect_err("invalid paths must not be skipped").is_validation(),
+                    "{field}: lookup preserves validation errors"
+                );
+            }
+        }
         Ok(())
     }
 
@@ -693,7 +782,7 @@ fn non_utf8_names_preserve_all_configuration_lookups() -> TestResult {
     assert_eq!(file.fetch_recurse(name)?, Some(FetchRecurse::OnDemand));
     assert_eq!(file.ignore(name)?, Some(Ignore::Untracked));
     assert_eq!(file.shallow(name)?, Some(true));
-    assert_eq!(file.name_by_path("deps/raw".into()), Some(name));
+    assert_eq!(file.name_by_path("deps/raw".into())?, Some(name));
 
     let config = gix_config::File::from_bytes_no_includes(
         b"[submodule \"raw-\xff\"]

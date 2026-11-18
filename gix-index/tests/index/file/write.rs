@@ -15,6 +15,7 @@ fn roundtrips() -> TestResult {
             Generated("v2"),
             options_with(write::Extensions::Given {
                 tree_cache: true,
+                untracked_cache: false,
                 end_of_index_entry: true,
             }),
         ),
@@ -46,6 +47,284 @@ fn roundtrips() -> TestResult {
         compare_raw_bytes(&out_bytes, &expected_bytes, name);
     }
     Ok(())
+}
+
+#[test]
+fn untracked_caches_roundtrip_when_enabled() -> TestResult {
+    for fixture in [
+        Generated("untracked_cache_empty"),
+        Generated("untracked_cache_populated"),
+        Generated("untracked_cache_nested"),
+        Loose("UNTR"),
+        Loose("UNTR-with-oids"),
+    ] {
+        let expected = fixture.open();
+        assert!(expected.untracked().is_some(), "the fixture has an untracked cache");
+        for extensions in [
+            write::Extensions::AllUnconditionally,
+            write::Extensions::All,
+            write::Extensions::Given {
+                tree_cache: false,
+                untracked_cache: true,
+                end_of_index_entry: true,
+            },
+            write::Extensions::Given {
+                tree_cache: true,
+                untracked_cache: false,
+                end_of_index_entry: true,
+            },
+            write::Extensions::None,
+        ] {
+            let mut out = Vec::new();
+            expected.write_to(&mut out, options_with(extensions))?;
+            let (actual, _) =
+                State::from_bytes(&out, expected.timestamp(), expected.object_hash(), Default::default())?;
+            if extensions.should_write(extension::untracked_cache::SIGNATURE).is_some() {
+                if matches!(extensions, write::Extensions::All) {
+                    let cache = actual.untracked().expect("All writes the untracked cache");
+                    let original = expected.untracked().expect("the fixture has an untracked cache");
+                    assert_eq!(cache.identifier(), original.identifier(), "cache identity is retained");
+                    assert_eq!(
+                        cache.directories().len(),
+                        original.directories().len(),
+                        "directory structure is retained"
+                    );
+                    for (directory, old) in cache.directories().iter().zip(original.directories()) {
+                        assert_eq!(directory.name, old.name, "directory names are retained");
+                        assert_eq!(
+                            directory.sub_directories, old.sub_directories,
+                            "child directories are retained"
+                        );
+                        assert_eq!(
+                            directory.exclude_file_oid, old.exclude_file_oid,
+                            "ignore hashes are retained"
+                        );
+                        assert!(
+                            directory.stat.is_none() && directory.untracked_entries.is_empty() && !directory.check_only,
+                            "All invalidates cached directory listings"
+                        );
+                    }
+                } else {
+                    assert_eq!(
+                        format!("{:#?}", actual.untracked()),
+                        format!("{:#?}", expected.untracked()),
+                        "writing {} preserves its untracked cache, including directory validity and ignore hashes",
+                        fixture.to_name()
+                    );
+                }
+                if let Generated(_) = &fixture {
+                    let root = expected
+                        .path()
+                        .parent()
+                        .and_then(std::path::Path::parent)
+                        .expect("generated indexes live in the fixture's .git directory");
+                    let temporary = gix_testtools::tempfile::TempDir::new()?;
+                    let index_path = temporary.path().join("index");
+                    std::fs::write(&index_path, &out)?;
+                    let arguments = [
+                        "--no-optional-locks",
+                        "ls-files",
+                        "--others",
+                        "--exclude-standard",
+                        "-z",
+                    ];
+                    let expected_listing = gix_testtools::git_command(root).args(arguments).output()?;
+                    let actual_listing = gix_testtools::git_command(root)
+                        .args(arguments)
+                        .env("GIT_INDEX_FILE", &index_path)
+                        .output()?;
+                    assert!(
+                        expected_listing.status.success(),
+                        "Git can read the original fixture index"
+                    );
+                    assert!(
+                        actual_listing.status.success(),
+                        "Git can read the serialized UNTR: {actual_listing:?}"
+                    );
+                    assert_eq!(
+                        actual_listing.stdout, expected_listing.stdout,
+                        "Git produces the same untracked listing from its own index and the serialized cache"
+                    );
+                }
+            } else {
+                assert!(
+                    actual.untracked().is_none(),
+                    "untracked caches can be omitted explicitly"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn default_write_invalidates_the_untracked_cache_after_an_index_edit() -> TestResult {
+    let mut index = Generated("untracked_cache_nested").open();
+    assert!(index.untracked().is_some(), "the source has a populated cache");
+    let original_cache = format!("{:#?}", index.untracked());
+    let root = index
+        .path()
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("the generated index lives in .git")
+        .to_owned();
+    index.remove_entries(|_, path, _| path == "tracked-dir-with-ignore/tracked-file");
+    let temporary = gix_testtools::tempfile::TempDir::new()?;
+    index.set_path(temporary.path().join("index"));
+    index.write(Options::default())?;
+    assert_eq!(
+        format!("{:#?}", index.untracked()),
+        original_cache,
+        "writing does not mutate the in-memory cache"
+    );
+
+    let status = gix_testtools::git_command(root)
+        .args([
+            "--no-optional-locks",
+            "status",
+            "--porcelain",
+            "--untracked-files=normal",
+            "-z",
+        ])
+        .env("GIT_INDEX_FILE", index.path())
+        .output()?;
+    assert!(status.status.success(), "Git reads the edited index: {status:?}");
+    assert!(
+        status
+            .stdout
+            .split(|byte| *byte == 0)
+            .any(|line| line == b"?? tracked-dir-with-ignore/tracked-file"),
+        "Git lists the file whose index entry was removed"
+    );
+    let reopened = gix_index::File::at(index.path(), index.object_hash(), false, Default::default())?;
+    let cache = reopened.untracked().expect("default writes retain the untracked cache");
+    assert!(
+        cache.directories().iter().all(|directory| directory.stat.is_none()
+            && directory.untracked_entries.is_empty()
+            && !directory.check_only),
+        "default writes invalidate all cached directory listings"
+    );
+    Ok(())
+}
+
+#[test]
+fn default_write_invalidates_all_tree_nodes_after_index_edits() -> TestResult {
+    let mut index = Generated("v2_deeper_tree").open();
+    let original_tree = index.tree().expect("committing populates TREE").clone();
+    let root = index
+        .path()
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("the generated index lives in .git")
+        .to_owned();
+    index
+        .entry_mut_by_path_and_stage("sub/a/1".into(), entry::Stage::Unconflicted)
+        .expect("the fixture tracks this nested file")
+        .mode = entry::Mode::FILE_EXECUTABLE;
+    index
+        .entry_mut_by_path_and_stage("sub/c/d/3".into(), entry::Stage::Unconflicted)
+        .expect("the fixture tracks this deeply nested file")
+        .flags
+        .insert(entry::Flags::REMOVE);
+
+    let temporary = gix_testtools::tempfile::TempDir::new()?;
+    index.set_path(temporary.path().join("cached-index"));
+    index.write(Options::default())?;
+    assert_eq!(
+        index.tree(),
+        Some(&original_tree),
+        "writing does not mutate the in-memory cache"
+    );
+    let reopened = gix_index::File::at(index.path(), index.object_hash(), false, Default::default())?;
+    assert_invalidated_tree(reopened.tree().expect("All retains TREE"), &original_tree);
+    reopened.verify_extensions(false, gix_object::find::Never)?;
+
+    let uncached_path = temporary.path().join("uncached-index");
+    let mut uncached_bytes = Vec::new();
+    index.write_to(&mut uncached_bytes, options_with(write::Extensions::None))?;
+    std::fs::write(&uncached_path, uncached_bytes)?;
+    // Git may write trees and refresh the index, but must not modify the read-only fixture.
+    let objects = temporary.path().join("objects");
+    std::fs::create_dir(&objects)?;
+    let write_tree = |path| {
+        gix_testtools::git_command(&root)
+            .arg("write-tree")
+            .env("GIT_INDEX_FILE", path)
+            .env("GIT_OBJECT_DIRECTORY", &objects)
+            .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", root.join(".git/objects"))
+            .output()
+    };
+    let cached = write_tree(index.path())?;
+    let uncached = write_tree(&uncached_path)?;
+    assert!(
+        cached.status.success() && uncached.status.success(),
+        "Git reads both indexes: {cached:?}, {uncached:?}"
+    );
+    assert_eq!(
+        cached.stdout, uncached.stdout,
+        "invalidated caches produce the same tree as rebuilding from scratch"
+    );
+    assert_ne!(
+        cached.stdout,
+        format!("{}\n", original_tree.id).as_bytes(),
+        "the rebuilt tree reflects the entry edits"
+    );
+    Ok(())
+}
+
+#[test]
+fn optional_extensions_can_be_selected_independently() {
+    let signatures = [
+        extension::tree::SIGNATURE,
+        extension::untracked_cache::SIGNATURE,
+        extension::end_of_index_entry::SIGNATURE,
+    ];
+    for extensions in [write::Extensions::default(), write::Extensions::AllUnconditionally] {
+        for signature in signatures {
+            assert_eq!(
+                extensions.should_write(signature),
+                Some(signature),
+                "all modes select every writable optional extension"
+            );
+        }
+    }
+    for tree_cache in [false, true] {
+        for untracked_cache in [false, true] {
+            for end_of_index_entry in [false, true] {
+                let extensions = write::Extensions::Given {
+                    tree_cache,
+                    untracked_cache,
+                    end_of_index_entry,
+                };
+                for (signature, enabled) in
+                    signatures
+                        .into_iter()
+                        .zip([tree_cache, untracked_cache, end_of_index_entry])
+                {
+                    assert_eq!(
+                        extensions.should_write(signature),
+                        enabled.then_some(signature),
+                        "Given selects only enabled extensions"
+                    );
+                    assert_eq!(
+                        write::Extensions::None.should_write(signature),
+                        None,
+                        "None selects no optional extensions"
+                    );
+                }
+                assert_eq!(
+                    extensions.should_write(extension::sparse::SIGNATURE),
+                    None,
+                    "mandatory extensions cannot be selected"
+                );
+                assert_eq!(
+                    extensions.should_write(*b"REUC"),
+                    None,
+                    "unsupported extensions cannot be selected"
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -124,7 +403,7 @@ fn roundtrips_sparse_index() -> TestResult {
 }
 
 #[test]
-fn state_comparisons_with_various_extension_configurations() {
+fn state_comparisons_with_various_extension_configurations() -> TestResult {
     for fixture in [
         Loose("extended-flags"),
         Loose("conflicting-file"),
@@ -156,12 +435,15 @@ fn state_comparisons_with_various_extension_configurations() {
         for options in [
             options_with(write::Extensions::None),
             options_with(write::Extensions::All),
+            options_with(write::Extensions::AllUnconditionally),
             options_with(write::Extensions::Given {
                 tree_cache: true,
+                untracked_cache: false,
                 end_of_index_entry: false,
             }),
             options_with(write::Extensions::Given {
                 tree_cache: false,
+                untracked_cache: false,
                 end_of_index_entry: true,
             }),
         ] {
@@ -169,13 +451,14 @@ fn state_comparisons_with_various_extension_configurations() {
             let fixture = fixture.to_name();
 
             let mut out = Vec::<u8>::new();
-            let (actual_version, _digest) = expected.write_to(&mut out, options).unwrap();
+            let (actual_version, _digest) = expected.write_to(&mut out, options)?;
 
             let (actual, _) =
-                State::from_bytes(&out, FileTime::now(), gix_testtools::object_hash(), Default::default()).unwrap();
+                State::from_bytes(&out, FileTime::now(), gix_testtools::object_hash(), Default::default())?;
             compare_states(&actual, actual_version, &expected, options, fixture);
         }
     }
+    Ok(())
 }
 
 #[test]
@@ -246,14 +529,21 @@ fn compare_states(actual: &State, actual_version: Version, expected: &State, opt
         actual_version,
         "version mismatch, read vs written, in {fixture:?}"
     );
-    assert_eq!(
-        actual.tree(),
-        options
-            .extensions
-            .should_write(extension::tree::SIGNATURE)
-            .and_then(|_| expected.tree()),
-        "tree extension mismatch, actual vs option in {fixture:?}"
-    );
+    if matches!(options.extensions, write::Extensions::All) {
+        match (actual.tree(), expected.tree()) {
+            (Some(actual), Some(expected)) => assert_invalidated_tree(actual, expected),
+            (actual, expected) => assert_eq!(actual, expected, "absent caches are not created in {fixture:?}"),
+        }
+    } else {
+        assert_eq!(
+            actual.tree(),
+            options
+                .extensions
+                .should_write(extension::tree::SIGNATURE)
+                .and_then(|_| expected.tree()),
+            "tree extension mismatch, actual vs option in {fixture:?}"
+        );
+    }
 
     // As `write_to` does / should not mutate we can test those properties here.
     // Anything that can be configured has to be tested separately when comparing against baseline
@@ -280,6 +570,22 @@ fn compare_states(actual: &State, actual_version: Version, expected: &State, opt
     );
 }
 
+fn assert_invalidated_tree(actual: &extension::Tree, expected: &extension::Tree) {
+    assert!(
+        actual.num_entries.is_none() && actual.id.is_null(),
+        "all cache-tree nodes are invalidated"
+    );
+    assert_eq!(actual.name, expected.name, "cache-tree names are retained");
+    assert_eq!(
+        actual.children.len(),
+        expected.children.len(),
+        "cache-tree structure is retained"
+    );
+    for (actual, expected) in actual.children.iter().zip(&expected.children) {
+        assert_invalidated_tree(actual, expected);
+    }
+}
+
 fn compare_raw_bytes(generated: &[u8], expected: &[u8], fixture: &str) {
     assert_eq!(generated.len(), expected.len(), "file length mismatch in {fixture:?}");
 
@@ -304,6 +610,7 @@ fn only_tree_ext() -> Options {
         extensions: write::Extensions::Given {
             end_of_index_entry: false,
             tree_cache: true,
+            untracked_cache: false,
         },
         skip_hash: false,
     }

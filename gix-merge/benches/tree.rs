@@ -98,6 +98,7 @@ fn merge<'objects>(
         diff_state,
         diff_resource_cache,
         blob_merge,
+        gix_merge::tree::Context::default(),
         options,
     )
     .expect("in-memory tree merge succeeds")
@@ -686,9 +687,27 @@ mod linux {
 
     pub(super) fn tree_merge(c: &mut Criterion) {
         let fixture = fixture();
-        for (name, scenario) in [("small-conflict", fixture.small), ("large-change", fixture.large)] {
+        let unchanged = Scenario {
+            base: fixture.small.base,
+            ours: fixture.small.base,
+            theirs: fixture.small.base,
+            changes: 0,
+        };
+        let equal_tips = Scenario {
+            theirs: fixture.small.ours,
+            ..fixture.small
+        };
+        // Equal roots exercise shortcuts; the single deep conflict exposes unchanged-subtree collection cost.
+        for (name, scenario) in [
+            ("unchanged", unchanged),
+            ("equal-tips", equal_tips),
+            ("small-conflict", fixture.small),
+            ("large-change", fixture.large),
+        ] {
             let mut group = c.benchmark_group(format!("tree-merge/linux-sized/{name}"));
-            group.throughput(Throughput::Elements(scenario.changes));
+            if scenario.changes != 0 {
+                group.throughput(Throughput::Elements(scenario.changes));
+            }
             for (name, rewrites) in [("without-renames", None), ("with-renames", Some(Rewrites::default()))] {
                 validate(&fixture.objects, scenario, rewrites);
                 let mut diff_state = gix_diff::tree::State::default();
@@ -719,7 +738,7 @@ mod linux {
         let mut diff_state = gix_diff::tree::State::default();
         let mut diff_resource_cache = new_diff_resource_cache();
         let mut blob_merge = new_blob_merge_platform();
-        let outcome = merge(
+        let mut outcome = merge(
             objects,
             scenario,
             &mut diff_state,
@@ -727,11 +746,26 @@ mod linux {
             &mut blob_merge,
             options(rewrites),
         );
-        assert_eq!(outcome.conflicts.len(), 1, "the workload has exactly one conflict");
-        assert!(
-            outcome.conflicts[0].is_unresolved(TreatAsUnresolved::git()),
-            "the conflicting text edit remains unresolved"
-        );
+        if scenario.ours == scenario.theirs {
+            assert!(
+                outcome.conflicts.is_empty(),
+                "equal input trees merge without conflicts"
+            );
+            assert_eq!(
+                outcome
+                    .tree
+                    .write(|tree| objects.write(tree))
+                    .expect("the result tree can be written"),
+                scenario.ours,
+                "equal input trees retain all unchanged entries"
+            );
+        } else {
+            assert_eq!(outcome.conflicts.len(), 1, "the workload has exactly one conflict");
+            assert!(
+                outcome.conflicts[0].is_unresolved(TreatAsUnresolved::git()),
+                "the conflicting text edit remains unresolved"
+            );
+        }
     }
 
     fn merge<'objects>(
@@ -756,6 +790,7 @@ mod linux {
             diff_state,
             diff_resource_cache,
             blob_merge,
+            gix_merge::tree::Context::default(),
             options,
         )
         .expect("the synthetic tree merge succeeds")

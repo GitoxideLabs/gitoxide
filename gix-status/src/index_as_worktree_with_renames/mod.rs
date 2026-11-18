@@ -306,6 +306,7 @@ pub(super) mod function {
                                 gix_trace::debug!("full-tree copy tracking isn't currently supported");
                                 Ok::<_, std::io::Error>(())
                             },
+                            Default::default(),
                         )
                         .or_raise(|| message("Could not track worktree rewrites"))?;
 

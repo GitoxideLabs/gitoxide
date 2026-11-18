@@ -230,7 +230,7 @@ mod submodule_status {
             let local_repo = repo.to_thread_local();
             let submodule_paths = match local_repo.submodules() {
                 Ok(Some(sm)) => {
-                    let mut v: Vec<_> = sm.filter_map(|sm| sm.path().ok()).collect();
+                    let mut v: Vec<_> = sm.filter_map(|sm| sm.try_path().transpose()).collect::<Result<_>>()?;
                     v.sort();
                     v
                 }
@@ -282,8 +282,16 @@ mod submodule_status {
                 .binary_search_by(|path| path.as_bstr().cmp(rela_path))
                 .is_ok()
             {
-                repo.submodules()?
-                    .and_then(|mut submodules| submodules.find(|sm| sm.path().is_ok_and(|path| path == rela_path)))
+                let mut found = None;
+                if let Some(submodules) = repo.submodules()? {
+                    for sm in submodules {
+                        if sm.try_path()?.is_some_and(|path| path == rela_path) {
+                            found = Some(sm);
+                            break;
+                        }
+                    }
+                }
+                found
             } else {
                 None
             };

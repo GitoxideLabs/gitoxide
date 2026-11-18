@@ -154,6 +154,7 @@ where
                 let state = gix_traverse::tree::breadthfirst::State::default();
                 gix_traverse::tree::breadthfirst(self.src_tree, state, self.objects, &mut delegate)
             },
+            Default::default(),
         )?;
         if !cancelled {
             let _ = self

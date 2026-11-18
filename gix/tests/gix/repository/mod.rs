@@ -37,6 +37,10 @@ mod shallow;
 mod state;
 #[cfg(feature = "attributes")]
 mod submodule;
+#[cfg(feature = "merge")]
+mod submodule_merge;
+#[cfg(feature = "merge")]
+mod submodule_merge_provider;
 mod worktree;
 
 mod format_version {

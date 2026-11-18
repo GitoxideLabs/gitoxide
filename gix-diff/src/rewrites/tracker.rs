@@ -23,6 +23,15 @@ use crate::{
     tree::visit::Action,
 };
 
+/// Input traversal information that can affect ambiguous rename identities.
+#[derive(Default, Debug, Clone, Copy)]
+pub struct Context<'a> {
+    /// Consider these destination paths in their given order, before any unlisted paths.
+    /// An empty list preserves path ordering. Merge callers can supply their deferred
+    /// three-tree traversal order without changing ordinary diff matching.
+    pub destination_order: &'a [&'a BStr],
+}
+
 /// The kind of a change.
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub enum ChangeKind {
@@ -171,12 +180,16 @@ impl<T: Change> Tracker<T> {
     /// `push_source_tree(push_fn: push(change, location))` is a function that is called when the entire tree of the source
     /// should be added as modifications by calling `push` repeatedly to use for perfect copy tracking. Note that `push`
     /// will panic if `change` is not a modification, and it's valid to not call `push` at all.
+    ///
+    /// `context` supplies input traversal information for rename matching. Use [`Context::default()`]
+    /// to retain ordinary path ordering.
     pub fn emit<PushSourceTreeFn, E>(
         &mut self,
         mut cb: impl FnMut(visit::Destination<'_, T>, Option<visit::Source<'_, T>>) -> Action,
         diff_cache: &mut crate::blob::Platform,
         objects: &impl gix_object::FindObjectOrHeader,
         mut push_source_tree: PushSourceTreeFn,
+        context: Context<'_>,
     ) -> Result<Outcome>
     where
         PushSourceTreeFn: FnMut(&mut dyn FnMut(T, &BStr)) -> std::result::Result<(), E>,
@@ -225,7 +238,7 @@ impl<T: Change> Tracker<T> {
                 })?;
             }
             self.sort_items_by_id_and_location();
-            let pairs = self.find_file_renames(&mut out, diff_cache, objects)?;
+            let pairs = self.find_file_renames(&mut out, diff_cache, objects, context)?;
             if self.emit_pairs(&pairs, &mut cb).is_break() {
                 self.items.clear();
                 self.path_backing.clear();
@@ -331,6 +344,7 @@ impl<T: Change> Tracker<T> {
         out: &mut Outcome,
         diff_cache: &mut crate::blob::Platform,
         objects: &impl gix_object::FindObjectOrHeader,
+        context: Context<'_>,
     ) -> Result<Vec<Candidate>> {
         let copies = self.rewrites.copies.is_some();
         let mut sources: Vec<_> = self
@@ -356,6 +370,20 @@ impl<T: Change> Tracker<T> {
             })
             .collect();
         self.path_order(&mut destinations);
+        if !context.destination_order.is_empty() {
+            let order: std::collections::HashMap<_, _> = context
+                .destination_order
+                .iter()
+                .enumerate()
+                .map(|(order, &path)| (path, order))
+                .collect();
+            destinations.sort_by_key(|&idx| {
+                order
+                    .get(self.items[idx].location(&self.path_backing))
+                    .copied()
+                    .unwrap_or(usize::MAX)
+            });
+        }
         let mut used: Vec<_> = self
             .items
             .iter()

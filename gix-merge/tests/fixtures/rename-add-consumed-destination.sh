@@ -2,8 +2,8 @@
 set -eu
 
 # Reduced from crash-671cfebac375be1a2d9585bd57f8328eb212d058. Repeated
-# gitlinks make directory renames interact with a file rename into h/h.
-# A preceding structural conflict consumes that destination's indexed change.
+# gitlinks create crossing rename sources. Normalizing them first keeps the added
+# gitlink at a/h and the binary at h/h; no destination type collision remains.
 git init repo
 cd repo
 empty_tree=$(git mktree </dev/null)

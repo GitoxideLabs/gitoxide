@@ -40,14 +40,34 @@ pub enum ConflictKind {
     PathUpdatedDueToDirectoryRename,
     /// Multiple destinations have the same number of file renames from a directory.
     DirectoryRenameSplit,
+    /// A file blocks an inferred directory-rename destination.
+    FileInWayOfDirectoryRename,
+    /// Multiple paths are inferred to have the same directory-rename destination.
+    DirectoryRenameCollision,
     /// Added files differ in mode.
     DistinctModes,
     /// The same file was renamed to different destinations.
     RenameRename,
+    /// A rename participates in a destination collision.
+    RenameInvolvedInCollision,
     /// Deleted in ours with a new file added, renamed to new file in theirs with original content.
     RenameAddDelete,
     /// Two binary files were changed in different ways, which can never be merged (without a merge-driver)
     Binary,
+    /// The submodule repository is unavailable for checking conflicting gitlink commits.
+    SubmoduleNotInitialized,
+    /// One gitlink commit contains the other in its submodule history.
+    SubmoduleFastForwarding,
+    /// Both gitlink commits follow the base but are incomparable.
+    SubmoduleConflict,
+    /// Existing submodule merges suggest a manual conflict resolution.
+    SubmodulePossibleResolution,
+    /// One of the named gitlink commits is missing from the submodule.
+    SubmoduleHistoryUnavailable,
+    /// A selected gitlink commit rewinds behind its recorded base.
+    SubmoduleMayHaveRewinds,
+    /// The two gitlinks have no common recorded submodule base.
+    SubmoduleLacksMergeBase,
 }
 
 /// More loosely structured information about the `Conflict`.
@@ -199,7 +219,7 @@ impl Iterator for Expectations<'_> {
     }
 }
 
-fn parse_merge_info(content: String) -> MergeInfo {
+pub(super) fn parse_merge_info(content: String) -> MergeInfo {
     let mut lines = content.split('\0').filter(|t| !t.is_empty()).peekable();
     let tree_id = gix_hash::ObjectId::from_hex(lines.next().unwrap().as_bytes()).unwrap();
     let mut out = MergeInfo {
@@ -291,10 +311,22 @@ fn parse_info<'a>(mut lines: impl Iterator<Item = &'a str>) -> Option<ConflictIn
         "CONFLICT (directory rename split)" | "CONFLICT(directory rename unclear split)" => {
             ConflictKind::DirectoryRenameSplit
         }
+        "CONFLICT (file in way of directory rename)" => ConflictKind::FileInWayOfDirectoryRename,
+        "CONFLICT(directory rename collision)" | "CONFLICT (directory rename collision)" => {
+            ConflictKind::DirectoryRenameCollision
+        }
         "CONFLICT (distinct modes)" => ConflictKind::DistinctModes,
         "CONFLICT (rename/rename)" => ConflictKind::RenameRename,
+        "CONFLICT (rename involved in collision)" => ConflictKind::RenameInvolvedInCollision,
         "CONFLICT (rename/delete)" => ConflictKind::RenameAddDelete,
         "CONFLICT (binary)" => ConflictKind::Binary,
+        "CONFLICT (submodule not initialized)" => ConflictKind::SubmoduleNotInitialized,
+        "Fast forwarding submodule" => ConflictKind::SubmoduleFastForwarding,
+        "CONFLICT (submodule)" => ConflictKind::SubmoduleConflict,
+        "CONFLICT (submodule with possible resolution)" => ConflictKind::SubmodulePossibleResolution,
+        "CONFLICT (submodule history not available)" => ConflictKind::SubmoduleHistoryUnavailable,
+        "CONFLICT (submodule may have rewinds)" => ConflictKind::SubmoduleMayHaveRewinds,
+        "CONFLICT (submodule lacks merge base)" => ConflictKind::SubmoduleLacksMergeBase,
         conflict_type => panic!("Unkonwn conflict type: {conflict_type}"),
     };
     let message = lines.next()?.to_owned();

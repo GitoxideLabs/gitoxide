@@ -23,6 +23,9 @@ use crate::{blob::builtin_driver, commit::Options};
 /// the ancestor-label isn't explicitly set so that the merge base label becomes the shortened `id`.
 /// Note that it's a dyn closure only to make it possible to recursively call this function in case of multiple merge-bases.
 ///
+/// `context` supplies optional submodule history queries, sharing its callback with recursive virtual-base merges.
+/// Use [`crate::tree::Context::default()`] to leave nontrivial gitlink merges unresolved.
+///
 /// `write_object` is used only if it's allowed to merge multiple merge-bases into one, and if there
 /// are multiple merge bases, and to write merged buffers as blobs.
 ///
@@ -50,6 +53,7 @@ pub fn commit<'objects>(
     blob_merge: &mut crate::blob::Platform,
     objects: &'objects (impl gix_object::FindObjectOrHeader + gix_object::Write),
     abbreviate_hash: &mut dyn FnMut(&gix_hash::oid) -> String,
+    mut context: crate::tree::Context<'_>,
     options: Options,
 ) -> Result<super::Outcome<'objects>> {
     let merge_bases = gix_revision::merge_base(our_commit, &[their_commit], graph)?;
@@ -79,6 +83,7 @@ pub fn commit<'objects>(
                     blob_merge,
                     objects,
                     abbreviate_hash,
+                    context.reborrow(),
                     options.tree_merge.clone(),
                 )?;
                 virtual_merge_bases = Vec::from(out.virtual_merge_bases);
@@ -113,6 +118,7 @@ pub fn commit<'objects>(
         &mut state,
         diff_resource_cache,
         blob_merge,
+        context,
         options.tree_merge,
     )?;
 

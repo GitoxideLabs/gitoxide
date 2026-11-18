@@ -14,6 +14,9 @@ pub mod pipeline;
 ///
 pub mod platform;
 
+// Git's MAX_XDIFF_SIZE, independent of core.bigFileThreshold.
+const MAX_TEXT_MERGE_SIZE: usize = 1023 * 1024 * 1024;
+
 /// Define if a merge is conflicted or not.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum Resolution {
@@ -46,8 +49,8 @@ pub enum BuiltinDriver {
     /// Perform a merge between text-sources such that conflicts are marked according to
     /// `merge.conflictStyle` in the Git configuration.
     ///
-    /// If any of the inputs, *base*, *ours* or *theirs* looks like non-text/binary,
-    /// the [`Binary`](Self::Binary) driver will be used instead.
+    /// If any of the inputs, *base*, *ours* or *theirs*, looks like binary data or exceeds
+    /// 1023 MiB, the [`Binary`](Self::Binary) driver is used.
     ///
     /// Also see [`builtin_driver::text::ConflictStyle`].
     #[default]
@@ -63,6 +66,7 @@ pub enum BuiltinDriver {
     ///
     /// This can be useful for files that change a lot, but will remain usable merely by adding
     /// all changed lines.
+    /// It has the same binary fallback as [`Text`](Self::Text).
     Union,
 }
 
