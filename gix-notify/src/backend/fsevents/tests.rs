@@ -1,5 +1,8 @@
-use super::*;
+use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
 use gix_parallel::{Mutable, lock};
+
+use super::*;
 
 #[test]
 fn ambiguous_native_flags_do_not_guess_a_file_kind() {
@@ -155,7 +158,7 @@ fn late_marker_from_a_timed_out_request_cannot_complete_its_successor() {
 }
 
 #[test]
-fn loss_is_processed_even_for_filtered_native_paths() {
+fn stream_wide_loss_is_processed_even_for_filtered_native_paths() {
     let state = OwnShared::new(Mutable::new(queue::State::new(crate::Options::default())));
     let sender = OwnShared::new(queue::Sender::new(state.clone(), 0));
     let context = Context {
@@ -165,7 +168,7 @@ fn loss_is_processed_even_for_filtered_native_paths() {
     };
     let name = CString::new("/unrelated").expect("no NUL");
     let path = name.as_ptr();
-    let flags = fs::kFSEventStreamEventFlagMustScanSubDirs | fs::kFSEventStreamEventFlagHistoryDone;
+    let flags = fs::kFSEventStreamEventFlagMustScanSubDirs | fs::kFSEventStreamEventFlagKernelDropped;
     callback(
         std::ptr::null_mut(),
         std::ptr::from_ref(&context).cast_mut().cast(),
@@ -184,6 +187,64 @@ fn loss_is_processed_even_for_filtered_native_paths() {
         Some(Loss::Rescan),
         "loss is not subject to scope filtering"
     );
+}
+
+#[test]
+fn coalesced_subtrees_preserve_coverage_only_when_disjoint_from_the_logical_watches() {
+    for (subtree, loses_coverage) in [
+        ("/repo/ignored/deep", false),
+        ("/repository", false),
+        ("/repo/source", true),
+        ("/REPO/SOURCE/subdir", true),
+        ("/parent", true),
+        ("/repo/ignored", true),
+        ("/repo/öther/subdir", true),
+        ("", true),
+        ("/unrelated/../repo", true),
+    ] {
+        let state = OwnShared::new(Mutable::new(queue::State::new(crate::Options::default())));
+        let sender = OwnShared::new(queue::Sender::new(state.clone(), 0));
+        let context = Context {
+            pending: Mutable::new(None),
+            sender: sender.clone(),
+            watches: BTreeMap::from([
+                (PathBuf::from("/repo"), false),
+                (PathBuf::from("/repo/source"), true),
+                (PathBuf::from("/parent/deep/file"), false),
+            ]),
+        };
+        let names = [
+            CString::new(subtree).expect("no NUL"),
+            CString::new("/repo/file").expect("no NUL"),
+        ];
+        let mut paths = names.each_ref().map(|path| path.as_ptr());
+        let flags = [
+            fs::kFSEventStreamEventFlagMustScanSubDirs,
+            fs::kFSEventStreamEventFlagItemModified,
+        ];
+        callback(
+            std::ptr::null_mut(),
+            std::ptr::from_ref(&context).cast_mut().cast(),
+            paths.len(),
+            paths.as_mut_ptr().cast(),
+            flags.as_ptr(),
+            std::ptr::null(),
+        );
+        assert_eq!(sender.fence(0).is_err(), loses_coverage, "coverage for {subtree:?}");
+        let batch = lock(&state).drain(crate::Budget::default());
+        assert_eq!(
+            batch.loss,
+            loses_coverage.then_some(Loss::Rescan),
+            "loss for {subtree:?}"
+        );
+        assert!(
+            batch
+                .events
+                .iter()
+                .any(|event| event.paths == [PathBuf::from("/repo/file")]),
+            "an ordinary change in the same batch is still delivered"
+        );
+    }
 }
 
 #[test]
