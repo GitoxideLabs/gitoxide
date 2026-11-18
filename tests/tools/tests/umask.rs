@@ -1,5 +1,29 @@
 #[test]
 #[cfg(unix)]
+fn subprocess_umask_leaves_parent_unchanged() -> gix_testtools::TestResult {
+    let original = gix_testtools::umask();
+    let global_config = std::env::var_os("GIT_CONFIG_GLOBAL");
+    for mask in [0o077, 0o022] {
+        if gix_testtools::run_with_umask(mask)? {
+            assert_eq!(gix_testtools::umask(), mask, "the subprocess uses the requested mask");
+            assert_eq!(
+                std::env::var("GIT_CONFIG_GLOBAL")?,
+                "/dev/null",
+                "the subprocess does not read the user's global Git config"
+            );
+        }
+    }
+    assert_eq!(gix_testtools::umask(), original, "the calling process keeps its mask");
+    assert_eq!(
+        std::env::var_os("GIT_CONFIG_GLOBAL"),
+        global_config,
+        "the calling process keeps its Git environment"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
 #[cfg_attr(
     not(any(target_os = "linux", target_os = "android")),
     ignore = "The test itself uses /proc"

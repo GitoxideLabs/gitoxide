@@ -2107,26 +2107,34 @@ pub fn run_in_isolated_process() -> Result<bool> {
     Ok(true)
 }
 
+const ISOLATED_TEST_NAME: &str = "GIX_TESTTOOLS_ISOLATED_TEST_NAME";
+
 #[serial_test::serial]
 fn spawn_isolated_test() -> Result<Option<(std::process::Child, tempfile::TempDir)>> {
-    const MARKER: &str = "GIX_TESTTOOLS_ISOLATED_TEST_NAME";
     let thread = std::thread::current();
     let name = thread
         .name()
         .ok_or("isolation must be requested from a named libtest thread")?;
-    if env::var_os(MARKER).as_deref() == Some(OsStr::new(name)) {
+    if env::var_os(ISOLATED_TEST_NAME).as_deref() == Some(OsStr::new(name)) {
         return Ok(None);
     }
+    Ok(Some(spawn_test(
+        command_with_environment_snapshot(env::current_exe()?),
+        name,
+    )?))
+}
+
+/// Call under the default `serial_test` lock, including when capturing the command's environment.
+fn spawn_test(mut cmd: std::process::Command, name: &str) -> std::io::Result<(std::process::Child, tempfile::TempDir)> {
     let config_dir = tempfile::TempDir::new()?;
-    let mut cmd = command_with_environment_snapshot(env::current_exe()?);
     let child = configure_git_environment(&mut cmd, config_dir.path())
         .args(["--exact", name, "--nocapture", "--test-threads=1", "--include-ignored"])
-        .env(MARKER, name)
+        .env(ISOLATED_TEST_NAME, name)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()?;
-    Ok(Some((child, config_dir)))
+    Ok((child, config_dir))
 }
 
 fn split_git_arguments(input: &str) -> Result<Vec<String>> {
@@ -2855,6 +2863,80 @@ pub fn size_ok(actual_size: usize, expected_64_bit_size: usize) -> bool {
     return actual_size == expected_64_bit_size;
     #[cfg(target_pointer_width = "32")]
     return actual_size <= expected_64_bit_size;
+}
+
+/// Run the current test in a subprocess with `mask` and an isolated Git environment.
+///
+/// Like [`run_in_isolated_process()`], this leaves the parent environment untouched and uses the
+/// default `serial_test` lock when spawning; do not call it in a `#[parallel]` scope. The parent's
+/// umask is unchanged, too. There is no need to call [`run_in_isolated_process()`] separately.
+///
+/// Returns `true` only in the subprocess for this mask, where the test body should run. The parent
+/// waits for the subprocess and returns `false`, or an error if the test failed. To test several
+/// masks, call this in a loop and continue when it returns `false`.
+#[cfg(unix)]
+pub fn run_with_umask(mask: u32) -> std::io::Result<bool> {
+    if let Some(child_mask) = env::var_os(TEST_UMASK) {
+        return Ok(child_mask == format!("{mask:03o}").as_str());
+    }
+
+    let thread = std::thread::current();
+    let name = thread
+        .name()
+        .ok_or_else(|| std::io::Error::other("expected a named libtest thread"))?;
+    REQUESTED_UMASK.with(|requested| requested.set(Some(mask)));
+    let (child, _config_dir) = spawn_test_with_umask()?;
+    let output = child.wait_with_output()?;
+    if !output.status.success() {
+        return Err(std::io::Error::other(format!(
+            "test {name} failed with umask {mask:03o}: {}\n{}\n{}",
+            output.status,
+            output.stdout.as_bstr(),
+            output.stderr.as_bstr()
+        )));
+    }
+    Ok(false)
+}
+
+#[cfg(unix)]
+const TEST_UMASK: &str = "GIX_TEST_UMASK";
+
+#[cfg(unix)]
+thread_local! {
+    // `#[serial]` only wraps zero-argument functions. Pass the mask without modifying the environment.
+    static REQUESTED_UMASK: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(unix)]
+#[serial_test::serial]
+fn spawn_test_with_umask() -> std::io::Result<(std::process::Child, tempfile::TempDir)> {
+    let mask = REQUESTED_UMASK
+        .with(std::cell::Cell::take)
+        .expect("the spawning thread provided a mask");
+    let mask = format!("{mask:03o}");
+    let thread = std::thread::current();
+    let name = thread.name().expect("the spawning thread has a libtest name");
+    let mut cmd = command_with_environment_snapshot("/bin/sh");
+    cmd.args([
+            "-c",
+            // macOS removes DYLD_* when launching the system shell. Restore Cargo's library paths
+            // before executing the test binary, which may use dynamically linked dependencies.
+            r#"umask "$1" || exit
+shift
+if [ -n "$GIX_TEST_DYLD_LIBRARY_PATH" ]; then export DYLD_LIBRARY_PATH="$GIX_TEST_DYLD_LIBRARY_PATH"; fi
+if [ -n "$GIX_TEST_DYLD_FALLBACK_LIBRARY_PATH" ]; then export DYLD_FALLBACK_LIBRARY_PATH="$GIX_TEST_DYLD_FALLBACK_LIBRARY_PATH"; fi
+exec "$@""#,
+            "gix-test-umask",
+            &mask,
+        ])
+        .arg(env::current_exe()?)
+        .env(TEST_UMASK, &mask)
+        .env("GIX_TEST_DYLD_LIBRARY_PATH", env::var_os("DYLD_LIBRARY_PATH").unwrap_or_default())
+        .env(
+            "GIX_TEST_DYLD_FALLBACK_LIBRARY_PATH",
+            env::var_os("DYLD_FALLBACK_LIBRARY_PATH").unwrap_or_default(),
+        );
+    spawn_test(cmd, name)
 }
 
 /// Get the umask in a way that is safe, but may be too slow for use outside of tests.
