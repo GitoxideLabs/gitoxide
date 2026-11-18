@@ -1675,11 +1675,16 @@ views.
   `diff --git`, mode/rename, `---`, and `+++` headers followed by its structural
   changes. The file-tree overview precedes every per-file section; scrolling
   traverses all sections from beginning to end. File renames are always detected.
-  Tix parses these outlines with Tree-sitter. Rust shows modules, structs,
-  named and tuple fields, traits, implementations, and function signatures.
-  TOML shows tables and keys; Markdown shows heading hierarchies.
+  Each tree lists raw text line additions and deletions beside its filenames.
+  Binary files and paths without text counts show `n/a`. Hovering a directory
+  name in either tree shows the sum of counted descendants in the diff footer,
+  alongside the number of descendants without counts. Production-only review
+  aggregates only listed files, using whole-file counts for those files.
+  Rust shows modules, structs, named and tuple fields, traits, implementations, and function
+  signatures. TOML shows tables and keys; Markdown shows heading hierarchies.
   Hidden body, value, or prose changes mark their owning declaration with `~`;
-  executable code and opaque macro token trees remain hidden.
+  executable code and opaque macro token trees remain hidden. Tix parses
+  these outlines with Tree-sitter.
 - Inside structural mode, `r` toggles declaration rename matching and `w`
   toggles word changes within paired signatures. Both start enabled and remain
   set for later structural views in the same invocation. They redraw cached
@@ -1763,7 +1768,7 @@ views.
   old/new resources, including the active merge parent, branch comparison,
   staged blobs, and current unstaged or untracked contents. The view retains
   detached paths, display rows, and parsed outlines sharing their source text.
-  Whole-commit preparation does not compute line counts. Empty diffs say there
+  Preparation caches line counts without text conversion. Empty diffs say there
   are no file changes. Empty or mode-only files retain their headers. Unsupported
   languages, binary or oversized data, invalid UTF-8, and malformed syntax
   retain their file-tree entry and headers with an explicit unavailable-outline
