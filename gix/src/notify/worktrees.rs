@@ -247,6 +247,7 @@ impl RepositoryMonitor {
                         additional_paths: Vec::new(),
                         ..self.options.clone()
                     })?;
+                    other.loss_debounce = self.loss_debounce;
                     other.shared_metadata = true;
                     other.worktree_transition = Some(WorktreeChange::Added);
                     entry.insert(other)
