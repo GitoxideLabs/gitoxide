@@ -2,7 +2,7 @@ use gix::diff::blob::{Algorithm, Diff, InternedInput, sources::words};
 
 use super::{Change, Fragment, Line};
 
-pub(super) fn diff(before: &str, after: &str) -> Vec<Line> {
+pub(super) fn diff(before: &str, after: &str, omit_delimiters: bool) -> Vec<Line> {
     let input = InternedInput::new(words(before), words(after));
     let mut changes = Diff::compute(Algorithm::Myers, &input);
     changes.postprocess_no_heuristic(&input);
@@ -36,7 +36,11 @@ pub(super) fn diff(before: &str, after: &str) -> Vec<Line> {
         ] {
             if !tokens.is_empty() {
                 let text: String = tokens.iter().map(|token| input.interner[*token]).collect();
-                append(&mut output, &format!("{open}{text}{close}"), change);
+                if omit_delimiters {
+                    append(&mut output, &text, change);
+                } else {
+                    append(&mut output, &format!("{open}{text}{close}"), change);
+                }
             }
         }
         previous = hunk.before.end as usize;

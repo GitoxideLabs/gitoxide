@@ -63,7 +63,7 @@ impl Change {
 pub struct Fragment {
     /// How this fragment changed.
     pub change: Change,
-    /// Sanitized source text, with delimiters around changed words.
+    /// Sanitized source text, with delimiters around changed words unless the render options omit them.
     pub text: String,
 }
 
@@ -87,6 +87,15 @@ pub struct Options {
     pub word_diff: bool,
     /// Exclude Rust test and benchmark declarations, including scopes disabled when `test` is false.
     pub production_only: bool,
+}
+
+/// Presentation settings for rendering structural changes.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RenderOptions {
+    /// Leave word-change delimiters out of the fragments for callers that style the changed text.
+    pub omit_word_delimiters: bool,
+    /// Replace runs of unchanged parameters in modified Rust signatures with an ellipsis.
+    pub omit_unchanged_parameters: bool,
 }
 
 /// Parsed outlines whose hidden implementation text participates only in comparison.
@@ -119,11 +128,16 @@ impl PreparedDiff {
 
     /// Render the cached outlines with the current settings. Identical outlines emit no rows.
     pub fn render(&self, options: &Options) -> Vec<Line> {
+        self.render_with(options, RenderOptions::default())
+    }
+
+    /// Render the cached outlines with optional changes to their presentation.
+    pub fn render_with(&self, options: &Options, format: RenderOptions) -> Vec<Line> {
         if !self.has_changes(options) {
             return Vec::new();
         }
         let mut lines = Vec::new();
-        render(&self.before, &self.after, 0, options, &mut lines);
+        render(&self.before, &self.after, 0, options, format, &mut lines);
         lines
     }
 }
@@ -214,7 +228,14 @@ fn align<'a>(before: &'a [Item], after: &'a [Item], options: &Options) -> Vec<Pa
     pairs
 }
 
-fn render(before: &[Item], after: &[Item], depth: usize, options: &Options, out: &mut Vec<Line>) {
+fn render(
+    before: &[Item],
+    after: &[Item],
+    depth: usize,
+    options: &Options,
+    format: RenderOptions,
+    out: &mut Vec<Line>,
+) {
     let pairs = align(before, after, options);
     let context = options
         .context
@@ -240,7 +261,7 @@ fn render(before: &[Item], after: &[Item], depth: usize, options: &Options, out:
         }
         skipping = false;
         match (before, after) {
-            (Some(before), Some(after)) => paired(before, after, depth, options, out),
+            (Some(before), Some(after)) => paired(before, after, depth, options, format, out),
             (Some(before), None) => entire(before, Change::Removed, options, out),
             (None, Some(after)) => entire(after, Change::Added, options, out),
             (None, None) => unreachable!("each aligned entry has at least one side"),
@@ -248,7 +269,7 @@ fn render(before: &[Item], after: &[Item], depth: usize, options: &Options, out:
     }
 }
 
-fn paired(before: &Item, after: &Item, depth: usize, options: &Options, out: &mut Vec<Line>) {
+fn paired(before: &Item, after: &Item, depth: usize, options: &Options, format: RenderOptions, out: &mut Vec<Line>) {
     if before.name != after.name {
         let indent: String = after.header.chars().take_while(|ch| matches!(ch, ' ' | '\t')).collect();
         lines(
@@ -257,17 +278,24 @@ fn paired(before: &Item, after: &Item, depth: usize, options: &Options, out: &mu
             out,
         );
     }
-    if before.header != after.header {
-        changed(&before.header, &after.header, options, out);
+    let unchanged = unchanged(before, after, options);
+    let headers = if format.omit_unchanged_parameters && !unchanged {
+        pruned_headers(before, after)
     } else {
-        let change = if !unchanged(before, after, options) {
-            Change::Modified
-        } else {
-            Change::Context
-        };
-        lines(&after.header, change, out);
+        None
+    };
+    let [old_header, new_header] = headers
+        .as_ref()
+        .map_or([before.header.as_str(), after.header.as_str()], |[before, after]| {
+            [before.as_str(), after.as_str()]
+        });
+    if old_header != new_header {
+        changed(old_header, new_header, options, format, out);
+    } else {
+        let change = if !unchanged { Change::Modified } else { Change::Context };
+        lines(new_header, change, out);
     }
-    if unchanged(before, after, options) {
+    if unchanged {
         if let Some(child) = after
             .children
             .iter()
@@ -276,20 +304,67 @@ fn paired(before: &Item, after: &Item, depth: usize, options: &Options, out: &mu
             omitted(child, out);
         }
     } else {
-        render(&before.children, &after.children, depth + 1, options, out);
+        render(&before.children, &after.children, depth + 1, options, format, out);
     }
     if before.footer != after.footer {
-        changed(&before.footer, &after.footer, options, out);
+        changed(&before.footer, &after.footer, options, format, out);
     } else {
         lines(&after.footer, Change::Context, out);
     }
 }
 
-fn changed(before: &str, after: &str, options: &Options, out: &mut Vec<Line>) {
+fn pruned_headers(before: &Item, after: &Item) -> Option<[String; 2]> {
+    let items = [before, after];
+    let parameters = [before.parameters.as_deref()?, after.parameters.as_deref()?];
+    if parameters.iter().any(|parameters| parameters.values.is_empty()) {
+        return None;
+    }
+    let mut input = InternedInput::default();
+    input.update_before(parameters[0].values.iter().map(|param| param.raw(before)));
+    input.update_after(parameters[1].values.iter().map(|param| param.raw(after)));
+    let diff = Diff::compute(Algorithm::Myers, &input);
+    if diff.count_removals() as usize == input.before.len() {
+        return None;
+    }
+
+    let mut headers: [String; 2] = std::array::from_fn(|side| {
+        let mut header = items[side].header[..parameters[side].header.start].to_owned();
+        header.push('(');
+        header
+    });
+    let mut previous = 0;
+    for hunk in diff.hunks() {
+        if previous < hunk.before.start {
+            for header in &mut headers {
+                if !header.ends_with("…, ") {
+                    header.push_str("…, ");
+                }
+            }
+        }
+        previous = hunk.before.end;
+        for (side, range) in [hunk.before, hunk.after].into_iter().enumerate() {
+            for parameter in &parameters[side].values[range.start as usize..range.end as usize] {
+                headers[side].push_str(parameter.display(items[side]));
+                headers[side].push_str(", ");
+            }
+        }
+    }
+    for (side, header) in headers.iter_mut().enumerate() {
+        if (previous as usize) < input.before.len() && !header.ends_with("…, ") {
+            header.push_str("…, ");
+        }
+        header.truncate(header.len() - 2);
+        header.push(')');
+        header.push_str(&items[side].header[parameters[side].header.end..]);
+    }
+    Some(headers)
+}
+
+fn changed(before: &str, after: &str, options: &Options, format: RenderOptions, out: &mut Vec<Line>) {
     if options.word_diff {
         let [before, after] =
             [before, after].map(|text| text.lines().map(terminal_text).collect::<Vec<_>>().join("\n"));
-        out.extend(words::diff(&before, &after));
+        out.extend(words::diff(&before, &after, format.omit_word_delimiters));
     } else {
         lines(before, Change::Removed, out);
         lines(after, Change::Added, out);

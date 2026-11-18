@@ -61,6 +61,29 @@ pub(super) struct Item {
     pub children: Vec<Item>,
     pub test_only: bool,
     pub contains_tests: bool,
+    pub parameters: Option<Box<Parameters>>,
+}
+
+#[derive(Debug)]
+pub(super) struct Parameters {
+    pub header: Range<usize>,
+    pub values: Vec<Parameter>,
+}
+
+#[derive(Debug)]
+pub(super) struct Parameter {
+    range: Range<usize>,
+    redacted: Option<String>,
+}
+
+impl Parameter {
+    pub(super) fn raw<'a>(&self, item: &'a Item) -> &'a str {
+        &item.content.source[self.range.clone()]
+    }
+
+    pub(super) fn display<'a>(&'a self, item: &'a Item) -> &'a str {
+        self.redacted.as_deref().unwrap_or_else(|| self.raw(item))
+    }
 }
 
 pub(super) fn parse(source: &str, language: Language) -> Result<Vec<Item>> {
@@ -119,12 +142,18 @@ fn rust_children(parent: Node<'_>, source: &Arc<str>) -> Vec<Item> {
         item.test_only |= test_only || attributes.iter().any(|attribute| test_attribute(*attribute, source));
         if let Some(first) = attributes.first() {
             item.content.range = first.start_byte()..node.end_byte();
+            let header_len = item.header.len();
             item.header = attributes
                 .iter()
                 .map(|attribute| indented(source, *attribute, attribute.byte_range()))
                 .chain(std::iter::once(item.header))
                 .collect::<Vec<_>>()
                 .join("\n");
+            if let Some(parameters) = &mut item.parameters {
+                let prefix = item.header.len() - header_len;
+                parameters.header.start += prefix;
+                parameters.header.end += prefix;
+            }
             attributes.clear();
         }
         item.contains_tests = item.test_only || item.children.iter().any(|child| child.contains_tests);
@@ -149,6 +178,7 @@ fn tuple_field(node: Node<'_>, visibility: Option<Node<'_>>, source: &Arc<str>) 
         children: Vec::new(),
         test_only: false,
         contains_tests: false,
+        parameters: None,
     }
 }
 
@@ -283,29 +313,47 @@ fn rust_item(node: Node<'_>, source: &Arc<str>) -> Option<Item> {
         children: Vec::new(),
         test_only: false,
         contains_tests: false,
+        parameters: None,
     };
     if node.kind() == "macro_definition" {
         let name = node.child_by_field_name("name")?;
         item.header = indented(source, node, node.start_byte()..name.end_byte()) + " { … }";
+    } else if kind == "function" {
+        let body = node.child_by_field_name("body");
+        let end = body.map_or(node.end_byte(), |body| body.start_byte());
+        item.test_only = body.is_some_and(|body| inner_test_only(body, source));
+        if let Some(parameters) = node.child_by_field_name("parameters") {
+            item.header = indented(source, node, node.start_byte()..parameters.start_byte());
+            let start = item.header.len();
+            item.header
+                .push_str(&sanitized(source, parameters, parameters.byte_range()));
+            item.parameters = Some(Box::new(Parameters {
+                header: start..item.header.len(),
+                values: rust_parameters(parameters, source),
+            }));
+            item.header
+                .push_str(&sanitized(source, node, parameters.end_byte()..end));
+        } else {
+            item.header = indented(source, node, node.start_byte()..end);
+        }
+        if body.is_some() {
+            item.header.push_str("{ … }");
+        }
     } else if let Some(body) = node.child_by_field_name("body") {
         item.test_only = inner_test_only(body, source);
-        if kind == "function" {
-            item.header = indented(source, node, node.start_byte()..body.start_byte()) + "{ … }";
-        } else {
-            item.content.body = body.start_byte() + 1..body.end_byte() - 1;
-            item.header = indented(source, node, node.start_byte()..body.start_byte() + 1);
-            let closing_prefix = &source[line_start(source, body.end_byte() - 1)..body.end_byte() - 1];
-            item.footer = format!(
-                "{}{}",
-                if closing_prefix.chars().all(char::is_whitespace) {
-                    closing_prefix.to_owned()
-                } else {
-                    indentation(source, node)
-                },
-                sanitized(source, node, body.end_byte() - 1..node.end_byte())
-            );
-            item.children = rust_children(body, source);
-        }
+        item.content.body = body.start_byte() + 1..body.end_byte() - 1;
+        item.header = indented(source, node, node.start_byte()..body.start_byte() + 1);
+        let closing_prefix = &source[line_start(source, body.end_byte() - 1)..body.end_byte() - 1];
+        item.footer = format!(
+            "{}{}",
+            if closing_prefix.chars().all(char::is_whitespace) {
+                closing_prefix.to_owned()
+            } else {
+                indentation(source, node)
+            },
+            sanitized(source, node, body.end_byte() - 1..node.end_byte())
+        );
+        item.children = rust_children(body, source);
     } else {
         item.header = indented(source, node, node.byte_range());
     }
@@ -317,6 +365,35 @@ fn rust_item(node: Node<'_>, source: &Arc<str>) -> Option<Item> {
         }
     }
     Some(item)
+}
+
+fn rust_parameters(parameters: Node<'_>, source: &str) -> Vec<Parameter> {
+    let mut values = Vec::new();
+    let mut attribute = None;
+    let mut cursor = parameters.walk();
+    for child in parameters.children(&mut cursor) {
+        match child.kind() {
+            "(" | ")" | "," | "line_comment" | "block_comment" => continue,
+            "attribute_item" => {
+                attribute = Some(child);
+            }
+            _ => {
+                let attribute = attribute.take();
+                let range = attribute.map_or(child.start_byte(), |attribute| attribute.start_byte())..child.end_byte();
+                let display = sanitized(source, child, child.byte_range());
+                let display = if let Some(attribute) = attribute {
+                    format!("{} {display}", sanitized(source, attribute, attribute.byte_range()))
+                } else {
+                    display
+                };
+                values.push(Parameter {
+                    redacted: (display != source[range.clone()]).then_some(display),
+                    range,
+                });
+            }
+        }
+    }
+    values
 }
 
 fn toml_children(parent: Node<'_>, source: &Arc<str>) -> Vec<Item> {
@@ -350,6 +427,7 @@ fn toml_children(parent: Node<'_>, source: &Arc<str>) -> Vec<Item> {
                 children: if table { toml_children(node, source) } else { Vec::new() },
                 test_only: false,
                 contains_tests: false,
+                parameters: None,
             })
         })
         .collect()
@@ -372,6 +450,7 @@ fn markdown(root: Node<'_>, source: &Arc<str>) -> Vec<Item> {
             children: Vec::new(),
             test_only: false,
             contains_tests: false,
+            parameters: None,
         });
     }
     items.extend(markdown_items(&headings, source, source.len()));
@@ -427,6 +506,7 @@ fn markdown_items(mut headings: &[Node<'_>], source: &Arc<str>, end: usize) -> V
             children: markdown_items(&headings[1..next], source, section_end),
             test_only: false,
             contains_tests: false,
+            parameters: None,
         });
         headings = &headings[next..];
     }
