@@ -355,7 +355,7 @@ impl Diff {
                     Line::styled(
                         header.clone(),
                         if header.starts_with("diff --git") {
-                            colors.header
+                            crate::ui::DIFF_FILE_HEADER
                         } else {
                             colors.metadata
                         },
@@ -1220,10 +1220,18 @@ mod tests {
                     view.lines[header + 2].0.to_string(),
                     "freezing does not discard the first visible change"
                 );
-                assert_eq!(
-                    terminal.backend().buffer()[(159, 1)].bg,
-                    colors.header.bg.expect("sampled headers have a background"),
-                    "the frozen header keeps its full-width theme color"
+                let buffer = terminal.backend().buffer();
+                assert!(
+                    buffer[(0, 1)].modifier.contains(Modifier::BOLD | Modifier::REVERSED),
+                    "the frozen path stands out from the hunk"
+                );
+                assert!(
+                    buffer[(159, 1)].modifier.contains(Modifier::REVERSED),
+                    "the highlight spans the viewport"
+                );
+                assert!(
+                    !buffer[(0, 2)].modifier.contains(Modifier::REVERSED),
+                    "hunk text keeps ordinary styling"
                 );
             }
         }

@@ -439,6 +439,10 @@ fn changes_pane_areas(
     }
 }
 
+pub(crate) const DIFF_FILE_HEADER: Style = Style::new()
+    .bg(Color::Reset)
+    .add_modifier(Modifier::BOLD.union(Modifier::REVERSED));
+
 fn patch_line(line: &BString) -> Line<'_> {
     let style = if line.starts_with(b"@@") {
         Style::default().fg(Color::Cyan)
@@ -461,7 +465,18 @@ pub(crate) fn draw_file_diff(
     offset: usize,
     horizontal_offset: usize,
 ) {
-    let lines = diff.lines.iter().map(patch_line);
+    let summary_rows = diff.summary.as_ref().map_or(0, |summary| summary.len() + 1);
+    let lines = diff.lines.iter().enumerate().map(|(index, line)| {
+        if diff
+            .file_headers
+            .binary_search_by_key(&(index + summary_rows), |&(_, header)| header)
+            .is_ok()
+        {
+            Line::styled(line.to_str_lossy(), DIFF_FILE_HEADER)
+        } else {
+            patch_line(line)
+        }
+    });
     let summary = diff
         .summary
         .as_deref()
@@ -472,10 +487,8 @@ pub(crate) fn draw_file_diff(
         area,
         &diff.title.to_str_lossy(),
         summary.chain(lines),
-        sticky_diff_header(&diff.file_headers, offset).map(|index| {
-            let summary_rows = diff.summary.as_ref().map_or(0, |summary| summary.len() + 1);
-            patch_line(&diff.lines[index - summary_rows])
-        }),
+        sticky_diff_header(&diff.file_headers, offset)
+            .map(|index| Line::styled(diff.lines[index - summary_rows].to_str_lossy(), DIFF_FILE_HEADER)),
         (offset, horizontal_offset),
         "↑↓/jk move · h/l pan · <enter>/q/Esc back",
     );
@@ -6026,21 +6039,41 @@ Native tests: 2s"
                 "summaries do not freeze a file name"
             );
             let offset = 6;
-            let (name, color) = if kind == ChangeKind::Deleted {
-                ("--- a/after.rs", Color::LightRed)
+            let name = if kind == ChangeKind::Deleted {
+                "--- a/after.rs"
             } else {
-                ("+++ b/after.rs", Color::Green)
+                "+++ b/after.rs"
             };
+            let filename_row = if kind == ChangeKind::Deleted { 3 } else { 4 };
+            assert!(
+                terminal.backend().buffer()[(0, filename_row)]
+                    .modifier
+                    .contains(Modifier::BOLD | Modifier::REVERSED),
+                "the filename stands out before it freezes"
+            );
             terminal.draw(|frame| draw_file_diff(frame, frame.area(), &diff, offset, 0))?;
             assert_eq!(
                 rendered_line(&terminal, 1).trim_end(),
                 name,
                 "added, deleted, and renamed files retain an existing filename"
             );
-            assert_eq!(
-                terminal.backend().buffer()[(0, 1)].fg,
-                color,
-                "freezing preserves patch header colors"
+            assert!(
+                terminal.backend().buffer()[(0, 1)]
+                    .modifier
+                    .contains(Modifier::BOLD | Modifier::REVERSED),
+                "the frozen filename keeps its highlight"
+            );
+            assert!(
+                terminal.backend().buffer()[(79, 1)]
+                    .modifier
+                    .contains(Modifier::REVERSED),
+                "the highlight spans the viewport"
+            );
+            assert!(
+                !terminal.backend().buffer()[(0, 2)]
+                    .modifier
+                    .contains(Modifier::REVERSED),
+                "hunk text keeps ordinary styling"
             );
             assert_eq!(
                 rendered_line(&terminal, 2).trim_end(),
