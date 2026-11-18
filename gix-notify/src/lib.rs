@@ -59,6 +59,8 @@
 //! are unchanged.
 //! A transient rename and restoration between checks can go undetected. Root checks do not replace
 //! application-level refreshes for silent notification blind spots.
+//! A coalesced FSEvents subtree only invalidates coverage when it can intersect a logical watch.
+//! Stream-wide drops and ambiguous loss still require a new baseline.
 //!
 //! Linux installs one watch per directory without following descendant symlinks. Directory moves,
 //! removals, and native queue overflow can require re-registering the desired watches before a new
