@@ -1,9 +1,12 @@
-use super::{Change, Language, Options, PreparedDiff};
+use super::{Change, Language, Options, PreparedDiff, RenderOptions};
 use gix_testtools::TestResult;
 
 fn text(prepared: &PreparedDiff, options: &Options) -> String {
-    prepared
-        .render(options)
+    display(prepared.render(options))
+}
+
+fn display(lines: Vec<super::Line>) -> String {
+    lines
         .into_iter()
         .map(|line| {
             format!(
@@ -48,6 +51,17 @@ fn bodies_mark_their_declarations_without_exposing_implementation() -> TestResul
     assert!(
         !output.contains("secret_"),
         "implementation text participates only in comparison"
+    );
+    let compact = display(prepared.render_with(
+        &Options::default(),
+        RenderOptions {
+            omit_unchanged_parameters: true,
+            ..RenderOptions::default()
+        },
+    ));
+    assert!(
+        compact.contains("~\tpub fn calculate(…) -> i32 { … }"),
+        "body-only edits keep the return type in a compact signature: {compact}"
     );
     Ok(())
 }
@@ -152,11 +166,94 @@ fn renames_and_word_changes_can_be_redrawn_from_the_same_inputs() -> TestResult 
             .any(|fragment| fragment.change == Change::Added && fragment.text == "{+u32+}"),
         "only inserted words carry addition styling"
     );
+    let raw = signature.render_with(
+        &options,
+        RenderOptions {
+            omit_word_delimiters: true,
+            ..RenderOptions::default()
+        },
+    );
+    for (change, word) in [(Change::Removed, "i32"), (Change::Added, "u32")] {
+        assert!(
+            raw.iter()
+                .flat_map(|line| &line.fragments)
+                .any(|fragment| fragment.change == change && fragment.text == word),
+            "marker-free fragments keep their change kind and source text"
+        );
+    }
     options.word_diff = false;
     let output = text(&signature, &options);
     assert!(
         output.contains("-fn f(arg: i32)") && output.contains("+fn f(arg: u32)"),
         "word mode can return to separate declaration lines: {output}"
+    );
+    Ok(())
+}
+
+#[test]
+fn compact_signatures_keep_changed_arguments_in_order_and_preserve_the_return_type() -> TestResult {
+    let before = "impl Widget {
+    #[inline]
+    fn convert<T>(
+        &self,
+        coordinates: (u8, u8),
+        keep: bool,
+        old: u16,
+    ) -> T where T: Copy { hidden_before() }
+}
+trait Shape {
+    fn order(&self, left: u8, right: u8) -> usize;
+}
+fn deleted(flag: bool) -> bool { hidden_before() }
+";
+    let after = "impl Widget {
+    #[inline]
+    fn convert<T>(
+        &self,
+        coordinates: (u16, u8),
+        keep: bool,
+        #[cfg(test)] fresh: u32,
+    ) -> T where T: Copy { hidden_after() }
+}
+trait Shape {
+    fn order(&self, right: u8, left: u8) -> usize;
+}
+fn added(flag: bool) -> bool { hidden_after() }
+";
+    let prepared = PreparedDiff::new(before, after, Language::Rust)?;
+    let options = Options {
+        context: vec![0],
+        ..Options::default()
+    };
+    let compact = display(prepared.render_with(
+        &options,
+        RenderOptions {
+            omit_unchanged_parameters: true,
+            ..RenderOptions::default()
+        },
+    ));
+    for line in [
+        "-    fn convert<T>(…, coordinates: (u8, u8), …, old: u16) -> T where T: Copy { … }",
+        "+    fn convert<T>(…, coordinates: (u16, u8), …, #[cfg(…)] fresh: u32) -> T where T: Copy { … }",
+        "-fn deleted(flag: bool) -> bool { … }",
+        "+fn added(flag: bool) -> bool { … }",
+    ] {
+        assert!(
+            compact.lines().any(|candidate| candidate == line),
+            "compact signatures retain {line:?}: {compact}"
+        );
+    }
+    let reordered: Vec<_> = compact.lines().filter(|line| line.contains("fn order(")).collect();
+    assert_eq!(reordered.len(), 2, "moving a parameter remains visible: {compact}");
+    assert!(
+        reordered
+            .iter()
+            .all(|line| line.contains('…') && line.ends_with("-> usize;")),
+        "trait method signatures retain their return type and semicolon: {compact}"
+    );
+    assert!(
+        !compact.contains("keep: bool") && !compact.contains("hidden_") && !compact.contains("…, …"),
+        "unchanged arguments and hidden bodies are collapsed without repeated placeholders: {compact}"
     );
     Ok(())
 }

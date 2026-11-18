@@ -85,6 +85,7 @@ mod tests {
             children: Vec::new(),
             test_only: false,
             contains_tests: false,
+            parameters: None,
         }
     }
 
