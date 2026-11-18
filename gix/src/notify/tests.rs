@@ -210,6 +210,8 @@ fn monitor() -> RepositoryMonitor {
             registered: BTreeMap::from([(PathBuf::from("/repo"), false), (PathBuf::from("/repo/src"), false)]),
             ..Domain::default()
         },
+        #[cfg(target_os = "macos")]
+        external_ignores: external_ignores::Watcher::default(),
         directories: inventory::directory_lookup([PathBuf::from("/repo"), PathBuf::from("/repo/src")]),
         nested_repositories: HashSet::new(),
         index_fingerprint: None,
@@ -1522,6 +1524,11 @@ fn metadata_watches_exclude_ancestors_and_external_configuration() -> TestResult
             watches.contains_key(&layout.common_dir.join("info")),
             "repository-local ignore and attribute files remain covered"
         );
+        assert_eq!(
+            watches.contains_key(&external_root),
+            !cfg!(target_os = "macos"),
+            "macOS external ignores leave their parent out of native repository roots"
+        );
     }
     std::fs::write(&config, "[monitor]\nvalue = after\n")?;
     assert_eq!(
@@ -1540,6 +1547,79 @@ fn metadata_watches_exclude_ancestors_and_external_configuration() -> TestResult
     assert!(
         inventory::metadata_watches(&layout, None, false)?.is_empty(),
         "a missing repository root does not broaden coverage to its parent"
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn retargeting_an_external_ignore_watch_invalidates_ignores_only() -> TestResult {
+    let fixture = fixture()?;
+    let external = gix_testtools::tempfile::tempdir()?;
+    let root = external.path().canonicalize()?;
+    let ignore = root.join("ignore");
+    let old = root.join("old");
+    let new = root.join("new");
+    let replacement = root.join("replacement");
+    std::fs::write(&old, "ignored/\n")?;
+    std::fs::write(&new, "other/\n")?;
+    std::os::unix::fs::symlink(&old, &ignore)?;
+    std::os::unix::fs::symlink(&new, &replacement)?;
+    let open = || {
+        crate::open_opts(
+            fixture.path(),
+            crate::open::Options::isolated().config_overrides([format!("core.excludesFile={}", ignore.display())]),
+        )
+    };
+    let mut monitor = open()?.monitor(Options {
+        metadata_debounce: Duration::ZERO,
+        max_latency: Duration::ZERO,
+        ..Default::default()
+    })?;
+    let mut service = || monitor.service(Instant::now(), open);
+    for _ in 0..3 {
+        let outcome = service();
+        assert!(outcome.errors.is_empty(), "registration succeeds: {:?}", outcome.errors);
+    }
+    std::fs::rename(&replacement, &ignore)?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let outcome = service();
+        assert!(
+            outcome.errors.is_empty(),
+            "atomic retargeting keeps coverage: {:?}",
+            outcome.errors
+        );
+        if outcome.changes.ignores {
+            assert_eq!(
+                outcome.changes,
+                Changes {
+                    ignores: true,
+                    worktree: Some(Scope::All),
+                    ..Changes::default()
+                },
+                "external file changes refresh ignore rules and worktree coverage"
+            );
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the watcher observes the name being retargeted"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        monitor
+            .layout
+            .dependencies
+            .iter()
+            .any(|dependency| dependency.path == ignore)
+            && !monitor
+                .layout
+                .dependencies
+                .iter()
+                .any(|dependency| dependency.path == new),
+        "the external file watch owns the configured name across retargeting"
     );
     Ok(())
 }

@@ -94,10 +94,11 @@ pub(super) fn watch_parent(layout: &Layout, watches: &mut BTreeMap<PathBuf, bool
     if let Some(parent) = path.parent() {
         if layout.contains(path) {
             watch_directory(layout, watches, parent, false);
-        } else if layout
-            .dependencies
-            .iter()
-            .any(|dependency| dependency.path == path && dependency.kind == DependencyKind::Ignore)
+        } else if !cfg!(target_os = "macos")
+            && layout
+                .dependencies
+                .iter()
+                .any(|dependency| dependency.path == path && dependency.kind == DependencyKind::Ignore)
         {
             // Global ignore files can be replaced atomically or created below missing parents.
             if let Some(parent) = parent.ancestors().find(|parent| parent.is_dir()) {

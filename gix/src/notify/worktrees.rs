@@ -123,6 +123,10 @@ impl RepositoryMonitor {
                 Ok(false) => {
                     if let Some(other) = self.other_worktrees.remove(&git_dir) {
                         statistics.removed += other.worktree.registered.len();
+                        #[cfg(target_os = "macos")]
+                        {
+                            statistics.removed += other.external_ignores.registered_len();
+                        }
                         self.retired_worktrees
                             .extend(other.worktree_change(WorktreeChange::Removed));
                     }
