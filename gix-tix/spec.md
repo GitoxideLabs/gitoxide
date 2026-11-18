@@ -1680,6 +1680,10 @@ views.
   name in either tree shows the sum of counted descendants in the diff footer,
   alongside the number of descendants without counts. Production-only review
   aggregates only listed files, using whole-file counts for those files.
+  With confirmed Kitty pixel graphics, both trees use one connector cell per
+  nesting level and draw thin lines using the commit graph's tile backend.
+  Otherwise the trees use the wider text connectors. Hit regions follow the
+  chosen layout, including after scrolling or panning.
   Rust shows modules, structs, named and tuple fields, traits, implementations, and function
   signatures. TOML shows tables and keys; Markdown shows heading hierarchies.
   Hidden body, value, or prose changes mark their owning declaration with `~`;

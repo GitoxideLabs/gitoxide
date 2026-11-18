@@ -18,6 +18,7 @@ use crate::{
     FileChange, OBJECT_CACHE_SIZE,
     app::{ChangeKind, PathChange, TreeDiffTarget},
     diff_colors::Palette,
+    graph_tiles::Tile,
 };
 
 pub(crate) mod outline;
@@ -265,17 +266,23 @@ impl FileTree {
     fn render(
         &self,
         files: &[File],
-        prefix: &str,
+        (prefix, compact): (&str, bool),
         lines: &mut Vec<Line<'static>>,
         file_rows: &mut [Option<usize>],
         directories: &mut Vec<DirectoryStat>,
         colors: &Palette,
     ) {
+        let branch = |last| match (compact, last) {
+            (true, false) => "├",
+            (true, true) => "└",
+            (false, false) => "├── ",
+            (false, true) => "└── ",
+        };
         let count = self.directories.len() + self.files.len();
         for (index, (name, tree)) in self.directories.iter().enumerate() {
             let last = index + 1 == count;
             let name = quoted(name.as_bstr(), "");
-            let indent = format!("{prefix}{} ", if last { "└──" } else { "├──" });
+            let indent = format!("{prefix}{}", branch(last));
             let start = Span::raw(indent.as_str()).width();
             let mut summary = format!("{name}/  +{} -{}", tree.added, tree.removed);
             if tree.without_counts != 0 {
@@ -287,10 +294,19 @@ impl FileTree {
                 columns: start..start + Span::raw(name.as_str()).width() + 1,
                 summary,
             });
-            lines.push(Line::styled(format!("{indent}{name}/"), colors.metadata));
+            lines.push(Line::from(vec![
+                Span::styled(indent, colors.metadata),
+                Span::styled(format!("{name}/"), colors.metadata),
+            ]));
+            let continuation = match (compact, last) {
+                (true, false) => "│",
+                (true, true) => " ",
+                (false, false) => "│   ",
+                (false, true) => "    ",
+            };
             tree.render(
                 files,
-                &format!("{prefix}{}", if last { "    " } else { "│   " }),
+                (&format!("{prefix}{continuation}"), compact),
                 lines,
                 file_rows,
                 directories,
@@ -301,7 +317,7 @@ impl FileTree {
             let path = &files[*file].path;
             let last = self.directories.len() + index + 1 == count;
             let mut spans = vec![
-                Span::raw(format!("{prefix}{} ", if last { "└──" } else { "├──" })),
+                Span::raw(format!("{prefix}{}", branch(last))),
                 Span::styled(format!("{} ", path.kind.letter()), colors.path(path.kind)),
                 Span::raw(quoted(name.as_bstr(), "")),
             ];
@@ -323,7 +339,12 @@ impl FileTree {
 type DiffRows = Vec<(Line<'static>, Option<Language>)>;
 
 impl Diff {
-    fn render(&self, options: &Options, colors: &Palette) -> (DiffRows, Vec<FileLink>, Vec<DirectoryStat>) {
+    fn render(
+        &self,
+        options: &Options,
+        colors: &Palette,
+        compact: bool,
+    ) -> (DiffRows, Vec<FileLink>, Vec<DirectoryStat>) {
         let visible: Vec<_> = self
             .files
             .iter()
@@ -368,7 +389,14 @@ impl Diff {
         }
         let mut file_rows = vec![None; self.files.len()];
         let mut directories = Vec::new();
-        tree.render(&self.files, "", &mut lines, &mut file_rows, &mut directories, colors);
+        tree.render(
+            &self.files,
+            ("", compact),
+            &mut lines,
+            &mut file_rows,
+            &mut directories,
+            colors,
+        );
         let mut rows = lines.into_iter().map(|line| (line, None)).collect::<Vec<_>>();
         let mut file_links = Vec::with_capacity(visible.len());
         for index in visible {
@@ -472,6 +500,7 @@ pub(crate) struct View<'a> {
     file_links: Vec<FileLink>,
     directories: Vec<DirectoryStat>,
     pointer: Option<Position>,
+    graphics: bool,
     tree_rows: Vec<(usize, usize)>,
     tree_visible: bool,
     tree_scroll: Option<(usize, usize)>,
@@ -479,8 +508,8 @@ pub(crate) struct View<'a> {
 }
 
 impl<'a> View<'a> {
-    pub(crate) fn new(diff: &'a Diff, options: &'a mut Options, colors: &'a Palette) -> Self {
-        let (lines, file_links, directories) = diff.render(options, colors);
+    pub(crate) fn new(diff: &'a Diff, options: &'a mut Options, colors: &'a Palette, graphics: bool) -> Self {
+        let (lines, file_links, directories) = diff.render(options, colors, graphics);
         let max_width = lines.iter().map(|(line, _)| line.width()).max().unwrap_or_default();
         let file_headers = file_header_rows(&lines);
         let tree_rows = file_tree_rows(&file_links);
@@ -493,6 +522,7 @@ impl<'a> View<'a> {
             file_links,
             directories,
             pointer: None,
+            graphics,
             tree_rows,
             tree_visible: false,
             tree_scroll: None,
@@ -656,7 +686,7 @@ impl<'a> View<'a> {
             }
             _ => return false,
         }
-        (self.lines, self.file_links, self.directories) = self.diff.render(self.options, self.colors);
+        (self.lines, self.file_links, self.directories) = self.diff.render(self.options, self.colors, self.graphics);
         self.file_headers = file_header_rows(&self.lines);
         self.tree_rows = file_tree_rows(&self.file_links);
         self.tree_scroll = None;
@@ -699,6 +729,7 @@ impl<'a> View<'a> {
             (offset, horizontal_offset),
             directory_summary.unwrap_or(&footer),
         );
+        self.tag_tree(frame, area, offset, horizontal_offset);
     }
 
     fn draw_tree(&self, frame: &mut Frame<'_>, tree: Rect, offset: usize) {
@@ -722,21 +753,50 @@ impl<'a> View<'a> {
                     line
                 }
             });
+        let area = Rect::new(tree.x, tree.y, tree.width.saturating_sub(1), tree.height);
+        let tree_offset = self.tree_offset(tree, offset);
         crate::ui::draw_diff(
             frame,
-            Rect::new(tree.x, tree.y, tree.width.saturating_sub(1), tree.height),
+            area,
             "Files",
             lines,
             None,
-            (self.tree_offset(tree, offset), 0),
+            (tree_offset, 0),
             "Tab hide · wheel scroll",
         );
+        self.tag_tree(frame, area, tree_offset, 0);
         frame.render_widget(
             Block::default()
                 .borders(Borders::RIGHT)
                 .border_style(self.colors.metadata),
             tree,
         );
+    }
+
+    fn tag_tree(&self, frame: &mut Frame<'_>, area: Rect, offset: usize, horizontal_offset: usize) {
+        let tree_end = self.tree_line_count();
+        if !self.graphics || offset >= tree_end {
+            return;
+        }
+        let mut tiles = Vec::new();
+        for (y, (line, _)) in
+            (area.y.saturating_add(1)..area.bottom().saturating_sub(1)).zip(&self.lines[offset..tree_end])
+        {
+            let Some(prefix) = line.spans.first() else {
+                continue;
+            };
+            tiles.clear();
+            tiles.extend(
+                prefix
+                    .content
+                    .chars()
+                    .take_while(|ch| matches!(ch, ' ' | '│' | '├' | '└'))
+                    .skip(horizontal_offset)
+                    .take(usize::from(area.width))
+                    .map(|ch| Tile::from_text(ch).unwrap_or_default()),
+            );
+            crate::ui::tag_graph(frame, Rect::new(area.x, y, area.width, 1), &tiles, 0);
+        }
     }
 }
 
@@ -871,7 +931,7 @@ mod tests {
         let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
         let mut options = Options::default();
         let colors = Palette::default();
-        let mut view = View::new(&diff, &mut options, &colors);
+        let mut view = View::new(&diff, &mut options, &colors, false);
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 12))?;
         let offset = view.last_file_header();
         for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT, KeyModifiers::SHIFT] {
@@ -915,7 +975,7 @@ mod tests {
         let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
         let mut options = Options::default();
         let colors = Palette::default();
-        let mut review = crate::DiffView::Structural(View::new(&diff, &mut options, &colors));
+        let mut review = crate::DiffView::Structural(View::new(&diff, &mut options, &colors, false));
         assert!(review.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
         let area = Rect::new(3, 2, 120, 80);
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(125, 84))?;
@@ -994,7 +1054,7 @@ mod tests {
         let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
         let mut options = Options::default();
         let colors = Palette::default();
-        let mut view = View::new(&diff, &mut options, &colors);
+        let mut view = View::new(&diff, &mut options, &colors, false);
         assert!(view.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
         let area = Rect::new(2, 2, 120, 7);
         let [tree, patch] = view.areas(area);
@@ -1064,7 +1124,7 @@ mod tests {
         let mut options = crate::App::new(24).structural_diff_options;
         let colors = Palette::default();
         {
-            let mut view = View::new(&diff, &mut options, &colors);
+            let mut view = View::new(&diff, &mut options, &colors, false);
             let original = text(&view.lines);
             assert!(
                 !original.contains("fn unchanged()"),
@@ -1115,7 +1175,7 @@ mod tests {
                 "context can be enabled again"
             );
         }
-        let reopened = View::new(&diff, &mut options, &colors);
+        let reopened = View::new(&diff, &mut options, &colors, false);
         assert!(
             text(&reopened.lines).contains("fn unchanged()"),
             "reopening preserves the selected context"
@@ -1129,7 +1189,7 @@ mod tests {
         let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
         let mut options = Options::default();
         let colors = Palette::default();
-        let mut review = crate::DiffView::Structural(View::new(&diff, &mut options, &colors));
+        let mut review = crate::DiffView::Structural(View::new(&diff, &mut options, &colors, false));
         let area = Rect::new(4, 3, 100, 7);
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(110, 12))?;
         for key in [None, Some('p'), Some('c'), Some('w'), Some('r'), Some('c'), Some('p')] {
@@ -1250,7 +1310,7 @@ mod tests {
         );
         let mut options = Options::default();
         let colors = Palette::default();
-        let mut view = View::new(&diff, &mut options, &colors);
+        let mut view = View::new(&diff, &mut options, &colors, false);
         let area = Rect::new(2, 3, 120, 24);
         for (filtered, expected) in [(false, "src/  +4 -4"), (true, "src/  +2 -2")] {
             if filtered {
@@ -1296,7 +1356,7 @@ mod tests {
         let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
         let mut options = Options::default();
         let colors = Palette::new([220; 3], [20; 3], None);
-        let mut view = View::new(&diff, &mut options, &colors);
+        let mut view = View::new(&diff, &mut options, &colors, false);
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(160, 7))?;
         let row = |terminal: &ratatui::Terminal<ratatui::backend::TestBackend>, y| {
             (0..160)
@@ -1379,6 +1439,7 @@ mod tests {
                 ..Options::default()
             },
             &Palette::default(),
+            false,
         );
         let output = text(&lines);
         let first_header = output.find("diff --git").expect("changed files have patch headers");
@@ -1431,6 +1492,61 @@ mod tests {
     }
 
     #[test]
+    fn kitty_tree_uses_one_cell_per_level_and_keeps_the_filename_clickable() -> TestResult {
+        let repository = repository()?;
+        let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
+        let colors = Palette::default();
+        let area = Rect::new(2, 3, 100, 10);
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(105, 15))?;
+        for (graphics, indent) in [(false, 12), (true, 3)] {
+            let mut options = Options::default();
+            let mut view = View::new(&diff, &mut options, &colors, graphics);
+            let link = view
+                .file_links
+                .iter()
+                .find(|link| view.lines[link.row].0.spans[2].content == "added.rs")
+                .expect("the nested fixture file is listed");
+            let (row, target) = (link.row, link.target);
+            let name = u16::try_from(link.columns.start)?;
+            assert_eq!(
+                name,
+                indent + 2,
+                "each level uses the expected number of connector columns"
+            );
+            let pan = 2;
+            terminal.draw(|frame| view.draw(frame, area, row, pan))?;
+            let connector = &terminal.backend().buffer()[(area.x + indent - 1 - u16::try_from(pan)?, area.y + 1)];
+            assert_eq!(
+                Tile::decode(connector.symbol()).map(|tile| tile.paths),
+                graphics.then_some(Tile::UP_RIGHT),
+                "a clipped overview uses the expected connector renderer"
+            );
+            let pointer = Position::new(area.x + name - u16::try_from(pan)?, area.y + 1);
+            assert_eq!(
+                view.tree_target(pointer, area, row, pan),
+                Some(target),
+                "panning preserves the file's hit region"
+            );
+            assert!(view.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
+            let [tree, _] = view.areas(area);
+            let y = tree.y + 1 + u16::try_from(row - view.tree_offset(tree, target))?;
+            terminal.draw(|frame| view.draw(frame, area, target, 0))?;
+            let connector = &terminal.backend().buffer()[(tree.x + indent - 1, y)];
+            assert_eq!(
+                Tile::decode(connector.symbol()).map(|tile| tile.paths),
+                graphics.then_some(Tile::UP_RIGHT),
+                "the sidebar uses the same connector geometry"
+            );
+            assert_eq!(
+                view.tree_target(Position::new(tree.x + name, y), area, target, 0),
+                Some(target),
+                "the same filename stays clickable in the sidebar"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn live_options_change_declarations_and_keep_file_renames_enabled() -> TestResult {
         let repository = repository()?;
         let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
@@ -1439,7 +1555,7 @@ mod tests {
             word_diff: true,
             ..Options::default()
         };
-        let original = text(&diff.render(&options, &Palette::default()).0);
+        let original = text(&diff.render(&options, &Palette::default(), false).0);
         assert!(
             original.contains("[renamed: old -> new]"),
             "declaration matching starts enabled"
@@ -1447,7 +1563,7 @@ mod tests {
         assert!(original.contains("[-i32-]{+u32+}"), "word changes start enabled");
         {
             let colors = Palette::default();
-            let mut view = View::new(&diff, &mut options, &colors);
+            let mut view = View::new(&diff, &mut options, &colors, false);
             assert!(view.key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)));
             let output = text(&view.lines);
             assert!(
@@ -1484,7 +1600,7 @@ mod tests {
             "settings outlive the view and can be reused for the next commit"
         );
         assert!(
-            !text(&View::new(&diff, &mut options, &Palette::default()).lines).contains("[-i32-]"),
+            !text(&View::new(&diff, &mut options, &Palette::default(), false).lines).contains("[-i32-]"),
             "reopening retains the word setting"
         );
         Ok(())
@@ -1498,7 +1614,7 @@ mod tests {
         let colors = Palette::default();
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(160, 24))?;
         {
-            let mut view = View::new(&diff, &mut options, &colors);
+            let mut view = View::new(&diff, &mut options, &colors, false);
             terminal.draw(|frame| view.draw(frame, frame.area(), 0, 0))?;
             assert!(
                 text(&view.lines).starts_with("Changed files (13)"),
@@ -1601,7 +1717,7 @@ mod tests {
             view.key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
         }
         assert!(options.production_only, "the production setting outlives the view");
-        let view = View::new(&diff, &mut options, &colors);
+        let view = View::new(&diff, &mut options, &colors, false);
         assert!(
             text(&view.lines).starts_with("Changed files (5)"),
             "reopening retains the filter"
@@ -1667,7 +1783,7 @@ mod tests {
             ..Options::default()
         };
         assert_eq!(
-            text(&diff.render(&options, &Palette::default()).0),
+            text(&diff.render(&options, &Palette::default(), false).0),
             "Changed files (0)\nNo production file changes.",
             "a selected file with only test edits has no tree entry, patch header, or false parent change"
         );
@@ -1692,8 +1808,8 @@ mod tests {
         )?;
         let commit = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "tip".into())?;
         assert_eq!(
-            text(&branch.render(&Options::default(), &Palette::default()).0),
-            text(&commit.render(&Options::default(), &Palette::default()).0),
+            text(&branch.render(&Options::default(), &Palette::default(), false).0),
+            text(&commit.render(&Options::default(), &Palette::default(), false).0),
             "branch and commit comparisons use the same selected base"
         );
         let first = prepare_commit_with_repository(&repository, target(&repository, "main", 0)?, "merge".into())?;
@@ -1701,8 +1817,8 @@ mod tests {
         assert_eq!(first.files[0].path.path, "side/parent.rs");
         let second = prepare_commit_with_repository(&repository, target(&repository, "main", 1)?, "merge".into())?;
         assert_eq!(
-            text(&second.render(&Options::default(), &Palette::default()).0),
-            text(&commit.render(&Options::default(), &Palette::default()).0),
+            text(&second.render(&Options::default(), &Palette::default(), false).0),
+            text(&commit.render(&Options::default(), &Palette::default(), false).0),
             "the second parent sees the main-side changes"
         );
         Ok(())
@@ -1748,7 +1864,7 @@ mod tests {
                 title: "staged".into(),
                 files: vec![staged],
             }
-            .render(&options, &Palette::default())
+            .render(&options, &Palette::default(), false)
             .0,
         );
         assert!(
@@ -1768,7 +1884,7 @@ mod tests {
                 title: "unstaged".into(),
                 files: vec![unstaged],
             }
-            .render(&options, &Palette::default())
+            .render(&options, &Palette::default(), false)
             .0,
         );
         assert!(
@@ -1796,7 +1912,7 @@ mod tests {
                 title: "untracked".into(),
                 files: vec![untracked],
             }
-            .render(&options, &Palette::default())
+            .render(&options, &Palette::default(), false)
             .0,
         );
         assert!(

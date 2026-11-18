@@ -99,9 +99,9 @@ fn tab_reopens_the_file_tree_beside_a_scrolled_structural_diff() -> gix_error::T
     terminal.wait_for(|output| contains(&output[scrolled..], b"69"))?;
     let shown = terminal.output.len();
     terminal.master.write_all(b"\t")?;
-    terminal.wait_for(|output| contains(&output[shown..], b"Files"))?;
+    terminal.wait_for(|output| contains(&output[shown..], b"Files") && contains(&output[shown..], b"\x1b_Ga=p,"))?;
     let clicked = terminal.output.len();
-    terminal.master.write_all(b"\x1b[<0;12;4M\x1b[<0;12;4m")?;
+    terminal.master.write_all(b"\x1b[<0;8;4M\x1b[<0;8;4m")?;
     terminal.wait_for(|output| contains(&output[clicked..], b"u32"))?;
     let hidden = terminal.output.len();
     terminal.master.write_all(b"\t")?;
@@ -131,7 +131,7 @@ fn mouse_clicks_and_wheels_navigate_the_structural_diff() -> gix_error::TestResu
     terminal.master.write_all(b"\x1b[<35;5;3M")?;
     terminal.wait_for(|output| contains(&output[hovered..], b"+71 -1"))?;
     let clicked = terminal.output.len();
-    terminal.master.write_all(b"\x1b[<0;12;5M\x1b[<0;12;5m")?;
+    terminal.master.write_all(b"\x1b[<0;8;5M\x1b[<0;8;5m")?;
     // Cell diffs can reuse the file-header prefix; the jump reveals later declarations.
     terminal.wait_for(|output| contains(&output[clicked..], b"added_016"))?;
     for (wheel, expected) in [

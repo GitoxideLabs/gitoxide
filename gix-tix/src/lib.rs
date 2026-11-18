@@ -4333,12 +4333,14 @@ fn event_loop(
                                 let diff =
                                     structural_diff::prepare_file(&repository_path, repository_is_bare, change, path)?;
                                 let colors = terminal.backend().diff_colors();
+                                let graphics = terminal.backend().enabled();
                                 show_diff_view(
                                     terminal,
                                     DiffView::Structural(structural_diff::View::new(
                                         &diff,
                                         &mut app.structural_diff_options,
                                         &colors,
+                                        graphics,
                                     )),
                                     picker,
                                 )
@@ -4375,12 +4377,14 @@ fn event_loop(
                         structural_diff::prepare_commit(&repository_path, repository_is_bare, target, title).and_then(
                             |diff| {
                                 let colors = terminal.backend().diff_colors();
+                                let graphics = terminal.backend().enabled();
                                 show_diff_view(
                                     terminal,
                                     DiffView::Structural(structural_diff::View::new(
                                         &diff,
                                         &mut app.structural_diff_options,
                                         &colors,
+                                        graphics,
                                     )),
                                     picker.as_deref().map(|picker| (picker, *picker_focused)),
                                 )
