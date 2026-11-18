@@ -734,6 +734,20 @@ enum DiffView<'a> {
 }
 
 impl DiffView<'_> {
+    fn areas(&self, area: Rect) -> [Rect; 2] {
+        match self {
+            Self::Patch(_) => [Rect::default(), area],
+            Self::Structural(view) => view.areas(area),
+        }
+    }
+
+    fn scroll_tree(&mut self, mouse: MouseEvent, area: Rect, offset: usize) -> bool {
+        match self {
+            Self::Patch(_) => false,
+            Self::Structural(view) => view.scroll_tree(mouse, area, offset),
+        }
+    }
+
     fn sticky_header_index(&self, offset: usize) -> Option<usize> {
         match self {
             Self::Patch(diff) => ui::sticky_diff_header(&diff.file_headers, offset),
@@ -755,6 +769,13 @@ impl DiffView<'_> {
     }
 
     fn mouse(&self, mouse: MouseEvent, area: Rect, offset: usize, horizontal_offset: usize) -> Option<(usize, usize)> {
+        let [tree, area] = self.areas(area);
+        if tree.contains(Position::new(mouse.column, mouse.row)) {
+            let Self::Structural(view) = self else {
+                return None;
+            };
+            return view.tree_target(mouse, tree, offset).map(|target| (target, 0));
+        }
         if !area.contains(Position::new(mouse.column, mouse.row)) {
             return None;
         }
@@ -8564,7 +8585,7 @@ fn show_diff_view(
         let page = usize::from(diff_area.height.saturating_sub(2)).max(1);
         let end = diff.end_offset(page);
         let max = diff.max_offset(page);
-        let horizontal_page = usize::from(diff_area.width).max(1);
+        let horizontal_page = usize::from(diff.areas(diff_area)[1].width).max(1);
         let horizontal_max = diff.max_width().saturating_sub(horizontal_page);
         offset = offset.min(max);
         let page = page - usize::from(page > 1 && diff.sticky_header_index(offset).is_some());
@@ -8592,7 +8613,9 @@ fn show_diff_view(
             }
             TerminalEvent::Resize(_, _) => continue,
             TerminalEvent::Mouse(mouse) if focused => {
-                if let Some(position) = diff.mouse(mouse, diff_area, offset, horizontal_offset) {
+                if !diff.scroll_tree(mouse, diff_area, offset)
+                    && let Some(position) = diff.mouse(mouse, diff_area, offset, horizontal_offset)
+                {
                     (offset, horizontal_offset) = position;
                 }
                 continue;

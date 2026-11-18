@@ -87,6 +87,39 @@ fn sigint_restores_the_terminal_from_the_structural_diff() -> gix_error::TestRes
 }
 
 #[test]
+fn tab_reopens_the_file_tree_beside_a_scrolled_structural_diff() -> gix_error::TestResult {
+    let repository = structural_fixture()?;
+    let (mut terminal, original) = Pty::spawn(repository.path(), true)?;
+    terminal.wait_for(|output| contains(output, b"second") && contains(output, b"\x1b_Ga=p,"))?;
+    let opened = terminal.output.len();
+    terminal.master.write_all(b"\x1b[13;2u")?;
+    terminal.wait_for(|output| contains(&output[opened..], b"declaration renames:on"))?;
+    let scrolled = terminal.output.len();
+    terminal.master.write_all(b"\x1b[F")?;
+    terminal.wait_for(|output| contains(&output[scrolled..], b"69"))?;
+    let shown = terminal.output.len();
+    terminal.master.write_all(b"\t")?;
+    terminal.wait_for(|output| contains(&output[shown..], b"Files"))?;
+    let clicked = terminal.output.len();
+    terminal.master.write_all(b"\x1b[<0;12;4M\x1b[<0;12;4m")?;
+    terminal.wait_for(|output| contains(&output[clicked..], b"u32"))?;
+    let hidden = terminal.output.len();
+    terminal.master.write_all(b"\t")?;
+    terminal.wait_for(|output| contains(&output[hidden..], b"Structural"))?;
+    terminal.master.write_all(b"qqq")?;
+    assert!(
+        terminal.wait_for_exit()?.success(),
+        "panel navigation returns to history and exits normally"
+    );
+    assert_eq!(
+        rustix::termios::tcgetattr(&terminal.master)?.local_modes,
+        original.local_modes,
+        "panel navigation restores terminal modes"
+    );
+    Ok(())
+}
+
+#[test]
 fn mouse_clicks_and_wheels_navigate_the_structural_diff() -> gix_error::TestResult {
     let repository = structural_fixture()?;
     let (mut terminal, original) = Pty::spawn(repository.path(), true)?;

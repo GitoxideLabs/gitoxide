@@ -1695,6 +1695,17 @@ views.
   releases, and modified keys leave it unchanged. Redraw cached outlines and
   refresh frozen headers and file-tree jump targets without reading sources or
   reparsing inputs.
+- `Tab` shows or hides a file-tree panel to the left of structural review. It
+  starts hidden in each view and reserves a third of the width, up to 48 columns.
+  Keep the main diff's vertical position when toggling and restore its full width
+  when hiding. Only unmodified presses toggle the panel; repeats and releases do not.
+  Highlight every file section currently visible in the diff, including its
+  frozen header, and bring the current file into the panel's viewport. Clicking
+  a visible filename jumps to its header and clears main-diff panning.
+  Wheels over the panel scroll its tree independently; moving through the diff
+  follows the current file again. Context, word, declaration-rename, and
+  production settings refresh both the panel and its click targets. Reuse
+  cached rows and file indices without source reads, parsing, or source copies.
 - Built-in structural and patch views freeze the current file header at the
   top of the diff content after it scrolls out of view. Headers first move in
   normal flow; the next file replaces the frozen header when it reaches the
