@@ -1709,8 +1709,9 @@ views.
 - Built-in structural and patch views freeze the current file header at the
   top of the diff content after it scrolls out of view. Headers first move in
   normal flow; the next file replaces the frozen header when it reaches the
-  top. The overview has no frozen file header. Frozen rows retain their colors
-  and horizontal panning, and scrolling to the end still shows the final change.
+  top. The overview has no frozen file header. Filename rows use a full-width
+  band in bold reverse video, both in flow and frozen, and pan with the diff.
+  Scrolling to the end still shows the final change.
   Cache file boundaries with the display data and refresh them with structural
   settings, so scrolling finds the current file without scanning the whole diff.
   A viewport with only one content row shows changes instead of freezing a header.
@@ -1747,7 +1748,7 @@ views.
 - Structural mode colors declarations with lexical syntax foregrounds, subtle
   red/green backgrounds for removals/additions, and a faint yellow background
   for modifications. Changed words have stronger red/green backgrounds and
-  bold text. File-tree statuses and patch headers use the same terminal palette.
+  bold text. File-tree statuses and patch metadata use the same terminal palette.
   Foregrounds retain at least 4.5:1 contrast against their sampled backgrounds,
   including syntax colors and word emphasis. Both light and dark themes use
   the actual terminal foreground/background and its queried ANSI colors.
