@@ -1673,7 +1673,7 @@ views.
   traverses all sections from beginning to end. File renames are always detected.
   Each tree lists raw text line additions and deletions beside its filenames.
   Binary files and paths without text counts show `n/a`. Hovering a directory
-  name in either tree shows the sum of counted descendants in the diff footer,
+  name in either tree shows the sum of counted descendants beside that name,
   alongside the number of descendants without counts. Production-only review
   aggregates only listed files, using whole-file counts for those files.
   With confirmed Kitty pixel graphics, both trees use one connector cell per
@@ -1701,12 +1701,15 @@ views.
   refresh frozen headers and file-tree jump targets without reading sources or
   reparsing inputs.
 - `Tab` shows or hides a file-tree panel to the left of structural review. It
-  starts hidden in each view and reserves a third of the width, up to 48 columns.
+  starts hidden in each view and fits the widest displayed path, including its
+  diffstat or potential hover totals. It leaves at least one column for the diff
+  when the terminal is too narrow to fit both.
   Keep the main diff's vertical position when toggling and restore its full width
   when hiding. Only unmodified presses toggle the panel; repeats and releases do not.
   Highlight every file section currently visible in the diff, including its
-  frozen header, and bring the current file into the panel's viewport. Clicking
-  a visible filename jumps to its header and clears main-diff panning.
+  frozen header, and bring the current file into the panel's viewport. Apply
+  the highlight to the entry label while line counts use the terminal background.
+  Clicking a visible filename jumps to its header and clears main-diff panning.
   Wheels over the panel scroll its tree independently; moving through the diff
   follows the current file again. Context, word, declaration-rename, and
   production settings refresh both the panel and its click targets. Reuse
