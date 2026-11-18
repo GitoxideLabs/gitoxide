@@ -1674,7 +1674,8 @@ views.
   Each tree lists raw text line additions and deletions beside its filenames.
   Binary files and paths without text counts show `n/a`. Hovering a directory
   name in either tree shows the sum of counted descendants beside that name,
-  alongside the number of descendants without counts. Production-only review
+  using the same addition and deletion colors as file counts, alongside the
+  number of descendants without counts. Production-only review
   aggregates only listed files, using whole-file counts for those files.
   With confirmed Kitty pixel graphics, both trees use one connector cell per
   nesting level and draw thin lines using the commit graph's tile backend.

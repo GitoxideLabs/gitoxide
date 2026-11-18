@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fmt::Write as _, ops::Range, path::Path};
+use std::{collections::BTreeMap, ops::Range, path::Path};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, MouseEvent, MouseEventKind};
 use gix::{
@@ -259,7 +259,14 @@ struct FileTree {
 struct DirectoryStat {
     row: usize,
     columns: Range<usize>,
-    counts: String,
+    counts: Line<'static>,
+}
+
+fn line_count_spans(added: u64, removed: u64, colors: &Palette) -> [Span<'static>; 2] {
+    [
+        Span::styled(format!("  +{added}"), colors.path(ChangeKind::Added)),
+        Span::styled(format!(" -{removed}"), colors.path(ChangeKind::Deleted)),
+    ]
 }
 
 impl FileTree {
@@ -284,10 +291,11 @@ impl FileTree {
             let name = quoted(name.as_bstr(), "");
             let indent = format!("{prefix}{}", branch(last));
             let start = Span::raw(indent.as_str()).width();
-            let mut counts = format!("  +{} -{}", tree.added, tree.removed);
+            let mut counts = Line::from(Vec::from(line_count_spans(tree.added, tree.removed, colors)));
             if tree.without_counts != 0 {
-                write!(counts, " · {} without line counts", tree.without_counts)
-                    .expect("writing to a String cannot fail");
+                counts
+                    .spans
+                    .push(Span::raw(format!(" · {} without line counts", tree.without_counts)));
             }
             directories.push(DirectoryStat {
                 row: lines.len(),
@@ -413,9 +421,7 @@ impl Diff {
                 });
                 if let Some((added, removed)) = file.path.lines {
                     line.spans
-                        .push(Span::styled(format!("  +{added}"), colors.path(ChangeKind::Added)));
-                    line.spans
-                        .push(Span::styled(format!(" -{removed}"), colors.path(ChangeKind::Deleted)));
+                        .extend(line_count_spans(added.into(), removed.into(), colors));
                 } else {
                     line.spans.push(Span::styled("  n/a", colors.metadata));
                 }
@@ -685,13 +691,8 @@ impl<'a> View<'a> {
         };
         let x = usize::from(pointer.x) + dir.columns.end - column;
         if x < usize::from(right) {
-            frame.buffer_mut().set_stringn(
-                x as u16,
-                pointer.y,
-                &dir.counts,
-                usize::from(right) - x,
-                Style::default(),
-            );
+            let x = x as u16;
+            frame.buffer_mut().set_line(x, pointer.y, &dir.counts, right - x);
         }
     }
 
@@ -833,11 +834,7 @@ fn measure_widths(lines: &DiffRows, file_headers: &[(usize, usize)], directories
     let tree_width = tree
         .iter()
         .map(|(line, _)| line.width())
-        .chain(
-            directories
-                .iter()
-                .map(|dir| dir.columns.end + Span::raw(dir.counts.as_str()).width()),
-        )
+        .chain(directories.iter().map(|dir| dir.columns.end + dir.counts.width()))
         .max()
         .unwrap_or_default();
     let diff_width = diff.iter().map(|(line, _)| line.width()).max().unwrap_or_default();
@@ -1444,6 +1441,20 @@ mod tests {
                     row.starts_with(expected),
                     "the hovered label and its visible descendants' totals share a row: {row}"
                 );
+                for (sign, kind) in [('+', ChangeKind::Added), ('-', ChangeKind::Deleted)] {
+                    let index = expected.find(sign).expect("the total has additions and deletions");
+                    let cell = &buffer[(area.x + column + u16::try_from(index)?, y)];
+                    assert_eq!(
+                        Some(cell.fg),
+                        colors.path(kind).fg,
+                        "directory counts use the file diffstat colors"
+                    );
+                    assert_eq!(
+                        cell.bg,
+                        ratatui::style::Color::Reset,
+                        "directory counts use the terminal background"
+                    );
+                }
                 assert!(
                     !(area.x..area.right())
                         .map(|x| buffer[(x, area.bottom() - 1)].symbol())
