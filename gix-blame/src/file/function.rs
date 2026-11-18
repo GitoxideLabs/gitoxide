@@ -75,6 +75,7 @@ pub fn file(
     options: Options,
 ) -> Result<Outcome> {
     let _span = gix_trace::coarse!("gix_blame::file()", ?file_path, ?start);
+    let odb = TreeAndCommitCache::new(odb);
 
     let mut stats = Statistics::default();
     let (mut buf, mut buf2, mut buf3) = (Vec::new(), Vec::new(), Vec::new());
@@ -843,6 +844,58 @@ fn blob_changes_from_data(
 
     stats.blobs_diffed += 1;
     changes
+}
+
+/// Wraps an object database to remember recently decoded trees and commits, as the traversal fetches the same ones repeatedly.
+/// This matters most for databases without an object cache, where each fetch means inflating the pack entry again.
+struct TreeAndCommitCache<T> {
+    inner: T,
+    objects: std::cell::RefCell<CachedObjects>,
+}
+
+#[derive(Default)]
+struct CachedObjects {
+    map: std::collections::HashMap<ObjectId, (gix_object::Kind, Vec<u8>)>,
+    bytes: usize,
+}
+
+impl<T> TreeAndCommitCache<T> {
+    const MAX_BYTES: usize = 64 * 1024 * 1024;
+
+    fn new(inner: T) -> Self {
+        Self {
+            inner,
+            objects: Default::default(),
+        }
+    }
+}
+
+impl<T: gix_object::Find> gix_object::Find for TreeAndCommitCache<T> {
+    fn try_find<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> Result<Option<gix_object::Data<'a>>> {
+        if let Some((kind, data)) = self.objects.borrow().map.get(id) {
+            buffer.clear();
+            buffer.extend_from_slice(data);
+            return Ok(Some(gix_object::Data::new(buffer, *kind, id.kind())));
+        }
+        let Some(obj) = self.inner.try_find(id, buffer)? else {
+            return Ok(None);
+        };
+        let (kind, len) = (obj.kind, obj.data.len());
+        if matches!(kind, gix_object::Kind::Tree | gix_object::Kind::Commit) {
+            let mut objects = self.objects.borrow_mut();
+            if objects.bytes + len <= Self::MAX_BYTES {
+                objects.bytes += len;
+                objects.map.insert(id.to_owned(), (kind, obj.data.to_vec()));
+            }
+        }
+        Ok(Some(obj))
+    }
+}
+
+impl<T: gix_object::FindHeader> gix_object::FindHeader for TreeAndCommitCache<T> {
+    fn try_header(&self, id: &gix_hash::oid) -> Result<Option<gix_object::Header>> {
+        self.inner.try_header(id)
+    }
 }
 
 fn find_path_entry_in_commit(
