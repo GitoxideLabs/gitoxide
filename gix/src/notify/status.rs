@@ -33,6 +33,11 @@ impl Subscriptions {
             retained: Default::default(),
         }
     }
+    pub(super) fn set_loss_debounce(&mut self, quiet: Option<Duration>) {
+        for handle in self.handles.get_mut().iter().filter_map(WeakShared::upgrade) {
+            lock(&handle.pending).loss_debounce = quiet;
+        }
+    }
 }
 
 impl Drop for Subscriptions {
@@ -65,6 +70,7 @@ struct Retained {
 pub(crate) struct Pending {
     pub(crate) changes: Changes,
     pub(crate) coverage: CoverageStatus,
+    pub(crate) loss_debounce: Option<Duration>,
     pub(crate) coverage_changed: bool,
     pub(crate) covered: bool,
     pub(crate) closed: bool,
@@ -155,6 +161,7 @@ impl RepositoryMonitor {
             pending: Mutable::new(Pending {
                 changes: Changes::default(),
                 coverage: self.root_coverage_status(),
+                loss_debounce: self.loss_debounce(),
                 coverage_changed: false,
                 covered,
                 closed: false,
@@ -312,18 +319,18 @@ impl RepositoryMonitor {
             return;
         }
         retained.retain(|_, entry| {
-            let changes = {
+            let (changes, quiet) = {
                 let mut pending = lock(&entry.subscription.pending);
                 if pending.closed || !pending.covered {
                     return false;
                 }
                 pending.coverage_changed = false;
-                std::mem::take(&mut pending.changes)
+                (std::mem::take(&mut pending.changes), pending.loss_debounce)
             };
             if changes.index || entry.watches.topology_changed(&changes) {
                 entry.rediscover.get_or_insert(now);
             }
-            let (mut local, topology_changed) = entry.watches.service(now);
+            let (mut local, topology_changed) = entry.watches.service(now, quiet);
             if topology_changed {
                 entry.rediscover.get_or_insert(now);
             }

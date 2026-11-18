@@ -255,10 +255,13 @@ impl Watches {
             .min()
     }
 
-    pub(crate) fn service(&mut self, now: Instant) -> (crate::notify::Outcome, bool) {
+    pub(crate) fn service(&mut self, now: Instant, quiet: Option<Duration>) -> (crate::notify::Outcome, bool) {
         let mut outcome = crate::notify::Outcome::default();
         let mut topology_changed = false;
         let mut omitted_errors = 0usize;
+        for child in self.children.values_mut() {
+            child.monitor.apply_loss_debounce(quiet);
+        }
         let after = self.cursor.as_ref().map_or(Bound::Unbounded, Bound::Excluded);
         let keys: Vec<_> = self
             .children
@@ -326,15 +329,15 @@ impl Watches {
         subscription: &Subscription,
         interrupt: &AtomicBool,
     ) -> Result {
-        #[cfg(not(feature = "async-notify"))]
-        let _ = subscription;
         let discovered = discover(repo, mode, options, interrupt)?;
         let mut retain = HashSet::new();
         let mut first_error = None;
+        let loss_debounce = lock(&subscription.pending).loss_debounce;
         for (key, prepared) in discovered.children {
             check_interrupted(interrupt)?;
             retain.insert(key.clone());
             let mut child = prepared.child;
+            child.monitor.apply_loss_debounce(loss_debounce);
             #[cfg(feature = "async-notify")]
             child.monitor.set_async_wake(subscription.wake.clone());
             if let Some(old) = self.children.get_mut(&key)

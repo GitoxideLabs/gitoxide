@@ -872,11 +872,33 @@ fn checkout_coverage_controls_submodule_watches_and_refresh_deadlines() -> TestR
     let fixture = fixture()?;
     let root = fixture.path();
     add_submodule(root, "child")?;
-    let (mut project, mut monitor) = monitor(root)?;
+    let repo = open(root)?;
+    let mut project = repo.monitor(Default::default())?;
+    let quiet = Some(Duration::from_millis(125));
+    project.set_loss_debounce(quiet)?;
+    let mut monitor = project.worktree_status(&repo, Default::default())?;
     project.service(Instant::now(), || open(root));
     refresh(&mut monitor, root)?;
     assert_eq!(monitor.watches.children.len(), 1, "the handle owns the child's watch");
 
+    assert!(
+        monitor
+            .watches
+            .children
+            .values()
+            .all(|child| child.monitor.loss_debounce() == quiet),
+        "new submodule watches inherit project loss debounce"
+    );
+    project.set_loss_debounce(None)?;
+    monitor.service(Instant::now());
+    assert!(
+        monitor
+            .watches
+            .children
+            .values()
+            .all(|child| child.monitor.loss_debounce().is_none()),
+        "live submodule watches apply updated loss debounce before polling"
+    );
     project.update_checkout_filter(Some(Vec::new()))?;
     let now = Instant::now();
     project.service(now, || open(root));

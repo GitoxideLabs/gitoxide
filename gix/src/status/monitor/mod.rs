@@ -414,7 +414,8 @@ impl WorktreeStatusHandle {
         if !self.status_enabled() {
             self.watches = Default::default();
         }
-        let (mut outcome, topology_changed) = self.watches.service(now);
+        let quiet = lock(&self.subscription.pending).loss_debounce;
+        let (mut outcome, topology_changed) = self.watches.service(now, quiet);
         self.submodules_dirty |= topology_changed;
         merge_scopes(&mut self.unstaged, outcome.changes.worktree.clone());
         if include_project_changes {
