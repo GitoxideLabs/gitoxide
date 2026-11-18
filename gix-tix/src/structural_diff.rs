@@ -1,6 +1,6 @@
-use std::{collections::BTreeMap, ops::Range, path::Path};
+use std::{collections::BTreeMap, fmt::Write as _, ops::Range, path::Path};
 
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, MouseEvent, MouseEventKind};
 use gix::{
     Result,
     bstr::{BStr, BString, ByteSlice},
@@ -8,7 +8,7 @@ use gix::{
 };
 use ratatui::{
     Frame,
-    layout::Rect,
+    layout::{Position, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders},
@@ -40,6 +40,11 @@ struct File {
 pub(crate) fn prepare_file(repository_path: &Path, bare: bool, change: &FileChange, path: &PathChange) -> Result<Diff> {
     let mut repository = crate::open_repository(repository_path, bare, false)?;
     repository.object_cache_size(OBJECT_CACHE_SIZE);
+    let mut path = path.clone();
+    if path.lines.is_none() && !matches!(change, FileChange::Unavailable(_)) {
+        let (mut tree, mut worktree) = crate::line_diff_state(&repository)?;
+        path.lines = crate::line_counts_for_change(&repository, change, &mut tree, worktree.as_mut())?;
+    }
     Ok(Diff {
         title: format!(
             "Structural diff · {} {}",
@@ -47,7 +52,7 @@ pub(crate) fn prepare_file(repository_path: &Path, bare: bool, change: &FileChan
             quoted(path.path.as_bstr(), "")
         )
         .into(),
-        files: vec![File::prepare(&repository, change, path)],
+        files: vec![File::prepare(&repository, change, &path)],
     })
 }
 
@@ -67,11 +72,12 @@ fn prepare_commit_with_repository(
     target: TreeDiffTarget,
     title: BString,
 ) -> Result<Diff> {
-    let changes = crate::load_changes_with_diff_options(
+    let mut changes = crate::load_changes_with_diff_options(
         repository,
         target,
         Some(gix::diff::Options::default().with_rewrites(Some(Default::default()))),
     )?;
+    crate::add_line_counts(repository, &mut changes)?;
     Ok(Diff {
         title: format!("Structural diff · {}", title.to_str_lossy()).into(),
         files: changes
@@ -244,6 +250,15 @@ fn quoted(path: &BStr, prefix: &str) -> String {
 struct FileTree {
     directories: BTreeMap<BString, FileTree>,
     files: BTreeMap<BString, usize>,
+    added: u64,
+    removed: u64,
+    without_counts: usize,
+}
+
+struct DirectoryStat {
+    row: usize,
+    columns: Range<usize>,
+    summary: String,
 }
 
 impl FileTree {
@@ -253,24 +268,32 @@ impl FileTree {
         prefix: &str,
         lines: &mut Vec<Line<'static>>,
         file_rows: &mut [Option<usize>],
+        directories: &mut Vec<DirectoryStat>,
         colors: &Palette,
     ) {
         let count = self.directories.len() + self.files.len();
         for (index, (name, tree)) in self.directories.iter().enumerate() {
             let last = index + 1 == count;
-            lines.push(Line::styled(
-                format!(
-                    "{prefix}{} {}/",
-                    if last { "└──" } else { "├──" },
-                    quoted(name.as_bstr(), "")
-                ),
-                colors.metadata,
-            ));
+            let name = quoted(name.as_bstr(), "");
+            let indent = format!("{prefix}{} ", if last { "└──" } else { "├──" });
+            let start = Span::raw(indent.as_str()).width();
+            let mut summary = format!("{name}/  +{} -{}", tree.added, tree.removed);
+            if tree.without_counts != 0 {
+                write!(summary, " · {} without line counts", tree.without_counts)
+                    .expect("writing to a String cannot fail");
+            }
+            directories.push(DirectoryStat {
+                row: lines.len(),
+                columns: start..start + Span::raw(name.as_str()).width() + 1,
+                summary,
+            });
+            lines.push(Line::styled(format!("{indent}{name}/"), colors.metadata));
             tree.render(
                 files,
                 &format!("{prefix}{}", if last { "    " } else { "│   " }),
                 lines,
                 file_rows,
+                directories,
                 colors,
             );
         }
@@ -297,8 +320,10 @@ impl FileTree {
     }
 }
 
+type DiffRows = Vec<(Line<'static>, Option<Language>)>;
+
 impl Diff {
-    fn render(&self, options: &Options, colors: &Palette) -> (Vec<(Line<'static>, Option<Language>)>, Vec<FileLink>) {
+    fn render(&self, options: &Options, colors: &Palette) -> (DiffRows, Vec<FileLink>, Vec<DirectoryStat>) {
         let visible: Vec<_> = self
             .files
             .iter()
@@ -332,23 +357,39 @@ impl Diff {
             let mut node = &mut tree;
             for directory in directories {
                 node = node.directories.entry(BString::from(*directory)).or_default();
+                if let Some((added, removed)) = file.path.lines {
+                    node.added += u64::from(added);
+                    node.removed += u64::from(removed);
+                } else {
+                    node.without_counts += 1;
+                }
             }
             node.files.insert(BString::from(*name), index);
         }
         let mut file_rows = vec![None; self.files.len()];
-        tree.render(&self.files, "", &mut lines, &mut file_rows, colors);
+        let mut directories = Vec::new();
+        tree.render(&self.files, "", &mut lines, &mut file_rows, &mut directories, colors);
         let mut rows = lines.into_iter().map(|line| (line, None)).collect::<Vec<_>>();
         let mut file_links = Vec::with_capacity(visible.len());
         for index in visible {
             let file = &self.files[index];
             rows.push((Line::default(), None));
             if let Some(row) = file_rows[index] {
-                let line = &rows[row].0;
+                let target = rows.len();
+                let line = &mut rows[row].0;
                 file_links.push(FileLink {
                     row,
                     columns: line.spans.iter().take(2).map(Span::width).sum::<usize>()..line.width(),
-                    target: rows.len(),
+                    target,
                 });
+                if let Some((added, removed)) = file.path.lines {
+                    line.spans
+                        .push(Span::styled(format!("  +{added}"), colors.path(ChangeKind::Added)));
+                    line.spans
+                        .push(Span::styled(format!(" -{removed}"), colors.path(ChangeKind::Deleted)));
+                } else {
+                    line.spans.push(Span::styled("  n/a", colors.metadata));
+                }
             }
             rows.extend(file.headers.iter().map(|header| {
                 (
@@ -385,7 +426,7 @@ impl Diff {
             }
         }
         file_links.sort_unstable_by_key(|link| link.row);
-        (rows, file_links)
+        (rows, file_links, directories)
     }
 }
 
@@ -425,10 +466,12 @@ struct FileLink {
 pub(crate) struct View<'a> {
     diff: &'a Diff,
     options: &'a mut Options,
-    lines: Vec<(Line<'static>, Option<Language>)>,
+    lines: DiffRows,
     max_width: usize,
     file_headers: Vec<(usize, usize)>,
     file_links: Vec<FileLink>,
+    directories: Vec<DirectoryStat>,
+    pointer: Option<Position>,
     tree_rows: Vec<(usize, usize)>,
     tree_visible: bool,
     tree_scroll: Option<(usize, usize)>,
@@ -437,7 +480,7 @@ pub(crate) struct View<'a> {
 
 impl<'a> View<'a> {
     pub(crate) fn new(diff: &'a Diff, options: &'a mut Options, colors: &'a Palette) -> Self {
-        let (lines, file_links) = diff.render(options, colors);
+        let (lines, file_links, directories) = diff.render(options, colors);
         let max_width = lines.iter().map(|(line, _)| line.width()).max().unwrap_or_default();
         let file_headers = file_header_rows(&lines);
         let tree_rows = file_tree_rows(&file_links);
@@ -448,6 +491,8 @@ impl<'a> View<'a> {
             max_width,
             file_headers,
             file_links,
+            directories,
+            pointer: None,
             tree_rows,
             tree_visible: false,
             tree_scroll: None,
@@ -529,7 +574,7 @@ impl<'a> View<'a> {
 
     pub(crate) fn scroll_tree(&mut self, mouse: MouseEvent, area: Rect, offset: usize) -> bool {
         let [tree, _] = self.areas(area);
-        if !tree.contains(ratatui::layout::Position::new(mouse.column, mouse.row)) {
+        if !tree.contains(Position::new(mouse.column, mouse.row)) {
             return false;
         }
         let current = self.tree_offset(tree, offset);
@@ -545,18 +590,50 @@ impl<'a> View<'a> {
         true
     }
 
-    pub(crate) fn tree_target(&self, mouse: MouseEvent, tree: Rect, offset: usize) -> Option<usize> {
-        if !tree.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
-            || mouse.kind != MouseEventKind::Down(MouseButton::Left)
-            || !mouse.modifiers.is_empty()
-            || mouse.row <= tree.y
-            || mouse.row >= tree.bottom().saturating_sub(1)
-            || mouse.column >= tree.right().saturating_sub(1)
-        {
+    fn tree_cell(
+        &self,
+        pointer: Position,
+        area: Rect,
+        offset: usize,
+        horizontal_offset: usize,
+    ) -> Option<(usize, usize)> {
+        let [tree, diff] = self.areas(area);
+        let (area, offset, frozen, horizontal_offset) = if tree.contains(pointer) {
+            if pointer.x == tree.right() - 1 {
+                return None;
+            }
+            (tree, self.tree_offset(tree, offset), 0, 0)
+        } else {
+            let frozen = usize::from(diff.height > 3 && self.sticky_header_index(offset).is_some());
+            (diff, offset, frozen, horizontal_offset)
+        };
+        if !area.contains(pointer) || pointer.y <= area.y || pointer.y >= area.bottom().saturating_sub(1) {
             return None;
         }
-        let row = self.tree_offset(tree, offset) + usize::from(mouse.row - tree.y - 1);
-        self.file_target(row, usize::from(mouse.column - tree.x))
+        let row = offset + usize::from(pointer.y - area.y - 1).checked_sub(frozen)?;
+        Some((row, usize::from(pointer.x - area.x) + horizontal_offset))
+    }
+
+    pub(crate) fn tree_target(
+        &self,
+        pointer: Position,
+        area: Rect,
+        offset: usize,
+        horizontal_offset: usize,
+    ) -> Option<usize> {
+        let (row, column) = self.tree_cell(pointer, area, offset, horizontal_offset)?;
+        self.file_target(row, column)
+    }
+
+    pub(crate) fn set_pointer(&mut self, pointer: Option<Position>) {
+        self.pointer = pointer;
+    }
+
+    fn directory_summary(&self, area: Rect, offset: usize, horizontal_offset: usize) -> Option<&str> {
+        let (row, column) = self.tree_cell(self.pointer?, area, offset, horizontal_offset)?;
+        let index = self.directories.binary_search_by_key(&row, |dir| dir.row).ok()?;
+        let dir = &self.directories[index];
+        dir.columns.contains(&column).then_some(dir.summary.as_str())
     }
 
     pub(crate) fn key(&mut self, key: KeyEvent) -> bool {
@@ -579,7 +656,7 @@ impl<'a> View<'a> {
             }
             _ => return false,
         }
-        (self.lines, self.file_links) = self.diff.render(self.options, self.colors);
+        (self.lines, self.file_links, self.directories) = self.diff.render(self.options, self.colors);
         self.file_headers = file_header_rows(&self.lines);
         self.tree_rows = file_tree_rows(&self.file_links);
         self.tree_scroll = None;
@@ -593,6 +670,7 @@ impl<'a> View<'a> {
     }
 
     pub(crate) fn draw(&self, frame: &mut Frame<'_>, area: Rect, offset: usize, horizontal_offset: usize) {
+        let directory_summary = self.directory_summary(area, offset, horizontal_offset);
         let [tree, area] = self.areas(area);
         if tree.width != 0 {
             self.draw_tree(frame, tree, offset);
@@ -619,7 +697,7 @@ impl<'a> View<'a> {
             self.sticky_header_index(offset)
                 .map(|index| self.colors.highlight(&self.lines[index].0, None)),
             (offset, horizontal_offset),
-            &footer,
+            directory_summary.unwrap_or(&footer),
         );
     }
 
@@ -683,7 +761,7 @@ fn file_header_rows(lines: &[(Line<'_>, Option<Language>)]) -> Vec<(usize, usize
 
 #[cfg(test)]
 mod tests {
-    use crossterm::event::KeyModifiers;
+    use crossterm::event::{KeyModifiers, MouseButton};
     use gix::error::TestResult;
 
     use super::*;
@@ -1160,6 +1238,59 @@ mod tests {
     }
 
     #[test]
+    fn file_line_counts_match_git_and_directory_hover_follows_the_filter() -> TestResult {
+        let repository = production_repository()?;
+        let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
+        let workdir = repository.workdir().expect("the fixture has a worktree");
+        let numstat = gix_testtools::git(workdir, "diff --numstat base tip -- src/mixed.rs")?;
+        assert_eq!(
+            numstat.trim(),
+            "2\t2\tsrc/mixed.rs",
+            "the fixture modifies two lines in this file"
+        );
+        let mut options = Options::default();
+        let colors = Palette::default();
+        let mut view = View::new(&diff, &mut options, &colors);
+        let area = Rect::new(2, 3, 120, 24);
+        for (filtered, expected) in [(false, "src/  +4 -4"), (true, "src/  +2 -2")] {
+            if filtered {
+                assert!(view.key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)));
+            }
+            let output = text(&view.lines[..view.tree_line_count()]);
+            assert!(
+                output.contains("mixed.rs  +2 -2"),
+                "a visible file shows whole-file line counts"
+            );
+            let dir = view
+                .directories
+                .iter()
+                .find(|dir| dir.summary.starts_with("src/ "))
+                .expect("src contains changes");
+            let row = u16::try_from(dir.row)?;
+            let column = u16::try_from(dir.columns.start)?;
+            view.set_pointer(Some(Position::new(area.x + column, area.y + 1 + row)));
+            assert_eq!(
+                view.directory_summary(area, 0, 0),
+                Some(expected),
+                "the overview aggregates only visible descendants"
+            );
+            assert!(view.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
+            assert_eq!(
+                view.directory_summary(area, 0, 0),
+                Some(expected),
+                "the sidebar has the same directory totals"
+            );
+            view.set_pointer(None);
+            assert!(
+                view.directory_summary(area, 0, 0).is_none(),
+                "losing the pointer hides the total"
+            );
+            assert!(view.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
+        }
+        Ok(())
+    }
+
+    #[test]
     fn file_headers_stick_only_after_reaching_the_viewport_top() -> TestResult {
         let repository = repository()?;
         let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
@@ -1241,7 +1372,7 @@ mod tests {
     fn continuous_diff_starts_with_the_file_tree_and_keeps_every_changed_file() -> TestResult {
         let repository = repository()?;
         let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
-        let (lines, _) = diff.render(
+        let (lines, _, _) = diff.render(
             &Options {
                 find_renames: true,
                 word_diff: true,
@@ -1252,6 +1383,7 @@ mod tests {
         let output = text(&lines);
         let first_header = output.find("diff --git").expect("changed files have patch headers");
         let overview = &output[..first_header];
+        assert!(overview.contains("binary.rs  n/a"), "binary files have no text counts");
         for name in [
             "Changed files",
             "src/",

@@ -127,6 +127,9 @@ fn mouse_clicks_and_wheels_navigate_the_structural_diff() -> gix_error::TestResu
     let opened = terminal.output.len();
     terminal.master.write_all(b"\x1b[13;2u")?;
     terminal.wait_for(|output| contains(&output[opened..], b"declaration renames:on"))?;
+    let hovered = terminal.output.len();
+    terminal.master.write_all(b"\x1b[<35;5;3M")?;
+    terminal.wait_for(|output| contains(&output[hovered..], b"+71 -1"))?;
     let clicked = terminal.output.len();
     terminal.master.write_all(b"\x1b[<0;12;5M\x1b[<0;12;5m")?;
     // Cell diffs can reuse the file-header prefix; the jump reveals later declarations.

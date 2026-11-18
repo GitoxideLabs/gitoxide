@@ -722,14 +722,17 @@ impl DiffView<'_> {
     }
 
     fn mouse(&self, mouse: MouseEvent, area: Rect, offset: usize, horizontal_offset: usize) -> Option<(usize, usize)> {
-        let [tree, area] = self.areas(area);
-        if tree.contains(Position::new(mouse.column, mouse.row)) {
-            let Self::Structural(view) = self else {
-                return None;
+        let pointer = Position::new(mouse.column, mouse.row);
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left) && mouse.modifiers.is_empty() {
+            return match self {
+                Self::Patch(_) => None,
+                Self::Structural(view) => view
+                    .tree_target(pointer, area, offset, horizontal_offset)
+                    .map(|target| (target, 0)),
             };
-            return view.tree_target(mouse, tree, offset).map(|target| (target, 0));
         }
-        if !area.contains(Position::new(mouse.column, mouse.row)) {
+        let [_, area] = self.areas(area);
+        if !area.contains(pointer) {
             return None;
         }
         let max = self.max_offset(usize::from(area.height.saturating_sub(2)).max(1));
@@ -743,18 +746,6 @@ impl DiffView<'_> {
                 offset,
                 horizontal_offset.saturating_add(horizontal_page).min(horizontal_max),
             )),
-            _ if mouse.kind == MouseEventKind::Down(MouseButton::Left) && mouse.modifiers.is_empty() => {
-                let Self::Structural(view) = self else {
-                    return None;
-                };
-                if mouse.row <= area.y || mouse.row >= area.bottom().saturating_sub(1) {
-                    return None;
-                }
-                let frozen = usize::from(area.height > 3 && self.sticky_header_index(offset).is_some());
-                let row = usize::from(mouse.row - area.y - 1).checked_sub(frozen)? + offset;
-                let column = usize::from(mouse.column - area.x) + horizontal_offset;
-                view.file_target(row, column).map(|target| (target, 0))
-            }
             _ => None,
         }
     }
@@ -8538,6 +8529,15 @@ fn show_diff_view(
         let Some(event) = read_terminal_event().or_raise(|| message("could not read file diff input"))? else {
             continue;
         };
+        if let DiffView::Structural(view) = &mut diff {
+            match &event {
+                TerminalEvent::Mouse(mouse) if focused => {
+                    view.set_pointer(Some(Position::new(mouse.column, mouse.row)));
+                }
+                TerminalEvent::FocusLost => view.set_pointer(None),
+                _ => {}
+            }
+        }
         let key = match event {
             TerminalEvent::FocusLost => {
                 focused = false;
