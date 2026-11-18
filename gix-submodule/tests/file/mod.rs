@@ -286,7 +286,10 @@ mod path {
 
     #[test]
     fn optional_path_rejects_invalid_values() -> gix_testtools::TestResult {
-        for field in ["path", "path =", "path = /outside", "path = ../outside"] {
+        for field in ["path", "path =", "path = /outside", "path = ../outside"]
+            .into_iter()
+            .chain(cfg!(windows).then_some("path = C:outside"))
+        {
             let module = submodule(&format!(
                 "[submodule.a]
                     {field}

@@ -1,5 +1,8 @@
 use gix_error::Result;
-use std::{collections::HashSet, path::Path};
+use std::{
+    collections::HashSet,
+    path::{Component, Path},
+};
 
 use bstr::{BStr, BString, ByteSlice};
 use gix_error::{OptionExt, ResultExt, bail, message, validation};
@@ -126,8 +129,8 @@ impl File {
 
     /// Return the configured checkout path relative to the working tree, or `None` if the path field is missing.
     ///
-    /// A present field must have an explicit, non-empty value. Path validation and error metadata are the same
-    /// as in [`path()`](Self::path()), so invalid paths are errors rather than being treated as absent.
+    /// A present field must have an explicit, non-empty path without a root or drive prefix.
+    /// Invalid paths produce the same validation errors and metadata as in [`path()`](Self::path()).
     /// The configured path spelling is preserved and the checkout need not exist.
     pub fn try_path(&self, name: &BStr) -> Result<Option<BString>> {
         let Some(path_bstr) = self.config.string_implicit_by("submodule", Some(name), "path") else {
@@ -140,7 +143,10 @@ impl File {
             bail!("The submodule '{name}' was missing its 'path' field or it was empty".validation());
         }
         let path = gix_path::from_bstr(path_bstr.as_bstr())?;
-        if path.is_absolute() {
+        if matches!(
+            path.components().next(),
+            Some(Component::RootDir | Component::Prefix(_))
+        ) {
             bail!(validation(format!("The path of submodule '{name}' needs to be relative")).with_input(path_bstr));
         }
         if gix_path::normalize(path, "".as_ref()).is_none() {
