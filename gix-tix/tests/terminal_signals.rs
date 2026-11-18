@@ -176,7 +176,7 @@ fn shift_enter_scrolls_the_continuous_structural_diff_and_keeps_live_settings() 
     // Cell diffs emit the changed suffix of 'on' -> 'off', not the entire footer.
     terminal.wait_for(|output| contains(&output[renames_changed..], b"ff"))?;
     let back = terminal.output.len();
-    terminal.master.write_all(b"q")?;
+    terminal.master.write_all(b"cq")?;
     terminal.wait_for(|output| contains(&output[back..], b"second"))?;
     let reopened = terminal.output.len();
     terminal.master.write_all(b"\x1b[13;2u")?;
@@ -184,6 +184,10 @@ fn shift_enter_scrolls_the_continuous_structural_diff_and_keeps_live_settings() 
     assert!(
         contains(&terminal.output[reopened..], b"words:off"),
         "settings persist when reopening the view"
+    );
+    assert!(
+        contains(&terminal.output[reopened..], b"c context:0"),
+        "the context key is routed to structural mode and persists when reopening"
     );
     terminal.master.write_all(b"\r")?;
     let legacy_start = terminal.output.len();

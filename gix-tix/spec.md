@@ -1688,6 +1688,13 @@ views.
   keys do not toggle the settings. Arrows/`j`/`k`, page keys, and `g`/`G` or
   `Home`/`End` move through the complete diff; `h`/`l` pans long lines.
   `Enter`, `q`, or `Escape` returns to Tix with its selection intact.
+- Inside structural mode, `c` toggles context between zero and one unchanged
+  sibling before and after a change at every nesting depth. One is the default.
+  The footer displays the active value, which persists for later structural
+  views in the same invocation. Only unmodified presses toggle it; repeats,
+  releases, and modified keys leave it unchanged. Redraw cached outlines and
+  refresh frozen headers and file-tree jump targets without reading sources or
+  reparsing inputs.
 - Built-in structural and patch views freeze the current file header at the
   top of the diff content after it scrolls out of view. Headers first move in
   normal flow; the next file replaces the frozen header when it reaches the

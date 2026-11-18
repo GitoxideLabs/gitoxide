@@ -477,6 +477,11 @@ impl<'a> View<'a> {
             KeyCode::Char('r') => self.options.find_renames = !self.options.find_renames,
             KeyCode::Char('w') => self.options.word_diff = !self.options.word_diff,
             KeyCode::Char('p') => self.options.production_only = !self.options.production_only,
+            KeyCode::Char('c') => {
+                let context = usize::from(self.options.context.first() == Some(&0));
+                self.options.context.clear();
+                self.options.context.push(context);
+            }
             _ => return false,
         }
         (self.lines, self.file_links) = self.diff.render(self.options, self.colors);
@@ -492,7 +497,8 @@ impl<'a> View<'a> {
 
     pub(crate) fn draw(&self, frame: &mut Frame<'_>, area: Rect, offset: usize, horizontal_offset: usize) {
         let footer = format!(
-            "p production only:{} · r declaration renames:{} · w words:{} · ↑↓/jk · g/G ends · h/l · Enter/q/Esc",
+            "c context:{} · p production only:{} · r declaration renames:{} · w words:{} · ↑↓/jk · g/G ends · h/l · Enter/q/Esc",
+            self.options.context.first().copied().unwrap_or(1),
             if self.options.production_only { "on" } else { "off" },
             if self.options.find_renames { "on" } else { "off" },
             if self.options.word_diff { "on" } else { "off" },
@@ -632,6 +638,73 @@ mod tests {
     }
 
     #[test]
+    fn context_toggles_between_one_and_zero_and_persists() -> TestResult {
+        let repository = production_repository()?;
+        let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
+        let mut options = Options::default();
+        let colors = Palette::default();
+        {
+            let mut view = View::new(&diff, &mut options, &colors);
+            let original = text(&view.lines);
+            assert!(
+                original.contains("fn unchanged()"),
+                "one unchanged sibling is shown by default"
+            );
+            for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT, KeyModifiers::SHIFT] {
+                assert!(
+                    !view.key(KeyEvent::new(KeyCode::Char('c'), modifiers)),
+                    "modified context keys leave the setting unchanged"
+                );
+            }
+            for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
+                assert!(
+                    !view.key(KeyEvent::new_with_kind(KeyCode::Char('c'), KeyModifiers::NONE, kind)),
+                    "holding or releasing c does not toggle context"
+                );
+            }
+            assert!(
+                view.key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)),
+                "c switches to zero context"
+            );
+            let output = text(&view.lines);
+            assert!(
+                !output.contains("fn unchanged()"),
+                "zero context hides unchanged siblings"
+            );
+            assert!(output.contains("test_helper"), "changed declarations remain visible");
+            let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(160, 24))?;
+            terminal.draw(|frame| view.draw(frame, frame.area(), 0, 0))?;
+            let footer: String = (0..160)
+                .map(|x| terminal.backend().buffer()[(x, 23)].symbol())
+                .collect();
+            assert!(
+                footer.contains("c context:0"),
+                "the footer displays the active context count"
+            );
+            assert!(
+                view.key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)),
+                "c restores one context line"
+            );
+            assert_eq!(
+                text(&view.lines),
+                original,
+                "restoring context reproduces the original diff"
+            );
+            assert!(
+                view.key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)),
+                "context can be disabled again"
+            );
+        }
+        assert_eq!(options.context, [0], "the setting outlives the view");
+        let reopened = View::new(&diff, &mut options, &colors);
+        assert!(
+            !text(&reopened.lines).contains("fn unchanged()"),
+            "reopening preserves zero context"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn file_tree_click_targets_follow_scrolling_panning_and_live_settings() -> TestResult {
         let repository = production_repository()?;
         let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
@@ -640,7 +713,7 @@ mod tests {
         let mut review = crate::DiffView::Structural(View::new(&diff, &mut options, &colors));
         let area = Rect::new(4, 3, 100, 7);
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(110, 12))?;
-        for key in [None, Some('p'), Some('w'), Some('r'), Some('p')] {
+        for key in [None, Some('p'), Some('c'), Some('w'), Some('r'), Some('c'), Some('p')] {
             if let Some(key) = key {
                 assert!(review.key(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE)));
             }
@@ -760,7 +833,7 @@ mod tests {
                 .trim_end()
                 .to_owned()
         };
-        for key in [None, Some('p'), Some('w'), Some('r')] {
+        for key in [None, Some('p'), Some('c'), Some('w'), Some('r'), Some('c')] {
             if let Some(key) = key {
                 assert!(view.key(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE)));
             }
