@@ -219,6 +219,8 @@ fn monitor() -> RepositoryMonitor {
         changed_directories: HashSet::new(),
         pending_metadata: Pending::default(),
         pending_worktree: Changes::default(),
+        loss_debounce: None,
+        deferred_loss: None,
         pending_statistics: Statistics::default(),
         metadata_dirty: false,
         inventory_dirty: false,
@@ -244,6 +246,88 @@ fn event(path: impl Into<PathBuf>, kind: EventKind, path_kind: PathKind) -> Even
         kind,
         path_kind,
     }
+}
+
+#[test]
+fn recoverable_loss_waits_for_quiet_and_coalesces_worktree_invalidations() -> TestResult {
+    let mut monitor = monitor();
+    let quiet = Duration::from_millis(100);
+    monitor.set_loss_debounce(Some(quiet))?;
+    monitor.options.metadata_debounce = Duration::ZERO;
+    let start = Instant::now();
+    let file = modified("/repo/src/file");
+    monitor.observe(&file, true, start);
+    monitor.defer_loss(true, start);
+    let mut out = Outcome::default();
+    monitor.poll(start, &mut out);
+    assert!(
+        monitor.recovery_pending(),
+        "the snapshot is unreliable as soon as loss is observed"
+    );
+    assert_eq!(monitor.next_timeout(start), Some(quiet));
+    assert!(
+        monitor.take_changes(start).is_empty(),
+        "no partial worktree refresh escapes the delay"
+    );
+
+    let again = start + Duration::from_millis(70);
+    monitor.defer_loss(true, again);
+    monitor.observe(&file, true, again);
+    monitor.observe(&modified("/repo/.git/refs/heads/main"), false, again);
+    assert_eq!(
+        monitor.take_changes(again),
+        Changes {
+            references: true,
+            ..Changes::default()
+        },
+        "worktree loss leaves independent reference notifications live"
+    );
+
+    monitor.poll(start + quiet, &mut out);
+    assert!(
+        monitor.take_changes(start + quiet).is_empty(),
+        "each loss restarts the quiet period"
+    );
+    assert_eq!(monitor.next_timeout(start + quiet), Some(again - start));
+    monitor.poll(again + quiet, &mut out);
+    assert_eq!(monitor.take_changes(again + quiet), Changes::worktree_all());
+    assert!(
+        monitor.take_changes(again + quiet).is_empty(),
+        "one full invalidation covers the burst"
+    );
+    Ok(())
+}
+
+#[test]
+fn deferred_loss_combines_domains_but_immediate_recovery_can_supersede_it() -> TestResult {
+    let mut monitor = monitor();
+    let quiet = Duration::from_millis(100);
+    monitor.set_loss_debounce(Some(quiet))?;
+    let now = Instant::now();
+    monitor.defer_loss(false, now);
+    monitor.defer_loss(true, now + Duration::from_millis(1));
+    let mut out = Outcome::default();
+    let after_quiet = now + quiet + Duration::from_millis(1);
+    monitor.poll(after_quiet, &mut out);
+    let changes = monitor.take_changes(after_quiet);
+    assert!(
+        changes.references && changes.worktree == Some(Scope::All),
+        "later worktree loss keeps the earlier, broader metadata invalidation"
+    );
+
+    monitor.defer_loss(true, after_quiet);
+    monitor.rescan();
+    monitor.defer_loss(false, Instant::now());
+    let changes = monitor.take_changes(Instant::now());
+    assert!(
+        changes.references && changes.worktree == Some(Scope::All),
+        "a manual rescan publishes immediately even if the retiring watch reports another loss"
+    );
+    assert!(
+        monitor.deferred_loss.is_none(),
+        "the explicit rescan consumes the deferred loss"
+    );
+    Ok(())
 }
 
 #[test]

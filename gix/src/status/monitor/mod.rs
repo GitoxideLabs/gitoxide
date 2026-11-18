@@ -139,6 +139,16 @@ impl Monitor {
         &self.repository
     }
 
+    /// Set the quiet period for recoverable notification loss in this checkout and its submodules.
+    /// See [`RepositoryMonitor::set_loss_debounce()`] for scheduling and validation.
+    pub fn set_loss_debounce(&mut self, quiet: Option<Duration>) -> Result {
+        self.repository.set_loss_debounce(quiet)?;
+        for child in self.children.values_mut() {
+            child.monitor.apply_loss_debounce(quiet);
+        }
+        Ok(())
+    }
+
     /// Whether root and child subscriptions are verified and no submodule reconciliation is pending.
     ///
     /// This is a positive recovery signal for previously reported monitoring errors. A service
@@ -169,7 +179,11 @@ impl Monitor {
 
     /// Switch repository layout and discard the old repository's cached status.
     pub fn reconfigure(&mut self, repo: &Repository) -> Result {
-        *self = Self::new(repo, self.options.clone())?;
+        let mut replacement = Self::new(repo, self.options.clone())?;
+        replacement
+            .repository
+            .apply_loss_debounce(self.repository.loss_debounce());
+        *self = replacement;
         Ok(())
     }
 
@@ -484,6 +498,7 @@ impl Monitor {
             check_interrupted(interrupt)?;
             retain.insert(key.clone());
             let mut child = prepared.child;
+            child.monitor.apply_loss_debounce(self.repository.loss_debounce());
             if let Some(old) = self.children.get_mut(&key)
                 && old.monitor.layout() == child.monitor.layout()
                 && old.worktree == child.worktree

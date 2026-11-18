@@ -433,7 +433,7 @@ pub struct Outcome {
     pub errors: Vec<Error>,
     /// Whether enabled coverage still needs recovery, including degraded linked worktrees.
     ///
-    /// Remains true during quiet retry backoff. An empty `errors` list does not establish that
+    /// Remains true during loss debounce and quiet retry backoff. An empty `errors` list does not establish that
     /// coverage has recovered; use this field to retain earlier diagnostics until it does.
     /// Successful initial registration and ordinary inventory verification are not recovery failures.
     pub recovery_pending: bool,
@@ -446,6 +446,11 @@ struct Pending {
     changes: Changes,
     first: Option<Instant>,
     deadline: Option<Instant>,
+}
+
+struct DeferredLoss {
+    worktree_only: bool,
+    deadline: Instant,
 }
 
 impl Pending {
@@ -563,6 +568,8 @@ pub struct RepositoryMonitor {
     changed_directories: HashSet<PathBuf>,
     pending_metadata: Pending,
     pending_worktree: Changes,
+    loss_debounce: Option<Duration>,
+    deferred_loss: Option<DeferredLoss>,
     pending_statistics: Statistics,
     metadata_dirty: bool,
     inventory_dirty: bool,
@@ -634,6 +641,8 @@ impl Repository {
             changed_directories: HashSet::new(),
             pending_metadata: Pending::default(),
             pending_worktree: Changes::default(),
+            loss_debounce: None,
+            deferred_loss: None,
             pending_statistics: Statistics::default(),
             metadata_dirty: true,
             inventory_dirty: true,
@@ -833,6 +842,33 @@ impl RepositoryMonitor {
         &self.options
     }
 
+    /// The configured quiet period for recoverable native directory-watch loss.
+    pub fn loss_debounce(&self) -> Option<Duration> {
+        self.loss_debounce
+    }
+
+    /// Set how much quiet time must follow the last recoverable native directory-watch loss before
+    /// sending a full invalidation. By default (`None`), and with a zero duration, loss is immediate.
+    /// The new setting applies to subsequent losses in this monitor and its linked checkouts.
+    ///
+    /// While waiting, the eventual rescan covers affected events, and [`Outcome::recovery_pending`]
+    /// reports stale coverage. Explicit rescans and watch failures that need registration repair can
+    /// recover immediately. Durations exceeding the platform's clock range are rejected.
+    pub fn set_loss_debounce(&mut self, quiet: Option<Duration>) -> Result {
+        if quiet.is_some_and(|quiet| Instant::now().checked_add(quiet).is_none()) {
+            return Err(gix_error::validation("loss debounce exceeds the supported clock range").raise());
+        }
+        self.apply_loss_debounce(quiet);
+        Ok(())
+    }
+
+    pub(crate) fn apply_loss_debounce(&mut self, quiet: Option<Duration>) {
+        self.loss_debounce = quiet;
+        for other in self.other_worktrees.values_mut() {
+            other.loss_debounce = quiet;
+        }
+    }
+
     /// Whether all enabled subscriptions are installed and their inventory is verified.
     ///
     /// Pending maintenance, retries, and registration verification keep this false, even when
@@ -882,7 +918,8 @@ impl RepositoryMonitor {
         if self.external_ignores.retry.is_some() {
             return true;
         }
-        self.maintenance_failed
+        self.deferred_loss.is_some()
+            || self.maintenance_failed
             || self.metadata.rebuild
                 && (self.options.metadata
                     || self.worktree_enabled() && self.ignore_aware()
@@ -937,13 +974,17 @@ impl RepositoryMonitor {
                 }
                 // Successful replacement already published invalidation and queued verification.
                 if loss != gix_notify::Loss::WatchSetChanged {
-                    self.coverage_lost(worktree, now);
+                    if matches!(loss, gix_notify::Loss::Rescan | gix_notify::Loss::Overflow) && batch.error.is_none() {
+                        self.defer_loss(worktree, now);
+                    } else {
+                        self.coverage_lost(worktree, now);
+                    }
                 }
             }
             out.statistics.received += batch.events.len();
             for event in batch.events {
                 self.observe(&event, worktree, now);
-                if !worktree && self.all_worktrees_enabled() {
+                if !worktree && self.all_worktrees_enabled() && !self.loss_pending_for(false) {
                     self.observe_index(&event, now);
                     for other in self.other_worktrees.values_mut() {
                         other.observe(&event, false, now);
@@ -968,6 +1009,12 @@ impl RepositoryMonitor {
                 )));
                 self.maintenance = Some(now + self.options.retry_interval);
             }
+        }
+        if !self.backlog
+            && let Some(loss) = &self.deferred_loss
+            && loss.deadline <= now
+        {
+            self.coverage_lost(loss.worktree_only, now);
         }
     }
 
@@ -1082,6 +1129,7 @@ impl RepositoryMonitor {
         [
             self.maintenance,
             self.pending_metadata.deadline,
+            self.deferred_loss.as_ref().map(|loss| loss.deadline),
             #[cfg(target_os = "macos")]
             self.external_ignores.retry,
         ]
@@ -1120,6 +1168,9 @@ impl RepositoryMonitor {
     }
 
     fn coverage_lost(&mut self, worktree: bool, now: Instant) {
+        if !worktree || self.deferred_loss.as_ref().is_some_and(|loss| loss.worktree_only) {
+            self.deferred_loss = None;
+        }
         self.directory_inventory = None;
         if worktree {
             self.pending_worktree.merge(Changes::worktree_all());
@@ -1139,6 +1190,33 @@ impl RepositoryMonitor {
             }
         }
         self.maintenance = Some(now);
+    }
+
+    fn defer_loss(&mut self, worktree: bool, now: Instant) {
+        let rebuilding = self.metadata.rebuild || (worktree && self.worktree.rebuild);
+        let Some(deadline) = self
+            .loss_debounce
+            .and_then(|quiet| now.checked_add(quiet))
+            .filter(|at| !rebuilding && *at > now)
+        else {
+            self.coverage_lost(worktree, now);
+            return;
+        };
+        let worktree_only = worktree && self.deferred_loss.as_ref().is_none_or(|loss| loss.worktree_only);
+        self.deferred_loss = Some(DeferredLoss {
+            worktree_only,
+            deadline,
+        });
+        self.pending_worktree = Changes::default();
+        if !worktree_only {
+            self.pending_metadata = Pending::default();
+        }
+    }
+
+    fn loss_pending_for(&self, worktree: bool) -> bool {
+        self.deferred_loss
+            .as_ref()
+            .is_some_and(|loss| worktree || !loss.worktree_only)
     }
 
     fn maintain(
@@ -1372,7 +1450,10 @@ impl RepositoryMonitor {
 
     fn observe(&mut self, event: &Event, worktree: bool, now: Instant) {
         if event.paths.is_empty() || matches!(event.kind, EventKind::Any) {
-            self.coverage_lost(worktree, now);
+            self.defer_loss(worktree, now);
+            return;
+        }
+        if self.loss_pending_for(worktree) {
             return;
         }
         let mut changes = Changes::default();

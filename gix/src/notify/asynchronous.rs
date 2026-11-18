@@ -89,6 +89,7 @@ impl RepositoryMonitor {
         [
             self.maintenance,
             self.pending_metadata.deadline,
+            self.deferred_loss.as_ref().map(|loss| loss.deadline),
             #[cfg(target_os = "macos")]
             self.external_ignores.retry,
         ]

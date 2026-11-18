@@ -41,11 +41,16 @@ fn overflowing_scheduling_durations_are_rejected() -> TestResult {
             "validation identifies the invalid option: {error}"
         );
     }
-    repo.monitor(Options {
+    let mut monitor = repo.monitor(Options {
         metadata_debounce: Duration::ZERO,
         max_latency: Duration::ZERO,
         ..Options::default()
     })?;
+    assert!(
+        monitor.set_loss_debounce(Some(Duration::MAX)).is_err(),
+        "loss debounce also rejects durations outside the clock range"
+    );
+    monitor.set_loss_debounce(Some(Duration::ZERO))?;
     Ok(())
 }
 
