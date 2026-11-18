@@ -1758,11 +1758,12 @@ views.
   The View popout shows the active setting. Unmodified presses toggle it; repeats,
   releases, and modified keys do not. Filtering redraws cached outlines without
   source reads, parsing, terminal queries, or additional copies of source text.
-- Structural mode uses lexical syntax foregrounds and distinct red, green,
-  and yellow backgrounds for removed, added, and modified declarations. Changed
-  words use stronger red/green backgrounds and bold text. In color mode the
-  declaration markers and word-change delimiters are omitted. File-tree
-  statuses, line counts, and patch metadata use the same terminal palette.
+- Structural mode uses lexical syntax foregrounds and muted red, green, and
+  yellow backgrounds for removed, added, and modified declarations. Names and
+  language keywords are bold, including in plain mode. Changed words use
+  stronger red/green backgrounds and bold text. In color mode the declaration
+  markers and word-change delimiters are omitted. File-tree statuses, line
+  counts, and patch metadata use the same terminal palette.
 - `v c` toggles structural diff colors and updates the View popout. Plain mode shows
   declaration markers and word-change delimiters. The choice persists for
   later structural views in the same invocation. A nonempty `NO_COLOR` starts
