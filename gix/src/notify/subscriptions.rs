@@ -40,7 +40,9 @@ impl RepositoryMonitor {
     /// merges the invalidations from both the old and new lists, so removing a dependency cannot
     /// silently drop a pending invalidation. Registration failures are reported in the outcome and
     /// retried with the new subscriptions retained.
-    /// Equal resolved subscriptions are a no-op. Scheduling and coverage policies require a new monitor.
+    /// Equal resolved subscriptions are a no-op. To change the loss quiet period, use
+    /// [`set_loss_debounce()`](Self::set_loss_debounce). Other scheduling and coverage policies
+    /// require a new monitor.
     /// Native checkout selection can change separately with [`update_checkout_filter()`](Self::update_checkout_filter).
     pub fn update_subscriptions(
         &mut self,
@@ -115,6 +117,9 @@ impl RepositoryMonitor {
         }
         self.pending_worktree.merge(Changes::worktree_all());
         if !enabled {
+            if self.deferred_loss.as_ref().is_some_and(|loss| loss.worktree_only) {
+                self.deferred_loss = None;
+            }
             self.pending_statistics.removed += self.worktree.registered.len();
             self.worktree = Domain::default();
             #[cfg(target_os = "macos")]
