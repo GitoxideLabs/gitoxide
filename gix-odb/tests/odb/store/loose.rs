@@ -905,11 +905,11 @@ fn shared_object_permissions_match_git_after_umask() -> crate::Result {
             continue;
         }
         for (setting, permissions) in [
-            ("false", 0),
-            ("group", 0o660),
-            ("all", 0o664),
-            ("0640", -0o640),
-            ("0660", -0o660),
+            ("false", gix_fs::SharedPermissions::Umask),
+            ("group", gix_fs::SharedPermissions::Group),
+            ("all", gix_fs::SharedPermissions::Everybody),
+            ("0640", gix_fs::SharedPermissions::Explicit(0o640)),
+            ("0660", gix_fs::SharedPermissions::Explicit(0o660)),
         ] {
             let dir = gix_testtools::tempfile::tempdir()?;
             gix_testtools::git(

@@ -25,7 +25,7 @@ fn copies_sparse_patterns_from_the_source_private_git_directory() -> gix_testtoo
             git_dir: Some(&source_git_dir),
         },
         gix_worktree::add::Options {
-            shared_repository_permissions: -0o640,
+            shared_repository_permissions: gix_fs::SharedPermissions::Explicit(0o640),
             ..Default::default()
         },
     )?;
@@ -203,7 +203,7 @@ fn shared_permissions_include_linking_files_but_preserve_existing_directories() 
     fs::create_dir(&common_dir)?;
     fs::set_permissions(&common_dir, fs::Permissions::from_mode(0o700))?;
     let options = gix_worktree::add::Options {
-        shared_repository_permissions: -0o640,
+        shared_repository_permissions: gix_fs::SharedPermissions::Explicit(0o640),
         ..Default::default()
     };
     let destination = tmp.path().join("parent/worktree");

@@ -289,7 +289,7 @@ fn adapted_untracked_caches_match_gits_uncached_listing_after_tracking_changes()
             extensions: gix_index::write::Extensions::AllUnconditionally,
             ..Default::default()
         },
-        0,
+        Default::default(),
     )?;
     let uncached_path = temporary.path().join("uncached-index");
     let mut uncached_bytes = Vec::new();

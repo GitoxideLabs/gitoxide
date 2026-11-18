@@ -71,7 +71,7 @@ pub struct Outcome {
     /// The worktree index that was used for the operation.
     pub worktree_index: IndexPersistedOrInMemory,
     pub(super) skip_hash: bool,
-    pub(super) shared_repository_permissions: i32,
+    pub(super) shared_repository_permissions: gix_fs::SharedPermissions,
     pub(super) changes: Option<Vec<(usize, ApplyChange)>>,
 }
 

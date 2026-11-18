@@ -38,8 +38,7 @@ where
     /// The parsed `core.sharedRepository` policy applied when this handle writes loose objects.
     ///
     /// Changes take effect on the next write, including already-open loose databases, without affecting other handles.
-    /// See [`gix_fs::adjust_shared_repository_permissions()`] for the signed mode encoding.
-    pub shared_repository_permissions: i32,
+    pub shared_repository_permissions: gix_fs::SharedPermissions,
 
     pub(crate) token: Option<handle::Mode>,
     snapshot: RefCell<load_index::Snapshot>,

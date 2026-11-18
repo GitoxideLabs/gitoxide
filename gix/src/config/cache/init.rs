@@ -110,7 +110,7 @@ impl Cache {
             alloc_limit_bytes,
             loose_compression,
             reflog,
-            shared_repository_permissions: 0,
+            shared_repository_permissions: gix_fs::SharedPermissions::Umask,
             refs_namespace,
             is_bare,
             ignore_case,

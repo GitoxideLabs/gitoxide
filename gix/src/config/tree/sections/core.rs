@@ -354,22 +354,24 @@ mod repository_format_version {
 
 mod shared_repository {
     use gix_error::ResultExt;
+    use gix_fs::SharedPermissions::{self, Everybody, Explicit, Group, Umask};
 
     use crate::{Result, bstr::ByteSlice, config, config::tree::core::SharedRepository};
 
     impl SharedRepository {
         /// Parse `value` as Git's `core.sharedRepository` permission policy.
         ///
-        /// `None` represents a bare key (without value) and is treated as boolean `true`, equivalent to `group`. The result uses Git's
-        /// compact encoding: `0` leaves permissions to the process umask, a positive mode ORs in permission bits after the
-        /// umask, and a negative mode replaces the permission bits.
-        pub fn try_into_shared_repository(&'static self, value: Option<impl gix_utils::AsBStr>) -> Result<i32> {
-            let Some(value) = value else { return Ok(0o660) };
+        /// `None` represents a bare key and is treated as boolean `true`, equivalent to `group`.
+        pub fn try_into_shared_repository(
+            &'static self,
+            value: Option<impl gix_utils::AsBStr>,
+        ) -> Result<SharedPermissions> {
+            let Some(value) = value else { return Ok(Group) };
             let value = value.as_bstr();
             match value.as_bytes() {
-                b"umask" => return Ok(0),
-                b"group" => return Ok(0o660),
-                b"all" | b"world" | b"everybody" => return Ok(0o664),
+                b"umask" => return Ok(Umask),
+                b"group" => return Ok(Group),
+                b"all" | b"world" | b"everybody" => return Ok(Everybody),
                 _ => {}
             }
 
@@ -377,10 +379,10 @@ mod shared_repository {
                 u32::from_str_radix(value.trim_start_matches([' ', '\t', '\n', '\x0b', '\x0c', '\r']), 8).ok()
             }) {
                 return match mode {
-                    0 => Ok(0),
-                    1 => Ok(0o660),
-                    2 => Ok(0o664),
-                    mode if mode & 0o600 == 0o600 => Ok(-((mode & 0o666) as i32)),
+                    0 => Ok(Umask),
+                    1 => Ok(Group),
+                    2 => Ok(Everybody),
+                    mode if mode & 0o600 == 0o600 => Ok(Explicit(mode & 0o666)),
                     _ => Err(
                         config::key::error_with_value(self, "Invalid configuration value", value).validation_error(),
                     ),
@@ -388,7 +390,7 @@ mod shared_repository {
             }
 
             gix_config::Boolean::try_from(value)
-                .map(|value| if value.0 { 0o660 } else { 0 })
+                .map(|value| if value.0 { Group } else { Umask })
                 .or_raise(|| config::key::error(self, "Invalid configuration value"))
         }
     }

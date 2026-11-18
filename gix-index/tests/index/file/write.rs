@@ -12,11 +12,11 @@ fn shared_permissions_apply_to_new_and_replaced_indexes() -> crate::Result {
     let dir = gix_testtools::tempfile::TempDir::new()?;
     let path = dir.path().join("index");
     let mut index = gix_index::File::from_state(State::new(gix_testtools::object_hash()), path.clone());
-    for permissions in [-0o640, -0o660] {
-        index.write(Default::default(), permissions)?;
+    for mode in [0o640, 0o660] {
+        index.write(Default::default(), gix_fs::SharedPermissions::Explicit(mode))?;
         assert_eq!(
             fs::metadata(&path)?.permissions().mode() & 0o777,
-            permissions.unsigned_abs(),
+            mode,
             "the committed index uses the sharing policy after the umask"
         );
         assert!(
@@ -196,7 +196,7 @@ fn default_write_invalidates_the_untracked_cache_after_an_index_edit() -> TestRe
     index.remove_entries(|_, path, _| path == "tracked-dir-with-ignore/tracked-file");
     let temporary = gix_testtools::tempfile::TempDir::new()?;
     index.set_path(temporary.path().join("index"));
-    index.write(Options::default(), 0)?;
+    index.write(Options::default(), Default::default())?;
     assert_eq!(
         format!("{:#?}", index.untracked()),
         original_cache,
@@ -254,7 +254,7 @@ fn default_write_invalidates_all_tree_nodes_after_index_edits() -> TestResult {
 
     let temporary = gix_testtools::tempfile::TempDir::new()?;
     index.set_path(temporary.path().join("cached-index"));
-    index.write(Options::default(), 0)?;
+    index.write(Options::default(), Default::default())?;
     assert_eq!(
         index.tree(),
         Some(&original_tree),
@@ -366,7 +366,7 @@ fn skip_hash() -> TestResult {
                 extensions: Default::default(),
                 skip_hash,
             },
-            0,
+            Default::default(),
         )?;
         assert_eq!(
             expected.checksum().is_none(),

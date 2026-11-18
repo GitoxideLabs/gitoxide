@@ -1608,7 +1608,7 @@ fn sharing_changes_apply_to_open_databases_without_affecting_other_handles() -> 
             gix_testtools::object_hash(),
             None,
             gix_odb::store::init::Options {
-                shared_repository_permissions: -0o640,
+                shared_repository_permissions: gix_fs::SharedPermissions::Explicit(0o640),
                 ..Default::default()
             },
         )?;
@@ -1619,15 +1619,15 @@ fn sharing_changes_apply_to_open_databases_without_affecting_other_handles() -> 
         let other = db.clone();
         let path =
             |id: &gix_hash::oid| gix_odb::loose::Store::at(dir.path(), gix_testtools::object_hash()).object_path(id);
-        for permissions in [-0o660, -0o600] {
-            db.shared_repository_permissions = permissions;
-            let data = format!("object with permissions {permissions}");
+        for mode in [0o660, 0o600] {
+            db.shared_repository_permissions = gix_fs::SharedPermissions::Explicit(mode);
+            let data = format!("object with permissions {mode:o}");
             let blob_id =
                 gix_object::compute_hash(gix_testtools::object_hash(), gix_object::Kind::Blob, data.as_bytes())?;
             db.write_buf_with_known_id(gix_object::Kind::Blob, data.as_bytes(), blob_id)?;
             assert_eq!(
                 fs::metadata(path(&blob_id))?.permissions().mode() & 0o777,
-                permissions.unsigned_abs() & !0o222,
+                mode & !0o222,
                 "already-open databases use the current handle policy"
             );
         }
@@ -1637,7 +1637,7 @@ fn sharing_changes_apply_to_open_databases_without_affecting_other_handles() -> 
             0o440,
             "a cloned handle retains its policy despite shared loose-store snapshots"
         );
-        db.shared_repository_permissions = -0o644;
+        db.shared_repository_permissions = gix_fs::SharedPermissions::Explicit(0o644);
         let converted = db.into_inner().into_arc()?;
         let blob_id = converted.write_buf(gix_object::Kind::Blob, b"converted handle")?;
         assert_eq!(

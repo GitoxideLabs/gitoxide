@@ -190,7 +190,8 @@ async fn startup_failure_and_dropped_handles_allow_replacement() -> TestResult {
 async fn cancelling_startup_does_not_leave_an_endpoint_owned() -> TestResult {
     let fixture = Fixture::new()?;
     let endpoint = fixture.context().endpoint;
-    let startup_lock = gix_lock::Marker::acquire_to_hold_resource(&endpoint, Default::default(), None, 0)?;
+    let startup_lock =
+        gix_lock::Marker::acquire_to_hold_resource(&endpoint, Default::default(), None, Default::default())?;
     let result = tokio::time::timeout(
         Duration::from_millis(10),
         server::asynchronous::spawn(fixture.context(), Default::default()),

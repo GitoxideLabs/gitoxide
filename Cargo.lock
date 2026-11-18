@@ -2441,6 +2441,7 @@ dependencies = [
  "gix-credentials",
  "gix-date",
  "gix-error",
+ "gix-fs",
  "gix-hash",
  "gix-lock",
  "gix-macros",

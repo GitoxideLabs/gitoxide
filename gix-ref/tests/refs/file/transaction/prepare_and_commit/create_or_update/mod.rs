@@ -98,7 +98,7 @@ fn shared_reflogs_can_be_appended_by_another_owner() -> TestResult {
                 .as_bytes(),
         )?;
         let mut store = gix_ref::file::Store::at(path.join(".git"), crate::fixture_hash_kind());
-        store.shared_repository_permissions = -0o660;
+        store.shared_repository_permissions = gix_fs::SharedPermissions::Explicit(0o660);
         let before = reflog_lines(&store, "HEAD")?.len();
         store
             .transaction()
@@ -179,7 +179,7 @@ fn shared_permissions_cover_refs_reflogs_and_packed_refs() -> TestResult {
     use std::{fs, os::unix::fs::PermissionsExt};
 
     let (_keep, mut store) = empty_store()?;
-    store.shared_repository_permissions = -0o640;
+    store.shared_repository_permissions = gix_fs::SharedPermissions::Explicit(0o640);
     let commit_id = ObjectId::empty_blob(crate::fixture_hash_kind());
     store
         .transaction()
@@ -220,7 +220,7 @@ fn shared_permissions_cover_refs_reflogs_and_packed_refs() -> TestResult {
         );
     }
 
-    store.shared_repository_permissions = -0o660;
+    store.shared_repository_permissions = gix_fs::SharedPermissions::Explicit(0o660);
     let next_commit_id = ObjectId::empty_tree(crate::fixture_hash_kind());
     store
         .transaction()

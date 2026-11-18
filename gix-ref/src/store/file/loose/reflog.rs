@@ -186,7 +186,7 @@ pub mod create_or_update {
                     if let Some(mut file) = file_for_appending {
                         let committer = committer.ok_or_raise(|| MissingCommitter)?;
                         if cfg!(unix)
-                            && self.shared_repository_permissions != 0
+                            && self.shared_repository_permissions != gix_fs::SharedPermissions::Umask
                             && let Ok(metadata) = file.metadata()
                         {
                             let current = metadata.permissions();

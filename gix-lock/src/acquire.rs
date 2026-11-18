@@ -5,6 +5,7 @@ use std::{
 };
 
 use gix_error::{Class, ClassificationMarker, ErrorExt, Result, message};
+use gix_fs::SharedPermissions;
 use gix_tempfile::{AutoRemove, ContainingDirectory};
 use gix_utils::backoff;
 
@@ -54,8 +55,7 @@ impl File {
     /// resolver used by Git-style callers that must update a symlink's target instead of replacing the link itself.
     ///
     /// Apply `shared_repository_permissions`, Git's parsed sharing policy, to the lock file and newly created directories
-    /// after the process umask. Pass `0` to keep the umask permissions without reading or rewriting permission metadata.
-    /// See [`gix_fs::set_shared_repository_permissions()`] for the encoding.
+    /// after the process umask. Pass [`gix_fs::SharedPermissions::Umask`] to skip reading or rewriting permission metadata.
     ///
     /// On Unix, lock files start with `0o666` before the umask and sharing policy are applied.
     ///
@@ -68,7 +68,7 @@ impl File {
         at_path: impl AsRef<Path>,
         mode: Fail,
         boundary_directory: Option<PathBuf>,
-        shared_repository_permissions: i32,
+        shared_repository_permissions: SharedPermissions,
         resolve_resource: Option<&dyn Fn(&Path) -> PathBuf>,
     ) -> Result<File> {
         let resolve_resource = resolve_resource.unwrap_or(&keep_resource);
@@ -98,7 +98,7 @@ impl File {
         at_path: impl AsRef<Path>,
         mode: Fail,
         boundary_directory: Option<PathBuf>,
-        shared_repository_permissions: i32,
+        shared_repository_permissions: SharedPermissions,
     ) -> Result<File> {
         Self::acquire(at_path, mode, boundary_directory, shared_repository_permissions, None)
     }
@@ -110,7 +110,7 @@ impl Marker {
     ///
     /// If `boundary_directory` is given, missing directories will be created and removed up to that boundary on rollback.
     ///
-    /// The sharing policy applies to both the marker and newly created directories; `0` keeps the umask permissions.
+    /// The sharing policy applies to both the marker and newly created directories.
     /// On Unix, marker files start with `0o666` before the umask and sharing policy are applied.
     ///
     /// ### Warning of potential resource leak
@@ -122,7 +122,7 @@ impl Marker {
         at_path: impl AsRef<Path>,
         mode: Fail,
         boundary_directory: Option<PathBuf>,
-        shared_repository_permissions: i32,
+        shared_repository_permissions: SharedPermissions,
     ) -> Result<Marker> {
         let (resource_path, lock_path, handle) = lock_with_mode(
             at_path.as_ref(),
@@ -147,7 +147,10 @@ impl Marker {
     }
 }
 
-fn dir_cleanup(boundary: Option<PathBuf>, shared_repository_permissions: i32) -> (ContainingDirectory, AutoRemove) {
+fn dir_cleanup(
+    boundary: Option<PathBuf>,
+    shared_repository_permissions: SharedPermissions,
+) -> (ContainingDirectory, AutoRemove) {
     match boundary {
         None => (ContainingDirectory::Exists, AutoRemove::Tempfile),
         Some(boundary_directory) => (
@@ -187,7 +190,7 @@ fn lock_with_mode<T>(
     resource: &Path,
     mode: Fail,
     boundary_directory: Option<PathBuf>,
-    shared_repository_permissions: i32,
+    shared_repository_permissions: SharedPermissions,
     resolve_resource: &dyn Fn(&Path) -> PathBuf,
     try_lock: &dyn Fn(&Path, ContainingDirectory, AutoRemove) -> std::io::Result<T>,
 ) -> Result<(PathBuf, PathBuf, T)> {
@@ -284,12 +287,19 @@ mod tests {
     #[test]
     fn permission_denied_preserves_the_io_source() {
         for mode in [Fail::Immediately, Fail::AfterDurationWithBackoff(Duration::ZERO)] {
-            let err = lock_with_mode::<()>(Path::new("resource"), mode, None, 0, &keep_resource, &|_, _, _| {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    "access denied",
-                ))
-            })
+            let err = lock_with_mode::<()>(
+                Path::new("resource"),
+                mode,
+                None,
+                SharedPermissions::Umask,
+                &keep_resource,
+                &|_, _, _| {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "access denied",
+                    ))
+                },
+            )
             .expect_err("authorization is required to obtain the lock");
             assert!(err.is_permission_denied(), "authorization failure is classified");
             assert!(!err.is_retryable(), "authorization is not ordinary lock contention");
@@ -317,7 +327,7 @@ mod tests {
             Path::new("link"),
             Fail::AfterDurationWithBackoff(Duration::ZERO),
             None,
-            0,
+            SharedPermissions::Umask,
             &resolve,
             &|path, _, _| {
                 if path == Path::new("first.lock") {

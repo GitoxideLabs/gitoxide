@@ -4,6 +4,7 @@ use std::{
 };
 
 use gix_error::{Result, ResultExt, bail, message, validation};
+use gix_fs::SharedPermissions;
 use gix_utils::progress::DynNestedProgress;
 
 use crate::fetch::{
@@ -234,7 +235,10 @@ fn read_remaining(reader: &mut impl std::io::Read) -> std::io::Result<()> {
     std::io::copy(reader, &mut std::io::sink()).map(|_| ())
 }
 
-fn acquire_shallow_lock(shallow_file: &Path, shared_repository_permissions: i32) -> Result<gix_lock::File> {
+fn acquire_shallow_lock(
+    shallow_file: &Path,
+    shared_repository_permissions: SharedPermissions,
+) -> Result<gix_lock::File> {
     gix_lock::File::acquire_to_update_resource(
         shallow_file,
         gix_lock::acquire::Fail::Immediately,
@@ -248,7 +252,7 @@ fn add_shallow_args(
     args: &mut Arguments,
     shallow: &Shallow,
     shallow_file: &std::path::Path,
-    shared_repository_permissions: i32,
+    shared_repository_permissions: SharedPermissions,
 ) -> Result<(Option<nonempty::NonEmpty<gix_hash::ObjectId>>, Option<gix_lock::File>)> {
     let expect_change = *shallow != Shallow::NoChange;
     let shallow_lock = expect_change

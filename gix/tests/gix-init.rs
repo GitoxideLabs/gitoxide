@@ -36,7 +36,7 @@ fn initialization_permissions_match_git() -> gix_testtools::Result {
         if !gix_testtools::run_with_umask(umask)? {
             continue;
         }
-        for shared in ["group", "0640", "false"] {
+        for shared in ["group", "all", "0640", "0660", "0664", "false"] {
             for bare in [false, true] {
                 let temp = gix_testtools::tempfile::tempdir()?;
                 for directory in ["template/info", "template/hooks", "git-parent", "gix-parent"] {
@@ -227,7 +227,8 @@ mod config {
         )?
         .to_thread_local();
         assert_eq!(
-            repo.refs.shared_repository_permissions, -0o640,
+            repo.refs.shared_repository_permissions,
+            gix::fs::SharedPermissions::Explicit(0o640),
             "conditional includes supply the policy used by the opened repository"
         );
         #[cfg(unix)]

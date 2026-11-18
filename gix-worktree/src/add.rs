@@ -42,8 +42,8 @@ pub struct Options {
     /// Copied sparse-checkout metadata also uses this policy. Unlike Git, the linking files `.git`, `gitdir`,
     /// `commondir`, and `locked` receive these permissions as well.
     /// This option does not configure permissions for subsequently checked-out files or subdirectories.
-    /// See [`gix_fs::adjust_shared_repository_permissions()`] for the signed mode encoding; `0` is the default.
-    pub shared_repository_permissions: i32,
+    /// Defaults to [`gix_fs::SharedPermissions::Umask`].
+    pub shared_repository_permissions: gix_fs::SharedPermissions,
     /// Write relative paths into the `.git` and `gitdir` files, falling back to absolute paths across filesystem roots.
     ///
     /// This does not affect the paths passed to [`prepare()`], which may be absolute or relative regardless of

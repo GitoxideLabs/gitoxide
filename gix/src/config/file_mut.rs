@@ -16,7 +16,7 @@ impl FileTransaction {
         source: gix_config::Source,
         trust: gix_sec::Trust,
         lock_mode: gix_lock::acquire::Fail,
-        shared_repository_permissions: i32,
+        shared_repository_permissions: gix_fs::SharedPermissions,
     ) -> Result<Self> {
         let mut lock = gix_lock::File::acquire(
             &path,
@@ -91,14 +91,16 @@ impl FileTransaction {
 pub(crate) fn shared_repository_permissions(
     config: &gix_config::File,
     filter: fn(&gix_config::file::Metadata) -> bool,
-) -> Result<i32> {
+) -> Result<gix_fs::SharedPermissions> {
     let value = config.sections_by_name_and_filter("core", filter).and_then(|sections| {
         sections
             .filter(|section| section.header().subsection_name().is_none())
             .filter_map(|section| section.value_implicit("sharedRepository"))
             .last()
     });
-    let Some(value) = value else { return Ok(0) };
+    let Some(value) = value else {
+        return Ok(gix_fs::SharedPermissions::Umask);
+    };
     crate::config::tree::Core::SHARED_REPOSITORY.try_into_shared_repository(value)
 }
 

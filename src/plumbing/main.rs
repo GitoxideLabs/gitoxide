@@ -1023,11 +1023,11 @@ pub fn main() -> Result<()> {
                                         {
                                             repo.refs.shared_repository_permissions
                                         } else {
-                                            0
+                                            gix::fs::SharedPermissions::Umask
                                         }
                                     }
                                     Some(Err(err)) if !err.is_not_found() => return Err(err),
-                                    _ => 0,
+                                    _ => gix::fs::SharedPermissions::Umask,
                                 };
                                 core::pack::multi_index::create(
                                     index_paths,

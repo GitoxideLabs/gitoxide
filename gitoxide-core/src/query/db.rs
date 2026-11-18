@@ -1,13 +1,17 @@
 use gix::{
     Result,
     error::{ErrorExt, ResultExt, message},
+    fs::SharedPermissions,
 };
 use rusqlite::{OptionalExtension, params};
 
 /// A version to be incremented whenever the database layout is changed, to refresh it automatically.
 const VERSION: usize = 1;
 
-pub fn create(path: impl AsRef<std::path::Path>, shared_repository_permissions: i32) -> Result<rusqlite::Connection> {
+pub fn create(
+    path: impl AsRef<std::path::Path>,
+    shared_repository_permissions: SharedPermissions,
+) -> Result<rusqlite::Connection> {
     let path = path.as_ref();
     let open = || -> Result<_> {
         let con = rusqlite::Connection::open(path).or_error()?;

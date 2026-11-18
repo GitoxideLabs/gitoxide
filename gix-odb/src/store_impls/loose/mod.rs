@@ -17,9 +17,8 @@ pub struct Options {
     pub compression: gix_zlib::Compression,
     /// The parsed `core.sharedRepository` policy for new loose objects and fanout directories.
     ///
-    /// Defaults to `0`, leaving permissions to the process umask. Objects remain read-only.
-    /// See [`gix_fs::adjust_shared_repository_permissions()`] for the signed mode encoding.
-    pub shared_repository_permissions: i32,
+    /// Defaults to [`gix_fs::SharedPermissions::Umask`]. Objects remain read-only.
+    pub shared_repository_permissions: gix_fs::SharedPermissions,
 }
 
 impl Default for Options {
@@ -27,7 +26,7 @@ impl Default for Options {
         Options {
             alloc_limit_bytes: None,
             compression: gix_zlib::Compression::BEST_SPEED,
-            shared_repository_permissions: 0,
+            shared_repository_permissions: gix_fs::SharedPermissions::Umask,
         }
     }
 }
@@ -43,7 +42,7 @@ pub struct Store {
     pub(crate) alloc_limit_bytes: Option<usize>,
     /// The compression level to use when writing loose objects.
     pub(crate) compression: gix_zlib::Compression,
-    pub(crate) shared_repository_permissions: i32,
+    pub(crate) shared_repository_permissions: gix_fs::SharedPermissions,
 }
 
 /// Initialization

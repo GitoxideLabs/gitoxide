@@ -25,7 +25,7 @@ pub fn create(
     mut progress: impl NestedProgress + 'static,
     should_interrupt: &AtomicBool,
     object_hash: gix::hash::Kind,
-    shared_repository_permissions: i32,
+    shared_repository_permissions: gix::fs::SharedPermissions,
 ) -> Result<()> {
     let mut out = BufWriter::new(gix::lock::File::acquire_to_update_resource(
         output_path,

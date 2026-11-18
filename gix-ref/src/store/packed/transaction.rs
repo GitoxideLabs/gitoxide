@@ -275,7 +275,7 @@ pub(crate) fn buffer_into_transaction(
     lock_mode: gix_lock::acquire::Fail,
     precompose_unicode: bool,
     namespace: Option<Namespace>,
-    shared_repository_permissions: i32,
+    shared_repository_permissions: gix_fs::SharedPermissions,
 ) -> Result<packed::Transaction> {
     let lock = gix_lock::File::acquire(&buffer.path, lock_mode, None, shared_repository_permissions, None)?;
     Ok(packed::Transaction {

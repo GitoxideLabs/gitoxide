@@ -1661,7 +1661,7 @@ fn marker_if_needed(
                 archive_name,
                 gix_lock::acquire::Fail::AfterDurationWithBackoff(Duration::from_mins(6)),
                 None,
-                0,
+                Default::default(),
             )
         })
         .transpose()?)

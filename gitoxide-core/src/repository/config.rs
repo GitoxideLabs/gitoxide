@@ -109,8 +109,13 @@ pub fn fmt(
     };
     let lock = in_place
         .then(|| {
-            gix::lock::File::acquire_to_update_resource(&source, gix::lock::acquire::Fail::Immediately, None, 0)
-                .or_raise(|| message!("Could not lock configuration file at \"{}\"", source.display()))
+            gix::lock::File::acquire_to_update_resource(
+                &source,
+                gix::lock::acquire::Fail::Immediately,
+                None,
+                Default::default(),
+            )
+            .or_raise(|| message!("Could not lock configuration file at \"{}\"", source.display()))
         })
         .transpose()?;
     let input = std::fs::read(&source)

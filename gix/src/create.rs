@@ -6,6 +6,7 @@ use std::{
 
 use crate::error::{ErrorExt, ResultExt, bail, message, validation};
 use gix_discover::DOT_GIT_DIR;
+use gix_fs::SharedPermissions;
 
 use crate::{Error, Result};
 
@@ -39,7 +40,7 @@ const TPL_HEAD: &[u8] = include_bytes!("assets/init/HEAD");
 
 struct PathCursor<'a>(&'a mut PathBuf);
 
-struct NewDir<'a>(&'a mut PathBuf, i32);
+struct NewDir<'a>(&'a mut PathBuf, SharedPermissions);
 
 impl PathCursor<'_> {
     fn at(&mut self, component: &str) -> &Path {
@@ -71,7 +72,7 @@ impl Drop for PathCursor<'_> {
     }
 }
 
-fn write_file(data: &[u8], path: &Path, shared_repository_permissions: i32) -> Result<()> {
+fn write_file(data: &[u8], path: &Path, shared_repository_permissions: SharedPermissions) -> Result<()> {
     let mut file = OpenOptions::new()
         .write(true)
         .create(true)
@@ -85,7 +86,7 @@ fn write_file(data: &[u8], path: &Path, shared_repository_permissions: i32) -> R
         .map_err(|err| io_error(err, "Could not write data", path))
 }
 
-fn create_dir(p: &Path, shared_repository_permissions: i32) -> Result<()> {
+fn create_dir(p: &Path, shared_repository_permissions: SharedPermissions) -> Result<()> {
     gix_fs::dir::create::all(p, Default::default(), shared_repository_permissions)
         .map_err(|err| io_error(err, "Could not create directory", p))?;
     Ok(())
@@ -147,7 +148,7 @@ fn default_object_hash() -> Option<gix_hash::Kind> {
 /// in
 /// [metadata](gix_error::Error::metadata()).
 pub fn into(directory: impl Into<PathBuf>, kind: Kind, options: Options) -> Result<gix_discover::repository::Path> {
-    into_with_capabilities(directory, kind, options, 0).map(|(path, _)| path)
+    into_with_capabilities(directory, kind, options, SharedPermissions::Umask).map(|(path, _)| path)
 }
 
 pub(crate) fn into_with_capabilities(
@@ -158,7 +159,7 @@ pub(crate) fn into_with_capabilities(
         destination_must_be_empty,
         object_hash,
     }: Options,
-    shared_repository_permissions: i32,
+    shared_repository_permissions: SharedPermissions,
 ) -> Result<(gix_discover::repository::Path, gix_fs::Capabilities)> {
     let mut dot_git = directory.into();
     let bare = matches!(kind, Kind::Bare);
@@ -272,12 +273,13 @@ pub(crate) fn into_with_capabilities(
             }
             core.push("ignorecase", bool(caps.ignore_case))?;
             core.push("precomposeunicode", bool(caps.precompose_unicode))?;
-            if shared_repository_permissions != 0 {
-                let value = match shared_repository_permissions {
-                    0o660 => "1".to_owned(),
-                    0o664 => "2".to_owned(),
-                    mode => format!("0{:o}", mode.unsigned_abs()),
-                };
+            let shared_repository = match shared_repository_permissions {
+                SharedPermissions::Umask => None,
+                SharedPermissions::Group => Some("1".to_owned()),
+                SharedPermissions::Everybody => Some("2".to_owned()),
+                SharedPermissions::Explicit(mode) => Some(format!("0{mode:o}")),
+            };
+            if let Some(value) = shared_repository {
                 core.push("sharedrepository", value)?;
             }
 

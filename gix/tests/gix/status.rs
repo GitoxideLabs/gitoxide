@@ -155,7 +155,7 @@ mod into_iter {
         );
         let mut index = repo.open_index()?;
         index.entries_mut()[0].stat = Default::default();
-        index.write(Default::default(), -0o640)?;
+        index.write(Default::default(), gix::fs::SharedPermissions::Explicit(0o640))?;
         let mut status = repo.status(gix::progress::Discard)?.into_iter(None)?;
         for item in status.by_ref() {
             item?;

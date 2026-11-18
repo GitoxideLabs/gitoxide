@@ -548,7 +548,7 @@ fn publication_lock(repo: &gix::Repository) -> Result<gix::lock::Marker> {
         repo.git_dir().join("tix-rebase"),
         gix::lock::acquire::Fail::Immediately,
         None,
-        0,
+        Default::default(),
     )
     .or_raise(|| gix::error::message("another Tix command is publishing this rebase; retry after it finishes"))
 }

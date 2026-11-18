@@ -168,7 +168,12 @@ mod write_to_directory {
             if !gix_testtools::run_with_umask(mask)? {
                 continue;
             }
-            for (setting, permissions) in [("false", 0), ("group", 0o660), ("all", 0o664), ("0640", -0o640)] {
+            for (setting, permissions) in [
+                ("false", gix_fs::SharedPermissions::Umask),
+                ("group", gix_fs::SharedPermissions::Group),
+                ("all", gix_fs::SharedPermissions::Everybody),
+                ("0640", gix_fs::SharedPermissions::Explicit(0o640)),
+            ] {
                 let git_pack_dir = gix_testtools::scripted_fixture_read_only_with_args(
                     "make_shared_repository_pack.sh",
                     [format!("{mask:04o}"), setting.into(), SMALL_PACK.into()],
@@ -284,7 +289,7 @@ mod write_to_directory {
                             index_version: pack::index::Version::V2,
                             alloc_limit_bytes: None,
                             compression: gix_zlib::Compression::BEST_SPEED,
-                            shared_repository_permissions: 0,
+                            shared_repository_permissions: gix_fs::SharedPermissions::Umask,
                         },
                     )?;
                     assert_eq!(
@@ -371,7 +376,7 @@ mod write_to_directory {
                 index_version: pack::index::Version::V2,
                 alloc_limit_bytes: None,
                 compression: gix_zlib::Compression::BEST_SPEED,
-                shared_repository_permissions: 0,
+                shared_repository_permissions: gix_fs::SharedPermissions::Umask,
             },
         )
         .expect_err("a ref-delta without an in-pack or external base cannot be indexed");
@@ -518,7 +523,7 @@ mod write_to_directory {
                 index_version: pack::index::Version::V2,
                 alloc_limit_bytes: prevent_allocation,
                 compression: gix_zlib::Compression::BEST_SPEED,
-                shared_repository_permissions: 0,
+                shared_repository_permissions: gix_fs::SharedPermissions::Umask,
             },
         )
         .expect_err("a zero allocation limit rejects non-empty delta-tree storage");
@@ -548,7 +553,7 @@ mod write_to_directory {
                 index_version: pack::index::Version::V2,
                 alloc_limit_bytes: None,
                 compression: gix_zlib::Compression::BEST_SPEED,
-                shared_repository_permissions: 0,
+                shared_repository_permissions: gix_fs::SharedPermissions::Umask,
             },
         )?)
     }

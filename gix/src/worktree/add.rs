@@ -465,7 +465,11 @@ fn sparse_checkout_git_dir(repo: &crate::Repository) -> Result<Option<&Path>> {
     Ok(is_enabled.then_some(repo.git_dir()))
 }
 
-fn copy_worktree_config(source: &Path, destination: &Path, shared_repository_permissions: i32) -> Result<()> {
+fn copy_worktree_config(
+    source: &Path,
+    destination: &Path,
+    shared_repository_permissions: gix_fs::SharedPermissions,
+) -> Result<()> {
     let mut config = match gix_config::File::from_path_no_includes(source.to_owned(), gix_config::Source::Worktree) {
         Ok(config) => config,
         Err(err) if err.is_not_found() => return Ok(()),

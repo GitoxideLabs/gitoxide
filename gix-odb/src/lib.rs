@@ -183,7 +183,7 @@ pub struct Store {
     /// The compression level to use when writing loose objects.
     loose_compression: gix_zlib::Compression,
     /// The initial sharing policy for newly created handles.
-    shared_repository_permissions: i32,
+    shared_repository_permissions: gix_fs::SharedPermissions,
 }
 
 /// Create a new cached handle to the object store with support for additional options.

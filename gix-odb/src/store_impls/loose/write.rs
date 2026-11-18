@@ -72,7 +72,7 @@ impl Store {
         kind: gix_object::Kind,
         from: &[u8],
         id: gix_hash::ObjectId,
-        shared_repository_permissions: i32,
+        shared_repository_permissions: gix_fs::SharedPermissions,
     ) -> Result<gix_hash::ObjectId> {
         let mut to = self.compressed_tempfile()?;
         to.write_all(&gix_object::encode::loose_header(kind, from.len() as u64))
@@ -93,7 +93,7 @@ impl Store {
         kind: gix_object::Kind,
         size: u64,
         mut from: &mut dyn io::Read,
-        shared_repository_permissions: i32,
+        shared_repository_permissions: gix_fs::SharedPermissions,
     ) -> Result<gix_hash::ObjectId> {
         let mut to = self.dest()?;
         to.write_all(&gix_object::encode::loose_header(kind, size))
@@ -112,7 +112,7 @@ impl Store {
         size: u64,
         mut from: &mut dyn io::Read,
         id: gix_hash::ObjectId,
-        shared_repository_permissions: i32,
+        shared_repository_permissions: gix_fs::SharedPermissions,
     ) -> Result<gix_hash::ObjectId> {
         let mut to = self.compressed_tempfile()?;
         to.write_all(&gix_object::encode::loose_header(kind, size))
@@ -167,7 +167,7 @@ impl Store {
     fn finalize_object(
         &self,
         gix_hash::io::Write { hash, inner: file }: gix_hash::io::Write<CompressedTempfile>,
-        shared_repository_permissions: i32,
+        shared_repository_permissions: gix_fs::SharedPermissions,
     ) -> Result<gix_hash::ObjectId> {
         let id = hash
             .try_finalize()
@@ -181,7 +181,7 @@ impl Store {
         &self,
         id: gix_hash::ObjectId,
         file: CompressedTempfile,
-        shared_repository_permissions: i32,
+        shared_repository_permissions: gix_fs::SharedPermissions,
     ) -> Result<gix_hash::ObjectId> {
         let object_path = loose::hash_path(&id, self.path.clone());
         let object_dir = object_path

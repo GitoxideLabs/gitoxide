@@ -165,9 +165,8 @@ pub enum ContainingDirectory {
     CreateAllRaceProof {
         /// How often to retry directory creation when other processes interfere.
         retries: gix_fs::dir::create::Retries,
-        /// Git's parsed sharing policy for newly created directories; `0` keeps the umask permissions.
-        /// See [`gix_fs::set_shared_repository_permissions()`] for the encoding.
-        shared_repository_permissions: i32,
+        /// Git's sharing policy for newly created directories.
+        shared_repository_permissions: gix_fs::SharedPermissions,
     },
 }
 

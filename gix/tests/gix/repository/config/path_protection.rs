@@ -128,7 +128,8 @@ fn safe_directory_promotion_updates_reference_protection_and_sharing() -> TestRe
                 "{source}: reference protection uses the final section trust"
             );
             assert_eq!(
-                repo.refs.shared_repository_permissions, 0o660,
+                repo.refs.shared_repository_permissions,
+                gix::fs::SharedPermissions::Group,
                 "{source}: reference sharing uses the final section trust"
             );
         }

@@ -417,7 +417,7 @@ fn create_keep_file(data_path: &Path) -> Result<Option<PathBuf>> {
 
 fn new_pack_file(
     directory: &Path,
-    shared_repository_permissions: i32,
+    shared_repository_permissions: gix_fs::SharedPermissions,
 ) -> io::Result<gix_tempfile::Handle<gix_tempfile::handle::Writable>> {
     gix_fs::dir::create::all(directory, Default::default(), shared_repository_permissions)?;
     #[cfg(unix)]

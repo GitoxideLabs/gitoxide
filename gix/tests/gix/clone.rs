@@ -826,7 +826,8 @@ mod blocking_io {
             "the clone adopted the remote format"
         );
         assert_eq!(
-            repo.refs.shared_repository_permissions, -0o640,
+            repo.refs.shared_repository_permissions,
+            gix::fs::SharedPermissions::Explicit(0o640),
             "the ref store inherits the restored override"
         );
         for name in ["packed-refs", "logs/HEAD", "index"] {

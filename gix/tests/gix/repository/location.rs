@@ -93,11 +93,13 @@ fn relative_paths_retain_runtime_state_and_the_selected_index_after_changing_cwd
     );
     assert_eq!(repo.current_dir(), current_dir, "the opening CWD remains unchanged");
     assert_eq!(
-        repo.refs.shared_repository_permissions, -0o640,
+        repo.refs.shared_repository_permissions,
+        gix::fs::SharedPermissions::Explicit(0o640),
         "anchoring retains the reference store's sharing policy"
     );
     assert_eq!(
-        repo.objects.shared_repository_permissions, -0o640,
+        repo.objects.shared_repository_permissions,
+        gix::fs::SharedPermissions::Explicit(0o640),
         "anchoring retains the object handle's sharing policy"
     );
     assert_eq!(

@@ -85,7 +85,7 @@ pub fn from_list(
                 );
             }
             let mut index = gix::index::File::from_state(index, index_path);
-            index.write(options, 0)?;
+            index.write(options, gix::fs::SharedPermissions::Umask)?;
         }
         None => {
             let index = gix::index::File::from_state(index, std::path::PathBuf::new());

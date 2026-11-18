@@ -26,10 +26,9 @@ pub struct Options {
     pub compression: gix_zlib::Compression,
     /// The parsed `core.sharedRepository` policy for the pack and index files and newly created destination directories.
     ///
-    /// Defaults to `0`, leaving permissions to the process umask. Pack and index files remain read-only;
+    /// Defaults to [`gix_fs::SharedPermissions::Umask`]. Pack and index files remain read-only;
     /// `.keep` markers retain Git's private permissions independently of this policy.
-    /// See [`gix_fs::adjust_shared_repository_permissions()`] for the signed mode encoding.
-    pub shared_repository_permissions: i32,
+    pub shared_repository_permissions: gix_fs::SharedPermissions,
 }
 
 impl Default for Options {
@@ -41,7 +40,7 @@ impl Default for Options {
             index_version: Default::default(),
             alloc_limit_bytes: None,
             compression: gix_zlib::Compression::BEST_SPEED,
-            shared_repository_permissions: 0,
+            shared_repository_permissions: gix_fs::SharedPermissions::Umask,
         }
     }
 }
