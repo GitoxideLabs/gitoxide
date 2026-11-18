@@ -109,12 +109,7 @@ impl Watcher {
             .name("gix-notify control".into())
             .spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let mut watcher = crate::Watcher {
-                        state: native_state.clone(),
-                        options,
-                        desired: Vec::new(),
-                        backend: None,
-                    };
+                    let mut watcher = crate::Watcher::with_state(options, native_state.clone());
                     while let Ok(command) = receive.recv_blocking() {
                         let complete = command(&mut watcher);
                         active.busy.store(false, Ordering::Release);
