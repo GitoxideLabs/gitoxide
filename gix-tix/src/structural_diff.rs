@@ -980,17 +980,17 @@ mod tests {
     }
 
     #[test]
-    fn context_toggles_between_one_and_zero_and_persists() -> TestResult {
+    fn context_starts_at_zero_and_can_be_toggled_across_views() -> TestResult {
         let repository = production_repository()?;
         let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
-        let mut options = Options::default();
+        let mut options = crate::App::new(24).structural_diff_options;
         let colors = Palette::default();
         {
             let mut view = View::new(&diff, &mut options, &colors);
             let original = text(&view.lines);
             assert!(
-                original.contains("fn unchanged()"),
-                "one unchanged sibling is shown by default"
+                !original.contains("fn unchanged()"),
+                "zero context hides unchanged siblings by default"
             );
             for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT, KeyModifiers::SHIFT] {
                 assert!(
@@ -1006,12 +1006,12 @@ mod tests {
             }
             assert!(
                 view.key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)),
-                "c switches to zero context"
+                "c adds one context line"
             );
             let output = text(&view.lines);
             assert!(
-                !output.contains("fn unchanged()"),
-                "zero context hides unchanged siblings"
+                output.contains("fn unchanged()"),
+                "one context line shows unchanged siblings"
             );
             assert!(output.contains("test_helper"), "changed declarations remain visible");
             let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(160, 24))?;
@@ -1020,12 +1020,12 @@ mod tests {
                 .map(|x| terminal.backend().buffer()[(x, 23)].symbol())
                 .collect();
             assert!(
-                footer.contains("c context:0"),
+                footer.contains("c context:1"),
                 "the footer displays the active context count"
             );
             assert!(
                 view.key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)),
-                "c restores one context line"
+                "c returns to zero context"
             );
             assert_eq!(
                 text(&view.lines),
@@ -1034,14 +1034,13 @@ mod tests {
             );
             assert!(
                 view.key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)),
-                "context can be disabled again"
+                "context can be enabled again"
             );
         }
-        assert_eq!(options.context, [0], "the setting outlives the view");
         let reopened = View::new(&diff, &mut options, &colors);
         assert!(
-            !text(&reopened.lines).contains("fn unchanged()"),
-            "reopening preserves zero context"
+            text(&reopened.lines).contains("fn unchanged()"),
+            "reopening preserves the selected context"
         );
         Ok(())
     }

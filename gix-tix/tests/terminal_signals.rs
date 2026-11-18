@@ -174,6 +174,10 @@ fn shift_enter_scrolls_the_continuous_structural_diff_and_keeps_live_settings() 
     let first_page = &terminal.output[view_start..];
     assert!(contains(first_page, b"src/"), "the file tree starts the built-in view");
     assert!(
+        contains(first_page, b"c context:0"),
+        "the first structural view starts with zero context"
+    );
+    assert!(
         contains(first_page, b"---") && contains(first_page, b"+++") && contains(first_page, b"b/src/api.rs"),
         "patch headers follow the file tree on the same page"
     );
@@ -219,7 +223,7 @@ fn shift_enter_scrolls_the_continuous_structural_diff_and_keeps_live_settings() 
         "settings persist when reopening the view"
     );
     assert!(
-        contains(&terminal.output[reopened..], b"c context:0"),
+        contains(&terminal.output[reopened..], b"c context:1"),
         "the context key is routed to structural mode and persists when reopening"
     );
     terminal.master.write_all(b"\r")?;

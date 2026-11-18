@@ -847,6 +847,7 @@ impl App {
             worktree_watch_error: None,
             changes_parent: 0,
             structural_diff_options: crate::structural_diff::outline::Options {
+                context: vec![0],
                 find_renames: true,
                 word_diff: true,
                 ..Default::default()

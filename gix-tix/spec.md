@@ -1689,7 +1689,7 @@ views.
   `Home`/`End` move through the complete diff; `h`/`l` pans long lines.
   `Enter`, `q`, or `Escape` returns to Tix with its selection intact.
 - Inside structural mode, `c` toggles context between zero and one unchanged
-  sibling before and after a change at every nesting depth. One is the default.
+  sibling before and after a change at every nesting depth. Zero is the default.
   The footer displays the active value, which persists for later structural
   views in the same invocation. Only unmodified presses toggle it; repeats,
   releases, and modified keys leave it unchanged. Redraw cached outlines and
