@@ -166,9 +166,10 @@ fn late_worktree_demotion_applies_to_local_and_worktree_configuration() -> TestR
             .system_config_path(fixture.join(system_config));
         options.permissions.config.system = true;
         let repo = gix::open_opts(fixture.join("demoted"), options)?;
-        assert!(
-            repo.workdir().is_some_and(|path| path.ends_with("missing")),
-            "{system_config}: the initially trusted config selects the missing checkout"
+        assert_eq!(
+            repo.workdir(),
+            Some(fixture.join("demoted").as_path()),
+            "{system_config}: losing trust in core.worktree restores the inferred checkout"
         );
         assert_eq!(
             repo.git_dir_trust(),
@@ -758,12 +759,13 @@ fn non_bare_split_worktree() -> TestResult {
         assert!(repo.git_dir().is_dir());
         assert!(
             !repo.is_bare(),
-            "worktree is actually configured, and it's non-bare by configuration"
+            "core.bare describes the repository layout even when the checkout is unavailable"
         );
         assert_eq!(repo.kind(), gix::repository::Kind::Common);
         assert_eq!(
-            repo.workdir().expect("worktree is configured").is_dir(),
-            worktree_exists
+            repo.workdir().map(std::path::Path::is_dir),
+            worktree_exists.then_some(true),
+            "{name}: a split Git directory has no inferred checkout if its configured path loses trust"
         );
     }
     Ok(())

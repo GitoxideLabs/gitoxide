@@ -578,11 +578,13 @@ mod into_iter {
         let root = gix_testtools::scripted_fixture_read_only("make_unlisted_gitlinks.sh")?;
         let repo = gix::open_opts(
             root.join("missing-worktree"),
-            gix::open::Options::isolated().config_overrides(["diff.ignoreSubmodules=all"]),
+            gix::open::Options::isolated()
+                .filter_config_section(|_| true)
+                .config_overrides(["diff.ignoreSubmodules=all"]),
         )?;
         assert!(
             !repo.workdir().expect("core.worktree is configured").exists(),
-            "opening a repository permits a missing configured checkout"
+            "an eligible configuration section can select a missing checkout"
         );
         let index = repo.index()?;
         let entry = index.entry_by_path("d".into()).expect("the fixture has a gitlink");

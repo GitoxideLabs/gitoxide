@@ -350,109 +350,118 @@ impl ThreadSafeRepository {
             update_repository_section_trust(&mut resolved.file, *git_dir_trust, is_safe);
         }
 
-        // Git's precedence is: GIT_WORK_TREE, core.bare, core.worktree, inferred worktree.
-        let configured_worktree = resolved
-            .file
-            .raw_value_with_section_filter(Core::WORKTREE, |section| {
-                is_eligible_worktree_config_section(section, &git_dir, current_dir, &mut filter_config_section)
-            })
-            .ok()
-            .map(|(value, section)| (value, section.meta().source));
-        let worktree_from_environment = configured_worktree
-            .as_ref()
-            .is_some_and(|(_, source)| *source == gix_config::Source::EnvOverride);
-        let may_use_configured_worktree = resolved.is_bare == Some(false) || worktree_from_environment;
-
-        if let Some((worktree, source)) = configured_worktree.filter(|_| may_use_configured_worktree) {
-            if worktree.is_empty() {
-                return Err(not_found("path is missing").and_raise(
-                    validation("The path at the 'core.worktree' configuration could not be interpolated")
-                        .with_input(worktree),
-                ));
-            }
-            // Git treats core.worktree as a literal path, without tilde or prefix interpolation.
-            let worktree = gix_path::from_bstr(worktree.as_bstr())?.into_owned();
-            let worktree = match source {
-                gix_config::Source::Env
-                | gix_config::Source::Cli
-                | gix_config::Source::Api
-                | gix_config::Source::EnvOverride => worktree,
-                _ => worktree_dir_from_repository_config(&git_dir, worktree, current_dir),
-            };
-            let keep_worktree_relative = worktree_dir.as_deref().is_some_and(Path::is_relative)
-                && git_dir.is_relative()
-                && worktree.is_relative()
-                && !matches!(
-                    source,
-                    gix_config::Source::Env
-                        | gix_config::Source::Cli
-                        | gix_config::Source::Api
-                        | gix_config::Source::EnvOverride
-                );
-            worktree_dir = if worktree_from_environment {
-                Some(gix_path::normalize_saturating(worktree.into(), current_dir)?.into_owned())
-            } else {
-                gix_path::normalize(worktree.into(), current_dir).map(Cow::into_owned)
-            };
-            // Normalization can consume leading `..` through CWD; preserve a relative inferred checkout's namespace.
-            if keep_worktree_relative && let Some(worktree) = worktree_dir.as_mut() {
-                *worktree = gix_path::relativize_with_prefix(worktree, current_dir).into_owned();
-            }
-            #[allow(unused_variables, reason = "Used when tracing is enabled at compile time.")]
-            if let Some(worktree_path) = worktree_dir.as_deref().filter(|wtd| !wtd.is_dir()) {
-                gix_trace::warn!(
-                    "The configured worktree path \"{}\" is not a directory or doesn't exist - `core.worktree` may be misleading",
-                    worktree_path.display()
-                );
-            }
-            if worktree_from_environment {
-                resolved.is_bare = Some(false);
-            }
-        } else if !lenient_config
-            && resolved.is_bare == Some(false)
-            && resolved
+        let inferred_worktree_dir = worktree_dir;
+        let mut worktree_dir = loop {
+            let mut worktree_dir = inferred_worktree_dir.clone();
+            let mut is_bare = resolved.is_bare;
+            // Git's precedence is: GIT_WORK_TREE, core.bare, core.worktree, inferred worktree.
+            let configured_worktree = resolved
                 .file
-                .boolean_filter(Core::WORKTREE, |section| {
+                .raw_value_with_section_filter(Core::WORKTREE, |section| {
                     is_eligible_worktree_config_section(section, &git_dir, current_dir, &mut filter_config_section)
                 })
-                .or_raise(|| config::key::error(&Core::WORKTREE, "Invalid configuration value"))?
-                .is_some()
-        {
-            bail!(config::key::error(&Core::WORKTREE, "Invalid configuration value"));
-        }
+                .ok()
+                .map(|(value, section)| (value, section.meta().source));
+            let worktree_from_environment = configured_worktree
+                .as_ref()
+                .is_some_and(|(_, source)| *source == gix_config::Source::EnvOverride);
+            let may_use_configured_worktree = is_bare == Some(false) || worktree_from_environment;
 
-        // Without an explicit path, a non-bare `.git` directory implies its parent as worktree.
-        if worktree_dir.is_none()
-            && resolved.is_bare == Some(false)
-            && refs.git_dir().file_name() == Some(OsStr::new(gix_discover::DOT_GIT_DIR))
-        {
-            worktree_dir = Some(git_dir.parent().expect("parent is always available").to_owned());
-        }
-        if resolved.is_bare == Some(true) && !is_linked_worktree {
-            // Linked worktrees may inherit core.bare=true from their common repository.
-            // Other checkouts are suppressed unless the caller is opening a submodule checkout.
-            if retain_inferred_worktree_when_bare {
-                // Preserve the submodule checkout before checking its ownership, not after initialization.
-                if let Some(worktree) = worktree_dir.as_ref() {
-                    _ = std::fs::read_dir(worktree).or_error()?;
+            if let Some((worktree, source)) = configured_worktree.filter(|_| may_use_configured_worktree) {
+                if worktree.is_empty() {
+                    return Err(not_found("path is missing").and_raise(
+                        validation("The path at the 'core.worktree' configuration could not be interpolated")
+                            .with_input(worktree),
+                    ));
                 }
-            } else {
-                worktree_dir = None;
+                // Git treats core.worktree as a literal path, without tilde or prefix interpolation.
+                let worktree = gix_path::from_bstr(worktree.as_bstr())?.into_owned();
+                let worktree = match source {
+                    gix_config::Source::Env
+                    | gix_config::Source::Cli
+                    | gix_config::Source::Api
+                    | gix_config::Source::EnvOverride => worktree,
+                    _ => worktree_dir_from_repository_config(&git_dir, worktree, current_dir),
+                };
+                let keep_worktree_relative = worktree_dir.as_deref().is_some_and(Path::is_relative)
+                    && git_dir.is_relative()
+                    && worktree.is_relative()
+                    && !matches!(
+                        source,
+                        gix_config::Source::Env
+                            | gix_config::Source::Cli
+                            | gix_config::Source::Api
+                            | gix_config::Source::EnvOverride
+                    );
+                worktree_dir = if worktree_from_environment {
+                    Some(gix_path::normalize_saturating(worktree.into(), current_dir)?.into_owned())
+                } else {
+                    gix_path::normalize(worktree.into(), current_dir).map(Cow::into_owned)
+                };
+                // Normalization can consume leading `..` through CWD; preserve a relative inferred checkout's namespace.
+                if keep_worktree_relative && let Some(worktree) = worktree_dir.as_mut() {
+                    *worktree = gix_path::relativize_with_prefix(worktree, current_dir).into_owned();
+                }
+                #[allow(unused_variables, reason = "Used when tracing is enabled at compile time.")]
+                if let Some(worktree_path) = worktree_dir.as_deref().filter(|wtd| !wtd.is_dir()) {
+                    gix_trace::warn!(
+                        "The configured worktree path \"{}\" is not a directory or doesn't exist - `core.worktree` may be misleading",
+                        worktree_path.display()
+                    );
+                }
+                if worktree_from_environment {
+                    is_bare = Some(false);
+                }
+            } else if !lenient_config
+                && is_bare == Some(false)
+                && resolved
+                    .file
+                    .boolean_filter(Core::WORKTREE, |section| {
+                        is_eligible_worktree_config_section(section, &git_dir, current_dir, &mut filter_config_section)
+                    })
+                    .or_raise(|| config::key::error(&Core::WORKTREE, "Invalid configuration value"))?
+                    .is_some()
+            {
+                bail!(config::key::error(&Core::WORKTREE, "Invalid configuration value"));
             }
-        }
 
-        // A configured checkout can differ from the one used to determine initial trust.
-        if *git_dir_trust == Trust::Full
-            && let Some(worktree) = worktree_dir.as_deref()
-            && !gix_sec::identity::is_path_owned_by_current_user(worktree).unwrap_or(false)
-            && let Err(err) = check_safe_directory(worktree)
-        {
-            if bail_if_untrusted {
-                return Err(err);
+            // Without an explicit path, a non-bare `.git` directory implies its parent as worktree.
+            if worktree_dir.is_none()
+                && is_bare == Some(false)
+                && refs.git_dir().file_name() == Some(OsStr::new(gix_discover::DOT_GIT_DIR))
+            {
+                worktree_dir = Some(git_dir.parent().expect("parent is always available").to_owned());
             }
-            *git_dir_trust = Trust::Reduced;
-            update_repository_section_trust(&mut resolved.file, Trust::Reduced, is_safe);
-        }
+            if is_bare == Some(true) && !is_linked_worktree {
+                // Linked worktrees may inherit core.bare=true from their common repository.
+                // Other checkouts are suppressed unless the caller is opening a submodule checkout.
+                if retain_inferred_worktree_when_bare {
+                    // Preserve the submodule checkout before checking its ownership, not after initialization.
+                    if let Some(worktree) = worktree_dir.as_ref() {
+                        _ = std::fs::read_dir(worktree).or_error()?;
+                    }
+                } else {
+                    worktree_dir = None;
+                }
+            }
+
+            // A configured checkout can differ from the one used to determine initial trust.
+            if *git_dir_trust == Trust::Full
+                && let Some(worktree) = worktree_dir.as_deref()
+                && !gix_sec::identity::is_path_owned_by_current_user(worktree).unwrap_or(false)
+                && let Err(err) = check_safe_directory(worktree)
+            {
+                if bail_if_untrusted {
+                    return Err(err);
+                }
+                *git_dir_trust = Trust::Reduced;
+                update_repository_section_trust(&mut resolved.file, Trust::Reduced, is_safe);
+                // Consult core.worktree again with the final section trust.
+                continue;
+            }
+            resolved.is_bare = is_bare;
+            break worktree_dir;
+        };
 
         let mut config =
             config::Cache::from_resolved(resolved, filter_config_section, *env, attributes, lenient_config)
