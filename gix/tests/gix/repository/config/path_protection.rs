@@ -37,7 +37,7 @@ fn repository_sources_respect_the_section_filter() -> TestResult {
                 let validate = checkout.validate;
                 let configured = (use_config && value != "invalid").then_some(value == "true");
                 let fallback = if repo.git_dir_trust() == Trust::Full && use_config {
-                    true
+                    gix_fs::Capabilities::default().symlink
                 } else {
                     symlinks_supported
                 };

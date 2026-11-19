@@ -206,8 +206,9 @@ impl crate::Repository {
     /// Return filesystem options as retrieved from the repository configuration.
     ///
     /// When `core.symlinks` has no usable value, try a temporary link in the worktree if
-    /// repository trust is reduced or a custom section filter is in use. If the probe cannot
-    /// inspect or remove the link, use the platform default for symlinks.
+    /// repository trust is reduced or a custom section filter is in use. If the probe is skipped
+    /// or cannot inspect or remove the link, use the platform default. If it cannot create
+    /// the link, report that symlinks are not supported.
     pub fn filesystem_options(&self) -> Result<gix_fs::Capabilities> {
         self.config.fs_capabilities(Some(self))
     }

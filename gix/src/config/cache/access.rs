@@ -325,8 +325,8 @@ impl Cache {
     ///
     /// If the configuration filter leaves no usable `core.symlinks` value, probe only when `probe_worktree`
     /// supplies a repository with a worktree and either its Git directory is not fully trusted or a custom
-    /// configuration section filter is set. If probing fails, use the platform default for symlink support.
-    /// Without a usable setting or a probe, assume symlinks are supported.
+    /// configuration section filter is set. If the probe is skipped or returns an error, use the platform
+    /// default for symlink support. An unsuccessful attempt to create the temporary symlink reports no support.
     pub(crate) fn fs_capabilities(&self, probe_worktree: Option<&crate::Repository>) -> Result<gix_fs::Capabilities> {
         Ok(gix_fs::Capabilities {
             precompose_unicode: self.boolean("core.precomposeUnicode", &Core::PRECOMPOSE_UNICODE, false)?,
@@ -335,14 +335,15 @@ impl Cache {
             symlink: self
                 .boolean_with_filter(&Core::SYMLINKS, self.filter_config_section)?
                 .unwrap_or_else(|| {
-                    let Some(repo) = probe_worktree else { return true };
-                    if repo.git_dir_trust() == gix_sec::Trust::Full && repo.options.filter_config_section.is_none() {
-                        return true;
-                    }
-                    repo.workdir().is_none_or(|dir| {
-                        gix_fs::Capabilities::probe_symlink(&repo.current_dir().join(dir))
-                            .unwrap_or_else(|_| gix_fs::Capabilities::default().symlink)
-                    })
+                    probe_worktree
+                        .filter(|repo| {
+                            repo.git_dir_trust() != gix_sec::Trust::Full || repo.options.filter_config_section.is_some()
+                        })
+                        .and_then(|repo| {
+                            let dir = repo.workdir()?;
+                            gix_fs::Capabilities::probe_symlink(&repo.current_dir().join(dir)).ok()
+                        })
+                        .unwrap_or_else(|| gix_fs::Capabilities::default().symlink)
                 }),
         })
     }
