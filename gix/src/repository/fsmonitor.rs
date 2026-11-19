@@ -135,7 +135,7 @@ impl Repository {
                 None => self.interpolate_path("~"),
             }
         })?;
-        let capabilities = self.filesystem_options()?;
+        let capabilities = self.config.fs_capabilities(None)?;
         Ok(server::Context {
             worktree,
             git_dir,

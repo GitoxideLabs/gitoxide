@@ -4,7 +4,7 @@ mod modules_file {
 
     #[test]
     fn overrides_respect_section_trust_for_every_modules_source() -> TestResult {
-        use gix::submodule::config::Update;
+        use gix::submodule::config::{FetchRecurse, Update};
         use gix_sec::Trust;
 
         let dir = gix_testtools::scripted_fixture_read_only("make_submodule_config_overrides.sh")?;
@@ -49,17 +49,58 @@ mod modules_file {
                         "{source}: {field} uses the same trust policy as update"
                     );
                 }
+                let mut submodules = repo.submodules()?.expect("both modules are listed");
+                let module = submodules.next().expect("s is listed first");
+                assert_eq!(
+                    module.is_active()?,
+                    use_overrides,
+                    "{source}: per-module activation respects the section filter"
+                );
+                assert_eq!(
+                    module.state()?.superproject_configuration,
+                    use_overrides,
+                    "{source}: only an eligible section counts as superproject configuration"
+                );
+                let module = submodules.next().expect("pattern is listed second");
+                assert_eq!(
+                    module.is_active()?,
+                    use_overrides,
+                    "{source}: the activation pathspec respects the section filter"
+                );
+                assert_eq!(
+                    module.fetch_recurse()?,
+                    use_overrides.then_some(FetchRecurse::Always),
+                    "{source}: the fetch recursion fallback respects the section filter"
+                );
             }
             let repo = gix::open_opts(
                 &repo_dir,
-                crate::restricted()
-                    .with_trust(Trust::Reduced)
-                    .config_overrides(["submodule.s.update=!trusted"]),
+                crate::restricted().with_trust(Trust::Reduced).config_overrides([
+                    "submodule.s.update=!trusted",
+                    "submodule.s.url=https://safe.example/s",
+                    "submodule.active=pattern",
+                    "fetch.recurseSubmodules=false",
+                ]),
             )?;
             assert_eq!(
                 repo.modules()?.expect("module exists").update("s".into())?,
                 Some(Update::Command("trusted".into())),
                 "{source}: trusted API overrides remain usable in reduced-trust repositories"
+            );
+            let modules = repo.submodules()?.expect("both modules are listed").collect::<Vec<_>>();
+            assert!(
+                !modules[0].is_active()?,
+                "{source}: the trusted pathspec excludes a submodule with an eligible URL"
+            );
+            assert!(modules[1].is_active()?, "{source}: the trusted pathspec is used");
+            assert_eq!(
+                modules[1].fetch_recurse()?,
+                Some(FetchRecurse::Never),
+                "{source}: the trusted fetch fallback is used"
+            );
+            assert!(
+                modules[0].state()?.superproject_configuration,
+                "{source}: trusted overrides count as superproject configuration"
             );
         }
         Ok(())

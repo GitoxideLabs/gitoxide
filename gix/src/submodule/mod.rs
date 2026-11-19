@@ -54,12 +54,13 @@ impl<'repo> SharedState<'repo> {
         }))
     }
 
-    fn active_state_mut(&self) -> Result<(RefMut<'_, IsActivePlatform>, RefMut<'_, gix_worktree::Stack>)> {
+    fn active_state_mut(&self) -> Result<RefMut<'_, IsActiveState>> {
         let mut state = self.is_active.borrow_mut();
         if state.is_none() {
+            let config = self.repo.trusted_submodule_config()?;
             let platform = self
                 .modules
-                .is_active_platform(&self.repo.config.resolved, self.repo.config.pathspec_defaults()?)?;
+                .is_active_platform(&config, self.repo.config.pathspec_defaults()?)?;
             let index = self.index()?;
             let attributes = self
                 .repo
@@ -69,16 +70,18 @@ impl<'repo> SharedState<'repo> {
                         .adjust_for_bare(self.repo.is_bare()),
                 )?
                 .detach();
-            *state = Some(IsActiveState { platform, attributes });
+            *state = Some(IsActiveState {
+                config,
+                platform,
+                attributes,
+            });
         }
-        Ok(RefMut::map_split(state, |opt| {
-            let state = opt.as_mut().expect("populated above");
-            (&mut state.platform, &mut state.attributes)
-        }))
+        Ok(RefMut::map(state, |opt| opt.as_mut().expect("populated above")))
     }
 }
 
 struct IsActiveState {
+    config: gix_config::File,
     platform: IsActivePlatform,
     attributes: gix_worktree::Stack,
 }
@@ -142,8 +145,11 @@ impl Submodule<'_> {
     pub fn fetch_recurse(&self) -> Result<Option<config::FetchRecurse>> {
         Ok(match self.state.modules.fetch_recurse(self.name())? {
             Some(val) => Some(val),
-            None => crate::config::tree::Fetch::RECURSE_SUBMODULES
-                .try_into_recurse_submodules(self.state.repo.config.resolved.boolean("fetch.recurseSubmodules"))?,
+            None => {
+                let repo = self.state.repo;
+                let key = &crate::config::tree::Fetch::RECURSE_SUBMODULES;
+                key.try_into_recurse_submodules(repo.config.resolved.boolean_filter(key, repo.filter_config_section()))?
+            }
         })
     }
 
@@ -165,17 +171,17 @@ impl Submodule<'_> {
     ///
     /// Please see the [plumbing crate documentation](gix_submodule::IsActivePlatform::is_active()) for details.
     pub fn is_active(&self) -> Result<bool> {
-        let (mut platform, mut attributes) = self.state.active_state_mut()?;
-        let is_active = platform.is_active(
-            &self.state.repo.config.resolved,
-            self.name.as_ref(),
-            &mut |relative_path, case, is_dir, out| {
-                attributes
-                    .set_case(case)
-                    .at_entry(relative_path, Some(is_dir_to_mode(is_dir)), &self.state.repo.objects)
-                    .is_ok_and(|platform| platform.matching_attributes(out))
-            },
-        )?;
+        let IsActiveState {
+            config,
+            platform,
+            attributes,
+        } = &mut *self.state.active_state_mut()?;
+        let is_active = platform.is_active(config, self.name.as_ref(), &mut |relative_path, case, is_dir, out| {
+            attributes
+                .set_case(case)
+                .at_entry(relative_path, Some(is_dir_to_mode(is_dir)), &self.state.repo.objects)
+                .is_ok_and(|platform| platform.matching_attributes(out))
+        })?;
         Ok(is_active)
     }
 
@@ -270,12 +276,11 @@ impl Submodule<'_> {
     fn state_inner(&self, validate_gitdir_file_target: bool) -> Result<State> {
         let maybe_old_path = self.git_dir_try_old_form_inner(validate_gitdir_file_target)?;
         let worktree_git = self.worktree_gitdir()?;
-        let superproject_configuration = self
-            .state
-            .repo
+        let repo = self.state.repo;
+        let superproject_configuration = repo
             .config
             .resolved
-            .sections_by_name("submodule")
+            .sections_by_name_and_filter("submodule", repo.filter_config_section())
             .into_iter()
             .flatten()
             .any(|section| section.header().subsection_name() == Some(self.name.as_ref()));
@@ -637,7 +642,7 @@ pub struct State {
     pub is_old_form: bool,
     /// if the worktree is checked out.
     pub worktree_checkout: bool,
-    /// If submodule configuration was found in the superproject's `.git/config` file.
+    /// If submodule configuration was found in an eligible section of the superproject's configuration.
     /// Note that the presence of a single section is enough, independently of the actual values.
     pub superproject_configuration: bool,
 }

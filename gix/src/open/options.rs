@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use super::Options;
-use crate::{Result, ThreadSafeRepository, bstr::BString, config, open::Permissions};
+use crate::{Result, ThreadSafeRepository, bstr::BString, open::Permissions};
 
 impl Default for Options {
     fn default() -> Self {
@@ -234,7 +234,7 @@ impl gix_sec::trust::DefaultForLevel for Options {
                 permissions: Permissions::default_for_level(level),
                 git_dir_trust: gix_sec::Trust::Full.into(),
                 retain_inferred_worktree_when_bare: false,
-                filter_config_section: Some(config::section::is_trusted),
+                filter_config_section: None,
                 lossy_config: false,
                 bail_if_untrusted: false,
                 lenient_config: true,
@@ -251,7 +251,7 @@ impl gix_sec::trust::DefaultForLevel for Options {
                 permissions: Permissions::default_for_level(level),
                 git_dir_trust: gix_sec::Trust::Reduced.into(),
                 retain_inferred_worktree_when_bare: false,
-                filter_config_section: Some(config::section::is_trusted),
+                filter_config_section: None,
                 bail_if_untrusted: false,
                 lenient_config: true,
                 open_path_as_is: false,

@@ -78,5 +78,4 @@ git -C global-ignore status --porcelain=v1 >global-ignore/.git/status-configured
 # Repository opening permits a configured checkout that does not exist yet.
 # Reconstructing the status provider must preserve this state without requiring it to exist.
 cp -R listed-commit missing-worktree
-git -C missing-worktree config diff.ignoreSubmodules all
 git -C missing-worktree config core.worktree ../missing-checkout

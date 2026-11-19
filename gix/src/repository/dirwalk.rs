@@ -14,7 +14,7 @@ impl Repository {
     ///
     /// Used in conjunction with [`dirwalk()`](Self::dirwalk())
     pub fn dirwalk_options(&self) -> Result<dirwalk::Options> {
-        Ok(dirwalk::Options::from_fs_caps(self.filesystem_options()?))
+        Ok(dirwalk::Options::from_fs_caps(self.config.fs_capabilities(None)?))
     }
 
     /// Perform a directory walk configured with `options` under control of the `delegate`. Use `patterns` to
@@ -59,7 +59,7 @@ impl Repository {
 
         let git_dir_realpath =
             crate::path::realpath_opts(self.git_dir(), self.current_dir(), crate::path::realpath::MAX_SYMLINKS)?;
-        let fs_caps = self.filesystem_options()?;
+        let fs_caps = self.config.fs_capabilities(None)?;
         let accelerate_lookup = fs_caps.ignore_case.then(|| index.prepare_icase_backing());
         let mut opts = gix_dir::walk::Options::from(options);
         let worktree_relative_worktree_dirs_storage;

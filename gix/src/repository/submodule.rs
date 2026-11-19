@@ -38,8 +38,6 @@ impl Repository {
     /// so time this method is called a new [modules file](submodule::ModulesSnapshot) will be created.
     ///
     /// Note that git configuration is also contributing to the result based on the current snapshot.
-    ///
-    // TODO(submodule): make it use an updated snapshot instead once we have `config()`.
     pub fn modules(&self) -> Result<Option<submodule::ModulesSnapshot>> {
         match self.modules.recent_snapshot(
             || {
@@ -82,7 +80,16 @@ impl Repository {
     }
 
     fn modules_from_bytes(&self, bytes: &[u8], path: Option<std::path::PathBuf>) -> Result<gix_submodule::File> {
-        let mut overrides = gix_config::File::new(self.config.resolved.meta_owned());
+        gix_submodule::File::from_bytes(bytes, path, &self.trusted_submodule_config()?)
+    }
+
+    /// Copy the `[submodule]` and `[submodule "<name>"]` sections from the superproject's resolved config
+    /// that pass its configured section filter.
+    ///
+    /// This keeps `.gitmodules` overrides and activation checks subject to the same trust policy.
+    /// The returned config does not include values from `.gitmodules` itself.
+    pub(crate) fn trusted_submodule_config(&self) -> Result<gix_config::File> {
+        let mut config = gix_config::File::new(self.config.resolved.meta_owned());
         for section in self
             .config
             .resolved
@@ -90,9 +97,9 @@ impl Repository {
             .into_iter()
             .flatten()
         {
-            overrides.push_section(section.to_owned())?;
+            config.push_section(section.to_owned())?;
         }
-        gix_submodule::File::from_bytes(bytes, path, &overrides)
+        Ok(config)
     }
 
     /// Return the list of available submodules, or `None` if there is no submodule configuration.

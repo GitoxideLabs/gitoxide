@@ -14,6 +14,7 @@ for source in local worktree; do
     fi
     cat >>"$config" <<EOF
 [core]
+  symlinks = $value
   protectHFS = $value
   protectNTFS = $value
   sharedRepository = group
@@ -22,6 +23,13 @@ for source in local worktree; do
 EOF
   done
 done
+
+# A file as the checkout path makes it impossible to create a link there on any platform.
+# Protected configuration selects it while the local core.symlinks setting stays ineligible.
+git init -q unavailable-checkout
+git -C unavailable-checkout config core.symlinks true
+touch unavailable-checkout/.git/checkout-file
+git config --file unavailable-checkout/.git/checkout.config core.worktree checkout-file
 
 # Provide a protected configuration source that tests can opt into while forcing
 # reduced initial trust. The wildcard promotes every dynamically located fixture

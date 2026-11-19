@@ -3,6 +3,7 @@ set -eu -o pipefail
 
 # Repository-local overrides conflict with every supported .gitmodules setting,
 # including a command update that must only be available to trusted sections.
+# The second module uses the superproject's active pathspec and fetch fallback.
 git init worktree
 (cd worktree
   cat >.gitmodules <<EOF
@@ -13,10 +14,18 @@ git init worktree
   ignore = none
   branch = main
   fetchRecurseSubmodules = true
+[submodule "pattern"]
+  path = pattern
+  url = https://safe.example/pattern
 EOF
   cat >>.git/config <<EOF
 
+[fetch]
+  recurseSubmodules = true
+[submodule]
+  active = pattern
 [submodule "s"]
+  active = true
   url = https://override.example/s
   update = !override
   ignore = all

@@ -576,7 +576,10 @@ mod into_iter {
         use gix::status::plumbing::index_as_worktree::traits::SubmoduleStatus;
 
         let root = gix_testtools::scripted_fixture_read_only("make_unlisted_gitlinks.sh")?;
-        let repo = gix::open_opts(root.join("missing-worktree"), gix::open::Options::isolated())?;
+        let repo = gix::open_opts(
+            root.join("missing-worktree"),
+            gix::open::Options::isolated().config_overrides(["diff.ignoreSubmodules=all"]),
+        )?;
         assert!(
             !repo.workdir().expect("core.worktree is configured").exists(),
             "opening a repository permits a missing configured checkout"
@@ -705,6 +708,19 @@ mod into_iter {
         assert!(
             !repo.is_dirty()?,
             "the global ignore setting applies to unlisted gitlinks"
+        );
+        let reduced = || gix::open::Options::isolated().with_trust(gix::sec::Trust::Reduced);
+        assert!(
+            gix::open_opts(root.join("global-ignore"), reduced())?.is_dirty()?,
+            "a reduced-trust ignore setting cannot hide a dirty gitlink"
+        );
+        assert!(
+            !gix::open_opts(
+                root.join("global-ignore"),
+                reduced().config_overrides(["diff.ignoreSubmodules=all"]),
+            )?
+            .is_dirty()?,
+            "an API ignore setting still applies to a reduced-trust repository"
         );
         for modules in ["absent", "listed"] {
             let repo = gix::open_opts(

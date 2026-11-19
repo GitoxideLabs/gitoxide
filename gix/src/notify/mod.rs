@@ -603,7 +603,8 @@ impl Repository {
             }
         }
         let filesystem = self
-            .filesystem_options()
+            .config
+            .fs_capabilities(None)
             .or_raise(|| message("could not read filesystem options"))?;
         for path in options.worktree_filter.iter_mut().flatten() {
             *path = absolute_path(path, self.current_dir(), filesystem.precompose_unicode)?;
@@ -655,7 +656,8 @@ impl Layout {
 
     fn for_options(repo: &Repository, options: &Options) -> Result<Self> {
         let precompose = repo
-            .filesystem_options()
+            .config
+            .fs_capabilities(None)
             .or_raise(|| message("could not read filesystem options"))?
             .precompose_unicode;
         let absolute = |path: &Path| absolute_path(path, repo.current_dir(), precompose);
@@ -1110,7 +1112,8 @@ impl RepositoryMonitor {
             }
         }
         let filesystem = repo
-            .filesystem_options()
+            .config
+            .fs_capabilities(None)
             .or_raise(|| message("could not read filesystem options"))?;
         self.precompose_unicode = filesystem.precompose_unicode;
         self.ignore_case = filesystem.ignore_case;
