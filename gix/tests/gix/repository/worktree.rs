@@ -2718,8 +2718,12 @@ mod with_core_worktree_config {
     }
 
     #[test]
-    fn non_existing_relative() {
-        let repo = repo("relative-nonexisting-worktree");
+    fn non_existing_relative() -> TestResult {
+        let repo = crate::util::named_subrepo_opts(
+            "make_core_worktree_repo.sh",
+            "relative-nonexisting-worktree",
+            crate::restricted().filter_config_section(|_| true),
+        )?;
         assert_eq!(
             count_deleted(repo.git_dir()),
             0,
@@ -2728,9 +2732,9 @@ mod with_core_worktree_config {
 
         assert!(
             !repo.workdir().expect("configured").exists(),
-            "non-existing or invalid worktrees (this one is a file) are taken verbatim and \
-            may lead to errors later - just like in `git` and we explicitly do not try to be smart about it"
+            "an eligible relative core.worktree value may resolve to a missing path"
         );
+        Ok(())
     }
 
     #[test]

@@ -28,7 +28,7 @@ fn discover_with_git_dir_environment_override_uses_it_and_sets_trust() -> TestRe
         fallback.path(),
         Default::default(),
         gix_sec::trust::Mapping {
-            full: crate::restricted(),
+            full: crate::restricted().with_enforced_trust(gix::sec::Trust::Reduced),
             reduced: crate::restricted(),
         },
     )?;
@@ -37,6 +37,11 @@ fn discover_with_git_dir_environment_override_uses_it_and_sets_trust() -> TestRe
         repo.git_dir(),
         overridden.git_dir(),
         "the git-dir from the environment replaces the fallback and opens without panicking on missing trust"
+    );
+    assert_eq!(
+        repo.to_thread_local().git_dir_trust(),
+        gix::sec::Trust::Full,
+        "the environment-selected repository uses its own ownership"
     );
     Ok(())
 }
@@ -81,6 +86,203 @@ fn core_worktree_cli_override_does_not_override_bare() -> TestResult {
         "core.worktree from -c does not override core.bare in Git"
     );
     assert!(repo.is_bare(), "the CLI override leaves the bare repository bare");
+    Ok(())
+}
+
+#[test]
+fn enforced_full_trust_keeps_the_configured_checkout() -> TestResult {
+    use gix::sec::Trust;
+    let fixture = gix_testtools::scripted_fixture_read_only("make_repository_trust.sh")?;
+    let repo = gix::open_opts(
+        fixture.join("demoted"),
+        crate::restricted()
+            .with_enforced_trust(Trust::Full)
+            .bail_if_untrusted(true),
+    )?;
+    assert_eq!(repo.git_dir_trust(), Trust::Full, "the caller decided repository trust");
+    assert_eq!(
+        repo.workdir(),
+        Some(fixture.join("missing").as_path()),
+        "the local checkout setting stays eligible even when ownership cannot be checked"
+    );
+    Ok(())
+}
+
+#[test]
+fn enforced_reduced_trust_survives_safe_directory_and_reload() -> TestResult {
+    use gix::sec::Trust;
+    let fixture = gix_testtools::scripted_fixture_read_only("make_repository_trust.sh")?;
+    let path = fixture.join("promoted");
+    let mut options = crate::restricted()
+        .with_enforced_trust(Trust::Reduced)
+        .system_config_path(fixture.join("trusted-worktrees.config"));
+    options.permissions.config.system = true;
+    let mut repo = gix::open_opts(&path, options)?;
+    assert_eq!(
+        repo.git_dir_trust(),
+        Trust::Reduced,
+        "safe.directory cannot promote enforced trust"
+    );
+    assert_eq!(
+        repo.workdir(),
+        Some(path.as_path()),
+        "the local checkout setting stays ineligible"
+    );
+    assert_eq!(
+        repo.reload()?.git_dir_trust(),
+        Trust::Reduced,
+        "reload retains enforcement"
+    );
+    let err = repo
+        .reload_with(|options| options.bail_if_untrusted(true))
+        .expect_err("strict opening requires full trust");
+    assert!(err.is_permission_denied(), "enforced reduced trust fails a strict open");
+    repo.reload_with(|options| options.with_enforced_trust(None))?;
+    assert_eq!(
+        repo.git_dir_trust(),
+        Trust::Full,
+        "clearing enforcement restores automatic trust"
+    );
+    Ok(())
+}
+
+#[test]
+fn enforced_trust_is_local_to_the_opened_worktree() -> TestResult {
+    use gix::sec::Trust;
+    let fixture = gix_testtools::scripted_fixture_read_only("make_worktree_repo.sh")?;
+    let options = || crate::restricted().with_enforced_trust(Trust::Reduced);
+    let mut main = gix::open_opts(fixture.join("repo"), options())?;
+    let linked = main
+        .worktree_proxy_by_id("wt-a")?
+        .expect("the fixture has a registered worktree")
+        .into_repo()?;
+    assert_eq!(
+        linked.git_dir_trust(),
+        Trust::Full,
+        "a linked checkout determines its own trust"
+    );
+    let linked = gix::open_opts(fixture.join("wt-a"), options())?;
+    assert_eq!(
+        linked.main_repo()?.git_dir_trust(),
+        Trust::Full,
+        "the main checkout determines its own trust"
+    );
+    main.reload_with(|options| options.with_enforced_trust(Trust::Full).bail_if_untrusted(true))?;
+    let err = main
+        .worktree_proxy_by_id("wt-deleted")?
+        .expect("the deleted checkout is still registered")
+        .into_repo_with_possibly_inaccessible_worktree()
+        .expect_err("a strict open must check the other checkout's ownership");
+    assert!(
+        err.is_permission_denied(),
+        "the main checkout's full trust is local to it"
+    );
+    Ok(())
+}
+
+#[test]
+fn safe_directory_promotion_applies_to_worktree_and_namespace() -> TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_repository_trust.sh")?;
+    let mut options = crate::restricted()
+        .with_trust(gix::sec::Trust::Reduced)
+        .system_config_path(fixture.join("trusted-worktrees.config"))
+        .bail_if_untrusted(true);
+    options.permissions.config.system = true;
+    let repo = gix::open_opts(fixture.join("promoted"), options)?;
+    assert_eq!(
+        repo.git_dir_trust(),
+        gix::sec::Trust::Full,
+        "protected configuration approves the discovered checkout"
+    );
+    assert_eq!(
+        repo.workdir()
+            .expect("the approved repository has a checkout")
+            .canonicalize()?,
+        fixture.join("checkout").canonicalize()?,
+        "trust the configured worktree path after approval"
+    );
+    assert_eq!(
+        repo.namespace().map(gix_ref::Namespace::as_bstr),
+        Some("refs/namespaces/local/".into()),
+        "the reference store uses the promoted worktree configuration"
+    );
+    Ok(())
+}
+
+#[test]
+fn safe_directory_matches_the_discovered_checkout_or_bare_git_directory() -> TestResult {
+    use gix::sec::Trust;
+
+    let fixture = gix_testtools::scripted_fixture_read_only("make_repository_trust.sh")?;
+    let options = || {
+        let mut options = crate::restricted()
+            .with_trust(Trust::Reduced)
+            .system_config_path(fixture.join("trusted-git-dirs.config"));
+        options.permissions.config.system = true;
+        options
+    };
+    for name in ["promoted", "declared-bare"] {
+        let path = fixture.join(name);
+        let repo = gix::open_opts(&path, options())?;
+        assert_eq!(
+            repo.git_dir_trust(),
+            Trust::Reduced,
+            "{name}: only the Git directory was approved"
+        );
+        let err = gix::open_opts(&path, options().bail_if_untrusted(true))
+            .expect_err("strict opening requires approval of the discovered checkout");
+        assert!(err.is_permission_denied(), "{name}: an unapproved checkout is unsafe");
+        assert!(
+            err.to_string()
+                .contains(&format!("\"{}\"", path.canonicalize()?.display())),
+            "{name}: the error identifies the discovered checkout"
+        );
+    }
+    let repo = gix::open_opts(fixture.join("bare.git"), options().bail_if_untrusted(true))?;
+    assert_eq!(
+        repo.git_dir_trust(),
+        Trust::Full,
+        "a repository discovered without a checkout can be approved by its Git directory"
+    );
+    Ok(())
+}
+
+#[cfg(not(target_os = "wasi"))]
+#[test]
+fn late_worktree_demotion_applies_to_local_and_worktree_configuration() -> TestResult {
+    use gix::{config::tree::Core, sec::Trust};
+    let fixture = gix_testtools::scripted_fixture_read_only("make_repository_trust.sh")?;
+    for (initial_trust, system_config) in [
+        (Trust::Full, "fallback.config"),
+        (Trust::Reduced, "trusted-worktrees.config"),
+    ] {
+        let mut options = crate::restricted()
+            .with_trust(initial_trust)
+            .strict_config(true)
+            .system_config_path(fixture.join(system_config));
+        options.permissions.config.system = true;
+        let repo = gix::open_opts(fixture.join("demoted"), options)?;
+        assert_eq!(
+            repo.workdir(),
+            Some(fixture.join("demoted").as_path()),
+            "{system_config}: losing trust in core.worktree restores the inferred checkout"
+        );
+        assert_eq!(
+            repo.git_dir_trust(),
+            Trust::Reduced,
+            "{system_config}: failure to verify checkout ownership reduces trust"
+        );
+        assert_eq!(
+            repo.config_snapshot().trusted_program(Core::SSH_COMMAND)?,
+            Some("system-program".into()),
+            "{system_config}: a reduced-trust local section cannot supply a program"
+        );
+        assert_eq!(
+            repo.namespace().map(gix_ref::Namespace::as_bstr),
+            Some("refs/namespaces/system/".into()),
+            "{system_config}: the reference store falls back to the trusted namespace"
+        );
+    }
     Ok(())
 }
 
@@ -529,6 +731,31 @@ fn worktree_of_natively_bare_repo() -> TestResult {
 }
 
 #[test]
+fn worktree_of_bare_repo_with_uppercase_admin_directory() -> TestResult {
+    let (fixture, ()) = gix_testtools::scripted_fixture_read_only_with_post("make_worktree_repo.sh", 1, |fixture| {
+        if let gix_testtools::FixtureState::Uninitialized(path) = fixture {
+            let bare = path.join("natively-bare-repo");
+            // Use an intermediate name so the case change works on case-insensitive filesystems too.
+            std::fs::rename(bare.join("worktrees"), bare.join("worktrees-tmp"))?;
+            std::fs::rename(bare.join("worktrees-tmp"), bare.join("WORKTREES"))?;
+            std::fs::write(
+                path.join("worktree-of-natively-bare-repo/.git"),
+                "gitdir: ../natively-bare-repo/WORKTREES/worktree-of-natively-bare-repo\n",
+            )?;
+        }
+        Ok(())
+    })?;
+    let checkout = fixture.join("worktree-of-natively-bare-repo");
+    let repo = gix::open_opts(&checkout, gix::open::Options::isolated())?;
+    assert_eq!(
+        repo.workdir(),
+        Some(checkout.as_path()),
+        "commondir identifies the linked worktree even if the administrative path uses uppercase WORKTREES"
+    );
+    Ok(())
+}
+
+#[test]
 fn natively_bare_repo_itself_is_common() -> TestResult {
     let repo = named_subrepo_opts(
         "make_worktree_repo.sh",
@@ -628,12 +855,13 @@ fn non_bare_split_worktree() -> TestResult {
         assert!(repo.git_dir().is_dir());
         assert!(
             !repo.is_bare(),
-            "worktree is actually configured, and it's non-bare by configuration"
+            "core.bare describes the repository layout even when the checkout is unavailable"
         );
         assert_eq!(repo.kind(), gix::repository::Kind::Common);
         assert_eq!(
-            repo.workdir().expect("worktree is configured").is_dir(),
-            worktree_exists
+            repo.workdir().map(std::path::Path::is_dir),
+            worktree_exists.then_some(true),
+            "{name}: a split Git directory has no inferred checkout if its configured path loses trust"
         );
     }
     Ok(())

@@ -3,6 +3,7 @@ set -eu -o pipefail
 
 # Bare keys end at the line boundary. Git must reject extra tokens instead of reading them as
 # additional settings, which could otherwise override a URL in untrusted `.gitmodules` content.
+# A continuation at EOF still requires the value's quotes to be closed.
 # Record description, config, exit status, and winning URL as NUL-terminated fields.
 unset GIT_CONFIG_COUNT
 : >baseline.git
@@ -45,3 +46,4 @@ baseline 0 explicit-empty-comment "${module}branch = #comment\n"
 baseline 0 explicit-attached-comment "${module}url = ../good#comment\n"
 baseline 0 explicit-quoted-comment "${module}url = \"../good\";comment\n"
 baseline 0 explicit-continuation "${module}url = ../\\\ngood\n"
+baseline 128 unterminated-quote-at-eof "${module}branch = \"main\\"

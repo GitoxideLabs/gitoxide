@@ -20,9 +20,9 @@ where
 /// How to obtain a submodule's status.
 #[derive(Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub enum Submodule {
-    /// Use the `diff.submoduleIgnore` configuration to determine, or if not set,
-    /// use the submodule's own ['ignore' value](crate::Submodule::ignore) to determine
-    /// which submodules participate in the status query, and to which extent.
+    /// Use an eligible `diff.ignoreSubmodules` setting or fall back to the submodule's own
+    /// [`ignore` value](crate::Submodule::ignore) to determine which submodules participate
+    /// in the status query and to what extent.
     AsConfigured {
         /// If `true`, default `false`, the computation will stop once the first in a ladder operations
         /// ordered from cheap to expensive shows that the submodule is dirty.

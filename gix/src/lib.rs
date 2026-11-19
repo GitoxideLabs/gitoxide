@@ -22,14 +22,19 @@
 //!
 //! ### The Trust Model
 //!
-//! It is very simple - based on the ownership of the repository compared to the user of the current process [Trust](sec::Trust)
-//! is assigned. This can be [overridden](open::Options::with_trust()) as well. Further, git configuration files track their trust level
-//! per section based on and sensitive values like paths to executables or certain values will be skipped if they are from a source
-//! that isn't [fully](sec::Trust::Full) trusted.
+//! By default, `gix` determines the initial [trust level](sec::Trust) by checking whether the repository
+//! is owned by the current user. When opening a repository directly, use [`open::Options::with_trust()`]
+//! to supply a trust level you have already determined. This skips the initial ownership check but still
+//! considers `safe.directory` and the ownership of the final worktree. Pass `None` to use the default.
 //!
-//! That way, data can safely be obtained without risking to execute untrusted executables.
+//! Use [`open::Options::with_enforced_trust()`] only as an I/O optimization when you already know that
+//! the repository and its configured worktree are trustworthy. It sets the final trust level, skipping
+//! repository and worktree ownership checks as well as `safe.directory` approval.
 //!
-//! Note that it's possible to let `gix` act like `git` or `git2` by setting the [open::Options::bail_if_untrusted()] option.
+//! Configuration sections carry their own trust level. Sensitive configuration reads, such as lookups
+//! of executable paths, can filter out untrusted sources without rejecting the repository outright.
+//! To reject repositories whose final trust level is [`Reduced`](sec::Trust::Reduced), set
+//! [`open::Options::bail_if_untrusted()`] to `true`.
 //!
 //! ### The prelude and extensions
 //!

@@ -44,7 +44,7 @@ impl Repository {
         if inherit_ignore_case
             && self
                 .config
-                .fs_capabilities()
+                .fs_capabilities(None)
                 .with_lenient_default(self.config.lenient_config)
                 .or_raise(|| message("Filesystem configuration could not be obtained to learn about case sensitivity"))?
                 .ignore_case

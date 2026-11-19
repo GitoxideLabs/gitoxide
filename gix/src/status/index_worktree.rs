@@ -297,10 +297,11 @@ mod submodule_status {
             };
             let (ignore, check_dirty) = match self.mode {
                 Submodule::AsConfigured { check_dirty } => {
-                    // diff.ignoreSubmodules is the global setting, and if it exists, it overrides the submodule's own ignore setting.
+                    // An eligible diff.ignoreSubmodules setting overrides the submodule's own ignore setting.
                     let global_ignore = repo
-                        .config_snapshot()
-                        .string(config::tree::Diff::IGNORE_SUBMODULES)
+                        .config
+                        .resolved
+                        .string_filter(config::tree::Diff::IGNORE_SUBMODULES, repo.filter_config_section())
                         .map(|value| config::tree::Diff::IGNORE_SUBMODULES.try_into_ignore(value))
                         .transpose()
                         .with_leniency(repo.config.lenient_config)?;

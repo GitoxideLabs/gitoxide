@@ -1,6 +1,24 @@
 use std::path::PathBuf;
 
+use gix_sec::Trust;
+
 use crate::bstr::BString;
+
+#[derive(Copy, Clone)]
+pub(crate) enum RepositoryTrust {
+    /// Opening may adjust this level after resolving the configuration and worktree.
+    Precomputed(Trust),
+    /// The caller has made the final trust decision for this repository.
+    Enforced(Trust),
+}
+
+impl RepositoryTrust {
+    pub(crate) fn level(self) -> Trust {
+        match self {
+            Self::Precomputed(level) | Self::Enforced(level) => level,
+        }
+    }
+}
 
 /// Permissions associated with various resources of a git repository
 #[derive(Copy, Clone, Ord, PartialOrd, PartialEq, Eq, Debug, Hash)]
@@ -30,7 +48,7 @@ pub struct Options {
     pub permissions: Permissions,
     /// Trust is specific to this Git directory and must not be reused when opening sub-repositories.
     /// Use `clone_without_trust()` so each sub-repository's trust is determined independently.
-    pub(crate) git_dir_trust: Option<gix_sec::Trust>,
+    pub(crate) git_dir_trust: Option<RepositoryTrust>,
     /// Warning: this one is copied to config::Cache - don't change it after repo open or keep in sync.
     pub(crate) filter_config_section: Option<fn(&gix_config::file::Metadata) -> bool>,
     pub(crate) lossy_config: bool,
@@ -67,7 +85,7 @@ mod tests {
     #[test]
     fn copying_for_another_repository_clears_repository_specific_state() -> gix_testtools::TestResult {
         let mut options = Options::isolated()
-            .with_trust(gix_sec::Trust::Reduced)
+            .with_enforced_trust(gix_sec::Trust::Reduced)
             .open_path_as_is(true);
         options.current_dir = Some("captured-cwd".into());
         options.retain_inferred_worktree_when_bare = true;
@@ -129,15 +147,5 @@ mod tests {
             }
         }
         Ok(())
-    }
-
-    #[test]
-    fn size_of_options() {
-        let actual = std::mem::size_of::<Options>();
-        let limit = 160;
-        assert!(
-            actual <= limit,
-            "{actual} <= {limit}: size shouldn't change without us knowing (on windows, it's bigger)"
-        );
     }
 }

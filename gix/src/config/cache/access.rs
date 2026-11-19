@@ -132,10 +132,13 @@ impl Cache {
     }
 
     #[cfg(feature = "blob-diff")]
-    pub(crate) fn diff_pipeline_options(&self) -> Result<gix_diff::blob::pipeline::Options> {
+    pub(crate) fn diff_pipeline_options(
+        &self,
+        probe_worktree: Option<&crate::Repository>,
+    ) -> Result<gix_diff::blob::pipeline::Options> {
         Ok(gix_diff::blob::pipeline::Options {
             large_file_threshold_bytes: self.big_file_threshold()?,
-            fs: self.fs_capabilities()?,
+            fs: self.fs_capabilities(probe_worktree)?,
         })
     }
 
@@ -296,12 +299,52 @@ impl Cache {
         res.with_leniency(self.lenient_config)
     }
 
-    pub(crate) fn fs_capabilities(&self) -> Result<gix_fs::Capabilities> {
+    fn boolean(&self, full_key: &str, key: &'static config::tree::keys::Boolean, default: bool) -> Result<bool> {
+        debug_assert_eq!(
+            full_key,
+            key.logical_name(),
+            "BUG: key name and hardcoded name must match"
+        );
+        Ok(self.boolean_with_filter(key, |_| true)?.unwrap_or(default))
+    }
+
+    fn boolean_with_filter(
+        &self,
+        key: &'static config::tree::keys::Boolean,
+        filter: impl FnMut(&gix_config::file::Metadata) -> bool,
+    ) -> Result<Option<bool>> {
+        self.apply_leniency(key.enrich_error(self.resolved.boolean_filter(key, filter)))
+    }
+
+    /// Resolve filesystem capabilities from configuration, optionally probing the worktree for symlink support.
+    ///
+    /// Pass `None` even if a repository is available when the caller does not use `symlink` (for example,
+    /// when it only needs case sensitivity or Unicode normalization), or when it must not write to the
+    /// worktree. The probe creates and removes a temporary symlink. A usable `core.symlinks` setting
+    /// still takes precedence when probing is disabled.
+    ///
+    /// If the configuration filter leaves no usable `core.symlinks` value, probe only when `probe_worktree`
+    /// supplies a repository with a worktree and either its Git directory is not fully trusted or a custom
+    /// configuration section filter is set. If the probe is skipped or returns an error, use the platform
+    /// default for symlink support. An unsuccessful attempt to create the temporary symlink reports no support.
+    pub(crate) fn fs_capabilities(&self, probe_worktree: Option<&crate::Repository>) -> Result<gix_fs::Capabilities> {
         Ok(gix_fs::Capabilities {
-            precompose_unicode: boolean(self, "core.precomposeUnicode", &Core::PRECOMPOSE_UNICODE, false)?,
-            ignore_case: boolean(self, "core.ignoreCase", &Core::IGNORE_CASE, false)?,
-            executable_bit: boolean(self, "core.fileMode", &Core::FILE_MODE, true)?,
-            symlink: boolean(self, "core.symlinks", &Core::SYMLINKS, true)?,
+            precompose_unicode: self.boolean("core.precomposeUnicode", &Core::PRECOMPOSE_UNICODE, false)?,
+            ignore_case: self.boolean("core.ignoreCase", &Core::IGNORE_CASE, false)?,
+            executable_bit: self.boolean("core.fileMode", &Core::FILE_MODE, true)?,
+            symlink: self
+                .boolean_with_filter(&Core::SYMLINKS, self.filter_config_section)?
+                .unwrap_or_else(|| {
+                    probe_worktree
+                        .filter(|repo| {
+                            repo.git_dir_trust() != gix_sec::Trust::Full || repo.options.filter_config_section.is_some()
+                        })
+                        .and_then(|repo| {
+                            let dir = repo.workdir()?;
+                            gix_fs::Capabilities::probe_symlink(&repo.current_dir().join(dir)).ok()
+                        })
+                        .unwrap_or_else(|| gix_fs::Capabilities::default().symlink)
+                }),
         })
     }
 
@@ -309,9 +352,9 @@ impl Cache {
     pub(crate) fn stat_options(&self) -> Result<gix_index::entry::stat::Options> {
         use crate::config::tree::gitoxide;
         Ok(gix_index::entry::stat::Options {
-            trust_ctime: boolean(self, "core.trustCTime", &Core::TRUST_C_TIME, true)?,
-            use_nsec: boolean(self, "gitoxide.core.useNsec", &gitoxide::Core::USE_NSEC, false)?,
-            use_stdev: boolean(self, "gitoxide.core.useStdev", &gitoxide::Core::USE_STDEV, false)?,
+            trust_ctime: self.boolean("core.trustCTime", &Core::TRUST_C_TIME, true)?,
+            use_nsec: self.boolean("gitoxide.core.useNsec", &gitoxide::Core::USE_NSEC, false)?,
+            use_stdev: self.boolean("gitoxide.core.useStdev", &gitoxide::Core::USE_STDEV, false)?,
             check_stat: self
                 .apply_leniency(
                     self.resolved
@@ -368,7 +411,7 @@ impl Cache {
                     .integer_filter("checkout.workers", &mut self.filter_config_section.clone()),
             ),
         )?;
-        let capabilities = self.fs_capabilities()?;
+        let capabilities = repo.filesystem_options()?;
         let filters = {
             let mut filters = gix_filter::Pipeline::new(
                 repo.command_context()?,
@@ -382,8 +425,7 @@ impl Cache {
             }
             filters
         };
-        let filter_process_delay = if boolean(
-            self,
+        let filter_process_delay = if self.boolean(
             "gitoxide.core.filterProcessDelay",
             &gitoxide::Core::FILTER_PROCESS_DELAY,
             true,
@@ -416,12 +458,7 @@ impl Cache {
     #[cfg(feature = "excludes")]
     pub(crate) fn ignore_pattern_parser(&self) -> Result<gix_ignore::search::Ignore> {
         Ok(gix_ignore::search::Ignore {
-            support_precious: boolean(
-                self,
-                "gitoxide.parsePrecious",
-                &config::tree::Gitoxide::PARSE_PRECIOUS,
-                false,
-            )?,
+            support_precious: self.boolean("gitoxide.parsePrecious", &config::tree::Gitoxide::PARSE_PRECIOUS, false)?,
         })
     }
 
@@ -706,15 +743,4 @@ fn trusted_file_path_with_observer(
 
 pub(crate) fn home_dir(environment: crate::open::permissions::Environment) -> Option<PathBuf> {
     gix_path::env::home_dir().and_then(|path| environment.home.check_opt(path))
-}
-
-fn boolean(me: &Cache, full_key: &str, key: &'static config::tree::keys::Boolean, default: bool) -> Result<bool> {
-    debug_assert_eq!(
-        full_key,
-        key.logical_name(),
-        "BUG: key name and hardcoded name must match"
-    );
-    Ok(me
-        .apply_leniency(key.enrich_error(me.resolved.boolean(full_key)))?
-        .unwrap_or(default))
 }

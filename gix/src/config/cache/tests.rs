@@ -8,28 +8,25 @@ use crate::open::Permissions;
 
 fn cache(directory: &Path, permissions: Permissions) -> TestResult<Cache> {
     let branch_name: gix_ref::FullName = "refs/heads/main".try_into()?;
-    Ok(Cache::from_stage_one(
-        StageOne::new(
-            directory,
-            directory,
-            gix_sec::Trust::Full,
-            false,
-            false,
-            crate::config::section::is_trusted,
-        )?,
+    let config = StageOne::new(directory, directory, gix_sec::Trust::Full, false, false)?.resolve(
         directory,
         Some(branch_name.as_ref()),
-        crate::config::section::is_trusted,
         None,
         None,
         None,
         None,
         permissions.env,
-        permissions.attributes,
         permissions.config,
         false,
         &[],
         &[],
+        false,
+    )?;
+    Ok(Cache::from_resolved(
+        config,
+        crate::config::section::is_trusted,
+        permissions.env,
+        permissions.attributes,
         false,
     )?)
 }

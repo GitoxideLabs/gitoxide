@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use super::Options;
-use crate::{Result, ThreadSafeRepository, bstr::BString, config, open::Permissions};
+use super::{Options, RepositoryTrust};
+use crate::{Result, ThreadSafeRepository, bstr::BString, open::Permissions};
 
 impl Default for Options {
     fn default() -> Self {
@@ -142,30 +142,64 @@ impl Options {
         self
     }
 
-    /// Set the trust override of the `.git` directory we are about to open, or clear it with `None`.
+    /// Set the initial trust level for a [direct open][Self::open], or pass `None` to determine it from ownership.
     ///
-    /// This can be set manually to force trust even though otherwise it might
-    /// not be fully trusted, leading to limitations in how configuration files
-    /// are interpreted.
+    /// Supplying a level skips the ownership checks of the repository path before resolving any gitfile,
+    /// the resolved Git directory, its common directory (if separate), and the initially identified worktree
+    /// (if it exists).
     ///
-    /// If no override is set, trust is determined via [`gix_sec::Trust::from_path_ownership()`] for the
-    /// candidate path before resolving a possible gitfile, then lowered as needed by ownership checks of the
-    /// resolved git directory, common directory, and existing worktree. Setting trust explicitly bypasses
-    /// these initial ownership checks when opening, but not when discovering a repository.
+    /// Opening still considers `safe.directory` and the ownership of the final worktree. The final worktree
+    /// can differ because `core.worktree` is read after the initial path is identified and can point to a
+    /// different checkout.
     ///
-    /// # Security Warning
+    /// Only supply [`Full`][gix_sec::Trust::Full] if you trust the repository, since its configuration can
+    /// supply values such as external commands.
     ///
-    /// Use with extreme care and only if it's absolutely known that the repository
-    /// is always controlled by the desired user. This only bypasses the ownership checks described above
-    /// when the [`open()`][Self::open()] method is used, as opposed to discovery. Worktree ownership and
-    /// `safe.directory` are still considered later during opening.
+    /// See [`with_enforced_trust()`][Self::with_enforced_trust()] to set the final trust level.
     pub fn with_trust(mut self, trust: impl Into<Option<gix_sec::Trust>>) -> Self {
-        self.git_dir_trust = trust.into();
+        self.git_dir_trust = trust.into().map(RepositoryTrust::Precomputed);
         self
     }
 
-    /// If true, default false, and if the repository's trust level is not `Full`
-    /// (see [`with_trust()`][Self::with_trust()] for more), then the open operation will fail.
+    /// Enforce `trust` for a [direct open][Self::open], or pass `None` to determine trust from ownership again.
+    ///
+    /// An enforced level skips repository and worktree ownership checks and `safe.directory` approval.
+    /// [Reloading][crate::Repository::reload()] retains it. Discovery, submodules and other worktrees
+    /// determine their own trust. [`bail_if_untrusted(true)`][Self::bail_if_untrusted] rejects an enforced
+    /// [`Reduced`][gix_sec::Trust::Reduced] level.
+    ///
+    /// See [`with_trust()`][Self::with_trust()] to set the initial level while keeping the later trust checks.
+    ///
+    /// # Security
+    ///
+    /// Enforce [`Full`][gix_sec::Trust::Full] only if you already trust the repository, its configuration,
+    /// and its configured checkout. With the default configuration filter, sensitive reads can then use
+    /// repository-local settings that would otherwise be ignored for a repository with reduced trust.
+    ///
+    /// An attacker who controls the repository can influence later operations:
+    ///
+    /// - **Run commands with the caller's privileges.**
+    ///   - Network operations can invoke configured SSH commands, credential helpers, or askpass programs.
+    ///   - Worktree and content operations can invoke clean, smudge, and process filters; diff operations
+    ///     can invoke external diff commands and text converters; merges can invoke external merge drivers.
+    ///   - Operations that request an editor can launch the configured editor. Signing and verification
+    ///     can invoke configured signature programs, and SSH signing can run a command to select the key.
+    /// - **Send repository data to an unintended remote.**
+    ///   - A later push can use a destination from the repository's configuration.
+    /// - **Redirect worktree reads and writes.**
+    ///   - `core.worktree` can point to a different checkout whose ownership is not checked.
+    /// - **Exhaust process memory.**
+    ///   - Processing doctored repository files can consume large amounts of memory and cause an
+    ///     out-of-memory failure. `gix` does not impose an overall memory limit, regardless of trust level.
+    ///
+    /// If you cannot vouch for the repository and checkout, leave trust unspecified so ownership and
+    /// `safe.directory` checks still apply. Use process-level resource limits when handling untrusted input.
+    pub fn with_enforced_trust(mut self, trust: impl Into<Option<gix_sec::Trust>>) -> Self {
+        self.git_dir_trust = trust.into().map(RepositoryTrust::Enforced);
+        self
+    }
+
+    /// Reject repositories with a final trust level of [`Reduced`][gix_sec::Trust::Reduced]. Defaults to `false`.
     ///
     /// Use this to mimic `git`s way of handling untrusted repositories. Note that `gitoxide` solves
     /// this by not using configuration from untrusted sources and by generally being secured against
@@ -221,6 +255,15 @@ impl Options {
         self
     }
 
+    /// Related worktrees can share computed repository trust. A caller's override applies only to the original one.
+    pub(crate) fn clone_for_linked_worktree(&self) -> Self {
+        let mut options = self.clone_with_trust().without_repository_environment_overrides();
+        if matches!(options.git_dir_trust, Some(RepositoryTrust::Enforced(_))) {
+            options.git_dir_trust = None;
+        }
+        options
+    }
+
     pub(crate) fn current_dir_or_empty(&self) -> &std::path::Path {
         self.current_dir.as_deref().unwrap_or(std::path::Path::new(""))
     }
@@ -232,9 +275,9 @@ impl gix_sec::trust::DefaultForLevel for Options {
             gix_sec::Trust::Full => Options {
                 object_store_slots: Default::default(),
                 permissions: Permissions::default_for_level(level),
-                git_dir_trust: gix_sec::Trust::Full.into(),
+                git_dir_trust: Some(RepositoryTrust::Precomputed(level)),
                 retain_inferred_worktree_when_bare: false,
-                filter_config_section: Some(config::section::is_trusted),
+                filter_config_section: None,
                 lossy_config: false,
                 bail_if_untrusted: false,
                 lenient_config: true,
@@ -249,9 +292,9 @@ impl gix_sec::trust::DefaultForLevel for Options {
             gix_sec::Trust::Reduced => Options {
                 object_store_slots: gix_odb::store::init::Slots::Given(32), // limit resource usage
                 permissions: Permissions::default_for_level(level),
-                git_dir_trust: gix_sec::Trust::Reduced.into(),
+                git_dir_trust: Some(RepositoryTrust::Precomputed(level)),
                 retain_inferred_worktree_when_bare: false,
-                filter_config_section: Some(config::section::is_trusted),
+                filter_config_section: None,
                 bail_if_untrusted: false,
                 lenient_config: true,
                 open_path_as_is: false,

@@ -313,7 +313,7 @@ fn config_value(backing: &[u8], i: &mut &[u8], dispatch: &mut dyn FnMut(Event)) 
 /// emit [`Event::ValueNotDone`], the continuation newline, and finally [`Event::ValueDone`].
 /// At the start of each physical value chunk, Git whitespace is emitted as [`Event::Whitespace`]
 /// while the logical value is still empty and outside quotes.
-/// If the value ends with a trailing backslash at EOF, it is emitted as
+/// A trailing backslash outside quotes at EOF is emitted as
 /// [`Event::ValueNotDone`] followed directly by an empty [`Event::ValueDone`].
 /// Otherwise a single [`Event::Value`] is emitted with trailing Git whitespace
 /// trimmed from the logical value.
@@ -348,6 +348,9 @@ fn value(backing: &[u8], i: &mut &[u8], dispatch: &mut dyn FnMut(Event)) -> Pars
             b';' | b'#' if !is_in_quotes => break,
             b'\\' => {
                 let Some((&escaped, after_escape)) = rest.split_first() else {
+                    if is_in_quotes {
+                        return Err(());
+                    }
                     let value = value_start[..value_start.len() - remaining.len()].as_bstr();
                     dispatch(Event::ValueNotDone(Span::new(backing, value)));
                     dispatch(Event::ValueDone(Span::default()));

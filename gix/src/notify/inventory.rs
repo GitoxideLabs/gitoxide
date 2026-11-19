@@ -321,7 +321,8 @@ pub(super) fn worktree_directories_reusing(
         .workdir()
         .ok_or_else(|| message("cannot enumerate a bare worktree").raise())?;
     let caps = repo
-        .filesystem_options()
+        .config
+        .fs_capabilities(None)
         .or_raise(|| message("could not read filesystem options"))?;
     let root = super::absolute_path(root, repo.current_dir(), caps.precompose_unicode)?;
     let root = root.as_path();
@@ -442,7 +443,7 @@ impl Directories {
         {
             self.read_dir_calls = 0;
         }
-        let ignore_case = repo.filesystem_options()?.ignore_case;
+        let ignore_case = repo.config.fs_capabilities(None)?.ignore_case;
         let mut lookup = None;
         let mut excludes = repo.excludes(
             index,

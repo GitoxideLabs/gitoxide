@@ -8,6 +8,38 @@ pub fn repo(name: &str) -> Result<gix::Repository> {
     )?)
 }
 
+#[test]
+fn nul_in_submodule_name_fails_at_git_dir_lookup() -> gix_testtools::TestResult {
+    use gix::bstr::ByteSlice;
+    use gix_validate::submodule::name::Error;
+
+    let fixture = gix_testtools::scripted_fixture_read_only("make_submodule_name_with_nul.sh")?;
+    let repo = gix::open_opts(fixture, gix::open::Options::isolated())?;
+    let module = repo
+        .submodules()?
+        .expect("the fixture has submodules")
+        .next()
+        .expect("one submodule");
+    assert_eq!(
+        module.name(),
+        b"library\0name".as_bstr(),
+        "enumeration preserves the raw name"
+    );
+    assert_eq!(
+        module.url()?.to_bstring(),
+        "../library.git",
+        "lookup uses the name only as a config key"
+    );
+    let err = module
+        .git_dir()
+        .expect_err("the name cannot be used to build a Git directory path");
+    assert!(
+        matches!(err.downcast_any_ref::<Error>(), Some(Error::NulByte)),
+        "Git directory lookup reports the invalid name"
+    );
+    Ok(())
+}
+
 mod url {
     use std::path::{Path, PathBuf};
 
@@ -817,7 +849,7 @@ mod open {
         let repo = named_subrepo_opts(
             "make_submodules.sh",
             "with-submodules",
-            crate::restricted().with_trust(Trust::Reduced),
+            crate::restricted().with_enforced_trust(Trust::Reduced),
         )?;
         assert_eq!(
             repo.git_dir_trust(),
