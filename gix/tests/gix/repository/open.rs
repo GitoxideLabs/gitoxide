@@ -85,6 +85,111 @@ fn core_worktree_cli_override_does_not_override_bare() -> TestResult {
 }
 
 #[test]
+fn safe_directory_promotion_applies_to_worktree_and_namespace() -> TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_repository_trust.sh")?;
+    let mut options = crate::restricted()
+        .with_trust(gix::sec::Trust::Reduced)
+        .system_config_path(fixture.join("trusted-worktrees.config"))
+        .bail_if_untrusted(true);
+    options.permissions.config.system = true;
+    let repo = gix::open_opts(fixture.join("promoted"), options)?;
+    assert_eq!(
+        repo.git_dir_trust(),
+        gix::sec::Trust::Full,
+        "protected configuration approves the discovered checkout"
+    );
+    assert_eq!(
+        repo.workdir()
+            .expect("the approved repository has a checkout")
+            .canonicalize()?,
+        fixture.join("checkout").canonicalize()?,
+        "trust the configured worktree path after approval"
+    );
+    assert_eq!(
+        repo.namespace().map(gix_ref::Namespace::as_bstr),
+        Some("refs/namespaces/local/".into()),
+        "the reference store uses the promoted worktree configuration"
+    );
+    Ok(())
+}
+
+#[test]
+fn safe_directory_matches_the_discovered_checkout_or_bare_git_directory() -> TestResult {
+    use gix::sec::Trust;
+
+    let fixture = gix_testtools::scripted_fixture_read_only("make_repository_trust.sh")?;
+    let options = || {
+        let mut options = crate::restricted()
+            .with_trust(Trust::Reduced)
+            .system_config_path(fixture.join("trusted-git-dirs.config"));
+        options.permissions.config.system = true;
+        options
+    };
+    for name in ["promoted", "declared-bare"] {
+        let path = fixture.join(name);
+        let repo = gix::open_opts(&path, options())?;
+        assert_eq!(
+            repo.git_dir_trust(),
+            Trust::Reduced,
+            "{name}: only the Git directory was approved"
+        );
+        let err = gix::open_opts(&path, options().bail_if_untrusted(true))
+            .expect_err("strict opening requires approval of the discovered checkout");
+        assert!(err.is_permission_denied(), "{name}: an unapproved checkout is unsafe");
+        assert!(
+            err.to_string()
+                .contains(&format!("\"{}\"", path.canonicalize()?.display())),
+            "{name}: the error identifies the discovered checkout"
+        );
+    }
+    let repo = gix::open_opts(fixture.join("bare.git"), options().bail_if_untrusted(true))?;
+    assert_eq!(
+        repo.git_dir_trust(),
+        Trust::Full,
+        "a repository discovered without a checkout can be approved by its Git directory"
+    );
+    Ok(())
+}
+
+#[cfg(not(target_os = "wasi"))]
+#[test]
+fn late_worktree_demotion_applies_to_local_and_worktree_configuration() -> TestResult {
+    use gix::{config::tree::Core, sec::Trust};
+    let fixture = gix_testtools::scripted_fixture_read_only("make_repository_trust.sh")?;
+    for (initial_trust, system_config) in [
+        (Trust::Full, "fallback.config"),
+        (Trust::Reduced, "trusted-worktrees.config"),
+    ] {
+        let mut options = crate::restricted()
+            .with_trust(initial_trust)
+            .strict_config(true)
+            .system_config_path(fixture.join(system_config));
+        options.permissions.config.system = true;
+        let repo = gix::open_opts(fixture.join("demoted"), options)?;
+        assert!(
+            repo.workdir().is_some_and(|path| path.ends_with("missing")),
+            "{system_config}: the initially trusted config selects the missing checkout"
+        );
+        assert_eq!(
+            repo.git_dir_trust(),
+            Trust::Reduced,
+            "{system_config}: failure to verify checkout ownership reduces trust"
+        );
+        assert_eq!(
+            repo.config_snapshot().trusted_program(Core::SSH_COMMAND)?,
+            Some("system-program".into()),
+            "{system_config}: a reduced-trust local section cannot supply a program"
+        );
+        assert_eq!(
+            repo.namespace().map(gix_ref::Namespace::as_bstr),
+            Some("refs/namespaces/system/".into()),
+            "{system_config}: the reference store falls back to the trusted namespace"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn on_root_with_decomposed_unicode() -> TestResult {
     let tmp = gix_testtools::tempfile::TempDir::new()?;
 
@@ -525,6 +630,31 @@ fn worktree_of_natively_bare_repo() -> TestResult {
         "the shared config has core.bare=true, which a linked worktree inherits even though it has a workdir"
     );
     assert_eq!(repo.kind(), gix::repository::Kind::LinkedWorkTree);
+    Ok(())
+}
+
+#[test]
+fn worktree_of_bare_repo_with_uppercase_admin_directory() -> TestResult {
+    let (fixture, ()) = gix_testtools::scripted_fixture_read_only_with_post("make_worktree_repo.sh", 1, |fixture| {
+        if let gix_testtools::FixtureState::Uninitialized(path) = fixture {
+            let bare = path.join("natively-bare-repo");
+            // Use an intermediate name so the case change works on case-insensitive filesystems too.
+            std::fs::rename(bare.join("worktrees"), bare.join("worktrees-tmp"))?;
+            std::fs::rename(bare.join("worktrees-tmp"), bare.join("WORKTREES"))?;
+            std::fs::write(
+                path.join("worktree-of-natively-bare-repo/.git"),
+                "gitdir: ../natively-bare-repo/WORKTREES/worktree-of-natively-bare-repo\n",
+            )?;
+        }
+        Ok(())
+    })?;
+    let checkout = fixture.join("worktree-of-natively-bare-repo");
+    let repo = gix::open_opts(&checkout, gix::open::Options::isolated())?;
+    assert_eq!(
+        repo.workdir(),
+        Some(checkout.as_path()),
+        "commondir identifies the linked worktree even if the administrative path uses uppercase WORKTREES"
+    );
     Ok(())
 }
 

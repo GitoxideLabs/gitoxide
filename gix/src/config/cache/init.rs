@@ -17,11 +17,39 @@ use crate::{
     repository::init::setup_objects,
 };
 
-/// Initialization
-impl Cache {
+/// Configuration resolved through includes and overrides, ready for trust checks before caching values.
+pub(crate) struct Resolved {
+    pub file: gix_config::File,
+    #[cfg(feature = "notify")]
+    pub source_paths: Vec<std::path::PathBuf>,
+    pub is_bare: Option<bool>,
+    pub object_hash: gix_hash::Kind,
+}
+
+impl StageOne {
+    /// Merge the bootstrap repository config with the sources allowed by `config_permissions`,
+    /// resolve includes using `git_dir` and `branch_name` for conditional matching, and apply overrides.
+    /// Keep the bare setting and object hash determined during bootstrap.
+    ///
+    /// This does not filter sections by trust or cache individual values. The caller can finalize
+    /// repository trust and update section metadata before passing the result to [`Cache::from_resolved`].
     #[expect(clippy::too_many_arguments)]
-    pub fn from_stage_one(
-        StageOne {
+    pub fn resolve(
+        self,
+        git_dir: &std::path::Path,
+        branch_name: Option<&gix_ref::FullNameRef>,
+        git_install_dir: Option<&std::path::Path>,
+        home: Option<&std::path::Path>,
+        git_installation_config_path: Option<&std::path::Path>,
+        system_config_path: Option<&std::path::Path>,
+        environment: open::permissions::Environment,
+        config_permissions: open::permissions::Config,
+        lenient_config: bool,
+        api_config_overrides: &[BString],
+        cli_config_overrides: &[BString],
+        use_repository_local_environment: bool,
+    ) -> Result<Resolved> {
+        let StageOne {
             git_dir_config,
             mut buf,
             #[cfg(feature = "notify")]
@@ -31,23 +59,7 @@ impl Cache {
             object_hash,
             reflog: _,
             precompose_unicode: _,
-            protect_windows: _,
-        }: StageOne,
-        git_dir: &std::path::Path,
-        branch_name: Option<&gix_ref::FullNameRef>,
-        filter_config_section: fn(&gix_config::file::Metadata) -> bool,
-        git_install_dir: Option<&std::path::Path>,
-        home: Option<&std::path::Path>,
-        git_installation_config_path: Option<&std::path::Path>,
-        system_config_path: Option<&std::path::Path>,
-        environment: open::permissions::Environment,
-        attributes: open::permissions::Attributes,
-        config_permissions: open::permissions::Config,
-        lenient_config: bool,
-        api_config_overrides: &[BString],
-        cli_config_overrides: &[BString],
-        use_repository_local_environment: bool,
-    ) -> Result<Self> {
+        } = self;
         let config = load(
             Some(git_dir_config),
             &mut buf,
@@ -76,7 +88,31 @@ impl Cache {
             source_paths.sort();
             source_paths.dedup();
         }
+        Ok(Resolved {
+            file: config,
+            #[cfg(feature = "notify")]
+            source_paths,
+            is_bare,
+            object_hash,
+        })
+    }
+}
 
+/// Initialization
+impl Cache {
+    pub fn from_resolved(
+        Resolved {
+            file: config,
+            #[cfg(feature = "notify")]
+            source_paths,
+            is_bare,
+            object_hash,
+        }: Resolved,
+        filter_config_section: fn(&gix_config::file::Metadata) -> bool,
+        environment: open::permissions::Environment,
+        attributes: open::permissions::Attributes,
+        lenient_config: bool,
+    ) -> Result<Self> {
         let hex_len = util::parse_core_abbrev(&config, object_hash).with_leniency(lenient_config)?;
 
         use util::config_bool;
@@ -95,6 +131,9 @@ impl Cache {
         let (static_pack_cache_limit_bytes, pack_cache_bytes, object_cache_bytes, alloc_limit_bytes) =
             util::parse_object_caches(&config, lenient_config, filter_config_section)?;
         let loose_compression = super::access::loose_compression(&config, lenient_config, filter_config_section)?;
+        let shared_repository_permissions =
+            config::file_mut::shared_repository_permissions(&config, filter_config_section)
+                .with_lenient_default(lenient_config)?;
         // NOTE: When adding a new initial cache, consider adjusting `reread_values_and_clear_caches()` as well.
         Ok(Cache {
             resolved: config.into(),
@@ -110,7 +149,7 @@ impl Cache {
             alloc_limit_bytes,
             loose_compression,
             reflog,
-            shared_repository_permissions: gix_fs::SharedPermissions::Umask,
+            shared_repository_permissions,
             refs_namespace,
             is_bare,
             ignore_case,

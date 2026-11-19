@@ -4,14 +4,18 @@ use crate::error::{ErrorExt, bail, message, validation};
 use crate::{
     Result,
     config::{
-        cache::util::{ApplyLeniency, ApplyLeniencyDefaultValue},
-        tree::{Core, Extensions, gitoxide},
+        cache::util::ApplyLeniency,
+        tree::{Core, Extensions},
     },
     repository::FormatVersion,
 };
 
 /// A utility to deal with the cyclic dependency between the ref store and the configuration. The ref-store needs the
 /// object hash kind, and the configuration needs the current branch name to resolve conditional includes with `onbranch`.
+///
+/// Bootstrap settings are read directly from the repository's `config` and, when enabled, `config.worktree`,
+/// without following includes or applying the section trust filter. Even a reduced-trust repository must be
+/// interpreted using its own format and layout settings.
 pub(crate) struct StageOne {
     pub git_dir_config: gix_config::File,
     pub buf: Vec<u8>,
@@ -26,7 +30,6 @@ pub(crate) struct StageOne {
     pub object_hash: gix_hash::Kind,
     pub reflog: Option<gix_ref::store::WriteReflog>,
     pub precompose_unicode: bool,
-    pub protect_windows: bool,
 }
 
 /// Initialization
@@ -37,7 +40,6 @@ impl StageOne {
         git_dir_trust: gix_sec::Trust,
         lossy: bool,
         lenient: bool,
-        mut filter_config_section: fn(&gix_config::file::Metadata) -> bool,
     ) -> Result<Self> {
         let mut buf = Vec::with_capacity(512);
         #[cfg(feature = "notify")]
@@ -99,12 +101,6 @@ impl StageOne {
             .with_leniency(lenient)?
             .unwrap_or_default();
 
-        const IS_WINDOWS: bool = cfg!(windows);
-        let protect_windows = gitoxide::Core::PROTECT_WINDOWS
-            .enrich_error(config.boolean_filter(gitoxide::Core::PROTECT_WINDOWS, &mut filter_config_section))
-            .with_lenient_default_value(lenient, Some(IS_WINDOWS))?
-            .unwrap_or(IS_WINDOWS);
-
         let reflog = util::query_refupdates(&config, lenient)?;
         Ok(StageOne {
             git_dir_config: config,
@@ -116,7 +112,6 @@ impl StageOne {
             object_hash,
             reflog,
             precompose_unicode,
-            protect_windows,
         })
     }
 }
