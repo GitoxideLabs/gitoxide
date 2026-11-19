@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn implicit_values_match_git() -> gix_testtools::TestResult {
+fn value_syntax_matches_git() -> gix_testtools::TestResult {
     let fixture = crate::scripted_fixture_read_only("make_parse_baseline.sh")?;
     let baseline = std::fs::read(fixture.join("baseline.git"))?;
     let baseline = baseline.strip_suffix(b"\0").expect("Git baseline records end in NUL");
