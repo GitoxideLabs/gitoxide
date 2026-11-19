@@ -1,14 +1,21 @@
-use gix_validate::submodule::name::Error;
+use bstr::ByteSlice;
 
 #[test]
-fn valid() {
-    fn validate(name: &str) -> Result<(), Error> {
-        gix_validate::submodule::name(name.into()).map(|_| ())
+fn valid() -> gix_testtools::TestResult {
+    for name in [
+        b"a/./b/..[".as_slice(),
+        b"..a/./b/",
+        br"..a\./b\",
+        "你好".as_bytes(),
+        b"raw-\xff",
+    ] {
+        assert_eq!(
+            gix_validate::submodule::name(name.as_bstr())?,
+            name.as_bstr(),
+            "valid submodule names retain their bytes"
+        );
     }
-
-    for valid_name in ["a/./b/..[", "..a/./b/", r"..a\./b\", "你好"] {
-        validate(valid_name).unwrap_or_else(|err| panic!("{valid_name} should be valid: {err:?}"));
-    }
+    Ok(())
 }
 
 mod invalid {
@@ -33,6 +40,8 @@ mod invalid {
     mktest!(starts_with_parent_component_backslash, br"..\", ParentComponent, @"ParentComponent");
     mktest!(parent_component_in_middle_backslash, br"hi\..\ho", ParentComponent, @"ParentComponent");
     mktest!(ends_with_parent_component_backslash, br"hi\ho\..", ParentComponent, @"ParentComponent");
+
+    mktest!(nul_byte, b"a\0b", NulByte, @"NulByte");
 
     /// Reproducer for GHSA-p3hw-mv63-rf9w: a crafted submodule name can place a harmless `..`
     /// first and a real `../` traversal later, so validators that only inspect the first match
