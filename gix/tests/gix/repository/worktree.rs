@@ -515,6 +515,109 @@ mod add {
     use gix_path::{into_bstr, to_unix_separators_on_windows};
 
     #[test]
+    #[cfg(unix)]
+    fn shared_repository_permissions_match_git_with_shared_linking_files() -> gix_error::TestResult {
+        for umask in [0o022, 0o077] {
+            if gix_testtools::run_with_umask(umask)? {
+                check_shared_repository_permissions()?;
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn check_shared_repository_permissions() -> gix_error::TestResult {
+        use std::{fs, os::unix::fs::PermissionsExt};
+
+        let mode =
+            |path: &std::path::Path| -> std::io::Result<u32> { Ok(fs::metadata(path)?.permissions().mode() & 0o7777) };
+        for (shared, worktree_config) in [("group", false), ("0640", false), ("false", false), ("0640", true)] {
+            let fixture = gix_testtools::scripted_fixture_writable_with_args(
+                "make_shared_repository.sh",
+                [shared, if worktree_config { "worktree" } else { "common" }],
+                gix_testtools::Creation::CopyFromReadOnly,
+            )?;
+            let source = gix::open_opts(fixture.path(), crate::restricted())?;
+            let work_dir = source.workdir().expect("source checkout").to_owned();
+            for attached in [true, false] {
+                let suffix = if attached { "attached" } else { "detached" };
+                let commit_id = source.head_id()?.detach();
+                let head = if attached {
+                    let topic = branch("gix-topic");
+                    source.reference(topic.clone(), commit_id, PreviousValue::MustNotExist, "create topic")?;
+                    gix::worktree::add::Head::Attached(topic)
+                } else {
+                    gix::worktree::add::Head::Detached(commit_id)
+                };
+                let parent = work_dir.join(format!("gix-{suffix}"));
+                let destination = parent.join("worktree");
+                let (created, _) =
+                    source.add_worktree(&destination, head, gix::progress::Discard, &AtomicBool::default())?;
+                gix_testtools::git(
+                    &work_dir,
+                    &format!(
+                        "worktree add {} git-{suffix}/worktree HEAD",
+                        if attached { "-b git-topic" } else { "--detach" }
+                    ),
+                )?;
+                let git_parent = work_dir.join(format!("git-{suffix}"));
+                let git_destination = git_parent.join("worktree");
+                let git_repo = gix::open_opts(&git_destination, crate::restricted())?;
+                for (actual, expected) in [
+                    (source.common_dir().join("worktrees"), git_parent.clone()),
+                    (parent, git_parent),
+                    (destination.clone(), git_destination.clone()),
+                    (created.git_dir().to_owned(), git_repo.git_dir().to_owned()),
+                ] {
+                    assert_eq!(
+                        mode(&actual)?,
+                        mode(&expected)?,
+                        "shared={shared}: worktree directories follow Git's directory policy"
+                    );
+                }
+                for name in ["HEAD", "logs", "logs/HEAD", "index"] {
+                    assert_eq!(
+                        mode(&created.git_dir().join(name))?,
+                        mode(&git_repo.git_dir().join(name))?,
+                        "shared={shared}: {name} follows Git's metadata policy"
+                    );
+                }
+                if worktree_config {
+                    assert_eq!(
+                        mode(&created.git_dir().join("config.worktree"))?,
+                        mode(&git_repo.git_dir().join("config.worktree"))?,
+                        "copied worktree configuration uses the source repository's sharing policy"
+                    );
+                }
+                for path in [
+                    destination.join(".git"),
+                    created.git_dir().join("gitdir"),
+                    created.git_dir().join("commondir"),
+                ] {
+                    assert_eq!(
+                        mode(&path)?,
+                        mode(&git_repo.git_dir().join("HEAD"))?,
+                        "shared={shared}: linking files deliberately use the repository metadata policy"
+                    );
+                }
+                for name in ["this", "some-with-file"] {
+                    assert_eq!(
+                        mode(&destination.join(name))?,
+                        mode(&git_destination.join(name))?,
+                        "shared={shared}: checked-out {name} retains Git's ordinary filesystem permissions"
+                    );
+                }
+                assert_eq!(
+                    gix_testtools::git(&destination, "status --porcelain")?,
+                    "",
+                    "permissions do not change checkout contents"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn initial_head_reflog_respects_configuration_like_git() -> gix_testtools::TestResult {
         for (log_all_ref_updates, worktree_config) in [
             (None, false),

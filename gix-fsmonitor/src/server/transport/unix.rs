@@ -51,17 +51,22 @@ impl Listener {
     pub fn bind(path: &Path) -> io::Result<Self> {
         // Git uses a temporary create-new <socket>.lock while probing and binding. Sharing
         // that protocol prevents concurrent native/Git starts from stealing each other's socket.
-        let lock = gix_lock::Marker::acquire_to_hold_resource(path, Duration::from_millis(100).into(), None, 0)
-            .map_err(|error| {
-                let kind = if error.is_retryable() {
-                    io::ErrorKind::WouldBlock
-                } else {
-                    error
-                        .downcast_any_ref::<io::Error>()
-                        .map_or(io::ErrorKind::Other, io::Error::kind)
-                };
-                io::Error::new(kind, error)
-            })?;
+        let lock = gix_lock::Marker::acquire_to_hold_resource(
+            path,
+            Duration::from_millis(100).into(),
+            None,
+            Default::default(),
+        )
+        .map_err(|error| {
+            let kind = if error.is_retryable() {
+                io::ErrorKind::WouldBlock
+            } else {
+                error
+                    .downcast_any_ref::<io::Error>()
+                    .map_or(io::ErrorKind::Other, io::Error::kind)
+            };
+            io::Error::new(kind, error)
+        })?;
         match connect(path) {
             Ok(_) => {
                 return Err(io::Error::new(
@@ -407,7 +412,7 @@ mod tests {
         }
         let dir = gix_testtools::tempfile::tempdir()?;
         let path = dir.path().join("socket");
-        let lock = gix_lock::Marker::acquire_to_hold_resource(&path, Default::default(), None, 0)?;
+        let lock = gix_lock::Marker::acquire_to_hold_resource(&path, Default::default(), None, Default::default())?;
         let lock_path = lock.lock_path().to_owned();
         assert!(
             matches!(Listener::bind(&path), Err(error) if error.kind() == io::ErrorKind::WouldBlock),

@@ -323,6 +323,8 @@ without trading responsiveness for metadata that is not visible.
   inside the current worktree's Git metadata. Bare opt-in needs no output file.
   A path-placement conflict can have only stage-zero entries. Its saved operation
   is ready to continue with the provisional placement or with staged changes.
+  On Unix, the provisional index is written with the repository's
+  `core.sharedRepository` policy.
   `=CONTINUE` additionally creates a new export file; `=-` explicitly writes the
   todo to stdout. Optional filenames require `=` and never consume a positional
   input file. Export errors prevent materialization. Materialization exits

@@ -23,6 +23,9 @@ pub struct Options {
     /// Defaults to [`Compression::BEST_SPEED`](gix_zlib::Compression::BEST_SPEED), which is
     /// also what `git` uses unless configured otherwise with `core.looseCompression` or `core.compression`.
     pub loose_compression: gix_zlib::Compression,
+    /// The parsed `core.sharedRepository` policy for loose objects written by new handles.
+    /// Defaults to [`gix_fs::SharedPermissions::Umask`].
+    pub shared_repository_permissions: gix_fs::SharedPermissions,
 }
 
 impl Default for Options {
@@ -33,6 +36,7 @@ impl Default for Options {
             alloc_limit_bytes: None,
             current_dir: None,
             loose_compression: gix_zlib::Compression::BEST_SPEED,
+            shared_repository_permissions: gix_fs::SharedPermissions::Umask,
         }
     }
 }
@@ -85,6 +89,7 @@ impl Store {
             alloc_limit_bytes,
             current_dir,
             loose_compression,
+            shared_repository_permissions,
         }: Options,
     ) -> std::io::Result<Self> {
         let _span = gix_trace::detail!("gix_odb::Store::at()");
@@ -144,6 +149,7 @@ impl Store {
             object_hash,
             alloc_limit_bytes,
             loose_compression,
+            shared_repository_permissions,
             num_handles_stable: Default::default(),
             num_handles_unstable: Default::default(),
             num_disk_state_consolidation: Default::default(),

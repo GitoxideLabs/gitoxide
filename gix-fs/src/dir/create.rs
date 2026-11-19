@@ -1,6 +1,8 @@
 //!
 use std::path::Path;
 
+use crate::SharedPermissions;
+
 /// The amount of retries to do during various aspects of the directory creation.
 /// A zero budget allows the initial attempt but no retries for that failure.
 #[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq)]
@@ -99,15 +101,14 @@ pub struct Iter<'a> {
     retries: Retries,
     original_retries: Retries,
     state: State,
-    shared_repository_permissions: i32,
+    shared_repository_permissions: SharedPermissions,
 }
 
 /// Construction
 impl<'a> Iter<'a> {
     /// Create a new instance that creates `target` when iterated with the default amount of [`Retries`].
-    /// Apply Git's parsed sharing policy to newly created directories; `0` keeps the umask permissions.
-    /// See [`crate::set_shared_repository_permissions()`] for the encoding.
-    pub fn new(target: &'a Path, shared_repository_permissions: i32) -> Self {
+    /// Apply Git's sharing policy to newly created directories.
+    pub fn new(target: &'a Path, shared_repository_permissions: SharedPermissions) -> Self {
         Iter {
             cursors: vec![target],
             original_retries: Retries::default(),
@@ -213,12 +214,11 @@ impl<'a> Iterator for Iter<'a> {
 
 /// Create all directories leading to `dir` including `dir` itself with the specified amount of `retries`.
 ///
-/// Apply Git's parsed sharing policy to each newly created directory, or pass `0` to keep the umask permissions.
+/// Apply Git's sharing policy to each newly created directory.
 /// Existing directories, including ancestors, retain their permissions.
-/// See [`crate::set_shared_repository_permissions()`] for the policy encoding.
 ///
 /// Returns the input `dir` on success to make it useful in expressions.
-pub fn all(dir: &Path, retries: Retries, shared_repository_permissions: i32) -> std::io::Result<&Path> {
+pub fn all(dir: &Path, retries: Retries, shared_repository_permissions: SharedPermissions) -> std::io::Result<&Path> {
     let iter = Iter::new(dir, shared_repository_permissions).retries(retries);
     for res in iter {
         match res {

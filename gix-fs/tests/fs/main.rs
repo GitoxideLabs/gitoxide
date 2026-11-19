@@ -1,3 +1,4 @@
+use gix_fs::SharedPermissions;
 use gix_testtools::TestResult;
 
 mod capabilities;
@@ -14,7 +15,7 @@ mod walkdir;
 fn default_sharing_policy_does_not_access_the_path() -> TestResult {
     let dir = tempfile::tempdir()?;
     let missing = dir.path().join("missing/file");
-    gix_fs::set_shared_repository_permissions(&missing, 0)?;
+    gix_fs::set_shared_repository_permissions(&missing, SharedPermissions::default())?;
     assert!(
         !missing.exists(),
         "the default sharing policy performs no filesystem access"
@@ -31,20 +32,20 @@ fn shared_repository_permissions_preserve_readonly_and_apply_explicit_modes() ->
     let file = dir.path().join("file");
     fs::write(&file, b"contents")?;
     fs::set_permissions(&file, fs::Permissions::from_mode(0o600))?;
-    gix_fs::set_shared_repository_permissions(&file, 0o660)?;
+    gix_fs::set_shared_repository_permissions(&file, SharedPermissions::Group)?;
     assert_eq!(
         fs::metadata(&file)?.permissions().mode() & 0o777,
         0o660,
-        "a positive policy adds permission bits"
+        "group sharing adds permission bits"
     );
-    gix_fs::set_shared_repository_permissions(&file, -0o640)?;
+    gix_fs::set_shared_repository_permissions(&file, SharedPermissions::Explicit(0o640))?;
     assert_eq!(
         fs::metadata(&file)?.permissions().mode() & 0o777,
         0o640,
         "an explicit policy can remove permission bits"
     );
     fs::set_permissions(&file, fs::Permissions::from_mode(0o444))?;
-    gix_fs::set_shared_repository_permissions(&file, 0o660)?;
+    gix_fs::set_shared_repository_permissions(&file, SharedPermissions::Group)?;
     assert_eq!(
         fs::metadata(&file)?.permissions().mode() & 0o777,
         0o444,
@@ -56,6 +57,7 @@ fn shared_repository_permissions_preserve_readonly_and_apply_explicit_modes() ->
 #[test]
 #[cfg(unix)]
 fn shared_repository_permissions_are_applied_after_the_umask() {
+    use gix_fs::SharedPermissions::{Everybody, Explicit, Group, Umask};
     use std::os::unix::fs::PermissionsExt;
     let adjust = |mode, shared_repository_permissions| {
         gix_fs::adjust_shared_repository_permissions(
@@ -65,25 +67,30 @@ fn shared_repository_permissions_are_applied_after_the_umask() {
         .mode()
     };
 
-    assert_eq!(adjust(0o640, 0), 0o640, "zero retains the post-umask mode");
-    assert_eq!(adjust(0o600, 0o660), 0o660, "a positive mode adds permissions");
+    assert_eq!(adjust(0o640, Umask), 0o640, "umask retains the post-umask mode");
+    assert_eq!(adjust(0o604, Group), 0o664, "group sharing adds permissions");
     assert_eq!(
-        adjust(0o444, 0o660),
+        adjust(0o604, Explicit(0o660)),
+        0o660,
+        "an explicit group-like mode removes permissions outside the mode"
+    );
+    assert_eq!(
+        adjust(0o444, Group),
         0o444,
         "sharing does not make read-only files writable"
     );
     assert_eq!(
-        adjust(0o700, 0o664),
+        adjust(0o700, Everybody),
         0o775,
         "executable files gain execute bits alongside read bits"
     );
     assert_eq!(
-        adjust(0o1755, -0o640),
+        adjust(0o1755, Explicit(0o2640)),
         0o1750,
-        "a negative mode replaces permission bits, preserves executability and retains unrelated mode bits"
+        "an explicit mode replaces permission bits, preserves executability and leaves special bits alone"
     );
     assert_eq!(
-        adjust(0o040700, 0o660),
+        adjust(0o040700, Group),
         if cfg!(any(target_os = "freebsd", target_os = "openbsd")) {
             0o040770
         } else {

@@ -854,19 +854,22 @@ mod core {
 
     #[test]
     fn shared_repository() -> TestResult {
+        use gix::fs::SharedPermissions::{Everybody, Explicit, Group, Umask};
+
         for (value, expected) in [
-            (None, 0o660),
-            (Some("umask"), 0),
-            (Some("false"), 0),
-            (Some("0"), 0),
-            (Some("group"), 0o660),
-            (Some("true"), 0o660),
-            (Some("1"), 0o660),
-            (Some("all"), 0o664),
-            (Some("world"), 0o664),
-            (Some("everybody"), 0o664),
-            (Some("2"), 0o664),
-            (Some("0640"), -0o640),
+            (None, Group),
+            (Some("umask"), Umask),
+            (Some("false"), Umask),
+            (Some("0"), Umask),
+            (Some("group"), Group),
+            (Some("true"), Group),
+            (Some("1"), Group),
+            (Some("all"), Everybody),
+            (Some("world"), Everybody),
+            (Some("everybody"), Everybody),
+            (Some("2"), Everybody),
+            (Some("0640"), Explicit(0o640)),
+            (Some(" 0660"), Explicit(0o660)),
         ] {
             assert_eq!(
                 Core::SHARED_REPOSITORY.try_into_shared_repository(value)?,

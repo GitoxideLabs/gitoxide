@@ -98,7 +98,7 @@ impl Cache {
             &self.directory,
             gix_lock::acquire::Fail::AfterDurationWithBackoff(Duration::from_mins(6)),
             None,
-            0,
+            Default::default(),
         )
         .or_error()
     }

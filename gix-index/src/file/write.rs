@@ -1,5 +1,6 @@
 use crate::{File, Version, write};
 use gix_error::Result;
+use gix_fs::SharedPermissions;
 
 impl File {
     /// Write the index to `out` with `options`, to be readable by [`File::at()`], returning the version that was actually written
@@ -32,6 +33,7 @@ impl File {
     /// Write ourselves to the path we were read from after acquiring a lock, using `options`.
     ///
     /// The checksum is updated after a successful write, or cleared if [`write::Options::skip_hash`] is set.
+    /// The sharing policy `shared_repository_permissions` applies to the newly written index.
     ///
     /// ### Cache extensions
     ///
@@ -46,14 +48,20 @@ impl File {
     /// A newly constructed index can use [`State::copy_metadata_from()`](crate::State::copy_metadata_from())
     /// with its original state to retain and selectively invalidate both caches before writing with
     /// [`write::Extensions::AllUnconditionally`].
-    pub fn write(&mut self, options: write::Options) -> Result {
+    pub fn write(&mut self, options: write::Options, shared_repository_permissions: SharedPermissions) -> Result {
         use gix_error::{ErrorExt, ResultExt, bail, message};
 
         let _span = gix_trace::detail!("gix_index::File::write()", path = ?self.path);
         let mut lock = std::io::BufWriter::with_capacity(
             64 * 1024,
-            gix_lock::File::acquire_to_update_resource(&self.path, gix_lock::acquire::Fail::Immediately, None, 0)
-                .or_raise(|| message("Could not acquire lock for index file"))?,
+            gix_lock::File::acquire(
+                &self.path,
+                gix_lock::acquire::Fail::Immediately,
+                None,
+                shared_repository_permissions,
+                None,
+            )
+            .or_raise(|| message("Could not acquire lock for index file"))?,
         );
         let (version, digest) = self
             .write_to(&mut lock, options)

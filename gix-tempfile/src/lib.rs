@@ -165,9 +165,8 @@ pub enum ContainingDirectory {
     CreateAllRaceProof {
         /// How often to retry directory creation when other processes interfere.
         retries: gix_fs::dir::create::Retries,
-        /// Git's parsed sharing policy for newly created directories; `0` keeps the umask permissions.
-        /// See [`gix_fs::set_shared_repository_permissions()`] for the encoding.
-        shared_repository_permissions: i32,
+        /// Git's sharing policy for newly created directories.
+        shared_repository_permissions: gix_fs::SharedPermissions,
     },
 }
 
@@ -226,6 +225,16 @@ pub fn new(
     cleanup: AutoRemove,
 ) -> io::Result<Handle<Writable>> {
     Handle::<Writable>::new(containing_directory, directory, cleanup)
+}
+
+/// Like [`new()`], but request `permissions` when creating the file, subject to the process umask.
+pub fn new_with_permissions(
+    containing_directory: impl AsRef<Path>,
+    directory: ContainingDirectory,
+    cleanup: AutoRemove,
+    permissions: std::fs::Permissions,
+) -> io::Result<Handle<Writable>> {
+    Handle::<Writable>::new_with_permissions(containing_directory, directory, cleanup, permissions)
 }
 
 /// A shortcut to [`Handle::<Writable>::at()`] providing a writable temporary file at the given path.

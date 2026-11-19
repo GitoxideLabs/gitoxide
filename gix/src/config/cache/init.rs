@@ -10,7 +10,7 @@ use crate::{
     config,
     config::{
         Cache,
-        cache::util::ApplyLeniency,
+        cache::util::{ApplyLeniency, ApplyLeniencyDefault},
         tree::{Author, Committer, Core, Gitoxide, Http, Init, Notes, gitoxide},
     },
     open,
@@ -110,6 +110,7 @@ impl Cache {
             alloc_limit_bytes,
             loose_compression,
             reflog,
+            shared_repository_permissions: gix_fs::SharedPermissions::Umask,
             refs_namespace,
             is_bare,
             ignore_case,
@@ -162,17 +163,32 @@ impl Cache {
         )?;
 
         #[cfg(feature = "revision")]
-        {
-            let object_kind_hint = util::disambiguate_hint(config, self.lenient_config)?;
-            self.object_kind_hint = object_kind_hint;
-        }
+        let object_kind_hint = util::disambiguate_hint(config, self.lenient_config)?;
         let reflog = util::query_refupdates(config, self.lenient_config)?;
+        let shared_repository_permissions =
+            config::file_mut::shared_repository_permissions(config, self.filter_config_section)
+                .with_lenient_default(self.lenient_config)?;
         let refs_namespace = util::query_refs_namespace(config, self.lenient_config, self.filter_config_section)?;
+        let object_caches = util::parse_object_caches(config, self.lenient_config, self.filter_config_section)?;
+        let loose_compression =
+            super::access::loose_compression(config, self.lenient_config, self.filter_config_section)?;
 
         self.hex_len = hex_len;
         self.ignore_case = ignore_case;
+        #[cfg(feature = "revision")]
+        {
+            self.object_kind_hint = object_kind_hint;
+        }
         self.reflog = reflog;
+        self.shared_repository_permissions = shared_repository_permissions;
         self.refs_namespace = refs_namespace;
+        (
+            self.static_pack_cache_limit_bytes,
+            self.pack_cache_bytes,
+            self.object_cache_bytes,
+            self.alloc_limit_bytes,
+        ) = object_caches;
+        self.loose_compression = loose_compression;
 
         self.user_agent = Default::default();
         self.personas = Default::default();
@@ -182,15 +198,6 @@ impl Cache {
             self.diff_renames = Default::default();
             self.diff_algorithm = Default::default();
         }
-        (
-            self.static_pack_cache_limit_bytes,
-            self.pack_cache_bytes,
-            self.object_cache_bytes,
-            self.alloc_limit_bytes,
-        ) = util::parse_object_caches(config, self.lenient_config, self.filter_config_section)?;
-        let loose_compression =
-            super::access::loose_compression(config, self.lenient_config, self.filter_config_section)?;
-        self.loose_compression = loose_compression;
         #[cfg(any(feature = "blocking-network-client", feature = "async-network-client"))]
         {
             self.url_scheme = Default::default();
@@ -423,6 +430,8 @@ impl crate::Repository {
 
     fn apply_changed_values(&mut self) {
         self.refs.write_reflog = util::reflog_or_default(self.config.reflog, self.workdir().is_some());
+        self.refs.shared_repository_permissions = self.config.shared_repository_permissions;
+        self.objects.shared_repository_permissions = self.config.shared_repository_permissions;
         self.refs.namespace.clone_from(&self.config.refs_namespace);
     }
 }

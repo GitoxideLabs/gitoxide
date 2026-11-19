@@ -11,7 +11,7 @@ mod mark_path {
             &target,
             ContainingDirectory::CreateAllRaceProof {
                 retries: Default::default(),
-                shared_repository_permissions: 0,
+                shared_repository_permissions: gix_fs::SharedPermissions::Umask,
             },
             AutoRemove::TempfileAndEmptyParentDirectoriesUntil {
                 boundary_directory: dir.path().into(),
@@ -47,7 +47,7 @@ mod mark_path {
             &filename,
             ContainingDirectory::CreateAllRaceProof {
                 retries: Default::default(),
-                shared_repository_permissions: 0,
+                shared_repository_permissions: gix_fs::SharedPermissions::Umask,
             },
             AutoRemove::TempfileAndEmptyParentDirectoriesUntil {
                 boundary_directory: dir.path().into(),
@@ -79,7 +79,7 @@ mod at_path {
             &target,
             ContainingDirectory::CreateAllRaceProof {
                 retries: Default::default(),
-                shared_repository_permissions: 0,
+                shared_repository_permissions: gix_fs::SharedPermissions::Umask,
             },
             AutoRemove::TempfileAndEmptyParentDirectoriesUntil {
                 boundary_directory: dir.path().into(),
@@ -115,7 +115,7 @@ mod at_path {
             &target,
             ContainingDirectory::CreateAllRaceProof {
                 retries: Default::default(),
-                shared_repository_permissions: 0,
+                shared_repository_permissions: gix_fs::SharedPermissions::Umask,
             },
             AutoRemove::TempfileAndEmptyParentDirectoriesUntil {
                 boundary_directory: dir.path().into(),
@@ -184,7 +184,7 @@ mod at_path {
             &filename,
             ContainingDirectory::CreateAllRaceProof {
                 retries: Default::default(),
-                shared_repository_permissions: 0,
+                shared_repository_permissions: gix_fs::SharedPermissions::Umask,
             },
             AutoRemove::TempfileAndEmptyParentDirectoriesUntil {
                 boundary_directory: dir.path().into(),
@@ -217,7 +217,7 @@ mod at_path {
                     on_create_directory_failure: 4,
                     on_interrupt: 3,
                 },
-                shared_repository_permissions: 0,
+                shared_repository_permissions: gix_fs::SharedPermissions::Umask,
             },
             AutoRemove::TempfileAndEmptyParentDirectoriesUntil {
                 boundary_directory: dir.path().into(),
@@ -311,7 +311,7 @@ mod new {
                 &containing_dir,
                 ContainingDirectory::CreateAllRaceProof {
                     retries: Default::default(),
-                    shared_repository_permissions: 0,
+                    shared_repository_permissions: gix_fs::SharedPermissions::Umask,
                 },
                 AutoRemove::TempfileAndEmptyParentDirectoriesUntil {
                     boundary_directory: dir.path().into(),

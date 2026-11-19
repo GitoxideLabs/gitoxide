@@ -10,7 +10,7 @@ mod all {
         let dir = tempfile::tempdir()?;
         fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700))?;
         let target = dir.path().join("one/two");
-        create::all(&target, Default::default(), -0o640)?;
+        create::all(&target, Default::default(), gix_fs::SharedPermissions::Explicit(0o640))?;
         assert_eq!(
             fs::metadata(dir.path())?.permissions().mode() & 0o7777,
             0o700,
@@ -27,7 +27,7 @@ mod all {
                 assert_ne!(mode & 0o2000, 0, "shared directories inherit their group on Linux");
             }
         }
-        create::all(&target, Default::default(), 0o660)?;
+        create::all(&target, Default::default(), gix_fs::SharedPermissions::Group)?;
         assert_eq!(
             fs::metadata(target)?.permissions().mode() & 0o777,
             0o750,
@@ -46,13 +46,13 @@ mod all {
             on_interrupt: 0,
         };
         assert_eq!(
-            create::all(&target, retries, 0)?,
+            create::all(&target, retries, Default::default())?,
             target,
             "creating a single directory needs no retries"
         );
         assert!(target.is_dir(), "the destination was created");
         assert_eq!(
-            create::all(&target, retries, 0)?,
+            create::all(&target, retries, Default::default())?,
             target,
             "an existing directory needs no retries"
         );
@@ -68,7 +68,8 @@ mod all {
                 on_create_directory_failure,
                 ..Default::default()
             };
-            let failure = create::all(&target, retries, 0).expect_err("a single attempt cannot create missing parents");
+            let failure = create::all(&target, retries, Default::default())
+                .expect_err("a single attempt cannot create missing parents");
             assert_eq!(
                 failure.kind(),
                 std::io::ErrorKind::NotFound,
@@ -88,8 +89,8 @@ mod all {
         let file = dir.path().join("file");
         std::fs::write(&file, b"keep")?;
         for target in [file.clone(), file.join("child")] {
-            let failure =
-                create::all(&target, Default::default(), 0).expect_err("a file cannot be used as a directory");
+            let failure = create::all(&target, Default::default(), Default::default())
+                .expect_err("a file cannot be used as a directory");
             assert_eq!(
                 failure.kind(),
                 std::io::ErrorKind::NotADirectory,
@@ -104,7 +105,7 @@ mod all {
     fn a_deeply_nested_directory() -> TestResult {
         let dir = tempfile::tempdir()?;
         let target = &dir.path().join("1").join("2").join("3").join("4").join("5").join("6");
-        let dir = create::all(target, Default::default(), 0)?;
+        let dir = create::all(target, Default::default(), Default::default())?;
         assert_eq!(dir, target, "all subdirectories can be created");
         assert!(target.is_dir(), "the deepest destination was created");
         Ok(())
@@ -122,7 +123,7 @@ mod iter {
     #[test]
     fn an_existing_directory_causes_immediate_success() -> TestResult {
         let dir = tempfile::tempdir()?;
-        let mut it = create::Iter::new(dir.path(), 0);
+        let mut it = create::Iter::new(dir.path(), Default::default());
         let created = it.next().expect("item").expect("success");
         assert_eq!(created, dir.path(), "first iteration is immediately successful");
         assert!(it.next().is_none(), "iterator exhausted afterwards");
@@ -133,7 +134,7 @@ mod iter {
     fn a_single_directory_can_be_created_too() -> TestResult {
         let dir = tempfile::tempdir()?;
         let new_dir = dir.path().join("new");
-        let mut it = create::Iter::new(&new_dir, 0);
+        let mut it = create::Iter::new(&new_dir, Default::default());
         let created = it.next().expect("item").expect("success");
         assert_eq!(created, &new_dir, "first iteration is immediately successful");
         assert!(it.next().is_none(), "iterator exhausted afterwards");
@@ -145,7 +146,7 @@ mod iter {
     fn multiple_intermediate_directories_are_created_automatically() -> TestResult {
         let dir = tempfile::tempdir()?;
         let new_dir = dir.path().join("s1").join("s2").join("new");
-        let mut it = create::Iter::new(&new_dir, 0);
+        let mut it = create::Iter::new(&new_dir, Default::default());
         let failure = it
             .next()
             .expect("the iterator reports its next creation attempt")
@@ -199,7 +200,7 @@ mod iter {
             on_create_directory_failure: 1,
             ..Default::default()
         };
-        let mut it = create::Iter::new(&new_dir, 0).retries(limits);
+        let mut it = create::Iter::new(&new_dir, Default::default()).retries(limits);
         let failure = it
             .next()
             .expect("the iterator reports its next creation attempt")
@@ -241,7 +242,7 @@ mod iter {
         std::fs::write(&new_dir, [42])?;
         assert!(new_dir.is_file());
 
-        let mut it = create::Iter::new(&new_dir, 0);
+        let mut it = create::Iter::new(&new_dir, Default::default());
         let failure = it
             .next()
             .expect("the iterator reports its next creation attempt")
@@ -284,7 +285,7 @@ mod iter {
             on_create_directory_failure: 2,
             on_interrupt: 0,
         };
-        let mut it = create::Iter::new(&new_dir, 0).retries(limits);
+        let mut it = create::Iter::new(&new_dir, Default::default()).retries(limits);
         assert!(
             matches!(it.nth(1), Some(Ok(dir)) if dir == parent_dir),
             "the initial attempt creates the missing parent"
@@ -305,7 +306,7 @@ mod iter {
         let dir = tempfile::tempdir()?;
         let new_dir = dir.path().join("a").join("new");
         let parent_dir = new_dir.parent().unwrap();
-        let mut it = create::Iter::new(&new_dir, 0).retries(Retries {
+        let mut it = create::Iter::new(&new_dir, Default::default()).retries(Retries {
             to_create_entire_directory: 2,
             on_create_directory_failure: 2,
             ..Default::default()
@@ -362,7 +363,7 @@ mod iter {
         let dir = tempfile::tempdir()?;
         let new_dir = dir.path().join("a").join("new");
         let parent_dir = new_dir.parent().unwrap();
-        let mut it = create::Iter::new(&new_dir, 0);
+        let mut it = create::Iter::new(&new_dir, Default::default());
 
         let failure = it
             .next()

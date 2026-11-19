@@ -24,7 +24,10 @@ fn copies_sparse_patterns_from_the_source_private_git_directory() -> gix_testtoo
             common_dir: &common_dir,
             git_dir: Some(&source_git_dir),
         },
-        Default::default(),
+        gix_worktree::add::Options {
+            shared_repository_permissions: gix_fs::SharedPermissions::Explicit(0o640),
+            ..Default::default()
+        },
     )?;
 
     assert_eq!(
@@ -32,11 +35,37 @@ fn copies_sparse_patterns_from_the_source_private_git_directory() -> gix_testtoo
         patterns,
         "private patterns are copied verbatim, not read from the common directory or interpreted"
     );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        for (name, mode) in [("info", 0o750), ("info/sparse-checkout", 0o640)] {
+            assert_eq!(
+                fs::metadata(prepared.git_dir().join(name))?.permissions().mode() & 0o777,
+                mode,
+                "copied sparse-checkout metadata at {name} follows the sharing policy"
+            );
+        }
+    }
     assert!(
         !prepared.git_dir().join("index").exists(),
         "preparation does not create an index"
     );
 
+    Ok(())
+}
+
+#[test]
+fn creates_deep_destination_parents() -> gix_testtools::TestResult {
+    let tmp = tempdir()?;
+    let common_dir = tmp.path().join("repo.git");
+    fs::create_dir(&common_dir)?;
+    let destination = tmp.path().join("d/".repeat(30)).join("worktree");
+    let prepared = gix_worktree::add::prepare(&destination, Context::new(&common_dir), Default::default())?;
+    assert!(
+        prepared.work_dir().join(".git").is_file(),
+        "all missing parents are created"
+    );
     Ok(())
 }
 
@@ -161,6 +190,58 @@ fn invalid_source_sparse_pattern_file_rolls_back_new_and_caller_owned_destinatio
             "caller_owned={caller_owned}: only the source registration remains after rollback"
         );
     }
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn shared_permissions_include_linking_files_but_preserve_existing_directories() -> crate::Result {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempdir()?;
+    let common_dir = tmp.path().join("repo.git");
+    fs::create_dir(&common_dir)?;
+    fs::set_permissions(&common_dir, fs::Permissions::from_mode(0o700))?;
+    let options = gix_worktree::add::Options {
+        shared_repository_permissions: gix_fs::SharedPermissions::Explicit(0o640),
+        ..Default::default()
+    };
+    let destination = tmp.path().join("parent/worktree");
+    let prepared = gix_worktree::add::prepare(&destination, Context::new(&common_dir), options)?;
+    for path in [
+        destination.join(".git"),
+        prepared.git_dir().join("gitdir"),
+        prepared.git_dir().join("commondir"),
+        prepared.git_dir().join("locked"),
+    ] {
+        assert_eq!(
+            fs::metadata(path)?.permissions().mode() & 0o777,
+            0o640,
+            "all linking files follow the explicit sharing policy"
+        );
+    }
+    for path in [tmp.path().join("parent"), destination, common_dir.join("worktrees")] {
+        assert_eq!(
+            fs::metadata(path)?.permissions().mode() & 0o777,
+            0o750,
+            "new directories include search permissions"
+        );
+    }
+    assert_eq!(
+        fs::metadata(&common_dir)?.permissions().mode() & 0o777,
+        0o700,
+        "existing repository permissions are unchanged"
+    );
+    let existing = tmp.path().join("existing");
+    fs::create_dir(&existing)?;
+    fs::set_permissions(&existing, fs::Permissions::from_mode(0o700))?;
+    let prepared = gix_worktree::add::prepare(&existing, Context::new(&common_dir), options)?;
+    prepared.rollback()?;
+    assert_eq!(
+        fs::metadata(existing)?.permissions().mode() & 0o777,
+        0o700,
+        "a caller-owned destination retains its mode after rollback"
+    );
     Ok(())
 }
 
@@ -386,7 +467,10 @@ fn linking_paths_preserve_backslashes_in_unix_filenames() -> gix_testtools::Test
         let prepared = gix_worktree::add::prepare(
             &work_dir,
             Context::new(&common_dir),
-            gix_worktree::add::Options { relative_paths },
+            gix_worktree::add::Options {
+                relative_paths,
+                ..Default::default()
+            },
         )?;
         let dot_git = prepared.work_dir().join(".git");
         let git_dir = gix_discover::path::from_gitdir_file(&dot_git)?;

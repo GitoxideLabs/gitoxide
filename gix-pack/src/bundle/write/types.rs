@@ -24,6 +24,11 @@ pub struct Options {
     /// these with the same level it uses for loose objects, which is `core.looseCompression` or
     /// `core.compression`, or level 1 if neither is set.
     pub compression: gix_zlib::Compression,
+    /// The parsed `core.sharedRepository` policy for the pack and index files and newly created destination directories.
+    ///
+    /// Defaults to [`gix_fs::SharedPermissions::Umask`]. Pack and index files remain read-only;
+    /// `.keep` markers retain Git's private permissions independently of this policy.
+    pub shared_repository_permissions: gix_fs::SharedPermissions,
 }
 
 impl Default for Options {
@@ -35,6 +40,7 @@ impl Default for Options {
             index_version: Default::default(),
             alloc_limit_bytes: None,
             compression: gix_zlib::Compression::BEST_SPEED,
+            shared_repository_permissions: gix_fs::SharedPermissions::Umask,
         }
     }
 }
@@ -57,7 +63,7 @@ pub struct Outcome {
     pub data_path: Option<PathBuf>,
     /// The path to the `.keep` file to prevent collection of the newly written pack until refs are pointing to it.
     /// It might be `None` if the file at `data_path` already existed, indicating that we have received a pack that
-    /// was already present locally.
+    /// was already present locally, or when an existing `.keep` marker belongs to another operation.
     ///
     /// The file is created right before moving the pack data and index data into place (i.e. `data_path` and `index_path`)
     /// and is expected to be removed by the caller when ready.

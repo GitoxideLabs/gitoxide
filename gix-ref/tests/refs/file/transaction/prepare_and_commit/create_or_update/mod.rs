@@ -58,6 +58,197 @@ fn reflog_messages_preserve_bytes() -> Result {
 }
 
 #[test]
+#[cfg(unix)]
+fn shared_reflogs_can_be_appended_by_another_owner() -> TestResult {
+    use std::{
+        fs,
+        os::unix::{fs::MetadataExt, fs::PermissionsExt, process::CommandExt},
+        process::Command,
+    };
+
+    const CHILD_FIXTURE: &str = "GIX_TEST_SHARED_REF_CHILD";
+    const SECOND_USER_ID: u32 = 65534;
+    if let Some(path) = std::env::var_os(CHILD_FIXTURE) {
+        let path = std::path::PathBuf::from(path);
+        let log_path = path.join(".git/logs/HEAD");
+        let metadata = fs::metadata(&log_path)?;
+        assert_eq!(metadata.uid(), 0, "the first user still owns the reflog");
+        assert_eq!(
+            metadata.gid(),
+            SECOND_USER_ID,
+            "the second user can write via the group"
+        );
+        assert_eq!(
+            metadata.mode() & 0o777,
+            0o664,
+            "the reflog has a different mode from the policy"
+        );
+        let err = fs::set_permissions(&log_path, fs::Permissions::from_mode(0o660))
+            .expect_err("the second user can append but cannot chmod this reflog");
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+
+        // The trust exception is local to this command and this disposable ownership test.
+        gix_testtools::git(
+            &path,
+            "-c safe.directory='*' -c core.sharedRepository=0660 reset --soft HEAD~",
+        )?;
+        let commit_id = ObjectId::from_hex(
+            gix_testtools::git(&path, "-c safe.directory='*' rev-parse 'HEAD@{1}'")?
+                .trim()
+                .as_bytes(),
+        )?;
+        let mut store = gix_ref::file::Store::at(path.join(".git"), crate::fixture_hash_kind());
+        store.shared_repository_permissions = gix_fs::SharedPermissions::Explicit(0o660);
+        let before = reflog_lines(&store, "HEAD")?.len();
+        store
+            .transaction()
+            .prepare(
+                [RefEdit::update(
+                    "HEAD".try_into()?,
+                    commit_id,
+                    PreviousValue::MustExist,
+                    "gix update",
+                )],
+                Fail::Immediately,
+                Fail::Immediately,
+            )?
+            .commit(committer().to_ref(&mut TimeBuf::default()))?;
+        assert_eq!(
+            reflog_lines(&store, "HEAD")?.len(),
+            before + 1,
+            "gix appends to the other user's reflog just as Git does"
+        );
+        let metadata = fs::metadata(log_path)?;
+        assert_eq!(metadata.uid(), 0, "appending preserves ownership");
+        assert_eq!(
+            metadata.mode() & 0o777,
+            0o664,
+            "appending succeeds without changing the mode"
+        );
+        return Ok(());
+    }
+
+    let dir = gix_testtools::tempfile::TempDir::new()?;
+    if fs::metadata(dir.path())?.uid() != 0 {
+        eprintln!("skipping second-owner scenario: creating another UID requires root");
+        return Ok(());
+    }
+    drop(dir);
+    let dir = gix_testtools::scripted_fixture_writable("make_shared_ref_repository.sh")?;
+    fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o777))?;
+    // Copying recreates directories without their shared modes; allow the second user to create ref locks.
+    for name in [".git", ".git/refs/heads"] {
+        fs::set_permissions(dir.path().join(name), fs::Permissions::from_mode(0o2777))?;
+    }
+    for name in ["HEAD", "refs/heads/main"] {
+        let path = dir.path().join(".git/logs").join(name);
+        std::os::unix::fs::chown(&path, None, Some(SECOND_USER_ID))?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o664))?;
+    }
+    let thread = std::thread::current();
+    let output = Command::new(std::env::current_exe()?)
+        .args([
+            "--exact",
+            thread.name().expect("libtest names its test threads"),
+            "--nocapture",
+        ])
+        .env(CHILD_FIXTURE, dir.path())
+        .current_dir(dir.path())
+        .uid(SECOND_USER_ID)
+        .gid(SECOND_USER_ID)
+        .output();
+    let output = match output {
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            eprintln!("skipping second-owner scenario: changing UID is unavailable: {err}");
+            return Ok(());
+        }
+        output => output?,
+    };
+    assert!(
+        output.status.success(),
+        "the second user can update shared references: {}\n{}",
+        output.stdout.as_bstr(),
+        output.stderr.as_bstr()
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn shared_permissions_cover_refs_reflogs_and_packed_refs() -> TestResult {
+    use std::{fs, os::unix::fs::PermissionsExt};
+
+    let (_keep, mut store) = empty_store()?;
+    store.shared_repository_permissions = gix_fs::SharedPermissions::Explicit(0o640);
+    let commit_id = ObjectId::empty_blob(crate::fixture_hash_kind());
+    store
+        .transaction()
+        .packed_refs(PackedRefs::DeletionsAndNonSymbolicUpdates(Box::new(EmptyCommit)))
+        .prepare(
+            ["HEAD", "refs/heads/nested/topic", "refs/heads/keep"]
+                .into_iter()
+                .map(|name| {
+                    RefEdit::update(
+                        name.try_into().expect("valid test reference name"),
+                        commit_id,
+                        PreviousValue::MustNotExist,
+                        "initial",
+                    )
+                }),
+            Fail::Immediately,
+            Fail::Immediately,
+        )?
+        .commit(committer().to_ref(&mut TimeBuf::default()))?;
+    for name in [
+        "HEAD",
+        "refs/heads/nested/topic",
+        "logs/HEAD",
+        "logs/refs/heads/nested/topic",
+        "packed-refs",
+    ] {
+        assert_eq!(
+            fs::metadata(store.git_dir().join(name))?.permissions().mode() & 0o777,
+            0o640,
+            "{name} honors the shared permission policy"
+        );
+    }
+    for name in ["refs/heads/nested", "logs/refs/heads/nested"] {
+        assert_eq!(
+            fs::metadata(store.git_dir().join(name))?.permissions().mode() & 0o777,
+            0o750,
+            "new reference and reflog directories provide search access"
+        );
+    }
+
+    store.shared_repository_permissions = gix_fs::SharedPermissions::Explicit(0o660);
+    let next_commit_id = ObjectId::empty_tree(crate::fixture_hash_kind());
+    store
+        .transaction()
+        .prepare(
+            [
+                RefEdit::update("HEAD".try_into()?, next_commit_id, PreviousValue::MustExist, "update"),
+                RefEdit::delete("refs/heads/keep".try_into()?, PreviousValue::MustExist),
+            ],
+            Fail::Immediately,
+            Fail::Immediately,
+        )?
+        .commit(committer().to_ref(&mut TimeBuf::default()))?;
+    for name in ["HEAD", "logs/HEAD", "packed-refs"] {
+        assert_eq!(
+            fs::metadata(store.git_dir().join(name))?.permissions().mode() & 0o777,
+            0o660,
+            "updates to {name} honor the current policy, including existing packed buffers"
+        );
+    }
+    assert_eq!(
+        reflog_lines(&store, "HEAD")?.len(),
+        2,
+        "permission changes preserve existing reflog entries"
+    );
+    Ok(())
+}
+
+#[test]
 fn intermediate_directories_are_removed_on_rollback() -> TestResult {
     for explicit_rollback in [false, true] {
         let (dir, store) = empty_store()?;

@@ -5128,7 +5128,7 @@ fn push_branch(
                     directory.join(gix::path::from_bstr(relative)?),
                     gix::lock::acquire::Fail::Immediately,
                     Some(directory.to_owned()),
-                    0,
+                    Default::default(),
                 )
                 .or_raise(|| message!("cannot push {branch}: could not lock {name}"))?,
             );
@@ -10137,7 +10137,7 @@ mod tests {
                         repository.common_dir().join(&reference),
                         gix::lock::acquire::Fail::Immediately,
                         Some(repository.common_dir().to_owned()),
-                        0,
+                        Default::default(),
                     )
                 })
                 .transpose()?;

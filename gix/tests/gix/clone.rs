@@ -713,6 +713,66 @@ mod blocking_io {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn fetch_and_checkout_honors_shared_repository_permissions() -> TestResult {
+        for umask in [0o022, 0o077] {
+            if gix_testtools::run_with_umask(umask)? {
+                check_clone_permissions(umask)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn check_clone_permissions(umask: u32) -> TestResult {
+        use std::{fs, os::unix::fs::PermissionsExt};
+
+        let source_path = gix_testtools::scripted_fixture_read_only_with_args(
+            "make_shared_repository_clones.sh",
+            [format!("{umask:04o}")],
+        )?;
+        let destinations = gix_testtools::tempfile::Builder::new()
+            .prefix("clone's destinations")
+            .tempdir()?;
+        let mode = |path: &Path| -> std::io::Result<u32> { Ok(fs::metadata(path)?.permissions().mode() & 0o7777) };
+        for shared in ["group", "0640", "false"] {
+            let git_path = source_path.join(format!("git-{shared}"));
+            let destination = destinations.path().join(format!("gix-{shared}"));
+            let mut prepare = gix::clone::PrepareFetch::new(
+                source_path.as_path(),
+                &destination,
+                gix::create::Kind::WithWorktree,
+                Default::default(),
+                restricted().config_overrides([format!("core.sharedRepository={shared}")]),
+            )?;
+            let (mut checkout, _) = prepare.fetch_then_checkout(gix::progress::Discard, &AtomicBool::default())?;
+            let (created, _) = checkout.main_worktree(gix::progress::Discard, &AtomicBool::default())?;
+            for name in [
+                "",
+                "config",
+                "HEAD",
+                "logs",
+                "logs/HEAD",
+                "refs/heads/main",
+                "packed-refs",
+                "index",
+            ] {
+                assert_eq!(
+                    mode(&created.git_dir().join(name))?,
+                    mode(&git_path.join(".git").join(name))?,
+                    "shared={shared}: cloned {name} follows Git's metadata policy"
+                );
+            }
+            assert_eq!(
+                mode(&destination.join("this"))?,
+                mode(&git_path.join("this"))?,
+                "cloned worktree files retain Git's umask-based permissions"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn fetch_and_checkout() -> TestResult {
         if gix_testtools::run_in_isolated_process()? {
             return Ok(());
@@ -733,6 +793,50 @@ mod blocking_io {
         assert_eq!(index.entries().len(), 1, "All entries are known as per HEAD tree");
 
         assure_index_entries_on_disk(&index, repo.workdir().expect("non-bare"))?;
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(all(unix, feature = "sha1", feature = "sha256"))]
+    fn adopting_sha256_preserves_in_memory_sharing_for_clone_writes() -> TestResult {
+        use std::os::unix::fs::PermissionsExt;
+
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let remote = gix_testtools::scripted_fixture_read_only("make_sha256_remote.sh")?.join("remote");
+        let tmp = gix_testtools::tempfile::TempDir::new()?;
+        let mut prepare = gix::clone::PrepareFetch::new(
+            remote,
+            tmp.path(),
+            gix::create::Kind::WithWorktree,
+            gix::create::Options {
+                object_hash: Some(gix::hash::Kind::Sha1),
+                ..Default::default()
+            },
+            restricted(),
+        )?
+        .with_in_memory_config_overrides(["core.sharedRepository=0640"]);
+        let (mut checkout, _) = prepare.fetch_then_checkout(gix::progress::Discard, &AtomicBool::default())?;
+        let (repo, _) = checkout.main_worktree(gix::progress::Discard, &AtomicBool::default())?;
+
+        assert_eq!(
+            repo.object_hash(),
+            gix::hash::Kind::Sha256,
+            "the clone adopted the remote format"
+        );
+        assert_eq!(
+            repo.refs.shared_repository_permissions,
+            gix::fs::SharedPermissions::Explicit(0o640),
+            "the ref store inherits the restored override"
+        );
+        for name in ["packed-refs", "logs/HEAD", "index"] {
+            assert_eq!(
+                repo.git_dir().join(name).metadata()?.permissions().mode() & 0o777,
+                0o640,
+                "{name} honors the in-memory sharing override after the object format changes"
+            );
+        }
         Ok(())
     }
 
@@ -1493,14 +1597,29 @@ mod blocking_io {
         );
 
         let tmp = gix_testtools::tempfile::TempDir::new()?;
-        let (repo, out) = gix::clone::PrepareFetch::new(
+        let mut prepare = gix::clone::PrepareFetch::new(
             remote,
             tmp.path(),
             gix::create::Kind::Bare,
             Default::default(),
-            restricted(),
-        )?
-        .fetch_only(gix::progress::Discard, &AtomicBool::default())?;
+            restricted().config_overrides(["core.sharedRepository=group"]),
+        )?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(tmp.path().join("config"), std::fs::Permissions::from_mode(0o600))?;
+        }
+        let (repo, out) = prepare.fetch_only(gix::progress::Discard, &AtomicBool::default())?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                repo.git_dir().join("config").metadata()?.permissions().mode() & 0o777,
+                0o600,
+                "adopting the remote object format preserves the existing configuration's mode"
+            );
+        }
 
         assert_eq!(
             repo.object_hash(),

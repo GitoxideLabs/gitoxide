@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -eu -o pipefail
 
-# Keep protection settings in each repository-local source so opening can assign
+# Keep protection and sharing settings in each repository-local source so opening can assign
 # reduced trust without changing ownership or writing to the cached fixture.
 for source in local worktree; do
   for value in false true invalid; do
@@ -16,6 +16,7 @@ for source in local worktree; do
 [core]
   protectHFS = $value
   protectNTFS = $value
+  sharedRepository = group
 [gitoxide "core"]
   protectWindows = $value
 EOF

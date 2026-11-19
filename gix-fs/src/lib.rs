@@ -2,7 +2,7 @@
 //!
 //! The stable API covers directory creation and cleanup, permission handling, and clearing Windows read-only attributes:
 //! [`dir::create::Retries`], [`dir::create::all()`], [`dir::remove::empty_upward_until_boundary()`],
-//! [`set_shared_repository_permissions()`], and [`clear_readonly_attribute()`].
+//! [`SharedPermissions`], [`set_shared_repository_permissions()`], and [`clear_readonly_attribute()`].
 //!
 //! All other public APIs require the `unstable` feature and may break in minor releases.
 //! Restrict updates to the same minor series when using them. The `serde` and `walkdir` features also enable `unstable`.
@@ -170,32 +170,48 @@ pub fn current_dir(precompose_unicode: bool) -> std::io::Result<PathBuf> {
     })
 }
 
+/// Git's `core.sharedRepository` policy for permissions on newly created repository data.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SharedPermissions {
+    /// Keep permissions as set by the process umask.
+    #[default]
+    Umask,
+    /// Add owner and group read and write permissions (`0o660`).
+    Group,
+    /// Add owner and group read and write permissions, plus read permission for others (`0o664`).
+    Everybody,
+    /// Replace the nine Unix permission bits with the low nine bits of this mode.
+    Explicit(u32),
+}
+
 /// Adjust `permissions` according to Git's shared-repository permission policy.
 ///
-/// See [`set_shared_repository_permissions()`] for the policy encoding and platform-specific behavior.
+/// See [`set_shared_repository_permissions()`] for platform-specific behavior.
 /// Keep directory file-type bits in `permissions` so search access and setgid can be applied correctly.
 #[gix_macros::unstable(since = "2026-09-01")]
 pub fn adjust_shared_repository_permissions(
     permissions: std::fs::Permissions,
-    shared_repository_permissions: i32,
+    shared_repository_permissions: SharedPermissions,
 ) -> std::fs::Permissions {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if shared_repository_permissions == 0 {
-            return permissions;
-        }
+        let mut tweak = match shared_repository_permissions {
+            SharedPermissions::Umask => return permissions,
+            SharedPermissions::Group => 0o660,
+            SharedPermissions::Everybody => 0o664,
+            SharedPermissions::Explicit(mode) => mode & 0o777,
+        };
         let mut permissions = permissions;
         let mode = permissions.mode();
         // Follow Git's calc_shared_perm() in path.c.
-        let mut tweak = shared_repository_permissions.unsigned_abs();
         if mode & 0o200 == 0 {
             tweak &= !0o222;
         }
         if mode & 0o100 != 0 {
             tweak |= (tweak & 0o444) >> 2;
         }
-        let mut adjusted = if shared_repository_permissions < 0 {
+        let mut adjusted = if matches!(shared_repository_permissions, SharedPermissions::Explicit(_)) {
             (mode & !0o777) | tweak
         } else {
             mode | tweak
@@ -225,22 +241,13 @@ pub fn adjust_shared_repository_permissions(
 /// Read-only files stay read-only, and executable files gain execute bits wherever the policy grants read access.
 /// Directories gain search permissions alongside read permissions and setgid where needed to inherit the parent group.
 ///
-/// `shared_repository_permissions` uses Git's compact signed encoding, usually parsed from `core.sharedRepository`:
-///
-/// - `0` leaves the umask permissions unchanged. An absent key, `umask`, boolean `false`, and legacy value `0` produce this.
-/// - A positive mode is ORed into the post-umask mode. A bare key, `group`, boolean `true`, and legacy value `1` usually
-///   produce `0o660`; `all`, `world`, `everybody`, and legacy value `2` usually produce `0o664`.
-/// - A negative mode replaces the low nine Unix permission bits with its absolute value. Explicit octal configuration
-///   such as `0640` is represented as `-0o640`, so it can remove bits allowed by the umask instead of merely adding bits.
-///
-/// Pass the parsed encoding, not an explicit octal configuration value directly.
-/// No metadata is read or written for the default policy (`0`) or on non-Unix platforms.
+/// No metadata is read or written for [`SharedPermissions::Umask`] or on non-Unix platforms.
 pub fn set_shared_repository_permissions(
     path: &std::path::Path,
-    shared_repository_permissions: i32,
+    shared_repository_permissions: SharedPermissions,
 ) -> std::io::Result<()> {
     #[cfg(unix)]
-    if shared_repository_permissions != 0 {
+    if shared_repository_permissions != SharedPermissions::Umask {
         let current = std::fs::metadata(path)?.permissions();
         let adjusted = adjust_shared_repository_permissions(current.clone(), shared_repository_permissions);
         if current != adjusted {

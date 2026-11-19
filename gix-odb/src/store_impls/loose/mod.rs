@@ -15,6 +15,10 @@ pub struct Options {
     /// Git uses [`Compression::BEST_SPEED`](gix_zlib::Compression::BEST_SPEED) unless configured otherwise with
     /// `core.looseCompression` or `core.compression`.
     pub compression: gix_zlib::Compression,
+    /// The parsed `core.sharedRepository` policy for new loose objects and fanout directories.
+    ///
+    /// Defaults to [`gix_fs::SharedPermissions::Umask`]. Objects remain read-only.
+    pub shared_repository_permissions: gix_fs::SharedPermissions,
 }
 
 impl Default for Options {
@@ -22,6 +26,7 @@ impl Default for Options {
         Options {
             alloc_limit_bytes: None,
             compression: gix_zlib::Compression::BEST_SPEED,
+            shared_repository_permissions: gix_fs::SharedPermissions::Umask,
         }
     }
 }
@@ -37,6 +42,7 @@ pub struct Store {
     pub(crate) alloc_limit_bytes: Option<usize>,
     /// The compression level to use when writing loose objects.
     pub(crate) compression: gix_zlib::Compression,
+    pub(crate) shared_repository_permissions: gix_fs::SharedPermissions,
 }
 
 /// Initialization
@@ -62,12 +68,14 @@ impl Store {
         let Options {
             alloc_limit_bytes,
             compression,
+            shared_repository_permissions,
         } = options;
         Store {
             path: objects_directory.into(),
             object_hash,
             alloc_limit_bytes,
             compression,
+            shared_repository_permissions,
         }
     }
 

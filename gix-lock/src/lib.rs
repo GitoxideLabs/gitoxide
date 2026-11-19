@@ -28,7 +28,7 @@
 //!     &resource,
 //!     gix_lock::acquire::Fail::Immediately,
 //!     None,
-//!     0,
+//!     Default::default(),
 //! )?;
 //! lock.write_all(b"new = value\n")?;
 //! let (resource_path, _) = lock.commit()?;

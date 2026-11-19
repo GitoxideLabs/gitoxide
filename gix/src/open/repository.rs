@@ -17,7 +17,10 @@ use crate::{
     bstr::BString,
     config,
     config::{
-        cache::{interpolate_context, util::ApplyLeniencyDefaultValue},
+        cache::{
+            interpolate_context,
+            util::{ApplyLeniencyDefault, ApplyLeniencyDefaultValue},
+        },
         tree::{Core, Key, Safe, gitoxide},
     },
     open::Permissions,
@@ -494,6 +497,9 @@ impl ThreadSafeRepository {
         }
 
         // Trust promotion and trusted overrides are only available after configuration is resolved.
+        config.shared_repository_permissions =
+            config::file_mut::shared_repository_permissions(&config.resolved, filter_config_section)
+                .with_lenient_default(lenient_config)?;
         let use_on_windows = cfg!(windows);
         refs.prohibit_windows_device_names = gitoxide::Core::PROTECT_WINDOWS
             .enrich_error(
@@ -525,6 +531,7 @@ impl ThreadSafeRepository {
         }
 
         refs.write_reflog = config::cache::util::reflog_or_default(config.reflog, worktree_dir.is_some());
+        refs.shared_repository_permissions = config.shared_repository_permissions;
         refs.namespace.clone_from(&config.refs_namespace);
         let prefix = replacement_objects_refs_prefix(&config.resolved, lenient_config, filter_config_section)?;
 
@@ -588,6 +595,7 @@ impl ThreadSafeRepository {
                         use_multi_pack_index: config.use_multi_pack_index,
                         alloc_limit_bytes: config.alloc_limit_bytes,
                         loose_compression: config.loose_compression,
+                        shared_repository_permissions: config.shared_repository_permissions,
                         current_dir: current_dir.to_owned().into(),
                     },
                 )
