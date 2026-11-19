@@ -178,7 +178,9 @@ impl Capabilities {
         res
     }
 
-    fn probe_symlink(root: &Path) -> std::io::Result<bool> {
+    /// Check symlink support by creating and removing a temporary link in `root`.
+    /// An unsuccessful creation yields `false`. Errors inspecting or removing the link are returned.
+    pub fn probe_symlink(root: &Path) -> std::io::Result<bool> {
         let rand = gix_utils::rng::usize(..);
         let link_path = root.join(format!("__file_link{rand}"));
         if crate::symlink::create("dangling".as_ref(), &link_path).is_err() {
