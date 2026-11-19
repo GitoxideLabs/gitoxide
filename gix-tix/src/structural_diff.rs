@@ -355,26 +355,45 @@ impl Diff {
         colors: &Palette,
         compact: bool,
     ) -> (DiffRows, Vec<FileLink>, Vec<DirectoryStat>) {
+        let format = RenderOptions {
+            omit_word_delimiters: colors.colored,
+            omit_unchanged_parameters: true,
+        };
         let visible: Vec<_> = self
             .files
             .iter()
             .enumerate()
             .filter(|(_, file)| file.visible(options))
-            .map(|(index, _)| index)
+            .filter_map(|(index, file)| {
+                let outline = file
+                    .outline
+                    .as_ref()
+                    .map(|outline| outline.render_with(options, format));
+                if options.hide_modifications {
+                    match file.path.kind {
+                        ChangeKind::Added | ChangeKind::Deleted | ChangeKind::Renamed => {}
+                        ChangeKind::Modified if outline.as_ref().is_ok_and(|lines| !lines.is_empty()) => {}
+                        _ => return None,
+                    }
+                }
+                Some((index, outline))
+            })
             .collect();
         let mut lines = vec![Line::styled(
             format!("Changed files ({})", visible.len()),
             colors.header,
         )];
         if visible.is_empty() {
-            lines.push(Line::from(if options.production_only {
+            lines.push(Line::from(if options.hide_modifications {
+                "No additions, deletions, or renames."
+            } else if options.production_only {
                 "No production file changes."
             } else {
                 "No file changes."
             }));
         }
         let mut tree = FileTree::default();
-        for &index in &visible {
+        for &(index, _) in &visible {
             let file = &self.files[index];
             let components = file
                 .path
@@ -409,7 +428,7 @@ impl Diff {
         );
         let mut rows = lines.into_iter().map(|line| (line, None)).collect::<Vec<_>>();
         let mut file_links = Vec::with_capacity(visible.len());
-        for index in visible {
+        for (index, outline) in visible {
             let file = &self.files[index];
             rows.push((Line::default(), None));
             if let Some(row) = file_rows[index] {
@@ -441,15 +460,8 @@ impl Diff {
                     None,
                 )
             }));
-            match &file.outline {
-                Ok(outline) => {
-                    let rendered = outline.render_with(
-                        options,
-                        RenderOptions {
-                            omit_word_delimiters: colors.colored,
-                            omit_unchanged_parameters: true,
-                        },
-                    );
+            match outline {
+                Ok(rendered) => {
                     if rendered.is_empty() {
                         rows.push((
                             Line::styled("No structural changes.", Style::default().add_modifier(Modifier::DIM)),
@@ -518,14 +530,16 @@ enum ViewOption {
     Color,
     Context,
     Production,
+    Modifications,
     Renames,
     Words,
 }
 
-const VIEW_OPTIONS: [(char, ViewOption); 5] = [
+const VIEW_OPTIONS: [(char, ViewOption); 6] = [
     ('c', ViewOption::Color),
     ('x', ViewOption::Context),
     ('p', ViewOption::Production),
+    ('m', ViewOption::Modifications),
     ('r', ViewOption::Renames),
     ('w', ViewOption::Words),
 ];
@@ -791,6 +805,7 @@ impl<'a> View<'a> {
             ViewOption::Renames => options.find_renames = !options.find_renames,
             ViewOption::Words => options.word_diff = !options.word_diff,
             ViewOption::Production => options.production_only = !options.production_only,
+            ViewOption::Modifications => options.hide_modifications = !options.hide_modifications,
             ViewOption::Context => {
                 let context = usize::from(options.context.first() == Some(&0));
                 options.context.clear();
@@ -817,6 +832,8 @@ impl<'a> View<'a> {
                     ViewOption::Context => ("context 1", true),
                     ViewOption::Production if options.production_only => ("production only on", true),
                     ViewOption::Production => ("production only off", false),
+                    ViewOption::Modifications if options.hide_modifications => ("modifications hidden", true),
+                    ViewOption::Modifications => ("modifications shown", false),
                     ViewOption::Renames if options.find_renames => ("renames on", true),
                     ViewOption::Renames => ("renames off", false),
                     ViewOption::Words if options.word_diff => ("words on", true),
@@ -1212,6 +1229,7 @@ mod tests {
             "color on",
             "context 1",
             "production only off",
+            "modifications shown",
             "renames on",
             "words on",
             "Tab files",
@@ -2001,6 +2019,53 @@ mod tests {
             !text(&View::new(&diff, &mut settings, &Palette::default(), false).lines).contains("[-i32-]"),
             "reopening retains the word setting"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn modifications_can_be_hidden_from_the_structural_diff_and_file_tree() -> TestResult {
+        let repository = repository()?;
+        let diff = prepare_commit_with_repository(&repository, target(&repository, "tip", 0)?, "updated".into())?;
+        let mut settings = crate::App::new(24).structural_diff_settings;
+        settings.colored = false;
+        let colors = Palette::default();
+        let press = |letter| KeyEvent::new(KeyCode::Char(letter), KeyModifiers::NONE);
+        let filtered = {
+            let mut view = View::new(&diff, &mut settings, &colors, false);
+            let original = text(&view.lines);
+            assert!(
+                original.contains("unsupported.txt") && original.contains("~name"),
+                "modifications are visible by default"
+            );
+            assert!(!view.key(press('m')), "the toggle belongs to the View menu");
+            assert!(
+                view.key(press('v')) && view.key(press('m')),
+                "View accepts the filter key"
+            );
+            let output = text(&view.lines);
+            for hidden in ["unsupported.txt", "Cargo.toml", "README.md", "executable.rs"] {
+                assert!(!output.contains(hidden), "hide the modification-only file {hidden}");
+            }
+            for kept in [
+                "A added.rs",
+                "D removed.rs",
+                "R moved.rs",
+                "M modified.rs",
+                "[renamed: old -> new]",
+                "pub struct Config",
+            ] {
+                assert!(output.contains(kept), "keep {kept} in the filtered view");
+            }
+            assert!(view.key(press('m')), "the View menu stays open");
+            assert_eq!(text(&view.lines), original, "a second toggle restores the full diff");
+            assert!(
+                view.key(press('m')),
+                "the filter can be turned back on before reopening"
+            );
+            output
+        };
+        let reopened = View::new(&diff, &mut settings, &colors, false);
+        assert_eq!(text(&reopened.lines), filtered, "the filter persists across views");
         Ok(())
     }
 
