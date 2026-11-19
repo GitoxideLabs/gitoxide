@@ -119,6 +119,61 @@ fn modules_traits_fields_and_added_removed_functions_remain_structural() -> Test
 }
 
 #[test]
+fn hiding_modifications_keeps_nested_changes_without_showing_modified_siblings_as_context() -> TestResult {
+    let before = "
+mod nested {
+    fn body_only() { before(); }
+    struct Removed;
+    fn unchanged() {}
+    fn signature() -> i32 { 0 }
+}
+";
+    let after = "
+mod nested {
+    fn body_only() { after(); }
+    enum Added { Variant }
+    fn unchanged() {}
+    fn signature() -> u32 { 0 }
+}
+";
+    let outline = PreparedDiff::new(before, after, Language::Rust)?;
+    let mut options = Options {
+        hide_modifications: true,
+        ..Options::default()
+    };
+    for word_diff in [false, true] {
+        options.word_diff = word_diff;
+        let output = text(&outline, &options);
+        assert!(
+            output.starts_with(" mod nested {"),
+            "nested changes keep their module as context"
+        );
+        assert!(
+            output.contains("-    struct Removed;") && output.contains("+    enum Added"),
+            "whole declarations keep their addition and removal markers: {output}"
+        );
+        assert!(
+            output.contains("fn unchanged()"),
+            "unchanged siblings remain available as context"
+        );
+        assert!(
+            !output.contains("body_only") && !output.contains("signature"),
+            "context should not reveal modification-only siblings: {output}"
+        );
+    }
+    let outline = PreparedDiff::new(
+        "fn signature() -> i32 { 0 }",
+        "fn signature() -> u32 { 0 }",
+        Language::Rust,
+    )?;
+    assert!(
+        outline.render(&options).is_empty(),
+        "signature edits alone emit no rows"
+    );
+    Ok(())
+}
+
+#[test]
 fn renames_and_word_changes_can_be_redrawn_from_the_same_inputs() -> TestResult {
     let renamed = PreparedDiff::new(
         "fn old(value: u32) -> u32 { old(value) + 1 }",

@@ -1698,8 +1698,9 @@ views.
   popout above the status bar, including when the file panel is open.
   `v` opens View settings. `c` toggles colors, `x` toggles context between
   zero and one unchanged sibling on each side at each depth, `p` toggles
-  production-only review, `r` toggles declaration renames, and `w` toggles
-  word changes. Context starts at zero, with renames and words enabled.
+  production-only review, `m` toggles modifications, `r` toggles declaration
+  renames, and `w` toggles word changes. Context starts at zero, with
+  modifications shown and renames and words enabled.
   The popout shows active settings and stays open for consecutive changes.
   Only unmodified presses toggle settings. Setting changes persist across
   views in the same invocation and redraw cached outlines and file indices.
@@ -1720,9 +1721,10 @@ views.
   the highlight to the entry label while line counts use the terminal background.
   Clicking a visible filename jumps to its header and clears main-diff panning.
   Wheels over the panel scroll its tree independently; moving through the diff
-  follows the current file again. Context, word, declaration-rename, and
-  production settings refresh both the panel and its click targets. Reuse
-  cached rows and file indices without source reads, parsing, or source copies.
+  follows the current file again. Context, word, declaration-rename,
+  production, and modification settings refresh both the panel and its click
+  targets. Reuse cached rows and file indices without source reads, parsing, or
+  source copies.
 - Built-in structural and patch views freeze the current file header at the
   top of the diff content after it scrolls out of view. Headers first move in
   normal flow; the next file replaces the frozen header when it reaches the
@@ -1762,6 +1764,13 @@ views.
   The View popout shows the active setting. Unmodified presses toggle it; repeats,
   releases, and modified keys do not. Filtering redraws cached outlines without
   source reads, parsing, terminal queries, or additional copies of source text.
+- `v m` hides modifications in structural review. File additions, deletions,
+  and renames remain visible. A modified file stays in both file trees and
+  keeps its section only if its outline contains a declaration addition,
+  deletion, or rename. Keep enclosing declarations for context without
+  highlighting edits to them. The filter works with the production, context,
+  and declaration-rename settings. An empty result says
+  `No additions, deletions, or renames.`
 - Structural mode uses lexical syntax foregrounds and muted red, green, and
   yellow backgrounds for removed, added, and modified declarations. Names and
   language keywords are bold, including in plain mode. Changed words use

@@ -87,6 +87,8 @@ pub struct Options {
     pub word_diff: bool,
     /// Exclude Rust test and benchmark declarations, including scopes disabled when `test` is false.
     pub production_only: bool,
+    /// Show declaration additions, removals and renames, with their enclosing context.
+    pub hide_modifications: bool,
 }
 
 /// Presentation settings for rendering structural changes.
@@ -245,15 +247,37 @@ fn render(
         .copied()
         .unwrap_or(1);
     let mut visible = vec![false; pairs.len()];
-    for (index, pair) in pairs.iter().enumerate() {
-        if !matches!(pair, (Some(before), Some(after)) if unchanged(before, after, options)) {
-            let end = index.saturating_add(context).saturating_add(1).min(pairs.len());
-            visible[index.saturating_sub(context)..end].fill(true);
+    // A same-name edit can provide context for retained child changes.
+    let mut filtered_children = if options.hide_modifications {
+        vec![None; pairs.len()]
+    } else {
+        Vec::new()
+    };
+    for (index, &(before, after)) in pairs.iter().enumerate() {
+        if let (Some(before), Some(after)) = (before, after) {
+            if unchanged(before, after, options) {
+                continue;
+            }
+            if before.name == after.name
+                && let Some(slot) = filtered_children.get_mut(index)
+            {
+                let children = slot.insert(Vec::new());
+                render(&before.children, &after.children, depth + 1, options, format, children);
+                if children.is_empty() {
+                    continue;
+                }
+            }
         }
+        let end = index.saturating_add(context).saturating_add(1).min(pairs.len());
+        visible[index.saturating_sub(context)..end].fill(true);
+    }
+    if options.hide_modifications && !visible.contains(&true) {
+        return;
     }
     let mut skipping = false;
-    for ((before, after), visible) in pairs.into_iter().zip(visible) {
-        if !visible {
+    for (index, ((before, after), visible)) in pairs.into_iter().zip(visible).enumerate() {
+        let children = filtered_children.get_mut(index).and_then(Option::take);
+        if !visible || children.as_ref().is_some_and(Vec::is_empty) {
             if !skipping && let Some(item) = after.or(before) {
                 omitted(item, out);
             }
@@ -262,6 +286,11 @@ fn render(
         }
         skipping = false;
         match (before, after) {
+            (Some(_), Some(after)) if let Some(children) = children => {
+                lines(&after.header, Change::Context, out);
+                out.extend(children);
+                lines(&after.footer, Change::Context, out);
+            }
             (Some(before), Some(after)) => paired(before, after, depth, options, format, out),
             (Some(before), None) => entire(before, Change::Removed, options, out),
             (None, Some(after)) => entire(after, Change::Added, options, out),
@@ -280,7 +309,7 @@ fn paired(before: &Item, after: &Item, depth: usize, options: &Options, format: 
         );
     }
     let unchanged = unchanged(before, after, options);
-    let headers = if format.omit_unchanged_parameters && !unchanged {
+    let headers = if !options.hide_modifications && format.omit_unchanged_parameters && !unchanged {
         pruned_headers(before, after)
     } else {
         None
@@ -290,10 +319,14 @@ fn paired(before: &Item, after: &Item, depth: usize, options: &Options, format: 
         .map_or([before.header.as_str(), after.header.as_str()], |[before, after]| {
             [before.as_str(), after.as_str()]
         });
-    if old_header != new_header {
+    if !options.hide_modifications && old_header != new_header {
         changed(old_header, new_header, options, format, out);
     } else {
-        let change = if !unchanged { Change::Modified } else { Change::Context };
+        let change = if unchanged || options.hide_modifications {
+            Change::Context
+        } else {
+            Change::Modified
+        };
         lines(new_header, change, out);
     }
     if unchanged {
@@ -307,7 +340,7 @@ fn paired(before: &Item, after: &Item, depth: usize, options: &Options, format: 
     } else {
         render(&before.children, &after.children, depth + 1, options, format, out);
     }
-    if before.footer != after.footer {
+    if !options.hide_modifications && before.footer != after.footer {
         changed(&before.footer, &after.footer, options, format, out);
     } else {
         lines(&after.footer, Change::Context, out);
