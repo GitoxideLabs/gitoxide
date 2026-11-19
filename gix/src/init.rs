@@ -36,6 +36,7 @@ impl ThreadSafeRepository {
     }
 
     /// Similar to [`init`][Self::init()], but allows to determine how exactly to open the newly created repository.
+    /// A newly created repository starts with [`Full`][gix_sec::Trust::Full] trust and undergoes the usual worktree checks.
     /// Invalid `init.defaultBranch` values include their bytes as `input` [metadata](gix_error::Error::metadata()).
     ///
     /// # Deviation
@@ -80,7 +81,7 @@ impl ThreadSafeRepository {
             open_options.api_config_overrides.push("core.symlinks=false".into());
         }
         let (git_dir, worktree_dir) = path.into_repository_and_work_tree_directories();
-        open_options.git_dir_trust = Some(gix_sec::Trust::Full);
+        open_options = open_options.with_trust(gix_sec::Trust::Full);
         // The repo will use `core.precomposeUnicode` to adjust the value as needed.
         open_options.current_dir = gix_fs::current_dir(false)
             .or_raise(|| message("Could not obtain the current directory"))?

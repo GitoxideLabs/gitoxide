@@ -113,11 +113,7 @@ impl crate::Repository {
     /// [`make_paths_absolute()`][Self::make_paths_absolute()].
     pub fn main_repo(&self) -> Result<crate::Repository> {
         if self.kind() == crate::repository::Kind::LinkedWorkTree {
-            let options = self
-                .options
-                .clone_with_trust()
-                .without_repository_environment_overrides()
-                .open_path_as_is(true);
+            let options = self.options.clone_for_linked_worktree().open_path_as_is(true);
             crate::ThreadSafeRepository::open_opts(self.current_dir().join(self.common_dir()), options).map(Into::into)
         } else {
             let mut repo = self.clone();

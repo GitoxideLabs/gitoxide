@@ -17,10 +17,11 @@ impl ThreadSafeRepository {
     /// while applying `options`. Then use the `trust_map` to determine which of our own repository options to use
     /// for instantiations.
     ///
-    /// Note that [trust overrides](crate::open::Options::with_trust()) in the `trust_map` are not effective here and we will
-    /// always override it with the determined trust value as per [gix_discover::upwards::Options::trust].
-    /// This value, however, can be set to [assume a given trust level](gix_discover::upwards::TrustPolicy::Assume) to let
-    /// callers control the trust level without re-determining it.
+    /// Discovery supplies the initial trust level through [`upwards::Options::trust`], replacing any
+    /// [initial](crate::open::Options::with_trust()) or [enforced](crate::open::Options::with_enforced_trust())
+    /// trust level in `trust_map`.
+    /// [`upwards::TrustPolicy::Assume`] supplies that initial level directly. Opening still applies
+    /// `safe.directory` and checks ownership of the final worktree.
     pub fn discover_opts(
         directory: impl AsRef<Path>,
         options: upwards::Options<'_>,
@@ -29,8 +30,7 @@ impl ThreadSafeRepository {
         let _span = gix_trace::coarse!("ThreadSafeRepository::discover()");
         let (path, trust) = upwards_opts(directory.as_ref(), options)?;
         let (git_dir, worktree_dir) = path.into_repository_and_work_tree_directories();
-        let mut options = trust_map.into_value_by_level(trust);
-        options.git_dir_trust = trust.into();
+        let mut options = trust_map.into_value_by_level(trust).with_trust(trust);
         // Note that we will adjust the `current_dir` later so it matches the value of `core.precomposeUnicode`.
         options.current_dir =
             Some(gix_fs::current_dir(false).or_raise(|| message("Could not obtain the current working directory"))?);

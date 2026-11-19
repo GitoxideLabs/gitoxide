@@ -849,7 +849,7 @@ mod open {
         let repo = named_subrepo_opts(
             "make_submodules.sh",
             "with-submodules",
-            crate::restricted().with_trust(Trust::Reduced),
+            crate::restricted().with_enforced_trust(Trust::Reduced),
         )?;
         assert_eq!(
             repo.git_dir_trust(),

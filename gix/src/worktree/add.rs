@@ -281,11 +281,7 @@ impl crate::Repository {
             )?;
         }
 
-        let options = repo
-            .options
-            .clone_with_trust()
-            .without_repository_environment_overrides()
-            .open_path_as_is(true);
+        let options = repo.options.clone_for_linked_worktree().open_path_as_is(true);
         let mut repo = crate::ThreadSafeRepository::open_opts(prepared.git_dir(), options)
             .or_raise(|| message("Could not open a worktree repository"))?
             .to_thread_local();

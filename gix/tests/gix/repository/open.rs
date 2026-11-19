@@ -28,7 +28,7 @@ fn discover_with_git_dir_environment_override_uses_it_and_sets_trust() -> TestRe
         fallback.path(),
         Default::default(),
         gix_sec::trust::Mapping {
-            full: crate::restricted(),
+            full: crate::restricted().with_enforced_trust(gix::sec::Trust::Reduced),
             reduced: crate::restricted(),
         },
     )?;
@@ -37,6 +37,11 @@ fn discover_with_git_dir_environment_override_uses_it_and_sets_trust() -> TestRe
         repo.git_dir(),
         overridden.git_dir(),
         "the git-dir from the environment replaces the fallback and opens without panicking on missing trust"
+    );
+    assert_eq!(
+        repo.to_thread_local().git_dir_trust(),
+        gix::sec::Trust::Full,
+        "the environment-selected repository uses its own ownership"
     );
     Ok(())
 }
@@ -81,6 +86,97 @@ fn core_worktree_cli_override_does_not_override_bare() -> TestResult {
         "core.worktree from -c does not override core.bare in Git"
     );
     assert!(repo.is_bare(), "the CLI override leaves the bare repository bare");
+    Ok(())
+}
+
+#[test]
+fn enforced_full_trust_keeps_the_configured_checkout() -> TestResult {
+    use gix::sec::Trust;
+    let fixture = gix_testtools::scripted_fixture_read_only("make_repository_trust.sh")?;
+    let repo = gix::open_opts(
+        fixture.join("demoted"),
+        crate::restricted()
+            .with_enforced_trust(Trust::Full)
+            .bail_if_untrusted(true),
+    )?;
+    assert_eq!(repo.git_dir_trust(), Trust::Full, "the caller decided repository trust");
+    assert_eq!(
+        repo.workdir(),
+        Some(fixture.join("missing").as_path()),
+        "the local checkout setting stays eligible even when ownership cannot be checked"
+    );
+    Ok(())
+}
+
+#[test]
+fn enforced_reduced_trust_survives_safe_directory_and_reload() -> TestResult {
+    use gix::sec::Trust;
+    let fixture = gix_testtools::scripted_fixture_read_only("make_repository_trust.sh")?;
+    let path = fixture.join("promoted");
+    let mut options = crate::restricted()
+        .with_enforced_trust(Trust::Reduced)
+        .system_config_path(fixture.join("trusted-worktrees.config"));
+    options.permissions.config.system = true;
+    let mut repo = gix::open_opts(&path, options)?;
+    assert_eq!(
+        repo.git_dir_trust(),
+        Trust::Reduced,
+        "safe.directory cannot promote enforced trust"
+    );
+    assert_eq!(
+        repo.workdir(),
+        Some(path.as_path()),
+        "the local checkout setting stays ineligible"
+    );
+    assert_eq!(
+        repo.reload()?.git_dir_trust(),
+        Trust::Reduced,
+        "reload retains enforcement"
+    );
+    let err = repo
+        .reload_with(|options| options.bail_if_untrusted(true))
+        .expect_err("strict opening requires full trust");
+    assert!(err.is_permission_denied(), "enforced reduced trust fails a strict open");
+    repo.reload_with(|options| options.with_enforced_trust(None))?;
+    assert_eq!(
+        repo.git_dir_trust(),
+        Trust::Full,
+        "clearing enforcement restores automatic trust"
+    );
+    Ok(())
+}
+
+#[test]
+fn enforced_trust_is_local_to_the_opened_worktree() -> TestResult {
+    use gix::sec::Trust;
+    let fixture = gix_testtools::scripted_fixture_read_only("make_worktree_repo.sh")?;
+    let options = || crate::restricted().with_enforced_trust(Trust::Reduced);
+    let mut main = gix::open_opts(fixture.join("repo"), options())?;
+    let linked = main
+        .worktree_proxy_by_id("wt-a")?
+        .expect("the fixture has a registered worktree")
+        .into_repo()?;
+    assert_eq!(
+        linked.git_dir_trust(),
+        Trust::Full,
+        "a linked checkout determines its own trust"
+    );
+    let linked = gix::open_opts(fixture.join("wt-a"), options())?;
+    assert_eq!(
+        linked.main_repo()?.git_dir_trust(),
+        Trust::Full,
+        "the main checkout determines its own trust"
+    );
+    main.reload_with(|options| options.with_enforced_trust(Trust::Full).bail_if_untrusted(true))?;
+    let err = main
+        .worktree_proxy_by_id("wt-deleted")?
+        .expect("the deleted checkout is still registered")
+        .into_repo_with_possibly_inaccessible_worktree()
+        .expect_err("a strict open must check the other checkout's ownership");
+    assert!(
+        err.is_permission_denied(),
+        "the main checkout's full trust is local to it"
+    );
     Ok(())
 }
 

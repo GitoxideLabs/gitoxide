@@ -7,7 +7,7 @@ use gix_sec::Trust;
 use std::path::Path;
 use std::{borrow::Cow, collections::BTreeMap, ffi::OsStr, path::PathBuf};
 
-use super::Options;
+use super::{Options, RepositoryTrust};
 use crate::{
     Error, Result, ThreadSafeRepository,
     bstr::BString,
@@ -59,9 +59,10 @@ impl ThreadSafeRepository {
     /// `options` for fine-grained control.
     /// Empty `core.worktree` values include their bytes as `input` [metadata](gix_error::Error::metadata()).
     ///
-    /// Unless trust is set explicitly with [`Options::with_trust()`], its initial level comes from ownership of the
-    /// candidate path (`path` or `path/.git`) before resolving a possible gitfile. Ownership checks of the resolved
-    /// git directory, common directory, and existing worktree can then only lower this level.
+    /// By default, initial trust comes from ownership of the candidate path (`path` or `path/.git`) before resolving
+    /// a possible gitfile. Ownership checks of the resolved Git directory, common directory, and existing worktree
+    /// can lower this level. Use [`Options::with_trust()`] to set the initial level or
+    /// [`Options::with_enforced_trust()`] to set the final level.
     /// Use [`crate::discover()`] if options such as permissions should also be selected according to ownership.
     ///
     /// Opening an absolute Git directory keeps repository paths absolute. The selected index path is always absolute,
@@ -113,7 +114,7 @@ impl ThreadSafeRepository {
             .expect("we have sanitized path with is_git()")
             .into_repository_and_work_tree_directories();
         if let Some(candidate_trust) = candidate_trust {
-            options.git_dir_trust = Some(gix_discover::repository::trust(
+            options = options.with_trust(gix_discover::repository::trust(
                 &git_dir,
                 worktree_dir.as_deref(),
                 &cwd,
@@ -131,6 +132,7 @@ impl ThreadSafeRepository {
     /// the candidate path (`GIT_DIR` if set, otherwise `fallback_directory`) before resolving a possible gitfile.
     /// Ownership checks of the resolved git directory, common directory, and existing worktree can only lower
     /// that level, so a trusted target cannot upgrade an untrusted gitfile.
+    /// The computed level replaces any initial or enforced trust level in the selected options.
     ///
     /// Note that this will read various `GIT_*` environment variables to check for overrides, and is probably most useful when implementing
     /// custom hooks.
@@ -168,8 +170,7 @@ impl ThreadSafeRepository {
 
         let git_dir_trust =
             gix_discover::repository::trust(&git_dir, worktree_dir.as_deref(), &cwd, (&path, Some(candidate_trust)))?;
-        let mut options = trust_map.into_value_by_level(git_dir_trust);
-        options.git_dir_trust = git_dir_trust.into();
+        let mut options = trust_map.into_value_by_level(git_dir_trust).with_trust(git_dir_trust);
         options.current_dir = Some(cwd);
         ThreadSafeRepository::open_from_paths(git_dir, worktree_dir, options, None)
     }
@@ -227,6 +228,13 @@ impl ThreadSafeRepository {
             ref mut current_dir,
         } = options;
         let git_dir_trust = git_dir_trust.as_mut().expect("trust must be determined by now");
+        if bail_if_untrusted && matches!(git_dir_trust, RepositoryTrust::Enforced(Trust::Reduced)) {
+            return Err(message!(
+                "Full trust is required to open \"{}\", but reduced trust was enforced",
+                git_dir.display()
+            )
+            .permission_denied_error());
+        }
 
         let mut common_dir = match known_common_dir {
             Some(common_dir) => Some(common_dir),
@@ -249,7 +257,7 @@ impl ThreadSafeRepository {
         let repo_config = config::cache::StageOne::new(
             common_dir.as_deref().unwrap_or(&git_dir),
             git_dir.as_ref(),
-            *git_dir_trust,
+            git_dir_trust.level(),
             lossy_config,
             lenient_config,
         )
@@ -326,10 +334,13 @@ impl ThreadSafeRepository {
                 use_repository_local_environment,
             )
             .or_raise(|| message("Repository configuration could not be loaded"))?;
-        let safe_dirs = resolved
-            .file
-            .strings_filter(Safe::DIRECTORY, Safe::directory_filter)
-            .unwrap_or_default();
+        let safe_dirs = match git_dir_trust {
+            RepositoryTrust::Enforced(_) => Vec::new(),
+            RepositoryTrust::Precomputed(_) => resolved
+                .file
+                .strings_filter(Safe::DIRECTORY, Safe::directory_filter)
+                .unwrap_or_default(),
+        };
         let check_safe_directory = |path: &Path| {
             check_safe_directories(
                 path,
@@ -340,14 +351,16 @@ impl ThreadSafeRepository {
             )
         };
         let is_safe = |path: &Path| !safe_dirs.is_empty() && check_safe_directory(path).is_ok();
-        if *git_dir_trust == Trust::Reduced && (bail_if_untrusted || !safe_dirs.is_empty()) {
+        if let RepositoryTrust::Precomputed(trust @ Trust::Reduced) = git_dir_trust
+            && (bail_if_untrusted || !safe_dirs.is_empty())
+        {
             // Repository configuration can change the checkout after discovery.
             match check_safe_directory(worktree_dir.as_deref().unwrap_or(&git_dir)) {
-                Ok(()) => *git_dir_trust = Trust::Full,
+                Ok(()) => *trust = Trust::Full,
                 Err(err) if bail_if_untrusted => return Err(err),
                 Err(_) => {}
             }
-            update_repository_section_trust(&mut resolved.file, *git_dir_trust, is_safe);
+            update_repository_section_trust(&mut resolved.file, *trust, is_safe);
         }
 
         let inferred_worktree_dir = worktree_dir;
@@ -446,7 +459,7 @@ impl ThreadSafeRepository {
             }
 
             // A configured checkout can differ from the one used to determine initial trust.
-            if *git_dir_trust == Trust::Full
+            if let RepositoryTrust::Precomputed(trust @ Trust::Full) = git_dir_trust
                 && let Some(worktree) = worktree_dir.as_deref()
                 && !gix_sec::identity::is_path_owned_by_current_user(worktree).unwrap_or(false)
                 && let Err(err) = check_safe_directory(worktree)
@@ -454,7 +467,7 @@ impl ThreadSafeRepository {
                 if bail_if_untrusted {
                     return Err(err);
                 }
-                *git_dir_trust = Trust::Reduced;
+                *trust = Trust::Reduced;
                 update_repository_section_trust(&mut resolved.file, Trust::Reduced, is_safe);
                 // Consult core.worktree again with the final section trust.
                 continue;
@@ -501,7 +514,7 @@ impl ThreadSafeRepository {
         refs.namespace.clone_from(&config.refs_namespace);
         let prefix = replacement_objects_refs_prefix(&config.resolved, lenient_config, filter_config_section)?;
 
-        if *git_dir_trust == gix_sec::Trust::Reduced && config.alloc_limit_bytes.is_none() {
+        if git_dir_trust.level() == Trust::Reduced && config.alloc_limit_bytes.is_none() {
             let alloc_limit_if_reduced_trust =
                 match gitoxide::Objects::ALLOC_LIMIT_IF_REDUCED_TRUST.try_into_usize(config.resolved.integer_filter(
                     gitoxide::Objects::ALLOC_LIMIT_IF_REDUCED_TRUST,
