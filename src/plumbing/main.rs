@@ -84,21 +84,29 @@ pub fn main() -> Result<()> {
                 mode,
                 Mode::StrictWithGitInstallConfig | Mode::LenientWithGitInstallConfig
             );
-            let mut repo = gix::ThreadSafeRepository::discover_with_environment_overrides_opts(
-                &repository,
-                Default::default(),
-                |options, _| {
-                    let mut options = options.strict_config(strict_toggle);
-                    options.permissions.config.git_binary = git_installation;
-                    options.permissions.attributes.git_binary = git_installation;
-                    if config.is_empty() {
-                        options
-                    } else {
-                        options.cli_overrides(config.clone())
-                    }
-                },
-            )
-            .map(gix::Repository::from)?;
+            let configure_open_options = |options: gix::open::Options| {
+                let mut options = options.strict_config(strict_toggle);
+                options.permissions.config.git_binary = git_installation;
+                options.permissions.attributes.git_binary = git_installation;
+                if config.is_empty() {
+                    options
+                } else {
+                    options.cli_overrides(config.clone())
+                }
+            };
+            let mut repo = match args.repo_trust {
+                Some(trust) => trust
+                    .apply(configure_open_options(gix::open::Options::default_for_level(
+                        trust.level(),
+                    )))
+                    .discover_with_environment_overrides(&repository),
+                None => gix::ThreadSafeRepository::discover_with_environment_overrides_opts(
+                    &repository,
+                    Default::default(),
+                    |options, _| configure_open_options(options),
+                )
+                .map(Into::into),
+            }?;
             if !config.is_empty() {
                 repo.config_snapshot_mut()
                     .append_config(config.iter(), gix::config::Source::Cli)
@@ -172,7 +180,12 @@ pub fn main() -> Result<()> {
             repository(Mode::Lenient)?.into_sync(),
             gix_tix::command::Invocation::GixTix,
         ),
-        Subcommands::Env => prepare_and_run("env", verbose, None, move |_progress, out, _err| core::env(out, format)),
+        Subcommands::Env => prepare_and_run("env", verbose, None, move |_progress, out, _err| {
+            let repo_trust = repository(Mode::LenientWithGitInstallConfig)
+                .ok()
+                .map(|repo| repo.git_dir_trust());
+            core::env(repo_trust, out, format)
+        }),
         Subcommands::Editor { paths } => core::repository::editor(repository(Mode::Lenient)?, paths),
         Subcommands::Merge(merge::Platform { cmd }) => match cmd {
             merge::SubCommands::File {

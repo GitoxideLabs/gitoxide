@@ -102,7 +102,7 @@ pub fn trust(paths: &[std::path::PathBuf], mut out: impl std::io::Write) -> Resu
     Ok(())
 }
 
-pub fn env(mut out: impl std::io::Write, format: OutputFormat) -> Result<()> {
+pub fn env(repo_trust: Option<gix::sec::Trust>, mut out: impl std::io::Write, format: OutputFormat) -> Result<()> {
     if format != OutputFormat::Human {
         bail!(gix::error::unsupported("JSON output isn't supported"));
     }
@@ -150,6 +150,9 @@ pub fn env(mut out: impl std::io::Write, format: OutputFormat) -> Result<()> {
         field = "core dir",
     )
     .or_error()?;
+    if let Some(trust) = repo_trust {
+        writeln!(out, "{field:>width$}: {trust:?}", field = "repo trust").or_error()?;
+    }
     Ok(())
 }
 
