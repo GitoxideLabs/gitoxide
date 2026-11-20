@@ -7,7 +7,7 @@ pub fn open_repo(path: impl Into<std::path::PathBuf>) -> Result<gix::Repository,
 }
 
 pub fn discover_repo(path: impl AsRef<std::path::Path>) -> Result<gix::Repository, gix_error::Error> {
-    gix::discover_opts(path, Default::default(), gix::open::Options::isolated())
+    gix::open::Options::isolated().discover(path)
 }
 
 pub fn basic_subrepo_dir(name: &str) -> Result<std::path::PathBuf, Box<dyn std::error::Error + Send + Sync>> {

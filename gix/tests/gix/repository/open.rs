@@ -81,16 +81,20 @@ fn discovery_checks_ownership_before_applying_open_trust() -> TestResult {
         trust: upwards::TrustPolicy::Required(Trust::Full),
         ..Default::default()
     };
-    let err = gix::discover_opts(
-        &git_dir,
-        options,
-        crate::restricted().with_enforced_trust(Trust::Reduced),
-    )
-    .expect_err("discovery cannot check ownership of the missing common directory");
-    assert!(
-        err.to_string().contains("Could not determine trust level for path"),
-        "the opening trust override must not skip discovery's ownership check: {err}"
-    );
+    for result in [
+        gix::discover_opts(
+            &git_dir,
+            options,
+            crate::restricted().with_enforced_trust(Trust::Reduced),
+        ),
+        crate::restricted().with_trust(Trust::Reduced).discover(&git_dir),
+    ] {
+        let err = result.expect_err("discovery cannot check ownership of the missing common directory");
+        assert!(
+            err.to_string().contains("Could not determine trust level for path"),
+            "the opening trust override must not skip discovery's ownership check: {err}"
+        );
+    }
     Ok(())
 }
 
@@ -135,10 +139,14 @@ fn options_open_and_discover_honor_initial_and_enforced_trust() -> TestResult {
     };
 
     check_trust(&subdir, |options, start| {
+        options.discover_with_environment_overrides(start)
+    })?;
+    check_trust(&subdir, |options, start| {
         gix::discover_with_environment_overrides_opts(start, Default::default(), options)
     })?;
 
     let environment = gix_testtools::Env::new().set("GIT_DIR", bare.display().to_string());
+    check_trust(&subdir, |options, start| options.discover(start))?;
     check_trust(&subdir, |options, start| {
         gix::discover_opts(
             start,
@@ -199,6 +207,9 @@ fn options_open_and_discover_honor_initial_and_enforced_trust() -> TestResult {
     check_trust(&worktree, |options, start| options.open(start))?;
 
     let _environment = environment.set("GIT_DIR", git_dir.display().to_string());
+    check_trust(&bare, |options, start| {
+        options.discover_with_environment_overrides(start)
+    })?;
     check_trust(&bare, |options, start| {
         gix::discover_with_environment_overrides_opts(start, Default::default(), options)
     })

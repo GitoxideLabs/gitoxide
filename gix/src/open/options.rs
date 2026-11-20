@@ -142,7 +142,7 @@ impl Options {
         self
     }
 
-    /// Set the initial trust level when [opening a repository][Self::open], including after [discovery][crate::discover_opts()].
+    /// Set the initial trust level when [opening a repository][Self::open], including after [discovery][Self::discover].
     /// Pass `None` to use the trust determined from ownership or supplied by discovery.
     ///
     /// When opening without an upward search, supplying a level skips the ownership checks of the repository path
@@ -162,7 +162,7 @@ impl Options {
         self
     }
 
-    /// Enforce `trust` when [opening a repository][Self::open], including after [discovery][crate::discover_opts()].
+    /// Enforce `trust` when [opening a repository][Self::open], including after [discovery][Self::discover].
     /// Pass `None` to use the trust determined from ownership or supplied by discovery.
     ///
     /// An enforced level skips opening's repository and worktree ownership checks and `safe.directory` approval.

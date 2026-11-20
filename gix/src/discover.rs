@@ -118,6 +118,23 @@ impl ThreadSafeRepository {
     }
 }
 
+/// Lifecycle
+impl crate::open::Options {
+    /// Discover a repository by searching upwards from `directory`, without applying environment overrides to discovery.
+    ///
+    /// See [`crate::discover_opts()`] for the trust policy and to customize the upward search.
+    pub fn discover(self, directory: impl AsRef<Path>) -> Result<Repository> {
+        crate::discover_opts(directory, Default::default(), self)
+    }
+
+    /// Open the repository selected by `GIT_DIR`, or discover one upwards from `directory`.
+    ///
+    /// See [`crate::discover_with_environment_overrides_opts()`] for the supported overrides and trust policy.
+    pub fn discover_with_environment_overrides(self, directory: impl AsRef<Path>) -> Result<Repository> {
+        crate::discover_with_environment_overrides_opts(directory, Default::default(), self)
+    }
+}
+
 pub(crate) fn discover_with_open_options(
     directory: &Path,
     options: upwards::Options<'_>,
