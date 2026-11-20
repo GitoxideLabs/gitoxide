@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use super::{Options, RepositoryTrust};
-use crate::{Result, ThreadSafeRepository, bstr::BString, open::Permissions};
+use crate::{Repository, Result, bstr::BString, open::Permissions};
 
 impl Default for Options {
     fn default() -> Self {
@@ -239,10 +239,15 @@ impl Options {
         self.lenient_config = !toggle;
         self
     }
+}
 
-    /// Open a repository at `path` with the options set so far.
-    pub fn open(self, path: impl Into<PathBuf>) -> Result<ThreadSafeRepository> {
-        ThreadSafeRepository::open_opts(path, self)
+/// Lifecycle
+impl Options {
+    /// Open a repository at `path` with these options, without searching parent directories.
+    ///
+    /// As in [`crate::open_opts()`], `path` can be a worktree or a Git directory.
+    pub fn open(self, path: impl Into<PathBuf>) -> Result<Repository> {
+        crate::open_opts(path, self)
     }
 }
 
