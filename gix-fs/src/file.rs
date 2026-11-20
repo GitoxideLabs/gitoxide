@@ -37,6 +37,7 @@ pub fn clear_readonly_attribute(path: &std::path::Path) -> std::io::Result<()> {
 ///
 /// Calling a platform-specific `custom_flags()` setter again replaces the no-follow flags.
 /// Symlinks in parent components are still followed. On other platforms, these options do not prevent following symlinks.
+#[gix_macros::unstable(since = "2026-09-30")]
 pub fn open_options_no_follow() -> std::fs::OpenOptions {
     #[cfg_attr(not(any(unix, windows)), allow(unused_mut))]
     let mut options = std::fs::OpenOptions::new();
@@ -59,6 +60,7 @@ pub fn open_options_no_follow() -> std::fs::OpenOptions {
 }
 
 /// The outcome of [`open_read_only_no_follow()`].
+#[gix_macros::unstable(since = "2026-09-30")]
 #[derive(Debug)]
 pub enum FileOrSymlink {
     /// An opened filesystem handle which isn't itself a symlink.
@@ -99,6 +101,7 @@ pub enum FileOrSymlink {
 /// ```
 ///
 /// Symlinks in parent components are still followed. No-follow protection is only provided on Unix and Windows.
+#[gix_macros::unstable(since = "2026-09-30")]
 pub fn open_read_only_no_follow(path: &std::path::Path) -> std::io::Result<FileOrSymlink> {
     match open_options_no_follow().read(true).open(path) {
         // This is naturally Windows-only as opening a symlink with O_NOFOLLOW fails on linux.
