@@ -4500,6 +4500,11 @@ mod tests {
                 }),
                 "repair without verification preserves the warning"
             );
+            assert_eq!(
+                app.changes_error(ChangePane::Worktree),
+                Some(expected.as_str()),
+                "verification preserves the diagnostic after retry backoff ends"
+            );
             assert!(app.update_monitor_error(&Outcome {
                 coverage: CoverageStatus::Healthy,
                 ..Outcome::default()
