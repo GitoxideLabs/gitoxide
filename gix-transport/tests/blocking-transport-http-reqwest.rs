@@ -345,3 +345,73 @@ fn client_configuration_is_lazy_retained_on_restart_and_cached() -> gix_testtool
     }
     Ok(())
 }
+
+/// Regression for <https://github.com/GitoxideLabs/gitoxide/issues/3015>: a proxy configured
+/// through `http.proxy` must reach the `reqwest` client instead of being dropped.
+#[test]
+fn configured_proxy_is_used() -> gix_testtools::TestResult {
+    let proxy_listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let proxy_addr = proxy_listener.local_addr()?;
+    let proxy_was_contacted = observe_connection_within_deadline(proxy_listener);
+
+    // Nothing listens on this port, so a direct connection cannot succeed. The request can only
+    // be answered if it goes through the proxy.
+    let unreachable_addr = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        listener.local_addr()?
+    };
+    let url = format!("http://{unreachable_addr}/repo");
+
+    let mut client = http::connect::<http::reqwest::Remote>(url.as_str().try_into()?, Protocol::V1, false);
+    let options = http::Options {
+        proxy: Some(format!("http://{proxy_addr}")),
+        ..Default::default()
+    };
+    client.configure(&options)?;
+
+    let _ = client.handshake(Service::UploadPack, &[]);
+
+    assert!(
+        proxy_was_contacted.join().expect("thread"),
+        "the configured proxy must receive the connection"
+    );
+    Ok(())
+}
+
+/// A `http.noProxy` entry that names a different host must not stop requests from using the
+/// configured proxy.
+#[test]
+fn no_proxy_for_another_host_keeps_the_proxy() -> gix_testtools::TestResult {
+    let proxy_listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let proxy_addr = proxy_listener.local_addr()?;
+    let proxy_was_contacted = observe_connection_within_deadline(proxy_listener);
+
+    // A host that resolves but has nothing listening, so reaching it directly fails. The handshake
+    // can only succeed through the proxy, which makes this test fail if the proxy is ignored.
+    let unreachable_addr = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        listener.local_addr()?
+    };
+    let url = format!("http://{unreachable_addr}/repo");
+
+    let mut client = http::connect::<http::reqwest::Remote>(url.as_str().try_into()?, Protocol::V1, false);
+    let options = http::Options {
+        proxy: Some(format!("http://{proxy_addr}")),
+        // The proxy request carries the target host, so noProxy has to name what the client sees.
+        no_proxy: Some("unreachable.invalid".to_owned()),
+        ..Default::default()
+    };
+    client.configure(&options)?;
+
+    let result = client.handshake(Service::UploadPack, &[]);
+
+    assert!(
+        result.is_err(),
+        "nothing listens on the target, so a direct connection cannot work"
+    );
+    assert!(
+        proxy_was_contacted.join().expect("thread"),
+        "noProxy names a different host, so the proxy must still receive the connection"
+    );
+    Ok(())
+}

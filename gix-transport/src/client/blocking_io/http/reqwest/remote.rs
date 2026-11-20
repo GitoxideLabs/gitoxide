@@ -39,6 +39,25 @@ fn authority_changed(curr_url: &reqwest::Url, prev_url: &reqwest::Url) -> bool {
         || curr_url.port_or_known_default() != prev_url.port_or_known_default()
 }
 
+/// Turn `http.proxy` and `http.noProxy` into a proxy for reqwest, or `None` to leave the client
+/// without one.
+///
+/// An empty proxy string disables proxying instead of naming a proxy, as `http.proxy` documents.
+/// Since this function produces the only proxy that reqwest will use, setting one also disables
+/// proxying from the environment, which matches the `curl` backend: once `http.proxy` is set, a
+/// request goes there and nowhere else.
+fn configure_proxy(config: &http::Options) -> Result<Option<reqwest::Proxy>> {
+    let Some(proxy) = config.proxy.as_deref().filter(|proxy| !proxy.is_empty()) else {
+        return Ok(None);
+    };
+    let mut proxy =
+        reqwest::Proxy::all(proxy).map_err(|err| err.and_raise(message("Could not parse the configured proxy")))?;
+    if let Some(no_proxy) = config.no_proxy.as_deref() {
+        proxy = proxy.no_proxy(reqwest::NoProxy::from_string(no_proxy));
+    }
+    Ok(Some(proxy))
+}
+
 impl Default for Remote {
     fn default() -> Self {
         let (req_send, req_recv) = std::sync::mpsc::sync_channel(0);
@@ -64,6 +83,9 @@ impl Default for Remote {
                     let mut builder = reqwest::blocking::ClientBuilder::new()
                         .connect_timeout(std::time::Duration::from_secs(20))
                         .http1_title_case_headers();
+                    if let Some(proxy) = configure_proxy(&config)? {
+                        builder = builder.proxy(proxy);
+                    }
                     if let Some(backend) = config.backend.as_ref() {
                         let mut backend = backend
                             .lock()
