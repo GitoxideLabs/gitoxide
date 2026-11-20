@@ -128,11 +128,11 @@ impl ThreadSafeRepository {
     /// Try to open a git repository in `fallback_directory` (can be worktree or `.git` directory) only if there is no override
     /// of the `gitdir` using git environment variables.
     ///
-    /// Use `trust_map` to select options according to the ownership-derived trust level. Initial trust comes from
-    /// the candidate path (`GIT_DIR` if set, otherwise `fallback_directory`) before resolving a possible gitfile.
-    /// Ownership checks of the resolved git directory, common directory, and existing worktree can only lower
-    /// that level, so a trusted target cannot upgrade an untrusted gitfile.
-    /// The computed level replaces any initial or enforced trust level in the selected options.
+    /// Call `open_options_by_trust` with the ownership-derived trust level and corresponding opening defaults,
+    /// as in [`Self::discover_opts()`]. Initial trust comes from the candidate path (`GIT_DIR` if set, otherwise
+    /// `fallback_directory`) before resolving a possible gitfile. Ownership checks of the resolved Git directory,
+    /// common directory, and existing worktree can only lower that level, so a trusted target cannot upgrade an
+    /// untrusted gitfile. An explicit trust setting returned by the callback is preserved.
     ///
     /// Note that this will read various `GIT_*` environment variables to check for overrides, and is probably most useful when implementing
     /// custom hooks.
@@ -144,7 +144,17 @@ impl ThreadSafeRepository {
     #[doc(alias = "open_from_env", alias = "git2")]
     pub fn open_with_environment_overrides(
         fallback_directory: impl Into<PathBuf>,
-        trust_map: gix_sec::trust::Mapping<Options>,
+        open_options_by_trust: impl FnOnce(Options, Trust) -> Options,
+    ) -> Result<Self> {
+        Self::open_with_environment_and_options(fallback_directory, None, |trust| {
+            Options::from_trust_callback(trust, open_options_by_trust)
+        })
+    }
+
+    pub(crate) fn open_with_environment_and_options(
+        fallback_directory: impl Into<PathBuf>,
+        assumed_trust: Option<Trust>,
+        open_options: impl FnOnce(Trust) -> Options,
     ) -> Result<Self> {
         let _span = gix_trace::coarse!("ThreadSafeRepository::open_with_environment_overrides()");
         let overrides = EnvironmentOverrides::from_env().or_error()?;
@@ -162,15 +172,21 @@ impl ThreadSafeRepository {
 
         // To be altered later based on `core.precomposeUnicode`.
         let cwd = gix_fs::current_dir(false).or_error()?;
-        let candidate_trust = gix_sec::Trust::from_path_ownership(&path).or_error()?;
+        let candidate_trust = assumed_trust
+            .is_none()
+            .then(|| Trust::from_path_ownership(&path))
+            .transpose()
+            .or_error()?;
         let (git_dir, worktree_dir) = gix_discover::repository::Path::from_dot_git_dir(path.clone(), path_kind, &cwd)
             .expect("we have sanitized path with is_git()")
             .into_repository_and_work_tree_directories();
         let worktree_dir = worktree_dir.or(overrides.worktree_dir);
 
-        let git_dir_trust =
-            gix_discover::repository::trust(&git_dir, worktree_dir.as_deref(), &cwd, (&path, Some(candidate_trust)))?;
-        let mut options = trust_map.into_value_by_level(git_dir_trust).with_trust(git_dir_trust);
+        let git_dir_trust = match assumed_trust {
+            Some(trust) => trust,
+            None => gix_discover::repository::trust(&git_dir, worktree_dir.as_deref(), &cwd, (&path, candidate_trust))?,
+        };
+        let mut options = open_options(git_dir_trust);
         options.current_dir = Some(cwd);
         ThreadSafeRepository::open_from_paths(git_dir, worktree_dir, options, None)
     }

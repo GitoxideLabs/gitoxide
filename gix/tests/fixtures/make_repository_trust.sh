@@ -12,10 +12,15 @@ for repo in promoted demoted declared-bare; do
   git -C "$repo" config extensions.worktreeConfig true
   git -C "$repo" config --worktree gitoxide.core.refsNamespace local
 done
+mkdir promoted/subdir
 # Discovery sees the checkout of declared-bare before core.bare suppresses it.
 git config --file declared-bare/.git/config core.bare true
 git init --bare -q bare.git
 git config --file trusted-git-dirs.config --add safe.directory "$(git -C bare.git rev-parse --absolute-git-dir)"
+
+# The candidate is recognizable, but discovery cannot check ownership of its common directory.
+git init --bare -q missing-common.git
+echo missing >missing-common.git/commondir
 
 git config --file promoted/.git/config.worktree core.worktree ../../checkout
 git config --file demoted/.git/config.worktree core.worktree ../../missing
