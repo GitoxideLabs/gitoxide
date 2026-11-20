@@ -258,14 +258,10 @@ pub fn repo_rw(name: &str) -> Result<(Repository, tempfile::TempDir)> {
 pub fn repo_rw_opts(name: &str, opts: gix::open::Options) -> Result<(Repository, tempfile::TempDir)> {
     let repo_path = gix_testtools::scripted_fixture_writable(name)?;
     Ok((
-        ThreadSafeRepository::discover_opts(
-            repo_path.path(),
-            Default::default(),
-            gix_sec::trust::Mapping {
-                full: opts.clone_without_trust(),
-                reduced: opts,
-            },
-        )?
+        ThreadSafeRepository::discover_opts(repo_path.path(), Default::default(), |_, trust| match trust {
+            gix_sec::Trust::Full => opts.clone_without_trust(),
+            gix_sec::Trust::Reduced => opts,
+        })?
         .to_thread_local(),
         repo_path,
     ))

@@ -30,7 +30,6 @@ impl ThreadSafeRepository {
         kind: crate::create::Kind,
         options: crate::create::Options,
     ) -> Result<Self> {
-        use gix_sec::trust::DefaultForLevel;
         let open_options = crate::open::Options::default_for_level(gix_sec::Trust::Full);
         Self::init_opts(directory, kind, options, open_options)
     }

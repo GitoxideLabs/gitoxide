@@ -562,6 +562,84 @@ mod open {
     }
 
     #[test]
+    fn configure_related_repository_can_modify_or_skip_submodule_opens() -> TestResult {
+        use std::ops::ControlFlow::{Break, Continue};
+
+        use gix::{error::ErrorExt, open::RelatedRepositoryKind, sec::Trust};
+
+        let fixture = gix_testtools::scripted_fixture_read_only("make_unlisted_gitlinks.sh")?;
+        let root = fixture.join("listed-clean");
+        let parent_dir = root.join(".git");
+        let checkout = root.join("d");
+        let repo = gix::open::Options::isolated()
+            .with_enforced_trust(Trust::Reduced)
+            .configure_related_repository(move |related, options| {
+                assert_eq!(related.kind, RelatedRepositoryKind::Submodule, "old-form submodule");
+                assert_eq!(related.git_dir, checkout.join(".git"), "the resolved Git directory");
+                assert_eq!(related.inferred_worktree, Some(checkout.as_path()), "the checkout");
+                assert_eq!(related.parent.git_dir(), parent_dir, "the superproject's Git directory");
+                assert_eq!(
+                    related.parent.git_dir_trust(),
+                    Trust::Reduced,
+                    "the parent's effective trust"
+                );
+                assert_eq!(related.initial_trust, Trust::Full, "the child's ownership trust");
+                Ok(Continue(options.config_overrides(["core.abbrev=12"])))
+            })
+            .open(&root)?
+            .clone();
+        let submodule = repo
+            .submodules()?
+            .expect("registered submodules")
+            .next()
+            .expect("submodule d");
+        let opened = submodule.open()?.expect("the callback allowed opening");
+        assert_eq!(
+            opened.kind(),
+            gix::repository::Kind::Common,
+            "the old-form layout is ordinary"
+        );
+        assert_eq!(
+            opened.config_snapshot().integer("core.abbrev"),
+            Some(12),
+            "the child sees the override"
+        );
+
+        let root = fixture.join("listed-gitfile-empty-worktree-config");
+        let repo = gix::open::Options::isolated()
+            .configure_related_repository(|_, _| Ok(Break(())))
+            .open(&root)?;
+        let submodule = repo
+            .submodules()?
+            .expect("registered submodules")
+            .next()
+            .expect("submodule d");
+        assert!(
+            submodule.open()?.is_none(),
+            "skip takes effect before reading the invalid config"
+        );
+        #[cfg(feature = "status")]
+        assert!(
+            submodule.status(gix::submodule::config::Ignore::None, false).is_err(),
+            "status reports that inspection was skipped"
+        );
+
+        let repo = gix::open::Options::isolated()
+            .configure_related_repository(|_, _| Err(gix::error::not_found("callback error").raise()))
+            .open(&root)?;
+        let submodule = repo
+            .submodules()?
+            .expect("registered submodules")
+            .next()
+            .expect("submodule d");
+        let err = submodule
+            .open()
+            .expect_err("callback errors propagate even when classified as not found");
+        assert_eq!(err.to_string(), "callback error");
+        Ok(())
+    }
+
+    #[test]
     fn gitfile_dot_dot_target_preserves_configured_worktree() -> TestResult {
         let root = gix_testtools::scripted_fixture_read_only("make_unlisted_gitlinks.sh")?
             .join("listed-gitfile-worktree-config");

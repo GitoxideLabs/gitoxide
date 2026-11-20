@@ -279,23 +279,20 @@ pub fn discover(directory: impl AsRef<std::path::Path>) -> Result<Repository> {
     ThreadSafeRepository::discover(directory).map(Into::into)
 }
 
-/// Try to open a git repository in `directory` and search upwards through its parents until one is found,
-/// using `open_options` regardless of the trust level of the discovered repository.
-/// The detected trust level is retained, so repositories with reduced trust still restrict their behavior accordingly.
+/// Search upwards from `directory` for a Git repository and open it with `open_options`, regardless of its trust level.
+/// The search does not apply environment overrides to discovery.
+///
+/// [`discover::upwards::Options::trust`] determines whether a repository meets the search's trust requirements.
+/// Use [`discover::upwards::TrustPolicy::Assume`] to skip ownership checks during the search.
+/// Once a repository is found, its discovered trust is used as initial trust for opening unless overridden by
+/// [`open::Options::with_trust()`] or [`open::Options::with_enforced_trust()`]. Unless trust is enforced,
+/// opening still considers `safe.directory` and the ownership of the final worktree.
 pub fn discover_opts(
     directory: impl AsRef<std::path::Path>,
     options: discover::upwards::Options<'_>,
     open_options: open::Options,
 ) -> Result<Repository> {
-    ThreadSafeRepository::discover_opts(
-        directory,
-        options,
-        sec::trust::Mapping {
-            full: open_options.clone_with_trust(),
-            reduced: open_options,
-        },
-    )
-    .map(Into::into)
+    discover::discover_with_open_options(directory.as_ref(), options, open_options, false)
 }
 
 /// Try to discover a git repository directly from the environment.
@@ -305,11 +302,25 @@ pub fn discover_with_environment_overrides(directory: impl AsRef<std::path::Path
     ThreadSafeRepository::discover_with_environment_overrides(directory).map(Into::into)
 }
 
+/// Open the repository selected by `GIT_DIR`, or search upwards from `directory`, using `open_options` in either case.
+///
+/// This honors the environment overrides described in [`ThreadSafeRepository::discover_with_environment_overrides_opts()`].
+/// If `GIT_DIR` is set, there is no upward search and `options` do not apply. The selected repository is opened
+/// using ownership-derived trust unless `open_options` supplies trust explicitly. Otherwise, trust follows the
+/// same policy as [`discover_opts()`].
+pub fn discover_with_environment_overrides_opts(
+    directory: impl AsRef<std::path::Path>,
+    options: discover::upwards::Options<'_>,
+    open_options: open::Options,
+) -> Result<Repository> {
+    discover::discover_with_open_options(directory.as_ref(), options, open_options, true)
+}
+
 /// Try to open a git repository directly from the environment.
 ///
 /// See [`ThreadSafeRepository::open_with_environment_overrides()`].
 pub fn open_with_environment_overrides(directory: impl Into<std::path::PathBuf>) -> Result<Repository> {
-    ThreadSafeRepository::open_with_environment_overrides(directory, Default::default()).map(Into::into)
+    ThreadSafeRepository::open_with_environment_overrides(directory, |options, _| options).map(Into::into)
 }
 
 /// See [`ThreadSafeRepository::init()`], but returns a [`Repository`] instead.
@@ -380,7 +391,6 @@ where
 }
 
 fn open_opts_with_git_binary_config() -> open::Options {
-    use gix_sec::trust::DefaultForLevel;
     let mut opts = open::Options::default_for_level(gix_sec::Trust::Full);
     opts.permissions.config.git_binary = true;
     opts

@@ -315,7 +315,8 @@ fn size_in_memory() {
     // Network-client features add protocol permission caching to `Repository::config`,
     // which grows the type by one more cached cell.
     // The ODB handle's sharing policy brings the Windows workspace layout to 1504 bytes.
-    let limit = 1504;
+    // The related-repository callback in `open::Options` brings the limit to 1512 bytes.
+    let limit = 1512;
     assert!(
         actual_size <= limit,
         "size of Repository shouldn't change without us noticing, it's meant to be cloned: should have been at most {limit:?}, was {actual_size}"

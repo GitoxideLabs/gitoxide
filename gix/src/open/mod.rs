@@ -1,8 +1,54 @@
-use std::path::PathBuf;
+use std::{
+    ops::ControlFlow,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
+use gix_error::ErrorExt;
 use gix_sec::Trust;
 
-use crate::bstr::BString;
+use crate::{Repository, bstr::BString};
+
+/// The relationship that led to opening another repository from an existing one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum RelatedRepositoryKind {
+    /// A submodule, including old-form layouts and unlisted gitlinks.
+    Submodule,
+    /// A linked worktree.
+    LinkedWorktree,
+    /// The main repository opened from a linked worktree.
+    MainRepository,
+}
+
+/// The target and parent of an open initiated by an existing repository.
+///
+/// The target paths are absolute, with their symlink spelling preserved.
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub struct RelatedRepository<'a> {
+    /// The relationship through which the target is being opened.
+    pub kind: RelatedRepositoryKind,
+    /// The target's resolved Git directory.
+    pub git_dir: &'a Path,
+    /// The target's inferred checkout, which may be absent, inaccessible, or changed by configuration later.
+    pub inferred_worktree: Option<&'a Path>,
+    /// The trust the target would start with using the opening path's usual ownership or worktree trust rules.
+    pub initial_trust: Trust,
+    /// The repository initiating the open. Its paths may be relative to its captured working directory.
+    pub parent: &'a Repository,
+}
+
+type ConfigureRelatedRepository =
+    dyn Fn(RelatedRepository<'_>, Options) -> crate::Result<ControlFlow<(), Options>> + Send + Sync;
+
+pub(crate) fn related_repository_skipped(git_dir: &Path) -> crate::Error {
+    gix_error::message!(
+        "Opening the repository at \"{}\" was skipped by the callback",
+        git_dir.display()
+    )
+    .raise()
+}
 
 #[derive(Copy, Clone)]
 pub(crate) enum RepositoryTrust {
@@ -72,6 +118,10 @@ pub struct Options {
     /// Internal to pass an already obtained CWD on to where it may also be used.
     /// This avoids the CWD being queried more than once per repo.
     pub(crate) current_dir: Option<PathBuf>,
+    /// Callback that can change the opening options or skip a related repository open before its configuration is loaded.
+    /// [`Self::clone_without_trust()`] retains it so the policy applies to subsequent related opens.
+    /// Set it with [`Self::configure_related_repository()`].
+    configure_related_repository: Option<Arc<ConfigureRelatedRepository>>,
 }
 
 mod options;

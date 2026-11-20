@@ -5,6 +5,7 @@ use gix_error::{ResultExt, bail};
 use crate::{
     Repository, Result, ThreadSafeRepository,
     bstr::{BStr, BString, ByteSlice},
+    open::{RelatedRepositoryKind, related_repository_skipped},
     worktree::Proxy,
 };
 
@@ -132,6 +133,15 @@ impl Proxy<'_> {
                 (&common_dir, None),
             )?);
         }
+        let options = options
+            .configure_related_open(
+                self.parent,
+                RelatedRepositoryKind::LinkedWorktree,
+                &self.git_dir,
+                base.as_deref(),
+            )?
+            .continue_value()
+            .ok_or_else(|| related_repository_skipped(&self.git_dir))?;
         ThreadSafeRepository::open_from_paths(self.git_dir, base, options, Some(common_dir)).map(Into::into)
     }
 }

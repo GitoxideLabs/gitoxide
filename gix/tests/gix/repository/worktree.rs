@@ -164,6 +164,36 @@ mod lock {
 #[cfg(feature = "worktree-mutation")]
 mod add {
     #[test]
+    fn configure_related_repository_skip_rolls_back_worktree_registration() -> gix_testtools::TestResult {
+        use gix::{open::RelatedRepositoryKind, worktree::add::Head};
+        use std::{ops::ControlFlow, sync::atomic::AtomicBool};
+
+        let (repo, _fixture) = crate::basic_rw_repo()?;
+        let destinations = gix_testtools::tempfile::TempDir::new()?;
+        let destination = destinations.path().join("skipped");
+        let repo = crate::restricted()
+            .configure_related_repository(|related, _| {
+                assert_eq!(related.kind, RelatedRepositoryKind::LinkedWorktree);
+                Ok(ControlFlow::Break(()))
+            })
+            .open(repo.git_dir())?;
+        let err = repo
+            .prepare_add_worktree(
+                &destination,
+                Head::Detached(repo.head_id()?.detach()),
+                &AtomicBool::default(),
+            )
+            .expect_err("the callback skipped the new worktree");
+        assert!(
+            err.to_string().contains("Could not open a worktree repository"),
+            "{err}"
+        );
+        assert!(!destination.exists(), "the skipped checkout is rolled back");
+        assert!(repo.worktrees()?.is_empty(), "the skipped registration is rolled back");
+        Ok(())
+    }
+
+    #[test]
     fn returned_repositories_and_preparation_have_absolute_paths() -> gix_testtools::TestResult {
         let (source, _fixture) = crate::basic_rw_repo()?;
         let destinations = gix_testtools::tempfile::TempDir::new()?;
@@ -2916,6 +2946,53 @@ fn worktree_listing_errors_preserve_io_errors() -> TestResult {
             "both listing APIs preserve the directory traversal failure"
         );
     }
+    Ok(())
+}
+
+#[test]
+fn configure_related_repository_applies_to_linked_and_main_opens() -> TestResult {
+    use std::ops::ControlFlow::{Break, Continue};
+
+    use gix::open::RelatedRepositoryKind;
+
+    let Some(dir) = gix_testtools::scripted_fixture_read_only_with_git_version("make_worktree_repo.sh", |version| {
+        version >= (2, 31, 0)
+    })?
+    else {
+        return Ok(());
+    };
+    let repo = crate::restricted()
+        .configure_related_repository(|related, _| {
+            assert!(related.git_dir.is_absolute(), "the target path can be used directly");
+            match related.kind {
+                RelatedRepositoryKind::LinkedWorktree if related.git_dir.ends_with("wt-a") => Ok(Continue(
+                    gix::open::Options::isolated().config_overrides(["core.abbrev=12"]),
+                )),
+                RelatedRepositoryKind::MainRepository => {
+                    assert!(
+                        related.parent.git_dir().ends_with("wt-a"),
+                        "the linked worktree is the parent"
+                    );
+                    Ok(Break(()))
+                }
+                _ => Ok(Break(())),
+            }
+        })
+        .open(dir.join("repo"))?;
+    let linked = repo.worktree_proxy_by_id("wt-a")?.expect("worktree wt-a").into_repo()?;
+    assert_eq!(
+        linked.config_snapshot().integer("core.abbrev"),
+        Some(12),
+        "the linked worktree sees the override"
+    );
+    let err = linked
+        .main_repo()
+        .expect_err("the inherited callback skipped the main repository");
+    assert!(err.to_string().contains(&repo.git_dir().display().to_string()), "{err}");
+    assert!(
+        repo.worktrees_including_main()?.any(|result| result.is_err()),
+        "traversal surfaces skips so callers know they did not see all worktrees"
+    );
     Ok(())
 }
 

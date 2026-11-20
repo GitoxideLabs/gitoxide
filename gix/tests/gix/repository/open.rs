@@ -1,5 +1,5 @@
 use gix_testtools::TestResult;
-use std::borrow::Cow;
+use std::{borrow::Cow, path::Path};
 
 use gix::bstr::BString;
 use gix::config::tree::Key;
@@ -14,7 +14,9 @@ fn open_permissions_is_isolated() {
 
 #[test]
 #[serial_test::serial]
-fn discover_with_git_dir_environment_override_uses_it_and_sets_trust() -> TestResult {
+fn git_dir_environment_override_supplies_initial_trust() -> TestResult {
+    use gix::sec::Trust;
+
     let _environment = gix_testtools::isolate_git_environment()?;
     let fallback = gix_testtools::tempfile::TempDir::new()?;
     crate::init_repo_isolated(fallback.path(), gix::create::Kind::WithWorktree)?;
@@ -24,26 +26,193 @@ fn discover_with_git_dir_environment_override_uses_it_and_sets_trust() -> TestRe
         .unset("GIT_WORK_TREE")
         .set("GIT_DIR", overridden.git_dir().to_string_lossy().into_owned());
 
-    let repo = gix::ThreadSafeRepository::discover_with_environment_overrides_opts(
-        fallback.path(),
-        Default::default(),
-        gix_sec::trust::Mapping {
-            full: crate::restricted().with_enforced_trust(gix::sec::Trust::Reduced),
-            reduced: crate::restricted(),
-        },
-    )?;
-
-    assert_eq!(
-        repo.git_dir(),
-        overridden.git_dir(),
-        "the git-dir from the environment replaces the fallback and opens without panicking on missing trust"
-    );
-    assert_eq!(
-        repo.to_thread_local().git_dir_trust(),
-        gix::sec::Trust::Full,
-        "the environment-selected repository uses its own ownership"
-    );
+    for (enforce, expected) in [(false, Trust::Full), (true, Trust::Reduced)] {
+        let open_options_by_trust = |options: gix::open::Options, trust| {
+            assert_eq!(
+                trust,
+                Trust::Full,
+                "the callback receives the selected repository's trust"
+            );
+            assert_eq!(
+                options.permissions,
+                gix::open::Permissions::all(),
+                "the callback receives full-trust defaults"
+            );
+            if enforce {
+                options.with_enforced_trust(Trust::Reduced)
+            } else {
+                gix::open::Options::isolated()
+            }
+        };
+        for repo in [
+            gix::ThreadSafeRepository::discover_with_environment_overrides_opts(
+                fallback.path(),
+                Default::default(),
+                open_options_by_trust,
+            )?,
+            gix::ThreadSafeRepository::open_with_environment_overrides(fallback.path(), open_options_by_trust)?,
+        ] {
+            assert_eq!(
+                repo.git_dir(),
+                overridden.git_dir(),
+                "the git-dir from the environment replaces the fallback"
+            );
+            assert_eq!(
+                repo.to_thread_local().git_dir_trust(),
+                expected,
+                "the callback may override trust; unset trust inherits the selected repository's trust"
+            );
+        }
+    }
     Ok(())
+}
+
+#[test]
+#[cfg(any(unix, windows))]
+fn discovery_checks_ownership_before_applying_open_trust() -> TestResult {
+    use gix::{discover::upwards, sec::Trust};
+
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let fixture = gix_testtools::scripted_fixture_read_only("make_repository_trust.sh")?;
+    let git_dir = fixture.join("missing-common.git");
+    let options = upwards::Options {
+        trust: upwards::TrustPolicy::Required(Trust::Full),
+        ..Default::default()
+    };
+    for result in [
+        gix::discover_opts(
+            &git_dir,
+            options,
+            crate::restricted().with_enforced_trust(Trust::Reduced),
+        ),
+        crate::restricted().with_trust(Trust::Reduced).discover(&git_dir),
+    ] {
+        let err = result.expect_err("discovery cannot check ownership of the missing common directory");
+        assert!(
+            err.to_string().contains("Could not determine trust level for path"),
+            "the opening trust override must not skip discovery's ownership check: {err}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn options_open_and_discover_honor_initial_and_enforced_trust() -> TestResult {
+    use gix::{discover::upwards, sec::Trust};
+
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let fixture = gix_testtools::scripted_fixture_read_only("make_repository_trust.sh")?;
+    let worktree = fixture.join("promoted");
+    let git_dir = worktree.join(".git");
+    let subdir = worktree.join("subdir");
+    let bare = fixture.join("bare.git");
+    type Select = fn(gix::open::Options, &Path) -> gix::Result<gix::Repository>;
+    let check_trust = |start: &Path, select: Select| -> TestResult {
+        let mut approved = crate::restricted().system_config_path(fixture.join("trusted-worktrees.config"));
+        approved.permissions.config.system = true;
+        for (options, expected, reason) in [
+            (
+                crate::restricted().with_trust(Trust::Reduced),
+                Trust::Reduced,
+                "explicit trust takes precedence over ownership",
+            ),
+            (
+                approved.clone_without_trust().with_trust(Trust::Reduced),
+                Trust::Full,
+                "safe.directory can promote initial trust",
+            ),
+            (
+                approved.with_enforced_trust(Trust::Reduced),
+                Trust::Reduced,
+                "safe.directory cannot promote enforced trust",
+            ),
+        ] {
+            let repo = select(options, start)?;
+            assert_eq!(repo.git_dir(), git_dir, "open the selected repository from {start:?}");
+            assert_eq!(repo.git_dir_trust(), expected, "{reason} when opening from {start:?}");
+        }
+        Ok(())
+    };
+
+    check_trust(&subdir, |options, start| {
+        options.discover_with_environment_overrides(start)
+    })?;
+    check_trust(&subdir, |options, start| {
+        gix::discover_with_environment_overrides_opts(start, Default::default(), options)
+    })?;
+
+    let environment = gix_testtools::Env::new().set("GIT_DIR", bare.display().to_string());
+    check_trust(&subdir, |options, start| options.discover(start))?;
+    check_trust(&subdir, |options, start| {
+        gix::discover_opts(
+            start,
+            upwards::Options {
+                trust: upwards::TrustPolicy::Required(Trust::Full),
+                ..Default::default()
+            },
+            options,
+        )
+    })?;
+    let repo = gix::discover_opts(
+        &subdir,
+        upwards::Options {
+            trust: upwards::TrustPolicy::Assume(Trust::Reduced),
+            ..Default::default()
+        },
+        crate::restricted(),
+    )?;
+    assert_eq!(
+        repo.git_dir_trust(),
+        Trust::Reduced,
+        "without an open trust override, the discovery policy supplies initial trust"
+    );
+    check_trust(&subdir, |options, start| {
+        gix::ThreadSafeRepository::discover_opts(start, Default::default(), |_, _| options).map(Into::into)
+    })?;
+    let repo = gix::ThreadSafeRepository::discover_opts(
+        &subdir,
+        upwards::Options {
+            trust: upwards::TrustPolicy::Assume(Trust::Reduced),
+            ..Default::default()
+        },
+        |options, trust| {
+            assert_eq!(
+                trust,
+                Trust::Reduced,
+                "the callback receives trust from upward discovery"
+            );
+            assert_eq!(
+                options.permissions,
+                gix::open::Permissions::secure(),
+                "the callback receives reduced-trust defaults"
+            );
+            crate::restricted().config_overrides(["core.abbrev=12"])
+        },
+    )?
+    .to_thread_local();
+    assert_eq!(
+        repo.git_dir_trust(),
+        Trust::Reduced,
+        "replacement options inherit discovery trust when they do not specify trust"
+    );
+    assert_eq!(
+        repo.config_snapshot().integer("core.abbrev"),
+        Some(12),
+        "opening uses the options returned by the callback"
+    );
+    check_trust(&worktree, |options, start| options.open(start))?;
+
+    let _environment = environment.set("GIT_DIR", git_dir.display().to_string());
+    check_trust(&bare, |options, start| {
+        options.discover_with_environment_overrides(start)
+    })?;
+    check_trust(&bare, |options, start| {
+        gix::discover_with_environment_overrides_opts(start, Default::default(), options)
+    })
 }
 
 #[test]
@@ -1160,15 +1329,7 @@ mod submodules {
     fn discover_repo(name: impl AsRef<Path>) -> Result<gix::Repository> {
         let dir = gix_testtools::scripted_fixture_read_only("make_submodules.sh")?;
         let repo_dir = dir.join(name);
-        Ok(gix::ThreadSafeRepository::discover_opts(
-            repo_dir,
-            Default::default(),
-            gix_sec::trust::Mapping {
-                full: crate::restricted(),
-                reduced: crate::restricted(),
-            },
-        )?
-        .to_thread_local())
+        Ok(gix::discover_opts(repo_dir, Default::default(), crate::restricted())?)
     }
 }
 

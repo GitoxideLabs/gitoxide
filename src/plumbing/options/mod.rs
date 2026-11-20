@@ -15,6 +15,14 @@ pub struct Args {
     #[clap(short = 'r', long, default_value = ".")]
     pub repository: PathBuf,
 
+    /// Override trust when opening the selected repository.
+    ///
+    /// This does not change ownership checks during an upward search. Only use full trust for
+    /// repositories whose configuration and worktree you trust.
+    /// Their configuration can run external commands.
+    #[clap(long, value_enum)]
+    pub repo_trust: Option<Trust>,
+
     /// Add these values to the configuration in the form of `key=value` or `key`.
     ///
     /// For example, if `key` is `core.abbrev`, set configuration like `[core] abbrev = key`,
@@ -77,6 +85,34 @@ pub struct Args {
 
     #[clap(subcommand)]
     pub cmd: Subcommands,
+}
+
+#[derive(Debug, Copy, Clone, clap::ValueEnum)]
+pub enum Trust {
+    /// Start with full trust and check ownership of the final worktree.
+    Full,
+    /// Start with reduced trust and allow approval by `safe.directory`.
+    Reduced,
+    /// Force full trust, skipping ownership and `safe.directory` checks when opening.
+    ForceFull,
+    /// Force reduced trust, skipping ownership and `safe.directory` checks when opening.
+    ForceReduced,
+}
+
+impl Trust {
+    pub fn level(self) -> gix::sec::Trust {
+        match self {
+            Self::Full | Self::ForceFull => gix::sec::Trust::Full,
+            Self::Reduced | Self::ForceReduced => gix::sec::Trust::Reduced,
+        }
+    }
+
+    pub fn apply(self, options: gix::open::Options) -> gix::open::Options {
+        match self {
+            Self::Full | Self::Reduced => options.with_trust(self.level()),
+            Self::ForceFull | Self::ForceReduced => options.with_enforced_trust(self.level()),
+        }
+    }
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -166,7 +202,7 @@ pub enum Subcommands {
     Corpus(corpus::Platform),
     MergeBase(merge_base::Command),
     Merge(merge::Platform),
-    /// Print paths relevant to the Git installation.
+    /// Print Git installation paths and the selected repository's trust level, when available.
     Env,
     /// Open paths in the editor selected by Git's precedence rules.
     Editor {

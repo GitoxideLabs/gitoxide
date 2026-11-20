@@ -215,6 +215,7 @@ impl Clone for BuiltinSubmoduleStatus {
 
 ///
 mod submodule_status {
+    use std::ops::ControlFlow;
 
     use crate::{Result, config::cache::util::ApplyLeniency};
     use crate::{
@@ -332,8 +333,10 @@ mod submodule_status {
                     let Some(git_dir) = crate::submodule::git_dir_from_worktree_gitdir(&worktree_gitdir, true)? else {
                         return Ok(None);
                     };
-                    let Some(sm_repo) = crate::submodule::open(&repo, &git_dir, rela_path)? else {
-                        return Ok(None);
+                    let sm_repo = match crate::submodule::open(&repo, &git_dir, rela_path)? {
+                        ControlFlow::Break(git_dir) => return Err(crate::open::related_repository_skipped(&git_dir)),
+                        ControlFlow::Continue(None) => return Ok(None),
+                        ControlFlow::Continue(Some(repo)) => repo,
                     };
                     crate::submodule::Status {
                         state: crate::submodule::State {

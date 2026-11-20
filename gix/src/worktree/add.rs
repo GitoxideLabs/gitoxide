@@ -282,9 +282,13 @@ impl crate::Repository {
         }
 
         let options = repo.options.clone_for_linked_worktree().open_path_as_is(true);
-        let mut repo = crate::ThreadSafeRepository::open_opts(prepared.git_dir(), options)
-            .or_raise(|| message("Could not open a worktree repository"))?
-            .to_thread_local();
+        let mut repo = crate::ThreadSafeRepository::open_opts_inner(
+            prepared.git_dir().to_owned(),
+            options,
+            Some((&repo, crate::open::RelatedRepositoryKind::LinkedWorktree)),
+        )
+        .or_raise(|| message("Could not open a worktree repository"))?
+        .to_thread_local();
         repo.clear_namespace();
         gix_fs::set_shared_repository_permissions(
             &repo.git_dir().join("HEAD"),
