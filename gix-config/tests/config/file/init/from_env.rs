@@ -21,10 +21,15 @@ fn empty_without_relevant_environment() -> TestResult {
 
 #[test]
 #[serial]
-fn empty_with_zero_count() -> TestResult {
-    let _environment = gix_testtools::isolate_git_environment()?.set("GIT_CONFIG_COUNT", "0");
-    let config = File::from_env(Default::default())?;
-    assert!(config.is_none());
+fn ignore_pairs_with_zero_or_empty_count() -> TestResult {
+    let _environment = gix_testtools::isolate_git_environment()?
+        .set("GIT_CONFIG_KEY_0", "core.key")
+        .set("GIT_CONFIG_VALUE_0", "value");
+    for count in ["0", ""] {
+        let _count = gix_testtools::Env::new().set("GIT_CONFIG_COUNT", count);
+        let config = File::from_env(Default::default())?;
+        assert!(config.is_none(), "count {count:?} ignores environment pairs");
+    }
     Ok(())
 }
 

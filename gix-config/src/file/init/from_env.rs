@@ -5,7 +5,8 @@ use crate::{File, KeyRef, file, file::init};
 
 /// Instantiation from environment variables
 impl File {
-    /// Generates a config from `GIT_CONFIG_*` environment variables or returns `Ok(None)` if no configuration was found.
+    /// Generates a config from `GIT_CONFIG_*` environment variables.
+    /// Returns `Ok(None)` if `GIT_CONFIG_COUNT` is unset, empty, or zero.
     /// See [`git-config`'s documentation] for more information on the environment variables in question.
     ///
     /// With `options` configured, it's possible to resolve `include.path` or `includeIf.<condition>.path` directives as well.
@@ -18,10 +19,10 @@ impl File {
         use gix_error::{OptionExt, ResultExt, message, not_found, validation};
         use std::env;
         let count: usize = match env::var("GIT_CONFIG_COUNT") {
-            Ok(v) => v
+            Ok(v) if !v.is_empty() => v
                 .parse::<usize>()
                 .or_raise(|| validation("GIT_CONFIG_COUNT was not a positive integer").with_input(v.into_bytes()))?,
-            Err(_) => return Ok(None),
+            Ok(_) | Err(_) => return Ok(None),
         };
 
         if count == 0 {
