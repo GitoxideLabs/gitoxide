@@ -1686,8 +1686,10 @@ views.
   Rust shows modules, structs, named and tuple fields, traits, implementations, and function
   signatures. Modified Rust functions and methods collapse runs of unchanged
   parameters to an ellipsis, keeping changed parameters in order along with
-  the return type and any `where` clause. TOML shows tables and keys. Markdown
-  shows heading hierarchies.
+  the return type and any `where` clause. Python (`.py` and `.pyi`) shows
+  decorators, class and function signatures, nested class members, and simple
+  module and class bindings. Function bodies and assigned values are hidden.
+  TOML shows tables and keys. Markdown shows heading hierarchies.
   Hidden body, value, or prose changes mark their owning declaration with `~`;
   executable code and opaque macro token trees remain hidden. Tix parses
   these outlines with Tree-sitter.
@@ -1747,7 +1749,8 @@ views.
   set for later views in the same invocation. Hide tests, benchmarks, examples,
   and fixtures in conventional directories, including their singular names,
   and Rust helper filenames such as `tests.rs`, `test_*.rs`, `*_test.rs`, and
-  `*_tests.rs`. Hide Rust test/benchmark attributes and scopes that cannot be
+  `*_tests.rs`. Hide Python `test_*.py`, `*_test.py`, and `conftest.py` files.
+  Hide Rust test/benchmark attributes and scopes that cannot be
   enabled with `test` false, including nested `all`/`any`/`not` predicates and
   inner attributes. Unknown feature/platform predicates retain any declaration
   that might be production code. Opaque bodies and custom Cargo target paths

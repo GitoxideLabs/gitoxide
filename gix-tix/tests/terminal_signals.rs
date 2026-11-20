@@ -288,6 +288,37 @@ fn shift_enter_scrolls_the_continuous_structural_diff_and_keeps_live_settings() 
 }
 
 #[test]
+fn python_file_opens_in_the_structural_view() -> gix_error::TestResult {
+    let repository = fixture()?;
+    let path = repository.path();
+    std::fs::write(
+        path.join("api.py"),
+        "class PythonService:
+    def start(self):
+        private_python_body()
+",
+    )?;
+    git(path, "add api.py")?;
+    git(path, "commit -m 'add python service'")?;
+    let (mut terminal, _) = Pty::spawn(path, true)?;
+    terminal.wait_for(|output| contains(output, b"add python service") && contains(output, b"\x1b_Ga=p,"))?;
+    let opened = terminal.output.len();
+    terminal.master.write_all(b"\x1b[13;2u")?;
+    terminal
+        .wait_for(|output| contains(&output[opened..], b"PythonService") && contains(&output[opened..], b"back"))?;
+    assert!(
+        !contains(&terminal.output[opened..], b"private_python_body"),
+        "structural review keeps the function body hidden"
+    );
+    terminal.master.write_all(b"qqq")?;
+    assert!(
+        terminal.wait_for_exit()?.success(),
+        "the Python outline returns to history and quits"
+    );
+    Ok(())
+}
+
+#[test]
 fn production_only_shortcut_filters_the_tree_and_survives_reopening() -> gix_error::TestResult {
     let repository = gix_testtools::scripted_fixture_writable("structural-diff-production.sh")?;
     let (mut terminal, original) = Pty::spawn(repository.path(), true)?;
