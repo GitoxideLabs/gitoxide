@@ -1,6 +1,6 @@
 ---
 name: gh-advisories-to-rustsec
-description: Review this repository's published GitHub security advisories and integrate all entries missing from a user-prepared local RustSec advisory-db worktree. Create Codex-authored local commits and comparisons for human review, reauthoring, and submission; do not publish advisories, push, or create a PR.
+description: Review this repository's published GitHub security advisories and integrate eligible missing RustSec entries for directly vulnerable crates into a user-prepared local advisory-db worktree. Create Codex-authored local commits and comparisons for human review, reauthoring, and submission; do not publish advisories, push, or create a PR.
 ---
 
 # GH Advisories to RustSec
@@ -25,9 +25,13 @@ gh api --paginate --slurp "repos/$source_repo/security-advisories?state=publishe
 
 Retain the raw public source snapshot in a task-owned review directory outside the destination. Read each full advisory, including its description, identifiers, dates, package/ecosystem, affected ranges, patched versions, CVSS vector, and references. Do not import drafts, embargoed or withdrawn advisories, or non-Cargo packages; record exclusions. Report API/access/pagination failures rather than claiming complete coverage from partial data.
 
-Inventory coverage per **package and vulnerability**. Search all existing RustSec entries for GHSA/CVE identifiers in IDs, aliases, and source URLs, then check package and issue context. An alias already present for one crate does not cover another affected crate. Conversely, an existing entry with a matching CVE or source URL may cover a GHSA even without its GHSA alias. Use `related` only for different related vulnerabilities. Do not overwrite existing entries; report material discrepancies separately. Repeat deduplication against this run's drafts as well.
+Inventory coverage by **vulnerability first, then directly vulnerable package**. Search all existing RustSec entries for GHSA/CVE identifiers in IDs, aliases, and source URLs, then compare root cause, fixing commits, and package context. A matching CVE or source URL may cover a GHSA even without its GHSA alias. Finding the same vulnerability under another crate is evidence of existing coverage, not a reason to add entries for every GHSA package. Use `related` only for different related vulnerabilities. Do not overwrite existing entries; report material discrepancies separately. Repeat deduplication against this run's drafts as well.
 
-Keep a ledger for every source advisory/package: already covered (with RustSec path/ID), imported, excluded, or blocked with a specific reason. Work through all candidates; one uncertain advisory should not prevent independent, well-supported imports.
+Follow [RustSec's practice](https://github.com/rustsec/advisory-db/pull/2900#discussion_r3272546332): add entries for crates whose own implementation contains the vulnerability. Exclude crates affected solely through a dependency, including wrappers and crates in the same project; `cargo audit` checks the dependency graph. Verify the vulnerable implementation and relevant published dependency versions rather than relying on the GHSA package list or a wrapper's patched release. An existing alias does not rule out a missing entry for another directly vulnerable crate. Check historical package renames at the original vulnerable crate rather than adding wrapper entries to fill a naming gap.
+
+Choose affected packages separately for the two databases. A dependency-only RustSec exclusion does not imply that GHSA should drop that package: its multi-package metadata can help Dependabot or Renovate users, including users without committed lockfiles. See the [review motivating these coverage and consistency rules](https://github.com/rustsec/advisory-db/pull/3561#pullrequestreview-5898236501).
+
+Keep a ledger for every source vulnerability and its packages: already covered (with RustSec path/ID), imported, excluded, or blocked with a specific reason. For dependency-only exclusions, record the dependency evidence and covering advisory, or identify a gap at the vulnerable dependency. Make existing vulnerability coverage and any justified additional entries explicit. Work through all candidates; one uncertain advisory should not prevent independent, well-supported imports.
 
 ## Review Before Translation
 
@@ -36,13 +40,13 @@ Check each missing advisory for significant inaccuracies before it enters anothe
 - **Claim and impact:** follow linked reports, fixing commits, relevant code/tests, and release history as needed. Verify the trigger, vulnerable behavior, consequence, and actual fix. Correct substantially unsupported claims, exaggerated impact, and contradictions when evidence establishes the correction. Do not infer exploitation, memory unsafety, or remote reachability just from a title or severity label.
 - **Package and versions:** verify exact published Cargo package names, including plumbing crates versus their wrappers, and introduced/fixed versions on each affected release line. Cross-check GHSA bounds and first-patched versions with release evidence; do not assume all workspace crates share versions. Preserve platform or feature prerequisites supported by the evidence.
 - **CVSS:** check the vector's metrics against the described attack and its computed score against the source score/severity. Use a trustworthy calculator or library if recomputing it. Preserve a supported vector in a version accepted by the current RustSec schema; do not invent one from a severity label. Omit optional CVSS with an explanation when it cannot be justified or represented.
-- **Writing:** retain the root cause, trigger/prerequisites, impact, affected versions, fix/workaround, useful references, and relevant attribution. Remove repetitive filler, unsupported conclusions, and empty or formulaic headings. Prefer a descriptive title and short, concrete paragraphs; retain technical detail that helps users assess exposure.
+- **Writing:** start from the source title and description, adapting Markdown as needed. Retain the root cause, trigger/prerequisites, impact, affected versions, fix/workaround, useful references, and relevant attribution, including useful analysis and reasonably sized PoCs. Remove repetitive filler and unsupported conclusions; do not rewrite accurate, useful prose or discard technical detail merely for brevity. For a justified new entry covering a vulnerability already in RustSec, reuse the existing RustSec title and shared explanation, with justified corrections or crate-specific adaptations documented rather than introducing a competing account of the same issue.
 
-Record significant factual/metadata corrections and their evidence, distinguishing verified facts from remaining uncertainty. If package, affected range, or core vulnerability claims remain materially uncertain, leave that candidate blocked rather than guess. Minor editorial imperfections do not block a useful, accurate import.
+Record significant factual/metadata corrections and their evidence, distinguishing verified facts from remaining uncertainty. When source prose needs substantive correction, usually recommend the same correction to the GHSA; report it separately without changing the source, and explain any justified RustSec-specific difference. GHSA revision need not precede a supported RustSec import. If package, affected range, or core vulnerability claims remain materially uncertain, leave that candidate blocked rather than guess. Minor editorial imperfections do not block a useful, accurate import.
 
 ## RustSec Drafts and Validation
 
-Create one entry per affected Cargo package and distinct vulnerability, following the current template. A GHSA covering several crates can require several entries. For a batch, the current draft convention permits:
+Create one entry per eligible directly vulnerable Cargo package and distinct vulnerability still missing RustSec coverage, following the current template. A GHSA warrants several entries only when several crates contain the vulnerability, not merely because it lists several affected packages. If all eligible implementations are covered, create no drafts or commits. For a batch, the current draft convention permits:
 
 ```text
 crates/<package>/RUSTSEC-0000-0000.GHSA-xxxx-xxxx-xxxx.md
@@ -80,7 +84,7 @@ git -C "$advisory_db" -c user.name=Codex -c user.email=codex@openai.com \
 
 Keep identity overrides command-local and honor signing settings. Verify each committed author and both trailers. Do not rewrite pre-existing commits. Finish on the prepared checkout with a clean worktree unless explicitly reported blocked drafts or concurrent changes remain.
 
-In the external review directory, retain the raw GHSA snapshots and, per new entry, the original summary as an H1 followed by its description, the proposed RustSec title and description without TOML, and a source-versus-proposed metadata table with correction reasons/evidence. Save both prose versions as Markdown so title changes are visible without format-only diff noise. Do not commit these artifacts into advisory-db.
+In the external review directory, retain the raw GHSA snapshots and, per new entry, the original summary as an H1 followed by its description, the proposed RustSec title and description without TOML, and a source-versus-proposed metadata table with correction reasons/evidence. For additional coverage of an existing vulnerability, include the existing RustSec text/path and explain why another directly vulnerable crate needs an entry and any necessary prose differences. Save prose versions as Markdown so title changes are visible without format-only diff noise. Do not commit these artifacts into advisory-db.
 
 ## Human Handoff
 
@@ -100,7 +104,7 @@ git -C "$advisory_db" rebase --force-rebase \
   --exec 'git commit --amend --no-edit --reset-author' "$start_hash"
 ```
 
-Prepare a suggested PR title/body outside the checkout describing the downstream benefit, affected crates, source links, substantive corrections, validation, and AI assistance. The user creates the PR themselves **after reviewing and reauthoring**. Provide concrete commands for their configured writable fork remote and submission branch; do not assume `origin` is a writable fork or push directly to upstream. If the fork/branch is unknown, label the placeholders. For example, with those values chosen by the user:
+Prepare a suggested PR title/body outside the checkout describing the downstream benefit, affected crates, source links, substantive corrections, validation, and AI assistance. Make existing vulnerability coverage, reasons for additional entries, and dependency-only exclusions explicit. The user creates the PR themselves **after reviewing and reauthoring**. Provide concrete commands for their configured writable fork remote and submission branch; do not assume `origin` is a writable fork or push directly to upstream. If the fork/branch is unknown, label the placeholders. For example, with those values chosen by the user:
 
 ```bash
 git -C "$advisory_db" push "$fork_remote" "HEAD:refs/heads/$submission_branch"
