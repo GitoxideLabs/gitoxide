@@ -326,7 +326,7 @@ impl Repository {
 }
 
 mod submodule {
-    use std::collections::HashMap;
+    use std::{collections::HashMap, ops::ControlFlow};
 
     use crate::{
         Repository, Result,
@@ -376,9 +376,12 @@ mod submodule {
         // Git tries the checkout first, including unregistered or renamed submodules.
         if let Some(worktree_gitdir) = crate::submodule::worktree_gitdir(repo, path)?
             && let Some(git_dir) = crate::submodule::git_dir_from_worktree_gitdir(&worktree_gitdir, true)?
-            && let Some(subrepo) = crate::submodule::open(repo, &git_dir, path)?
         {
-            return Ok(Some(subrepo));
+            match crate::submodule::open(repo, &git_dir, path)? {
+                ControlFlow::Break(_) => return Ok(None),
+                ControlFlow::Continue(Some(subrepo)) => return Ok(Some(subrepo)),
+                ControlFlow::Continue(None) => {}
+            }
         }
         if let Some(submodules) = repo.submodules()? {
             for submodule in submodules {

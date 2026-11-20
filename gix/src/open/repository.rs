@@ -7,9 +7,9 @@ use gix_sec::Trust;
 use std::path::Path;
 use std::{borrow::Cow, collections::BTreeMap, ffi::OsStr, path::PathBuf};
 
-use super::{Options, RepositoryTrust};
+use super::{Options, RelatedRepositoryKind, RepositoryTrust, related_repository_skipped};
 use crate::{
-    Error, Result, ThreadSafeRepository,
+    Error, Repository, Result, ThreadSafeRepository,
     bstr::BString,
     config,
     config::{
@@ -75,10 +75,17 @@ impl ThreadSafeRepository {
     ///
     /// Note that opening a repository for implementing custom hooks is also handle specifically in
     /// [`open_with_environment_overrides()`][Self::open_with_environment_overrides()].
-    pub fn open_opts(path: impl Into<PathBuf>, mut options: Options) -> Result<Self> {
+    pub fn open_opts(path: impl Into<PathBuf>, options: Options) -> Result<Self> {
+        Self::open_opts_inner(path.into(), options, None)
+    }
+
+    pub(crate) fn open_opts_inner(
+        path: PathBuf,
+        mut options: Options,
+        related: Option<(&Repository, RelatedRepositoryKind)>,
+    ) -> Result<Self> {
         let _span = gix_trace::coarse!("ThreadSafeRepository::open()");
         let (path, kind) = {
-            let path = path.into();
             let looks_like_dot_git_dir = path.ends_with(gix_discover::DOT_GIT_DIR);
             let maybe_git_repo_path = if !options.open_path_as_is && !looks_like_dot_git_dir {
                 Some(path.join(gix_discover::DOT_GIT_DIR))
@@ -122,6 +129,12 @@ impl ThreadSafeRepository {
             )?);
         }
         options.current_dir = Some(cwd);
+        if let Some((parent, kind)) = related {
+            options = options
+                .configure_related_open(parent, kind, &git_dir, worktree_dir.as_deref())?
+                .continue_value()
+                .ok_or_else(|| related_repository_skipped(&git_dir))?;
+        }
         ThreadSafeRepository::open_from_paths(git_dir, worktree_dir, options, None)
     }
 
@@ -223,6 +236,7 @@ impl ThreadSafeRepository {
         let retain_inferred_worktree_when_bare = std::mem::take(&mut options.retain_inferred_worktree_when_bare);
         let Options {
             ref mut git_dir_trust,
+            configure_related_repository: _,
             object_store_slots,
             filter_config_section,
             lossy_config,

@@ -2,6 +2,7 @@
 //!
 use std::{
     cell::{Ref, RefCell, RefMut},
+    ops::ControlFlow,
     path::{Path, PathBuf},
 };
 
@@ -12,6 +13,7 @@ use crate::{
     Repository, Result, Submodule,
     bstr::{BStr, BString},
     is_dir_to_mode,
+    open::RelatedRepositoryKind,
     worktree::IndexPersistedOrInMemory,
 };
 
@@ -298,7 +300,8 @@ impl Submodule<'_> {
         self.state_inner(true)
     }
 
-    /// Open the submodule as repository, or `None` if the submodule wasn't initialized yet.
+    /// Open the submodule as repository, or `None` if it wasn't initialized yet or opening was
+    /// skipped by the [configured callback](crate::open::Options::configure_related_repository).
     ///
     /// More states can be derived here:
     ///
@@ -310,6 +313,13 @@ impl Submodule<'_> {
     /// The repository can also be used to learn about the submodule `HEAD`, i.e. where its working tree is at,
     /// which may differ compared to the superproject's index or `HEAD` commit.
     pub fn open(&self) -> Result<Option<Repository>> {
+        Ok(match self.open_inner()? {
+            ControlFlow::Continue(repo) => repo,
+            ControlFlow::Break(_) => None,
+        })
+    }
+
+    fn open_inner(&self) -> Result<ControlFlow<PathBuf, Option<Repository>>> {
         open(self.state.repo, &self.git_dir_try_old_form()?, self.path()?.as_ref())
     }
 
@@ -375,7 +385,11 @@ pub(crate) fn git_dir_from_worktree_gitdir(
 /// or trust from `superproject`. Infer its checkout from `relative_path` below `superproject`'s worktree,
 /// preserving path spelling and configuration precedence.
 /// Include the checkout's `.git` entry in trust checks while opening the resolved repository path.
-pub(crate) fn open(superproject: &Repository, git_dir: &Path, relative_path: &BStr) -> Result<Option<Repository>> {
+pub(crate) fn open(
+    superproject: &Repository,
+    git_dir: &Path,
+    relative_path: &BStr,
+) -> Result<ControlFlow<PathBuf, Option<Repository>>> {
     let work_dir = superproject
         .workdir()
         .map(|work_dir| work_dir_from_relative_path(work_dir, relative_path))
@@ -387,7 +401,7 @@ pub(crate) fn open(superproject: &Repository, git_dir: &Path, relative_path: &BS
         .unwrap_or(git_dir);
     let kind = match gix_discover::is_git(git_dir) {
         Ok(kind) => kind,
-        Err(_) => return Ok(None),
+        Err(_) => return Ok(ControlFlow::Continue(None)),
     };
     let cwd = superproject.current_dir();
     let (git_dir, work_dir) = match work_dir {
@@ -402,8 +416,17 @@ pub(crate) fn open(superproject: &Repository, git_dir: &Path, relative_path: &BS
 
     options.current_dir = Some(cwd.to_owned());
     options.retain_inferred_worktree_when_bare = superproject.workdir().is_some();
+    let ControlFlow::Continue(options) = options.configure_related_open(
+        superproject,
+        RelatedRepositoryKind::Submodule,
+        &git_dir,
+        work_dir.as_deref(),
+    )?
+    else {
+        return Ok(ControlFlow::Break(cwd.join(git_dir)));
+    };
     match crate::ThreadSafeRepository::open_from_paths(git_dir, work_dir, options, None) {
-        Ok(repo) => Ok(Some(repo.into())),
+        Ok(repo) => Ok(ControlFlow::Continue(Some(repo.into()))),
         Err(err)
             if err
                 .error()
@@ -411,7 +434,7 @@ pub(crate) fn open(superproject: &Repository, git_dir: &Path, relative_path: &BS
                 .downcast_ref::<gix_error::Message>()
                 .is_some_and(|error| error.class == Some(gix_error::Class::NotFound)) =>
         {
-            Ok(None)
+            Ok(ControlFlow::Continue(None))
         }
         Err(err) => Err(err),
     }
@@ -464,6 +487,8 @@ mod tests {
 ///
 #[cfg(feature = "status")]
 pub mod status {
+    use std::ops::ControlFlow;
+
     use gix_submodule::config;
 
     use super::Status;
@@ -523,8 +548,9 @@ pub mod status {
                     ..Default::default()
                 });
             }
-            let sm_repo = match self.open()? {
-                None => {
+            let sm_repo = match self.open_inner()? {
+                ControlFlow::Break(git_dir) => return Err(crate::open::related_repository_skipped(&git_dir)),
+                ControlFlow::Continue(None) => {
                     state.repository_exists = false;
                     return Ok(Status {
                         state,
@@ -532,7 +558,7 @@ pub mod status {
                         ..Default::default()
                     });
                 }
-                Some(repo) => repo,
+                ControlFlow::Continue(Some(repo)) => repo,
             };
 
             Status {

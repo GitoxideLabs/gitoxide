@@ -63,6 +63,55 @@ fn local_submodule_history_respects_modified_graphs_and_linked_repositories() ->
 }
 
 #[test]
+fn configure_related_repository_skip_prevents_merge_fallback() -> TestResult {
+    use std::{
+        ops::ControlFlow,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    let Some(fixture) = fixture()? else {
+        return Ok(());
+    };
+    let root = fixture.join("corrupt-config");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let repo = crate::util::restricted()
+        .configure_related_repository({
+            let calls = Arc::clone(&calls);
+            move |related, _| {
+                assert_eq!(related.kind, gix::open::RelatedRepositoryKind::Submodule);
+                calls.fetch_add(1, Ordering::Relaxed);
+                Ok(ControlFlow::Break(()))
+            }
+        })
+        .open(&root)?
+        .with_object_memory();
+    let tree_ids = std::fs::read_to_string(root.join("trees"))?
+        .lines()
+        .map(|line| ObjectId::from_hex(line.as_bytes()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let outcome = repo.merge_trees(
+        tree_ids[0],
+        tree_ids[1],
+        tree_ids[2],
+        Default::default(),
+        repo.tree_merge_options()?,
+    )?;
+    assert!(
+        outcome.has_unresolved_conflicts(TreatAsUnresolved::git()),
+        "merging the gitlink requires the skipped repository's history"
+    );
+    assert_eq!(
+        calls.load(Ordering::Relaxed),
+        1,
+        "skip ends the lookup for this submodule"
+    );
+    Ok(())
+}
+
+#[test]
 fn corrupt_submodule_repository_is_an_error() -> TestResult {
     let Some(fixture) = fixture()? else {
         return Ok(());

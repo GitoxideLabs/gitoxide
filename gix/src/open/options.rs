@@ -1,6 +1,11 @@
-use std::path::PathBuf;
+use std::{
+    borrow::Cow,
+    ops::ControlFlow,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
-use super::{Options, RepositoryTrust};
+use super::{Options, RelatedRepository, RelatedRepositoryKind, RepositoryTrust};
 use crate::{Repository, Result, bstr::BString, open::Permissions};
 
 impl Default for Options {
@@ -9,6 +14,7 @@ impl Default for Options {
             object_store_slots: Default::default(),
             permissions: Default::default(),
             git_dir_trust: None,
+            configure_related_repository: None,
             filter_config_section: None,
             lossy_config: false,
             lenient_config: true,
@@ -39,6 +45,7 @@ impl Options {
             object_store_slots: self.object_store_slots,
             permissions: self.permissions,
             git_dir_trust: self.git_dir_trust,
+            configure_related_repository: self.configure_related_repository.clone(),
             filter_config_section: self.filter_config_section,
             lossy_config: self.lossy_config,
             lenient_config: self.lenient_config,
@@ -80,6 +87,23 @@ impl Options {
 
 /// Builder methods
 impl Options {
+    /// Configure opens of submodules and related worktrees initiated by this repository.
+    ///
+    /// The callback runs after path resolution and before loading the target's configuration and takes
+    /// ownership of the options the target would otherwise open with.
+    /// The callback is inherited with the opening options and passed to sub-repositories.
+    ///
+    /// Return [`ControlFlow::Continue`] with the options to use or [`ControlFlow::Break`] with `()`
+    /// to skip the current open. `Submodule::open()` reports a skip as `Ok(None)`. Operations that require
+    /// opening the repository report a skip as an error. Callback errors propagate to the caller.
+    pub fn configure_related_repository(
+        mut self,
+        configure: impl Fn(RelatedRepository<'_>, Self) -> Result<ControlFlow<(), Self>> + Send + Sync + 'static,
+    ) -> Self {
+        self.configure_related_repository = Some(Arc::new(configure));
+        self
+    }
+
     /// Apply the given configuration `values` like `init.defaultBranch=special` or `core.bool-implicit-true` in memory to as early
     /// as the configuration is initialized to allow affecting the repository instantiation phase, both on disk or when opening.
     /// The configuration is marked with [source API][gix_config::Source::Api].
@@ -254,6 +278,50 @@ impl Options {
 }
 
 impl Options {
+    pub(crate) fn configure_related_open(
+        mut self,
+        parent: &Repository,
+        kind: RelatedRepositoryKind,
+        git_dir: &Path,
+        inferred_worktree: Option<&Path>,
+    ) -> Result<ControlFlow<(), Self>> {
+        fn anchored<'a>(path: &'a Path, current_dir: &Path) -> Cow<'a, Path> {
+            if path.is_absolute() {
+                Cow::Borrowed(path)
+            } else {
+                Cow::Owned(current_dir.join(path))
+            }
+        }
+        let Some(configure) = self.configure_related_repository.clone() else {
+            return Ok(ControlFlow::Continue(self));
+        };
+        let trust = self.git_dir_trust.expect("initial trust has been determined");
+        let current_dir = self.current_dir.take().expect("the opening CWD has been captured");
+        let retain_inferred_worktree_when_bare = self.retain_inferred_worktree_when_bare;
+        let git_dir = anchored(git_dir, &current_dir);
+        let inferred_worktree = inferred_worktree.map(|path| anchored(path, &current_dir));
+        let ControlFlow::Continue(mut options) = configure(
+            RelatedRepository {
+                kind,
+                git_dir: &git_dir,
+                inferred_worktree: inferred_worktree.as_deref(),
+                initial_trust: trust.level(),
+                parent,
+            },
+            self,
+        )?
+        else {
+            return Ok(ControlFlow::Break(()));
+        };
+        // The callback can replace the entire options value.
+        options.configure_related_repository.get_or_insert(configure);
+        options.git_dir_trust.get_or_insert(trust);
+        options.current_dir = Some(current_dir);
+        options.use_repository_local_environment = false;
+        options.retain_inferred_worktree_when_bare = retain_inferred_worktree_when_bare;
+        Ok(ControlFlow::Continue(options))
+    }
+
     /// Prevent repository-local environment overrides from being inherited when opening another repository.
     ///
     /// To be used when opening a nested repository, like worktrees or submodules.
@@ -294,6 +362,7 @@ impl Options {
                 object_store_slots: Default::default(),
                 permissions: Permissions::default_for_level(level),
                 git_dir_trust: Some(RepositoryTrust::Precomputed(level)),
+                configure_related_repository: None,
                 retain_inferred_worktree_when_bare: false,
                 filter_config_section: None,
                 lossy_config: false,
@@ -311,6 +380,7 @@ impl Options {
                 object_store_slots: gix_odb::store::init::Slots::Given(32), // limit resource usage
                 permissions: Permissions::default_for_level(level),
                 git_dir_trust: Some(RepositoryTrust::Precomputed(level)),
+                configure_related_repository: None,
                 retain_inferred_worktree_when_bare: false,
                 filter_config_section: None,
                 bail_if_untrusted: false,
