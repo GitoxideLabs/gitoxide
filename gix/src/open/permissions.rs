@@ -214,8 +214,9 @@ impl Permissions {
     }
 }
 
-impl gix_sec::trust::DefaultForLevel for Permissions {
-    fn default_for_level(level: Trust) -> Self {
+impl Permissions {
+    /// Return the default opening permissions for `level`.
+    pub fn default_for_level(level: Trust) -> Self {
         match level {
             Trust::Full => Permissions::all(),
             Trust::Reduced => Permissions::secure(),

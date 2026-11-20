@@ -275,8 +275,6 @@ impl Options {
         trust: gix_sec::Trust,
         open_options_by_trust: impl FnOnce(Self, gix_sec::Trust) -> Self,
     ) -> Self {
-        use gix_sec::trust::DefaultForLevel;
-
         let mut options = open_options_by_trust(Self::default_for_level(trust), trust);
         options.git_dir_trust.get_or_insert(RepositoryTrust::Precomputed(trust));
         options
@@ -287,8 +285,10 @@ impl Options {
     }
 }
 
-impl gix_sec::trust::DefaultForLevel for Options {
-    fn default_for_level(level: gix_sec::Trust) -> Self {
+impl Options {
+    /// Return default opening options for `level`, setting it as the initial repository trust.
+    /// Only supply [`Full`][gix_sec::Trust::Full] if you already trust the repository; see [`Self::with_trust()`].
+    pub fn default_for_level(level: gix_sec::Trust) -> Self {
         match level {
             gix_sec::Trust::Full => Options {
                 object_store_slots: Default::default(),
