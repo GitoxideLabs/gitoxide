@@ -27,7 +27,9 @@ pub fn discard(_attrs: TokenStream, _input: TokenStream) -> TokenStream {
 /// Expose an item only within its crate unless the consuming crate enables `unstable`.
 ///
 /// Supply `#[gix_macros::unstable(since = "YYYY-MM-DD")]` with the date the item was introduced.
-/// The date must be a valid calendar date and is included in the enabled item's documentation.
+/// The date must be a valid calendar date. When enabled, the instability note follows the first
+/// nonblank line of literal documentation so it appears in rustdoc overviews. If the macro cannot
+/// edit the summary, it adds a separate note instead.
 /// Usually the date alone is enough; add an optional, nonempty `reason = "..."` only to explain
 /// a non-obvious rationale. The gate also applies directly to file-backed modules
 /// (`pub mod name;`), requiring Rust 1.99 or newer.
@@ -47,9 +49,9 @@ pub fn unstable(attrs: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// Mark each field with `#[unstable(since = "YYYY-MM-DD")]`, dating its introduction.
 /// Add an optional, nonempty `reason = "..."` only when the rationale is not obvious.
-/// With the consuming crate's `unstable` feature enabled it remains public and gains an instability
-/// marker, the date and any supplied reason in its documentation; otherwise it
-/// becomes `pub(crate)`. All unmarked fields are unchanged.
+/// With the consuming crate's `unstable` feature enabled, the field remains public and gets the
+/// same documentation note as [`unstable`]. Otherwise it becomes `pub(crate)`.
+/// All unmarked fields are unchanged.
 #[proc_macro_attribute]
 pub fn unstable_fields(attrs: TokenStream, input: TokenStream) -> TokenStream {
     unstable::fields(attrs.into(), input.into())
