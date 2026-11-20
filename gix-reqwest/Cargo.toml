@@ -1,0 +1,341 @@
+[package]
+name = "gix-reqwest"
+version = "0.1.0"
+description = "An HTTP client with patches for gitoxide, maintained as a fork of reqwest."
+keywords = ["http", "request", "client"]
+categories = ["web-programming::http-client", "wasm"]
+repository = "https://github.com/GitoxideLabs/gitoxide"
+documentation = "https://docs.rs/gix-reqwest"
+authors = ["Sean McArthur <sean@seanmonstar.com>", "Sebastian Thiel <sebastian.thiel@icloud.com>"]
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+edition = "2021"
+rust-version = "1.85.0"
+autotests = true
+include = [
+    "README.md",
+    "Cargo.toml",
+    "LICENSE-APACHE",
+    "LICENSE-MIT",
+    "src/**/*.rs"
+]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs", "--cfg", "reqwest_unstable"]
+targets = ["x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
+
+[package.metadata.playground]
+features = [
+    "blocking",
+    "cookies",
+    "query",
+    "form",
+    "json",
+    "multipart",
+]
+
+[package.metadata.qa]
+# Keep upstream's live Internet tests out of the workspace's deterministic runs.
+isolated = true
+checks = [
+    { args = ["--no-default-features", "--features", "blocking,http2,socks"] },
+    { args = ["--all-features", "--all-targets"], env = { RUSTFLAGS = "--cfg reqwest_unstable" } },
+]
+tests = [
+    { args = ["--no-default-features", "--features", "blocking,http2,socks,rustls,cookies,charset,query,form,json,multipart,stream,hickory-dns,gzip,brotli,zstd,deflate", "-E", "not binary(badssl) & not test(test_tls_info)"] },
+    # The loopback TLS server needs rustls to exercise both client backends.
+    { args = ["--features", "blocking,socks,native-tls", "--lib", "--test", "proxy", "--test", "redirect"] },
+    { args = ["--no-default-features", "--features", "blocking,http2,socks", "--lib", "--test", "proxy", "--test", "redirect"] },
+]
+doctests = [
+    { args = ["--features", "blocking,cookies,query,form,json,multipart,stream"] },
+]
+
+[package.metadata.qa.wasm]
+targets = ["wasm32-unknown-unknown"]
+checks = [
+    { args = ["--no-default-features", "--features", "cookies,query,form,json,multipart,stream"] },
+]
+
+[features]
+default = ["default-tls", "charset", "http2", "system-proxy"]
+
+default-tls = ["rustls"]
+
+http2 = ["dep:h2", "hyper/http2", "hyper-util/http2", "hyper-rustls?/http2"]
+
+rustls = ["__rustls-aws-lc-rs", "dep:rustls-platform-verifier", "__rustls"]
+rustls-no-provider = ["dep:rustls-platform-verifier", "__rustls"]
+
+native-tls = ["__native-tls", "__native-tls-alpn"]
+native-tls-no-alpn = ["__native-tls"]
+native-tls-vendored = ["__native-tls", "native-tls-crate?/vendored", "__native-tls-alpn"]
+native-tls-vendored-no-alpn = ["__native-tls", "native-tls-crate?/vendored"]
+
+blocking = ["dep:futures-channel", "futures-channel?/sink", "dep:futures-util", "futures-util?/io", "futures-util?/sink", "tokio/sync"]
+
+charset = ["dep:encoding_rs", "dep:mime"]
+
+cookies = ["dep:cookie_crate", "dep:cookie_store"]
+
+gzip = ["tower-http/decompression-gzip"]
+brotli = ["tower-http/decompression-br"]
+zstd = ["tower-http/decompression-zstd"]
+deflate = ["tower-http/decompression-deflate"]
+
+query = ["dep:serde", "dep:serde_urlencoded"]
+form = ["dep:serde", "dep:serde_urlencoded"]
+json = ["dep:serde", "dep:serde_json"]
+
+multipart = ["dep:mime_guess", "dep:futures-util"]
+
+hickory-dns = ["dep:hickory-resolver"]
+
+stream = ["tokio/fs", "dep:futures-util", "dep:tokio-util", "dep:wasm-streams"]
+
+socks = []
+
+# Use the system's proxy configuration.
+system-proxy = ["hyper-util/client-proxy-system"]
+
+# Experimental HTTP/3 client.
+http3 = ["rustls", "dep:h3", "dep:h3-quinn", "dep:quinn", "tokio/macros"]
+
+
+# Internal (PRIVATE!) features used to aid testing.
+# Don't rely on these whatsoever. They may disappear at any time.
+
+# Enables common types used for TLS. Useless on its own.
+__tls = ["dep:rustls-pki-types", "tokio/io-util"]
+
+# Enables common rustls code.
+__rustls = ["dep:hyper-rustls", "dep:tokio-rustls", "dep:rustls", "__tls"]
+__rustls-aws-lc-rs = ["hyper-rustls?/aws-lc-rs", "tokio-rustls?/aws-lc-rs", "rustls?/aws-lc-rs", "quinn?/rustls-aws-lc-rs"]
+
+# Enables common native-tls code.
+__native-tls = ["dep:hyper-tls", "dep:native-tls-crate", "__tls", "dep:tokio-native-tls"]
+__native-tls-alpn = ["native-tls-crate?/alpn", "hyper-tls?/alpn"]
+
+[dependencies]
+base64 = { version = "0.23", default-features = false, features = ["std"] }
+http = "1.1"
+url = "2.4"
+bytes = "1.2"
+futures-core = { version = "0.3.28", default-features = false }
+futures-util = { version = "0.3.28", default-features = false, optional = true }
+sync_wrapper = { version = "1.0", features = ["futures"] }
+
+# Optional deps...
+
+serde = { version = "1.0", optional = true }
+## query/form
+serde_urlencoded = { version = "0.7.1", optional = true }
+## json
+serde_json = { version = "1.0", optional = true }
+## multipart
+mime_guess = { version = "2.0", default-features = false, optional = true }
+
+[target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dependencies]
+encoding_rs = { version = "0.8", optional = true }
+http-body = "1"
+http-body-util = "0.1.2"
+hyper = { version = "1.1", features = ["http1", "client"] }
+hyper-util = { version = "0.1.21", features = ["http1", "client", "client-legacy", "client-proxy", "tokio"] }
+h2 = { version = "0.4", optional = true }
+log = "0.4.17"
+percent-encoding = "2.3"
+tokio = { version = "1.0", default-features = false, features = ["net", "time"] }
+tower = { version = "0.5.3", default-features = false, features = ["retry", "timeout", "util"] }
+tower-service = "0.3"
+tower-http = { version = "0.7.1", default-features = false, features = ["follow-redirect"] }
+pin-project-lite = "0.2.11"
+
+# Optional deps...
+rustls-pki-types = { version = "1.9.0", features = ["std"], optional = true }
+mime = { version = "0.3.16", optional = true }
+
+# native-tls
+hyper-tls = { version = "0.6", optional = true }
+native-tls-crate = { version = "0.2.16", optional = true, package = "native-tls" }
+tokio-native-tls = { version = "0.3.0", optional = true }
+
+# default rustls
+hyper-rustls = { version = "0.27.0", default-features = false, optional = true, features = ["http1", "tls12"] }
+rustls = { version = "0.23.4", optional = true, default-features = false, features = ["std", "tls12"] }
+tokio-rustls = { version = "0.26", optional = true, default-features = false, features = ["tls12"] }
+rustls-platform-verifier = { version = ">=0.6.0, <0.8.0", optional = true }
+
+## cookies
+cookie_crate = { version = "0.18.0", package = "cookie", optional = true }
+cookie_store = { version = "0.22.0", optional = true }
+
+## stream
+tokio-util = { version = "0.7.9", default-features = false, features = ["io"], optional = true }
+
+## hickory-dns
+hickory-resolver = { version = "0.26", optional = true, features = ["tokio"] }
+
+# HTTP/3 experimental support
+h3 = { version = "0.0.8", optional = true }
+h3-quinn = { version = "0.0.10", optional = true }
+quinn = { version = "0.11.1", default-features = false, features = ["runtime-tokio"], optional = true }
+futures-channel = { version = "0.3", optional = true }
+
+[target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dev-dependencies]
+env_logger = "0.11"
+hyper = { version = "1.1.0", default-features = false, features = ["http1", "http2", "client", "server"] }
+hyper-util = { version = "0.1.12", features = ["http1", "http2", "client", "client-legacy", "server-auto", "server-graceful", "tokio"] }
+serde = { version = "1.0", features = ["derive"] }
+flate2 = "1.0.13"
+brotli_crate = { package = "brotli", version = "9" }
+zstd_crate = { package = "zstd", version = "0.14" }
+doc-comment = "0.3"
+tokio = { version = "1.0", default-features = false, features = ["macros", "rt-multi-thread"] }
+futures-util = { version = "0.3.28", default-features = false, features = ["std", "alloc"] }
+
+# wasm
+
+[target.'cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))'.dependencies]
+js-sys = "0.3.77"
+wasm-bindgen = "0.2.89"
+wasm-bindgen-futures = "0.4.18"
+wasm-streams = { version = "0.7", optional = true }
+
+[target.'cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))'.dependencies.web-sys]
+version = "0.3.28"
+features = [
+    "AbortController",
+    "AbortSignal",
+    "Headers",
+    "Request",
+    "RequestInit",
+    "RequestMode",
+    "Response",
+    "Window",
+    "FormData",
+    "Blob",
+    "BlobPropertyBag",
+    "ServiceWorkerGlobalScope",
+    "RequestCredentials",
+    "File",
+    "ReadableStream",
+    "ReferrerPolicy",
+    "RequestCache"
+]
+
+[target.'cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))'.dev-dependencies]
+wasm-bindgen = { version = "0.2.89", features = ["serde-serialize"] }
+wasm-bindgen-test = "0.3"
+
+[dev-dependencies]
+tower = { version = "0.5.3", default-features = false, features = ["limit"] }
+num_cpus = "1.0"
+libc = "0"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(reqwest_unstable)'] }
+
+# Keep upstream idioms instead of mixing mechanical style changes into imports.
+[lints.clippy]
+bind_instead_of_map = "allow"
+bool_assert_comparison = "allow"
+clone_on_copy = "allow"
+derivable_impls = "allow"
+enum_variant_names = "allow"
+extra_unused_lifetimes = "allow"
+io_other_error = "allow"
+large_enum_variant = "allow"
+len_zero = "allow"
+manual_range_contains = "allow"
+map_clone = "allow"
+mem_replace_with_default = "allow"
+missing_const_for_thread_local = "allow"
+mixed_attributes_style = "allow"
+multiple_bound_locations = "allow"
+needless_borrow = "allow"
+needless_borrows_for_generic_args = "allow"
+needless_borrowed_reference = "allow"
+needless_lifetimes = "allow"
+non_minimal_cfg = "allow"
+question_mark = "allow"
+redundant_closure = "allow"
+redundant_pattern_matching = "allow"
+single_component_path_imports = "allow"
+too_many_arguments = "allow"
+type_complexity = "allow"
+useless_borrows_in_formatting = "allow"
+useless_conversion = "allow"
+
+[[example]]
+name = "blocking"
+path = "examples/blocking.rs"
+required-features = ["blocking"]
+
+[[example]]
+name = "json_dynamic"
+path = "examples/json_dynamic.rs"
+required-features = ["json"]
+
+[[example]]
+name = "json_typed"
+path = "examples/json_typed.rs"
+required-features = ["json"]
+
+[[example]]
+name = "tor_socks"
+path = "examples/tor_socks.rs"
+required-features = ["socks"]
+
+[[example]]
+name = "form"
+path = "examples/form.rs"
+required-features = ["form"]
+
+[[example]]
+name = "simple"
+path = "examples/simple.rs"
+
+[[example]]
+name = "h3_simple"
+path = "examples/h3_simple.rs"
+required-features = ["http3", "rustls"]
+
+[[example]]
+name = "connect_via_lower_priority_tokio_runtime"
+path = "examples/connect_via_lower_priority_tokio_runtime.rs"
+
+[[test]]
+name = "blocking"
+path = "tests/blocking.rs"
+required-features = ["blocking"]
+
+[[test]]
+name = "cookie"
+path = "tests/cookie.rs"
+required-features = ["cookies"]
+
+[[test]]
+name = "gzip"
+path = "tests/gzip.rs"
+required-features = ["gzip", "stream"]
+
+[[test]]
+name = "brotli"
+path = "tests/brotli.rs"
+required-features = ["brotli", "stream"]
+
+[[test]]
+name = "zstd"
+path = "tests/zstd.rs"
+required-features = ["zstd", "stream"]
+
+[[test]]
+name = "deflate"
+path = "tests/deflate.rs"
+required-features = ["deflate", "stream"]
+
+[[test]]
+name = "multipart"
+path = "tests/multipart.rs"
+required-features = ["multipart"]

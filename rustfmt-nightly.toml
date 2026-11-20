@@ -1,3 +1,5 @@
 group_imports = "StdExternalCrate"
 imports_granularity = "Crate"
 max_width = 120
+# The vendored client keeps upstream formatting with its own stable config.
+ignore = ["gix-reqwest"]

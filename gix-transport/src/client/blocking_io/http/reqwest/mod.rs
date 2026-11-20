@@ -1,5 +1,5 @@
 use gix_error::Result;
-/// An implementation for HTTP requests via `reqwest`.
+/// An implementation for HTTP requests via [`gix-reqwest`][crate::gix_reqwest].
 pub struct Remote {
     /// A worker thread which performs the actual request.
     handle: Option<std::thread::JoinHandle<Result>>,
@@ -15,20 +15,27 @@ pub struct Remote {
 
 /// A function to configure a single request prior to sending it, support most complex configuration beyond what's possible with
 /// basic `git` http configuration.
-pub type ConfigureRequestFn = dyn FnMut(&mut reqwest::blocking::Request) -> Result + Send + Sync + 'static;
+/// The request belongs to [`crate::gix_reqwest`], Gitoxide's patched reqwest fork.
+pub type ConfigureRequestFn = dyn FnMut(&mut gix_reqwest::blocking::Request) -> Result + Send + Sync + 'static;
 
 /// A function to configure the HTTP client before it is built, for example to provide a TLS configuration.
-pub type ConfigureClientFn =
-    dyn FnMut(reqwest::blocking::ClientBuilder) -> Result<reqwest::blocking::ClientBuilder> + Send + Sync + 'static;
+/// Use [`crate::gix_reqwest`] types when configuring the builder.
+pub type ConfigureClientFn = dyn FnMut(gix_reqwest::blocking::ClientBuilder) -> Result<gix_reqwest::blocking::ClientBuilder>
+    + Send
+    + Sync
+    + 'static;
 
-/// Options to configure the reqwest HTTP handler.
+/// Options to configure the HTTP handler backed by [`crate::gix_reqwest`].
 #[derive(Default)]
 pub struct Options {
     /// Configure the client on the first request, before building and reusing it for subsequent requests.
     ///
-    /// The callback runs again if the worker is restarted after a failure. Changes to this callback after
-    /// initialization do not affect an existing client. The transport installs its redirect policy after
-    /// this callback; use [`Self::configure_request`] for request-specific headers.
+    /// The callback runs again after client execution fails, after a worker restart, after a redirect chain changes
+    /// proxies, or when proxy routing or initial credentials change.
+    /// Changes to this callback after initialization do not affect an existing client. The transport installs
+    /// its proxy and redirect policies after this callback; use [`Self::configure_request`] for request-specific headers.
+    /// Reqwest handles redirect headers and timeouts, including the client's Referer setting and total request timeout.
+    /// After an authority change, subsequent requests suppress sensitive client defaults and retain explicit request headers.
     pub configure_client: Option<Box<ConfigureClientFn>>,
     /// A function to configure the request that is about to be made.
     pub configure_request: Option<Box<ConfigureRequestFn>>,

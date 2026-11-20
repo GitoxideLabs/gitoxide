@@ -1,0 +1,5 @@
+node_modules
+pkg
+target
+Cargo.lock
+*.swp

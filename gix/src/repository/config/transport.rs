@@ -166,13 +166,20 @@ impl crate::Repository {
                             .try_into_u32(config.integer_filter("http.lowSpeedLimit", &mut trusted_only))
                             .with_leniency(lenient)?
                             .unwrap_or_default();
+                        // Reqwest selects environment proxies per destination, including after redirects.
+                        // Keep curl's existing configuration and credential-helper setup.
+                        let mut explicit_proxy = |meta: &gix_config::file::Metadata| {
+                            (cfg!(feature = "blocking-http-transport-curl")
+                                || meta.source != gix_config::Source::EnvOverride)
+                                && trusted_only(meta)
+                        };
                         opts.proxy = proxy(
                             remote_name
                                 .and_then(|name| {
                                     config
                                         .string_filter(
                                             &format!("remote.{}.{}", name, Remote::PROXY.name),
-                                            &mut trusted_only,
+                                            &mut explicit_proxy,
                                         )
                                         .map(|v| (v, Some(name), &Remote::PROXY))
                                 })
@@ -180,13 +187,13 @@ impl crate::Repository {
                                     let key = "http.proxy";
                                     debug_assert_eq!(key, config::tree::Http::PROXY.logical_name());
                                     let http_proxy = config
-                                        .string_filter(key, &mut trusted_only)
+                                        .string_filter(key, &mut explicit_proxy)
                                         .map(|v| (v, None, &config::tree::Http::PROXY))
                                         .or_else(|| {
                                             let key = "gitoxide.http.proxy";
                                             debug_assert_eq!(key, gitoxide::Http::PROXY.logical_name());
                                             config
-                                                .string_filter(key, &mut trusted_only)
+                                                .string_filter(key, &mut explicit_proxy)
                                                 .map(|v| (v, None, &gitoxide::Http::PROXY))
                                         });
                                     if url.scheme == Https {
@@ -194,7 +201,7 @@ impl crate::Repository {
                                             let key = "gitoxide.https.proxy";
                                             debug_assert_eq!(key, gitoxide::Https::PROXY.logical_name());
                                             config
-                                                .string_filter(key, &mut trusted_only)
+                                                .string_filter(key, &mut explicit_proxy)
                                                 .map(|v| (v, None, &gitoxide::Https::PROXY))
                                         })
                                     } else {
@@ -205,7 +212,7 @@ impl crate::Repository {
                                     let key = "gitoxide.http.allProxy";
                                     debug_assert_eq!(key, gitoxide::Http::ALL_PROXY.logical_name());
                                     config
-                                        .string_filter(key, &mut trusted_only)
+                                        .string_filter(key, &mut explicit_proxy)
                                         .map(|v| (v, None, &gitoxide::Http::ALL_PROXY))
                                 }),
                             lenient,
@@ -214,7 +221,7 @@ impl crate::Repository {
                             let key = "gitoxide.http.noProxy";
                             debug_assert_eq!(key, gitoxide::Http::NO_PROXY.logical_name());
                             opts.no_proxy = config
-                                .string_filter(key, &mut trusted_only)
+                                .string_filter(key, &mut explicit_proxy)
                                 .and_then(|v| try_to_string(v, lenient, None, &gitoxide::Http::NO_PROXY).transpose())
                                 .transpose()?;
                         }
@@ -265,6 +272,125 @@ impl crate::Repository {
                                 ))
                             })
                             .transpose()?;
+                        #[cfg(all(
+                            feature = "blocking-http-transport-reqwest",
+                            not(feature = "blocking-http-transport-curl")
+                        ))]
+                        if opts.proxy.is_none() {
+                            use crate::bstr::ByteSlice;
+                            use gix_credentials::{
+                                helper::Action,
+                                protocol::{Context, ContextOptions},
+                            };
+                            use gix_error::ErrorExt;
+
+                            // Prepare only the imported proxy candidates: the callback must be Send + Sync,
+                            // whereas the repository/configuration can use Rc in non-parallel builds.
+                            let mut candidates = Vec::new();
+                            for key in ["gitoxide.http.proxy", "gitoxide.https.proxy", "gitoxide.http.allProxy"] {
+                                for value in config
+                                    .strings_filter(key, &mut |meta: &gix_config::file::Metadata| {
+                                        meta.source == gix_config::Source::EnvOverride && trusted_only(meta)
+                                    })
+                                    .into_iter()
+                                    .flatten()
+                                {
+                                    let Some(value) = value.to_str().ok().filter(|value| !value.is_empty()) else {
+                                        continue;
+                                    };
+                                    let value = if value.contains("://") {
+                                        value.to_owned()
+                                    } else {
+                                        format!("http://{value}")
+                                    };
+                                    let Ok(mut url) = gix_url::parse(value.as_str()) else {
+                                        continue; // The backend reports invalid settings only when selected.
+                                    };
+                                    if url.user().is_none() {
+                                        continue;
+                                    }
+                                    let helpers =
+                                        self.config_snapshot().credential_helpers(url.clone()).map_err(Arc::new);
+                                    // Match the backend's routing URL, but preserve the original declaration for
+                                    // URL-specific credential configuration and credential-store lookups.
+                                    if url.scheme == Http && url.port.is_none() {
+                                        url.port = Some(1080);
+                                    }
+                                    candidates.push((url.to_bstring(), helpers));
+                                }
+                            }
+                            if let Some((first_url, _)) = candidates.first() {
+                                let action = Action::get_for_url(first_url.clone());
+                                opts.proxy_authenticate = Some((
+                                    action,
+                                    Arc::new(Mutex::new(move |mut action: Action| {
+                                        let get = action.expects_output();
+                                        let selected = match &mut action {
+                                            Action::Get(context) => {
+                                                let url = context.url.clone().or_else(|| context.to_url()).ok_or_else(
+                                                    || {
+                                                        gix_error::message(
+                                                            "The URL for proxy authentication is missing",
+                                                        )
+                                                        .raise()
+                                                    },
+                                                )?;
+                                                let url = gix_url::parse(&url)?.to_bstring();
+                                                candidates.iter().position(|(candidate, _)| candidate == &url)
+                                            }
+                                            Action::Store(payload) | Action::Erase(payload) => {
+                                                let Some((index, original)) = payload
+                                                    .strip_prefix(b"url=gix-proxy:")
+                                                    .and_then(|payload| payload.strip_suffix(b"\n"))
+                                                    .and_then(|url| url.split_once_str(b":"))
+                                                else {
+                                                    return Ok(None);
+                                                };
+                                                if original.iter().any(|byte| matches!(byte, 0 | b'\n' | b'\r')) {
+                                                    return Err(message("Invalid proxy authentication handle").raise());
+                                                }
+                                                let index = index.to_str().or_error()?.parse::<usize>().or_error()?;
+                                                *payload = original
+                                                    .replace(b"%0D", b"\r")
+                                                    .replace(b"%0A", b"\n")
+                                                    .replace(b"%25", b"%")
+                                                    .into();
+                                                Some(index)
+                                            }
+                                        };
+                                        let Some(index) = selected else { return Ok(None) };
+                                        let Some((_, helpers)) = candidates.get_mut(index) else {
+                                            return Ok(None);
+                                        };
+                                        let (cascade, normalized_action, prompt_opts) =
+                                            helpers.as_mut().map_err(|source| {
+                                                source.clone().and_raise(gix_error::message(
+                                                    "Could not configure credential helpers for the proxy URL",
+                                                ))
+                                            })?;
+                                        let mut outcome = cascade.invoke(
+                                            if get { normalized_action.clone() } else { action },
+                                            prompt_opts.clone(),
+                                        )?;
+                                        if let Some(outcome) = &mut outcome
+                                            && let Action::Store(payload) = outcome.next.clone().store()
+                                        {
+                                            // Keep routing in the handle: clones may obtain identical helper credentials.
+                                            let mut url = format!("gix-proxy:{index}:").into_bytes();
+                                            url.extend(
+                                                payload
+                                                    .replace(b"%", b"%25")
+                                                    .replace(b"\n", b"%0A")
+                                                    .replace(b"\r", b"%0D"),
+                                            );
+                                            outcome.next = Context::from_url(url, ContextOptions::default()).into();
+                                        }
+                                        Ok(outcome)
+                                    }))
+                                        as Arc<Mutex<http::options::AuthenticateFn>>,
+                                ));
+                            }
+                        }
                         opts.connect_timeout = {
                             let key = "gitoxide.http.connectTimeout";
                             debug_assert_eq!(key, gitoxide::Http::CONNECT_TIMEOUT.logical_name());

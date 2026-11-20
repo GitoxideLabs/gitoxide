@@ -235,7 +235,7 @@ http-client-curl = ["gix/blocking-http-transport-curl"]
 http-client-curl-rustls = ["gix/blocking-http-transport-curl-rustls"]
 ## Implies `http-client-curl` and configures `curl` to use the `openssl` backend.
 http-client-curl-openssl = ["gix/blocking-http-transport-curl-openssl"]
-## Support synchronous 'http' and 'https' transports (e.g. for clone, fetch and push) using **reqwest**.
+## Support synchronous 'http' and 'https' transports (e.g. for clone, fetch and push) using **gix-reqwest**, Gitoxide's patched reqwest fork.
 http-client-reqwest = ["gix/blocking-http-transport-reqwest-rust-tls"]
 
 #! #### Async
@@ -367,6 +367,7 @@ members = [
     "gix-sequencer",
     "gix-submodule",
     "gix-transport",
+    "gix-reqwest",
     "gix-credentials",
     "gix-protocol",
     "gix-pack",

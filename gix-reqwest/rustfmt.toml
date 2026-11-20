@@ -1,0 +1,2 @@
+# Preserve upstream formatting to keep imports reviewable.
+max_width = 100
