@@ -1,3 +1,5 @@
+//! Conflict stages retained after a path is resolved, allowing the conflict to be restored.
+
 use bstr::BString;
 use gix_hash::ObjectId;
 
@@ -7,28 +9,22 @@ use crate::{extension::Signature, util::split_at_byte_exclusive};
 pub type Paths = Vec<ResolvePath>;
 
 /// A path with merge stages recorded by the resolve-undo extension.
-#[expect(
-    dead_code,
-    reason = "REUC is decoded but not yet exposed or written; retain its fields for planned round-trip support"
-)]
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvePath {
     /// relative to the root of the repository, or what would be stored in the index
-    name: BString,
+    pub name: BString,
 
     /// 0 = ancestor/common, 1 = ours, 2 = theirs
-    stages: [Option<Stage>; 3],
+    pub stages: [Option<Stage>; 3],
 }
 
 /// The file mode and object ID of a recorded merge stage.
-#[expect(
-    dead_code,
-    reason = "REUC is decoded but not yet exposed or written; retain its fields for planned round-trip support"
-)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Stage {
-    mode: u32,
-    id: ObjectId,
+    /// The original Git entry mode, or type and permission bits.
+    pub mode: u32,
+    /// The object previously recorded at this stage.
+    pub id: ObjectId,
 }
 
 /// The signature of the resolve-undo extension.

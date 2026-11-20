@@ -1,6 +1,6 @@
 use crate::Result;
 use gix_hash::ObjectId;
-use gix_object::{Exists, FindExt, Write};
+use gix_object::{Exists, Find, FindExt, Write};
 use gix_odb::{Header, store, store::iter::Ordering};
 use gix_testtools::fixture_path;
 
@@ -372,6 +372,71 @@ fn an_object_in_a_pack_moved_by_an_external_process_can_be_found_from_a_stale_ha
         gix_object::Kind::Blob,
         "a stale pack id should trigger an index refresh and find the moved pack"
     );
+    Ok(())
+}
+
+#[test]
+fn automatic_index_slots_grow_without_invalidating_stable_handles() -> gix_testtools::TestResult {
+    use gix_odb::store::init::{Options, Slots};
+
+    for slots in [
+        Slots::AsNeededByDiskState {
+            multiplier: 1.0,
+            minimum: 1,
+        },
+        Slots::Given(1),
+    ] {
+        let tmp = gix_testtools::tempfile::tempdir()?;
+        let pack_dir = tmp.path().join("pack");
+        std::fs::create_dir(&pack_dir)?;
+        let name = "pack-c0438c19fb16422b6bbcce24387b3264416d485b";
+        for ext in ["idx", "pack"] {
+            std::fs::copy(
+                fixture_path(format!("objects/pack/{name}.{ext}")),
+                pack_dir.join(format!("{name}.{ext}")),
+            )?;
+        }
+        let handle = gix_odb::at_opts(
+            tmp.path(),
+            gix_hash::Kind::Sha1,
+            Vec::new(),
+            Options {
+                slots,
+                ..Default::default()
+            },
+        )?;
+        let mut stable = handle.clone();
+        stable.prevent_pack_unload();
+        let object_id = hex_to_id("dd25c539efbb0ab018caa4cda2d133285634e9b5");
+        let mut buf = Vec::new();
+        let expected = stable.find(&object_id, &mut buf)?.data.to_owned();
+        assert_eq!(handle.store_ref().metrics().known_reachable_indices, 1);
+
+        for name in [
+            "pack-11fdfa9e156ab73caae3b6da867192221f2089c2",
+            "pack-a2bf8e71d8c18879e499335762dd95119d93d9f1",
+        ] {
+            for ext in ["idx", "pack"] {
+                std::fs::copy(
+                    fixture_path(format!("objects/pack/{name}.{ext}")),
+                    pack_dir.join(format!("{name}.{ext}")),
+                )?;
+            }
+        }
+        let result = handle.try_find(&missing_id(&handle), &mut buf);
+        match slots {
+            Slots::Given(_) => assert!(result.is_err(), "explicit capacity remains a hard limit"),
+            Slots::AsNeededByDiskState { .. } => {
+                assert!(result?.is_none());
+                assert_eq!(handle.store_ref().metrics().known_reachable_indices, 3);
+                assert_eq!(
+                    stable.find(&object_id, &mut buf)?.data,
+                    expected,
+                    "growing slots preserves existing pack identities"
+                );
+            }
+        }
+    }
     Ok(())
 }
 

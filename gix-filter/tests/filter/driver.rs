@@ -318,7 +318,7 @@ mod shutdown {
             "shutdown diagnostics identify the program that was actually invoked"
         );
         #[cfg(not(windows))]
-        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(env!("CARGO_BIN_EXE_gix-filter-test-arrow"), "<filter-driver>")]), "the prepared command, program, and status are retained", @r#"Filter process failed, command="\"/bin/sh\" \"-c\" \"'<filter-driver>' process fail-on-shutdown\" \"sh\"", exit_code=1, exit_status="exit status: 1", program="/bin/sh""#);
+        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(env!("CARGO_BIN_EXE_gix-filter-test-arrow"), "<filter-driver>")]), "the prepared command, program, and status are retained", @r#"Filter process failed, command="\"/bin/sh\" \"-c\" \"'<filter-driver>' process fail-on-shutdown\" \"'<filter-driver>' process fail-on-shutdown\"", exit_code=1, exit_status="exit status: 1", program="/bin/sh""#);
         #[cfg(windows)]
         insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(env!("CARGO_BIN_EXE_gix-filter-test-arrow"), "<filter-driver>")]), "the prepared command, program, and status are retained", @r#"Filter process failed, command="\"<filter-driver>\" \"process\" \"fail-on-shutdown\"", exit_code=1, exit_status="exit code: 1", program="<filter-driver>""#);
         Ok(())
@@ -454,6 +454,53 @@ pub(crate) mod apply {
         assert!(
             !diagnostic.values.contains_key("exit_status"),
             "a process that could not be spawned has no exit status"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn operation_environment_is_inherited_only_by_filter_children() -> TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let temp = gix_testtools::tempfile::tempdir()?;
+        let worktree = temp.path().canonicalize()?;
+        let mut state = driver::State::new(gix_command::Context {
+            worktree_dir: Some(worktree.clone()),
+            git_dir: Some(worktree.join(".git")),
+            ..Default::default()
+        });
+        state.environment = vec![
+            ("GIX_FILTER_TEST_VALUE".into(), "first".into()),
+            ("GIX_FILTER_TEST_VALUE".into(), "literal $value".into()),
+            ("GIT_DIR".into(), "wrong".into()),
+        ];
+        let filter = Driver {
+            name: "environment".into(),
+            clean: Some("printf '%s\n%s\n' \"$GIX_FILTER_TEST_VALUE\" \"$GIT_DIR\"".into()),
+            smudge: None,
+            process: None,
+            required: true,
+        };
+        let mut output = String::new();
+        state
+            .clone()
+            .apply(
+                &filter,
+                &mut std::io::empty(),
+                Operation::Clean,
+                context_from_path("file"),
+            )?
+            .expect("a clean filter is configured")
+            .read_to_string(&mut output)?;
+        assert_eq!(
+            output,
+            format!("literal $value\n{}\n", worktree.join(".git").display()),
+            "cloned state keeps overrides and repository context wins"
+        );
+        assert!(
+            std::env::var_os("GIX_FILTER_TEST_VALUE").is_none(),
+            "filter overrides do not change the parent process environment"
         );
         Ok(())
     }
@@ -634,7 +681,7 @@ pub(crate) mod apply {
             kind: Other,
             error: Message {
                 message: "Driver process failed",
-                values: {command: String("\"/bin/sh\" \"-c\" \"'<filter-driver>' smudge 'do/fail'\" \"sh\""), exit_code: I64(101), exit_status: String("exit status: 101"), program: Path("/bin/sh")},
+                values: {command: String("\"/bin/sh\" \"-c\" \"'<filter-driver>' smudge 'do/fail'\" \"'<filter-driver>' smudge 'do/fail'\""), exit_code: I64(101), exit_status: String("exit status: 101"), program: Path("/bin/sh")},
             },
         }
         "#);
@@ -678,32 +725,33 @@ pub(crate) mod apply {
     }
 
     #[test]
-    fn successful_non_required_driver_can_close_stdin_early() -> TestResult {
-        let mut state = gix_filter::driver::State::default();
-        let mut driver = driver_no_process();
-        driver.required = false;
-        driver.clean = Some({
-            let mut command = driver_path();
-            command.push_str(" take-one");
-            command
-        });
-        let input = vec![b'a'; 1024 * 1024];
+    fn successful_driver_can_close_stdin_early() -> TestResult {
+        for required in [false, true] {
+            let mut state = gix_filter::driver::State::default();
+            let mut driver = driver_no_process();
+            driver.required = required;
+            driver.clean = Some({
+                let mut command = driver_path();
+                command.push_str(" take-one");
+                command
+            });
+            let input = vec![b'a'; 1024 * 1024];
 
-        let mut filtered = state
-            .apply(
-                &driver,
-                &mut input.as_slice(),
-                driver::Operation::Clean,
-                context_from_path("ignored"),
-            )?
-            .expect("filter present");
-        let mut output = Vec::new();
-        filtered.read_to_end(&mut output)?;
-        assert_eq!(
-            output, b"a",
-            "a successful filter may intentionally consume only part of its input"
-        );
-
+            let mut filtered = state
+                .apply(
+                    &driver,
+                    &mut input.as_slice(),
+                    driver::Operation::Clean,
+                    context_from_path("ignored"),
+                )?
+                .expect("filter present");
+            let mut output = Vec::new();
+            filtered.read_to_end(&mut output)?;
+            assert_eq!(
+                output, b"a",
+                "a successful filter may intentionally consume only part of its input"
+            );
+        }
         Ok(())
     }
 

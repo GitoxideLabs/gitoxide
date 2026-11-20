@@ -335,3 +335,35 @@ mod loose {
         Ok(())
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn filesystem_symlinks_with_ref_names_are_symbolic_even_when_dangling() -> gix_testtools::TestResult {
+    let store = crate::file::store_at("make_filesystem_symrefs.sh")?;
+    for (name, target) in [
+        ("HEAD", "refs/heads/alias"),
+        ("ORIG_HEAD", "refs/tags/first"),
+        ("DANGLING", "refs/heads/missing"),
+    ] {
+        assert_eq!(
+            store.find(name)?.target,
+            gix_ref::Target::Symbolic(target.try_into()?),
+            "{name}: normalized symlink targets remain symbolic"
+        );
+    }
+    let references = store.loose_iter()?.collect::<gix_error::Result<Vec<_>>>()?;
+    assert_eq!(
+        references
+            .iter()
+            .find(|reference| reference.name == "refs/heads/from-link")
+            .map(|reference| &reference.target),
+        Some(&gix_ref::Target::Symbolic("refs/heads/main".try_into()?)),
+        "iteration recognizes the same filesystem symbolic references as lookup"
+    );
+    assert_eq!(
+        store.find("RELATIVE")?.target,
+        store.find("main")?.target,
+        "a non-ref symlink target is read as an ordinary file"
+    );
+    Ok(())
+}

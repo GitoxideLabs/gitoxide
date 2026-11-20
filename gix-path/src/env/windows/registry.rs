@@ -8,7 +8,7 @@ use winreg::{
 const UNINSTALL: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall";
 
 /// Installer registrations also cover custom roots, without guessing directories on each drive.
-pub(super) fn git_for_windows_bins() -> impl Iterator<Item = PathBuf> {
+pub(in crate::env) fn git_for_windows_bins() -> impl Iterator<Item = PathBuf> {
     registration_bins(|hive, view| {
         RegKey::predef(hive)
             .open_subkey_with_flags(r"Software\GitForWindows", KEY_READ | view)
@@ -20,7 +20,7 @@ pub(super) fn git_for_windows_bins() -> impl Iterator<Item = PathBuf> {
 }
 
 /// Scan uninstall registrations only after callers exhaust more likely Git installations.
-pub(super) fn msys2_bins() -> impl Iterator<Item = PathBuf> {
+pub(in crate::env) fn msys2_bins() -> impl Iterator<Item = PathBuf> {
     registration_bins(|hive, view| {
         RegKey::predef(hive)
             .open_subkey_with_flags(UNINSTALL, KEY_READ | view)

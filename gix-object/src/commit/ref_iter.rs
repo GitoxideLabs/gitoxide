@@ -46,13 +46,16 @@ impl<'a> CommitRefIter<'a> {
 
 /// Access
 impl<'a> CommitRefIter<'a> {
-    /// Parse `data` as commit and return its PGP signature, along with *all non-signature* data as [`SignedData`], or `None`
-    /// if the commit isn't signed. All hashes in `data` are parsed as `object_hash`.
+    /// Parse `data` as commit and return its active signature, along with bytes excluding both Git
+    /// signature headers (`gpgsig` and `gpgsig-sha256`) as [`SignedData`], or `None` if the commit isn't signed
+    /// for `hash_kind`. All hashes in `data` are parsed as `hash_kind`. Duplicate active signature headers
+    /// are rejected as ambiguous.
     ///
     /// This allows the caller to validate the signature by passing the signed data along with the signature back to the program
     /// that created it.
     pub fn signature(data: &'a [u8], hash_kind: gix_hash::Kind) -> Result<Option<(Cow<'a, BStr>, SignedData<'a>)>> {
-        let mut signature_and_range = None;
+        let mut signature = None;
+        let mut ranges = smallvec::SmallVec::<[Range<usize>; 2]>::new();
 
         let raw_tokens = CommitRefIterRaw {
             data,
@@ -62,17 +65,21 @@ impl<'a> CommitRefIter<'a> {
         };
         for token in raw_tokens {
             let token = token?;
-            if let Token::ExtraHeader((name, value)) = &token.token
-                && *name == signature_field_name(hash_kind)
+            if let Token::ExtraHeader((name, value)) = token.token
+                && super::is_signature_field(name)
             {
-                // keep track of the signature range alongside the signature data,
-                // because all but the signature is the signed data.
-                signature_and_range = Some((value.clone(), token.token_range));
-                break;
+                if name == signature_field_name(hash_kind) {
+                    gix_error::ensure!(
+                        signature.is_none(),
+                        gix_error::validation("Duplicate active commit signature header")
+                    );
+                    signature = Some(value);
+                }
+                ranges.push(token.token_range);
             }
         }
 
-        Ok(signature_and_range.map(|(sig, signature_range)| (sig, SignedData::new(data, signature_range))))
+        Ok(signature.and_then(|signature| SignedData::excluding(data, ranges).map(|data| (signature, data))))
     }
 
     /// Returns the object id of this commits tree if it is the first function called and if there is no error in decoding

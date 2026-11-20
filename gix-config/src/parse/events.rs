@@ -204,13 +204,42 @@ impl Events {
     ///
     /// Use `filter` to only include those events for which it returns true.
     pub fn from_bytes(input: &[u8], filter: Option<fn(EventRef<'_>) -> bool>) -> Result<Events, parse::Error> {
+        let (mut events, error) = Self::parse_events(input, filter);
+        if let Some(error) = error {
+            return Err(error);
+        }
+        events.backing = input.to_vec();
+        Ok(events)
+    }
+
+    /// Parse completed entries up to the first error, returning that error separately.
+    ///
+    /// The result contains all complete key/value pairs and section headers encountered
+    /// before the error. An unfinished key and its value events are discarded together,
+    /// including any line continuations. This permits validators to inspect earlier
+    /// values even when later syntax is malformed. Includes are not resolved.
+    ///
+    /// As in [`Self::from_bytes()`], `filter` selects retained events. Inputs larger
+    /// than [`u32::MAX`] produce no events and an error.
+    pub fn from_bytes_partial(
+        input: &[u8],
+        filter: Option<fn(EventRef<'_>) -> bool>,
+    ) -> (Events, Option<parse::Error>) {
+        let (mut events, error) = Self::parse_events(input, filter);
+        if input.len() <= u32::MAX as usize {
+            events.backing = input.to_vec();
+        }
+        (events, error)
+    }
+
+    fn parse_events(input: &[u8], filter: Option<fn(EventRef<'_>) -> bool>) -> (Events, Option<parse::Error>) {
         let mut header = None;
         let mut events = Vec::with_capacity(256);
+        let mut unfinished_key = None;
         let mut frontmatter = FrontMatterEvents::default();
         let mut sections = Vec::new();
-        // The parser emits offsets into the caller's input. Copy it only after successful parsing to
-        // make the returned events self-contained without allocating on parse errors.
-        parse::from_bytes::from_bytes(input, &mut |e: Event| match e {
+        // The caller attaches backing bytes after deciding whether to retain partial results.
+        let error = parse::from_bytes::from_bytes(input, &mut |e: Event| match e {
             Event::SectionHeader(next_header) => {
                 match header.take() {
                     None => {
@@ -234,11 +263,22 @@ impl Events {
                 });
             }
             event => {
+                match event {
+                    Event::SectionValueName(_) => unfinished_key = Some(events.len()),
+                    Event::Value(_) | Event::ValueDone(_) => unfinished_key = None,
+                    _ => {}
+                }
                 if filter.is_none_or(|f| f(event.as_ref_in(input))) {
                     events.push(event);
                 }
             }
-        })?;
+        })
+        .err();
+        if error.is_some()
+            && let Some(start) = unfinished_key
+        {
+            events.truncate(start);
+        }
 
         match header {
             None => {
@@ -251,11 +291,14 @@ impl Events {
                 });
             }
         }
-        Ok(Events {
-            backing: input.to_vec(),
-            frontmatter,
-            sections,
-        })
+        (
+            Events {
+                backing: Vec::new(),
+                frontmatter,
+                sections,
+            },
+            error,
+        )
     }
 
     /// Attempt to parse the provided `input` string.

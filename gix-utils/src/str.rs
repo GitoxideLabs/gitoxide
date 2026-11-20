@@ -170,3 +170,46 @@ pub fn precompose_bstr(s: Cow<'_, bstr::BStr>) -> Cow<'_, bstr::BStr> {
         },
     }
 }
+
+/// Replace `output` with `input` normalized like `git stripspace`.
+///
+/// Trim Git whitespace from line endings, keep at most one empty line between paragraphs,
+/// and terminate non-empty output with a newline. Other bytes are preserved. When provided,
+/// `comment_prefix` removes lines starting with that byte sequence before normalization.
+pub fn stripspace(input: &[u8], comment_prefix: Option<&[u8]>, output: &mut Vec<u8>) {
+    output.clear();
+    let mut blank_line = false;
+    for line in input.split(|byte| *byte == b'\n') {
+        if comment_prefix.is_some_and(|prefix| line.starts_with(prefix)) {
+            continue;
+        }
+        let Some(last) = line.iter().rposition(|byte| !crate::git_is_space(*byte)) else {
+            blank_line = !output.is_empty();
+            continue;
+        };
+        if blank_line {
+            output.push(b'\n');
+            blank_line = false;
+        }
+        output.extend_from_slice(&line[..=last]);
+        output.push(b'\n');
+    }
+}
+
+/// Replace `output` with `input` commented like `git stripspace --comment-lines`.
+///
+/// Prefix every line with `comment_prefix`, followed by a space unless the line is empty or
+/// starts with a tab. Preserve all input bytes and terminate non-empty output with a newline.
+pub fn comment_lines(input: &[u8], comment_prefix: &[u8], output: &mut Vec<u8>) {
+    output.clear();
+    for line in input.split_inclusive(|byte| *byte == b'\n') {
+        output.extend_from_slice(comment_prefix);
+        if !matches!(line.first(), Some(b'\n' | b'\t')) {
+            output.push(b' ');
+        }
+        output.extend_from_slice(line);
+        if !line.ends_with(b"\n") {
+            output.push(b'\n');
+        }
+    }
+}

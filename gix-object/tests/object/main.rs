@@ -7,6 +7,7 @@ mod commit;
 mod encode;
 mod identity_date;
 mod object_ref;
+mod references;
 mod signature_format;
 mod tag;
 mod tree;

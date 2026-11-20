@@ -94,6 +94,22 @@ mod ansi_c {
         }
 
         #[test]
+        fn unquoted_high_bytes_match_core_quote_path_false() {
+            for (input, expected) in [
+                ("濱野".as_bytes(), "濱野".as_bytes()),
+                ("濱野\t純".as_bytes(), "\"濱野\\t純\"".as_bytes()),
+                (b"\xff", b"\xff"),
+                (b"\x7f", br#""\177""#),
+            ] {
+                assert_eq!(
+                    ansi_c::quote_with(input.as_bstr(), false).as_ref(),
+                    expected.as_bstr(),
+                    "only high bytes are exempted by core.quotePath=false"
+                );
+            }
+        }
+
+        #[test]
         fn every_byte_round_trips() {
             let input = (0..=u8::MAX).collect::<Vec<_>>();
             let quoted = ansi_c::quote(input.as_bstr());

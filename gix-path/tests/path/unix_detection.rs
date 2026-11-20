@@ -20,15 +20,17 @@ fn assert_inferred(root: &Path) {
     );
 }
 
-fn assert_queried() {
+fn assert_system_default() {
+    let config = Path::new("/etc/gitconfig");
     assert_eq!(
         gix_path::env::installation_config(),
-        Some(Path::new("/queried/gitconfig")),
-        "ambiguous layouts preserve the configuration path reported by the selected Git"
+        config.is_file().then_some(config),
+        "unknown or absent installation configuration retains the native system default"
     );
-    assert!(
-        !gix_path::env::installation_config_is_system(),
-        "the query's reported scope is preserved"
+    assert_eq!(
+        gix_path::env::installation_config_is_system(),
+        config.is_file(),
+        "an existing default configuration has system scope"
     );
 }
 
@@ -68,35 +70,35 @@ fn homebrew_discovery_ignores_config_overrides() -> gix_error::TestResult {
 }
 
 #[test]
-fn first_unknown_executable_is_queried() -> gix_error::TestResult {
+fn first_unknown_executable_retains_system_default() -> gix_error::TestResult {
     let root = fixture()?;
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
     }
     let _env = select(std::env::join_paths([root.join("unknown"), root.join("homebrew/bin")])?);
-    assert_queried();
+    assert_system_default();
     Ok(())
 }
 
 #[test]
-fn missing_homebrew_config_is_queried() -> gix_error::TestResult {
+fn missing_homebrew_config_retains_system_default() -> gix_error::TestResult {
     let root = fixture()?;
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
     }
     let _env = select(root.join("incomplete/Cellar/git/2.56.0/bin"));
-    assert_queried();
+    assert_system_default();
     Ok(())
 }
 
 #[test]
-fn arbitrary_prefix_with_config_is_queried() -> gix_error::TestResult {
+fn arbitrary_prefix_with_config_is_inferred() -> gix_error::TestResult {
     let root = fixture()?;
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
     }
     let _env = select(root.join("custom/bin"));
-    assert_queried();
+    assert_inferred(&root.join("custom"));
     Ok(())
 }
 
@@ -116,7 +118,7 @@ fn broken_symlinks_and_non_executable_entries_are_skipped() -> gix_error::TestRe
 }
 
 #[test]
-fn restricted_execute_permissions_use_the_query_fallback() -> gix_error::TestResult {
+fn restricted_execute_permissions_do_not_require_execution() -> gix_error::TestResult {
     let root = fixture()?;
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
@@ -125,12 +127,12 @@ fn restricted_execute_permissions_use_the_query_fallback() -> gix_error::TestRes
         root.join("restricted/Cellar/git/2.56.0/bin"),
         root.join("unknown"),
     ])?);
-    assert_queried();
+    assert_inferred(&root.join("restricted"));
     Ok(())
 }
 
 #[test]
-fn relative_path_entry_uses_the_query_fallback() -> gix_error::TestResult {
+fn relative_path_entry_is_resolved_without_execution() -> gix_error::TestResult {
     let root = fixture()?;
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
@@ -139,7 +141,7 @@ fn relative_path_entry_uses_the_query_fallback() -> gix_error::TestResult {
         PathBuf::from("gix-test-relative-path"),
         root.join("homebrew/bin"),
     ])?);
-    assert_queried();
+    assert_inferred(&root.join("homebrew"));
     Ok(())
 }
 
@@ -181,22 +183,18 @@ mod apple {
     }
 
     #[test]
-    fn symlink_to_developer_git_is_queried() -> gix_error::TestResult {
+    fn symlink_to_developer_git_is_inferred() -> gix_error::TestResult {
         let root = fixture()?;
         if gix_testtools::run_in_isolated_process()? {
             return Ok(());
         }
         let _env = select(root.join("apple-link"));
-        assert_eq!(
-            gix_path::env::installation_config(),
-            None,
-            "an indirect Apple Git invocation must be queried; this fixture cannot execute"
-        );
+        assert_inferred(&root.join("Xcode.app/Contents/Developer"));
         Ok(())
     }
 
     #[test]
-    fn symlink_to_installed_apple_git_agrees_with_git() -> gix_error::TestResult {
+    fn symlink_to_installed_apple_git_uses_its_target() -> gix_error::TestResult {
         let root = fixture()?;
         if gix_testtools::run_in_isolated_process()? || !root.join("real-apple-link/git").is_file() {
             return Ok(());
@@ -205,11 +203,12 @@ mod apple {
             .unset("DEVELOPER_DIR")
             .unset("SDKROOT")
             .unset("TOOLCHAINS");
-        assert_agrees_with_git(&root)
+        assert_inferred(Path::new("/Library/Developer/CommandLineTools"));
+        Ok(())
     }
 
     #[test]
-    fn shim_with_developer_symlink_agrees_with_git() -> gix_error::TestResult {
+    fn shim_with_developer_symlink_uses_selected_directory() -> gix_error::TestResult {
         let root = fixture()?;
         if gix_testtools::run_in_isolated_process()? || !root.join("real-developer-link/usr/bin/git").is_file() {
             return Ok(());
@@ -218,43 +217,12 @@ mod apple {
             "DEVELOPER_DIR",
             root.join("real-developer-link").to_str().expect("UTF-8 fixture path"),
         );
-        assert_agrees_with_git(&root)
-    }
-
-    fn assert_agrees_with_git(root: &Path) -> gix_error::TestResult {
-        let output = gix_testtools::git_command(root)
-            .args([
-                "config",
-                "-lz",
-                "--show-origin",
-                "--no-includes",
-                "--show-scope",
-                "--name-only",
-            ])
-            .env_remove("GIT_CONFIG_NOSYSTEM")
-            .env_remove("GIT_CONFIG_PARAMETERS")
-            .env("GIT_DIR", "/dev/null")
-            .env("GIT_WORK_TREE", "/dev/null")
-            .output()?;
-        let stdout = String::from_utf8(output.stdout)?;
-        let mut fields = stdout.split('\0');
-        let scope = fields.next();
-        let config = fields.next().and_then(|origin| origin.strip_prefix("file:"));
-        assert_eq!(
-            gix_path::env::installation_config(),
-            config.map(Path::new),
-            "Apple Git's invocation and developer-directory selection determine the config"
-        );
-        assert_eq!(
-            gix_path::env::installation_config_is_system(),
-            scope == Some("system"),
-            "the installed Apple Git's scope is preserved"
-        );
+        assert_inferred(&root.join("real-developer-link"));
         Ok(())
     }
 
     #[test]
-    fn shim_with_developer_directory_is_queried() -> gix_error::TestResult {
+    fn shim_with_developer_directory_is_inferred() -> gix_error::TestResult {
         let root = fixture()?;
         if gix_testtools::run_in_isolated_process()? {
             return Ok(());
@@ -265,11 +233,7 @@ mod apple {
                 .to_str()
                 .expect("UTF-8 fixture path"),
         );
-        assert_eq!(
-            gix_path::env::installation_config(),
-            None,
-            "the shim must validate its developer directory; this fixture's Git cannot execute"
-        );
+        assert_inferred(&root.join("Xcode.app/Contents/Developer"));
         Ok(())
     }
 }

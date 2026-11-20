@@ -463,9 +463,14 @@ mod tests {
 
     #[test]
     fn requests_and_responses_obey_packet_size_boundaries() -> gix_testtools::TestResult {
-        let mut connection = Connection::new(b"0000");
-        assert!(exchange(&mut connection, b"", Options::default().max_response_size)?.is_empty());
-        assert_eq!(connection.written, b"0000", "empty requests contain only a flush");
+        for response in [b"0000".as_slice(), b"00040000"] {
+            let mut connection = Connection::new(response);
+            assert!(
+                exchange(&mut connection, b"", Options::default().max_response_size)?.is_empty(),
+                "an empty data packet contributes no bytes before the flush"
+            );
+            assert_eq!(connection.written, b"0000", "empty requests contain only a flush");
+        }
 
         let token = vec![b'x'; MAX_PACKET_SIZE - 3];
         let mut response = b"fff0".to_vec();
@@ -503,7 +508,7 @@ mod tests {
 
     #[test]
     fn malformed_control_and_truncated_packets_fail() {
-        for input in [b"0001", b"0002", b"0003", b"0004", b"fff1", b"ffff", b"zzzz", b"+005"] {
+        for input in [b"0001", b"0002", b"0003", b"fff1", b"ffff", b"zzzz", b"+005"] {
             assert_eq!(
                 exchange(
                     &mut Connection::new(input),
@@ -516,7 +521,7 @@ mod tests {
                 "invalid framing must cause the caller to use a full status scan"
             );
         }
-        for input in [b"".as_slice(), b"00", b"0006x", b"0005x"] {
+        for input in [b"".as_slice(), b"00", b"0006x", b"0005x", b"0004"] {
             assert_eq!(
                 exchange(
                     &mut Connection::new(input),

@@ -256,6 +256,8 @@ impl ThreadSafeRepository {
             ref system_config_path,
             use_repository_local_environment,
             ref mut current_dir,
+            #[cfg(all(unix, feature = "credentials"))]
+                credential_cache_daemon: _,
         } = options;
         let git_dir_trust = git_dir_trust.as_mut().expect("trust must be determined by now");
         if bail_if_untrusted && matches!(git_dir_trust, RepositoryTrust::Enforced(Trust::Reduced)) {

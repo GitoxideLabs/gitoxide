@@ -45,6 +45,10 @@ impl File {
     /// `git commit` or `git write-tree` to capture outdated subtree content, and a stale untracked cache
     /// can hide files whose tracked status changed.
     ///
+    /// Mutable entry access and path changes discard the in-memory tree cache. Callers that modify
+    /// it directly through [`State::tree_mut()`](crate::State::tree_mut()) must keep it consistent
+    /// with the entries or discard it with [`State::remove_tree()`](crate::State::remove_tree()).
+    ///
     /// A newly constructed index can use [`State::copy_metadata_from()`](crate::State::copy_metadata_from())
     /// with its original state to retain and selectively invalidate both caches before writing with
     /// [`write::Extensions::AllUnconditionally`].

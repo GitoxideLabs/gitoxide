@@ -64,6 +64,7 @@ pub struct Outcome {
     /// The path to the `.keep` file to prevent collection of the newly written pack until refs are pointing to it.
     /// It might be `None` if the file at `data_path` already existed, indicating that we have received a pack that
     /// was already present locally, or when an existing `.keep` marker belongs to another operation.
+    /// Existing markers remain untouched and are never returned as owned by this operation.
     ///
     /// The file is created right before moving the pack data and index data into place (i.e. `data_path` and `index_path`)
     /// and is expected to be removed by the caller when ready.

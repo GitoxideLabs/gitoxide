@@ -3,13 +3,28 @@ use std::path::Path;
 use gix_object::bstr::{BStr, BString, ByteSlice, ByteVec};
 use gix_path::RelativePath;
 
-use crate::{FullName, FullNameRef, Namespace, PartialNameRef};
+use crate::{FullName, FullNameRef, Namespace, PartialName, PartialNameRef};
 
 impl Namespace {
     /// Dissolve ourselves into the interior representation
     pub fn into_bstring(self) -> BString {
         self.0
     }
+    /// Return the unexpanded namespace accepted by [`expand()`], for example `team/project`.
+    ///
+    /// Use this form for `GIT_NAMESPACE`; passing the expanded reference prefix would cause Git
+    /// to expand each `refs/namespaces` component again.
+    pub fn to_partial_name(&self) -> PartialName {
+        let mut name = BString::default();
+        for component in self.0.split_str(b"/").skip(2).step_by(3) {
+            if !name.is_empty() {
+                name.push_byte(b'/');
+            }
+            name.push_str(component);
+        }
+        PartialName(name)
+    }
+
     /// Return ourselves as
     pub fn as_bstr(&self) -> &BStr {
         self.0.as_ref()

@@ -24,7 +24,30 @@ pub(crate) mod function {
         Url: TryInto<gix_url::Url, Error = E>,
         E: std::error::Error + Send + Sync + 'static,
     {
+        connect_with_environment(url, options, &[])
+    }
+
+    /// Connect like [`connect()`], applying `environment` to transport child processes.
+    ///
+    /// Repeated keys use their last value; required protocol and locale settings take precedence.
+    /// Repository-local variables are removed from transport children, as with [`connect()`].
+    /// HTTP and Git-protocol transports do not launch children and ignore these values.
+    pub fn connect_with_environment<Url, E>(
+        url: Url,
+        options: super::Options,
+        environment: &[(std::ffi::OsString, std::ffi::OsString)],
+    ) -> Result<Box<dyn Transport + Send>>
+    where
+        Url: TryInto<gix_url::Url, Error = E>,
+        E: std::error::Error + Send + Sync + 'static,
+    {
         let mut url = url.try_into().or_raise(|| message("Could not parse URL"))?;
+        let mut options = options;
+        options.working_dir = options
+            .working_dir
+            .map(std::path::absolute)
+            .transpose()
+            .or_raise(|| message("Could not resolve the transport working directory"))?;
         Ok(match url.scheme {
             gix_url::Scheme::Ext | gix_url::Scheme::Helper(_) | gix_url::Scheme::HelperUrl(_) => {
                 bail!("The '{}' protocol is currently unsupported".unsupported(), url.scheme);
@@ -32,25 +55,32 @@ pub(crate) mod function {
             gix_url::Scheme::File => {
                 if url.user().is_some() || url.password().is_some() || url.host().is_some() || url.port.is_some() {
                     bail!(
-                        "The url {:?} contains information that would not be used by the {} protocol".validation(),
-                        url.to_bstring(),
+                        "The URL contains authority information that would not be used by the {} protocol".validation(),
                         url.scheme
                     );
                 }
                 Box::new(
                     crate::client::blocking_io::file::connect(url.path, options.version, options.trace)
-                        .or_raise(|| message("connection failed"))?,
+                        .or_raise(|| message("connection failed"))?
+                        .with_environment(environment)
+                        .with_working_dir(options.working_dir),
                 )
             }
             gix_url::Scheme::Ssh => Box::new({
-                crate::client::blocking_io::ssh::connect(url, options.version, options.ssh, options.trace)
-                    .or_raise(|| message("connection failed"))?
+                crate::client::blocking_io::ssh::connect_with_environment_and_working_dir(
+                    url,
+                    options.version,
+                    options.ssh,
+                    options.trace,
+                    environment,
+                    options.working_dir.as_deref(),
+                )
+                .or_raise(|| message("connection failed"))?
             }),
             gix_url::Scheme::Git => {
                 if url.user().is_some() {
                     bail!(
-                        "The url {:?} contains information that would not be used by the {} protocol".validation(),
-                        url.to_bstring(),
+                        "The URL contains authority information that would not be used by the {} protocol".validation(),
                         url.scheme
                     );
                 }
@@ -88,4 +118,4 @@ pub(crate) mod function {
     }
 }
 
-pub use function::connect;
+pub use function::{connect, connect_with_environment};

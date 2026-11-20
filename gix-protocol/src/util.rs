@@ -61,6 +61,14 @@ mod with_transport {
             }
         }
 
+        /// Suppress the automatic flush after an exchange has already terminated the connection.
+        ///
+        /// Use this for operations such as receive-pack that consume the connection themselves,
+        /// including failed uploads for which further protocol writes are invalid.
+        pub fn prevent_flush_on_drop(&mut self) {
+            self.flush_packet_sent = true;
+        }
+
         /// Useful to explicitly invalidate the connection by sending a flush-packet.
         /// This will happen exactly once, and it is not considered an error to call it multiple times.
         ///

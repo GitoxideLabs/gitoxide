@@ -13,14 +13,22 @@ impl Snapshot<'_> {
         gix_prompt::Options,
     )> {
         let repo = self.repo;
-        function::credential_helpers(
+        #[cfg_attr(not(unix), allow(unused_mut))]
+        let mut outcome = function::credential_helpers(
             url,
             &repo.config.resolved,
             repo.config.lenient_config,
             &mut repo.filter_config_section(),
             repo.config.environment,
             false,
-        )
+        )?;
+        #[cfg(unix)]
+        if let Some(command) = repo.options.credential_cache_daemon.as_deref() {
+            for program in &mut outcome.0.programs {
+                program.cache_daemon = Some(command.clone());
+            }
+        }
+        Ok(outcome)
     }
 }
 
@@ -32,7 +40,7 @@ pub(super) mod function {
         bstr::{ByteSlice, ByteVec},
         config::{
             cache::util::ApplyLeniency,
-            tree::{Core, Credential, credential, gitoxide::Credentials},
+            tree::{Core, Credential, CredentialStore, credential, gitoxide::Credentials},
         },
     };
 
@@ -170,9 +178,18 @@ pub(super) mod function {
             }
         }
 
+        let store_lock_timeout = CredentialStore::LOCK_TIMEOUT_MS
+            .try_into_lock_timeout(config.integer_filter(CredentialStore::LOCK_TIMEOUT_MS, &mut filter))
+            .with_leniency(is_lenient_config)?
+            .unwrap_or_else(|| std::time::Duration::from_secs(1).into());
+        for program in &mut programs {
+            program.store_lock_timeout = store_lock_timeout;
+        }
+
         let allow_git_env = environment.git_prefix.is_allowed();
         let allow_ssh_env = environment.ssh_prefix.is_allowed();
         let prompt_options = gix_prompt::Options {
+            current_dir: None,
             askpass: crate::config::cache::access::trusted_file_path(
                 config,
                 Core::ASKPASS,

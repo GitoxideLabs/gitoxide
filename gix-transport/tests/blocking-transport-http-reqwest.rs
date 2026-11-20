@@ -33,7 +33,7 @@ fn request_failure_without_status_preserves_error_source() -> gix_testtools::Tes
         server.local_addr()?
     };
 
-    let url = format!("http://{addr}/repo");
+    let url = format!("http://{addr}/repo?token=token-sentinel");
     let mut client = http::connect::<http::reqwest::Remote>(url.as_str().try_into()?, Protocol::V1, false);
 
     let error = client
@@ -47,6 +47,18 @@ fn request_failure_without_status_preserves_error_source() -> gix_testtools::Tes
     assert!(
         io_error.source().is_some(),
         "the underlying error must be preserved as source(), not stringified: {io_error:?}"
+    );
+    let error = gix_error::Error::from_error(error);
+    for diagnostic in [format!("{error}"), format!("{error:?}")] {
+        assert!(
+            !diagnostic.contains("sentinel"),
+            "request failures must not expose credentials in the URL: {diagnostic}"
+        );
+    }
+    assert!(error.is_retryable(), "the connection failure remains retryable");
+    assert!(
+        error.downcast_any_ref::<reqwest::Error>().is_some(),
+        "the original backend error remains available"
     );
     Ok(())
 }
@@ -118,7 +130,7 @@ fn redirects_are_not_followed_with_configure_request_hook() -> gix_testtools::Te
 
     Caused by:
         0: I/O error (Other)
-        1: error following redirect for url (http://127.0.0.1:<original-port>/repo/info/refs?service=git-upload-pack)
+        1: error following redirect
         2: refusing to follow redirect after request headers were configured
     ");
     assert!(
@@ -212,7 +224,7 @@ fn cross_authority_redirects_are_not_followed_without_matching_tail() -> gix_tes
             .write_all(
                 format!(
                     "HTTP/1.1 302 Found\r\n\
-                     Location: http://127.0.0.1:{}/not-the-request-tail\r\n\
+                     Location: http://user:password-sentinel@127.0.0.1:{}/not-the-request-tail\r\n\
                      Content-Length: 0\r\n\
                      Connection: close\r\n\r\n",
                     redirected_addr.port()
@@ -243,13 +255,13 @@ fn cross_authority_redirects_are_not_followed_without_matching_tail() -> gix_tes
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&gix_error::TestError::from(err), &[
         (&redirect_addr.to_string(), "127.0.0.1:<original-port>"),
         (&redirected_addr.to_string(), "127.0.0.1:<redirect-port>"),
-    ]), "redirect rejection retains the mismatched request path", @r#"
+    ]), "redirect rejection identifies the mismatched suffix without exposing URL credentials", @r#"
     An IO error occurred when talking to the server
 
     Caused by:
         0: I/O error (Other)
-        1: error following redirect for url (http://127.0.0.1:<original-port>/repo/info/refs?service=git-upload-pack)
-        2: redirect url "http://127.0.0.1:<redirect-port>/not-the-request-tail" does not end with expected request suffix "/info/refs?service=git-upload-pack"
+        1: error following redirect
+        2: redirect URL does not end with the expected request suffix
     "#);
     assert!(
         !original_get.is_empty(),
