@@ -165,6 +165,33 @@ impl crate::Repository {
         ))
     }
 
+    /// Prepare the trusted `core.pager` to display caller-provided output.
+    ///
+    /// The command uses Git's shell semantics, piped standard input, inherited output streams, and repository context.
+    /// Return `None` when no pager is configured, or when an empty value or `cat` disables paging. The caller can then
+    /// display the output itself. Write the diff or other output to the child's standard input and wait for completion;
+    /// a broken pipe is normal when the user quits the pager early.
+    #[cfg(feature = "command")]
+    pub fn pager_command(&self) -> Result<Option<gix_command::Prepare>> {
+        use std::process::Stdio;
+
+        let Some(pager) = self.config_snapshot().trusted_program("core.pager")? else {
+            return Ok(None);
+        };
+        if pager.is_empty() || pager == "cat" {
+            return Ok(None);
+        }
+        Ok(Some(
+            gix_command::prepare(pager)
+                .command_may_be_shell_script_disallow_manual_argument_splitting()
+                .with_context(self.command_context()?)
+                .env("GIT_PAGER_IN_USE", "true")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit()),
+        ))
+    }
+
     /// Resolve all Git configuration needed to sign a commit with [`gix_object::Commit::sign()`].
     ///
     /// The returned plumbing options may be adjusted before use, for example to disable GPG pinentry by adding

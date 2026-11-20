@@ -2,12 +2,9 @@
 //! complete native callbacks; native flushes never run on that queue.
 use std::{
     collections::{BTreeMap, BTreeSet},
-    ffi::{CStr, CString, OsString, c_void},
-    os::unix::{
-        ffi::{OsStrExt, OsStringExt},
-        fs::MetadataExt,
-    },
-    path::{Path, PathBuf},
+    ffi::{CStr, CString, OsStr, c_void},
+    os::unix::{ffi::OsStrExt, fs::MetadataExt},
+    path::{Component, Path, PathBuf},
     ptr::NonNull,
     sync::mpsc::{self, SyncSender},
     thread::JoinHandle,
@@ -215,6 +212,27 @@ impl Context {
                 .ancestors()
                 .skip(2)
                 .any(|parent| self.watches.get(parent) == Some(&true))
+    }
+
+    fn subtree_intersects(&self, path: &Path) -> bool {
+        if !path.is_absolute() || path.components().any(|part| part == Component::ParentDir) {
+            return true;
+        }
+        self.watches.iter().any(|(watch, recursive)| {
+            let mut parts = path.components();
+            for part in watch.components() {
+                let Some(actual) = parts.next() else {
+                    return true;
+                };
+                let expected = part.as_os_str().as_bytes();
+                let actual = actual.as_os_str().as_bytes();
+                // Native paths may use case or Unicode aliases. Require a provable mismatch.
+                if expected.is_ascii() && actual.is_ascii() && !expected.eq_ignore_ascii_case(actual) {
+                    return false;
+                }
+            }
+            *recursive || parts.nth(1).is_none()
+        })
     }
 }
 
@@ -539,31 +557,34 @@ extern "C" fn callback(
                 let path = *((paths as *const *const std::ffi::c_char).add(index));
                 (CStr::from_ptr(path).to_bytes(), *flags.add(index))
             };
-            if flags & !KNOWN_FLAGS != 0
-                || flags
-                    & (fs::kFSEventStreamEventFlagMustScanSubDirs
-                        | fs::kFSEventStreamEventFlagUserDropped
-                        | fs::kFSEventStreamEventFlagKernelDropped
-                        | fs::kFSEventStreamEventFlagRootChanged
-                        | fs::kFSEventStreamEventFlagEventIdsWrapped
-                        | fs::kFSEventStreamEventFlagMount
-                        | fs::kFSEventStreamEventFlagUnmount)
-                    != 0
+            let path = Path::new(OsStr::from_bytes(path));
+            let stream_loss = flags
+                & (!KNOWN_FLAGS
+                    | fs::kFSEventStreamEventFlagUserDropped
+                    | fs::kFSEventStreamEventFlagKernelDropped
+                    | fs::kFSEventStreamEventFlagRootChanged
+                    | fs::kFSEventStreamEventFlagEventIdsWrapped
+                    | fs::kFSEventStreamEventFlagMount
+                    | fs::kFSEventStreamEventFlagUnmount)
+                != 0;
+            if stream_loss
+                || loss.is_none()
+                    && flags & fs::kFSEventStreamEventFlagMustScanSubDirs != 0
+                    && (flags & fs::kFSEventStreamEventFlagHistoryDone != 0 || context.subtree_intersects(path))
             {
                 loss = Some(Loss::Rescan);
             }
             if flags & fs::kFSEventStreamEventFlagHistoryDone != 0 {
                 continue;
             }
-            let path = PathBuf::from(OsString::from_vec(path.to_vec()));
-            if marker_path.as_ref() == Some(&path) {
+            if marker_path.as_deref() == Some(path) {
                 marker_seen = true;
                 continue;
             }
-            if context.accepts(&path) {
+            if context.accepts(path) {
                 let (kind, path_kind) = translate(flags);
                 events.push(Event {
-                    paths: vec![path],
+                    paths: vec![path.to_owned()],
                     kind,
                     path_kind,
                 });

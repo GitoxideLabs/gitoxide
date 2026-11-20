@@ -1,6 +1,6 @@
 use gix::{
     ObjectId, Result,
-    bstr::{BString, ByteSlice},
+    bstr::{BStr, BString, ByteSlice},
     config::File,
     error::{OptionExt, ResultExt, message},
     hash::ChangeId,
@@ -19,7 +19,8 @@ pub(crate) struct Enrichment {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct TreeEnrichment {
-    pub checks_pass: bool,
+    /// One result per tree: `None` is unmarked, an empty message is a plain check mark.
+    pub checks_pass: Option<BString>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -33,24 +34,24 @@ pub(crate) struct Headers {
     pub message: Option<BString>,
 }
 
-pub(crate) fn marker(todo: bool, note: bool, checks_pass: bool, refackiewed: bool) -> &'static str {
-    match (todo, note, checks_pass, refackiewed) {
-        (true, true, true, true) => "🚧📝✔️✨",
-        (true, true, true, false) => "🚧📝✔️",
-        (true, true, false, true) => "🚧📝✨",
-        (true, true, false, false) => "🚧📝",
-        (true, false, true, true) => "🚧✔️✨",
-        (true, false, true, false) => "🚧✔️",
-        (true, false, false, true) => "🚧✨",
-        (true, false, false, false) => "🚧",
-        (false, true, true, true) => "📝✔️✨",
-        (false, true, true, false) => "📝✔️",
-        (false, true, false, true) => "📝✨",
-        (false, true, false, false) => "📝",
-        (false, false, true, true) => "✔️✨",
-        (false, false, true, false) => "✔️",
-        (false, false, false, true) => "✨",
-        (false, false, false, false) => "",
+pub(crate) fn marker(todo: bool, note: bool, checks_pass: Option<&BStr>, refackiewed: bool) -> String {
+    format!(
+        "{}{}{}{}",
+        if todo { "🚧" } else { "" },
+        if note { "📝" } else { "" },
+        checks_pass.map(checks_pass_marker).unwrap_or_default(),
+        if refackiewed { "✨" } else { "" },
+    )
+}
+
+pub(crate) fn checks_pass_marker(message: &BStr) -> &str {
+    crate::emoji::leading(message).unwrap_or("✔️")
+}
+
+pub(crate) fn checks_pass_message(message: &BStr) -> &BStr {
+    match crate::emoji::leading(message) {
+        Some(emoji) => message[emoji.len()..].trim_start().as_bstr(),
+        None => message,
     }
 }
 
@@ -95,7 +96,8 @@ pub(crate) fn load_tree(notes: &mut gix::note::Platform, tree_id: ObjectId) -> R
         checks_pass: config
             .boolean("tree.checks-pass")
             .or_raise(|| message("tree.checks-pass is not a boolean"))?
-            .unwrap_or(false),
+            .unwrap_or(false)
+            .then(|| config.string("tree.checks-pass-message").unwrap_or_default()),
     })
 }
 
@@ -115,7 +117,8 @@ pub(crate) fn load_patch_for_commit(
     notes: &mut gix::note::Platform,
     commit_id: ObjectId,
 ) -> Result<PatchEnrichment> {
-    match crate::patch_id::for_commit(repo, commit_id)? {
+    let object = repo.find_commit(commit_id)?;
+    match crate::patch_id::for_display(repo, &object.decode()?)? {
         Some(patch_id) => load_patch(notes, crate::change_id::for_commit(repo, commit_id)?, patch_id),
         None => Ok(PatchEnrichment::default()),
     }
@@ -189,30 +192,35 @@ pub(crate) fn set_note(repo: &gix::Repository, commit_id: ObjectId, note: Option
 }
 
 pub(crate) fn toggle_checks_pass(repo: &gix::Repository, commit_id: ObjectId) -> Result<TreeEnrichment> {
-    let tree_id = tree_id(repo, commit_id)?;
-    update_tree(repo, tree_id, |config| {
-        let enabled = !config
-            .boolean("tree.checks-pass")
-            .or_raise(|| message("tree.checks-pass is not a boolean"))?
-            .unwrap_or(false);
-        set_checks_pass(config, enabled)
-    })
+    let current = load_tree(&mut open_tree(repo)?, tree_id(repo, commit_id)?)?;
+    set_checks_pass(repo, commit_id, current.checks_pass.is_none().then_some(b"".as_slice()))
 }
 
-pub(crate) fn ensure_checks_pass(repo: &gix::Repository, commit_id: ObjectId, enabled: bool) -> Result<TreeEnrichment> {
+pub(crate) fn set_checks_pass(
+    repo: &gix::Repository,
+    commit_id: ObjectId,
+    message: Option<&[u8]>,
+) -> Result<TreeEnrichment> {
     let tree_id = tree_id(repo, commit_id)?;
     let current = load_tree(&mut open_tree(repo)?, tree_id)?;
-    if current.checks_pass == enabled {
+    if message.is_some() && current.checks_pass.as_ref().map(|value| value.as_slice()) == message {
         return Ok(current);
     }
-    update_tree(repo, tree_id, |config| set_checks_pass(config, enabled))
-}
-
-fn set_checks_pass(config: &mut File, enabled: bool) -> Result<()> {
-    config
-        .section_mut_or_create_new("tree", None)?
-        .set("checks-pass", if enabled { "true" } else { "false" })?;
-    Ok(())
+    update_tree(repo, tree_id, |config| {
+        for key in ["tree.checks-pass", "tree.checks-pass-message"] {
+            if config.string_implicit(key).is_some() {
+                config.raw_values_mut(key)?.delete_all();
+            }
+        }
+        if let Some(message) = message {
+            let mut section = config.section_mut_or_create_new("tree", None)?;
+            section.set("checks-pass", "true")?;
+            if !message.is_empty() {
+                section.set("checks-pass-message", message)?;
+            }
+        }
+        Ok(())
+    })
 }
 
 pub(crate) fn apply_headers(
@@ -347,13 +355,17 @@ fn update_tree(
 ) -> Result<TreeEnrichment> {
     let mut notes = open_tree(repo)?;
     let mut config = load_config(&mut notes, tree_id)?.unwrap_or_default();
+    let before = config.to_bstring();
     edit(&mut config)?;
-    let reference: FullName = TREE_REF_NAME
-        .try_into()
-        .expect("the tix tree enrich reference is valid");
-    notes
-        .replace_at_ref(reference.as_ref(), tree_id, config.to_bstring())
-        .or_raise(|| message("could not write the tix tree enrichment"))?;
+    let after = config.to_bstring();
+    if before != after {
+        let reference: FullName = TREE_REF_NAME
+            .try_into()
+            .expect("the tix tree enrich reference is valid");
+        notes
+            .replace_at_ref(reference.as_ref(), tree_id, after)
+            .or_raise(|| message("could not write the tix tree enrichment"))?;
+    }
     load_tree(&mut notes, tree_id)
 }
 
@@ -531,7 +543,7 @@ mod tests {
             b"[tree]\n\tchecks-pass = false\n\towner = me\n",
         )?;
 
-        assert!(toggle_checks_pass(&repo, original)?.checks_pass);
+        assert!(toggle_checks_pass(&repo, original)?.checks_pass.is_some());
         let mut notes = open_tree(&repo)?;
         let note = notes.get(tree)?.into_iter().next().expect("the tree enrichment exists");
         let config = File::try_from(note.blob.data.as_bstr())?;
@@ -544,13 +556,133 @@ mod tests {
         rewritten.message = "same tree".into();
         let rewritten = repo.write_object(&rewritten)?.detach();
         assert!(
-            load_tree(&mut open_tree(&repo)?, tree_id(&repo, rewritten)?)?.checks_pass,
+            load_tree(&mut open_tree(&repo)?, tree_id(&repo, rewritten)?)?
+                .checks_pass
+                .is_some(),
             "a message-only rewrite retains the tree marker"
         );
         let changed_tree = tree_id(&repo, repo.rev_parse_single("HEAD~1")?.detach())?;
         assert!(
-            !load_tree(&mut open_tree(&repo)?, changed_tree)?.checks_pass,
+            load_tree(&mut open_tree(&repo)?, changed_tree)?.checks_pass.is_none(),
             "a different tree has no marker"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn checks_pass_replaces_one_result_and_clears_its_message() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let commit_id = repo.head_id()?.detach();
+        let tree_id = tree_id(&repo, commit_id)?;
+        let message = "⚡ Fast checks in 42s
+
+Compile: 30s
+Tests: 12s
+";
+        for message in [message, "🔬 Thorough checks", "false", ""] {
+            assert_eq!(
+                set_checks_pass(&repo, commit_id, Some(message.as_bytes()))?.checks_pass,
+                Some(message.into()),
+                "setting a message replaces the single result, including literal booleans and empty text"
+            );
+            let reference = repo.find_reference(TREE_REF_NAME)?.id().detach();
+            set_checks_pass(&repo, commit_id, Some(message.as_bytes()))?;
+            assert_eq!(
+                repo.find_reference(TREE_REF_NAME)?.id(),
+                reference,
+                "repeating the same result leaves notes history untouched"
+            );
+        }
+        set_checks_pass(&repo, commit_id, Some(message.as_bytes()))?;
+        assert!(toggle_checks_pass(&repo, commit_id)?.checks_pass.is_none());
+        let config = load_config(&mut open_tree(&repo)?, tree_id)?.expect("the tree note exists");
+        assert!(
+            config.string("tree.checks-pass-message").is_none(),
+            "clearing removes the message too"
+        );
+        assert_eq!(
+            toggle_checks_pass(&repo, commit_id)?.checks_pass,
+            Some(BString::default()),
+            "toggling back on does not resurrect an old result message"
+        );
+        assert_eq!(
+            checks_pass_message(message.as_bytes().as_bstr()),
+            message.as_bytes()["⚡ ".len()..].as_bstr(),
+            "the gutter emoji is removed only from displayed text"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn replacing_checks_pass_removes_duplicate_and_orphaned_values() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let commit_id = repo.head_id()?.detach();
+        let tree_id = tree_id(&repo, commit_id)?;
+        let reference: FullName = TREE_REF_NAME.try_into()?;
+        for message in [Some(b"".as_slice()), None] {
+            for enabled in ["true", "false"] {
+                repo.notes()?.replace_at_ref(
+                    reference.as_ref(),
+                    tree_id,
+                    format!(
+                        "[tree]
+    checks-pass = true
+    checks-pass-message = stale
+    owner = me
+[tree]
+    checks-pass = {enabled}
+    checks-pass-message = current
+"
+                    ),
+                )?;
+                assert_eq!(
+                    set_checks_pass(&repo, commit_id, message)?.checks_pass,
+                    message.map(Into::into)
+                );
+                let config = load_config(&mut open_tree(&repo)?, tree_id)?.expect("the enrichment exists");
+                assert!(
+                    config.string("tree.checks-pass-message").is_none(),
+                    "no older message can reappear"
+                );
+                assert_eq!(
+                    config.string("tree.owner"),
+                    Some("me".into()),
+                    "unrelated metadata survives"
+                );
+                let before = repo.find_reference(TREE_REF_NAME)?.id().detach();
+                set_checks_pass(&repo, commit_id, message)?;
+                assert_eq!(
+                    repo.find_reference(TREE_REF_NAME)?.id(),
+                    before,
+                    "repeating the operation is a no-op"
+                );
+            }
+        }
+        repo.notes()?.replace_at_ref(
+            reference.as_ref(),
+            tree_id,
+            b"[tree]
+    checks-pass
+    checks-pass-message
+    owner = me
+",
+        )?;
+        assert!(set_checks_pass(&repo, commit_id, None)?.checks_pass.is_none());
+        let config = load_config(&mut open_tree(&repo)?, tree_id)?.expect("the enrichment exists");
+        assert!(
+            config.string_implicit("tree.checks-pass").is_none(),
+            "implicit flags are removed too"
+        );
+        assert!(
+            config.string_implicit("tree.checks-pass-message").is_none(),
+            "implicit messages are removed too"
+        );
+        assert_eq!(
+            config.string("tree.owner"),
+            Some("me".into()),
+            "clearing preserves unrelated values"
         );
         Ok(())
     }
@@ -685,9 +817,9 @@ mod tests {
             "linked enrichments survive main-worktree changes"
         );
         let tree = tree_id(&main, id)?;
-        assert!(toggle_checks_pass(&main, id)?.checks_pass);
+        assert!(toggle_checks_pass(&main, id)?.checks_pass.is_some());
         assert!(
-            !load_tree(&mut open_tree(&linked)?, tree)?.checks_pass,
+            load_tree(&mut open_tree(&linked)?, tree)?.checks_pass.is_none(),
             "tree enrichments are also worktree-local"
         );
         let commit_id = with_patch_id(&main, id)?;

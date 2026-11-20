@@ -11,6 +11,8 @@ mod inotify;
 pub(crate) use inotify::Backend;
 
 #[cfg(target_os = "macos")]
+pub(crate) mod files;
+#[cfg(target_os = "macos")]
 mod fsevents;
 #[cfg(target_os = "macos")]
 pub(crate) use fsevents::Backend;

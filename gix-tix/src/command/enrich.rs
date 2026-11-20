@@ -1,4 +1,4 @@
-use std::{ffi::OsString, path::PathBuf};
+use std::{ffi::OsString, io::Write, path::PathBuf};
 
 use gix::{
     Result,
@@ -31,8 +31,24 @@ pub(super) enum Commit {
 
 #[derive(Debug, clap::Subcommand)]
 pub(super) enum Tree {
-    /// Mark the tree as passing checks, or clear the mark.
-    ChecksPass(BooleanTarget),
+    /// Show or toggle passing checks, or replace the result with a message.
+    ChecksPass(ChecksPassTarget),
+}
+
+#[derive(Debug, clap::Args)]
+pub(super) struct ChecksPassTarget {
+    /// Set this result message instead of toggling; an empty string sets a plain mark.
+    #[arg(value_name = "MESSAGE", conflicts_with = "clear")]
+    message: Option<OsString>,
+    /// Clear the result and its message.
+    #[arg(long)]
+    clear: bool,
+    /// Print the stored result message without changing it; fail if no result exists.
+    #[arg(long, conflicts_with_all = ["message", "clear"])]
+    show: bool,
+    /// Commit whose tree result should be read or changed; accepts change IDs.
+    #[arg(long, default_value = "HEAD", value_name = "REVSPEC")]
+    revision: OsString,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -99,32 +115,53 @@ pub(super) fn run(repository: gix::Repository, command: Command) -> Result<()> {
         Command::Commit(Commit::Note(args)) => edit_note(&repository, &args),
         Command::Commit(Commit::GitNote(args)) => edit_git_note(&repository, &args),
         Command::Tree(Tree::ChecksPass(args)) => {
-            let target = resolve(&repository, &args.target)?;
+            let (target, _) = super::resolve_commit(&repository, &args.revision, "checks-pass target")?;
+            if args.show {
+                return write_checks_pass(&repository, target, std::io::stdout().lock());
+            }
+            let result_message = args.message.as_deref().map(gix::path::os_str_into_bstr).transpose()?;
             let reference = crate::enrich::TREE_REF_NAME.try_into().expect("valid tree enrich ref");
             let (enrichment, changes) = tracked_ref_update(&repository, reference, |repository| {
-                crate::enrich::ensure_checks_pass(repository, target, !args.clear)
+                if args.clear {
+                    crate::enrich::set_checks_pass(repository, target, None)
+                } else if let Some(message) = result_message {
+                    crate::enrich::set_checks_pass(repository, target, Some(message))
+                } else {
+                    crate::enrich::toggle_checks_pass(repository, target)
+                }
             })?;
             super::record_undo(
                 &repository,
-                if enrichment.checks_pass {
+                if enrichment.checks_pass.is_some() {
                     "mark tree checks-pass"
                 } else {
                     "clear tree checks-pass"
                 },
                 changes,
             );
-            feedback(
-                &repository,
-                target,
-                if enrichment.checks_pass {
+            eprintln!(
+                "{} {}",
+                crate::change_id::display(&repository, target, 7)?,
+                if enrichment.checks_pass.is_some() {
                     "marked tree checks-pass"
                 } else {
                     "cleared tree checks-pass"
-                },
-            )
+                }
+            );
+            Ok(())
         }
         Command::Patch(Patch::Refackiewed(args)) => refackiewed(&repository, args),
     }
+}
+
+fn write_checks_pass(repository: &gix::Repository, commit_id: gix::ObjectId, mut out: impl Write) -> Result<()> {
+    let tree_id = crate::enrich::tree_id(repository, commit_id)?;
+    let result = crate::enrich::load_tree(&mut crate::enrich::open_tree(repository)?, tree_id)?;
+    let stored_message = result
+        .checks_pass
+        .ok_or_raise(|| message!("tree {tree_id} has no passing check result"))?;
+    out.write_all(&stored_message)
+        .or_raise(|| message("could not write checks-pass message"))
 }
 
 fn refackiewed(repository: &gix::Repository, args: BooleanTarget) -> Result<()> {
@@ -569,7 +606,7 @@ mod tests {
     }
 
     #[test]
-    fn boolean_enrichments_are_idempotent_and_target_the_selected_commit() -> gix_testtools::Result {
+    fn todo_is_idempotent_and_targets_the_selected_commit() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repository = crate::test_repository::open(fixture.path())?;
         let topic = repository.rev_parse_single("topic")?.detach();
@@ -583,13 +620,6 @@ mod tests {
                     target: target("topic"),
                 })),
             )?;
-            run(
-                repository.clone(),
-                Command::Tree(Tree::ChecksPass(BooleanTarget {
-                    clear,
-                    target: target("topic"),
-                })),
-            )?;
             assert_eq!(
                 crate::enrich::load(
                     &mut crate::enrich::open(&repository)?,
@@ -598,15 +628,6 @@ mod tests {
                 .todo,
                 !clear,
                 "todo is set or cleared without toggling"
-            );
-            assert_eq!(
-                crate::enrich::load_tree(
-                    &mut crate::enrich::open_tree(&repository)?,
-                    crate::enrich::tree_id(&repository, topic)?,
-                )?
-                .checks_pass,
-                !clear,
-                "checks-pass is set or cleared without toggling"
             );
             if !clear {
                 assert!(
@@ -617,16 +638,204 @@ mod tests {
                     .todo,
                     "the default HEAD remains untouched"
                 );
-                assert!(
-                    !crate::enrich::load_tree(
-                        &mut crate::enrich::open_tree(&repository)?,
-                        crate::enrich::tree_id(&repository, head)?,
-                    )?
-                    .checks_pass,
-                    "the default HEAD tree remains untouched"
-                );
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn checks_pass_toggles_or_sets_a_message_on_the_selected_tree() -> gix_testtools::Result {
+        use clap::Parser;
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let topic = repository.rev_parse_single("topic")?.detach();
+        let head = repository.head_id()?.detach();
+        let tree_id = crate::enrich::tree_id(&repository, topic)?;
+        let saved_result = || crate::enrich::load_tree(&mut crate::enrich::open_tree(&repository)?, tree_id);
+        let detailed = "⚡ Fast checks
+
+Tests: 2s";
+        for (message, clear, expected) in [
+            (None, false, Some("")),
+            (None, false, None),
+            (Some(detailed), false, Some(detailed)),
+            (Some("false"), false, Some("false")),
+            (Some("false"), false, Some("false")),
+            (None, true, None),
+            (None, true, None),
+            (Some(""), false, Some("")),
+        ] {
+            let previous = saved_result()?.checks_pass;
+            let before = gix_testtools::repository::snapshot(fixture.path())?;
+            let expected = expected.map(BString::from);
+            run(
+                repository.clone(),
+                Command::Tree(Tree::ChecksPass(ChecksPassTarget {
+                    message: message.map(Into::into),
+                    clear,
+                    show: false,
+                    revision: "topic".into(),
+                })),
+            )?;
+            assert_eq!(
+                saved_result()?.checks_pass,
+                expected,
+                "the explicit target receives toggles, replacements and idempotent clears"
+            );
+            if previous == expected {
+                assert_eq!(
+                    gix_testtools::repository::snapshot(fixture.path())?,
+                    before,
+                    "repeating a result or clear leaves notes and undo history unchanged"
+                );
+            } else {
+                crate::edit::undo::plan_undo(&repository)?
+                    .expect("changing a result is undoable")
+                    .apply(&repository)?;
+                assert_eq!(
+                    saved_result()?.checks_pass,
+                    previous,
+                    "undo restores the previous flag and message together"
+                );
+                crate::edit::undo::plan_redo(&repository)?
+                    .expect("undoing a result is redoable")
+                    .apply(&repository)?;
+                assert_eq!(
+                    saved_result()?.checks_pass,
+                    expected,
+                    "redo restores the replacement flag and message together"
+                );
+            }
+            assert!(
+                crate::enrich::load_tree(
+                    &mut crate::enrich::open_tree(&repository)?,
+                    crate::enrich::tree_id(&repository, head)?
+                )?
+                .checks_pass
+                .is_none(),
+                "targeting another revision leaves HEAD's different tree alone"
+            );
+        }
+        let args = super::super::Cli::try_parse_from(["tix", "enrich", "tree", "checks-pass", "HEAD"])?;
+        let Some(super::super::Command::Enrich(Command::Tree(Tree::ChecksPass(args)))) = args.platform.command else {
+            panic!("the checks-pass command was parsed");
+        };
+        assert_eq!(args.message, Some("HEAD".into()), "positional text is always a message");
+        assert_eq!(args.revision, "HEAD", "the target defaults to HEAD");
+        assert!(
+            super::super::Cli::try_parse_from(["tix", "enrich", "tree", "checks-pass", "message", "--clear"]).is_err(),
+            "clearing cannot also supply a replacement message"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn checks_pass_query_is_exclusive_and_keeps_the_default_target() -> gix_testtools::Result {
+        use clap::Parser;
+
+        for revision in [None, Some("topic")] {
+            let mut arguments = vec!["tix", "enrich", "tree", "checks-pass", "--show"];
+            if let Some(revision) = revision {
+                arguments.extend(["--revision", revision]);
+            }
+            let parsed = super::super::Cli::try_parse_from(arguments)?;
+            let Some(super::super::Command::Enrich(Command::Tree(Tree::ChecksPass(args)))) = parsed.platform.command
+            else {
+                panic!("the checks-pass query was parsed");
+            };
+            assert!(args.show, "the query selects the read-only operation");
+            assert_eq!(
+                args.revision,
+                revision.unwrap_or("HEAD"),
+                "queries use the usual target selection"
+            );
+        }
+        for conflicting in ["--clear", "replacement"] {
+            assert_eq!(
+                super::super::Cli::try_parse_from(["tix", "enrich", "tree", "checks-pass", "--show", conflicting])
+                    .expect_err("queries cannot change the saved result")
+                    .kind(),
+                clap::error::ErrorKind::ArgumentConflict,
+                "reading and writing are mutually exclusive"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn checks_pass_query_preserves_message_bytes_and_repository_state() -> gix_testtools::Result {
+        let detailed = "⚡ Fast checks
+
+Tests: 2s";
+        let (fixture, ()) = gix_testtools::scripted_fixture_read_only_with_args_with_post(
+            "history.sh",
+            ["checks-pass-query"],
+            1,
+            |fixture| {
+                if let gix_testtools::FixtureState::Uninitialized(path) = fixture {
+                    let repository = crate::test_repository::open(path)?;
+                    for (revision, message) in [
+                        ("HEAD", ""),
+                        ("topic", detailed),
+                        ("merged", "passed\n"),
+                        ("HEAD~1", "false"),
+                    ] {
+                        let commit_id = repository.rev_parse_single(revision)?.detach();
+                        crate::enrich::set_checks_pass(&repository, commit_id, Some(message.as_bytes()))?;
+                    }
+                    let mut shared_tree_commit = repository
+                        .find_commit(repository.rev_parse_single("topic")?)?
+                        .decode()?
+                        .into_owned()?;
+                    shared_tree_commit.message = "same checked tree".into();
+                    let commit_id = repository.write_object(&shared_tree_commit)?;
+                    repository.reference(
+                        "refs/heads/same-tree",
+                        commit_id,
+                        gix::refs::transaction::PreviousValue::MustNotExist,
+                        "test same tree",
+                    )?;
+                }
+                Ok(())
+            },
+        )?;
+        let repository = crate::test_repository::open(&fixture)?;
+        let before = gix_testtools::repository::snapshot(&fixture)?;
+        let head_commit_id = repository.head_id()?.detach();
+        let change_id = crate::change_id::for_commit(&repository, head_commit_id)?
+            .to_reverse_hex_with_len(7)
+            .to_string();
+        for (revision, expected) in [
+            ("HEAD", ""),
+            ("topic", detailed),
+            ("same-tree", detailed),
+            ("merged", "passed\n"),
+            ("HEAD~1", "false"),
+            (&change_id, ""),
+        ] {
+            let (commit_id, _) = super::super::resolve_commit(&repository, revision.as_ref(), "checks-pass target")?;
+            let mut output = Vec::new();
+            write_checks_pass(&repository, commit_id, &mut output)?;
+            assert_eq!(
+                output,
+                expected.as_bytes(),
+                "queries preserve the exact stored message for {revision}"
+            );
+        }
+        let mut output = Vec::new();
+        let (unmarked_commit_id, _) = super::super::resolve_commit(&repository, "v1".as_ref(), "checks-pass target")?;
+        let missing = write_checks_pass(&repository, unmarked_commit_id, &mut output)
+            .expect_err("an unmarked tree is different from a passing result without a message");
+        assert!(
+            format!("{missing:#}").contains("has no passing check result"),
+            "the missing result is diagnosed"
+        );
+        assert!(output.is_empty(), "missing results write no primary output");
+        assert_eq!(
+            gix_testtools::repository::snapshot(&fixture)?,
+            before,
+            "queries do not change notes, undo history, HEAD, index or worktree"
+        );
         Ok(())
     }
 

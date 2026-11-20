@@ -55,6 +55,8 @@ use crate::{Error, Repository, Result, bstr::BString};
 #[cfg(feature = "async-notify")]
 mod asynchronous;
 mod classify;
+#[cfg(target_os = "macos")]
+mod external_ignores;
 mod inventory;
 #[cfg(test)]
 mod tests;
@@ -117,7 +119,8 @@ pub enum WorktreeCoverage {
     /// ordinary staging only invalidates the index. Reenabled subtrees need local discovery,
     /// and directory changes reuse unaffected recursive coverage. The monitor retains directory names
     /// and a fingerprint of coverage-relevant index data, not individual file paths or ignore blobs.
-    /// Global ignore dependencies are watched too. Loss requests a full baseline and discovery walk.
+    /// Global ignore dependencies are watched too. On macOS they use file watches separate from the
+    /// repository's FSEvents streams. Loss of worktree coverage requests a full baseline and discovery walk.
     #[default]
     IgnoreAware,
     /// Recursively observe the entire worktree, including ignored paths and nested repositories.
@@ -298,7 +301,7 @@ impl Changes {
             && self.worktree.is_none()
     }
 
-    fn merge(&mut self, other: Self) {
+    pub(crate) fn merge(&mut self, other: Self) {
         self.references |= other.references;
         self.index |= other.index;
         self.configuration |= other.configuration;
@@ -313,7 +316,7 @@ impl Changes {
         }
     }
 
-    fn insert_worktree_path(&mut self, change: PathChange) {
+    pub(crate) fn insert_worktree_path(&mut self, change: PathChange) {
         let Scope::Paths(paths) = self.worktree.get_or_insert_with(|| Scope::Paths(Vec::new())) else {
             return;
         };
@@ -375,7 +378,7 @@ pub struct Statistics {
 }
 
 impl Statistics {
-    fn merge(&mut self, other: Self) {
+    pub(crate) fn merge(&mut self, other: Self) {
         self.received = self.received.saturating_add(other.received);
         self.rescans = self.rescans.saturating_add(other.rescans);
         self.added = self.added.saturating_add(other.added);
@@ -430,7 +433,7 @@ pub struct Outcome {
     pub errors: Vec<Error>,
     /// Whether enabled coverage still needs recovery, including degraded linked worktrees.
     ///
-    /// Remains true during quiet retry backoff. An empty `errors` list does not establish that
+    /// Remains true during loss debounce and quiet retry backoff. An empty `errors` list does not establish that
     /// coverage has recovered; use this field to retain earlier diagnostics until it does.
     /// Successful initial registration and ordinary inventory verification are not recovery failures.
     pub recovery_pending: bool,
@@ -443,6 +446,11 @@ struct Pending {
     changes: Changes,
     first: Option<Instant>,
     deadline: Option<Instant>,
+}
+
+struct DeferredLoss {
+    worktree_only: bool,
+    deadline: Instant,
 }
 
 impl Pending {
@@ -533,8 +541,9 @@ impl Domain {
 /// Repository subscriptions stay within the selected checkouts and their private and shared Git directories, without
 /// additional parent subscriptions to detect replacement of an entire root directory. External
 /// configuration and attribute files are not watched unless supplied in [`Options::additional_paths`].
-/// Ignore-aware worktree coverage also watches the nearest existing parents of external ignore
-/// dependencies. Reopen the repository to read current external configuration.
+/// Ignore-aware worktree coverage also observes external ignore dependencies. On macOS,
+/// these use a separate file watcher so unrelated activity under their parent directories stays
+/// out of the repository's FSEvents streams. Reopen the repository to read current external configuration.
 ///
 /// Reported event loss invalidates the affected caches at the next [`service()`](Self::service)
 /// call and requests inventory repair. Lost native root identities also require re-registration,
@@ -550,6 +559,8 @@ pub struct RepositoryMonitor {
     options: Options,
     metadata: Domain,
     worktree: Domain,
+    #[cfg(target_os = "macos")]
+    external_ignores: external_ignores::Watcher,
     directories: HashTable<PathBuf>,
     nested_repositories: HashSet<PathBuf>,
     index_fingerprint: Option<gix_hash::ObjectId>,
@@ -557,6 +568,8 @@ pub struct RepositoryMonitor {
     changed_directories: HashSet<PathBuf>,
     pending_metadata: Pending,
     pending_worktree: Changes,
+    loss_debounce: Option<Duration>,
+    deferred_loss: Option<DeferredLoss>,
     pending_statistics: Statistics,
     metadata_dirty: bool,
     inventory_dirty: bool,
@@ -620,6 +633,8 @@ impl Repository {
             options,
             metadata: Domain::default(),
             worktree: Domain::default(),
+            #[cfg(target_os = "macos")]
+            external_ignores: external_ignores::Watcher::default(),
             directories: HashTable::new(),
             nested_repositories: HashSet::new(),
             index_fingerprint: None,
@@ -627,6 +642,8 @@ impl Repository {
             changed_directories: HashSet::new(),
             pending_metadata: Pending::default(),
             pending_worktree: Changes::default(),
+            loss_debounce: None,
+            deferred_loss: None,
             pending_statistics: Statistics::default(),
             metadata_dirty: true,
             inventory_dirty: true,
@@ -692,10 +709,15 @@ impl Layout {
                         && layout.worktree.is_some()
                         && dependency.kind == DependencyKind::Ignore
                 {
+                    // The file watcher follows external symlinks from their configured name.
+                    let watch_name = cfg!(target_os = "macos") && !layout.contains(&path);
                     layout.dependencies.push(Dependency {
                         path,
                         kind: dependency.kind,
                     });
+                    if watch_name {
+                        continue;
+                    }
                 }
             }
             let path = absolute(&dependency.path)?;
@@ -730,7 +752,7 @@ impl Layout {
 /// traversed by `gix_path::realpath_opts()`. Windows drive-relative paths on another drive use that
 /// drive's current directory supplied by the operating system instead.
 ///
-/// On Windows, canonicalize the nearest existing ancestor to obtain native, verbatim spelling, then
+/// Canonicalize the nearest existing ancestor to obtain native spelling, then
 /// append the unresolved suffix. If `precompose` is `true`, convert a valid-Unicode result to its
 /// precomposed form; otherwise retain the spelling produced by resolution.
 ///
@@ -751,32 +773,32 @@ impl Layout {
 /// filesystem root. Windows native-path resolution also propagates errors other than missing-path
 /// errors and fails if no ancestor can be canonicalized. Success does not guarantee existence or
 /// provide race-free filesystem containment.
-fn absolute_path(path: &Path, current_dir: &Path, precompose: bool) -> Result<PathBuf> {
+pub(crate) fn absolute_path(path: &Path, current_dir: &Path, precompose: bool) -> Result<PathBuf> {
     // Native event paths use the physical spelling (notably /private/var on macOS).
     // realpath also preserves missing suffixes for dependencies that can appear later.
     let path = gix_path::realpath_opts(path, current_dir, gix_path::realpath::MAX_SYMLINKS)
         .or_raise(|| message("could not resolve repository monitor path"))?;
-    // Windows notifications use verbatim native roots; preserve missing dependency suffixes.
-    #[cfg(windows)]
-    let path = path
-        .ancestors()
-        .find_map(|ancestor| match ancestor.canonicalize() {
-            Ok(native) => Some(Ok(native.join(
-                path.strip_prefix(ancestor)
-                    .expect("ancestors are prefixes of the resolved path"),
-            ))),
+    let mut ancestor = path.as_path();
+    let physical = loop {
+        match ancestor.canonicalize() {
+            Ok(physical) => {
+                break physical.join(
+                    path.strip_prefix(ancestor)
+                        .expect("ancestor belongs to the resolved path"),
+                );
+            }
             Err(error)
                 if matches!(
                     error.kind(),
                     std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-                ) =>
+                ) && let Some(parent) = ancestor.parent() =>
             {
-                None
+                ancestor = parent;
             }
-            Err(error) => Some(Err(error).or_raise(|| message("could not resolve native repository monitor path"))),
-        })
-        .ok_or_else(|| message("repository monitor path has no existing ancestor").raise())??;
-    let path = std::borrow::Cow::Owned(path);
+            Err(error) => return Err(error.and_raise(message("could not canonicalize repository monitor path"))),
+        }
+    };
+    let path = std::borrow::Cow::Owned(physical);
     Ok(if precompose {
         gix_utils::str::precompose_path(path).into_owned()
     } else {
@@ -822,6 +844,48 @@ impl RepositoryMonitor {
         &self.options
     }
 
+    /// The configured quiet period for recoverable native directory-watch loss.
+    pub fn loss_debounce(&self) -> Option<Duration> {
+        self.loss_debounce
+    }
+
+    /// Set how much quiet time must follow the last recoverable native directory-watch loss before
+    /// sending a full invalidation. By default (`None`), and with a zero duration, loss is immediate.
+    /// The new setting applies to subsequent losses in this monitor and its linked checkouts.
+    ///
+    /// While waiting, the eventual rescan covers affected events, and [`Outcome::recovery_pending`]
+    /// reports stale coverage. Explicit rescans and watch failures that need registration repair can
+    /// recover immediately. Durations exceeding the platform's clock range are rejected.
+    pub fn set_loss_debounce(&mut self, quiet: Option<Duration>) -> Result {
+        if quiet.is_some_and(|quiet| Instant::now().checked_add(quiet).is_none()) {
+            return Err(gix_error::validation("loss debounce exceeds the supported clock range").raise());
+        }
+        self.apply_loss_debounce(quiet);
+        Ok(())
+    }
+
+    pub(crate) fn apply_loss_debounce(&mut self, quiet: Option<Duration>) {
+        self.loss_debounce = quiet;
+        for other in self.other_worktrees.values_mut() {
+            other.loss_debounce = quiet;
+        }
+    }
+
+    /// Whether all enabled subscriptions are installed and their inventory is verified.
+    ///
+    /// Pending maintenance, retries, and registration verification keep this false, even when
+    /// the latest [`service()`](Self::service) call has no new errors to report.
+    pub fn is_healthy(&self) -> bool {
+        !self.recovery_pending()
+            && self.maintenance.is_none()
+            && (!(self.options.metadata
+                || self.worktree_enabled() && self.ignore_aware()
+                || !self.options.additional_paths.is_empty())
+                || self.metadata.watcher.is_some())
+            && (!self.worktree_enabled() || self.worktree.watcher.is_some())
+            && self.other_worktrees.values().all(Self::is_healthy)
+    }
+
     /// Force a full refresh at the next [`service()`](Self::service) call.
     ///
     /// Rebuild native watches, rediscover subscriptions, and invalidate every enabled domain,
@@ -833,7 +897,10 @@ impl RepositoryMonitor {
         }
         self.metadata.rebuild = true;
         self.worktree.rebuild = true;
-        self.coverage_lost(false, Instant::now());
+        let now = Instant::now();
+        #[cfg(target_os = "macos")]
+        self.external_ignores.rescan(now, &mut self.pending_statistics);
+        self.coverage_lost(false, now);
     }
 
     fn worktree_enabled(&self) -> bool {
@@ -849,7 +916,12 @@ impl RepositoryMonitor {
     }
 
     fn recovery_pending(&self) -> bool {
-        self.maintenance_failed
+        #[cfg(target_os = "macos")]
+        if self.external_ignores.retry.is_some() {
+            return true;
+        }
+        self.deferred_loss.is_some()
+            || self.maintenance_failed
             || self.metadata.rebuild
                 && (self.options.metadata
                     || self.worktree_enabled() && self.ignore_aware()
@@ -865,6 +937,24 @@ impl RepositoryMonitor {
         }
         self.started = true;
         self.backlog = false;
+        #[cfg(target_os = "macos")]
+        if self
+            .external_ignores
+            .poll(now, self.options.retry_interval, out, &mut self.backlog)
+        {
+            self.inventory_dirty = true;
+            self.maintenance = Some(now);
+            self.pending_metadata.add(
+                Changes {
+                    ignores: true,
+                    worktree: Some(Scope::All),
+                    ..Changes::default()
+                },
+                now,
+                &self.options,
+                false,
+            );
+        }
         for worktree in [false, true] {
             let domain = if worktree {
                 &mut self.worktree
@@ -886,13 +976,17 @@ impl RepositoryMonitor {
                 }
                 // Successful replacement already published invalidation and queued verification.
                 if loss != gix_notify::Loss::WatchSetChanged {
-                    self.coverage_lost(worktree, now);
+                    if matches!(loss, gix_notify::Loss::Rescan | gix_notify::Loss::Overflow) && batch.error.is_none() {
+                        self.defer_loss(worktree, now);
+                    } else {
+                        self.coverage_lost(worktree, now);
+                    }
                 }
             }
             out.statistics.received += batch.events.len();
             for event in batch.events {
                 self.observe(&event, worktree, now);
-                if !worktree && self.all_worktrees_enabled() {
+                if !worktree && self.all_worktrees_enabled() && !self.loss_pending_for(false) {
                     self.observe_index(&event, now);
                     for other in self.other_worktrees.values_mut() {
                         other.observe(&event, false, now);
@@ -917,6 +1011,12 @@ impl RepositoryMonitor {
                 )));
                 self.maintenance = Some(now + self.options.retry_interval);
             }
+        }
+        if !self.backlog
+            && let Some(loss) = &self.deferred_loss
+            && loss.deadline <= now
+        {
+            self.coverage_lost(loss.worktree_only, now);
         }
     }
 
@@ -1025,18 +1125,26 @@ impl RepositoryMonitor {
         if self.backlog {
             return Some(Duration::ZERO);
         }
-        let poll = (self.metadata.watcher.is_some() || self.worktree.watcher.is_some()).then_some(POLL_INTERVAL);
-        [self.maintenance, self.pending_metadata.deadline]
-            .into_iter()
-            .flatten()
-            .map(|deadline| deadline.saturating_duration_since(now))
-            .chain(poll)
-            .chain(
-                self.other_worktrees
-                    .values()
-                    .filter_map(|other| other.next_timeout(now)),
-            )
-            .min()
+        let polling = self.metadata.watcher.is_some() || self.worktree.watcher.is_some();
+        #[cfg(target_os = "macos")]
+        let polling = polling || self.external_ignores.native.is_some();
+        [
+            self.maintenance,
+            self.pending_metadata.deadline,
+            self.deferred_loss.as_ref().map(|loss| loss.deadline),
+            #[cfg(target_os = "macos")]
+            self.external_ignores.retry,
+        ]
+        .into_iter()
+        .flatten()
+        .map(|deadline| deadline.saturating_duration_since(now))
+        .chain(polling.then_some(POLL_INTERVAL))
+        .chain(
+            self.other_worktrees
+                .values()
+                .filter_map(|other| other.next_timeout(now)),
+        )
+        .min()
     }
 
     fn maintenance_failed(&mut self, now: Instant) {
@@ -1062,6 +1170,9 @@ impl RepositoryMonitor {
     }
 
     fn coverage_lost(&mut self, worktree: bool, now: Instant) {
+        if !worktree || self.deferred_loss.as_ref().is_some_and(|loss| loss.worktree_only) {
+            self.deferred_loss = None;
+        }
         self.directory_inventory = None;
         if worktree {
             self.pending_worktree.merge(Changes::worktree_all());
@@ -1083,12 +1194,39 @@ impl RepositoryMonitor {
         self.maintenance = Some(now);
     }
 
+    fn defer_loss(&mut self, worktree: bool, now: Instant) {
+        let rebuilding = self.metadata.rebuild || (worktree && self.worktree.rebuild);
+        let Some(deadline) = self
+            .loss_debounce
+            .and_then(|quiet| now.checked_add(quiet))
+            .filter(|at| !rebuilding && *at > now)
+        else {
+            self.coverage_lost(worktree, now);
+            return;
+        };
+        let worktree_only = worktree && self.deferred_loss.as_ref().is_none_or(|loss| loss.worktree_only);
+        self.deferred_loss = Some(DeferredLoss {
+            worktree_only,
+            deadline,
+        });
+        self.pending_worktree = Changes::default();
+        if !worktree_only {
+            self.pending_metadata = Pending::default();
+        }
+    }
+
+    fn loss_pending_for(&self, worktree: bool) -> bool {
+        self.deferred_loss
+            .as_ref()
+            .is_some_and(|loss| worktree || !loss.worktree_only)
+    }
+
     fn maintain(
         &mut self,
         repo: &Repository,
         now: Instant,
         statistics: &mut Statistics,
-        _errors: &mut Vec<Error>,
+        errors: &mut Vec<Error>,
     ) -> Result {
         let layout = Layout::for_options(repo, &self.options)?;
         if self.layout != layout {
@@ -1117,6 +1255,11 @@ impl RepositoryMonitor {
             .or_raise(|| message("could not read filesystem options"))?;
         self.precompose_unicode = filesystem.precompose_unicode;
         self.ignore_case = filesystem.ignore_case;
+        #[cfg(target_os = "macos")]
+        self.external_ignores
+            .configure(&self.layout, now, self.options.retry_interval, statistics, errors);
+        #[cfg(not(target_os = "macos"))]
+        let _ = errors;
         let mut verify = false;
         if (self.options.metadata || self.worktree_enabled() && self.ignore_aware())
             && (self.metadata_dirty
@@ -1310,7 +1453,10 @@ impl RepositoryMonitor {
 
     fn observe(&mut self, event: &Event, worktree: bool, now: Instant) {
         if event.paths.is_empty() || matches!(event.kind, EventKind::Any) {
-            self.coverage_lost(worktree, now);
+            self.defer_loss(worktree, now);
+            return;
+        }
+        if self.loss_pending_for(worktree) {
             return;
         }
         let mut changes = Changes::default();
@@ -1545,5 +1691,32 @@ impl RepositoryMonitor {
             }
             self.pending_metadata.add(changes, now, &self.options, false);
         }
+    }
+}
+
+#[cfg(feature = "status-monitor")]
+impl RepositoryMonitor {
+    /// Install or maintain native coverage without consuming pending notifications.
+    /// This lets status establish its baseline after watches are installed while leaving
+    /// semantic metadata events available to the application's next service call.
+    pub(crate) fn prepare(&mut self, repo: &Repository, now: Instant) -> Result {
+        let mut statistics = Statistics::default();
+        let mut errors = Vec::new();
+        self.maintenance = None;
+        let result = (|| {
+            if self.all_worktrees_enabled() {
+                self.maintain_other_worktrees(repo, now, &mut statistics, &mut errors)?;
+            }
+            self.maintain(repo, now, &mut statistics, &mut errors)
+        })();
+        if let Err(error) = result {
+            errors.push(error);
+        }
+        self.pending_statistics.merge(statistics);
+        if errors.is_empty() {
+            return Ok(());
+        }
+        self.maintenance_failed(now);
+        Err(errors.remove(0))
     }
 }

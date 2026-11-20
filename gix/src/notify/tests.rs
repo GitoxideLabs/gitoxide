@@ -210,6 +210,8 @@ fn monitor() -> RepositoryMonitor {
             registered: BTreeMap::from([(PathBuf::from("/repo"), false), (PathBuf::from("/repo/src"), false)]),
             ..Domain::default()
         },
+        #[cfg(target_os = "macos")]
+        external_ignores: external_ignores::Watcher::default(),
         directories: inventory::directory_lookup([PathBuf::from("/repo"), PathBuf::from("/repo/src")]),
         nested_repositories: HashSet::new(),
         index_fingerprint: None,
@@ -217,6 +219,8 @@ fn monitor() -> RepositoryMonitor {
         changed_directories: HashSet::new(),
         pending_metadata: Pending::default(),
         pending_worktree: Changes::default(),
+        loss_debounce: None,
+        deferred_loss: None,
         pending_statistics: Statistics::default(),
         metadata_dirty: false,
         inventory_dirty: false,
@@ -242,6 +246,88 @@ fn event(path: impl Into<PathBuf>, kind: EventKind, path_kind: PathKind) -> Even
         kind,
         path_kind,
     }
+}
+
+#[test]
+fn recoverable_loss_waits_for_quiet_and_coalesces_worktree_invalidations() -> TestResult {
+    let mut monitor = monitor();
+    let quiet = Duration::from_millis(100);
+    monitor.set_loss_debounce(Some(quiet))?;
+    monitor.options.metadata_debounce = Duration::ZERO;
+    let start = Instant::now();
+    let file = modified("/repo/src/file");
+    monitor.observe(&file, true, start);
+    monitor.defer_loss(true, start);
+    let mut out = Outcome::default();
+    monitor.poll(start, &mut out);
+    assert!(
+        monitor.recovery_pending(),
+        "the snapshot is unreliable as soon as loss is observed"
+    );
+    assert_eq!(monitor.next_timeout(start), Some(quiet));
+    assert!(
+        monitor.take_changes(start).is_empty(),
+        "no partial worktree refresh escapes the delay"
+    );
+
+    let again = start + Duration::from_millis(70);
+    monitor.defer_loss(true, again);
+    monitor.observe(&file, true, again);
+    monitor.observe(&modified("/repo/.git/refs/heads/main"), false, again);
+    assert_eq!(
+        monitor.take_changes(again),
+        Changes {
+            references: true,
+            ..Changes::default()
+        },
+        "worktree loss leaves independent reference notifications live"
+    );
+
+    monitor.poll(start + quiet, &mut out);
+    assert!(
+        monitor.take_changes(start + quiet).is_empty(),
+        "each loss restarts the quiet period"
+    );
+    assert_eq!(monitor.next_timeout(start + quiet), Some(again - start));
+    monitor.poll(again + quiet, &mut out);
+    assert_eq!(monitor.take_changes(again + quiet), Changes::worktree_all());
+    assert!(
+        monitor.take_changes(again + quiet).is_empty(),
+        "one full invalidation covers the burst"
+    );
+    Ok(())
+}
+
+#[test]
+fn deferred_loss_combines_domains_but_immediate_recovery_can_supersede_it() -> TestResult {
+    let mut monitor = monitor();
+    let quiet = Duration::from_millis(100);
+    monitor.set_loss_debounce(Some(quiet))?;
+    let now = Instant::now();
+    monitor.defer_loss(false, now);
+    monitor.defer_loss(true, now + Duration::from_millis(1));
+    let mut out = Outcome::default();
+    let after_quiet = now + quiet + Duration::from_millis(1);
+    monitor.poll(after_quiet, &mut out);
+    let changes = monitor.take_changes(after_quiet);
+    assert!(
+        changes.references && changes.worktree == Some(Scope::All),
+        "later worktree loss keeps the earlier, broader metadata invalidation"
+    );
+
+    monitor.defer_loss(true, after_quiet);
+    monitor.rescan();
+    monitor.defer_loss(false, Instant::now());
+    let changes = monitor.take_changes(Instant::now());
+    assert!(
+        changes.references && changes.worktree == Some(Scope::All),
+        "a manual rescan publishes immediately even if the retiring watch reports another loss"
+    );
+    assert!(
+        monitor.deferred_loss.is_none(),
+        "the explicit rescan consumes the deferred loss"
+    );
+    Ok(())
 }
 
 #[test]
@@ -1522,6 +1608,11 @@ fn metadata_watches_exclude_ancestors_and_external_configuration() -> TestResult
             watches.contains_key(&layout.common_dir.join("info")),
             "repository-local ignore and attribute files remain covered"
         );
+        assert_eq!(
+            watches.contains_key(&external_root),
+            !cfg!(target_os = "macos"),
+            "macOS external ignores leave their parent out of native repository roots"
+        );
     }
     std::fs::write(&config, "[monitor]\nvalue = after\n")?;
     assert_eq!(
@@ -1540,6 +1631,79 @@ fn metadata_watches_exclude_ancestors_and_external_configuration() -> TestResult
     assert!(
         inventory::metadata_watches(&layout, None, false)?.is_empty(),
         "a missing repository root does not broaden coverage to its parent"
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn retargeting_an_external_ignore_watch_invalidates_ignores_only() -> TestResult {
+    let fixture = fixture()?;
+    let external = gix_testtools::tempfile::tempdir()?;
+    let root = external.path().canonicalize()?;
+    let ignore = root.join("ignore");
+    let old = root.join("old");
+    let new = root.join("new");
+    let replacement = root.join("replacement");
+    std::fs::write(&old, "ignored/\n")?;
+    std::fs::write(&new, "other/\n")?;
+    std::os::unix::fs::symlink(&old, &ignore)?;
+    std::os::unix::fs::symlink(&new, &replacement)?;
+    let open = || {
+        crate::open_opts(
+            fixture.path(),
+            crate::open::Options::isolated().config_overrides([format!("core.excludesFile={}", ignore.display())]),
+        )
+    };
+    let mut monitor = open()?.monitor(Options {
+        metadata_debounce: Duration::ZERO,
+        max_latency: Duration::ZERO,
+        ..Default::default()
+    })?;
+    let mut service = || monitor.service(Instant::now(), open);
+    for _ in 0..3 {
+        let outcome = service();
+        assert!(outcome.errors.is_empty(), "registration succeeds: {:?}", outcome.errors);
+    }
+    std::fs::rename(&replacement, &ignore)?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let outcome = service();
+        assert!(
+            outcome.errors.is_empty(),
+            "atomic retargeting keeps coverage: {:?}",
+            outcome.errors
+        );
+        if outcome.changes.ignores {
+            assert_eq!(
+                outcome.changes,
+                Changes {
+                    ignores: true,
+                    worktree: Some(Scope::All),
+                    ..Changes::default()
+                },
+                "external file changes refresh ignore rules and worktree coverage"
+            );
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the watcher observes the name being retargeted"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        monitor
+            .layout
+            .dependencies
+            .iter()
+            .any(|dependency| dependency.path == ignore)
+            && !monitor
+                .layout
+                .dependencies
+                .iter()
+                .any(|dependency| dependency.path == new),
+        "the external file watch owns the configured name across retargeting"
     );
     Ok(())
 }
@@ -1797,6 +1961,81 @@ fn physical_roots_and_config_symlink_replacements_are_both_observed() -> TestRes
         physical_root.join("missing/config"),
         "relative missing paths are made absolute"
     );
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn unicode_and_case_aliases_use_the_native_physical_root_without_precomposition() -> TestResult {
+    let fixture = fixture()?;
+    let root = fixture.path().join("Cafe\u{301}");
+    std::fs::create_dir(&root)?;
+    let status = gix_testtools::git_command(&root)
+        .args(["init", "--quiet", "--initial-branch=main"])
+        .status()?;
+    assert!(
+        status.success(),
+        "the repository initializes under its physical spelling"
+    );
+    let config_path = root.join(".git/config");
+    let mut config = std::fs::read_to_string(&config_path)?;
+    config.push_str("\n[include]\npath = ../missing/deeper/config\n");
+    std::fs::write(config_path, config)?;
+    let physical = root.canonicalize()?;
+    for name in ["Café", "CAFÉ"] {
+        let alias = fixture.path().join(name);
+        if !alias.exists() {
+            continue;
+        }
+        let mut options = crate::open::Options::isolated()
+            .config_overrides(["core.precomposeUnicode=false", "core.ignoreCase=false"]);
+        options.permissions.config.includes = true;
+        let repo = crate::open_opts(&alias, options)?;
+        let mut monitor = repo.monitor(Options::default())?;
+        monitor.observe(&modified(physical.join("tracked")), true, Instant::now());
+        assert_eq!(
+            monitor.pending_worktree.worktree,
+            Some(Scope::Paths(vec![path_change(
+                "tracked",
+                EventKind::Modify,
+                PathKind::File
+            )])),
+            "native events still reach a repository opened through the {name:?} alias"
+        );
+        assert!(
+            classify_metadata(&physical.join(".git/HEAD"), monitor.layout(), false)
+                .0
+                .references,
+            "native metadata paths also match the physical repository spelling"
+        );
+        assert_eq!(
+            monitor.layout().index,
+            physical.join(".git/index"),
+            "an index that has not been created yet uses its physical existing parent"
+        );
+        monitor.observe(&modified(physical.join(".git/index")), true, Instant::now());
+        assert!(
+            monitor.pending_worktree.index,
+            "native index events invalidate the selected index"
+        );
+        assert!(
+            monitor.layout().dependencies.iter().any(|source| {
+                source.kind == DependencyKind::Configuration && source.path == physical.join("missing/deeper/config")
+            }),
+            "missing configuration includes retain their dependency under the physical root"
+        );
+        assert_eq!(
+            absolute_path(&alias.join("missing/deeper/config"), fixture.path(), false)?,
+            physical.join("missing/deeper/config"),
+            "missing dependency suffixes retain the existing ancestor's physical spelling"
+        );
+        let index = repo.index_or_empty()?;
+        let directories = inventory::worktree_directories(&repo, &index)?;
+        assert!(
+            directories.paths.contains_key(&physical) && !directories.paths.contains_key(&physical.join(".git")),
+            "worktree inventory shares physical spelling and still excludes its administrative directory"
+        );
+    }
     Ok(())
 }
 

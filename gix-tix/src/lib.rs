@@ -6,21 +6,32 @@ mod app;
 mod change_id;
 pub mod command;
 mod command_menu;
+mod diff_colors;
 mod edit;
+mod emoji;
 mod enrich;
+mod github;
+mod graph_tiles;
 mod history;
+mod index_set;
+mod interrupt;
+mod kitty;
 mod logging;
 mod menu;
 mod patch_id;
 mod prefix_input;
 mod ref_tree;
+mod structural_diff;
+#[cfg(unix)]
+mod terminal_palette;
+mod terminal_reply;
 #[cfg(test)]
 mod test_repository;
 mod ui;
 mod worktrunk;
 
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, VecDeque},
     ffi::OsString,
     io::{self, Write},
     num::NonZeroU16,
@@ -34,6 +45,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+type Terminal = ratatui::Terminal<kitty::Backend<std::io::Stdout>>;
+
 use app::{
     Action, App, ChangeGroup, ChangeKind, ChangePane, Changes, ChangesMode, ComparedParent, Effect, PathChange,
     SelectionRelation, SharedCommitRow, State,
@@ -45,10 +58,11 @@ use crossterm::{
     event::{
         self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste, EnableFocusChange,
         EnableMouseCapture, Event as TerminalEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
-        KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        KeyboardEnhancementFlags, ModifierKeyCode, MouseButton, MouseEvent, MouseEventKind,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
-    style::ResetColor,
+    style::{Colored, Print, ResetColor},
     terminal::{self, Clear, ClearType},
 };
 use gix::{
@@ -77,6 +91,9 @@ const IMMEDIATE_PAGER_EXIT: Duration = Duration::from_millis(250);
 const REF_EVENT_INTERVAL: Duration = Duration::from_millis(250);
 const LINE_DIFF_POOL_IDLE: Duration = Duration::from_secs(10);
 const THEME_QUERY_TIMEOUT: Duration = Duration::from_millis(100);
+// Crossterm shares one process-wide input queue, including across built-in pagers.
+static TERMINAL_REPLIES: gix::parallel::Mutable<terminal_reply::ReplyFilter> =
+    gix::parallel::Mutable::new(terminal_reply::ReplyFilter::new());
 const PUSH_RETRY_PROMPT: &str = "push requires force · <enter> retry with force-with-lease · Esc cancel";
 const WORKTREE_STATUS_CURRENT: usize = 0;
 const WORKTREE_STATUS_PARTIAL: usize = usize::MAX - 1;
@@ -120,6 +137,7 @@ enum BackgroundProgressKind {
 enum BackgroundTaskKind {
     References,
     RemoveWorktree,
+    PullRequests,
 }
 
 impl BackgroundTaskKind {
@@ -132,6 +150,7 @@ enum BackgroundCompletion {
     Success(String),
     Attention(String),
     PushNeedsForce(PushRequest),
+    PullRequests(github::Snapshot),
 }
 
 struct PushRequest {
@@ -139,11 +158,12 @@ struct PushRequest {
     remote: BString,
     branch: BString,
     hidden_tips: Vec<gix::ObjectId>,
+    lease: Option<BString>,
 }
 
 enum PushOutcome {
     Pushed(String),
-    NeedsForce,
+    NeedsForce(BString),
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -163,18 +183,6 @@ struct ConflictHead {
     reference: Option<gix::refs::FullName>,
     parents: Vec<gix::ObjectId>,
     pending: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct WorktreeStatusHead {
-    reference: Option<gix::refs::FullName>,
-    target: Option<gix::ObjectId>,
-}
-
-#[derive(Default)]
-struct WorktreeStatusParts {
-    staged: bool,
-    scopes: HashSet<BString>,
 }
 
 enum ExternalConflictResolution {
@@ -202,7 +210,7 @@ fn worktree_watcher_needed(repository_is_bare: bool, mode: Option<ChangesMode>) 
 }
 
 fn sync_worktree_monitor(
-    monitor: &mut Option<gix::notify::RepositoryMonitor>,
+    monitor: &mut Option<gix::status::Monitor>,
     enabled: bool,
     repository_changed: bool,
     open: impl FnOnce() -> Result<gix::Repository>,
@@ -210,21 +218,50 @@ fn sync_worktree_monitor(
     let Some(current) = monitor.as_ref() else {
         return Ok(());
     };
-    if !repository_changed && current.options().worktree_coverage.is_some() == enabled {
+    if !repository_changed && current.options().repository.worktree_coverage.is_some() == enabled {
         return Ok(());
     }
-    let options = gix::notify::Options {
-        worktree_coverage: enabled.then(|| current.options().worktree_coverage.unwrap_or_default()),
+    let options = gix::status::monitor::Options {
+        repository: gix::notify::Options {
+            worktree_coverage: enabled.then(|| current.options().repository.worktree_coverage.unwrap_or_default()),
+            ..current.options().repository.clone()
+        },
         ..current.options().clone()
     };
+    let loss_debounce = current.repository_monitor().loss_debounce();
     let repository = open().or_raise(|| message("could not reopen repository for filesystem monitoring"))?;
     drop(monitor.take());
-    *monitor = Some(
-        repository
-            .monitor(options)
-            .or_raise(|| message("could not create replacement filesystem monitor"))?,
-    );
+    let mut replacement = gix::status::Monitor::new(&repository, options)
+        .or_raise(|| message("could not create replacement filesystem monitor"))?;
+    replacement.set_loss_debounce(loss_debounce)?;
+    *monitor = Some(replacement);
     Ok(())
+}
+
+fn worktree_status_visible(app: &App, ref_tree_active: bool) -> bool {
+    !ref_tree_active
+        && history_is_ready_to_draw(app.state, app.rows.len())
+        && app.changes_visible()
+        && app.changes_mode == Some(ChangesMode::Both)
+}
+
+fn worktree_monitor_timeout(
+    monitor: &gix::status::Monitor,
+    visible: bool,
+    retry: Option<Instant>,
+    now: Instant,
+) -> Option<Duration> {
+    if !visible {
+        monitor.next_service_timeout(now)
+    } else if let Some(deadline) = retry {
+        monitor
+            .next_service_timeout(now)
+            .into_iter()
+            .chain(Some(deadline.saturating_duration_since(now)))
+            .min()
+    } else {
+        monitor.next_timeout(now)
+    }
 }
 
 fn take_due(deadline: &mut Option<Instant>, now: Instant) -> bool {
@@ -294,6 +331,21 @@ pub(crate) enum FileChange {
     Unavailable(&'static str),
 }
 
+impl FileChange {
+    fn tree(change: gix::object::tree::diff::ChangeDetached) -> Self {
+        use gix::object::tree::diff::ChangeDetached;
+        let unavailable = matches!(change, ChangeDetached::Addition { entry_mode, .. } if entry_mode.is_commit())
+            || matches!(change, ChangeDetached::Deletion { entry_mode, .. } if entry_mode.is_commit())
+            || matches!(change, ChangeDetached::Modification { previous_entry_mode, entry_mode, .. } if previous_entry_mode.is_commit() || entry_mode.is_commit())
+            || matches!(change, ChangeDetached::Rewrite { source_entry_mode, entry_mode, .. } if source_entry_mode.is_commit() || entry_mode.is_commit());
+        if unavailable {
+            FileChange::Unavailable("submodule changes don't have a file diff")
+        } else {
+            FileChange::Tree(change)
+        }
+    }
+}
+
 struct LineDiffJob {
     index: usize,
     change: FileChange,
@@ -315,6 +367,15 @@ struct LineDiffPool {
     parallelism: usize,
     active: Option<LineDiffWorkers>,
     last_used: Option<Instant>,
+    staged_diff_key: Option<StagedDiffKey>,
+}
+
+#[derive(PartialEq)]
+struct StagedDiffKey {
+    configuration: BString,
+    configuration_metadata: Vec<gix::config::file::Metadata>,
+    global_attributes: Vec<(PathBuf, Option<Vec<u8>>)>,
+    indexed_attributes: Vec<(BString, gix::ObjectId)>,
 }
 
 struct LineDiffWorkers {
@@ -361,15 +422,23 @@ fn set_worktree_resources(
         )
         .or_raise(|| message("could not prepare old worktree diff resource"))?;
     let new_resource = new.unwrap_or(fallback);
-    cache
-        .set_resource(
-            new.map(|resource| resource.id),
-            new_resource.mode.kind(),
-            new_resource.path.as_bstr(),
-            gix::diff::blob::ResourceKind::NewOrDestination,
-            repository,
-        )
-        .or_raise(|| message("could not prepare new worktree diff resource"))?;
+    // Only a null new ID reads the worktree; staged and deleted sides use their recorded resources.
+    let worktree_root = if new.is_some_and(|resource| resource.id.is_null()) {
+        None
+    } else {
+        cache.filter.roots.new_root.take()
+    };
+    let result = cache.set_resource(
+        new.map(|resource| resource.id),
+        new_resource.mode.kind(),
+        new_resource.path.as_bstr(),
+        gix::diff::blob::ResourceKind::NewOrDestination,
+        repository,
+    );
+    if let Some(root) = worktree_root {
+        cache.filter.roots.new_root = Some(root);
+    }
+    result.or_raise(|| message("could not prepare new worktree diff resource"))?;
     Ok(())
 }
 
@@ -379,6 +448,7 @@ fn line_counts_for_change(
     tree_cache: &mut gix::diff::blob::Platform,
     worktree_cache: Option<&mut gix::diff::blob::Platform>,
 ) -> Result<LineCounts> {
+    interrupt::check().or_error()?;
     let counts = match change {
         FileChange::Tree(change) => change.attach(repository, repository).diff(tree_cache)?.line_counts()?,
         FileChange::Worktree { old, new } => {
@@ -392,9 +462,24 @@ fn line_counts_for_change(
 }
 
 fn line_diff_state(repository: &gix::Repository) -> Result<LineDiffState> {
-    let tree_cache = repository.diff_resource_cache_for_tree_diff()?;
-    let worktree_cache = worktree_diff_cache(repository, gix::diff::blob::pipeline::Mode::ToGit)?;
+    let tree_cache = without_textconv(repository.diff_resource_cache_for_tree_diff()?);
+    let worktree_cache = worktree_diff_cache(repository, gix::diff::blob::pipeline::Mode::ToGit)?.map(without_textconv);
     Ok((tree_cache, worktree_cache))
+}
+
+fn without_textconv(mut cache: gix::diff::blob::Platform) -> gix::diff::blob::Platform {
+    // Textconv overrides binary detection even when conversion is disabled.
+    let mut drivers = cache.filter.drivers().to_vec();
+    for driver in &mut drivers {
+        driver.binary_to_text_command = None;
+    }
+    cache.filter = gix::diff::blob::Pipeline::new(
+        cache.filter.roots,
+        cache.filter.worktree_filter,
+        drivers,
+        cache.filter.options,
+    );
+    cache
 }
 
 impl LineDiffPool {
@@ -405,6 +490,7 @@ impl LineDiffPool {
             parallelism: parallelism.max(1),
             active: None,
             last_used: None,
+            staged_diff_key: None,
         }
     }
 
@@ -425,13 +511,22 @@ impl LineDiffPool {
         result
     }
 
+    fn invalidate(&mut self) {
+        self.release_workers();
+        self.staged_diff_key = None;
+    }
+
+    fn release_workers(&mut self) {
+        self.active = None;
+        self.last_used = None;
+    }
+
     fn expire(&mut self, now: Instant) -> bool {
         let expired = self
             .last_used
             .is_some_and(|last_used| now.saturating_duration_since(last_used) >= LINE_DIFF_POOL_IDLE);
         if expired {
-            self.active = None;
-            self.last_used = None;
+            self.release_workers();
         }
         expired
     }
@@ -577,8 +672,8 @@ enum FileDiff {
 }
 
 enum PreparedFileDiff {
-    External(gix::diff::blob::platform::prepare_diff_command::Command, LineCounts),
-    BuiltIn(BuiltInDiff, LineCounts),
+    External(gix::diff::blob::platform::prepare_diff_command::Command),
+    BuiltIn(BuiltInDiff),
 }
 
 struct CommitDiff {
@@ -586,11 +681,110 @@ struct CommitDiff {
     internal: FileDiff,
 }
 
+enum DiffView<'a> {
+    Patch(&'a BuiltInDiff),
+    Structural(structural_diff::View<'a>),
+}
+
+impl DiffView<'_> {
+    fn areas(&self, area: Rect) -> [Rect; 2] {
+        match self {
+            Self::Patch(_) => [Rect::default(), area],
+            Self::Structural(view) => view.areas(area),
+        }
+    }
+
+    fn scroll_tree(&mut self, mouse: MouseEvent, area: Rect, offset: usize) -> bool {
+        match self {
+            Self::Patch(_) => false,
+            Self::Structural(view) => view.scroll_tree(mouse, area, offset),
+        }
+    }
+
+    fn sticky_header_index(&self, offset: usize) -> Option<usize> {
+        match self {
+            Self::Patch(diff) => ui::sticky_diff_header(&diff.file_headers, offset),
+            Self::Structural(view) => view.sticky_header_index(offset),
+        }
+    }
+
+    fn max_offset(&self, page: usize) -> usize {
+        let max = self.end_offset(page);
+        match self {
+            Self::Patch(_) => max,
+            Self::Structural(view) => max.max(view.last_file_header()),
+        }
+    }
+
+    fn end_offset(&self, page: usize) -> usize {
+        let offset = self.display_line_count().saturating_sub(page);
+        offset + usize::from(page > 1 && self.sticky_header_index(offset).is_some())
+    }
+
+    fn mouse(&self, mouse: MouseEvent, area: Rect, offset: usize, horizontal_offset: usize) -> Option<(usize, usize)> {
+        let pointer = Position::new(mouse.column, mouse.row);
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left) && mouse.modifiers.is_empty() {
+            return match self {
+                Self::Patch(_) => None,
+                Self::Structural(view) => view
+                    .tree_target(pointer, area, offset, horizontal_offset)
+                    .map(|target| (target, 0)),
+            };
+        }
+        let [_, area] = self.areas(area);
+        if !area.contains(pointer) {
+            return None;
+        }
+        let max = self.max_offset(usize::from(area.height.saturating_sub(2)).max(1));
+        let horizontal_page = usize::from(area.width).max(1);
+        let horizontal_max = self.max_width().saturating_sub(horizontal_page);
+        match mouse_scroll_action(mouse.kind, mouse.modifiers, 1, true) {
+            Some(Action::MoveUpBy(distance)) => Some((offset.saturating_sub(distance), horizontal_offset)),
+            Some(Action::MoveDownBy(distance)) => Some((offset.saturating_add(distance).min(max), horizontal_offset)),
+            Some(Action::ScrollLeft) => Some((offset, horizontal_offset.saturating_sub(horizontal_page))),
+            Some(Action::ScrollRight) => Some((
+                offset,
+                horizontal_offset.saturating_add(horizontal_page).min(horizontal_max),
+            )),
+            _ => None,
+        }
+    }
+
+    fn display_line_count(&self) -> usize {
+        match self {
+            Self::Patch(diff) => diff.display_line_count(),
+            Self::Structural(view) => view.line_count(),
+        }
+    }
+
+    fn max_width(&self) -> usize {
+        match self {
+            Self::Patch(diff) => diff.max_width,
+            Self::Structural(view) => view.max_width(),
+        }
+    }
+
+    fn draw(&self, frame: &mut ratatui::Frame<'_>, area: Rect, offset: usize, horizontal_offset: usize) {
+        match self {
+            Self::Patch(diff) => ui::draw_file_diff(frame, area, diff, offset, horizontal_offset),
+            Self::Structural(view) => view.draw(frame, area, offset, horizontal_offset),
+        }
+    }
+
+    fn key(&mut self, key: KeyEvent) -> bool {
+        match self {
+            Self::Patch(_) => false,
+            Self::Structural(view) => view.key(key),
+        }
+    }
+}
+
 pub(crate) struct BuiltInDiff {
     title: BString,
     summary: Option<Vec<Line<'static>>>,
     lines: Vec<BString>,
     max_width: usize,
+    file_headers: Vec<(usize, usize)>,
 }
 
 impl BuiltInDiff {
@@ -605,10 +799,15 @@ impl BuiltInDiff {
             summary: None,
             lines,
             max_width,
+            file_headers: Vec::new(),
         }
     }
 
     fn with_summary(mut self, summary: Vec<Line<'static>>) -> Self {
+        for (start, header) in &mut self.file_headers {
+            *start += summary.len() + 1;
+            *header += summary.len() + 1;
+        }
         self.max_width = self
             .max_width
             .max(summary.iter().map(Line::width).max().unwrap_or_default());
@@ -687,15 +886,14 @@ struct WorktreePreview {
     decorations: Decorations,
 }
 
-fn detect_commit_pane_background() -> Option<(u8, u8, u8)> {
+fn detect_terminal_colors() -> Option<terminal_colorsaurus::ColorPalette> {
     let mut options = terminal_colorsaurus::QueryOptions::default();
     options.timeout = THEME_QUERY_TIMEOUT;
-    match terminal_colorsaurus::background_color(options) {
-        Ok(background) => {
-            let color = background.scale_to_8bit();
-            let shaded = shade_terminal_background(color, background.perceived_lightness() <= 0.5);
-            tracing::debug!(?color, ?shaded, "detected terminal background");
-            Some(shaded)
+    gix::parallel::lock(&TERMINAL_REPLIES).arm();
+    match terminal_colorsaurus::color_palette(options) {
+        Ok(palette) => {
+            gix::parallel::lock(&TERMINAL_REPLIES).clear();
+            Some(palette)
         }
         Err(err) => {
             tracing::debug!(error = %err, "terminal background detection unavailable");
@@ -779,6 +977,7 @@ fn run_ui(
     mut options: Options,
     picker: Option<&mut worktrunk::Worktrees>,
 ) -> Result<UiExit> {
+    let _interrupt = interrupt::install()?;
     let mut repository_path = repository.git_dir().to_owned();
     let common_dir = normalize_common_dir(repository.common_dir.clone().unwrap_or_else(|| repository_path.clone()))?;
     let show_hidden = options.hide.is_empty() && !options.auto_hide;
@@ -796,23 +995,65 @@ fn run_ui(
         hidden_revision_count = options.hide.len(),
         "starting tix"
     );
-    let commit_pane_background = detect_commit_pane_background();
     let quit_on_finish = options.quit_on_finish.is_some();
-    let inline = quit_on_finish || options.no_alt_screen;
-    let terminal_result = if inline {
-        let (_, height) = terminal::size().or_raise(|| message("could not determine terminal size"))?;
-        ratatui::try_init_with_options(TerminalOptions {
-            viewport: Viewport::Inline(height),
+    #[cfg(unix)]
+    let theme_query_started = Instant::now();
+    let terminal_colors = detect_terminal_colors();
+    #[cfg(not(unix))]
+    let ansi_colors = None;
+    #[cfg(unix)]
+    let ansi_colors = if !quit_on_finish && terminal_colors.is_some() {
+        terminal_palette::query(
+            THEME_QUERY_TIMEOUT.saturating_sub(theme_query_started.elapsed()),
+            &mut gix::parallel::lock(&TERMINAL_REPLIES),
+        )
+        .unwrap_or_else(|err| {
+            tracing::debug!(error = %err, "terminal ANSI palette detection unavailable");
+            None
         })
     } else {
-        ratatui::try_init()
+        None
     };
+    let graphics = !quit_on_finish && kitty::supported();
+    let commit_pane_background = terminal_colors.as_ref().map(|palette| {
+        shade_terminal_background(
+            palette.background.scale_to_8bit(),
+            palette.background.perceived_lightness() <= 0.5,
+        )
+    });
+    let inline = quit_on_finish || options.no_alt_screen;
+    if interrupt::requested() {
+        return Ok(UiExit::Quit(None));
+    }
+    let terminal_result = (|| -> std::io::Result<Terminal> {
+        let mut backend = kitty::Backend::new(std::io::stdout(), graphics);
+        if let Some(palette) = &terminal_colors {
+            backend.set_terminal_colors(
+                palette.foreground.scale_to_8bit().into(),
+                palette.background.scale_to_8bit().into(),
+                ansi_colors,
+            );
+        }
+        terminal::enable_raw_mode()?;
+        if inline {
+            let (_, height) = terminal::size()?;
+            Terminal::with_options(
+                backend,
+                TerminalOptions {
+                    viewport: Viewport::Inline(height),
+                },
+            )
+        } else {
+            execute!(backend, terminal::EnterAlternateScreen)?;
+            Terminal::new(backend)
+        }
+    })();
     let mut terminal = terminal_result
         .inspect_err(|_| {
             if inline {
                 let _ = terminal::disable_raw_mode();
             } else {
-                ratatui::restore();
+                let _ = ratatui::try_restore();
             }
         })
         .or_raise(|| message("could not initialize terminal"))?;
@@ -825,15 +1066,21 @@ fn run_ui(
     let result = keyboard_setup
         .or_raise(|| message("could not enable enhanced keyboard events"))
         .and_then(|()| {
-            if !quit_on_finish {
-                let hook = std::panic::take_hook();
-                std::panic::set_hook(Box::new(move |info| {
-                    let mut backend = CrosstermBackend::new(std::io::stdout());
+            let hook = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                let mut backend = CrosstermBackend::new(std::io::stdout());
+                let _ = kitty::cleanup_process_images(&mut backend);
+                if !quit_on_finish {
                     let _ = disable_input(&mut backend, enhanced_keyboard);
-                    let _ = execute!(backend, cursor::Show);
-                    hook(info);
-                }));
-            }
+                }
+                let _ = execute!(backend, cursor::Show);
+                if inline {
+                    let _ = terminal::disable_raw_mode();
+                } else {
+                    let _ = ratatui::try_restore();
+                }
+                hook(info);
+            }));
             let mut picker_focused = picker.is_some();
             match event_loop(
                 &mut terminal,
@@ -850,19 +1097,23 @@ fn run_ui(
                 EventLoopExit::Promote(path) => Ok(UiExit::Promote(path)),
             }
         });
+    let graphics_restore = if inline {
+        terminal.backend_mut().cleanup_with_fallback()
+    } else {
+        terminal.backend_mut().cleanup()
+    };
     let keyboard_restore = if quit_on_finish {
         Ok(())
     } else {
         disable_input(terminal.backend_mut(), enhanced_keyboard)
     };
-    let cursor_restore = if inline {
+    let cursor_position_restore = if inline {
         let area = terminal.get_frame().area();
-        terminal
-            .set_cursor_position(Position::new(area.x, area.bottom().saturating_sub(1)))
-            .and_then(|()| terminal.show_cursor())
+        terminal.set_cursor_position(Position::new(area.x, area.bottom().saturating_sub(1)))
     } else {
         Ok(())
     };
+    let cursor_restore = terminal.backend_mut().restore_cursor();
     drop(terminal);
     let restore = if inline {
         terminal::disable_raw_mode()
@@ -871,10 +1122,16 @@ fn run_ui(
     }
     .or_raise(|| message("could not restore terminal"));
     if inline {
-        eprintln!();
+        let _ = writeln!(std::io::stderr());
     }
-    let outcome = result?;
+    let outcome = if interrupt::requested() {
+        UiExit::Quit(None)
+    } else {
+        result?
+    };
+    graphics_restore.or_raise(|| message("could not clear graph tiles"))?;
     keyboard_restore.or_raise(|| message("could not restore keyboard events"))?;
+    cursor_position_restore.or_raise(|| message("could not restore terminal cursor position"))?;
     cursor_restore.or_raise(|| message("could not restore terminal cursor"))?;
     restore?;
     Ok(outcome)
@@ -891,8 +1148,14 @@ fn validate_hidden_revisions(
     history::available_hidden_revisions(&repository, hide, auto_hide || hide.is_empty())
 }
 
-fn enable_input(backend: &mut CrosstermBackend<std::io::Stdout>, enhanced_keyboard: bool) -> std::io::Result<()> {
-    execute!(backend, EnableFocusChange, EnableMouseCapture, EnableBracketedPaste)?;
+fn enable_input(backend: &mut impl Write, enhanced_keyboard: bool) -> std::io::Result<()> {
+    execute!(
+        backend,
+        EnableFocusChange,
+        EnableMouseCapture,
+        EnableBracketedPaste,
+        Print(kitty::mouse_pointer(kitty::supported_terminal(), true))
+    )?;
     if enhanced_keyboard {
         execute!(backend, PushKeyboardEnhancementFlags(keyboard_enhancement_flags()))?;
     }
@@ -905,15 +1168,77 @@ fn keyboard_enhancement_flags() -> KeyboardEnhancementFlags {
         | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
 }
 
-fn disable_input(backend: &mut CrosstermBackend<std::io::Stdout>, enhanced_keyboard: bool) -> std::io::Result<()> {
+struct HeldModifier {
+    modifier: KeyModifiers,
+    sides: u8,
+}
+
+impl HeldModifier {
+    fn new(modifier: KeyModifiers) -> Self {
+        Self { modifier, sides: 0 }
+    }
+
+    fn update(&mut self, event: &TerminalEvent, enabled: bool) -> bool {
+        if !enabled || matches!(event, TerminalEvent::FocusLost | TerminalEvent::FocusGained) {
+            self.sides = 0;
+        } else if let TerminalEvent::Mouse(mouse) = event {
+            self.sides = if mouse.modifiers.contains(self.modifier) {
+                if self.sides == 0 { 4 } else { self.sides }
+            } else {
+                0
+            };
+        } else if let TerminalEvent::Key(key) = event {
+            let side = match key.code {
+                KeyCode::Modifier(ModifierKeyCode::LeftShift) if self.modifier == KeyModifiers::SHIFT => Some(1),
+                KeyCode::Modifier(ModifierKeyCode::RightShift) if self.modifier == KeyModifiers::SHIFT => Some(2),
+                KeyCode::Modifier(ModifierKeyCode::LeftAlt) if self.modifier == KeyModifiers::ALT => Some(1),
+                KeyCode::Modifier(ModifierKeyCode::RightAlt) if self.modifier == KeyModifiers::ALT => Some(2),
+                _ => None,
+            };
+            match side {
+                Some(bit) => {
+                    self.sides &= !4;
+                    if key.kind == KeyEventKind::Release {
+                        self.sides &= !bit;
+                    } else {
+                        self.sides |= bit;
+                    }
+                }
+                _ if !key.modifiers.contains(self.modifier) => self.sides = 0,
+                // A modified key can arrive after its modifier was pressed outside this input loop.
+                _ if self.sides == 0 => self.sides = 4,
+                _ => {}
+            }
+        }
+        self.sides != 0
+    }
+}
+
+fn disable_input(backend: &mut impl Write, enhanced_keyboard: bool) -> std::io::Result<()> {
     if enhanced_keyboard {
         execute!(backend, PopKeyboardEnhancementFlags)?;
     }
-    execute!(backend, DisableBracketedPaste, DisableMouseCapture, DisableFocusChange)
+    execute!(
+        backend,
+        DisableBracketedPaste,
+        DisableMouseCapture,
+        DisableFocusChange,
+        Print(kitty::mouse_pointer(kitty::supported_terminal(), false))
+    )
 }
 
 fn is_key_press(event: &TerminalEvent) -> bool {
     matches!(event, TerminalEvent::Key(key) if key.kind != KeyEventKind::Release)
+}
+
+fn read_terminal_event() -> std::io::Result<Option<TerminalEvent>> {
+    while !interrupt::requested() {
+        if event::poll(REF_EVENT_INTERVAL)? {
+            let event = event::read()?;
+            return Ok((!gix::parallel::lock(&TERMINAL_REPLIES).consume(&event)).then_some(event));
+        }
+    }
+    Ok(None)
 }
 
 fn prefix_input_available(app: &App, focused: bool, other_input_owner: bool) -> bool {
@@ -1016,10 +1341,14 @@ fn worktrunk_input(key: KeyEvent, selected: usize, len: usize, page: usize) -> O
             }))
         }
         KeyCode::Up => select(selected.saturating_sub(1)),
+        KeyCode::Char('p' | 'P') if key.modifiers.contains(KeyModifiers::CONTROL) => select(selected.saturating_sub(1)),
         KeyCode::Char('k' | 'K') if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
             select(selected.saturating_sub(1))
         }
         KeyCode::Down => select(selected.saturating_add(1).min(len.saturating_sub(1))),
+        KeyCode::Char('n' | 'N') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            select(selected.saturating_add(1).min(len.saturating_sub(1)))
+        }
         KeyCode::Char('j' | 'J') if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {
             select(selected.saturating_add(1).min(len.saturating_sub(1)))
         }
@@ -1111,7 +1440,7 @@ fn clear_worktree_preview_request(
     reason = "the picker extends the existing event-loop context"
 )]
 fn event_loop(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal,
     mut repository: gix::ThreadSafeRepository,
     revisions: Vec<OsString>,
     options: Options,
@@ -1140,11 +1469,20 @@ fn event_loop(
     let mut repository_monitor = if preview_mode {
         None
     } else {
-        let mut monitor = view_repository.monitor(gix::notify::Options {
-            worktree_coverage: worktree_watcher_needed(view_repository.workdir().is_none(), app.changes_mode)
-                .then_some(Default::default()),
-            ..Default::default()
-        })?;
+        let mut monitor = gix::status::Monitor::new(
+            &view_repository,
+            gix::status::monitor::Options {
+                repository: gix::notify::Options {
+                    worktree_coverage: worktree_watcher_needed(view_repository.workdir().is_none(), app.changes_mode)
+                        .then_some(Default::default()),
+                    ..Default::default()
+                },
+                // Match `gix status`: concurrent metadata checks scale poorly on macOS.
+                thread_limit: cfg!(target_os = "macos").then_some(3),
+                ..Default::default()
+            },
+        )?;
+        monitor.set_loss_debounce(Some(Duration::from_millis(250)))?;
         let initial = monitor.service(Instant::now(), || Ok(view_repository.clone()));
         app.update_monitor_error(&initial);
         for error in initial.errors {
@@ -1176,6 +1514,8 @@ fn event_loop(
         gix::parallel::OwnShared::clone(&authors),
     );
 
+    app.graphics_enabled = terminal.backend().enabled();
+    app.structural_diff_settings.colored = !Colored::ansi_color_disabled_memoized();
     app.set_enhanced_keyboard(enhanced_keyboard);
     let mut tree_selection_refs = None;
     app.set_configured_author(configured_author);
@@ -1203,6 +1543,7 @@ fn event_loop(
     let mut refresh_receiver: Option<mpsc::Receiver<HistoryRefreshResult>> = None;
     let mut refresh_pending = false;
     let mut ref_tree_refresh_pending = false;
+    let mut pull_requests_refresh_pending = false;
     let mut return_to_history_after_refresh = None;
     let mut refresh_expand_hidden = false;
     let mut verification_receiver = None;
@@ -1211,8 +1552,7 @@ fn event_loop(
     let mut commit_message = None;
     let mut tree_changes = TreeChangesCache::default();
     let mut worktree_changes = None;
-    let mut cached_status_head = None;
-    let mut worktree_status_parts = WorktreeStatusParts::default();
+    let mut worktree_status_retry = None;
     let mut selection_relation = None;
     let mut history_graph = None;
     let line_diff_parallelism = std::thread::available_parallelism().map_or(1, Into::into);
@@ -1239,6 +1579,9 @@ fn event_loop(
     let mut menu_background = None;
     let mut command_picker_key = None;
     let mut prefix_input = prefix_input::State::default();
+    let mut held_shift = HeldModifier::new(KeyModifiers::SHIFT);
+    let mut held_alt = HeldModifier::new(KeyModifiers::ALT);
+    let mut mouse_position = None;
     let mut filesystem_responses = logging::FilesystemResponses::default();
     let mut focused = true;
     let drawn = draw(
@@ -1253,8 +1596,8 @@ fn event_loop(
         &mut commit_message,
         &mut tree_changes,
         &mut worktree_changes,
-        &mut cached_status_head,
-        &mut worktree_status_parts,
+        &mut repository_monitor,
+        &mut worktree_status_retry,
         &mut history_graph,
         &mut selection_relation,
         &mut line_diff_pool,
@@ -1291,7 +1634,11 @@ fn event_loop(
     let mut pending_rebase_conflict: Option<edit::time_travel::Conflict> = None;
     let mut pending_todo_rebase_conflict: Option<edit::rebase::PlanConflict> = None;
     let mut pending_todo_operation = "rebase";
+    let mut normal_quit = false;
     let result: Result<EventLoopExit> = (|| loop {
+        if interrupt::requested() {
+            return Ok(EventLoopExit::Quit(None));
+        }
         if picker.as_deref_mut().is_some_and(worktrunk::Worktrees::drain_updates) {
             dirty = true;
             urgent |= quit_on_finish;
@@ -1317,8 +1664,7 @@ fn event_loop(
             app.set_fetch_remote(recovered.remote_default_name(gix::remote::Direction::Fetch));
             filesystem_responses.cancel_pending_worktree("worktree-unavailable");
             worktree_changes = None;
-            cached_status_head = None;
-            worktree_status_parts = WorktreeStatusParts::default();
+            worktree_status_retry = None;
             line_diff_pool = None;
             sync_line_diff_pool(
                 &mut line_diff_pool,
@@ -1352,6 +1698,18 @@ fn event_loop(
             filesystem_responses.observe_monitor(&outcome.changes, &outcome.statistics);
             monitor_changes = outcome.changes;
         }
+        if repository_monitor
+            .as_ref()
+            .is_some_and(gix::status::Monitor::is_healthy)
+            && app
+                .worktree_changes
+                .error
+                .as_deref()
+                .is_some_and(|message| message.starts_with("filesystem watch:"))
+        {
+            app.worktree_changes.error = None;
+            dirty = true;
+        }
         let conflict_refresh_due = monitor_changes.references
             || monitor_changes.operations
             || monitor_changes.index
@@ -1359,74 +1717,34 @@ fn event_loop(
             || monitor_changes.worktree.is_some();
         let status_config_changed =
             monitor_changes.configuration || monitor_changes.ignores || monitor_changes.attributes;
-        let worktree_invalidated = if status_config_changed || monitor_changes.index {
-            worktree_status_parts = WorktreeStatusParts::default();
-            invalidate_worktree_changes(&mut worktree_changes)
-        } else {
-            match &monitor_changes.worktree {
-                Some(gix::notify::Scope::All) => {
-                    worktree_status_parts = WorktreeStatusParts::default();
-                    invalidate_worktree_changes(&mut worktree_changes)
-                }
-                Some(gix::notify::Scope::Paths(paths)) => invalidate_worktree_status_parts(
-                    &mut worktree_changes,
-                    &mut worktree_status_parts,
-                    false,
-                    paths.iter().map(|change| change.path.clone()),
-                ),
-                None => false,
-            }
-        };
-        if worktree_invalidated || status_config_changed || monitor_changes.index || monitor_changes.worktree.is_some()
-        {
-            filesystem_responses.worktree_due(worktree_invalidated);
+        let status_now = Instant::now();
+        let worktree_invalidated = worktree_watcher_needed(repository_is_bare, app.changes_mode)
+            && worktree_status_visible(&app, ref_tree.is_active())
+            && worktree_status_retry.is_none_or(|deadline| deadline <= status_now)
+            && (repository_monitor
+                .as_ref()
+                .is_some_and(|monitor| monitor.refresh_due(status_now))
+                || worktree_status_retry.is_some_and(|deadline| deadline <= status_now));
+        if worktree_invalidated {
+            mark_worktree_snapshot_pending(&mut worktree_changes);
+            filesystem_responses.worktree_due(true);
             dirty = true;
             urgent = true;
         }
-        if status_config_changed {
+        if status_config_changed || monitor_changes.layout {
             fill_repository.retain = false;
             fill_repository.retained = None;
+            invalidate_worktree_changes(&mut worktree_changes);
+            if let Some(pool) = line_diff_pool.as_mut() {
+                pool.invalidate();
+            }
         }
         if monitor_changes.references || monitor_changes.configuration || monitor_changes.layout {
             app.clear_enrichments();
             let response_ids = filesystem_responses.references_due();
             refresh_pending = true;
-            let head_changed = status_config_changed
-                || worktree_changes
-                    .as_ref()
-                    .is_some_and(|(marker, _)| *marker != WORKTREE_STATUS_FULL)
-                    && match cached_status_head.as_ref() {
-                        Some(previous) => open_repository(&repository_path, repository_is_bare, false)
-                            .or_raise(|| {
-                                message("could not reopen repository to compare HEAD after a reference change")
-                            })
-                            .and_then(|repository| worktree_status_head(&repository))
-                            .map_or_else(
-                                |err| {
-                                    tracing::warn!(error = %err, "could not compare HEAD after a reference change");
-                                    true
-                                },
-                                |current| current != *previous,
-                            ),
-                        None => true,
-                    };
-            let invalidated = if status_config_changed {
-                worktree_status_parts = WorktreeStatusParts::default();
-                invalidate_worktree_changes(&mut worktree_changes)
-            } else {
-                head_changed
-                    && invalidate_worktree_status_parts(
-                        &mut worktree_changes,
-                        &mut worktree_status_parts,
-                        true,
-                        std::iter::empty(),
-                    )
-            };
-            filesystem_responses.phase(&response_ids, "reference-worktree-cache-invalidation");
-            if invalidated {
+            if worktree_invalidated {
                 filesystem_responses.queue_frame(&response_ids, "reference-worktree-cache-invalidation");
-                dirty = true;
-                urgent = true;
             }
             if !preview_mode
                 && pending_rebase_conflict.is_none()
@@ -1523,10 +1841,31 @@ fn event_loop(
             });
         if let Some((kind, result)) = background_completion {
             background_task = None;
+            let result = if kind == BackgroundTaskKind::PullRequests {
+                ref_tree.pull_requests_loading = false;
+                match result {
+                    Ok(BackgroundCompletion::PullRequests(snapshot)) => {
+                        let count = snapshot.pull_requests.len();
+                        ref_tree.pull_requests_stale = false;
+                        ref_tree.pull_requests = Some(snapshot);
+                        pull_requests_refresh_pending = ref_tree.show_pull_requests;
+                        Ok(BackgroundCompletion::Success(format!("loaded {count} open GitHub PRs")))
+                    }
+                    Err(err) => {
+                        ref_tree.pull_requests_stale = true;
+                        ref_tree.leave_error(format!("PR refresh: {err:#}"));
+                        Err(err)
+                    }
+                    other => other,
+                }
+            } else {
+                result
+            };
             let (succeeded, force_push) = report_background_task(&mut app, result);
             pending_force_push = force_push;
             match kind {
                 BackgroundTaskKind::References => refresh_pending |= succeeded,
+                BackgroundTaskKind::PullRequests => {}
                 BackgroundTaskKind::RemoveWorktree => {
                     let reinventory = recover_common_repository(&common_dir)
                         .or_raise(|| message("could not reopen the common repository after removing a worktree"))
@@ -1622,8 +1961,7 @@ fn event_loop(
                         commit_message = None;
                         tree_changes.clear();
                         worktree_changes = None;
-                        cached_status_head = None;
-                        worktree_status_parts = WorktreeStatusParts::default();
+                        worktree_status_retry = None;
                         selection_relation = None;
                         app.selection_relation = None;
                         app.tree_changes.error = None;
@@ -1691,9 +2029,12 @@ fn event_loop(
                             requested_worktree_preview = None;
                         }
                     }
-                    ref_tree.set_history_commits(app.rows.iter().map(|row| row.id));
+                    if let Some(history) = history_graph.as_ref() {
+                        ref_tree.set_history_commits(history, app.rows.iter().map(|row| row.id));
+                    }
                     if return_to_history_after_refresh.take().is_some() {
                         ref_tree.leave();
+                        app.close_shortcut_groups();
                     }
                     update_hidden_branch_updates(&mut app, history_graph.as_ref(), &ref_snapshot);
                     let response_ids = filesystem_responses.active_reference_ids().to_vec();
@@ -1868,7 +2209,7 @@ fn event_loop(
                         if enter {
                             command_picker.close();
                             ref_tree.toggle();
-                            app.history_display_expanded = false;
+                            app.close_shortcut_groups();
                         }
                         refresh_receiver = None;
                         dirty = true;
@@ -2062,25 +2403,36 @@ fn event_loop(
                 ));
             }
         }
-        if ref_tree_refresh_pending
+        if (ref_tree_refresh_pending || pull_requests_refresh_pending)
             && refresh_receiver.is_none()
             && lane_receiver.is_none()
             && history_graph.is_some()
             && matches!(app.state, State::Complete | State::Cancelled)
         {
+            let enter = ref_tree_refresh_pending && !ref_tree.is_active();
             ref_tree_refresh_pending = false;
+            pull_requests_refresh_pending = false;
+            let expand = if ref_tree.show_pull_requests {
+                ref_tree
+                    .pull_requests
+                    .as_ref()
+                    .map(|snapshot| snapshot.commit_ids().collect())
+                    .unwrap_or_default()
+            } else {
+                Default::default()
+            };
             refresh_receiver = Some(start_history_refresh(
                 repository_path.clone(),
                 repository_is_bare,
                 revisions.clone(),
                 if app.show_hidden { Vec::new() } else { hide.clone() },
                 true,
-                Default::default(),
+                expand,
                 gix::parallel::OwnShared::clone(&authors),
                 history_graph
                     .take()
                     .expect("ref-tree refresh starts only with a cached history graph"),
-                RefreshKind::RefTree { enter: true },
+                RefreshKind::RefTree { enter },
             ));
             app.deferred_history_state = Some(app.state);
             app.state = State::Loading;
@@ -2175,6 +2527,7 @@ fn event_loop(
                     &mut app,
                     &mut command_picker,
                     &decorations,
+                    &ref_tree,
                 )
                 .or_raise(|| message("could not redraw menu"))?)
         {
@@ -2194,8 +2547,8 @@ fn event_loop(
                 &mut commit_message,
                 &mut tree_changes,
                 &mut worktree_changes,
-                &mut cached_status_head,
-                &mut worktree_status_parts,
+                &mut repository_monitor,
+                &mut worktree_status_retry,
                 &mut history_graph,
                 &mut selection_relation,
                 &mut line_diff_pool,
@@ -2258,7 +2611,9 @@ fn event_loop(
             else {
                 history_finished = true;
                 lane_receiver = None;
-                history_graph = Some(HistoryGraph::default());
+                let graph = HistoryGraph::default();
+                ref_tree.set_history_commits(&graph, []);
+                history_graph = Some(graph);
                 app.deferred_history_state = None;
                 app.state = State::Complete;
                 refresh_pending = true;
@@ -2283,6 +2638,7 @@ fn event_loop(
                     app.set_known_merge_descendants(graph.commits_with_merge_descendants());
                     app.set_auto_merges(&graph, &decorations, &ref_snapshot.pins);
                     ref_tree.rebuild(&graph, &ref_snapshot, &decorations);
+                    ref_tree.set_history_commits(&graph, app.rows.iter().map(|row| row.id));
                     history_graph = Some(graph);
                     update_hidden_branch_updates(&mut app, history_graph.as_ref(), &ref_snapshot);
                     selection_relation = None;
@@ -2312,8 +2668,8 @@ fn event_loop(
                 &mut commit_message,
                 &mut tree_changes,
                 &mut worktree_changes,
-                &mut cached_status_head,
-                &mut worktree_status_parts,
+                &mut repository_monitor,
+                &mut worktree_status_retry,
                 &mut history_graph,
                 &mut selection_relation,
                 &mut line_diff_pool,
@@ -2342,7 +2698,7 @@ fn event_loop(
                 &app,
                 focused,
                 command_picker.is_open()
-                    || ref_tree.is_active()
+                    || ref_tree.is_active() && ref_tree.topological_navigation_active()
                     || picker.is_some() && worktrunk_owns_input(&app, *picker_focused, focused)
                     || pending_force_push.is_some()
                     || pending_rebase_conflict.is_some()
@@ -2365,9 +2721,14 @@ fn event_loop(
             continue;
         }
         let repeat_timeout = repeat_deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
-        let watcher_timeout = repository_monitor
-            .as_ref()
-            .and_then(|monitor| monitor.next_timeout(Instant::now()));
+        let watcher_timeout = repository_monitor.as_ref().and_then(|monitor| {
+            worktree_monitor_timeout(
+                monitor,
+                worktree_status_visible(&app, ref_tree.is_active()),
+                worktree_status_retry,
+                Instant::now(),
+            )
+        });
         let history_status_timeout =
             history_status_deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
         let line_diff_timeout = line_diff_pool
@@ -2382,6 +2743,9 @@ fn event_loop(
             prefix_input.timeout(Instant::now()),
             repeat_timeout,
             watcher_timeout,
+            worktree_status_retry
+                .filter(|_| worktree_status_visible(&app, ref_tree.is_active()))
+                .map(|deadline| deadline.saturating_duration_since(Instant::now())),
             history_status_timeout,
             line_diff_timeout,
             background_task_timeout,
@@ -2403,9 +2767,11 @@ fn event_loop(
                 Some(key) => (Some(TerminalEvent::Key(key)), true),
                 None => (
                     match poll_timeout(streaming, events, dirty, last_draw.elapsed(), wake_after) {
-                        Some(timeout) if event::poll(timeout).or_error()? => Some(event::read().or_error()?),
+                        Some(timeout) if event::poll(timeout.min(REF_EVENT_INTERVAL)).or_error()? => {
+                            read_terminal_event().or_error()?
+                        }
                         Some(_) => None,
-                        None => Some(event::read().or_error()?),
+                        None => read_terminal_event().or_error()?,
                     },
                     false,
                 ),
@@ -2414,13 +2780,77 @@ fn event_loop(
         let Some(terminal_event) = terminal_event else {
             continue;
         };
+        match &terminal_event {
+            TerminalEvent::Mouse(mouse) => mouse_position = Some(Position::new(mouse.column, mouse.row)),
+            TerminalEvent::FocusLost | TerminalEvent::FocusGained => mouse_position = None,
+            _ => {}
+        }
+        let modifiers_enabled =
+            (enhanced_keyboard || !matches!(terminal_event, TerminalEvent::Key(_))) && !diagnostic_input && focused;
+        let preview = held_shift.update(&terminal_event, modifiers_enabled);
+        let hover = held_alt.update(&terminal_event, modifiers_enabled);
+        if app.topological_preview != preview {
+            app.topological_preview = preview;
+            dirty = true;
+            urgent = true;
+        }
+        let hover_position = mouse_position.filter(|_| {
+            focused
+                && !diagnostic_input
+                && !command_picker.is_open()
+                && !app.auto_merge_picker.is_open()
+                && !*picker_focused
+        });
+        let hover_changed = if ref_tree.is_active() {
+            app.update_graph_hover(None, false);
+            ref_tree.update_hover(hover_position, hover)
+        } else {
+            ref_tree.update_hover(None, false);
+            app.update_graph_hover(hover_position, hover)
+        };
+        if hover_changed {
+            dirty = true;
+            urgent = true;
+        }
+        if enhanced_keyboard
+            && matches!(
+                terminal_event,
+                TerminalEvent::Key(KeyEvent {
+                    code: KeyCode::Modifier(
+                        ModifierKeyCode::LeftShift
+                            | ModifierKeyCode::RightShift
+                            | ModifierKeyCode::LeftAlt
+                            | ModifierKeyCode::RightAlt
+                    ),
+                    ..
+                })
+            )
+        {
+            continue;
+        }
         let held_prefix = app.held_prefix_group();
-        let prefix_outcome = prefix_input.handle(
-            &terminal_event,
-            &mut app,
-            Instant::now(),
-            prefix_enabled && !diagnostic_input,
-        );
+        let prefix_outcome = if ref_tree.is_active() {
+            prefix_input.handle_with(
+                &terminal_event,
+                &mut app,
+                Instant::now(),
+                prefix_enabled && !diagnostic_input,
+                &[
+                    command_menu::CommandGroup::Actions,
+                    command_menu::CommandGroup::View,
+                    command_menu::CommandGroup::Information,
+                    command_menu::CommandGroup::Viewport,
+                ],
+                |key, app| ref_tree.action(key, app),
+            )
+        } else {
+            prefix_input.handle(
+                &terminal_event,
+                &mut app,
+                Instant::now(),
+                prefix_enabled && !diagnostic_input,
+            )
+        };
         if held_prefix != app.held_prefix_group() {
             dirty = true;
             urgent = true;
@@ -2433,7 +2863,7 @@ fn event_loop(
                 continue;
             }
             prefix_input::Outcome::Submit(command_id) => {
-                let commands = command_menu::commands(&app, &decorations, app.has_verifiable_signatures());
+                let commands = view_commands(&app, &decorations, &ref_tree);
                 let Some(command) = commands.into_iter().find(|command| command.id == command_id) else {
                     dirty = true;
                     urgent = true;
@@ -2460,7 +2890,7 @@ fn event_loop(
                         "pushing {} to {} with force-with-lease…",
                         request.branch, request.remote
                     ));
-                    background_task = Some(start_push_worker(request, true));
+                    background_task = Some(start_push_worker(request));
                 }
                 PushRetryInput::Cancel => {
                     pending_force_push = None;
@@ -2638,8 +3068,7 @@ fn event_loop(
                                 fill_repository.retained = None;
                                 line_diff_pool = None;
                                 worktree_changes = None;
-                                cached_status_head = None;
-                                worktree_status_parts = WorktreeStatusParts::default();
+                                worktree_status_retry = None;
                                 app.set_worktree_changes_available(false);
                                 app.set_worktree_head_unborn(false);
                                 app.set_worktree_head(None, false);
@@ -2768,7 +3197,25 @@ fn event_loop(
             urgent = true;
             continue;
         }
-        if ref_tree.is_active() {
+        let prefix_action = if ref_tree.is_active() && command_picker.is_open() {
+            let input = command_menu_input(&terminal_event, &mut command_picker, &ref_tree.commands());
+            if !command_picker.is_open()
+                && let TerminalEvent::Key(key) = &terminal_event
+            {
+                command_picker_key = Some(key.code);
+            }
+            match input {
+                CommandMenuInput::Submit(action) => Some(action),
+                CommandMenuInput::Handled => {
+                    menu_dirty = true;
+                    continue;
+                }
+                CommandMenuInput::Pass => prefix_action,
+            }
+        } else {
+            prefix_action
+        };
+        if ref_tree.is_active() && (!command_picker.is_open() || prefix_action.is_some()) {
             let force_quit = matches!(
                 &terminal_event,
                 TerminalEvent::Key(KeyEvent {
@@ -2786,8 +3233,93 @@ fn event_loop(
             ) {
                 app.dismiss_undo_position();
             }
-            match &terminal_event {
-                TerminalEvent::Key(key) if key.kind != KeyEventKind::Release => match ref_tree.handle_key(*key) {
+            let tree_input = if let Some(action) = prefix_action.clone() {
+                Some(ref_tree.handle_action(action, &mut app))
+            } else {
+                match &terminal_event {
+                    TerminalEvent::Key(key) if key.kind != KeyEventKind::Release => {
+                        Some(ref_tree.handle_key(*key, &mut app))
+                    }
+                    _ => None,
+                }
+            };
+            match tree_input {
+                Some(input) => match input {
+                    ref_tree::Input::PullRequests { refresh } => {
+                        if ref_tree.show_pull_requests && !refresh {
+                            ref_tree.show_pull_requests = false;
+                            if let Some(graph) = &history_graph {
+                                ref_tree.rebuild(graph, &ref_snapshot, &decorations);
+                            }
+                        } else if background_task.is_some()
+                            || refresh_receiver.is_some()
+                            || !matches!(app.state, State::Complete | State::Cancelled)
+                        {
+                            ref_tree.leave_attention("wait for the current task before refreshing PRs");
+                        } else {
+                            let prepared =
+                                open_repository(&repository_path, repository_is_bare, false).and_then(|repo| {
+                                    let github = if refresh {
+                                        ref_tree
+                                            .github_repository
+                                            .clone()
+                                            .ok_or_raise(|| message("no GitHub repository is selected"))?
+                                    } else {
+                                        github::repository(&repo)?
+                                    };
+                                    let cache = if refresh {
+                                        Ok(ref_tree.pull_requests.clone())
+                                    } else {
+                                        github::Snapshot::load(&repo, &github)
+                                    };
+                                    Ok((github, cache))
+                                });
+                            match prepared {
+                                Ok((github, cache)) => {
+                                    ref_tree.show_pull_requests = true;
+                                    ref_tree.github_repository = Some(github.clone());
+                                    match cache {
+                                        Ok(Some(snapshot)) => ref_tree.pull_requests = Some(snapshot),
+                                        Ok(None) => ref_tree.pull_requests = None,
+                                        Err(err) => {
+                                            ref_tree.pull_requests = None;
+                                            ref_tree
+                                                .leave_attention(format!("PR cache: {err:#}; fetching a fresh copy"));
+                                        }
+                                    }
+                                    ref_tree.pull_requests_loading = true;
+                                    ref_tree.pull_requests_stale = true;
+                                    if let Some(graph) = &history_graph {
+                                        ref_tree.rebuild(graph, &ref_snapshot, &decorations);
+                                    }
+                                    pull_requests_refresh_pending = ref_tree.pull_requests.is_some();
+                                    app.start_background_task(format!("loading PRs from {}…", github.full_name));
+                                    background_task = Some(start_pull_requests_worker(
+                                        repository_path.clone(),
+                                        repository_is_bare,
+                                        github,
+                                    ));
+                                }
+                                Err(err) => ref_tree.leave_error(format!("PRs: {err:#}")),
+                            }
+                        }
+                        dirty = true;
+                        urgent = true;
+                        continue;
+                    }
+                    ref_tree::Input::OpenCommandMenu(names) => {
+                        if !names.is_empty() {
+                            match open_repository(&repository_path, repository_is_bare, false) {
+                                Ok(repository) => ref_tree
+                                    .set_remote_deletions(ref_tree::resolve_remote_deletions(&repository, names)),
+                                Err(err) => ref_tree.leave_error(format!("remote actions: {err:#}")),
+                            }
+                        }
+                        command_picker.open(&command_picker_items(&ref_tree.commands()));
+                        dirty = true;
+                        urgent = true;
+                        continue;
+                    }
                     ref_tree::Input::PinReferences { .. }
                     | ref_tree::Input::ResolveRemoteReferences(_)
                     | ref_tree::Input::DeleteLocalBranches { .. }
@@ -2810,9 +3342,26 @@ fn event_loop(
                         continue;
                     }
                     ref_tree::Input::PinReferences { id, kinds } => {
+                        let selected_prs = ref_tree.selected_pull_requests();
                         let result = open_repository(&repository_path, repository_is_bare, false)
                             .or_raise(|| message("could not open repository to pin ref-tree references"))
-                            .and_then(|repository| ref_tree::pin_references_reporting(&repository, id, &kinds));
+                            .and_then(|mut repository| {
+                                let mut pins = Vec::new();
+                                let mut changes = Vec::new();
+                                if let Some(snapshot) = &ref_tree.pull_requests {
+                                    let ssh = ref_tree.github_repository.as_ref().is_some_and(|repo| repo.ssh);
+                                    for pr in &selected_prs {
+                                        let (pin, edits) = github::pin(&repository, snapshot, pr, ssh)?;
+                                        pins.push(pin);
+                                        changes.extend(edits);
+                                        repository.reload()?;
+                                    }
+                                }
+                                let (ordinary, edits) = ref_tree::pin_references_reporting(&repository, id, &kinds)?;
+                                pins.extend(ordinary);
+                                changes.extend(edits);
+                                Ok((pins, changes))
+                            });
                         match result {
                             Ok((pins, changes)) if !pins.is_empty() => {
                                 app.select_commit_after_refresh(pins[0].id);
@@ -2928,6 +3477,12 @@ fn event_loop(
                     }
                     ref_tree::Input::DeleteRemoteReferences { groups, fallback } => {
                         prefix_input = prefix_input::State::default();
+                        held_shift = HeldModifier::new(KeyModifiers::SHIFT);
+                        held_alt = HeldModifier::new(KeyModifiers::ALT);
+                        app.topological_preview = false;
+                        mouse_position = None;
+                        app.update_graph_hover(None, false);
+                        ref_tree.update_hover(None, false);
                         match with_suspended_terminal(terminal, enhanced_keyboard, || {
                             Ok(push_remote_deletions(&repository_path, &groups))
                         }) {
@@ -2972,12 +3527,22 @@ fn event_loop(
                     }
                     ref_tree::Input::Quit => return Ok(EventLoopExit::Quit(None)),
                 },
-                TerminalEvent::Mouse(mouse) if ref_tree.handle_mouse(mouse.kind, mouse.modifiers, 1) => {
-                    dirty = true;
-                    urgent = true;
+                None if matches!(&terminal_event, TerminalEvent::Mouse(_)) => {
+                    if focused && let TerminalEvent::Mouse(mouse) = &terminal_event {
+                        let changed = if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+                            ref_tree.select_at(mouse.column, mouse.row)
+                        } else {
+                            ref_tree.handle_mouse(mouse.kind, mouse.modifiers, 1)
+                        };
+                        if changed {
+                            app.close_shortcut_groups();
+                            dirty = true;
+                            urgent = true;
+                        }
+                    }
                     continue;
                 }
-                TerminalEvent::Paste(_) => {
+                None if matches!(&terminal_event, TerminalEvent::Paste(_)) => {
                     ref_tree.leave_attention("commit paste is available only in history");
                     dirty = true;
                     urgent = true;
@@ -3068,13 +3633,24 @@ fn event_loop(
                     (action, repeats_history, key.kind == KeyEventKind::Repeat, false)
                 }
                 TerminalEvent::Mouse(_) if app.topological_navigation_active() => continue,
+                TerminalEvent::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => {
+                    let Some(action) = app.mouse_action(mouse.column, mouse.row) else {
+                        continue;
+                    };
+                    (Some(action), false, false, false)
+                }
                 TerminalEvent::Mouse(mouse) => {
                     let kind = mouse.kind;
                     let modifiers = mouse.modifiers;
                     let mut distance = 1;
                     if matches!(kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown) {
-                        while distance < EVENT_BATCH_SIZE && event::poll(Duration::ZERO).or_error()? {
-                            let next = event::read().or_error()?;
+                        while distance < EVENT_BATCH_SIZE
+                            && !interrupt::requested()
+                            && event::poll(Duration::ZERO).or_error()?
+                        {
+                            let Some(next) = read_terminal_event().or_error()? else {
+                                continue;
+                            };
                             match next {
                                 TerminalEvent::Mouse(next) if next.kind == kind && next.modifiers == modifiers => {
                                     distance += 1;
@@ -3361,7 +3937,7 @@ fn event_loop(
             && (!action_allowed_during_rebase_continuation(action.as_ref(), app.changes_focus.is_some())
                 || matches!(
                     action,
-                    Some(Action::Refresh | Action::ToggleHidden | Action::ToggleRefTree)
+                    Some(Action::Refresh | Action::ToggleHidden | Action::ToggleRefTree | Action::Delete)
                 ))
         {
             dirty = true;
@@ -3519,6 +4095,7 @@ fn event_loop(
         }
         if action == Action::ToggleRefTree {
             app.dismiss_undo_position();
+            app.close_shortcut_groups();
             if ref_tree.is_active() {
                 ref_tree.leave();
             } else {
@@ -3538,7 +4115,6 @@ fn event_loop(
         dirty = true;
         urgent |= !throttles_draw;
         let previous_changes_mode = app.changes_mode;
-        let toggles_changes = matches!(action, Action::ToggleChanges | Action::ToggleChangesVisibility);
         let refreshes_monitor = action == Action::Refresh;
         let refreshes_worktree = refreshes_monitor && app.changes_mode == Some(ChangesMode::Both);
         let selecting_tree = app.tree_selection_active();
@@ -3552,9 +4128,10 @@ fn event_loop(
             monitor.rescan();
         }
         if refreshes_worktree {
+            worktree_status_retry = None;
             invalidate_worktree_changes(&mut worktree_changes);
         }
-        if toggles_changes {
+        if previous_changes_mode != app.changes_mode {
             sync_line_diff_pool(
                 &mut line_diff_pool,
                 app.changes_mode.is_some(),
@@ -3577,6 +4154,21 @@ fn event_loop(
                 effect,
                 Effect::OpenDiff(..)
                     | Effect::OpenCommitDiff(_)
+                    | Effect::OpenStructuralDiff(..)
+                    | Effect::OpenCommitStructuralDiff(_)
+            ) {
+                fill_repository.retain = false;
+                fill_repository.retained = None;
+                if let Some(pool) = line_diff_pool.as_mut() {
+                    pool.release_workers();
+                }
+            }
+            if matches!(
+                effect,
+                Effect::OpenDiff(..)
+                    | Effect::OpenCommitDiff(_)
+                    | Effect::OpenStructuralDiff(..)
+                    | Effect::OpenCommitStructuralDiff(_)
                     | Effect::Reword(_)
                     | Effect::NewCommit { .. }
                     | Effect::Split(_)
@@ -3587,6 +4179,12 @@ fn event_loop(
                 // Nested input loops and external tools may consume releases while history is suspended.
                 prefix_input = prefix_input::State::default();
                 app.cancel_held_prefix();
+                held_shift = HeldModifier::new(KeyModifiers::SHIFT);
+                held_alt = HeldModifier::new(KeyModifiers::ALT);
+                app.topological_preview = false;
+                mouse_position = None;
+                app.update_graph_hover(None, false);
+                ref_tree.update_hover(None, false);
             }
             match effect {
                 Effect::Cancel => cancelled.store(true, Ordering::Relaxed),
@@ -3659,7 +4257,7 @@ fn event_loop(
                     refresh_pending = true;
                     refresh_expand_hidden = true;
                 }
-                Effect::OpenDiff(pane, index) => {
+                Effect::OpenDiff(pane, index) | Effect::OpenStructuralDiff(pane, index) => {
                     let changes = match pane {
                         ChangePane::Tree => tree_changes.as_ref().map(|(_, changes)| changes),
                         ChangePane::Worktree => worktree_changes.as_ref().map(|(_, changes)| changes),
@@ -3668,15 +4266,26 @@ fn event_loop(
                         .and_then(|changes| changes.diffs.get(index).zip(changes.paths.get(index)))
                         .ok_or_raise(|| message("selected path no longer has diff resources"))
                         .and_then(|(change, path)| {
-                            prepare_file_diff(&repository_path, repository_is_bare, change, path)
-                        })
-                        .and_then(|diff| {
-                            show_file_diff(
-                                terminal,
-                                diff,
-                                enhanced_keyboard,
-                                picker.as_deref().map(|picker| (picker, *picker_focused)),
-                            )
+                            let picker = picker.as_deref().map(|picker| (picker, *picker_focused));
+                            if matches!(effect, Effect::OpenStructuralDiff(..)) {
+                                let diff =
+                                    structural_diff::prepare_file(&repository_path, repository_is_bare, change, path)?;
+                                let colors = terminal.backend().diff_colors();
+                                let graphics = terminal.backend().enabled();
+                                show_diff_view(
+                                    terminal,
+                                    DiffView::Structural(structural_diff::View::new(
+                                        &diff,
+                                        &mut app.structural_diff_settings,
+                                        &colors,
+                                        graphics,
+                                    )),
+                                    picker,
+                                )
+                            } else {
+                                let diff = prepare_file_diff(&repository_path, repository_is_bare, change, path)?;
+                                show_file_diff(terminal, diff, enhanced_keyboard, picker)
+                            }
                         });
                     match result {
                         Ok(true) => app.focus_history(),
@@ -3684,7 +4293,7 @@ fn event_loop(
                         Ok(false) => {}
                     }
                 }
-                Effect::OpenCommitDiff(target) => {
+                Effect::OpenCommitDiff(target) | Effect::OpenCommitStructuralDiff(target) => {
                     let title = match target {
                         app::TreeDiffTarget::Commit { id, .. } => app
                             .rows
@@ -3702,15 +4311,35 @@ fn event_loop(
                         .as_ref()
                         .filter(|(cached_target, _)| *cached_target == target)
                         .map(|(_, changes)| changes);
-                    let result = prepare_commit_diff(&repository_path, repository_is_bare, target, cached, title)
-                        .and_then(|diff| {
-                            show_commit_diff(
-                                terminal,
-                                diff,
-                                enhanced_keyboard,
-                                picker.as_deref().map(|picker| (picker, *picker_focused)),
-                            )
-                        });
+                    let result = if matches!(effect, Effect::OpenCommitStructuralDiff(_)) {
+                        structural_diff::prepare_commit(&repository_path, repository_is_bare, target, title).and_then(
+                            |diff| {
+                                let colors = terminal.backend().diff_colors();
+                                let graphics = terminal.backend().enabled();
+                                show_diff_view(
+                                    terminal,
+                                    DiffView::Structural(structural_diff::View::new(
+                                        &diff,
+                                        &mut app.structural_diff_settings,
+                                        &colors,
+                                        graphics,
+                                    )),
+                                    picker.as_deref().map(|picker| (picker, *picker_focused)),
+                                )
+                            },
+                        )
+                    } else {
+                        prepare_commit_diff(&repository_path, repository_is_bare, target, cached, title).and_then(
+                            |diff| {
+                                show_commit_diff(
+                                    terminal,
+                                    diff,
+                                    enhanced_keyboard,
+                                    picker.as_deref().map(|picker| (picker, *picker_focused)),
+                                )
+                            },
+                        )
+                    };
                     match result {
                         Ok(true) => app.focus_history(),
                         Err(err) => app.leave_error(format!("diff: {err:#}")),
@@ -4740,7 +5369,7 @@ fn event_loop(
                         });
                     match result {
                         Ok((enrichment, changes)) => {
-                            let enabled = enrichment.checks_pass;
+                            let enabled = enrichment.checks_pass.is_some();
                             app.clear_enrichments();
                             app.set_tree_enrichment(id, enrichment);
                             leave_tracked_success(
@@ -4853,19 +5482,17 @@ fn event_loop(
                     match remote {
                         Ok((directory, remote)) => {
                             app.start_background_task(format!("pushing {branch} to {remote}…"));
-                            background_task = Some(start_push_worker(
-                                PushRequest {
-                                    repository_path: directory,
-                                    remote,
-                                    branch,
-                                    hidden_tips: if app.show_hidden {
-                                        Vec::new()
-                                    } else {
-                                        ref_snapshot.hidden_tips.clone()
-                                    },
+                            background_task = Some(start_push_worker(PushRequest {
+                                repository_path: directory,
+                                remote,
+                                branch,
+                                hidden_tips: if app.show_hidden {
+                                    Vec::new()
+                                } else {
+                                    ref_snapshot.hidden_tips.clone()
                                 },
-                                false,
-                            ));
+                                lease: None,
+                            }));
                         }
                         Err(err) => app.leave_error(format!("push: {err:#}")),
                     }
@@ -4874,7 +5501,12 @@ fn event_loop(
                 Effect::Fetch(remote) => {
                     let label = format!("fetching {remote}…");
                     app.start_background_task(label);
-                    background_task = Some(start_fetch_worker(repository_path.clone(), repository_is_bare, remote));
+                    background_task = Some(start_fetch_worker(
+                        repository_path.clone(),
+                        repository_is_bare,
+                        remote,
+                        app.rows.iter().map(|row| row.id).collect(),
+                    ));
                 }
                 Effect::VerifySignatures(ids) => {
                     verification_receiver = Some(start_signature_verification(
@@ -4888,34 +5520,44 @@ fn event_loop(
                 }
                 Effect::Quit if force_quit => return Ok(EventLoopExit::Quit(None)),
                 Effect::Quit => {
-                    if let Some(conflict) = pending_rebase_conflict.take() {
-                        let mut changes = conflict.into_ref_changes();
-                        if let Err(err) = record_and_clear_pending_undo(
-                            &repository_path,
-                            repository_is_bare,
-                            "time travel before conflict",
-                            &mut changes,
-                        ) {
-                            tracing::warn!(error = %err, "could not record suspended conflict before exit");
-                        }
-                    }
-                    if let Some(mut pending) = pending_conflict_resolution.take()
-                        && let Err(err) = record_and_clear_pending_undo(
-                            &repository_path,
-                            repository_is_bare,
-                            "materialize time-travel conflict",
-                            &mut pending.ref_changes,
-                        )
-                    {
-                        tracing::warn!(error = %err, "could not record materialized conflict before exit");
-                    }
-                    // Accepted pauses are already persisted; quitting only discards a transient preview.
-                    drop(pending_todo_rebase_conflict.take());
+                    normal_quit = true;
                     return Ok(EventLoopExit::Quit(None));
                 }
             }
         }
     })();
+    if normal_quit || interrupt::requested() {
+        if let Err(err) = recover_event_loop_repository(&mut repository_path, &common_dir, &mut repository_is_bare) {
+            tracing::warn!(error = %err, "could not recover repository before exit bookkeeping");
+        }
+        if let Some(conflict) = pending_rebase_conflict.take() {
+            let mut changes = conflict.into_ref_changes();
+            if let Err(err) = record_and_clear_pending_undo(
+                &repository_path,
+                repository_is_bare,
+                "time travel before conflict",
+                &mut changes,
+            ) {
+                tracing::warn!(error = %err, "could not record suspended conflict before exit");
+            }
+        }
+        if let Some(mut pending) = pending_conflict_resolution.take()
+            && let Err(err) = record_and_clear_pending_undo(
+                &repository_path,
+                repository_is_bare,
+                "materialize time-travel conflict",
+                &mut pending.ref_changes,
+            )
+        {
+            tracing::warn!(error = %err, "could not record materialized conflict before exit");
+        }
+        // Accepted pauses are already persisted; quitting only discards a transient preview.
+        drop(pending_todo_rebase_conflict.take());
+    }
+    if interrupt::requested() {
+        cancelled.store(true, Ordering::Relaxed);
+        return Ok(EventLoopExit::Quit(None));
+    }
     result
 }
 
@@ -4927,7 +5569,7 @@ fn start_lane_worker(rows: app::LaneInput) -> mpsc::Receiver<(Vec<SharedCommitRo
     receiver
 }
 
-fn start_push_worker(request: PushRequest, force_with_lease: bool) -> BackgroundWorker {
+fn start_push_worker(mut request: PushRequest) -> BackgroundWorker {
     let (sender, receiver) = mpsc::channel();
     let join = std::thread::spawn(gix::trace::in_thread(move || {
         let completion = match push_branch(
@@ -4935,10 +5577,13 @@ fn start_push_worker(request: PushRequest, force_with_lease: bool) -> Background
             request.remote.as_bstr(),
             request.branch.as_bstr(),
             &request.hidden_tips,
-            force_with_lease,
+            request.lease.as_ref().map(|lease| lease.as_bstr()),
         ) {
             Ok(PushOutcome::Pushed(message)) => Ok(BackgroundCompletion::Success(message)),
-            Ok(PushOutcome::NeedsForce) => Ok(BackgroundCompletion::PushNeedsForce(request)),
+            Ok(PushOutcome::NeedsForce(lease)) => {
+                request.lease = Some(lease);
+                Ok(BackgroundCompletion::PushNeedsForce(request))
+            }
             Err(err) => Err(err),
         };
         let _ = sender.send(completion);
@@ -4952,14 +5597,20 @@ fn start_push_worker(request: PushRequest, force_with_lease: bool) -> Background
 }
 
 #[cfg(feature = "blocking-network-client")]
-fn start_fetch_worker(repository_path: PathBuf, bare: bool, remote: BString) -> BackgroundWorker {
+fn start_fetch_worker(
+    repository_path: PathBuf,
+    bare: bool,
+    remote: BString,
+    visible_commits: std::collections::HashSet<gix::ObjectId>,
+) -> BackgroundWorker {
     let (sender, receiver) = mpsc::channel();
     let tree = gix::progress::tree::Root::new();
     let worker_tree = Arc::clone(&tree);
     let label = format!("fetching {remote}");
     std::thread::spawn(gix::trace::in_thread(move || {
         let _ = sender.send(
-            fetch_remote(&repository_path, bare, remote.as_bstr(), worker_tree).map(BackgroundCompletion::Success),
+            fetch_remote(&repository_path, bare, remote.as_bstr(), &visible_commits, worker_tree)
+                .map(BackgroundCompletion::Success),
         );
     }));
     BackgroundWorker {
@@ -4970,6 +5621,19 @@ fn start_fetch_worker(repository_path: PathBuf, bare: bool, remote: BString) -> 
             kind: BackgroundProgressKind::Fetch,
         }),
         kind: BackgroundTaskKind::References,
+        join: None,
+    }
+}
+
+fn start_pull_requests_worker(path: PathBuf, bare: bool, repository: github::Repository) -> BackgroundWorker {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(gix::trace::in_thread(move || {
+        let _ = sender.send(github::refresh(&path, bare, repository).map(BackgroundCompletion::PullRequests));
+    }));
+    BackgroundWorker {
+        receiver,
+        progress: None,
+        kind: BackgroundTaskKind::PullRequests,
         join: None,
     }
 }
@@ -5048,12 +5712,16 @@ fn fetch_remote(
     repository_path: &Path,
     bare: bool,
     remote_name: &BStr,
+    visible_commits: &std::collections::HashSet<gix::ObjectId>,
     progress_tree: Arc<gix::progress::tree::Root>,
 ) -> Result<String> {
+    use gix::remote::fetch::{Status, refs::update::Mode};
+
     let mut phase = progress_tree.add_child_with_id("setup", *b"TIXF");
     phase.init(Some(100), gix::progress::steps());
     let mut repository =
         open_repository(repository_path, bare, false).or_raise(|| message("could not open repository"))?;
+    repository.object_cache_size_if_unset(OBJECT_CACHE_SIZE);
     repository
         .config_snapshot_mut()
         .set_raw_value("gitoxide.credentials.terminalPrompt", "false")
@@ -5074,11 +5742,39 @@ fn fetch_remote(
         .or_raise(|| message!("could not prepare fetch from {remote_name}"))?;
     phase.set(15);
     phase.set_name("remote enumeration");
-    fetch
-        .receive(&mut progress, &AtomicBool::default())
+    let outcome = fetch
+        .receive(&mut progress, &gix::interrupt::IS_INTERRUPTED)
         .or_raise(|| message!("could not fetch from {remote_name}"))?;
     phase.set(95);
     phase.set_name("finalizing refs");
+    if !visible_commits.is_empty() {
+        let (Status::Change { update_refs, .. } | Status::NoPackReceived { update_refs, .. }) = outcome.status;
+        for update in &update_refs.updates {
+            if !matches!(update.mode, Mode::New | Mode::FastForward | Mode::Forced) {
+                continue;
+            }
+            let Some(edit) = update.edit_index.and_then(|index| update_refs.edits.get(index)) else {
+                continue;
+            };
+            let mut reference = repository.find_reference(edit.name.as_ref())?;
+            let commit_id = reference.peel_to_id()?;
+            if commit_id.object()?.kind != gix::objs::Kind::Commit {
+                continue;
+            }
+            for ancestor in repository.rev_walk([commit_id]).all()? {
+                let ancestor = ancestor.or_raise(|| message("could not traverse fetched history for pinning"))?;
+                if visible_commits.contains(&ancestor.id) {
+                    edit::time_travel::create_or_reuse_pin(
+                        &repository,
+                        gix::refs::Target::Symbolic(edit.name.clone()),
+                        commit_id.detach(),
+                        "tix fetch",
+                    )?;
+                    break;
+                }
+            }
+        }
+    }
     Ok(format!("fetched {remote_name}"))
 }
 
@@ -5087,8 +5783,47 @@ fn push_branch(
     remote: &BStr,
     branch: &BStr,
     hidden_tips: &[gix::ObjectId],
-    force_with_lease: bool,
+    force_lease: Option<&BStr>,
 ) -> Result<PushOutcome> {
+    let (refspec, cached_lease, destination) = {
+        let repository = open_repository(repository_path, false, false)?;
+        let branch_name = gix::refs::Category::LocalBranch.to_full_name(branch).or_error()?;
+        let upstream = (repository
+            .branch_remote_name(branch, gix::remote::Direction::Fetch)
+            .is_some_and(|name| name.as_bstr() == remote))
+        .then(|| repository.branch_remote_ref_name(branch_name.as_ref(), gix::remote::Direction::Fetch))
+        .flatten()
+        .transpose()?;
+        if let Some(upstream) = upstream {
+            gix::error::ensure!(
+                !upstream.as_bstr().starts_with(b"refs/pull/"),
+                "this PR branch is read-only; pushing to GitHub's PR refs is not supported"
+            );
+            let mut refspec = branch_name.as_bstr().to_owned();
+            refspec.push(b':');
+            refspec.extend_from_slice(upstream.as_bstr());
+            let lease = if force_lease.is_none() {
+                repository
+                    .config_snapshot()
+                    .string_by("branch", Some(branch), "tixPullRequest")
+                    .filter(|name| name.starts_with(b"refs/tix/github/"))
+                    .map(|name| {
+                        let mut reference = repository.find_reference(name.as_bstr())?;
+                        let mut lease = BString::from("--force-with-lease=");
+                        lease.extend_from_slice(upstream.as_bstr());
+                        lease.push(b':');
+                        lease.extend_from_slice(reference.peel_to_id()?.to_hex().to_string().as_bytes());
+                        Ok::<_, Error>(lease)
+                    })
+                    .transpose()?
+            } else {
+                None
+            };
+            (refspec, lease, upstream.as_bstr().to_owned())
+        } else {
+            (branch.to_owned(), None, branch_name.as_bstr().to_owned())
+        }
+    };
     let _source_locks = if hidden_tips.is_empty() {
         Vec::new()
     } else {
@@ -5153,15 +5888,32 @@ fn push_branch(
         }
         locks
     };
+    let lease = if let Some(lease) = force_lease {
+        lease.to_owned()
+    } else if let Some(lease) = cached_lease {
+        lease
+    } else {
+        let repository = open_repository(repository_path, false, false)?;
+        let push_remote = repository.find_fetch_remote(Some(remote))?;
+        if push_remote.name().is_none() {
+            let url = push_remote
+                .url(gix::remote::Direction::Push)
+                .ok_or_raise(|| message("the push remote has no URL"))?
+                .to_bstring();
+            observe_push_lease(repository_path, url.as_bstr(), destination.as_bstr())?
+        } else {
+            "--force-with-lease".into()
+        }
+    };
     let mut command = git_command(repository_path);
     command.arg("push").arg("--porcelain");
-    if force_with_lease {
-        command.arg("--force-with-lease");
+    if force_lease.is_some() {
+        command.arg(gix::path::from_bstr(&lease)?.as_ref());
     }
     let output = command
         .arg("--")
         .arg(gix::path::from_bstr(remote)?.as_ref())
-        .arg(gix::path::from_bstr(branch)?.as_ref())
+        .arg(gix::path::from_bstr(&refspec)?.as_ref())
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -5169,8 +5921,8 @@ fn push_branch(
         .output()
         .or_raise(|| message("could not launch git push"))?;
     if !output.status.success() {
-        if retryable_push_rejection(force_with_lease, &output.stdout) {
-            return Ok(PushOutcome::NeedsForce);
+        if retryable_push_rejection(force_lease.is_some(), &output.stdout) {
+            return Ok(PushOutcome::NeedsForce(lease));
         }
         let stdout = output.stdout.trim();
         let stderr = output.stderr.trim();
@@ -5187,6 +5939,43 @@ fn push_branch(
         bail!("git push {remote} {branch} failed with {}: {}", output.status, detail);
     }
     Ok(PushOutcome::Pushed(format!("pushed {branch} to {remote}")))
+}
+
+fn observe_push_lease(repository_path: &Path, remote: &BStr, destination: &BStr) -> Result<BString> {
+    let output = git_command(repository_path)
+        .args(["ls-remote", "--refs", "--"])
+        .arg(gix::path::from_bstr(remote)?.as_ref())
+        .arg(gix::path::from_bstr(destination)?.as_ref())
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::null())
+        .output()
+        .or_raise(|| message("could not inspect the remote tip for a force-push lease"))?;
+    gix::error::ensure!(
+        output.status.success(),
+        "could not inspect the remote tip: {}",
+        output.stderr.to_str_lossy().trim()
+    );
+    let mut lines = output.stdout.lines();
+    let mut lease = BString::from("--force-with-lease=");
+    lease.extend_from_slice(destination);
+    lease.push(b':');
+    if let Some(line) = lines.next() {
+        let (commit_id, name) = line
+            .split_once_str("\t")
+            .ok_or_raise(|| message("invalid ls-remote response"))?;
+        gix::error::ensure!(
+            name == destination && lines.next().is_none(),
+            "ambiguous ls-remote response"
+        );
+        lease.extend_from_slice(
+            gix::ObjectId::from_hex(commit_id)
+                .or_error()?
+                .to_hex()
+                .to_string()
+                .as_bytes(),
+        );
+    }
+    Ok(lease)
 }
 
 fn retryable_push_rejection(force_with_lease: bool, stdout: &[u8]) -> bool {
@@ -5232,6 +6021,9 @@ fn report_background_task(app: &mut App, result: Result<BackgroundCompletion>) -
         Ok(BackgroundCompletion::PushNeedsForce(request)) => {
             app.leave_attention(PUSH_RETRY_PROMPT);
             (false, Some(request))
+        }
+        Ok(BackgroundCompletion::PullRequests(_)) => {
+            unreachable!("PR results are handled before reporting background tasks")
         }
         Err(err) => {
             app.leave_error(format!("{err:#}"));
@@ -5422,32 +6214,6 @@ fn start_history_refresh(
     receiver
 }
 
-fn worktree_status_head(repository: &gix::Repository) -> Result<WorktreeStatusHead> {
-    let mut head = repository.head().or_raise(|| message("could not read HEAD"))?;
-    let reference = head.referent_name().map(ToOwned::to_owned);
-    let target = head
-        .try_peel_to_id()
-        .or_raise(|| message("could not peel HEAD"))?
-        .map(gix::Id::detach);
-    Ok(WorktreeStatusHead { reference, target })
-}
-
-fn remember_worktree_status_head(
-    cached: &mut Option<WorktreeStatusHead>,
-    refreshes_staged: bool,
-    scanned: Result<WorktreeStatusHead>,
-) {
-    if refreshes_staged {
-        *cached = match scanned {
-            Ok(head) => Some(head),
-            Err(err) => {
-                tracing::warn!(error = %err, "could not remember HEAD for worktree status");
-                None
-            }
-        };
-    }
-}
-
 fn invalidate_worktree_changes(changes: &mut Option<(usize, Changes)>) -> bool {
     if let Some((marker, _)) = changes {
         if *marker == WORKTREE_STATUS_FULL {
@@ -5459,22 +6225,12 @@ fn invalidate_worktree_changes(changes: &mut Option<(usize, Changes)>) -> bool {
     false
 }
 
-fn invalidate_worktree_status_parts(
-    changes: &mut Option<(usize, Changes)>,
-    parts: &mut WorktreeStatusParts,
-    staged: bool,
-    scopes: impl IntoIterator<Item = BString>,
-) -> bool {
-    let Some((marker, _)) = changes else {
-        return false;
-    };
-    if *marker == WORKTREE_STATUS_FULL {
-        return false;
+fn mark_worktree_snapshot_pending(changes: &mut Option<(usize, Changes)>) {
+    if let Some((marker, _)) = changes
+        && *marker != WORKTREE_STATUS_FULL
+    {
+        *marker = WORKTREE_STATUS_PARTIAL;
     }
-    parts.staged |= staged;
-    parts.scopes.extend(scopes);
-    *marker = WORKTREE_STATUS_PARTIAL;
-    true
 }
 
 fn leave_recorded_success(
@@ -6040,6 +6796,7 @@ fn redraw_menu<B: ratatui::backend::Backend>(
     app: &mut App,
     command_picker: &mut Menu<CommandId>,
     decorations: &Decorations,
+    ref_tree: &ref_tree::Tree,
 ) -> std::result::Result<bool, B::Error> {
     if !command_picker.is_open() && !app.auto_merge_picker.is_open() {
         return Ok(false);
@@ -6051,7 +6808,7 @@ fn redraw_menu<B: ratatui::backend::Backend>(
     let cursor = {
         let mut frame = terminal.get_frame();
         frame.buffer_mut().clone_from(background);
-        let cursor = draw_active_menu(&mut frame, *bounds, app, command_picker, decorations);
+        let cursor = draw_active_menu(&mut frame, *bounds, app, command_picker, decorations, ref_tree);
         prepare_terminal_frame(&mut frame);
         cursor
     };
@@ -6065,9 +6822,10 @@ fn draw_active_menu(
     app: &mut App,
     command_picker: &mut Menu<CommandId>,
     decorations: &Decorations,
+    ref_tree: &ref_tree::Tree,
 ) -> Option<Position> {
     if command_picker.is_open() {
-        let commands = command_menu::commands(app, decorations, app.has_verifiable_signatures());
+        let commands = view_commands(app, decorations, ref_tree);
         command_picker.sync(&command_picker_items(&commands));
         ui::draw_command_menu(frame, bounds, command_picker, &commands)
     } else if app.auto_merge_picker.is_open() {
@@ -6077,7 +6835,12 @@ fn draw_active_menu(
             &mut app.auto_merge_picker,
             app.auto_merge_picker_title,
             "no matching inputs",
-            |index| app.auto_merge_options[index].label.clone(),
+            |frame, area, index| {
+                frame.render_widget(
+                    ratatui::widgets::Paragraph::new(app.auto_merge_options[index].label.as_str()),
+                    area,
+                );
+            },
         )
     } else {
         None
@@ -6086,7 +6849,7 @@ fn draw_active_menu(
 
 #[expect(clippy::too_many_arguments, reason = "drawing needs the complete view state")]
 fn draw(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal,
     app: &mut App,
     command_picker: &mut Menu<CommandId>,
     menu_background: &mut Option<(Rect, Buffer)>,
@@ -6097,8 +6860,8 @@ fn draw(
     commit_message: &mut Option<(gix::ObjectId, BString)>,
     tree_changes: &mut TreeChangesCache,
     worktree_changes: &mut Option<(usize, Changes)>,
-    status_head: &mut Option<WorktreeStatusHead>,
-    status_parts: &mut WorktreeStatusParts,
+    status_monitor: &mut Option<gix::status::Monitor>,
+    status_retry: &mut Option<Instant>,
     history_graph: &mut Option<HistoryGraph>,
     selection_cache: &mut Option<SelectionRelationCache>,
     line_diff_pool: &mut Option<LineDiffPool>,
@@ -6109,6 +6872,10 @@ fn draw(
     picker_focused: bool,
 ) -> Result<()> {
     *menu_background = None;
+    if command_picker.is_open() || app.auto_merge_picker.is_open() || picker_focused {
+        app.update_graph_hover(None, false);
+        ref_tree.update_hover(None, false);
+    }
     let frame_area =
         resized_terminal_area(terminal).or_raise(|| message("could not resize the terminal before drawing"))?;
     let history_area = picker.as_ref().map_or(frame_area, |picker| {
@@ -6140,12 +6907,15 @@ fn draw(
             if let Some(picker) = picker {
                 worktrunk::draw(&mut frame, list, picker, picker_focused);
             }
-            ref_tree.draw(&mut frame, history, history_graph.as_ref());
+            ref_tree.draw(&mut frame, history, history_graph.as_ref(), app);
+            *menu_background = command_picker.is_open().then(|| (history, frame.buffer_mut().clone()));
+            let cursor = draw_active_menu(&mut frame, history, app, command_picker, decorations, ref_tree);
             prepare_terminal_frame(&mut frame);
+            terminal
+                .apply_buffer_with_cursor(cursor)
+                .or_raise(|| message("could not draw ref-tree overview"))?;
         }
-        terminal
-            .apply_buffer_with_cursor(None)
-            .or_raise(|| message("could not draw ref-tree overview"))?;
+
         filesystem_responses.frame_presented();
         return Ok(());
     }
@@ -6223,8 +6993,8 @@ fn draw(
     {
         restore_change_selection(&mut app.tree_changes, changes, tree_selection.clone());
     }
-    let worktree_changes_to_load = changes_visible
-        && app.changes_mode == Some(ChangesMode::Both)
+    let worktree_changes_to_load = worktree_status_visible(app, false)
+        && status_retry.is_none_or(|deadline| deadline <= Instant::now())
         && worktree_changes
             .as_ref()
             .is_none_or(|(marker, _)| *marker != WORKTREE_STATUS_CURRENT);
@@ -6245,8 +7015,7 @@ fn draw(
     if app.changes_mode.is_none() {
         tree_changes.clear();
         *worktree_changes = None;
-        *status_head = None;
-        *status_parts = WorktreeStatusParts::default();
+        *status_retry = None;
     }
     if let Some(id) = relation_to_load
         && let Some(graph) = history_graph
@@ -6354,44 +7123,52 @@ fn draw(
             let line_diff_pool = line_diff_pool
                 .as_mut()
                 .ok_or_raise(|| message("line diff pool is missing while the changes pane is visible"))?;
-            let partial = worktree_changes
+            let full = worktree_changes
                 .as_ref()
-                .is_some_and(|(marker, _)| *marker == WORKTREE_STATUS_PARTIAL);
-            let refreshes_staged = !partial || status_parts.staged;
-            let status_head_before = worktree_status_head(repository);
-            let loaded = if partial {
-                let mut updated = worktree_changes
-                    .as_ref()
-                    .map(|(_, changes)| changes.clone())
-                    .expect("partial status requires cached changes");
-                update_worktree_changes(repository, &mut updated, status_parts, line_diff_pool)
-                    .map(|full| (updated, refreshes_staged || full))
+                .is_none_or(|(marker, _)| *marker == WORKTREE_STATUS_FULL);
+            let loaded = if let Some(monitor) = status_monitor {
+                if full {
+                    monitor.invalidate();
+                }
+                refresh_worktree_changes(
+                    repository,
+                    monitor,
+                    worktree_changes.as_ref().filter(|_| !full).map(|(_, changes)| changes),
+                    line_diff_pool,
+                )
             } else {
-                load_worktree_changes(repository, line_diff_pool).map(|loaded| (loaded, true))
+                load_worktree_changes(repository, line_diff_pool)
             };
             repository.object_cache_size(None);
-            *status_parts = WorktreeStatusParts::default();
             match loaded {
-                Ok((loaded, refreshes_staged)) => {
+                Ok(loaded) => {
                     tracing::debug!(
-                        partial,
+                        full,
                         path_count = loaded.paths.len(),
                         elapsed_ms = started.elapsed().as_millis(),
                         "loaded worktree changes"
                     );
-                    app.worktree_changes.error = None;
+                    *status_retry = None;
+                    if !app
+                        .worktree_changes
+                        .error
+                        .as_deref()
+                        .is_some_and(|message| message.starts_with("filesystem watch:"))
+                    {
+                        app.worktree_changes.error = None;
+                    }
                     app.set_worktree_conflicted(loaded.paths.iter().any(|change| change.kind == ChangeKind::Unmerged));
                     restore_change_selection(&mut app.worktree_changes, &loaded, worktree_selection);
                     *worktree_changes = Some((WORKTREE_STATUS_CURRENT, loaded));
-                    remember_worktree_status_head(status_head, refreshes_staged, status_head_before);
                 }
                 Err(err) => {
                     tracing::warn!(error = %err, "could not load worktree changes");
                     app.worktree_changes.error = Some(format!("status: {err:#}"));
+                    *status_retry = Some(Instant::now() + Duration::from_secs(5));
+                    // A presentation failure may follow a successful snapshot refresh. Force a
+                    // fresh coverage report on retry so content-derived line counts are retried too.
                     if let Some((marker, _)) = worktree_changes.as_mut() {
-                        *marker = WORKTREE_STATUS_CURRENT;
-                    } else {
-                        *worktree_changes = Some((WORKTREE_STATUS_CURRENT, Changes::default()));
+                        *marker = WORKTREE_STATUS_FULL;
                     }
                 }
             }
@@ -6400,10 +7177,7 @@ fn draw(
     }
     let message = commit_message.as_ref().map(|(_, message)| message.as_bstr());
     let tree_changes = tree_changes.as_ref().map(|(_, changes)| changes);
-    let worktree_changes = worktree_changes
-        .as_ref()
-        .filter(|(marker, _)| *marker == WORKTREE_STATUS_CURRENT)
-        .map(|(_, changes)| changes);
+    let worktree_changes = worktree_changes.as_ref().map(|(_, changes)| changes);
     let cursor = {
         let mut frame = terminal.get_frame();
         let area = frame.area();
@@ -6425,7 +7199,7 @@ fn draw(
         );
         *menu_background = (command_picker.is_open() || app.auto_merge_picker.is_open())
             .then(|| (history, frame.buffer_mut().clone()));
-        let cursor = draw_active_menu(&mut frame, history, app, command_picker, decorations);
+        let cursor = draw_active_menu(&mut frame, history, app, command_picker, decorations, ref_tree);
         prepare_terminal_frame(&mut frame);
         cursor
     };
@@ -6603,35 +7377,36 @@ fn prepare_commit_diff_with_repository(
 ) -> Result<CommitDiff> {
     let loaded = cached
         .is_none()
-        .then(|| load_changes_without_lines(repository, target))
+        .then(|| {
+            let mut changes = load_changes_without_lines(repository, target)?;
+            add_line_counts(repository, &mut changes)?;
+            Ok::<_, Error>(changes)
+        })
         .transpose()?;
     let changes = cached
         .or(loaded.as_ref())
         .ok_or_raise(|| message("commit diff changes were neither cached nor loaded"))?;
     let mut external = Vec::new();
     let mut lines = Vec::new();
-    let mut lines_added = 0u64;
-    let mut lines_removed = 0u64;
-    let mut line_counts = Vec::with_capacity(changes.paths.len());
+    let mut file_headers = Vec::new();
     for (change, path) in changes.diffs.iter().zip(&changes.paths) {
-        let counts = match prepare_file_diff_content(repository, change, path, true)? {
-            PreparedFileDiff::External(command, counts) => {
-                external.push(command);
-                counts
-            }
-            PreparedFileDiff::BuiltIn(diff, counts) => {
+        match prepare_file_diff_content(repository, change, path)? {
+            PreparedFileDiff::External(command) => external.push(command),
+            PreparedFileDiff::BuiltIn(diff) => {
+                file_headers.extend(
+                    diff.file_headers
+                        .into_iter()
+                        .map(|(start, header)| (start + lines.len(), header + lines.len())),
+                );
                 lines.extend(diff.lines);
-                counts
             }
-        };
-        if let Some((added, removed)) = counts {
-            lines_added += u64::from(added);
-            lines_removed += u64::from(removed);
         }
-        line_counts.push(counts);
     }
-    let summary = ui::commit_diff_summary(changes, &line_counts, lines_added, lines_removed);
-    let internal = prepare_pager(repository, BuiltInDiff::new(title, lines).with_summary(summary))?;
+    let line_counts = changes.paths.iter().map(|path| path.lines).collect::<Vec<_>>();
+    let summary = ui::commit_diff_summary(changes, &line_counts, changes.lines_added, changes.lines_removed);
+    let mut diff = BuiltInDiff::new(title, lines);
+    diff.file_headers = file_headers;
+    let internal = prepare_pager(repository, diff.with_summary(summary))?;
     Ok(CommitDiff { external, internal })
 }
 
@@ -6640,9 +7415,9 @@ fn prepare_file_diff_with_repository(
     change: &FileChange,
     path: &PathChange,
 ) -> Result<FileDiff> {
-    match prepare_file_diff_content(repository, change, path, false)? {
-        PreparedFileDiff::External(command, _) => Ok(FileDiff::External(command)),
-        PreparedFileDiff::BuiltIn(diff, _) => prepare_pager(repository, diff),
+    match prepare_file_diff_content(repository, change, path)? {
+        PreparedFileDiff::External(command) => Ok(FileDiff::External(command)),
+        PreparedFileDiff::BuiltIn(diff) => prepare_pager(repository, diff),
     }
 }
 
@@ -6650,17 +7425,63 @@ fn prepare_file_diff_content(
     repository: &gix::Repository,
     change: &FileChange,
     path: &PathChange,
-    count_lines: bool,
 ) -> Result<PreparedFileDiff> {
-    if let FileChange::Unavailable(message) = change {
-        bail!("{message}");
-    }
+    let mut resources = prepare_file_diff_resources(repository, change)?;
     let global_command = repository
         .config_snapshot()
         .trusted_program(gix::config::tree::Diff::EXTERNAL)?
         .map(gix::path::os_string_into_bstring)
         .transpose()
         .or_raise(|| message("external diff command is not representable on this platform"))?;
+    let prepared = resources
+        .prepare_diff()
+        .map_err(gix::Error::from)
+        .or_raise(|| message("could not prepare selected diff"))?;
+    match prepared.operation {
+        gix::diff::blob::platform::prepare_diff::Operation::ExternalCommand { command, .. } => {
+            let command = command.to_owned();
+            prepare_external_diff(repository, &resources, command).map(PreparedFileDiff::External)
+        }
+        gix::diff::blob::platform::prepare_diff::Operation::InternalDiff {
+            algorithm,
+            change: text_change,
+        } => {
+            if let Some(command) = global_command {
+                return prepare_external_diff(repository, &resources, command).map(PreparedFileDiff::External);
+            }
+            let input = text_change.patch_input();
+            let diff = gix::diff::blob::diff_with_slider_heuristics(algorithm, &input);
+            let rendered = gix::diff::blob::UnifiedDiff::new(
+                &diff,
+                &input,
+                gix::diff::blob::unified_diff::ConsumeBinaryHunk::new(BString::default(), "\n"),
+                gix::diff::blob::unified_diff::ContextSize::symmetrical(3),
+            )
+            .consume()
+            .or_raise(|| message("could not render selected diff"))?;
+            Ok(PreparedFileDiff::BuiltIn(built_in_diff(
+                path,
+                change,
+                Some(rendered),
+                false,
+            )))
+        }
+        gix::diff::blob::platform::prepare_diff::Operation::SourceOrDestinationIsBinary => {
+            Ok(PreparedFileDiff::BuiltIn(built_in_diff(path, change, None, true)))
+        }
+        gix::diff::blob::platform::prepare_diff::Operation::NeitherExists => {
+            bail!(
+                "neither side of '{}' exists; refresh the changes and select an existing file",
+                path.path
+            );
+        }
+    }
+}
+
+fn prepare_file_diff_resources(repository: &gix::Repository, change: &FileChange) -> Result<gix::diff::blob::Platform> {
+    if let FileChange::Unavailable(message) = change {
+        bail!("{message}");
+    }
     let mut resources = match change {
         FileChange::Tree(_) => repository.diff_resource_cache(
             gix::diff::blob::pipeline::Mode::ToGitUnlessBinaryToTextIsPresent,
@@ -6683,89 +7504,20 @@ fn prepare_file_diff_content(
         }
         FileChange::Unavailable(_) => unreachable!("handled above"),
     }
-    let prepared = resources
-        .prepare_diff()
-        .map_err(gix::Error::from)
-        .or_raise(|| message("could not prepare selected diff"))?;
-    match prepared.operation {
-        gix::diff::blob::platform::prepare_diff::Operation::ExternalCommand { command, change } => {
-            let counts = count_lines
-                .then(|| {
-                    let input = change.patch_input();
-                    let diff = gix::diff::blob::diff_with_slider_heuristics(
-                        repository
-                            .diff_algorithm()
-                            .or_raise(|| message("could not obtain diff algorithm"))?,
-                        &input,
-                    );
-                    Ok::<_, Error>((diff.count_additions(), diff.count_removals()))
-                })
-                .transpose()?;
-            let command = command.to_owned();
-            prepare_external_diff(repository, &resources, command)
-                .map(|command| PreparedFileDiff::External(command, counts))
-        }
-        gix::diff::blob::platform::prepare_diff::Operation::InternalDiff {
-            algorithm,
-            change: text_change,
-        } => {
-            if let Some(command) = global_command {
-                let counts = count_lines.then(|| {
-                    let input = text_change.patch_input();
-                    let diff = gix::diff::blob::diff_with_slider_heuristics(algorithm, &input);
-                    (diff.count_additions(), diff.count_removals())
-                });
-                return prepare_external_diff(repository, &resources, command)
-                    .map(|command| PreparedFileDiff::External(command, counts));
-            }
-            let input = text_change.patch_input();
-            let diff = gix::diff::blob::diff_with_slider_heuristics(algorithm, &input);
-            let counts = Some((diff.count_additions(), diff.count_removals()));
-            let rendered = gix::diff::blob::UnifiedDiff::new(
-                &diff,
-                &input,
-                gix::diff::blob::unified_diff::ConsumeBinaryHunk::new(BString::default(), "\n"),
-                gix::diff::blob::unified_diff::ContextSize::symmetrical(3),
-            )
-            .consume()
-            .or_raise(|| message("could not render selected diff"))?;
-            Ok(PreparedFileDiff::BuiltIn(
-                built_in_diff(path, change, Some(rendered), false),
-                counts,
-            ))
-        }
-        gix::diff::blob::platform::prepare_diff::Operation::SourceOrDestinationIsBinary => {
-            Ok(PreparedFileDiff::BuiltIn(built_in_diff(path, change, None, true), None))
-        }
-        gix::diff::blob::platform::prepare_diff::Operation::NeitherExists => {
-            bail!(
-                "neither side of '{}' exists; refresh the changes and select an existing file",
-                path.path
-            );
-        }
-    }
+    Ok(resources)
 }
 
 fn prepare_pager(repository: &gix::Repository, diff: BuiltInDiff) -> Result<FileDiff> {
-    let Some(program) = repository.config_snapshot().trusted_program("core.pager")? else {
+    let Some(command) = repository
+        .pager_command()
+        .or_raise(|| message("could not prepare pager environment"))?
+    else {
         return Ok(FileDiff::BuiltIn(diff));
     };
-    if program.is_empty() || program == "cat" {
-        return Ok(FileDiff::BuiltIn(diff));
-    }
-    let command = gix::command::prepare(program)
-        .command_may_be_shell_script_disallow_manual_argument_splitting()
-        .with_context(
-            repository
-                .command_context()
-                .or_raise(|| message("could not prepare pager environment"))?,
-        )
-        .env("GIT_PAGER_IN_USE", "true")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .try_into()?;
-    Ok(FileDiff::Pager { command, diff })
+    Ok(FileDiff::Pager {
+        command: command.try_into()?,
+        diff,
+    })
 }
 
 fn prepare_external_diff(
@@ -6785,8 +7537,16 @@ fn prepare_external_diff(
         .or_raise(|| message("could not prepare external diff command"))
 }
 
-fn built_in_diff(path: &PathChange, change: &FileChange, rendered: Option<BString>, binary: bool) -> BuiltInDiff {
-    let (old_path, new_path, old_mode, new_mode) = match change {
+fn diff_sides<'a>(
+    path: &'a PathChange,
+    change: &'a FileChange,
+) -> (
+    Option<&'a BStr>,
+    Option<&'a BStr>,
+    Option<gix::objs::tree::EntryMode>,
+    Option<gix::objs::tree::EntryMode>,
+) {
+    match change {
         FileChange::Tree(gix::object::tree::diff::ChangeDetached::Addition { entry_mode, .. }) => {
             (None, Some(path.path.as_bstr()), None, Some(*entry_mode))
         }
@@ -6819,8 +7579,17 @@ fn built_in_diff(path: &PathChange, change: &FileChange, rendered: Option<BStrin
             old.as_ref().map(|resource| resource.mode),
             new.as_ref().map(|resource| resource.mode),
         ),
-        FileChange::Unavailable(_) => unreachable!("unavailable diffs aren't rendered"),
-    };
+        FileChange::Unavailable(_) => (
+            (path.kind != ChangeKind::Added).then_some(path.path.as_bstr()),
+            (path.kind != ChangeKind::Deleted).then_some(path.path.as_bstr()),
+            None,
+            None,
+        ),
+    }
+}
+
+fn built_in_diff(path: &PathChange, change: &FileChange, rendered: Option<BString>, binary: bool) -> BuiltInDiff {
+    let (old_path, new_path, old_mode, new_mode) = diff_sides(path, change);
     let display_path = |path: Option<&gix::bstr::BStr>, prefix: &str| -> BString {
         path.map_or_else(
             || "/dev/null".into(),
@@ -6844,14 +7613,16 @@ fn built_in_diff(path: &PathChange, change: &FileChange, rendered: Option<BStrin
     } else if let Some(rendered) = rendered {
         lines.extend(rendered.lines().map(BString::from));
     }
-    BuiltInDiff::new(
+    let mut diff = BuiltInDiff::new(
         format!("{} {}", path.kind.letter(), path.path.to_str_lossy()).into(),
         lines,
-    )
+    );
+    diff.file_headers.push((0, usize::from(new_path.is_some())));
+    diff
 }
 
 fn show_file_diff(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal,
     diff: FileDiff,
     enhanced_keyboard: bool,
     picker: Option<(&worktrunk::Worktrees, bool)>,
@@ -6859,12 +7630,12 @@ fn show_file_diff(
     match diff {
         FileDiff::External(command) => run_external_diff(terminal, command, enhanced_keyboard).map(|()| false),
         FileDiff::Pager { command, diff } => run_pager(terminal, command, &diff, enhanced_keyboard).map(|()| false),
-        FileDiff::BuiltIn(diff) => show_builtin_diff(terminal, &diff, picker),
+        FileDiff::BuiltIn(diff) => show_diff_view(terminal, DiffView::Patch(&diff), picker),
     }
 }
 
 fn show_commit_diff(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal,
     diff: CommitDiff,
     enhanced_keyboard: bool,
     picker: Option<(&worktrunk::Worktrees, bool)>,
@@ -6880,7 +7651,7 @@ fn show_commit_diff(
 
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
 fn edit_note(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal,
     repository_path: &Path,
     bare: bool,
     id: gix::ObjectId,
@@ -6929,7 +7700,7 @@ fn edit_note(
 
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
 fn edit_git_note(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal,
     repository_path: &Path,
     bare: bool,
     id: gix::ObjectId,
@@ -7021,7 +7792,7 @@ pub(crate) fn set_git_note(
 
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
 fn reword_commit(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal,
     repository_path: &Path,
     bare: bool,
     revisions: &[OsString],
@@ -7115,7 +7886,7 @@ pub(crate) fn load_rebase_todo_commits(
     reason = "the editor bridges terminal, repository, and selected view state"
 )]
 fn rebase_history(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal,
     repository_path: &Path,
     bare: bool,
     graph: &HistoryGraph,
@@ -7235,6 +8006,7 @@ fn preview_todo_rebase_conflict(
             attributions: attribution_start..attribution_start + attribution_len,
             title: metadata.title,
             metadata_loaded: true,
+            is_empty: metadata.is_empty,
             has_agent_marker: metadata.has_agent_marker,
             is_review: metadata.is_review,
             has_merge_replay: metadata.has_merge_replay,
@@ -7359,7 +8131,7 @@ fn run_with_rebase_selection<T: Send>(
 }
 
 fn run_rebase_plan(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal,
     repository: gix::ThreadSafeRepository,
     graph: &HistoryGraph,
     plan: edit::rebase::Plan,
@@ -7382,7 +8154,7 @@ fn run_rebase_plan(
 }
 
 fn run_with_todo_progress<T: Send>(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal,
     operation: impl FnOnce(&mut dyn FnMut(edit::rebase::Progress)) -> Result<T> + Send,
 ) -> Result<T> {
     std::thread::scope(|scope| {
@@ -7455,7 +8227,7 @@ fn load_patch_enrichment_state(
 ) -> Result<app::PatchEnrichmentState> {
     let object = repository.find_commit(commit_id)?;
     let commit = object.decode()?;
-    if let Some(patch_id) = patch_id::current(repository, &commit)? {
+    if let Some(patch_id) = patch_id::for_display(repository, &commit)? {
         let change_id = change_id::effective(commit_id, commit.extra_headers().find_all(change_id::HEADER));
         let enrichment = enrich::load_patch(notes, change_id, patch_id)?;
         Ok(app::PatchEnrichmentState::Fresh {
@@ -7475,7 +8247,7 @@ fn todo_progress_visible(elapsed: Duration) -> bool {
 
 #[tracing::instrument(skip_all, fields(parent = ?parent, ?kind))]
 fn create_commit(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal,
     repository_path: &Path,
     bare: bool,
     graph: &HistoryGraph,
@@ -7519,7 +8291,7 @@ fn create_commit(
 
 #[tracing::instrument(skip_all)]
 fn split_commit(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal,
     repository_path: &Path,
     bare: bool,
     graph: &HistoryGraph,
@@ -7551,7 +8323,7 @@ fn split_commit(
 
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
 fn delete_commit(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal,
     repository_path: &Path,
     bare: bool,
     graph: &HistoryGraph,
@@ -7566,24 +8338,20 @@ fn delete_commit(
 }
 
 fn run_external_diff(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal,
     mut command: gix::diff::blob::platform::prepare_diff_command::Command,
     enhanced_keyboard: bool,
 ) -> Result<()> {
     with_suspended_terminal(terminal, enhanced_keyboard, || {
         let status = command
             .status()
-            .or_raise(|| message("could not launch external diff").with_program(command.get_program()))?;
-        external_diff_status(&command, status)
+            .or_raise(|| message("could not launch external diff").with_program(command.get_program()));
+        interrupt::finish_external();
+        external_diff_status(&command, status?)
     })
 }
 
-fn run_pager(
-    terminal: &mut ratatui::DefaultTerminal,
-    mut command: Command,
-    diff: &BuiltInDiff,
-    enhanced_keyboard: bool,
-) -> Result<()> {
+fn run_pager(terminal: &mut Terminal, mut command: Command, diff: &BuiltInDiff, enhanced_keyboard: bool) -> Result<()> {
     with_suspended_terminal(terminal, enhanced_keyboard, || {
         let start = Instant::now();
         let mut child = command
@@ -7596,6 +8364,8 @@ fn run_pager(
         let status = child
             .wait()
             .or_raise(|| message("could not wait for diff pager").with_program(command.get_program()));
+        interrupt::finish_external();
+        interrupt::check().or_error()?;
         pager_write_result(write_result)
             .or_raise(|| message("diff pager communication failed").with_program(command.get_program()))?;
         pager_status(&command, status?)?;
@@ -7607,14 +8377,17 @@ fn run_pager(
 }
 
 fn wait_for_keypress() -> Result<()> {
-    terminal::enable_raw_mode().or_raise(|| message("could not read pager acknowledgement"))?;
+    terminal::enable_raw_mode().or_raise(|| message("could not read external program acknowledgement"))?;
     loop {
+        if interrupt::requested() {
+            return Ok(());
+        }
         if matches!(
-            event::read().or_raise(|| message("could not read pager acknowledgement"))?,
-            TerminalEvent::Key(KeyEvent {
+            read_terminal_event().or_raise(|| message("could not read external program acknowledgement"))?,
+            Some(TerminalEvent::Key(KeyEvent {
                 kind: KeyEventKind::Press,
                 ..
-            })
+            }))
         ) {
             return Ok(());
         }
@@ -7622,11 +8395,15 @@ fn wait_for_keypress() -> Result<()> {
 }
 
 fn with_suspended_terminal<T>(
-    terminal: &mut ratatui::DefaultTerminal,
+    terminal: &mut Terminal,
     enhanced_keyboard: bool,
     operation: impl FnOnce() -> Result<T>,
 ) -> Result<T> {
-    let suspend = disable_input(terminal.backend_mut(), enhanced_keyboard)
+    interrupt::check().or_error()?;
+    let suspend = terminal
+        .backend_mut()
+        .cleanup()
+        .and_then(|()| disable_input(terminal.backend_mut(), enhanced_keyboard))
         .and_then(|()| terminal.show_cursor())
         .and_then(|()| terminal::disable_raw_mode())
         .and_then(|()| {
@@ -7649,6 +8426,7 @@ fn with_suspended_terminal<T>(
         .and_then(|()| enable_input(terminal.backend_mut(), enhanced_keyboard))
         .and_then(|()| terminal.hide_cursor())
         .and_then(|()| terminal.clear());
+    interrupt::check().or_error()?;
     let value = result?;
     restore.or_raise(|| message("could not restore terminal after external program"))?;
     Ok(value)
@@ -7665,6 +8443,9 @@ fn push_remote_deletions(repository_path: &Path, groups: &[ref_tree::RemoteDelet
         failures: Vec::new(),
     };
     for group in groups {
+        if interrupt::requested() {
+            break;
+        }
         let result = (|| -> Result<ExitStatus> {
             let mut command = git_command(repository_path);
             command
@@ -7683,6 +8464,7 @@ fn push_remote_deletions(repository_path: &Path, groups: &[ref_tree::RemoteDelet
             Err(err) => outcome.failures.push(format!("{}: {err}", group.remote)),
         }
     }
+    interrupt::finish_external();
     outcome
 }
 
@@ -7713,15 +8495,19 @@ fn pager_needs_acknowledgement(elapsed: Duration) -> bool {
     elapsed <= IMMEDIATE_PAGER_EXIT
 }
 
-fn show_builtin_diff(
-    terminal: &mut ratatui::DefaultTerminal,
-    diff: &BuiltInDiff,
+fn show_diff_view(
+    terminal: &mut Terminal,
+    mut diff: DiffView<'_>,
     picker: Option<(&worktrunk::Worktrees, bool)>,
 ) -> Result<bool> {
     let mut offset = 0usize;
     let mut horizontal_offset = 0usize;
     let mut focused = true;
+    let ansi_color_disabled = Colored::ansi_color_disabled_memoized();
     loop {
+        if interrupt::requested() {
+            return Ok(true);
+        }
         let size = terminal
             .size()
             .or_raise(|| message("could not determine diff viewport"))?;
@@ -7730,21 +8516,43 @@ fn show_builtin_diff(
             worktrunk::areas(frame_area, picker.display_row_count())
         });
         let page = usize::from(diff_area.height.saturating_sub(2)).max(1);
-        let max = diff.display_line_count().saturating_sub(page);
-        let horizontal_page = usize::from(diff_area.width).max(1);
-        let horizontal_max = diff.max_width.saturating_sub(horizontal_page);
+        let end = diff.end_offset(page);
+        let max = diff.max_offset(page);
+        let horizontal_page = usize::from(diff.areas(diff_area)[1].width).max(1);
+        let horizontal_max = diff.max_width().saturating_sub(horizontal_page);
         offset = offset.min(max);
+        let page = page - usize::from(page > 1 && diff.sticky_header_index(offset).is_some());
         horizontal_offset = horizontal_offset.min(horizontal_max);
-        terminal
-            .draw(|frame| {
-                if let Some((picker, focused)) = picker {
-                    worktrunk::draw(frame, list_area, picker, focused);
+        let override_no_color = ansi_color_disabled && matches!(&diff, DiffView::Structural(view) if view.colored());
+        if override_no_color {
+            Colored::set_ansi_color_disabled(false);
+        }
+        let drawn = terminal.draw(|frame| {
+            if let Some((picker, focused)) = picker {
+                worktrunk::draw(frame, list_area, picker, focused);
+            }
+            diff.draw(frame, diff_area, offset, horizontal_offset);
+            prepare_terminal_frame(frame);
+        });
+        if override_no_color {
+            Colored::set_ansi_color_disabled(true);
+        }
+        drawn.or_raise(|| message("could not draw file diff"))?;
+        let Some(event) = read_terminal_event().or_raise(|| message("could not read file diff input"))? else {
+            continue;
+        };
+        if let DiffView::Structural(view) = &mut diff {
+            match &event {
+                TerminalEvent::Mouse(mouse) if focused => {
+                    view.set_pointer(Some(Position::new(mouse.column, mouse.row)));
                 }
-                ui::draw_file_diff(frame, diff_area, diff, offset, horizontal_offset);
-                prepare_terminal_frame(frame);
-            })
-            .or_raise(|| message("could not draw file diff"))?;
-        let event = event::read().or_raise(|| message("could not read file diff input"))?;
+                TerminalEvent::FocusLost => {
+                    view.set_pointer(None);
+                    view.close_prefix();
+                }
+                _ => {}
+            }
+        }
         let key = match event {
             TerminalEvent::FocusLost => {
                 focused = false;
@@ -7755,9 +8563,45 @@ fn show_builtin_diff(
                 continue;
             }
             TerminalEvent::Resize(_, _) => continue,
+            TerminalEvent::Mouse(mouse) if focused => {
+                if let DiffView::Structural(view) = &mut diff {
+                    match mouse.kind {
+                        MouseEventKind::Down(_) if view.close_prefix() => continue,
+                        MouseEventKind::ScrollUp
+                        | MouseEventKind::ScrollDown
+                        | MouseEventKind::ScrollLeft
+                        | MouseEventKind::ScrollRight => {
+                            view.close_prefix();
+                        }
+                        _ => {}
+                    }
+                }
+                if !diff.scroll_tree(mouse, diff_area, offset)
+                    && let Some(position) = diff.mouse(mouse, diff_area, offset, horizontal_offset)
+                {
+                    (offset, horizontal_offset) = position;
+                }
+                continue;
+            }
             TerminalEvent::Key(key) if focused && key.kind != KeyEventKind::Release => key,
             _ => continue,
         };
+        if diff.key(key) {
+            continue;
+        }
+        if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) {
+            match key.code {
+                KeyCode::Home | KeyCode::Char('g') => {
+                    offset = 0;
+                    continue;
+                }
+                KeyCode::End | KeyCode::Char('G') => {
+                    offset = end;
+                    continue;
+                }
+                _ => {}
+            }
+        }
         match action(key) {
             Some(Action::OpenDiff) => return Ok(false),
             Some(Action::ForceQuit | Action::Quit | Action::Cancel) => return Ok(true),
@@ -7768,7 +8612,7 @@ fn show_builtin_diff(
             Some(Action::HalfPageUp) => offset = offset.saturating_sub((page / 2).max(1)),
             Some(Action::HalfPageDown) => offset = offset.saturating_add((page / 2).max(1)).min(max),
             Some(Action::First) => offset = 0,
-            Some(Action::Last) => offset = max,
+            Some(Action::Last) => offset = end,
             Some(Action::ScrollLeft) => horizontal_offset = horizontal_offset.saturating_sub(horizontal_page),
             Some(Action::ScrollRight) => {
                 horizontal_offset = horizontal_offset.saturating_add(horizontal_page).min(horizontal_max);
@@ -7802,6 +8646,14 @@ fn load_changes(
 }
 
 fn load_changes_without_lines(repository: &gix::Repository, target: app::TreeDiffTarget) -> Result<Changes> {
+    load_changes_with_diff_options(repository, target, None)
+}
+
+fn load_changes_with_diff_options(
+    repository: &gix::Repository,
+    target: app::TreeDiffTarget,
+    options: Option<gix::diff::Options>,
+) -> Result<Changes> {
     let app::TreeDiffTarget::Commit {
         id,
         parent: requested_parent,
@@ -7812,7 +8664,7 @@ fn load_changes_without_lines(repository: &gix::Repository, target: app::TreeDif
         };
         let old_tree = repository.find_commit(base)?.tree()?;
         let new_tree = repository.find_commit(tip)?.tree()?;
-        let mut changes = load_tree_changes_without_lines(repository, Some(&old_tree), &new_tree, None)?;
+        let mut changes = load_tree_changes_with_diff_options(repository, Some(&old_tree), &new_tree, None, options)?;
         changes.range = Some(app::ComparedRange { base, tip });
         return Ok(changes);
     };
@@ -7840,7 +8692,7 @@ fn load_changes_without_lines(repository: &gix::Repository, target: app::TreeDif
         Some(parent) => Some(repository.find_commit(parent)?.tree()?),
         None => None,
     };
-    load_tree_changes_without_lines(repository, old_tree.as_ref(), &new_tree, compared_parent)
+    load_tree_changes_with_diff_options(repository, old_tree.as_ref(), &new_tree, compared_parent, options)
 }
 
 fn load_tree_changes_without_lines(
@@ -7849,7 +8701,17 @@ fn load_tree_changes_without_lines(
     new_tree: &gix::Tree<'_>,
     parent: Option<ComparedParent>,
 ) -> Result<Changes> {
-    let changes = repository.diff_tree_to_tree(old_tree, Some(new_tree), None)?;
+    load_tree_changes_with_diff_options(repository, old_tree, new_tree, parent, None)
+}
+
+fn load_tree_changes_with_diff_options(
+    repository: &gix::Repository,
+    old_tree: Option<&gix::Tree<'_>>,
+    new_tree: &gix::Tree<'_>,
+    parent: Option<ComparedParent>,
+    options: Option<gix::diff::Options>,
+) -> Result<Changes> {
+    let changes = repository.diff_tree_to_tree(old_tree, Some(new_tree), options)?;
     let mut out = Changes {
         parent,
         ..Changes::default()
@@ -7902,13 +8764,13 @@ fn load_tree_changes_without_lines(
             path,
             lines: None,
         });
-        out.diffs.push(FileChange::Tree(change));
+        out.diffs.push(FileChange::tree(change));
     }
     Ok(out)
 }
 
 fn add_line_counts(repository: &gix::Repository, changes: &mut Changes) -> Result<Vec<LineCounts>> {
-    let mut cache = repository.diff_resource_cache_for_tree_diff()?;
+    let mut cache = without_textconv(repository.diff_resource_cache_for_tree_diff()?);
     let mut counts = Vec::with_capacity(changes.diffs.len());
     for (path, change) in changes.paths.iter_mut().zip(&changes.diffs) {
         let lines = line_counts_for_change(repository, change, &mut cache, None)?;
@@ -8024,10 +8886,6 @@ fn staged_change(change: gix::diff::index::Change) -> Result<(PathChange, FileCh
             )
         }
     };
-    let unavailable = matches!(diff, ChangeDetached::Addition { entry_mode, .. } if entry_mode.is_commit())
-        || matches!(diff, ChangeDetached::Deletion { entry_mode, .. } if entry_mode.is_commit())
-        || matches!(diff, ChangeDetached::Modification { previous_entry_mode, entry_mode, .. } if previous_entry_mode.is_commit() || entry_mode.is_commit())
-        || matches!(diff, ChangeDetached::Rewrite { source_entry_mode, entry_mode, .. } if source_entry_mode.is_commit() || entry_mode.is_commit());
     Ok((
         PathChange {
             kind,
@@ -8036,11 +8894,7 @@ fn staged_change(change: gix::diff::index::Change) -> Result<(PathChange, FileCh
             path,
             lines: None,
         },
-        if unavailable {
-            FileChange::Unavailable("submodule changes don't have a file diff")
-        } else {
-            FileChange::Tree(diff)
-        },
+        FileChange::tree(diff),
     ))
 }
 
@@ -8210,108 +9064,42 @@ fn load_worktree_changes_without_lines(
     repository: &gix::Repository,
     untracked: gix::status::UntrackedFiles,
 ) -> Result<Changes> {
-    let mut status = repository
-        .status(gix::progress::Discard)
-        .or_raise(|| message("could not initialize worktree status"))?
+    let items = repository
+        .status(gix::progress::Discard)?
         .untracked_files(untracked)
         .index_worktree_options_mut(|options| {
             options.sorting = Some(gix::status::plumbing::index_as_worktree_with_renames::Sorting::ByPathCaseSensitive);
         })
-        .into_iter(Vec::<BString>::new())
-        .or_raise(|| message("could not start worktree status"))?;
-    let mut staged = Vec::new();
-    let mut unstaged = Vec::new();
+        .into_vec(Vec::new(), &gix::interrupt::IS_INTERRUPTED)?;
+    status_rows(items, repository.object_hash())
+}
+
+fn status_rows(items: impl IntoIterator<Item = gix::status::Item>, object_hash: gix::hash::Kind) -> Result<Changes> {
+    let mut rows = Vec::new();
     let mut has_tracked_changes = false;
-    for item in status.by_ref() {
-        match item.or_raise(|| message("could not obtain worktree status"))? {
+    for item in items {
+        match item {
             gix::status::Item::TreeIndex(change) => {
                 has_tracked_changes = true;
-                staged.push(staged_change(change)?);
+                rows.push(staged_change(change)?);
             }
             gix::status::Item::IndexWorktree(item) => {
-                if let Some((path, diff, tracked)) = unstaged_change(item, repository.object_hash())? {
+                if let Some((path, diff, tracked)) = unstaged_change(item, object_hash)? {
                     has_tracked_changes |= tracked;
-                    unstaged.push((path, diff));
+                    rows.push((path, diff));
                 }
             }
         }
     }
-    drop(status);
-    staged.sort_by(|(a, _), (b, _)| a.path.cmp(&b.path));
-    unstaged.sort_by(|(a, _), (b, _)| a.path.cmp(&b.path));
-    staged.extend(unstaged);
+    rows.sort_by(|(a, _), (b, _)| {
+        (a.kind != ChangeKind::Unmerged, a.group != ChangeGroup::Staged, &a.path).cmp(&(
+            b.kind != ChangeKind::Unmerged,
+            b.group != ChangeGroup::Staged,
+            &b.path,
+        ))
+    });
 
-    let (paths, diffs): (Vec<_>, Vec<_>) = staged.into_iter().unzip();
-    Ok(Changes {
-        paths,
-        diffs,
-        has_tracked_changes,
-        ..Changes::default()
-    })
-}
-
-fn load_unstaged_changes_without_lines(repository: &gix::Repository, patterns: Vec<BString>) -> Result<Changes> {
-    let mut status = repository
-        .status(gix::progress::Discard)
-        .or_raise(|| message("could not initialize incremental worktree status"))?
-        .untracked_files(gix::status::UntrackedFiles::Collapsed)
-        .into_index_worktree_iter(patterns)
-        .or_raise(|| message("could not start incremental worktree status"))?;
-    let mut unstaged = Vec::new();
-    let mut has_tracked_changes = false;
-    for item in status.by_ref() {
-        if let Some((path, diff, tracked)) = unstaged_change(
-            item.or_raise(|| message("could not obtain incremental worktree status"))?,
-            repository.object_hash(),
-        )? {
-            has_tracked_changes |= tracked;
-            unstaged.push((path, diff));
-        }
-    }
-    drop(status);
-    unstaged.sort_by(|(a, _), (b, _)| a.path.cmp(&b.path));
-    let (paths, diffs) = unstaged.into_iter().unzip();
-    Ok(Changes {
-        paths,
-        diffs,
-        has_tracked_changes,
-        ..Changes::default()
-    })
-}
-
-fn load_staged_changes_without_lines(repository: &gix::Repository) -> Result<Changes> {
-    let head_tree = repository
-        .head_tree_id_or_empty()
-        .or_raise(|| message("could not resolve HEAD tree for staged status"))?;
-    let index = repository
-        .index_or_empty()
-        .or_raise(|| message("could not open index for staged status"))?;
-    let mut pathspec = repository
-        .pathspec(
-            false,
-            None::<&str>,
-            false,
-            &index,
-            gix::worktree::stack::state::attributes::Source::IdMapping,
-        )
-        .or_raise(|| message("could not initialize staged status pathspec"))?;
-    let mut raw = Vec::new();
-    repository
-        .tree_index_status(
-            &head_tree,
-            &index,
-            Some(&mut pathspec),
-            gix::status::tree_index::TrackRenames::AsConfigured,
-            |change, _, _| {
-                raw.push(change.into_owned());
-                Ok(std::ops::ControlFlow::Continue(()))
-            },
-        )
-        .or_raise(|| message("could not obtain staged status"))?;
-    let mut staged = raw.into_iter().map(staged_change).collect::<Result<Vec<_>>>()?;
-    let has_tracked_changes = !staged.is_empty();
-    staged.sort_by(|(a, _), (b, _)| a.path.cmp(&b.path));
-    let (paths, diffs) = staged.into_iter().unzip();
+    let (paths, diffs): (Vec<_>, Vec<_>) = rows.into_iter().unzip();
     Ok(Changes {
         paths,
         diffs,
@@ -8340,23 +9128,6 @@ fn load_worktree_changes(repository: &gix::Repository, line_diff_pool: &mut Line
     )
 }
 
-fn literal_status_patterns(repository: &gix::Repository, scopes: &HashSet<BString>) -> Result<Option<Vec<BString>>> {
-    let defaults = repository
-        .pathspec_defaults()
-        .or_raise(|| message("could not load pathspec defaults for incremental status"))?;
-    if defaults.literal || defaults.signature.contains(gix::pathspec::MagicSignature::ICASE) {
-        return Ok(None);
-    }
-    Ok(Some(
-        scopes
-            .iter()
-            .map(|scope| {
-                gix::pathspec::Pattern::from_literal(scope.as_slice(), gix::pathspec::MagicSignature::TOP).to_bstring()
-            })
-            .collect(),
-    ))
-}
-
 fn path_is_in_status_scope(path: &BString, scope: &BString, ignore_case: bool) -> bool {
     let Some(prefix) = path.get(..scope.len()) else {
         return false;
@@ -8369,94 +9140,136 @@ fn path_is_in_status_scope(path: &BString, scope: &BString, ignore_case: bool) -
     prefix_matches && (path.len() == scope.len() || path.get(scope.len()) == Some(&b'/'))
 }
 
-fn replace_cached_changes(
+fn refresh_worktree_changes(
     repository: &gix::Repository,
-    cached: &mut Changes,
-    replacement: Changes,
-    mut replace: impl FnMut(&PathChange) -> bool,
-) -> Result<()> {
-    let mut pairs: Vec<_> = std::mem::take(&mut cached.paths)
-        .into_iter()
-        .zip(std::mem::take(&mut cached.diffs))
-        .filter(|(change, _)| !replace(change))
-        .collect();
-    pairs.extend(replacement.paths.into_iter().zip(replacement.diffs));
-    pairs.sort_by(|(a, _), (b, _)| {
-        let rank = |group| match group {
-            ChangeGroup::Staged => 0,
-            ChangeGroup::Unstaged => 1,
-            ChangeGroup::Tree => 2,
-        };
-        rank(a.group).cmp(&rank(b.group)).then_with(|| a.path.cmp(&b.path))
-    });
-    (cached.paths, cached.diffs) = pairs.into_iter().unzip();
-    (cached.lines_added, cached.lines_removed) = cached
-        .paths
-        .iter()
-        .filter_map(|change| change.lines)
-        .fold((0, 0), |(added, removed), (a, r)| {
-            (added + u64::from(a), removed + u64::from(r))
-        });
-    let index = repository
-        .index_or_empty()
-        .or_raise(|| message("could not open index after incremental status"))?;
-    cached.has_tracked_changes = cached.paths.iter().any(|change| {
-        change.group == ChangeGroup::Staged
-            || change.group == ChangeGroup::Unstaged
-                && (index.entry_by_path(change.path.as_bstr()).is_some()
-                    || change
-                        .source
-                        .as_ref()
-                        .is_some_and(|source| index.entry_by_path(source.as_bstr()).is_some()))
-    });
-    Ok(())
+    monitor: &mut gix::status::Monitor,
+    previous: Option<&Changes>,
+    pool: &mut LineDiffPool,
+) -> Result<Changes> {
+    let update = monitor.refresh(repository, &gix::interrupt::IS_INTERRUPTED)?;
+    monitored_worktree_changes(
+        repository,
+        monitor.snapshot().unwrap_or_default(),
+        &update,
+        previous,
+        pool,
+    )
 }
 
-fn update_worktree_changes(
+fn monitored_worktree_changes(
     repository: &gix::Repository,
-    cached: &mut Changes,
-    parts: &WorktreeStatusParts,
-    line_diff_pool: &mut LineDiffPool,
-) -> Result<bool> {
-    if parts.staged {
-        let staged = add_worktree_line_counts(load_staged_changes_without_lines(repository)?, line_diff_pool)?;
-        replace_cached_changes(repository, cached, staged, |change| change.group == ChangeGroup::Staged)?;
-    }
-    if !parts.scopes.is_empty() {
-        let index = repository
-            .index_or_empty()
-            .or_raise(|| message("could not open index for incremental status"))?;
-        let scopes = parts
-            .scopes
-            .iter()
-            .map(|scope| {
-                let mut scope = scope.clone();
-                // A child event can change whether any untracked ancestor collapses.
-                if index.entry_by_path(scope.as_bstr()).is_none()
-                    && let Some(slash) = scope.find_byte(b'/')
-                {
-                    scope.truncate(slash);
-                }
-                scope
-            })
-            .collect();
-        let Some(patterns) = literal_status_patterns(repository, &scopes)? else {
-            *cached = load_worktree_changes(repository, line_diff_pool)?;
-            return Ok(true);
+    snapshot: &[gix::status::Item],
+    update: &gix::status::monitor::Update,
+    previous: Option<&Changes>,
+    pool: &mut LineDiffPool,
+) -> Result<Changes> {
+    let mut out = status_rows(snapshot.iter().cloned(), repository.object_hash())?;
+    // Indexed and external attributes can change without a local attribute event.
+    // Keep their contents and the resolved configuration alongside reusable counts.
+    let index = repository.index_or_load_from_head_or_empty()?;
+    let ignore_case = repository.filesystem_options()?.ignore_case;
+    let case = if ignore_case {
+        gix::glob::pattern::Case::Fold
+    } else {
+        gix::glob::pattern::Case::Sensitive
+    };
+    let mut global_attributes = Vec::new();
+    for path in repository
+        .attribute_global_paths()?
+        .into_iter()
+        .chain([repository.common_dir().join("info/attributes")])
+    {
+        let contents = match std::fs::read(&path) {
+            Ok(contents) => Some(contents),
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::IsADirectory | io::ErrorKind::NotADirectory
+                ) || cfg!(windows) && err.kind() == io::ErrorKind::PermissionDenied =>
+            {
+                None
+            }
+            Err(err) => return Err(err).or_raise(|| message!("could not read attributes at {}", path.display())),
         };
-        let unstaged = add_worktree_line_counts(
-            load_unstaged_changes_without_lines(repository, patterns)?,
-            line_diff_pool,
-        )?;
-        let ignore_case = repository.filesystem_options()?.ignore_case;
-        replace_cached_changes(repository, cached, unstaged, |change| {
-            change.group == ChangeGroup::Unstaged
-                && scopes
-                    .iter()
-                    .any(|scope| path_is_in_status_scope(&change.path, scope, ignore_case))
-        })?;
+        global_attributes.push((path, contents));
     }
-    Ok(false)
+    let staged_diff_key = StagedDiffKey {
+        configuration: repository.config_snapshot().plumbing().to_bstring(),
+        configuration_metadata: repository
+            .config_snapshot()
+            .plumbing()
+            .sections()
+            .map(|section| section.meta().clone())
+            .collect(),
+        global_attributes,
+        indexed_attributes: gix_worktree::stack::State::AttributesStack(Default::default()).id_mappings_from_index(
+            &index,
+            index.path_backing(),
+            case,
+        ),
+    };
+    let configuration_changed = pool.staged_diff_key.as_ref().is_none_or(|previous| {
+        previous.configuration != staged_diff_key.configuration
+            || previous.configuration_metadata != staged_diff_key.configuration_metadata
+    });
+    if configuration_changed {
+        pool.active = None;
+        pool.last_used = None;
+    }
+    let external_attributes_changed = pool
+        .staged_diff_key
+        .as_ref()
+        .is_none_or(|previous| previous.global_attributes != staged_diff_key.global_attributes);
+    let staged_diff_key_changed = pool.staged_diff_key.as_ref() != Some(&staged_diff_key);
+    let rank = |group| match group {
+        ChangeGroup::Staged => 0,
+        ChangeGroup::Unstaged => 1,
+        ChangeGroup::Tree => 2,
+    };
+    let old: HashMap<_, _> = previous
+        .into_iter()
+        .flat_map(|changes| changes.paths.iter().zip(&changes.diffs))
+        .map(|(path, diff)| ((rank(path.group), path.path.as_bstr()), (path, diff)))
+        .collect();
+    let mut positions = Vec::new();
+    let mut diffs = Vec::new();
+    for (position, (path, diff)) in out.paths.iter_mut().zip(&out.diffs).enumerate() {
+        let covered = match path.group {
+            ChangeGroup::Staged => staged_diff_key_changed,
+            ChangeGroup::Unstaged if configuration_changed || external_attributes_changed => true,
+            ChangeGroup::Unstaged => match &update.unstaged {
+                None => false,
+                Some(gix::notify::Scope::All) => true,
+                Some(gix::notify::Scope::Paths(scopes)) => scopes
+                    .iter()
+                    .any(|scope| path_is_in_status_scope(&path.path, &scope.path, ignore_case)),
+            },
+            ChangeGroup::Tree => true,
+        };
+        if !covered
+            && let Some((old_path, old_diff)) = old.get(&(rank(path.group), path.path.as_bstr()))
+            && old_path.kind == path.kind
+            && old_path.source == path.source
+            && *old_diff == diff
+        {
+            path.lines = old_path.lines;
+        } else {
+            positions.push(position);
+            diffs.push(diff.clone());
+        }
+    }
+    if !diffs.is_empty() {
+        for (position, (diff, lines)) in positions.into_iter().zip(pool.line_counts(diffs)?) {
+            out.paths[position].lines = lines;
+            out.diffs[position] = diff;
+        }
+    }
+    for (added, removed) in out.paths.iter().filter_map(|path| path.lines) {
+        out.lines_added += u64::from(added);
+        out.lines_removed += u64::from(removed);
+    }
+    pool.staged_diff_key = Some(staged_diff_key);
+    Ok(out)
 }
 
 fn actor_bytes(author: &app::Author) -> Vec<u8> {
@@ -8524,6 +9337,14 @@ fn command_picker_items(commands: &[MenuCommand]) -> Vec<MenuItem<'_, CommandId>
             )
         })
         .collect()
+}
+
+fn view_commands(app: &App, decorations: &Decorations, ref_tree: &ref_tree::Tree) -> Vec<MenuCommand> {
+    if ref_tree.is_active() {
+        ref_tree.commands()
+    } else {
+        command_menu::commands(app, decorations, app.has_verifiable_signatures())
+    }
 }
 
 fn opens_command_menu(event: &TerminalEvent, command_menu_open: bool, ref_tree_active: bool) -> bool {
@@ -8736,6 +9557,9 @@ fn diagnostic_action(key: KeyEvent, app: &App) -> Option<Action> {
 }
 
 fn app_action(key: KeyEvent, app: &App) -> Option<Action> {
+    if key.code == KeyCode::Enter && key.modifiers.contains(KeyModifiers::SHIFT) {
+        return (key.kind == KeyEventKind::Press).then_some(Action::OpenStructuralDiff);
+    }
     if app.tree_selection_active() {
         if key.kind == KeyEventKind::Release {
             return None;
@@ -8777,6 +9601,17 @@ fn app_action(key: KeyEvent, app: &App) -> Option<Action> {
     }
     if app.topological_navigation_active() {
         return topological_selection_action(key);
+    }
+    if key.kind == KeyEventKind::Press && key.modifiers.is_empty() && app.can_position_selection() {
+        if app.viewport_expanded
+            && let KeyCode::Char(letter) = key.code
+            && let Some(action) = command_menu::shortcut_action(command_menu::CommandGroup::Viewport, letter)
+        {
+            return Some(action);
+        }
+        if key.code == KeyCode::Char('z') {
+            return Some(Action::ToggleViewport);
+        }
     }
     if key.kind != KeyEventKind::Release {
         let shifted = key.modifiers.contains(KeyModifiers::SHIFT) || matches!(key.code, KeyCode::Char('J' | 'K' | 'L'));
@@ -8915,8 +9750,11 @@ fn action_allowed_during_rebase_continuation(action: Option<&Action>, changes_fo
                 | Action::MoveDown
                 | Action::MoveUpBy(_)
                 | Action::MoveDownBy(_)
+                | Action::SelectHistoryRow { .. }
+                | Action::SelectChange { .. }
                 | Action::PanUpBy(_)
                 | Action::PanDownBy(_)
+                | Action::PositionSelection(_)
                 | Action::TopologicalUp
                 | Action::TopologicalDown
                 | Action::PreviousChild
@@ -8946,8 +9784,10 @@ fn action_allowed_during_rebase_continuation(action: Option<&Action>, changes_fo
                 | Action::SubmitEntrySelection
                 | Action::ToggleHistoryDisplay
                 | Action::ToggleInformation
+                | Action::ToggleViewport
                 | Action::ToggleAlign
                 | Action::ToggleCommit
+                | Action::ToggleCommitFullscreen
                 | Action::ToggleActions
                 | Action::ToggleChanges
                 | Action::ToggleChangesVisibility
@@ -8959,10 +9799,15 @@ fn action_allowed_during_rebase_continuation(action: Option<&Action>, changes_fo
                 | Action::Copy
                 | Action::CopyPath(_)
                 | Action::CopyAuthor
+                | Action::OpenStructuralDiff
                 | Action::ForceQuit
                 | Action::Quit
         )
-    ) || (changes_focused && matches!(action, Some(Action::OpenDiff | Action::Cancel | Action::Quit)))
+    ) || (changes_focused
+        && matches!(
+            action,
+            Some(Action::OpenDiff | Action::Cancel | Action::Quit | Action::Delete)
+        ))
 }
 
 fn action_with_shortcut_groups(
@@ -8985,6 +9830,9 @@ fn action_with_shortcut_groups(
     };
     let action = match code {
         KeyCode::Tab => Some(Action::ToggleChangesFocus),
+        KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
+            (key.kind == KeyEventKind::Press).then_some(Action::OpenStructuralDiff)
+        }
         KeyCode::Enter => Some(Action::OpenDiff),
         KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::ForceQuit),
         KeyCode::Char('b' | 'B') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::PageUp),
@@ -9031,6 +9879,7 @@ fn action_with_shortcut_groups(
         KeyCode::Char('2') if key.modifiers == KeyModifiers::NONE => Some(Action::TimeTravel { stash: true }),
         KeyCode::Char('@') => Some(Action::TimeTravel { stash: false }),
         KeyCode::Char('m' | ']') => Some(Action::ToggleCommit),
+        KeyCode::Char('`') if key.modifiers == KeyModifiers::NONE => Some(Action::ToggleCommitFullscreen),
         KeyCode::Char('r') => Some(Action::ToggleRefs),
         KeyCode::Char('s') => Some(Action::VerifySignatures),
         KeyCode::Char('t') => Some(Action::ToggleRefTree),
@@ -9039,7 +9888,9 @@ fn action_with_shortcut_groups(
         KeyCode::Char('y') => Some(Action::Copy),
         _ => None,
     });
-    action.filter(|action| key.kind == KeyEventKind::Press || !matches!(action, Action::Undo | Action::Redo))
+    action.filter(|action| {
+        key.kind == KeyEventKind::Press || !matches!(action, Action::Undo | Action::Redo | Action::Quit)
+    })
 }
 
 fn copy_selected_path_action(
@@ -9108,6 +9959,20 @@ mod tests {
     use gix::error::TestResult;
 
     use super::*;
+    use std::collections::HashSet;
+
+    fn status_scopes(paths: impl IntoIterator<Item = BString>) -> Option<gix::notify::Scope> {
+        Some(gix::notify::Scope::Paths(
+            paths
+                .into_iter()
+                .map(|path| gix::notify::PathChange {
+                    path,
+                    kind: gix::notify::plumbing::EventKind::Any,
+                    path_kind: gix::notify::plumbing::PathKind::Any,
+                })
+                .collect(),
+        ))
+    }
 
     #[test]
     fn worktrunk_keys_navigate_focus_and_promote() {
@@ -9116,6 +9981,42 @@ mod tests {
             worktrunk_input(key(KeyCode::Char('j')), 1, 4, 2),
             Some(WorktrunkInput::Select(2))
         );
+        for (ch, selected, expected) in [
+            ('n', 1, 2),
+            ('p', 1, 0),
+            ('N', 1, 2),
+            ('P', 1, 0),
+            ('n', 3, 3),
+            ('p', 0, 0),
+        ] {
+            for kind in [KeyEventKind::Press, KeyEventKind::Repeat] {
+                assert_eq!(
+                    worktrunk_input(
+                        KeyEvent::new_with_kind(KeyCode::Char(ch), KeyModifiers::CONTROL, kind),
+                        selected,
+                        4,
+                        2,
+                    ),
+                    Some(WorktrunkInput::Select(expected)),
+                    "Ctrl-n/p presses and repeats move one row within the list bounds"
+                );
+            }
+            assert_eq!(
+                worktrunk_input(key(KeyCode::Char(ch)), selected, 4, 2),
+                None,
+                "n/p only navigate when Control is held"
+            );
+            assert_eq!(
+                worktrunk_input(
+                    KeyEvent::new_with_kind(KeyCode::Char(ch), KeyModifiers::CONTROL, KeyEventKind::Release),
+                    selected,
+                    4,
+                    2,
+                ),
+                None,
+                "releasing Ctrl-n/p does not move the selection again"
+            );
+        }
         assert_eq!(
             worktrunk_input(key(KeyCode::PageDown), 1, 4, 2),
             Some(WorktrunkInput::Select(3))
@@ -9382,7 +10283,7 @@ mod tests {
         ] {
             assert!(
                 resolve_pasted_commit(&repository, &invalid, [commit, sibling]).is_err(),
-                "copied pairs must contain exactly a commit hash and its full change ID: {invalid:?}"
+                "copied pairs must contain exactly a commit hash and its full change ID"
             );
         }
         for invalid in ["topic", "dead beef", ""] {
@@ -9621,7 +10522,10 @@ mod tests {
     }
 
     #[test]
-    fn pending_changes_are_recorded_before_they_are_cleared() -> gix_testtools::Result {
+    fn pending_changes_are_recorded_during_shutdown_before_they_are_cleared() -> gix_testtools::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repository = test_repository::open(fixture.path())?;
         let id = repository.rev_parse_single("topic")?.detach();
@@ -9639,8 +10543,11 @@ mod tests {
             after: edit::undo::State::Object(id),
         }];
 
+        let guard = interrupt::install()?;
+        gix::interrupt::trigger();
         record_and_clear_pending_undo(fixture.path(), false, "materialize rebase conflict", &mut changes)?;
         assert!(changes.is_empty(), "the cancellation releases its accumulator");
+        drop(guard);
 
         let repository = test_repository::open(fixture.path())?;
         edit::undo::plan_undo(&repository)?
@@ -10059,7 +10966,7 @@ mod tests {
                         "missing-remote".into(),
                         "to-push".into(),
                         &[head_commit_id],
-                        force_with_lease,
+                        force_with_lease.then_some("--force-with-lease".into()),
                     )
                     .err()
                     .ok_or_raise(|| {
@@ -10149,7 +11056,7 @@ mod tests {
                             gix::path::into_bstr(remote.path())?.as_ref(),
                             branch.into(),
                             &hidden_tips,
-                            force_with_lease,
+                            force_with_lease.then_some("--force-with-lease".into()),
                         )?,
                         PushOutcome::Pushed(_)
                     ),
@@ -10206,7 +11113,7 @@ mod tests {
                         gix::path::into_bstr(remote.path())?.as_ref(),
                         branch.into(),
                         &unfinished.parents,
-                        false,
+                        None,
                     )?,
                     PushOutcome::Pushed(_)
                 ),
@@ -10287,7 +11194,7 @@ mod tests {
                                 gix::path::into_bstr(remote.path())?.as_ref(),
                                 branch.as_str().into(),
                                 &original.parents,
-                                force_with_lease,
+                                force_with_lease.then_some("--force-with-lease".into()),
                             )?,
                             PushOutcome::Pushed(_)
                         ),
@@ -10346,7 +11253,7 @@ mod tests {
         let git_dir = repository.git_dir().to_owned();
         drop(repository);
 
-        let PushOutcome::Pushed(message) = push_branch(&git_dir, remote_name.as_bstr(), branch.as_bstr(), &[], false)?
+        let PushOutcome::Pushed(message) = push_branch(&git_dir, remote_name.as_bstr(), branch.as_bstr(), &[], None)?
         else {
             panic!("the empty remote accepts the initial push");
         };
@@ -10368,12 +11275,18 @@ mod tests {
         assert!(rewritten.success(), "the pushed branch is rewritten locally");
         assert!(
             matches!(
-                push_branch(&git_dir, remote_name.as_bstr(), branch.as_bstr(), &[], false)?,
-                PushOutcome::NeedsForce
+                push_branch(&git_dir, remote_name.as_bstr(), branch.as_bstr(), &[], None)?,
+                PushOutcome::NeedsForce(_)
             ),
             "a non-fast-forward push offers the guarded retry"
         );
-        let PushOutcome::Pushed(message) = push_branch(&git_dir, remote_name.as_bstr(), branch.as_bstr(), &[], true)?
+        let PushOutcome::Pushed(message) = push_branch(
+            &git_dir,
+            remote_name.as_bstr(),
+            branch.as_bstr(),
+            &[],
+            Some("--force-with-lease".into()),
+        )?
         else {
             panic!("a forced retry cannot request another retry");
         };
@@ -10390,13 +11303,241 @@ mod tests {
             .args(["update-ref", "refs/heads/main", &main_id.to_hex().to_string()])
             .status()?;
         assert!(stale_remote.success(), "the remote changes without local knowledge");
-        let err = match push_branch(&git_dir, remote_name.as_bstr(), branch.as_bstr(), &[], true) {
+        let err = match push_branch(
+            &git_dir,
+            remote_name.as_bstr(),
+            branch.as_bstr(),
+            &[],
+            Some("--force-with-lease".into()),
+        ) {
             Err(err) => err,
             Ok(_) => panic!("a stale lease fails permanently"),
         };
         let message = format!("{err:#}");
         assert!(message.contains("[rejected] (stale info)"), "{message}");
         assert!(message.contains("failed to push some refs"), "{message}");
+        Ok(())
+    }
+
+    #[test]
+    fn force_push_to_a_url_remote_uses_the_tip_observed_before_the_initial_push() -> gix::error::TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let remote = gix_testtools::tempfile::tempdir()?;
+        assert!(
+            gix_testtools::git_command(remote.path())
+                .args(["init", "-q", "--bare"])
+                .status()?
+                .success()
+        );
+        let git = |args: &[&str]| gix_testtools::git_command(fixture.path()).args(args).status();
+        let remote_url = remote.path().to_string_lossy().into_owned();
+        assert!(
+            git(&[
+                "push",
+                "-q",
+                &remote_url,
+                "topic:refs/heads/incoming",
+                "merged:refs/heads/other"
+            ])?
+            .success()
+        );
+        assert!(git(&["branch", "local-pr", "main"])?.success());
+        assert!(git(&["config", "branch.local-pr.remote", &remote_url])?.success());
+        assert!(git(&["config", "branch.local-pr.pushRemote", &remote_url])?.success());
+        assert!(git(&["config", "branch.local-pr.merge", "refs/heads/incoming"])?.success());
+        let PushOutcome::NeedsForce(lease) =
+            push_branch(fixture.path(), remote_url.as_str().into(), "local-pr".into(), &[], None)?
+        else {
+            panic!("the divergent upstream needs a guarded force retry")
+        };
+        let unseen_commit_id = test_repository::open(fixture.path())?
+            .rev_parse_single("merged")?
+            .detach();
+        assert!(
+            gix_testtools::git_command(remote.path())
+                .args([
+                    "update-ref",
+                    "refs/heads/incoming",
+                    &unseen_commit_id.to_hex().to_string()
+                ])
+                .status()?
+                .success()
+        );
+        assert!(
+            push_branch(
+                fixture.path(),
+                remote_url.as_str().into(),
+                "local-pr".into(),
+                &[],
+                Some(lease.as_bstr())
+            )
+            .is_err(),
+            "a change between the initial push and its confirmation cannot be overwritten"
+        );
+        assert_eq!(
+            test_repository::open(remote.path())?
+                .find_reference("refs/heads/incoming")?
+                .id(),
+            unseen_commit_id
+        );
+        let original_commit_id = test_repository::open(fixture.path())?
+            .rev_parse_single("topic")?
+            .detach();
+        assert!(
+            gix_testtools::git_command(remote.path())
+                .args([
+                    "update-ref",
+                    "refs/heads/incoming",
+                    &original_commit_id.to_hex().to_string()
+                ])
+                .status()?
+                .success()
+        );
+        assert!(
+            matches!(
+                push_branch(
+                    fixture.path(),
+                    remote_url.as_str().into(),
+                    "local-pr".into(),
+                    &[],
+                    Some(lease.as_bstr())
+                )?,
+                PushOutcome::Pushed(_)
+            ),
+            "a URL remote without a tracking ref supports the confirmed force retry"
+        );
+        assert_eq!(
+            test_repository::open(remote.path())?
+                .find_reference("refs/heads/incoming")?
+                .id(),
+            test_repository::open(fixture.path())?.rev_parse_single("local-pr")?,
+            "the upstream receives the rewritten local branch"
+        );
+        assert_eq!(
+            observe_push_lease(fixture.path(), remote_url.as_str().into(), "refs/heads/missing".into())?,
+            "--force-with-lease=refs/heads/missing:",
+            "a missing remote branch gets a must-not-exist lease"
+        );
+        assert!(
+            observe_push_lease(
+                fixture.path(),
+                format!("{remote_url}/missing").as_str().into(),
+                "refs/heads/incoming".into()
+            )
+            .is_err(),
+            "a transport failure cannot be mistaken for a missing branch"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn push_uses_the_pr_upstream_when_the_local_branch_has_a_different_name() -> gix::error::TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let remote = gix_testtools::tempfile::tempdir()?;
+        assert!(
+            gix_testtools::git_command(remote.path())
+                .args(["init", "-q", "--bare"])
+                .status()?
+                .success()
+        );
+        let git = |args: &[&str]| gix_testtools::git_command(fixture.path()).args(args).status();
+        assert!(git(&["remote", "add", "fork", &remote.path().to_string_lossy()])?.success());
+        assert!(git(&["branch", "local-pr", "topic"])?.success());
+        for (key, value) in [
+            ("remote", "fork"),
+            ("pushRemote", "fork"),
+            ("merge", "refs/heads/topic"),
+        ] {
+            assert!(git(&["config", &format!("branch.local-pr.{key}"), value])?.success());
+        }
+        let expected = test_repository::open(fixture.path())?
+            .rev_parse_single("topic")?
+            .detach();
+        assert!(matches!(
+            push_branch(fixture.path(), "fork".into(), "local-pr".into(), &[], None)?,
+            PushOutcome::Pushed(_)
+        ));
+        let repository = test_repository::open(remote.path())?;
+        assert_eq!(
+            repository.find_reference("refs/heads/topic")?.id(),
+            expected,
+            "the PR head branch receives the push"
+        );
+        assert!(
+            repository.try_find_reference("refs/heads/local-pr")?.is_none(),
+            "a local alias must not create an unrelated remote branch"
+        );
+        let local = test_repository::open(fixture.path())?;
+        let cached = "refs/tix/github/base/project/pull/12/head";
+        local.reference(
+            cached,
+            expected,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "test fetched PR lease",
+        )?;
+        assert!(git(&["config", "branch.local-pr.tixPullRequest", cached])?.success());
+        let rewritten_commit_id = local.head_id()?.detach();
+        assert!(
+            git(&[
+                "update-ref",
+                "refs/heads/local-pr",
+                &rewritten_commit_id.to_hex().to_string()
+            ])?
+            .success()
+        );
+        let PushOutcome::NeedsForce(lease) = push_branch(fixture.path(), "fork".into(), "local-pr".into(), &[], None)?
+        else {
+            panic!("rewritten PR history needs a force retry")
+        };
+        local.reference(
+            cached,
+            rewritten_commit_id,
+            gix::refs::transaction::PreviousValue::Any,
+            "test background cache refresh",
+        )?;
+        assert!(
+            matches!(
+                push_branch(
+                    fixture.path(),
+                    "fork".into(),
+                    "local-pr".into(),
+                    &[],
+                    Some(lease.as_bstr())
+                )?,
+                PushOutcome::Pushed(_)
+            ),
+            "the cached PR head supplies the lease for the original remote branch"
+        );
+        assert_eq!(
+            test_repository::open(remote.path())?
+                .find_reference("refs/heads/topic")?
+                .id(),
+            rewritten_commit_id
+        );
+        assert!(git(&["update-ref", "refs/heads/local-pr", &expected.to_hex().to_string()])?.success());
+        assert!(
+            push_branch(
+                fixture.path(),
+                "fork".into(),
+                "local-pr".into(),
+                &[],
+                Some(lease.as_bstr())
+            )
+            .is_err(),
+            "a stale PR lease cannot overwrite unseen remote changes"
+        );
+        assert_eq!(
+            test_repository::open(remote.path())?
+                .find_reference("refs/heads/topic")?
+                .id(),
+            rewritten_commit_id
+        );
         Ok(())
     }
 
@@ -10524,6 +11665,7 @@ mod tests {
             fixture.path(),
             false,
             b"origin".as_bstr(),
+            &std::collections::HashSet::from([expected]),
             gix::progress::tree::Root::new(),
         )?;
         assert_eq!(message, "fetched origin");
@@ -10533,6 +11675,97 @@ mod tests {
                 .id(),
             expected,
             "the configured fetch refspec updates its tracking reference"
+        );
+        assert_eq!(
+            history::all_pins(&test_repository::open(fixture.path())?)?[0].target,
+            gix::refs::Target::Symbolic("refs/remotes/origin/main".try_into()?),
+            "a new ref at a visible commit is pinned even when no pack is received"
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "blocking-network-client")]
+    #[test]
+    fn fetch_pins_changed_refs_connected_to_the_starting_view() -> gix::error::TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let fixture = gix_testtools::scripted_fixture_writable("fetch.sh")?;
+        let local = fixture.path().join("local");
+        let _cwd = gix_testtools::set_current_dir(&local)?;
+        let repository = test_repository::open(&local)?;
+        let visible_commit_id = repository.rev_parse_single("main")?.detach();
+        let base_commit_id = repository.rev_parse_single("main^")?.detach();
+        let visible = std::collections::HashSet::from([visible_commit_id, base_commit_id]);
+        let (existing_pin, _) = edit::time_travel::create_or_reuse_pin(
+            &repository,
+            gix::refs::Target::Symbolic("refs/remotes/custom/pinned".try_into()?),
+            visible_commit_id,
+            "test existing symbolic pin",
+        )?;
+        let (direct_pin, _) = edit::time_travel::create_or_reuse_pin(
+            &repository,
+            gix::refs::Target::Object(visible_commit_id),
+            visible_commit_id,
+            "test direct pin at a fetched target",
+        )?;
+        drop(repository);
+
+        fetch_remote(
+            &local,
+            false,
+            b"origin".as_bstr(),
+            &visible,
+            gix::progress::tree::Root::new(),
+        )?;
+        let repository = test_repository::open(&local)?;
+        let pins = history::all_pins(&repository)?;
+        let mut targets: Vec<_> = pins.iter().filter_map(|pin| pin.target.try_name()).collect();
+        targets.sort();
+        assert_eq!(
+            targets.iter().map(|name| name.as_bstr()).collect::<Vec<_>>(),
+            [
+                "refs/remotes/custom/advanced",
+                "refs/remotes/custom/forced",
+                "refs/remotes/custom/merged",
+                "refs/remotes/custom/new",
+                "refs/remotes/custom/pinned",
+                "refs/remotes/custom/same",
+                "refs/tags/annotated",
+            ]
+            .map(|name| name.as_bytes().as_bstr()),
+            "new, fast-forwarded, and forced refs reaching the view are pinned, including through second parents"
+        );
+        assert!(
+            pins.iter().any(|pin| pin.name == existing_pin.name),
+            "the existing symbolic pin is reused"
+        );
+        assert!(
+            pins.contains(&direct_pin),
+            "a direct pin is preserved alongside new symbolic pins"
+        );
+        let snapshot = history::snapshot(&repository, &[], &[], false)?;
+        for pin in &pins {
+            assert!(
+                snapshot.view_tips.contains(&pin.id),
+                "fetched pinned tips enter the refreshed view"
+            );
+        }
+        let advanced_commit_id = repository.rev_parse_single("refs/remotes/custom/advanced")?.detach();
+        edit::time_travel::remove_pins(&local, false, advanced_commit_id)?;
+        let retained = history::all_pins(&repository)?;
+        drop(repository);
+        fetch_remote(
+            &local,
+            false,
+            b"origin".as_bstr(),
+            &visible,
+            gix::progress::tree::Root::new(),
+        )?;
+        assert_eq!(
+            history::all_pins(&test_repository::open(&local)?)?,
+            retained,
+            "an up-to-date fetch neither duplicates pins nor restores intentionally removed pins"
         );
         Ok(())
     }
@@ -10639,10 +11872,18 @@ mod tests {
                 remote: "origin".into(),
                 branch: "main".into(),
                 hidden_tips: Vec::new(),
+                lease: Some("--force-with-lease".into()),
             })),
         );
         assert!(!succeeded);
-        assert!(retry.is_some(), "the rejected push remains available for retry");
+        assert_eq!(
+            retry
+                .as_ref()
+                .and_then(|request| request.lease.as_ref())
+                .map(|lease| lease.as_bstr()),
+            Some("--force-with-lease".into()),
+            "the rejected push preserves its lease through the confirmation prompt"
+        );
         assert_eq!(
             app.notice(),
             Some(app::Notice {
@@ -10694,70 +11935,6 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         Err("reference monitoring did not report the completed loose-reference update".into())
-    }
-
-    #[test]
-    fn worktree_status_head_changes_only_with_head() -> gix_testtools::Result {
-        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
-        let repository = test_repository::open(fixture.path())?;
-        let baseline = worktree_status_head(&repository)?;
-        let main = repository.rev_parse_single("main")?.detach();
-        let topic = repository.rev_parse_single("topic")?.detach();
-        drop(repository);
-
-        let update_ref = |name: &str, target: gix::ObjectId| -> gix_testtools::Result {
-            let status = gix_testtools::git_command(fixture.path())
-                .args(["update-ref", name, &target.to_string()])
-                .status()?;
-            assert!(status.success(), "git updates {name}");
-            Ok(())
-        };
-        update_ref("refs/heads/unrelated", topic)?;
-        assert_eq!(
-            worktree_status_head(&test_repository::open(fixture.path())?)?,
-            baseline,
-            "an unrelated ref does not affect worktree status"
-        );
-
-        update_ref("refs/heads/alias", main)?;
-        let status = gix_testtools::git_command(fixture.path())
-            .args(["symbolic-ref", "HEAD", "refs/heads/alias"])
-            .status()?;
-        assert!(status.success(), "git reattaches HEAD to the alias");
-        let alias = worktree_status_head(&test_repository::open(fixture.path())?)?;
-        assert_ne!(alias, baseline, "the symbolic referent is part of the status baseline");
-        assert_eq!(
-            alias.target, baseline.target,
-            "the alias initially names the same commit"
-        );
-        let mut cached = Some(baseline.clone());
-        remember_worktree_status_head(&mut cached, false, Ok(alias.clone()));
-        assert_eq!(
-            cached,
-            Some(baseline.clone()),
-            "an unstaged-only refresh preserves the HEAD baseline"
-        );
-        remember_worktree_status_head(&mut cached, true, Ok(alias.clone()));
-        assert_eq!(cached, Some(alias.clone()), "a staged refresh advances the baseline");
-
-        update_ref("refs/heads/alias", topic)?;
-        let moved = worktree_status_head(&test_repository::open(fixture.path())?)?;
-        assert_ne!(
-            moved.target, alias.target,
-            "moving the checked-out ref changes the baseline"
-        );
-
-        let status = gix_testtools::git_command(fixture.path())
-            .args(["symbolic-ref", "HEAD", "refs/heads/unborn"])
-            .status()?;
-        assert!(status.success(), "git makes HEAD unborn");
-        let unborn = worktree_status_head(&test_repository::open(fixture.path())?)?;
-        assert_eq!(
-            unborn.reference.as_ref().map(gix::refs::FullName::as_bstr),
-            Some("refs/heads/unborn".into())
-        );
-        assert_eq!(unborn.target, None, "an unborn HEAD has no peeled target");
-        Ok(())
     }
 
     #[test]
@@ -10841,7 +12018,7 @@ mod tests {
     fn copies_the_selected_path_from_the_focused_changes_block() {
         let mut app = App::new(1);
         app.changes_focus = Some(ChangePane::Tree);
-        app.set_changes_bounds(ChangePane::Tree, 2, 2, None, 80, 0);
+        app.set_changes_bounds(ChangePane::Tree, 2, 2, [None; 2], 80, 0);
         drop(app.update(Action::MoveDown));
         let changes = Changes {
             paths: ["first", "dir/second"]
@@ -11081,6 +12258,103 @@ mod tests {
     }
 
     #[test]
+    fn submodule_tree_changes_have_no_blob_diff_or_line_counts() -> TestResult {
+        let fixture = gix_testtools::scripted_fixture_writable("submodule-changes.sh")?;
+        let repository = test_repository::open(fixture.path())?;
+        let mut pool = LineDiffPool::new(fixture.path(), false, 2);
+        for (revision, kind) in [
+            ("added", ChangeKind::Added),
+            ("modified", ChangeKind::Modified),
+            ("to-file", ChangeKind::TypeChanged),
+            ("to-submodule", ChangeKind::TypeChanged),
+            ("deleted", ChangeKind::Deleted),
+        ] {
+            let target = app::TreeDiffTarget::Commit {
+                id: repository.rev_parse_single(revision)?.detach(),
+                parent: 0,
+            };
+            let mut changes = load_changes(&repository, target, &mut pool)?;
+            assert_eq!(
+                changes.paths,
+                [PathChange {
+                    kind,
+                    group: ChangeGroup::Tree,
+                    source: None,
+                    path: "submodule".into(),
+                    lines: None,
+                }],
+                "{revision} retains the submodule row without line counts"
+            );
+            assert_eq!(
+                (changes.lines_added, changes.lines_removed),
+                (0, 0),
+                "{revision} excludes gitlinks from text totals"
+            );
+            assert_eq!(
+                add_line_counts(&repository, &mut changes)?,
+                [None],
+                "commit editors also avoid blob diffs for {revision}"
+            );
+            let error = prepare_file_diff_with_repository(&repository, &changes.diffs[0], &changes.paths[0])
+                .err()
+                .expect("submodule file diffs are unavailable");
+            assert!(
+                error.to_string().contains("submodule changes don't have a file diff"),
+                "{revision} reports the unsupported diff without trying to load a blob"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn diff_stats_ignore_textconv_while_patches_use_it() -> TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only("textconv.sh")?;
+        let repository = test_repository::open(&fixture)?;
+        let target = app::TreeDiffTarget::Commit {
+            id: repository.head_id()?.detach(),
+            parent: 0,
+        };
+        let mut pool = LineDiffPool::new(&fixture, false, 2);
+        let changes = load_changes(&repository, target, &mut pool)?;
+        assert_eq!(
+            gix_testtools::git(&fixture, "diff --no-textconv --numstat HEAD~ HEAD")?,
+            "-\t-\tsample.bin\n1\t1\tsample.txt\n",
+            "Git excludes textconv output from the reference stats"
+        );
+        assert_eq!(
+            changes.paths.iter().map(|path| path.lines).collect::<Vec<_>>(),
+            [None, Some((1, 1))],
+            "tree stats count the original text and exclude binary content"
+        );
+        let worktree = load_worktree_changes(&repository, &mut pool)?;
+        for path in &worktree.paths {
+            assert_eq!(
+                path.lines,
+                (path.path == "sample.txt").then_some((1, 1)),
+                "staged and unstaged stats ignore textconv"
+            );
+        }
+        for cached in [None, Some(&changes)] {
+            let commit = prepare_commit_diff_with_repository(&repository, target, cached, "textconv".into())?;
+            let FileDiff::BuiltIn(diff) = commit.internal else {
+                return Err("the fixture has no external diff or pager".into());
+            };
+            let summary = diff.summary.expect("commit diffs include statistics");
+            assert!(summary[0].to_string().contains("Bin"), "binary stats stay binary");
+            assert!(
+                summary[1].to_string().ends_with("2 +- 0"),
+                "text stats count one original insertion and removal"
+            );
+            assert_eq!(
+                diff.lines.iter().filter(|line| *line == "+after").count(),
+                3,
+                "text patches keep their doubled lines and binary patches keep decoded text"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn loads_changes_against_each_merge_parent() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
         let repository = crate::test_repository::open(&fixture)?;
@@ -11141,7 +12415,9 @@ mod tests {
                 assert!(diff.lines.iter().any(|line| line == "+root"));
             }
             FileDiff::External(_) => unreachable!("isolated repositories have no external diff"),
-            FileDiff::Pager { .. } => unreachable!("isolated repositories have no pager"),
+            FileDiff::Pager { .. } => {
+                unreachable!("isolated repositories have no pager")
+            }
         }
 
         let external_repository = crate::test_repository::open_with(&fixture, ["diff.external=test --flag"])?;
@@ -11236,7 +12512,7 @@ mod tests {
             .collect::<String>();
         assert!(
             summary.contains("A 2 · +2"),
-            "the existing diff pass supplies aggregate counts"
+            "the raw-content diff pass supplies aggregate counts"
         );
         let topic_position = diff
             .lines
@@ -11252,6 +12528,14 @@ mod tests {
             topic_position < extra_position,
             "whole-commit patches retain tree-diff order"
         );
+        let summary_rows = diff.summary.as_ref().expect("commit diffs have a summary").len() + 1;
+        for header in [topic_position, extra_position] {
+            assert_eq!(
+                DiffView::Patch(&diff).sticky_header_index(summary_rows + header + 1),
+                Some(summary_rows + header),
+                "aggregated patches freeze each file's own header after the summary"
+            );
+        }
         let base = repository.rev_parse_single("v1^{}")?.detach();
         let branch_target = app::TreeDiffTarget::Branch { base, tip: topic_id };
         let branch = load_changes(&repository, branch_target, line_diff_pool)?;
@@ -11633,7 +12917,7 @@ mod tests {
                 "remote-only commits never expand the edit scope"
             );
             tree.rebuild(&graph, &history.refs, &history.decorations);
-            terminal.draw(|frame| tree.draw(frame, frame.area(), Some(&graph)))?;
+            terminal.draw(|frame| tree.draw(frame, frame.area(), Some(&graph), &mut App::new(10)))?;
             let screen: String = terminal
                 .backend()
                 .buffer()
@@ -11975,7 +13259,7 @@ added
                     counts,
                     "only existing text contributes line counts for {name} with {external:?}"
                 );
-                let prepared = prepare_file_diff_content(&repository, &change, &path, true);
+                let prepared = prepare_file_diff_content(&repository, &change, &path);
                 if name == "missing" {
                     let err = prepared.err().expect("neither side exists, so no patch can be opened");
                     assert!(
@@ -11986,16 +13270,11 @@ added
                     continue;
                 }
                 match prepared? {
-                    PreparedFileDiff::External(_, actual) => {
+                    PreparedFileDiff::External(_) => {
                         assert!(external.is_some(), "external commands require configuration");
-                        assert_eq!(
-                            actual, counts,
-                            "external commands retain validated text counts for {name}"
-                        );
-                        assert!(actual.is_some(), "binary input must not launch an external command");
+                        assert!(counts.is_some(), "binary input must not launch an external command");
                     }
-                    PreparedFileDiff::BuiltIn(diff, actual) => {
-                        assert_eq!(actual, counts, "built-in diffs retain text counts for {name}");
+                    PreparedFileDiff::BuiltIn(diff) => {
                         if name == "binary" {
                             assert!(
                                 diff.lines.iter().any(|line| line == "Binary files differ"),
@@ -12021,7 +13300,7 @@ added
     }
 
     #[test]
-    fn loads_staged_and_unstaged_worktree_changes() -> gix_testtools::Result {
+    fn worktree_changes_put_conflicts_before_staged_and_unstaged_paths() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let path = fixture.path();
         let git = |args: &[&str]| -> std::io::Result<std::process::ExitStatus> {
@@ -12033,13 +13312,15 @@ added
 
         assert!(git(&["switch", "-q", "-c", "conflict-other"])?.success());
         std::fs::write(path.join("root"), "other\n")?;
+        std::fs::write(path.join("main"), "other\n")?;
         assert!(git(&["commit", "-qam", "other"])?.success());
         assert!(git(&["switch", "-q", "main"])?.success());
         std::fs::write(path.join("root"), "ours\n")?;
+        std::fs::write(path.join("main"), "ours\n")?;
         assert!(git(&["commit", "-qam", "ours"])?.success());
         assert!(
             !git(&["merge", "--no-edit", "conflict-other"])?.success(),
-            "the fixture deliberately leaves an unresolved path"
+            "the fixture deliberately leaves two unresolved paths"
         );
 
         std::fs::write(path.join("staged"), "staged\n")?;
@@ -12061,14 +13342,15 @@ added
         assert_eq!(
             rows,
             [
+                (ChangeGroup::Unstaged, ChangeKind::Unmerged, "main".into()),
+                (ChangeGroup::Unstaged, ChangeKind::Unmerged, "root".into()),
                 (ChangeGroup::Staged, ChangeKind::Added, "both".into()),
                 (ChangeGroup::Staged, ChangeKind::Added, "staged".into()),
                 (ChangeGroup::Unstaged, ChangeKind::Added, ".mailmap".into()),
                 (ChangeGroup::Unstaged, ChangeKind::Modified, "both".into()),
-                (ChangeGroup::Unstaged, ChangeKind::Unmerged, "root".into()),
                 (ChangeGroup::Unstaged, ChangeKind::Added, "untracked".into()),
             ],
-            "status is partitioned, path-sorted, includes conflicts and untracked files, and excludes ignored files"
+            "conflicts precede staged and unstaged paths, with raw-path sorting within each group and ignored files excluded"
         );
         assert!(changes.lines_added > 0, "available file diffs contribute line counts");
         assert!(
@@ -12094,6 +13376,24 @@ added
                 .contains("no single file diff"),
             "opening an unresolved path produces actionable feedback"
         );
+        let mut monitor = gix::status::Monitor::new(&repository, Default::default())?;
+        assert_eq!(
+            refresh_worktree_changes(&repository, &mut monitor, None, &mut line_diff_pool)?,
+            changes,
+            "monitored status preserves conflict ordering and keeps each diff with its path"
+        );
+        Ok(())
+    }
+
+    fn update_monitored_changes(
+        repository: &gix::Repository,
+        monitor: &mut gix::status::Monitor,
+        cached: &mut Changes,
+        changes: &gix::notify::Changes,
+        pool: &mut LineDiffPool,
+    ) -> Result<()> {
+        monitor.invalidate_changes(changes);
+        *cached = refresh_worktree_changes(repository, monitor, Some(cached), pool)?;
         Ok(())
     }
 
@@ -12112,7 +13412,8 @@ added
         std::fs::write(path.join("target/keep.cache"), "ignored\n")?;
         let repository = test_repository::open(path)?;
         let mut pool = LineDiffPool::new(path, false, 2);
-        let mut cached = load_worktree_changes(&repository, &mut pool)?;
+        let mut monitor = gix::status::Monitor::new(&repository, Default::default())?;
+        let mut cached = refresh_worktree_changes(&repository, &mut monitor, None, &mut pool)?;
         let git_status = gix_testtools::git_command(path)
             .args(["status", "--porcelain=v1", "-z", "--untracked-files=normal"])
             .output()?;
@@ -12157,12 +13458,13 @@ added
             } else {
                 std::fs::remove_dir_all(path.join("target/debug"))?;
             }
-            update_worktree_changes(
+            update_monitored_changes(
                 &repository,
+                &mut monitor,
                 &mut cached,
-                &WorktreeStatusParts {
-                    staged: false,
-                    scopes: HashSet::from([BString::from("target/debug/deps/new-artifact")]),
+                &gix::notify::Changes {
+                    worktree: status_scopes(vec![BString::from("target/debug/deps/new-artifact")]),
+                    ..Default::default()
                 },
                 &mut pool,
             )?;
@@ -12195,7 +13497,8 @@ added
 
         let repository = test_repository::open(path)?;
         let mut pool = LineDiffPool::new(path, false, 2);
-        let mut cached = load_worktree_changes(&repository, &mut pool)?;
+        let mut monitor = gix::status::Monitor::new(&repository, Default::default())?;
+        let mut cached = refresh_worktree_changes(&repository, &mut monitor, None, &mut pool)?;
         std::fs::write(path.join("timesheets/tracked"), "after\n")?;
         std::fs::write(path.join("timesheets/untracked"), "new\n")?;
         let expected = load_worktree_changes(&repository, &mut pool)?;
@@ -12211,12 +13514,13 @@ added
             "timesheets/tracked",
         ] {
             let scopes = [BString::from(relative)];
-            update_worktree_changes(
+            update_monitored_changes(
                 &repository,
+                &mut monitor,
                 &mut cached,
-                &WorktreeStatusParts {
-                    staged: false,
-                    scopes: scopes.into_iter().collect(),
+                &gix::notify::Changes {
+                    worktree: status_scopes(scopes),
+                    ..Default::default()
                 },
                 &mut pool,
             )?;
@@ -12232,15 +13536,16 @@ added
         let path = fixture.path();
         let repository = test_repository::open(path)?;
         let mut pool = LineDiffPool::new(path, false, 2);
-        let mut cached = load_worktree_changes(&repository, &mut pool)?;
+        let mut monitor = gix::status::Monitor::new(&repository, Default::default())?;
+        let mut cached = refresh_worktree_changes(&repository, &mut monitor, None, &mut pool)?;
 
         std::fs::write(path.join("main"), "changed in worktree\n")?;
         std::fs::write(path.join("literal[brackets]"), "untracked\n")?;
-        let parts = WorktreeStatusParts {
-            staged: false,
-            scopes: HashSet::from([BString::from("main"), BString::from("literal[brackets]")]),
+        let parts = gix::notify::Changes {
+            worktree: status_scopes(vec![BString::from("main"), BString::from("literal[brackets]")]),
+            ..Default::default()
         };
-        update_worktree_changes(&repository, &mut cached, &parts, &mut pool)?;
+        update_monitored_changes(&repository, &mut monitor, &mut cached, &parts, &mut pool)?;
         assert_eq!(
             cached,
             load_worktree_changes(&repository, &mut pool)?,
@@ -12250,11 +13555,13 @@ added
         let status = gix_testtools::git_command(path).args(["add", "main"]).status()?;
         assert!(status.success(), "git stages the tracked change");
         std::fs::write(path.join("main"), "changed in index\nand worktree\n")?;
-        let parts = WorktreeStatusParts {
-            staged: true,
-            scopes: HashSet::from([BString::from("main")]),
+        let parts = gix::notify::Changes {
+            references: true,
+            index: true,
+            worktree: status_scopes(vec![BString::from("main")]),
+            ..Default::default()
         };
-        update_worktree_changes(&repository, &mut cached, &parts, &mut pool)?;
+        update_monitored_changes(&repository, &mut monitor, &mut cached, &parts, &mut pool)?;
         assert_eq!(
             cached,
             load_worktree_changes(&repository, &mut pool)?,
@@ -12263,11 +13570,11 @@ added
 
         std::fs::create_dir_all(path.join("nested"))?;
         std::fs::write(path.join("nested/untracked"), "untracked\n")?;
-        let parts = WorktreeStatusParts {
-            staged: false,
-            scopes: HashSet::from([BString::from("nested")]),
+        let parts = gix::notify::Changes {
+            worktree: status_scopes(vec![BString::from("nested")]),
+            ..Default::default()
         };
-        update_worktree_changes(&repository, &mut cached, &parts, &mut pool)?;
+        update_monitored_changes(&repository, &mut monitor, &mut cached, &parts, &mut pool)?;
         assert_eq!(
             cached,
             load_worktree_changes(&repository, &mut pool)?,
@@ -12275,7 +13582,7 @@ added
         );
 
         std::fs::write(path.join("nested/.gitignore"), "untracked\n")?;
-        update_worktree_changes(&repository, &mut cached, &parts, &mut pool)?;
+        update_monitored_changes(&repository, &mut monitor, &mut cached, &parts, &mut pool)?;
         assert_eq!(
             cached,
             load_worktree_changes(&repository, &mut pool)?,
@@ -12289,12 +13596,13 @@ added
             .status()?;
         assert!(status.success(), "git moves the checked-out branch");
         let repository = test_repository::open(path)?;
-        update_worktree_changes(
+        update_monitored_changes(
             &repository,
+            &mut monitor,
             &mut cached,
-            &WorktreeStatusParts {
-                staged: true,
-                scopes: HashSet::new(),
+            &gix::notify::Changes {
+                references: true,
+                ..Default::default()
             },
             &mut pool,
         )?;
@@ -12303,6 +13611,238 @@ added
             load_worktree_changes(&repository, &mut pool)?,
             "a staged-only replacement follows the new HEAD tree"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn monitored_staged_line_counts_reuse_unchanged_blobs() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let root = fixture.path();
+        test_repository::disable_autocrlf(root)?;
+        std::fs::remove_file(root.join(".mailmap"))?;
+        for path in ["main", "root"] {
+            std::fs::write(root.join(path), "one\ntwo\n")?;
+        }
+        let status = gix_testtools::git_command(root)
+            .args(["add", "main", "root"])
+            .status()?;
+        assert!(status.success(), "both tracked files are staged");
+        let repository = test_repository::open(root)?;
+        let mut pool = LineDiffPool::new(root, false, 2);
+        let mut monitor = gix::status::Monitor::new(&repository, Default::default())?;
+        let mut cached = refresh_worktree_changes(&repository, &mut monitor, None, &mut pool)?;
+        let last_batch = pool.last_used;
+        update_monitored_changes(
+            &repository,
+            &mut monitor,
+            &mut cached,
+            &gix::notify::Changes {
+                index: true,
+                ..Default::default()
+            },
+            &mut pool,
+        )?;
+        assert_eq!(
+            pool.last_used, last_batch,
+            "unchanged staged blobs do not start another diff batch"
+        );
+        assert_eq!(
+            (cached.lines_added, cached.lines_removed),
+            (4, 2),
+            "both staged rows retain their original line counts"
+        );
+
+        std::fs::write(root.join("main"), "one\ntwo\nthree\n")?;
+        let status = gix_testtools::git_command(root).args(["add", "main"]).status()?;
+        assert!(status.success(), "another hunk changes the staged blob");
+        update_monitored_changes(
+            &repository,
+            &mut monitor,
+            &mut cached,
+            &gix::notify::Changes {
+                index: true,
+                ..Default::default()
+            },
+            &mut pool,
+        )?;
+        assert_eq!(
+            (cached.lines_added, cached.lines_removed),
+            (5, 2),
+            "the new staged blob gets fresh counts"
+        );
+        assert_eq!(
+            cached,
+            load_worktree_changes(&repository, &mut pool)?,
+            "cached results equal a full diff"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn monitored_line_counts_follow_configuration_and_indexed_attributes() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let root = fixture.path();
+        test_repository::disable_autocrlf(root)?;
+        std::fs::remove_file(root.join(".mailmap"))?;
+        std::fs::write(root.join("main"), "one\ntwo\n")?;
+        std::fs::write(root.join(".gitattributes"), "main diff=counting\n")?;
+        let status = gix_testtools::git_command(root)
+            .args(["add", "main", ".gitattributes"])
+            .status()?;
+        assert!(status.success(), "the staged file uses a configurable diff driver");
+        let repository = test_repository::open(root)?;
+        let mut pool = LineDiffPool::new(root, false, 2);
+        let mut monitor = gix::status::Monitor::new(&repository, Default::default())?;
+        let mut cached = refresh_worktree_changes(&repository, &mut monitor, None, &mut pool)?;
+        let lines = |changes: &Changes, group| {
+            changes
+                .paths
+                .iter()
+                .find(|path| path.group == group && path.path == "main")
+                .expect("the requested main row is present")
+                .lines
+        };
+        assert_eq!(
+            lines(&cached, ChangeGroup::Staged),
+            Some((2, 1)),
+            "the initial staged file is counted as text"
+        );
+        drop(repository);
+        for binary in ["true", "false"] {
+            let status = gix_testtools::git_command(root)
+                .args(["config", "diff.counting.binary", binary])
+                .status()?;
+            assert!(status.success(), "the diff driver changes without changing the blobs");
+            let repository = test_repository::open(root)?;
+            update_monitored_changes(
+                &repository,
+                &mut monitor,
+                &mut cached,
+                &gix::notify::Changes {
+                    index: true,
+                    ..Default::default()
+                },
+                &mut pool,
+            )?;
+            assert_eq!(
+                lines(&cached, ChangeGroup::Staged),
+                (binary == "false").then_some((2, 1)),
+                "an index-only event reopens changed configuration for unchanged staged blobs"
+            );
+        }
+
+        std::fs::write(root.join(".gitattributes"), "main -diff\n")?;
+        let status = gix_testtools::git_command(root)
+            .args(["add", ".gitattributes"])
+            .status()?;
+        assert!(
+            status.success(),
+            "indexed attributes change while the main blob stays the same"
+        );
+        let repository = test_repository::open(root)?;
+        update_monitored_changes(
+            &repository,
+            &mut monitor,
+            &mut cached,
+            &gix::notify::Changes {
+                index: true,
+                ..Default::default()
+            },
+            &mut pool,
+        )?;
+        assert_eq!(
+            lines(&cached, ChangeGroup::Staged),
+            None,
+            "an index-only event invalidates attribute-dependent counts"
+        );
+
+        std::fs::write(root.join(".gitattributes"), "main diff\n")?;
+        std::fs::write(root.join("main"), "one\ntwo\nthree\n")?;
+        pool.invalidate();
+        update_monitored_changes(
+            &repository,
+            &mut monitor,
+            &mut cached,
+            &gix::notify::Changes {
+                attributes: true,
+                ..Default::default()
+            },
+            &mut pool,
+        )?;
+        assert_eq!(
+            lines(&cached, ChangeGroup::Staged),
+            None,
+            "staged diffs still use indexed attributes"
+        );
+        assert_eq!(
+            lines(&cached, ChangeGroup::Unstaged),
+            Some((1, 0)),
+            "worktree diffs use current worktree attributes"
+        );
+        assert_eq!(
+            cached,
+            load_worktree_changes(&repository, &mut pool)?,
+            "attribute invalidation preserves full-refresh parity"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn monitored_staged_line_counts_follow_external_attributes() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let root = fixture.path();
+        test_repository::disable_autocrlf(root)?;
+        std::fs::remove_file(root.join(".mailmap"))?;
+        let external = gix_testtools::tempfile::tempdir()?;
+        let global_attributes = external.path().join("attributes");
+        let status = gix_testtools::git_command(root)
+            .args(["config", "core.attributesFile"])
+            .arg(&global_attributes)
+            .status()?;
+        assert!(
+            status.success(),
+            "the repository uses a missing external attribute file"
+        );
+        std::fs::write(root.join("main"), "one\ntwo\n")?;
+        let status = gix_testtools::git_command(root).args(["add", "main"]).status()?;
+        assert!(status.success(), "the changed text file is staged");
+        let repository = test_repository::open(root)?;
+        let mut pool = LineDiffPool::new(root, false, 2);
+        let mut monitor = gix::status::Monitor::new(&repository, Default::default())?;
+        let mut cached = refresh_worktree_changes(&repository, &mut monitor, None, &mut pool)?;
+        let lines = |changes: &Changes| {
+            changes
+                .paths
+                .iter()
+                .find(|path| path.group == ChangeGroup::Staged && path.path == "main")
+                .expect("the staged main row is present")
+                .lines
+        };
+        assert_eq!(lines(&cached), Some((2, 1)), "absent attributes leave the file as text");
+        for attributes in [global_attributes, repository.common_dir().join("info/attributes")] {
+            for contents in [Some("main -diff\n"), Some("main diff\n"), None] {
+                if let Some(contents) = contents {
+                    std::fs::write(&attributes, contents)?;
+                } else {
+                    std::fs::remove_file(&attributes)?;
+                }
+                update_monitored_changes(
+                    &repository,
+                    &mut monitor,
+                    &mut cached,
+                    &gix::notify::Changes {
+                        index: true,
+                        ..Default::default()
+                    },
+                    &mut pool,
+                )?;
+                assert_eq!(
+                    lines(&cached),
+                    (contents != Some("main -diff\n")).then_some((2, 1)),
+                    "an index-only event reads created, changed, and removed attribute files"
+                );
+            }
+        }
         Ok(())
     }
 
@@ -12346,6 +13886,66 @@ added
     }
 
     #[test]
+    fn monitored_line_counts_follow_coverage_even_when_status_items_are_equal() -> TestResult {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        test_repository::disable_autocrlf(fixture.path())?;
+        let root = fixture.path();
+        for path in ["main", "root"] {
+            std::fs::write(root.join(path), "changed\n")?;
+        }
+        let repository = test_repository::open(root)?;
+        let mut pool = LineDiffPool::new(root, false, 2);
+        let mut monitor = gix::status::Monitor::new(&repository, Default::default())?;
+        let previous = refresh_worktree_changes(&repository, &mut monitor, None, &mut pool)?;
+        for path in ["main", "root"] {
+            std::fs::write(root.join(path), "one\ntwo\n")?;
+        }
+        monitor.invalidate_changes(&gix::notify::Changes {
+            worktree: status_scopes(vec!["main".into()]),
+            ..Default::default()
+        });
+        let update = monitor.refresh(&repository, &AtomicBool::new(false))?;
+        assert!(!update.changed, "same-sized edits can preserve all raw status items");
+        let mut current = monitored_worktree_changes(
+            &repository,
+            monitor.snapshot().expect("refresh published a snapshot"),
+            &update,
+            Some(&previous),
+            &mut pool,
+        )?;
+        let lines = |changes: &Changes, name: &str| {
+            changes
+                .paths
+                .iter()
+                .find(|path| path.path == name)
+                .expect("modified path is visible")
+                .lines
+        };
+        assert_eq!(lines(&current, "main"), Some((2, 1)), "covered content is diffed again");
+        assert_eq!(
+            lines(&current, "root"),
+            Some((1, 1)),
+            "the other path keeps its counts until its event arrives"
+        );
+        update_monitored_changes(
+            &repository,
+            &mut monitor,
+            &mut current,
+            &gix::notify::Changes {
+                worktree: status_scopes(vec!["root".into()]),
+                ..Default::default()
+            },
+            &mut pool,
+        )?;
+        assert_eq!(
+            current,
+            load_worktree_changes(&repository, &mut pool)?,
+            "both delivered events restore full-refresh parity"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn streams_diff_bytes_and_accepts_early_pager_exit() -> gix_testtools::Result {
         let diff = BuiltInDiff::new(
             "M file".into(),
@@ -12384,6 +13984,65 @@ added
             "longer-running pagers restore tix immediately"
         );
         Ok(())
+    }
+
+    #[test]
+    fn fullscreen_commit_keys_scroll_lines_half_pages_and_boundaries() {
+        let mut app = App::new(1);
+        app.show_commit = true;
+        app.commit_fullscreen = true;
+        app.set_commit_bounds(6, 20);
+        let key = |code, modifiers| KeyEvent::new(code, modifiers);
+
+        for (key, offset) in [
+            (key(KeyCode::Char('j'), KeyModifiers::NONE), 1),
+            (key(KeyCode::Char('d'), KeyModifiers::CONTROL), 4),
+            (key(KeyCode::Char('u'), KeyModifiers::CONTROL), 1),
+            (key(KeyCode::Char('k'), KeyModifiers::NONE), 0),
+            (key(KeyCode::Char('g'), KeyModifiers::SHIFT), 20),
+            (key(KeyCode::Char('g'), KeyModifiers::NONE), 0),
+            (key(KeyCode::Char('G'), KeyModifiers::NONE), 20),
+            (key(KeyCode::Home, KeyModifiers::NONE), 0),
+            (key(KeyCode::End, KeyModifiers::NONE), 20),
+        ] {
+            let action = app_action(key, &app).expect("message navigation has a binding");
+            assert!(app.update(action).is_empty(), "scrolling has no repository effects");
+            assert_eq!(app.commit_offset, offset, "{key:?} scrolls the full-screen message");
+        }
+
+        app.update(Action::First);
+        let repeat = KeyEvent::new_with_kind(KeyCode::Char('j'), KeyModifiers::NONE, KeyEventKind::Repeat);
+        app.update(app_action(repeat, &app).expect("holding j continues to scroll"));
+        assert_eq!(app.commit_offset, 1);
+        assert_eq!(
+            app_action(
+                KeyEvent {
+                    kind: KeyEventKind::Release,
+                    ..repeat
+                },
+                &app
+            ),
+            None,
+            "key releases do not scroll"
+        );
+    }
+
+    #[test]
+    fn quit_requires_a_deliberate_press_for_each_panel() {
+        let mut app = App::new(1);
+        app.show_commit = true;
+        let key = |kind| KeyEvent::new_with_kind(KeyCode::Char('q'), KeyModifiers::NONE, kind);
+        let quit = app_action(key(KeyEventKind::Press), &app).expect("q has a quit action");
+        assert!(app.update(quit).is_empty());
+        assert!(!app.show_commit, "the press closes the message");
+        for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
+            assert_eq!(
+                app_action(key(kind), &app),
+                None,
+                "holding q cannot close the next panel"
+            );
+        }
+        assert_eq!(app.changes_mode, Some(ChangesMode::Both), "changes await another press");
     }
 
     #[test]
@@ -12484,6 +14143,57 @@ added
     }
 
     #[test]
+    fn viewport_prefix_positions_selection_before_direct_shortcuts() {
+        use app::{ChangePane, ViewportPosition};
+
+        let mut app = App::new(7);
+        app.changes_focus = Some(ChangePane::Tree);
+        app.set_changes_bounds(ChangePane::Tree, 7, 20, [None; 2], 80, 0);
+        let key = |letter| KeyEvent::new(KeyCode::Char(letter), KeyModifiers::NONE);
+        for (letter, position) in [
+            ('z', ViewportPosition::Center),
+            ('t', ViewportPosition::Top),
+            ('b', ViewportPosition::Bottom),
+        ] {
+            assert_eq!(app_action(key('z'), &app), Some(Action::ToggleViewport));
+            app.update(Action::ToggleViewport);
+            assert!(app.viewport_expanded, "z opens its discoverable command group");
+            let action = Action::PositionSelection(position);
+            assert_eq!(
+                app_action(key(letter), &app),
+                Some(action.clone()),
+                "z{letter} positions the viewport before ordinary letter shortcuts"
+            );
+            app.update(action);
+            assert!(!app.viewport_expanded, "positioning closes the prefix");
+        }
+        assert_eq!(
+            app_action(key('t'), &app),
+            Some(Action::ToggleRefTree),
+            "t keeps its ordinary meaning outside the viewport prefix"
+        );
+        app.update(Action::ToggleViewport);
+        assert_eq!(app_action(key('j'), &app), Some(Action::MoveDown));
+        app.update(Action::MoveDown);
+        assert!(!app.viewport_expanded, "navigation dismisses the prefix");
+        for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT, KeyModifiers::SHIFT] {
+            assert_eq!(
+                app_action(KeyEvent::new(KeyCode::Char('z'), modifiers), &app),
+                None,
+                "only an unmodified z opens the viewport prefix"
+            );
+        }
+        app.show_commit = true;
+        app.commit_fullscreen = true;
+        assert_eq!(app_action(key('z'), &app), None, "a message has no selected text row");
+        assert_eq!(
+            app_action(key('z'), &App::new(7)),
+            None,
+            "empty views have no row to position"
+        );
+    }
+
+    #[test]
     fn maps_navigation_and_control_c() {
         assert_eq!(
             action(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
@@ -12493,6 +14203,18 @@ added
             action(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
             Some(Action::OpenDiff)
         );
+        assert_eq!(
+            action(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT)),
+            Some(Action::OpenStructuralDiff),
+            "Shift+Enter opens the built-in structural diff"
+        );
+        for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
+            assert_eq!(
+                action(KeyEvent::new_with_kind(KeyCode::Enter, KeyModifiers::SHIFT, kind)),
+                None,
+                "holding Shift+Enter does not launch another tool"
+            );
+        }
         assert_eq!(
             action(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE)),
             Some(Action::PageUp)
@@ -12602,6 +14324,20 @@ added
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE)),
             Some(Action::ToggleCommit)
+        );
+        assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('`'), KeyModifiers::NONE)),
+            Some(Action::ToggleCommitFullscreen),
+            "backtick toggles the commit pane size"
+        );
+        assert_eq!(
+            action(KeyEvent::new_with_kind(
+                KeyCode::Char('`'),
+                KeyModifiers::NONE,
+                KeyEventKind::Release
+            )),
+            None,
+            "releasing backtick leaves the pane size alone"
         );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)),
@@ -13075,6 +14811,19 @@ added
             app_action(key(KeyCode::Enter), &app),
             Some(Action::ConfirmTreeSelection)
         );
+        let target = app
+            .selected_tree_diff_target()
+            .expect("tree selection highlights a commit");
+        let structural_diff = app_action(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT), &app)
+            .expect("Shift+Enter inspects the highlighted commit");
+        assert_eq!(
+            app.update(structural_diff),
+            vec![Effect::OpenCommitStructuralDiff(target)]
+        );
+        assert!(
+            app.tree_selection_source_active(),
+            "inspection does not confirm the transplant source"
+        );
         app.update(Action::ConfirmTreeSelection);
         assert!(
             app.tree_selection_active(),
@@ -13395,7 +15144,215 @@ added
         );
         assert!(
             flags.contains(KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES),
-            "printable j/k keys must use enhanced input for repeat events"
+            "printable navigation and standalone modifiers must use enhanced input"
+        );
+    }
+
+    #[test]
+    fn mouse_modifiers_restore_shift_state_without_keyboard_release_events() {
+        let mouse = |modifiers| {
+            TerminalEvent::Mouse(crossterm::event::MouseEvent {
+                kind: MouseEventKind::Moved,
+                column: 2,
+                row: 3,
+                modifiers,
+            })
+        };
+        let mut shift = HeldModifier::new(KeyModifiers::SHIFT);
+        assert!(
+            shift.update(&mouse(KeyModifiers::SHIFT), true),
+            "Shift-motion enables the selected-row preview"
+        );
+        assert!(
+            !shift.update(&mouse(KeyModifiers::NONE), true),
+            "motion without Shift clears a release missed outside the terminal"
+        );
+        assert!(
+            !shift.update(&mouse(KeyModifiers::SHIFT), false),
+            "unfocused input cannot start a preview"
+        );
+    }
+
+    #[test]
+    fn held_shift_preview_requires_enhanced_input_and_tracks_both_shift_keys() {
+        let key = |shift, kind| {
+            TerminalEvent::Key(KeyEvent::new_with_kind(
+                KeyCode::Modifier(shift),
+                KeyModifiers::SHIFT,
+                kind,
+            ))
+        };
+        let mut shift = HeldModifier::new(KeyModifiers::SHIFT);
+        let left = key(ModifierKeyCode::LeftShift, KeyEventKind::Press);
+        assert!(
+            !shift.update(&left, false),
+            "legacy keyboard input cannot enable the preview"
+        );
+        assert!(
+            shift.update(&left, true),
+            "pressing Shift enables the preview immediately"
+        );
+        assert!(
+            shift.update(&key(ModifierKeyCode::LeftShift, KeyEventKind::Repeat), true),
+            "repeats do not toggle the preview"
+        );
+        assert!(shift.update(&key(ModifierKeyCode::RightShift, KeyEventKind::Press), true));
+        assert!(
+            shift.update(&key(ModifierKeyCode::LeftShift, KeyEventKind::Release), true),
+            "releasing one Shift keeps the preview while the other is held"
+        );
+        assert!(
+            shift.update(&TerminalEvent::Resize(80, 24), true),
+            "resize retains held modifiers"
+        );
+        assert!(
+            !shift.update(&key(ModifierKeyCode::RightShift, KeyEventKind::Release), true),
+            "releasing the last Shift clears the preview even if its event still carries the Shift flag"
+        );
+        let app = App::new(1);
+        assert_eq!(
+            app_action(
+                KeyEvent::new(KeyCode::Modifier(ModifierKeyCode::LeftShift), KeyModifiers::SHIFT),
+                &app
+            ),
+            None,
+            "holding Shift alone remains a display-only action"
+        );
+    }
+
+    #[test]
+    fn held_shift_preview_recovers_after_focus_and_nested_input() {
+        let mut shift = HeldModifier::new(KeyModifiers::SHIFT);
+        let shifted = TerminalEvent::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT));
+        assert!(
+            shift.update(&shifted, true),
+            "a shifted key recovers a press received outside this input loop"
+        );
+        assert!(
+            shift.update(
+                &TerminalEvent::Key(KeyEvent::new_with_kind(
+                    KeyCode::Up,
+                    KeyModifiers::SHIFT,
+                    KeyEventKind::Release
+                )),
+                true
+            ),
+            "releasing a navigation key does not release Shift"
+        );
+        assert!(
+            !shift.update(&TerminalEvent::FocusLost, true),
+            "lost focus clears the preview"
+        );
+        assert!(!shift.update(&shifted, false), "unfocused input cannot reenable it");
+        assert!(
+            !shift.update(&TerminalEvent::FocusGained, true),
+            "focus alone does not restore stale modifiers"
+        );
+        assert!(shift.update(&shifted, true));
+        assert!(
+            !shift.update(
+                &TerminalEvent::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+                true
+            ),
+            "an unshifted key corrects a release consumed by another input loop"
+        );
+        assert!(shift.update(&shifted, true));
+        assert!(
+            !shift.update(
+                &TerminalEvent::Key(KeyEvent::new_with_kind(
+                    KeyCode::Modifier(ModifierKeyCode::LeftShift),
+                    KeyModifiers::NONE,
+                    KeyEventKind::Release
+                )),
+                true
+            ),
+            "a standalone release also clears an inferred press"
+        );
+    }
+
+    #[test]
+    fn alt_hover_and_shift_preview_track_modifiers_independently() {
+        let mut shift = HeldModifier::new(KeyModifiers::SHIFT);
+        let mut alt = HeldModifier::new(KeyModifiers::ALT);
+        let mut update = |event, enabled| (shift.update(&event, enabled), alt.update(&event, enabled));
+        let key = |code, modifiers, kind| TerminalEvent::Key(KeyEvent::new_with_kind(code, modifiers, kind));
+        let mouse = |modifiers| {
+            TerminalEvent::Mouse(crossterm::event::MouseEvent {
+                kind: MouseEventKind::Moved,
+                column: 2,
+                row: 3,
+                modifiers,
+            })
+        };
+        let left_alt = KeyCode::Modifier(ModifierKeyCode::LeftAlt);
+        let right_alt = KeyCode::Modifier(ModifierKeyCode::RightAlt);
+        let both = KeyModifiers::SHIFT | KeyModifiers::ALT;
+        for kind in [KeyEventKind::Press, KeyEventKind::Repeat] {
+            assert_eq!(
+                update(key(left_alt, KeyModifiers::ALT, kind), true),
+                (false, true),
+                "Option enables hover without enabling the selected-row preview"
+            );
+        }
+        assert_eq!(
+            update(
+                key(KeyCode::Modifier(ModifierKeyCode::LeftShift), both, KeyEventKind::Press),
+                true
+            ),
+            (true, true),
+            "Shift can enable its preview while Alt remains held"
+        );
+        assert_eq!(update(key(right_alt, both, KeyEventKind::Press), true), (true, true));
+        assert_eq!(
+            update(key(left_alt, both, KeyEventKind::Release), true),
+            (true, true),
+            "releasing one Option key retains hover while the other is held"
+        );
+        assert_eq!(
+            update(key(right_alt, both, KeyEventKind::Release), true),
+            (true, false),
+            "the final Option release restores Shift preview even if its event still carries Alt"
+        );
+        assert_eq!(
+            update(mouse(KeyModifiers::ALT), true),
+            (false, true),
+            "mouse reporting recovers Alt and a missed Shift release without enhanced keyboard events"
+        );
+        assert_eq!(
+            update(TerminalEvent::Resize(80, 24), true),
+            (false, true),
+            "resize retains Alt inferred from mouse movement"
+        );
+        assert_eq!(update(TerminalEvent::FocusLost, true), (false, false));
+        assert_eq!(update(TerminalEvent::FocusGained, true), (false, false));
+        assert_eq!(update(mouse(KeyModifiers::SHIFT), true), (true, false));
+        assert_eq!(
+            update(mouse(KeyModifiers::ALT), false),
+            (false, false),
+            "unfocused or suspended input clears both modifiers"
+        );
+        assert_eq!(
+            update(key(KeyCode::Down, KeyModifiers::ALT, KeyEventKind::Press), true),
+            (false, true),
+            "an Alt-modified key recovers a press received outside the input loop"
+        );
+        assert_eq!(
+            update(key(left_alt, KeyModifiers::NONE, KeyEventKind::Release), true),
+            (false, false),
+            "standalone Option release also clears an inferred press"
+        );
+        let app = App::new(1);
+        for code in [left_alt, right_alt] {
+            assert_eq!(
+                app_action(KeyEvent::new(code, KeyModifiers::ALT), &app),
+                None,
+                "Option alone is display-only"
+            );
+        }
+        assert_eq!(
+            app_action(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT), &app),
+            Some(Action::MoveDown),
+            "Alt-modified navigation retains its ordinary action"
         );
     }
 
@@ -13425,14 +15382,17 @@ added
     }
 
     #[test]
-    fn materialized_rebases_allow_inspection_but_block_repository_changes() {
+    fn materialized_rebases_allow_inspection_and_path_discard_but_block_history_changes() {
         for action in [
             Action::MoveDown,
             Action::CycleDuplicate,
             Action::ToggleChangesFocus,
             Action::ToggleChangesVisibility,
             Action::ToggleCommit,
+            Action::ToggleCommitFullscreen,
             Action::ToggleActions,
+            Action::ToggleViewport,
+            Action::PositionSelection(app::ViewportPosition::Center),
             Action::Refresh,
             Action::ToggleHidden,
             Action::ToggleRefTree,
@@ -13446,6 +15406,7 @@ added
             Action::Redo,
             Action::Amend,
             Action::Spill,
+            Action::Delete,
             Action::Rebase,
             Action::TimeTravel { stash: false },
             Action::TimeTravel { stash: true },
@@ -13460,7 +15421,7 @@ added
             action_allowed_during_rebase_continuation(Some(&Action::Quit), false),
             "history q always remains available"
         );
-        for action in [Action::OpenDiff, Action::Cancel, Action::Quit] {
+        for action in [Action::OpenDiff, Action::Cancel, Action::Quit, Action::Delete] {
             assert!(
                 action_allowed_during_rebase_continuation(Some(&action), true),
                 "{action:?} retains its changes-pane behavior"
@@ -13471,8 +15432,96 @@ added
             "history Enter is reserved for continuation"
         );
         assert!(
+            action_allowed_during_rebase_continuation(Some(&Action::OpenStructuralDiff), false),
+            "Shift+Enter inspects history without continuing the rebase"
+        );
+        assert!(
             !action_allowed_during_rebase_continuation(Some(&Action::Cancel), false),
             "history Escape is reserved for stopping"
+        );
+    }
+
+    #[test]
+    fn builtin_diff_mouse_wheels_scroll_and_respect_viewport_bounds() {
+        let diff = BuiltInDiff::new(
+            "patch".into(),
+            (0..80_000).map(|index| format!("line {index:010}").into()).collect(),
+        );
+        let view = DiffView::Patch(&diff);
+        let area = Rect::new(4, 3, 8, 7);
+        let mouse = MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        };
+        for (kind, expected) in [
+            (MouseEventKind::ScrollUp, (69_999, 3)),
+            (MouseEventKind::ScrollDown, (70_001, 3)),
+            (MouseEventKind::ScrollLeft, (70_000, 0)),
+            (MouseEventKind::ScrollRight, (70_000, 7)),
+        ] {
+            assert_eq!(
+                view.mouse(MouseEvent { kind, ..mouse }, area, 70_000, 3),
+                Some(expected),
+                "wheels navigate both axes beyond the terminal scroll integer limit"
+            );
+        }
+        assert_eq!(
+            view.mouse(
+                MouseEvent {
+                    kind: MouseEventKind::ScrollUp,
+                    ..mouse
+                },
+                area,
+                0,
+                0
+            ),
+            Some((0, 0)),
+            "upward scrolling stops at the beginning"
+        );
+        let max = view.max_offset(5);
+        assert_eq!(
+            view.mouse(mouse, area, max, 7),
+            Some((max, 7)),
+            "downward scrolling stops at the end"
+        );
+        for (column, row) in [
+            (area.x - 1, area.y),
+            (area.right(), area.y),
+            (area.x, area.y - 1),
+            (area.x, area.bottom()),
+        ] {
+            assert!(
+                view.mouse(MouseEvent { column, row, ..mouse }, area, 10, 0).is_none(),
+                "events outside the diff, including the worktree picker, do not scroll it"
+            );
+        }
+        assert!(
+            view.mouse(
+                MouseEvent {
+                    kind: MouseEventKind::Moved,
+                    ..mouse
+                },
+                area,
+                10,
+                0
+            )
+            .is_none(),
+            "pointer movement does not scroll the diff"
+        );
+        assert!(
+            view.mouse(
+                MouseEvent {
+                    kind: MouseEventKind::Down(MouseButton::Left),
+                    ..mouse
+                },
+                area,
+                10,
+                0
+            )
+            .is_none(),
+            "patch contents do not create file-tree links"
         );
     }
 
@@ -13659,8 +15708,16 @@ added
                 max_latency: Duration::from_millis(84),
                 retry_interval: Duration::from_secs(2),
             };
-            let initial = test_repository::open(&fixture)?.monitor(options)?;
-            let options = initial.options().clone();
+            let mut initial = gix::status::Monitor::new(
+                &test_repository::open(&fixture)?,
+                gix::status::monitor::Options {
+                    repository: options,
+                    ..Default::default()
+                },
+            )?;
+            let quiet = Some(Duration::from_millis(63));
+            initial.set_loss_debounce(quiet)?;
+            let options = initial.repository_monitor().options().clone();
             let mut monitor = Some(initial);
             sync_worktree_monitor(&mut monitor, true, false, || {
                 panic!("unchanged coverage must not reopen")
@@ -13669,6 +15726,7 @@ added
                 monitor
                     .as_ref()
                     .expect("unchanged monitoring remains active")
+                    .repository_monitor()
                     .options()
                     .worktree_coverage,
                 options.worktree_coverage,
@@ -13680,10 +15738,16 @@ added
                     opens += 1;
                     test_repository::open(&fixture)
                 })?;
-                let actual = monitor
+                let repository_monitor = monitor
                     .as_ref()
                     .expect("successful replacement restores monitoring")
-                    .options();
+                    .repository_monitor();
+                assert_eq!(
+                    repository_monitor.loss_debounce(),
+                    quiet,
+                    "replacement keeps the loss quiet period"
+                );
+                let actual = repository_monitor.options();
                 assert_eq!(
                     actual.worktree_coverage,
                     enabled.then_some(gix::notify::WorktreeCoverage::IgnoreAware),
@@ -13722,8 +15786,8 @@ added
     #[test]
     fn worktree_monitor_keeps_coverage_when_reopening_fails() -> gix_error::TestResult {
         let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
-        let initial = test_repository::open(&fixture)?.monitor(Default::default())?;
-        let layout = initial.layout().clone();
+        let initial = gix::status::Monitor::new(&test_repository::open(&fixture)?, Default::default())?;
+        let layout = initial.repository_monitor().layout().clone();
         let mut monitor = Some(initial);
         let err = sync_worktree_monitor(&mut monitor, false, false, || bail!(message("repository unavailable")))
             .expect_err("the failed reopen is propagated");
@@ -13732,9 +15796,13 @@ added
             "the reopen failure retains its cause"
         );
         let monitor = monitor.expect("reopen failure leaves the old monitor in its slot");
-        assert_eq!(monitor.layout(), &layout, "a failed reopen preserves the layout");
         assert_eq!(
-            monitor.options().worktree_coverage,
+            monitor.repository_monitor().layout(),
+            &layout,
+            "a failed reopen preserves the layout"
+        );
+        assert_eq!(
+            monitor.repository_monitor().options().worktree_coverage,
             Some(gix::notify::WorktreeCoverage::IgnoreAware),
             "a failed reopen preserves coverage"
         );
@@ -13758,7 +15826,10 @@ added
     #[test]
     fn worktree_monitor_construction_failure_leaves_an_empty_slot() -> gix_error::TestResult {
         let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
-        let mut monitor = Some(test_repository::open(&fixture)?.monitor(Default::default())?);
+        let mut monitor = Some(gix::status::Monitor::new(
+            &test_repository::open(&fixture)?,
+            Default::default(),
+        )?);
         // Isolated opens cannot expand '~': dependency discovery fails only when constructing the monitor.
         let repository = test_repository::open_with(&fixture, ["core.excludesFile=~/ignore"])?;
         let err = sync_worktree_monitor(&mut monitor, false, false, || Ok(repository))
@@ -13779,21 +15850,107 @@ added
         let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
         let repository = test_repository::open(&fixture)?;
         for worktree_coverage in [None, Some(gix::notify::WorktreeCoverage::IgnoreAware)] {
-            let mut monitor = Some(repository.monitor(gix::notify::Options {
-                worktree_coverage,
-                ..Default::default()
-            })?);
+            let mut monitor = Some(gix::status::Monitor::new(
+                &repository,
+                gix::status::monitor::Options {
+                    repository: gix::notify::Options {
+                        worktree_coverage,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )?);
             let mut recovered = test_repository::open_with(repository.common_dir(), ["core.bare=true"])?;
             recovered.set_workdir(None)?;
             sync_worktree_monitor(&mut monitor, false, true, || Ok(recovered))?;
             let monitor = monitor.expect("successful recovery restores monitoring");
-            assert_eq!(monitor.layout().worktree, None, "recovery replaces the checkout layout");
             assert_eq!(
-                monitor.options().worktree_coverage,
+                monitor.repository_monitor().layout().worktree,
+                None,
+                "recovery replaces the checkout layout"
+            );
+            assert_eq!(
+                monitor.repository_monitor().options().worktree_coverage,
                 None,
                 "common-repository recovery always disables worktree coverage"
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn status_redraws_require_a_view_that_can_consume_them() {
+        let mut app = App::new(2);
+        app.changes_mode = Some(ChangesMode::Both);
+        app.state = State::Loading;
+        assert!(
+            !worktree_status_visible(&app, false),
+            "initial loading must keep receiving history"
+        );
+        app.state = State::Complete;
+        assert!(
+            worktree_status_visible(&app, false),
+            "the combined view consumes status"
+        );
+        assert!(
+            !worktree_status_visible(&app, true),
+            "ref-tree draws cannot consume pending status"
+        );
+        app.changes_suppressed = true;
+        assert!(
+            !worktree_status_visible(&app, false),
+            "suppressed panes cannot consume pending status"
+        );
+        app.changes_suppressed = false;
+        app.changes_mode = Some(ChangesMode::Tree);
+        assert!(
+            !worktree_status_visible(&app, false),
+            "tree-only views leave worktree status pending"
+        );
+    }
+
+    #[test]
+    fn hidden_status_and_presentation_retries_preserve_monitor_service_deadlines() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = test_repository::open(fixture.path())?;
+        let mut monitor = gix::status::Monitor::new(&repository, Default::default())?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let outcome = monitor.service(Instant::now(), || Ok(repository.clone()));
+            assert!(outcome.errors.is_empty(), "watch registration succeeds");
+            if monitor.next_service_timeout(Instant::now()) != Some(Duration::ZERO) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "watch registration settles");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let now = Instant::now();
+        let service = monitor.next_service_timeout(now);
+        assert_eq!(
+            monitor.next_timeout(now),
+            Some(Duration::ZERO),
+            "the initial snapshot is dirty"
+        );
+        assert_eq!(
+            worktree_monitor_timeout(&monitor, false, None, now),
+            service,
+            "hidden consumers only service watches"
+        );
+        assert_eq!(
+            worktree_monitor_timeout(&monitor, false, Some(now), now),
+            service,
+            "hidden expired retries do not spin"
+        );
+        assert_eq!(
+            worktree_monitor_timeout(&monitor, true, Some(now + Duration::from_secs(5)), now),
+            service,
+            "presentation retry gates the dirty snapshot, preserving native polling"
+        );
+        assert_eq!(
+            worktree_monitor_timeout(&monitor, true, Some(now), now),
+            Some(Duration::ZERO),
+            "visible retries run at their deadline"
+        );
         Ok(())
     }
 
@@ -13828,19 +15985,16 @@ added
     #[test]
     fn partial_cache_invalidation_can_escalate_to_a_full_refresh() {
         let mut changes = Some((WORKTREE_STATUS_CURRENT, Changes::default()));
-        let mut parts = WorktreeStatusParts::default();
-        assert!(
-            invalidate_worktree_status_parts(&mut changes, &mut parts, false, [BString::from("src/lib.rs")]),
-            "a path event invalidates a current snapshot"
-        );
+        mark_worktree_snapshot_pending(&mut changes);
         assert_eq!(
             changes.as_ref().map(|(marker, _)| *marker),
             Some(WORKTREE_STATUS_PARTIAL)
         );
         assert!(
             invalidate_worktree_changes(&mut changes),
-            "coverage loss supersedes partial refresh"
+            "application operations supersede pending scopes"
         );
+        mark_worktree_snapshot_pending(&mut changes);
         assert_eq!(changes.as_ref().map(|(marker, _)| *marker), Some(WORKTREE_STATUS_FULL));
         assert!(
             !invalidate_worktree_changes(&mut changes),
@@ -14094,6 +16248,7 @@ added
                     attributions: 0..0,
                     title: BString::default(),
                     metadata_loaded: false,
+                    is_empty: false,
                     has_agent_marker: false,
                     is_review: false,
                     has_merge_replay: false,
