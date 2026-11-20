@@ -594,6 +594,7 @@ impl ThreadSafeRepository {
         let replacements = replacements.unwrap_or_default();
 
         Ok(ThreadSafeRepository {
+            #[allow(clippy::needless_update, reason = "test-support adds a feature-gated field")]
             objects: OwnShared::new(
                 gix_odb::Store::at_opts(
                     common_dir_ref.join("objects"),
@@ -606,6 +607,7 @@ impl ThreadSafeRepository {
                         loose_compression: config.loose_compression,
                         shared_repository_permissions: config.shared_repository_permissions,
                         current_dir: current_dir.to_owned().into(),
+                        ..Default::default()
                     },
                 )
                 .or_error()?,

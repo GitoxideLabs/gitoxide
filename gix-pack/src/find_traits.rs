@@ -13,8 +13,8 @@ use gix_error::Result;
 ///
 /// [issue]: https://github.com/rust-lang/rust/issues/44265
 pub trait Find {
-    /// Returns true if the object exists in the database.
-    fn contains(&self, id: &gix_hash::oid) -> bool;
+    /// Returns `Ok(true)` if the object exists in the database, or an error if the lookup fails.
+    fn contains(&self, id: &gix_hash::oid) -> Result<bool>;
 
     /// Find an object matching `id` in the database while placing its raw, decoded data into `buffer`.
     /// A `pack_cache` can be used to speed up subsequent lookups, set it to [`crate::cache::Never`] if the
@@ -161,7 +161,7 @@ mod find_impls {
     where
         T: crate::Find,
     {
-        fn contains(&self, id: &oid) -> bool {
+        fn contains(&self, id: &oid) -> Result<bool> {
             (*self).contains(id)
         }
 
@@ -191,7 +191,7 @@ mod find_impls {
     where
         T: super::Find,
     {
-        fn contains(&self, id: &oid) -> bool {
+        fn contains(&self, id: &oid) -> Result<bool> {
             self.deref().contains(id)
         }
 
@@ -221,7 +221,7 @@ mod find_impls {
     where
         T: super::Find,
     {
-        fn contains(&self, id: &oid) -> bool {
+        fn contains(&self, id: &oid) -> Result<bool> {
             self.deref().contains(id)
         }
 
@@ -251,7 +251,7 @@ mod find_impls {
     where
         T: super::Find,
     {
-        fn contains(&self, id: &oid) -> bool {
+        fn contains(&self, id: &oid) -> Result<bool> {
             self.deref().contains(id)
         }
 

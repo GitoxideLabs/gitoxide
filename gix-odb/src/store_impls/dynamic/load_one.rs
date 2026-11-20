@@ -3,39 +3,43 @@ use std::{
     sync::{Arc, atomic::Ordering},
 };
 
-use crate::store::{handle, types};
+use crate::store::types;
 
 impl super::Store {
-    /// If Ok(None) is returned, the pack-id was stale and referred to an unloaded pack or a pack which couldn't be
-    /// loaded as its file didn't exist on disk anymore.
+    /// If Ok(None) is returned, the resource node was stale or its pack couldn't be loaded because it no longer existed.
     /// If the oid is known, just load indices again to continue
     /// (objects rarely ever removed so should be present, maybe in another pack though),
-    /// and redo the entire lookup for a valid pack id whose pack can probably be loaded next time.
+    /// and redo the entire lookup with a current resource node whose pack can probably be loaded next time.
     pub(crate) fn load_pack(
         &self,
-        id: types::PackId,
+        slot: &types::MutableIndexAndPack,
+        slot_id: usize,
+        pack_index: Option<gix_pack::multi_index::PackIndex>,
+        expected_index: &super::handle::IntraPackLookup<'_>,
         marker: types::SlotIndexMarker,
     ) -> std::io::Result<Option<Arc<gix_pack::data::File>>> {
-        let index = self.index.load();
-        if index.generation != marker.generation {
+        let catalog = self.catalog.load();
+        let index = &catalog.index;
+        if index.generation != marker.generation
+            || !catalog
+                .slots
+                .get(slot_id)
+                .is_some_and(|current| std::ptr::eq(current.as_ref(), slot))
+        {
             return Ok(None);
         }
-        fn load_pack(
-            path: &Path,
-            id: types::PackId,
-            object_hash: gix_hash::Kind,
-            alloc_limit_bytes: Option<usize>,
-        ) -> std::io::Result<Arc<gix_pack::data::File>> {
-            gix_pack::data::File::at(path, object_hash)
-                .map(|pack| pack.with_alloc_limit_bytes(alloc_limit_bytes))
-                .map(|mut pack| {
-                    pack.id = id.to_intrinsic_pack_id();
-                    Arc::new(pack)
-                })
-                .map_err(super::error_to_io)
-        }
+        #[allow(deprecated)] // `try_update` is newer than our MSRV; keep using `fetch_update`.
+        let load_pack = |path: &Path| -> std::io::Result<Arc<gix_pack::data::File>> {
+            let mut pack = gix_pack::data::File::at(path, self.object_hash)
+                .map_err(super::error_to_io)?
+                .with_alloc_limit_bytes(self.alloc_limit_bytes);
+            pack.id = self
+                .next_pack_id
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+                .map_err(|_| std::io::Error::other("The object database exhausted its unique pack IDs"))?;
+            Ok(Arc::new(pack))
+        };
 
-        let slot = &index.files[id.index];
         // pin the current state before loading in the generation. That way we won't risk seeing the wrong value later.
         let slot_files = &**slot.files.load();
         if slot.generation.load(Ordering::SeqCst) > marker.generation {
@@ -44,30 +48,57 @@ impl super::Store {
             // Hope that when the caller returns/retries the new index is set so they can fetch it and retry.
             return Ok(None);
         }
-        match id.multipack_index {
+        if !slot_files.as_ref().is_some_and(|files| expected_index.matches(files)) {
+            return Ok(None);
+        }
+        match pack_index {
             None => {
                 match slot_files {
                     Some(types::IndexAndPacks::Index(bundle)) => {
                         match bundle.data.loaded() {
                             Some(pack) => Ok(Some(pack.clone())),
                             None => {
+                                #[cfg(feature = "test-support")]
+                                self.debug(crate::store::init::debug::Point::PackSlotLocking {
+                                    slot: slot_id,
+                                    pack_index: None,
+                                });
                                 let _lock = slot.write.lock();
+                                #[cfg(feature = "test-support")]
+                                self.debug(crate::store::init::debug::Point::PackSlotLocked {
+                                    slot: slot_id,
+                                    pack_index: None,
+                                });
                                 let mut files = slot.files.load_full();
                                 let files_mut = Arc::make_mut(&mut files);
+                                if !files_mut.as_ref().is_some_and(|files| expected_index.matches(files)) {
+                                    return Ok(None);
+                                }
                                 let pack = match files_mut {
                                     Some(types::IndexAndPacks::Index(bundle)) => {
                                         bundle.data.load_with_recovery(|path| {
-                                            load_pack(path, id, self.object_hash, self.alloc_limit_bytes)
-                                        })?
+                                            let res = load_pack(path);
+                                            #[cfg(feature = "test-support")]
+                                            self.debug(crate::store::init::debug::Point::PackLoadCompleted {
+                                                slot: slot_id,
+                                                pack_index: None,
+                                                outcome: if res.is_ok() {
+                                                    crate::store::init::debug::LoadOutcome::Success
+                                                } else {
+                                                    crate::store::init::debug::LoadOutcome::Failure
+                                                },
+                                            });
+                                            res
+                                        })
                                     }
                                     Some(types::IndexAndPacks::MultiIndex(_)) => {
                                         // something changed between us getting the lock, trigger a complete index refresh.
-                                        None
+                                        Ok(None)
                                     }
-                                    None => None,
+                                    None => Ok(None),
                                 };
                                 slot.files.store(files);
-                                Ok(pack)
+                                pack
                             }
                         }
                     }
@@ -85,25 +116,49 @@ impl super::Store {
                             Some(on_disk_pack) => match on_disk_pack.loaded() {
                                 Some(pack) => Ok(Some(pack.clone())),
                                 None => {
+                                    #[cfg(feature = "test-support")]
+                                    self.debug(crate::store::init::debug::Point::PackSlotLocking {
+                                        slot: slot_id,
+                                        pack_index: Some(pack_index),
+                                    });
                                     let _lock = slot.write.lock();
+                                    #[cfg(feature = "test-support")]
+                                    self.debug(crate::store::init::debug::Point::PackSlotLocked {
+                                        slot: slot_id,
+                                        pack_index: Some(pack_index),
+                                    });
                                     let mut files = slot.files.load_full();
                                     let files_mut = Arc::make_mut(&mut files);
+                                    if !files_mut.as_ref().is_some_and(|files| expected_index.matches(files)) {
+                                        return Ok(None);
+                                    }
                                     let pack = match files_mut {
                                         Some(types::IndexAndPacks::Index(_)) => {
                                             // something changed between us getting the lock, trigger a complete index refresh.
-                                            None
+                                            Ok(None)
                                         }
                                         Some(types::IndexAndPacks::MultiIndex(bundle)) => bundle
                                             .data
                                             .get_mut(pack_index as usize)
-                                            .expect("BUG: must set this handle to be stable")
+                                            .expect("pack index came from this multi-pack index")
                                             .load_with_recovery(|path| {
-                                                load_pack(path, id, self.object_hash, self.alloc_limit_bytes)
-                                            })?,
-                                        None => None,
+                                                let res = load_pack(path);
+                                                #[cfg(feature = "test-support")]
+                                                self.debug(crate::store::init::debug::Point::PackLoadCompleted {
+                                                    slot: slot_id,
+                                                    pack_index: Some(pack_index),
+                                                    outcome: if res.is_ok() {
+                                                        crate::store::init::debug::LoadOutcome::Success
+                                                    } else {
+                                                        crate::store::init::debug::LoadOutcome::Failure
+                                                    },
+                                                });
+                                                res
+                                            }),
+                                        None => Ok(None),
                                     };
                                     slot.files.store(files);
-                                    Ok(pack)
+                                    pack
                                 }
                             },
                         }
@@ -116,35 +171,34 @@ impl super::Store {
             }
         }
     }
+}
 
-    /// Similar to `.load_pack()`, but for entire indices, bypassing the index entirely and going solely by marker and id.
-    /// Returns `None` if the index wasn't available anymore or could otherwise not be loaded, which can be considered a bug
-    /// as we should always keep needed indices available.
-    pub(crate) fn index_by_id(&self, id: types::PackId, marker: types::SlotIndexMarker) -> Option<handle::IndexLookup> {
-        let index = self.index.load();
-        let slot = index.files.get(id.index)?;
-        // Pin this value before we check the generation to avoid seeing something newer later.
-        let slot_files = &**slot.files.load();
-        if slot.generation.load(Ordering::SeqCst) > marker.generation {
-            // This means somebody just overwrote our trashed slot with a new (or about to be stored) index, which means the slot isn't
-            // what we need it to be.
-            // This shouldn't as we won't overwrite slots while handles need stable indices.
-            return None;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gix_object::FindHeader;
+
+    #[test]
+    fn exhausted_pack_ids_do_not_wrap() -> gix_error::TestResult {
+        let store = Arc::new(crate::Store::at_opts(
+            gix_testtools::fixture_path("objects"),
+            gix_hash::Kind::Sha1,
+            &mut std::iter::empty(),
+            Default::default(),
+        )?);
+        store.next_pack_id.store(u32::MAX, Ordering::Relaxed);
+        let handle = store.to_handle_arc();
+        let blob_id = gix_hash::ObjectId::from_hex(b"dd25c539efbb0ab018caa4cda2d133285634e9b5")?;
+        for _ in 0..2 {
+            handle
+                .try_header(&blob_id)
+                .expect_err("exhausted IDs prevent pack loading");
+            assert_eq!(
+                store.next_pack_id.load(Ordering::Relaxed),
+                u32::MAX,
+                "an exhausted counter never wraps and reuses an ID"
+            );
         }
-        let lookup = match (slot_files).as_ref()? {
-            types::IndexAndPacks::Index(bundle) => handle::SingleOrMultiIndex::Single {
-                index: bundle.index.loaded()?.clone(),
-                data: bundle.data.loaded().cloned(),
-            },
-            types::IndexAndPacks::MultiIndex(multi) => handle::SingleOrMultiIndex::Multi {
-                index: multi.multi_index.loaded()?.clone(),
-                data: multi.data.iter().map(|f| f.loaded().cloned()).collect(),
-            },
-        };
-        handle::IndexLookup {
-            id: id.index,
-            file: lookup,
-        }
-        .into()
+        Ok(())
     }
 }

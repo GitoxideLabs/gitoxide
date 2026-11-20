@@ -69,6 +69,7 @@ impl crate::Repository {
         };
         let store = self.objects.store_ref();
         let objects = if store.path().is_relative() {
+            #[allow(clippy::needless_update, reason = "test-support adds a feature-gated field")]
             let mut handle = gix_odb::at_opts(
                 anchor(store.path())?,
                 store.object_hash(),
@@ -80,6 +81,7 @@ impl crate::Repository {
                     current_dir: Some(current_dir.to_owned()),
                     loose_compression: self.objects.loose_compression,
                     shared_repository_permissions: self.objects.shared_repository_permissions,
+                    ..Default::default()
                 },
             )
             .or_raise(|| message("Could not reopen the object database with an absolute path"))?

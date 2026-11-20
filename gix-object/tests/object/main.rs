@@ -96,7 +96,7 @@ fn never_writes_to_nowhere_and_finds_nothing() -> gix_testtools::TestResult {
         db.try_header(&expected)?.is_none(),
         "discarded writes must not make headers readable"
     );
-    assert!(!db.exists(&expected), "discarded writes must not exist");
+    assert!(!db.exists(&expected)?, "discarded writes must not exist");
 
     Ok(())
 }
@@ -122,7 +122,7 @@ fn never_fail_always_panics_on_all_object_access() {
         let _ = db.try_header(&blob_id);
     });
     assert_panics(|db, blob_id| {
-        db.exists(&blob_id);
+        let _ = db.exists(&blob_id);
     });
     assert_panics(|db, _| {
         let _ = db.write(&gix_object::Tree::default());
