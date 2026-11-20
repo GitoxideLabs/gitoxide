@@ -90,6 +90,7 @@ pub(super) fn parse(source: &str, language: Language) -> Result<Vec<Item>> {
     let source: Arc<str> = Arc::from(source);
     let grammar = match language {
         Language::Rust => tree_sitter_rust::LANGUAGE,
+        Language::Python => tree_sitter_python::LANGUAGE,
         Language::Toml => tree_sitter_toml_ng::LANGUAGE,
         Language::Markdown => tree_sitter_md::LANGUAGE,
     };
@@ -107,6 +108,7 @@ pub(super) fn parse(source: &str, language: Language) -> Result<Vec<Item>> {
     }
     Ok(match language {
         Language::Rust => rust_children(tree.root_node(), &source),
+        Language::Python => python_children(tree.root_node(), &source),
         Language::Toml => toml_children(tree.root_node(), &source),
         Language::Markdown => markdown(tree.root_node(), &source),
     })
@@ -396,6 +398,64 @@ fn rust_parameters(parameters: Node<'_>, source: &str) -> Vec<Parameter> {
     values
 }
 
+fn python_children(parent: Node<'_>, source: &Arc<str>) -> Vec<Item> {
+    let mut cursor = parent.walk();
+    parent
+        .named_children(&mut cursor)
+        .filter_map(|node| python_item(node, source))
+        .collect()
+}
+
+fn python_item(node: Node<'_>, source: &Arc<str>) -> Option<Item> {
+    let definition = node.child_by_field_name("definition").unwrap_or(node);
+    let mut cursor = definition.walk();
+    let (kind, name, header, children) = match definition.kind() {
+        "class_definition" | "function_definition" => {
+            let kind = if definition.kind() == "class_definition" {
+                "class"
+            } else {
+                "function"
+            };
+            let name = definition.child_by_field_name("name")?;
+            let colon = definition.children(&mut cursor).find(|child| child.kind() == ":")?;
+            let mut header = indented(source, node, node.start_byte()..colon.end_byte());
+            let children = if kind == "class" {
+                python_children(definition.child_by_field_name("body")?, source)
+            } else {
+                header.push_str(" …");
+                Vec::new()
+            };
+            (kind, name, header, children)
+        }
+        "expression_statement" => {
+            let assignment = definition.named_child(0).filter(|node| node.kind() == "assignment")?;
+            let name = assignment
+                .child_by_field_name("left")
+                .filter(|node| node.kind() == "identifier")?;
+            let mut cursor = assignment.walk();
+            let equals = assignment.children(&mut cursor).find(|child| child.kind() == "=");
+            let end = equals.map_or(assignment.end_byte(), |equals| equals.end_byte());
+            let mut header = indented(source, node, node.start_byte()..end);
+            if equals.is_some() {
+                header.push_str(" …");
+            }
+            ("binding", name, header, Vec::new())
+        }
+        _ => return None,
+    };
+    Some(Item {
+        kind,
+        name: text(source, name).to_owned(),
+        header,
+        footer: String::new(),
+        content: Content::new(source, node.byte_range()),
+        children,
+        test_only: false,
+        contains_tests: false,
+        parameters: None,
+    })
+}
+
 fn toml_children(parent: Node<'_>, source: &Arc<str>) -> Vec<Item> {
     let mut cursor = parent.walk();
     parent
@@ -569,13 +629,13 @@ fn redactions(node: Node<'_>, visible: &Range<usize>, out: &mut Vec<(Range<usize
     }
     let replacement = match node.kind() {
         "block" => Some("{ … }"),
-        "closure_expression" => Some("…"),
+        "closure_expression" | "lambda" => Some("…"),
         "token_tree" | "token_tree_pattern" => Some(match node.child(0).map(|child| child.kind()) {
             Some("(") => "(…)",
             Some("[") => "[…]",
             _ => "{ … }",
         }),
-        "line_comment" | "block_comment" => Some(""),
+        "line_comment" | "block_comment" | "comment" => Some(""),
         _ => None,
     };
     if let Some(replacement) = replacement {

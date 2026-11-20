@@ -15,6 +15,8 @@ use parse::Item;
 pub enum Language {
     /// Rust declarations, including modules, implementations, traits, and fields.
     Rust,
+    /// Python classes, functions, and named bindings.
+    Python,
     /// TOML tables and keys, with values hidden.
     Toml,
     /// Markdown heading hierarchies, with section content hidden.
@@ -26,6 +28,7 @@ impl Language {
     pub fn from_path(path: &Path) -> Option<Self> {
         match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
             "rs" => Some(Self::Rust),
+            "py" | "pyi" => Some(Self::Python),
             "toml" => Some(Self::Toml),
             "md" | "markdown" => Some(Self::Markdown),
             _ => None,

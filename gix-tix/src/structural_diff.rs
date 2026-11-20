@@ -106,8 +106,8 @@ impl File {
                 .and_then(|path| Language::from_path(&path))
         });
         let outline = (|| {
-            let language =
-                language.ok_or_raise(|| message("Unsupported structural language; supported: Rust, TOML, Markdown"))?;
+            let language = language
+                .ok_or_raise(|| message("Unsupported structural language; supported: Rust, Python, TOML, Markdown"))?;
             let resources = crate::prepare_file_diff_resources(repository, change)?;
             let (old, new) = resources
                 .resources()
@@ -179,6 +179,9 @@ fn non_production_path(path: &BStr) -> bool {
         return true;
     }
     let name = path.rsplit(|byte| *byte == b'/').next().unwrap_or_default();
+    if let Some(stem) = name.strip_suffix(b".py") {
+        return stem == b"conftest" || stem.starts_with(b"test_") || stem.ends_with(b"_test");
+    }
     let stem = name.strip_suffix(b".rs").unwrap_or_default();
     matches!(
         stem,
@@ -1076,6 +1079,9 @@ mod tests {
             "src/tests.rs",
             "src/test_repository.rs",
             "src/api_tests.rs",
+            "project/test_api.py",
+            "project/api_test.py",
+            "project/conftest.py",
         ] {
             assert!(
                 non_production_path(path.as_bytes().as_bstr()),
@@ -1089,6 +1095,7 @@ mod tests {
             "Cargo.toml",
             "docs/guide.md",
             "src/api.rs",
+            "project/contest.py",
         ] {
             assert!(
                 !non_production_path(path.as_bytes().as_bstr()),

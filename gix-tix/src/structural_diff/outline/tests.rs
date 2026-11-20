@@ -174,6 +174,71 @@ mod nested {
 }
 
 #[test]
+fn python_outlines_show_decorated_signatures_and_nested_declarations() -> TestResult {
+    let before = "
+class Service(Base):
+    timeout: int = private_old()
+
+    @classmethod
+    async def fetch(cls, path: str = 'local') -> str: return private_old()
+
+    def removed(self): pass
+";
+    let after = "
+class Service(Base):
+    timeout: int = private_new()
+
+    @classmethod
+    async def fetch(cls, path: str = 'local') -> str:
+        def private_nested(): pass
+        return private_new()
+
+    class Options:
+        enabled: bool
+";
+    for path in ["service.py", "service.PYI"] {
+        let language = Language::from_path(std::path::Path::new(path)).expect("Python files have an outline");
+        let diff = PreparedDiff::new(before, after, language)?;
+        let output = text(&diff, &Options::default());
+        for expected in [
+            "~class Service(Base):",
+            "~    timeout: int = …",
+            "~    @classmethod",
+            "~    async def fetch(cls, path: str = 'local') -> str: …",
+            "-    def removed(self): …",
+            "+    class Options:",
+            "+        enabled: bool",
+        ] {
+            assert!(output.contains(expected), "missing {expected}: {output}");
+        }
+        assert!(
+            !output.contains("private_"),
+            "implementation text stays hidden: {output}"
+        );
+        let output = text(
+            &diff,
+            &Options {
+                hide_modifications: true,
+                ..Options::default()
+            },
+        );
+        assert!(
+            output.starts_with(" class Service(Base):")
+                && output.contains("-    def removed")
+                && output.contains("+    class Options")
+                && !output.contains("fetch")
+                && !output.contains("timeout"),
+            "the filter hides Python modifications while keeping class context: {output}"
+        );
+        assert!(
+            PreparedDiff::new("def broken(", "", language).is_err(),
+            "malformed Python has no structural outline"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn renames_and_word_changes_can_be_redrawn_from_the_same_inputs() -> TestResult {
     let renamed = PreparedDiff::new(
         "fn old(value: u32) -> u32 { old(value) + 1 }",

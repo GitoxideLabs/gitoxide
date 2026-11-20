@@ -262,10 +262,11 @@ fn token(text: &str, language: Language, previous_word: &str) -> (usize, Option<
     let Some(first) = text.chars().next() else {
         return (0, None);
     };
-    if text.starts_with("//") {
+    let python = language == Language::Python;
+    if (python && first == '#') || (!python && text.starts_with("//")) {
         return (text.len(), Some(Token::Comment));
     }
-    if text.starts_with("/*") {
+    if !python && text.starts_with("/*") {
         return (text.find("*/").map_or(text.len(), |end| end + 2), Some(Token::Comment));
     }
     if language == Language::Toml {
@@ -286,7 +287,7 @@ fn token(text: &str, language: Language, previous_word: &str) -> (usize, Option<
             return (length, Some(Token::Name));
         }
     }
-    if first == '"' {
+    if first == '"' || (python && first == '\'') {
         return (quoted_length(text, first), Some(Token::String));
     }
     if first == '\'' {
@@ -316,7 +317,7 @@ fn token(text: &str, language: Language, previous_word: &str) -> (usize, Option<
     if first.is_alphabetic() || first == '_' {
         let name = text
             .strip_prefix("r#")
-            .filter(|name| name.starts_with(|ch: char| ch.is_alphabetic() || ch == '_'))
+            .filter(|name| !python && name.starts_with(|ch: char| ch.is_alphabetic() || ch == '_'))
             .unwrap_or(text);
         let length = text.len() - name.len()
             + name
@@ -325,7 +326,7 @@ fn token(text: &str, language: Language, previous_word: &str) -> (usize, Option<
                 .map_or(name.len(), |(index, _)| index);
         let word = &text[..length];
         let following = text[length..].trim_start();
-        let kind = if matches!(
+        let rust_keyword = matches!(
             word,
             "Self"
                 | "as"
@@ -368,9 +369,35 @@ fn token(text: &str, language: Language, previous_word: &str) -> (usize, Option<
                 | "use"
                 | "where"
                 | "while"
-        ) {
+        );
+        let keyword = if python {
+            matches!(
+                word,
+                "False"
+                    | "None"
+                    | "True"
+                    | "and"
+                    | "as"
+                    | "async"
+                    | "await"
+                    | "class"
+                    | "def"
+                    | "else"
+                    | "for"
+                    | "if"
+                    | "in"
+                    | "is"
+                    | "lambda"
+                    | "not"
+                    | "or"
+            )
+        } else {
+            rust_keyword
+        };
+        let kind = if keyword {
             Some(Token::Keyword)
         } else if word.starts_with("r#")
+            || (python && matches!(previous_word, "class" | "def"))
             || matches!(
                 previous_word,
                 "fn" | "mod"
@@ -425,6 +452,7 @@ fn token(text: &str, language: Language, previous_word: &str) -> (usize, Option<
                 character.is_alphanumeric()
                     || matches!(character, '_' | '"' | '\'' | '/')
                     || (language == Language::Toml && *character == '-')
+                    || (python && *character == '#')
             })
             .map_or(text.len(), |(index, _)| index),
         None,
@@ -531,6 +559,12 @@ mod tests {
                 ("mod nested {", Language::Rust, &["mod", "nested"]),
                 ("struct Data {", Language::Rust, &["struct", "Data"]),
                 ("status: u8,", Language::Rust, &["status"]),
+                ("class Service:", Language::Python, &["class", "Service"]),
+                (
+                    "async def fetch(path: str = 'local') -> str: …",
+                    Language::Python,
+                    &["async", "def", "fetch", "path"],
+                ),
                 ("[package.'quoted-key']", Language::Toml, &["package", "'quoted-key'"]),
                 ("default-features = …", Language::Toml, &["default-features"]),
                 ("# Project", Language::Markdown, &["# Project"]),
