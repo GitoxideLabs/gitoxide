@@ -27,6 +27,52 @@ fn normal_quit_restores_the_terminal() -> gix_error::TestResult {
 }
 
 #[test]
+fn externally_materialized_merge_conflict_reopens_hidden_changes() -> gix_error::TestResult {
+    let repository = fixture()?;
+    let path = repository.path();
+    let tip = git(path, "rev-parse HEAD")?;
+    let base = git(path, "rev-parse HEAD^")?;
+    let tree = git(path, "rev-parse HEAD^{tree}")?;
+    // Model the commit written by another Tix process when it checks out a merge replay conflict.
+    let commit = format!(
+        "tree {tree}
+parent {tip}
+parent {base}
+author Fixture <fixture@example.com> 1000000000 +0000
+committer Fixture <fixture@example.com> 1000000000 +0000
+tix-rebase-merge {tip} 1 parent {base} {tip} {base}
+patch-id v1 unavailable
+
+pending merge
+",
+        tip = tip.trim(),
+        base = base.trim(),
+        tree = tree.trim(),
+    );
+    std::fs::write(path.join(".git/tix-test-merge"), commit)?;
+    let merge = git(path, "hash-object -w -t commit .git/tix-test-merge")?;
+    let (mut terminal, _) = Pty::spawn(path, true)?;
+    terminal.wait_for(|output| contains(output, b"tracked.txt"))?;
+    let hiding = terminal.output.len();
+    terminal.master.write_all(b"C?")?;
+    terminal.wait_for(|output| contains(&output[hiding..], b"show "))?;
+    terminal.master.write_all(b"\x1b")?;
+
+    let reopening = terminal.output.len();
+    git(path, &format!("reset --hard {}", merge.trim()))?;
+    terminal.wait_for(|output| contains(&output[reopening..], b"resolve the checked-out merge conflict"))?;
+    let subsequent_edit = terminal.output.len();
+    std::fs::write(path.join("watched.txt"), "new worktree path\n")?;
+    terminal.wait_for(|output| contains(&output[subsequent_edit..], b"watched.txt"))?;
+    terminal.master.write_all(b"qq")?;
+    assert!(
+        terminal.wait_for_exit()?.success(),
+        "the restored panes leave Tix usable"
+    );
+    Ok(())
+}
+
+#[test]
 fn disabled_graphics_keeps_the_text_gutter() -> gix_error::TestResult {
     let repository = fixture()?;
     let (mut terminal, _) = Pty::spawn(repository.path(), true)?;

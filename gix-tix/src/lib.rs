@@ -1815,6 +1815,19 @@ fn event_loop(
                     &mut pending_conflict_resolution,
                 )
             {
+                sync_line_diff_pool(
+                    &mut line_diff_pool,
+                    app.changes_mode.is_some(),
+                    &repository_path,
+                    repository_is_bare,
+                    line_diff_parallelism,
+                );
+                let enabled = worktree_watcher_needed(repository_is_bare, app.changes_mode);
+                sync_worktree_monitor(&mut repository_monitor, enabled, false, || {
+                    open_repository(&repository_path, repository_is_bare, false)
+                })?;
+                worktree_status_retry = None;
+                invalidate_worktree_changes(&mut worktree_changes);
                 dirty = true;
                 urgent = true;
             }

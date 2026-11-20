@@ -1664,6 +1664,8 @@ views.
   are discarded after use. Ten seconds without a completed line-count batch
   joins the workers and releases their repositories. The next uncached diff
   reactivates the pool, while hiding changes drops it immediately.
+  If another process checks out a merge replay conflict, Tix reopens the
+  changes panes and restores line diffs and worktree monitoring before drawing.
 
 ### Diffs
 
