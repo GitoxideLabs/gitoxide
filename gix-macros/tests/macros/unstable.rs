@@ -121,29 +121,45 @@ path = {consumer:?}
             "date-only gates document their introduction without inventing a reason"
         );
         if !features.is_empty() {
+            let overview = std::fs::read_to_string(docs.join("index.html")).expect("crate overview exists");
+            let summary = "File-backed module documentation is preserved. — <strong>Unstable:</strong> Since 2026-10-13. This file-backed module still exposes plumbing.";
+            assert!(
+                overview.contains(summary) && !overview.contains("These details belong on the module page."),
+                "the overview includes the suffixed summary but not later paragraphs"
+            );
+            assert!(
+                handle.contains(
+                    "The raw value. — <strong>Unstable:</strong> Since 2026-10-13. The field exposes plumbing state."
+                ),
+                "a field with a leading blank doc line still gets the note on its summary"
+            );
+            assert!(
+                handle.contains(
+                    "<p>Return the raw value. — <strong>Unstable:</strong> Since 2026-10-13.</p>
+<p>This method is gated individually.</p>"
+                ),
+                "a multiline doc attribute gets the note on its first line only"
+            );
             let bare_module = std::fs::read_to_string(docs.join("module_without_reason/index.html"))
                 .expect("bare-gated module documentation exists");
             assert!(
-                bare_module.contains("Bare gates also work on file-backed modules.")
-                    && bare_module.contains("<strong>Unstable:</strong> Since 2026-10-13."),
+                bare_module.contains(
+                    "<p>Bare gates also work on file-backed modules. — <strong>Unstable:</strong> Since 2026-10-13.</p>"
+                ),
                 "a date-only module gate preserves original docs and adds an instability marker"
             );
             let raw = std::fs::read_to_string(docs.join("struct.Raw.html")).expect("bare-gated type docs exist");
             assert!(
-                raw.contains("<strong>Unstable:</strong> Since 2026-10-13."),
-                "a date-only type gate documents instability without a reason"
+                raw.contains("<p><strong>Unstable:</strong> Since 2026-10-13.</p>"),
+                "an undocumented type still gets an instability note"
             );
             let module = std::fs::read_to_string(docs.join("module/index.html")).expect("module documentation exists");
             assert!(
-                module.contains(
-                    "<p>File-backed module documentation is preserved.</p>
-<p><strong>Unstable:</strong> Since 2026-10-13."
-                ),
-                "the instability note follows the original summary in its own paragraph"
-            );
-            assert!(
-                module.contains("This file-backed module still exposes plumbing."),
-                "the module's reason is documented"
+                module.contains(&format!(
+                    "<p>{summary}</p>
+<p>These details belong on the module page.</p>"
+                )),
+                "the full docs preserve the summary and later paragraphs, adding the note to the summary only"
             );
         }
     }
