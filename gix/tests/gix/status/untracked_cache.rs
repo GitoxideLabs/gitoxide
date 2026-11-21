@@ -74,11 +74,20 @@ fn git_paths(root: &Path, extra: &[&str], use_cache: bool) -> TestResult<Vec<Str
 }
 
 #[test]
-fn git_untracked_cache_avoids_directory_reads_without_losing_tracked_names() -> TestResult {
+fn git_untracked_cache_skips_tracked_subtrees_without_collapsing_mixed_directories() -> TestResult {
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
     }
-    let root = gix_testtools::scripted_fixture_read_only("make_status_untracked_cache.sh")?;
+    let root = fixture_with(181, |root| {
+        let deep = root.join("tracked-only/only/dirs/until/here");
+        std::fs::create_dir_all(&deep)?;
+        for n in 0..64 {
+            std::fs::write(deep.join(n.to_string()), "tracked")?;
+        }
+        gix_testtools::git(root, "add tracked-only")?;
+        gix_testtools::git(root, "commit -qm tracked")?;
+        prime_cache(root)
+    })?;
     let repo = gix::open_opts(&root, gix::open::Options::isolated())?;
     let (actual, outcome) = status(&repo)?;
     assert_eq!(
@@ -90,8 +99,17 @@ fn git_untracked_cache_avoids_directory_reads_without_losing_tracked_names() -> 
         .dirwalk
         .expect("untracked status walks directories");
     assert!(
-        walk.cached_dir_listings >= 3,
+        walk.cached_dir_listings > 0,
         "the root and tracked-only branch avoid directory reads: {walk:?}"
+    );
+    assert_eq!(
+        actual,
+        git_paths(&root, &[], false)?,
+        "Git agrees on every untracked path"
+    );
+    assert!(
+        walk.seen_entries < 64,
+        "the walk skips the entire tracked-only branch: {walk:?}"
     );
     let precious = gix::open_opts(
         &root,
@@ -111,7 +129,7 @@ fn git_untracked_cache_avoids_directory_reads_without_losing_tracked_names() -> 
         assert_eq!(paths, actual, "a verbatim worktree path has the same status");
         let walk = outcome.index_worktree.dirwalk.expect("dirwalk is enabled");
         assert!(
-            walk.cached_dir_listings >= 3,
+            walk.cached_dir_listings > 0,
             "Windows path aliases retain the warmed cache: {walk:?}"
         );
     }
@@ -431,8 +449,8 @@ fn untyped_untracked_files_use_directory_reads() -> TestResult {
         .dirwalk
         .expect("dirwalk is enabled");
     assert!(
-        (2..=4).contains(&walk.cached_dir_listings),
-        "the tracked-only leaves and eligible ancestors have cached type information: {walk:?}"
+        walk.cached_dir_listings > 0,
+        "the tracked-only branch is omitted from its cached ancestor: {walk:?}"
     );
     assert!(
         walk.read_dir_calls >= 4,

@@ -36,7 +36,8 @@ impl super::Refresh {
         } else {
             0
         };
-        if cache.dir_flags() != flags
+        if index.is_sparse()
+            || cache.dir_flags() != flags
             || has_pathspec
             || options.recurse_repositories
             || options.emit_ignored.is_some()
@@ -153,6 +154,7 @@ fn listing<'index>(
         needed[pos] = dir.stat().is_some() || dir.sub_directories().iter().any(|&child| needed[child]);
     }
     let mut out = CachedListing::default();
+    let mut parents = Vec::new();
     let mut pending = vec![(0, BString::default())];
     while let Some((position, path)) = pending.pop() {
         let dir = &dirs[position];
@@ -199,31 +201,36 @@ fn listing<'index>(
             }
             entries.push((name.to_owned(), Kind::Directory));
         }
+        if !dir.sub_directories().is_empty() {
+            parents.push(path.clone());
+        }
         out.directories.insert(path, entries.into());
     }
-    // UNTR omits tracked names, which still prevent a mixed directory from collapsing.
+    // Only directories need names. A confirmed tracked file prevents collapsing its ancestors.
     let mut previous = b"".as_slice();
     for entry in index.entries() {
         let path = entry.path(index);
         let mut end = path.len();
-        let mut kind = if entry.mode.is_submodule() {
-            Kind::Directory
-        } else if entry.mode == gix_index::entry::Mode::SYMLINK {
-            Kind::Symlink
-        } else {
-            Kind::File
-        };
         loop {
             let start = path[..end].rfind_byte(b'/').map_or(0, |position| position + 1);
             let parent = path[..start.saturating_sub(1)].as_bstr();
-            if let Some(entries) = out.directories.get_mut(parent) {
-                entries.entries.push((path[start..end].into(), kind));
+            if path[start..end].eq_ignore_ascii_case(b".git") {
+                bail!(message("a pruned index path cannot establish a tracked directory"));
             }
-            // Adjacent paths share parents that have already been added and checked.
+            let directory = end != path.len() || entry.mode.is_submodule();
+            if !directory && start != 0 && previous.starts_with(&path[..start]) {
+                break;
+            }
+            if let Some(dir) = out.directories.get_mut(parent) {
+                if directory {
+                    dir.entries.push((path[start..end].into(), Kind::Directory));
+                }
+                dir.omitted_tracked = true;
+            }
+            // Earlier entries covered this parent, but may not have added this child.
             if start != 0 && previous.starts_with(&path[..start]) {
                 break;
             }
-            // More than one index spelling can map to the same canonical directory.
             if let Some(lookup) = lookup
                 && let Some(entry) = index.entry_closest_to_directory_or_directory_icase(parent, true, lookup)
                 && entry.path(index).get(..parent.len()) != Some(parent.as_ref())
@@ -234,14 +241,39 @@ fn listing<'index>(
                 break;
             }
             end = start - 1;
-            kind = Kind::Directory;
         }
         previous = path.as_ref();
     }
     for dir in out.directories.values_mut() {
-        let entries = &mut dir.entries;
-        entries.sort_unstable();
-        entries.dedup_by(|a, b| a.0 == b.0);
+        dir.entries.sort_unstable();
+        dir.entries.dedup_by(|a, b| a.0 == b.0);
+    }
+    // Children precede parents here. Once a tracked subtree has no remaining entries,
+    // its parent's tracked marker represents it as well.
+    for path in parents.into_iter().rev() {
+        let mut dir = out.directories.remove(path.as_bstr()).expect("recorded cached parent");
+        if dir.omitted_tracked {
+            let mut child_path = path.clone();
+            if !child_path.is_empty() {
+                child_path.push(b'/');
+            }
+            let prefix = child_path.len();
+            dir.entries.retain(|(name, _)| {
+                child_path.truncate(prefix);
+                child_path.extend_from_slice(name);
+                if out
+                    .directories
+                    .get(child_path.as_bstr())
+                    .is_some_and(|child| child.omitted_tracked && child.entries.is_empty())
+                {
+                    out.directories.remove(child_path.as_bstr());
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        out.directories.insert(path, dir);
     }
     Ok(Some(out))
 }
