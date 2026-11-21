@@ -206,6 +206,9 @@ pub struct Options<'a> {
     pub emit_tracked: bool,
     /// Controls the way untracked files are emitted. By default, this is happening immediately and without any simplification.
     pub emit_untracked: EmissionMode,
+    /// Permit cached untracked files and symlinks to be emitted with an unknown exact
+    /// [disk kind](crate::EntryRef::disk_kind). Deletion and symlink-sensitive walks still obtain their types.
+    pub allow_untyped_untracked: bool,
     /// If `true`, emit empty directories as well. Note that a directory also counts as empty if it has any amount or depth of nested
     /// subdirectories, as long as none of them includes a file.
     /// Thus, this makes leaf-level empty directories visible, as those don't have any content.
@@ -227,7 +230,7 @@ pub struct Options<'a> {
     pub worktree_relative_worktree_dirs: Option<&'a BTreeSet<BString>>,
 }
 
-/// Directory listings whose names and file types are known to be unchanged.
+/// Directory listings whose names and known file types are unchanged.
 ///
 /// Include every immediate tracked and untracked entry, except those covered by
 /// [`CachedDirectory::omitted_tracked`]. Names must be single
@@ -255,7 +258,7 @@ pub struct CachedListing {
 #[derive(Debug, Default, Clone)]
 pub struct CachedDirectory {
     /// Immediate entries the walk must classify.
-    pub entries: Vec<(BString, entry::Kind)>,
+    pub entries: Vec<(BString, CachedEntryKind)>,
     /// At least one tracked file is known to exist beneath this directory, preventing collapse.
     /// A partial listing may then omit tracked files and entire tracked-only subtrees.
     /// Only set this when their existence and the absence of reportable entries have been verified.
@@ -266,9 +269,30 @@ pub struct CachedDirectory {
 impl From<Vec<(BString, entry::Kind)>> for CachedDirectory {
     fn from(entries: Vec<(BString, entry::Kind)>) -> Self {
         Self {
-            entries,
+            entries: entries.into_iter().map(|(name, kind)| (name, kind.into())).collect(),
             omitted_tracked: false,
         }
+    }
+}
+
+/// Type information available for a cached directory entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CachedEntryKind {
+    /// The exact type is known.
+    Known(entry::Kind),
+    /// An untracked regular file or symlink, including a symlink pointing to a directory.
+    FileOrSymlink,
+}
+
+impl From<entry::Kind> for CachedEntryKind {
+    fn from(kind: entry::Kind) -> Self {
+        Self::Known(kind)
+    }
+}
+
+impl CachedEntryKind {
+    fn is_dir(self) -> bool {
+        matches!(self, Self::Known(kind) if kind.is_dir())
     }
 }
 

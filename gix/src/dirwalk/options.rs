@@ -34,6 +34,7 @@ impl From<Options> for gix_dir::walk::Options<'static> {
             for_deletion: v.for_deletion,
             emit_tracked: v.emit_tracked,
             emit_untracked: v.emit_untracked,
+            allow_untyped_untracked: false,
             emit_empty_directories: v.emit_empty_directories,
             classify_untracked_bare_repositories: v.classify_untracked_bare_repositories,
             emit_collapsed: v.emit_collapsed,

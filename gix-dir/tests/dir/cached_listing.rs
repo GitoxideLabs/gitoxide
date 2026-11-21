@@ -48,13 +48,16 @@ fn listing(includes_ignored: bool) -> walk::CachedListing {
             .get_mut(&BString::default())
             .expect("the root has a listing")
             .entries
-            .extend([(".git".into(), Directory), ("generated".into(), Directory)]);
+            .extend([
+                (".git".into(), Directory.into()),
+                ("generated".into(), Directory.into()),
+            ]);
         listing
             .directories
             .get_mut(&BString::from("mixed"))
             .expect("mixed has a listing")
             .entries
-            .push(("secret.ignored".into(), File));
+            .push(("secret.ignored".into(), File.into()));
         listing
             .directories
             .insert("generated".into(), vec![("data".into(), File)].into());
@@ -122,6 +125,74 @@ uncached/file
         assert!(
             actual.iter().any(|(entry, _)| entry.rela_path == "mixed/new"),
             "the tracked sibling prevents collapsing mixed into an untracked directory"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn cached_file_or_symlink_preserves_directory_matching_without_guessing_the_type() -> TestResult {
+    let root = gix_testtools::scripted_fixture_read_only("cached-listing.sh")?;
+    let mut listing = listing(true);
+    let mixed = listing
+        .directories
+        .get_mut(&BString::from("mixed"))
+        .expect("fixture directory");
+    let (_, kind) = mixed
+        .entries
+        .iter_mut()
+        .find(|(name, _)| name == "new")
+        .expect("fixture file");
+    *kind = walk::CachedEntryKind::FileOrSymlink;
+    let names = walk::Options {
+        allow_untyped_untracked: true,
+        ..options()
+    };
+    for (opts, exact) in [
+        (names, false),
+        (options(), true),
+        (
+            walk::Options {
+                symlinks_to_directories_are_ignored_like_directories: true,
+                ..names
+            },
+            true,
+        ),
+        (
+            walk::Options {
+                for_deletion: Some(ForDeletionMode::default()),
+                ..names
+            },
+            true,
+        ),
+    ] {
+        let ((out, _), entries) = try_collect_filtered_opts_collect(
+            &root,
+            None,
+            |keep, ctx| walk(&root, ctx, opts, keep),
+            None::<&str>,
+            Options {
+                cached_listing: Some(&listing),
+                ..Default::default()
+            },
+        )?;
+        let (entry, _) = entries
+            .iter()
+            .find(|(e, _)| e.rela_path == "mixed/new")
+            .expect("untracked file emitted");
+        assert_eq!(
+            entry.status, Untracked,
+            "an unknown exact type does not hide an untracked leaf"
+        );
+        assert_eq!(
+            entry.disk_kind,
+            exact.then_some(File),
+            "only a disk read establishes the exact type"
+        );
+        assert_eq!(
+            out.read_dir_calls,
+            u32::from(exact),
+            "only the directory missing exact types may need a read"
         );
     }
     Ok(())

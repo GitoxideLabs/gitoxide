@@ -14,7 +14,7 @@ use crate::{
     entry::{PathspecMatch, Status},
     walk,
     walk::{
-        Action, CollapsedEntriesEmissionMode, Context, Delegate,
+        Action, CachedEntryKind, CollapsedEntriesEmissionMode, Context, Delegate,
         EmissionMode::CollapseDirectory,
         ForDeletionMode, Options, Outcome, classify,
         function::{can_recurse, emit_entry},
@@ -60,6 +60,16 @@ pub(super) fn recursive(
         })
         .and_then(|listing| {
             listing.directories.get(current_bstr.as_bstr()).filter(|dir| {
+                if (!opts.allow_untyped_untracked
+                    || opts.symlinks_to_directories_are_ignored_like_directories
+                    || opts.for_deletion.is_some())
+                    && dir
+                        .entries
+                        .iter()
+                        .any(|(_, kind)| *kind == CachedEntryKind::FileOrSymlink)
+                {
+                    return false;
+                }
                 if dir.omitted_tracked {
                     return !listing.includes_ignored
                         && !opts.emit_tracked
@@ -243,7 +253,7 @@ fn read_dir_result<T>(
 }
 
 enum DirectoryEntry<'a> {
-    Cached(&'a (BString, entry::Kind)),
+    Cached(&'a (BString, CachedEntryKind)),
     Disk(gix_fs::read_dir::DirEntry),
 }
 
@@ -266,10 +276,10 @@ impl DirectoryEntry<'_> {
         }
     }
 
-    fn kind(&self) -> Option<entry::Kind> {
+    fn kind(&self) -> Option<CachedEntryKind> {
         match self {
             Self::Cached((_, kind)) => Some(*kind),
-            Self::Disk(entry) => entry.file_type().ok().map(Into::into),
+            Self::Disk(entry) => entry.file_type().ok().map(|ty| entry::Kind::from(ty).into()),
         }
     }
 }
@@ -600,7 +610,7 @@ mod tests {
         ] {
             let expected = gix_path::from_byte_slice(name)
                 .is_ok_and(|path| !name.contains(&0) && path.file_name() == Some(path.as_os_str()));
-            let cached = (BString::from(name), entry::Kind::File);
+            let cached = (BString::from(name), entry::Kind::File.into());
             assert_eq!(
                 DirectoryEntry::Cached(&cached).file_name().is_ok(),
                 expected,

@@ -88,7 +88,8 @@ pub(super) mod function {
             let (tx, rx) = std::sync::mpsc::channel();
             let walk_outcome = options
                 .dirwalk
-                .map(|options| {
+                .map(|mut dirwalk_options| {
+                    dirwalk_options.allow_untyped_untracked &= options.rewrites.is_none();
                     gix_parallel::build_thread()
                         .name("gix_status::dirwalk".into())
                         .spawn_scoped(
@@ -132,7 +133,7 @@ pub(super) mod function {
                                             explicit_traversal_root: Some(worktree),
                                             cached_listing: dirwalk_ctx.cached_listing,
                                         },
-                                        options,
+                                        dirwalk_options,
                                         &mut collect,
                                     )
                                 }
