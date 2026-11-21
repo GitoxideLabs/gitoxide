@@ -58,6 +58,10 @@ impl Task {
         }
     }
 
+    pub fn uses_test_variants(&self) -> bool {
+        matches!(self.id, "feature-tests" | "platform-feature-tests" | "isolated-tests")
+    }
+
     fn optional(mut self) -> Self {
         self.blocking = false;
         self
@@ -288,9 +292,20 @@ pub fn tasks(metadata: &Value, selection: &Value, platform: &str) -> Result<Vec<
             isolated_tests,
         ));
     }
-    let variants = core("variants")?;
+    let (variants, platform_variants): (Vec<_>, Vec<_>) = core("variants")?
+        .into_iter()
+        .filter(|command| command.platforms.is_empty() || command.platforms.iter().any(|label| label == platform))
+        .partition(|command| command.platforms.is_empty());
     if !variants.is_empty() {
         out.push(Task::new("feature-tests", "feature-tests", &["tests"], variants));
+    }
+    if !platform_variants.is_empty() {
+        out.push(Task::new(
+            "platform-feature-tests",
+            "feature-tests",
+            &["tests"],
+            platform_variants,
+        ));
     }
     for (id, stage) in [
         ("default-doctests", "default-doctests"),
@@ -455,6 +470,8 @@ fn assigned(task: &Task, platform: &str, exhaustive: bool) -> bool {
         // The gate runs this task before it publishes a matrix.
         "self-test" => false,
         "platform-tests" => platform == "freebsd-x86_64",
+        // Each case was already matched to this platform when building the task.
+        "platform-feature-tests" => true,
         "native-tests" | "native-bins" | "isolated-tests" | "without-git" | "size32" => {
             exhaustive || matches!(platform, "linux-x86_64" | "macos-aarch64" | "windows-x86_64")
         }
@@ -602,7 +619,7 @@ pub fn execute(
                 log.as_ref(),
                 coverage,
             )
-        } else if matches!(task.id, "feature-tests" | "isolated-tests") {
+        } else if task.uses_test_variants() {
             super::native_tests::variants(root, task.commands, dry_run, &mut snapshots, log.as_ref(), coverage)
         } else if task.id == "feature-builds" {
             run::each_case(task.commands, log.as_ref(), |command| {
@@ -803,6 +820,61 @@ mod tests {
                 "empty selections do not run package tests"
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn feature_test_variants_can_request_a_native_platform() -> gix_error::TestResult {
+        let mut metadata = metadata();
+        metadata["packages"][0]["metadata"]["qa"]["tests"] = json!([
+            {"args": ["--features", "portable"]},
+            {"args": ["--features", "native"], "platforms": ["windows-x86_64"]}
+        ]);
+
+        for mode in ["fast", "exhaustive"] {
+            let selection = json!({"mode": mode, "packages": ["gix-path"]});
+            let matrix = plan(&metadata, &selection, "linux-x86_64", true)?;
+            let variants: Vec<_> = matrix["tasks"]
+                .as_array()
+                .expect("plan tasks")
+                .iter()
+                .filter(|entry| entry["task"]["group"] == "feature-tests")
+                .flat_map(|entry| {
+                    entry["task"]["commands"]
+                        .as_array()
+                        .expect("test commands")
+                        .iter()
+                        .map(|command| (&entry["platform"], &command["args"]))
+                })
+                .collect();
+            let [(linux, portable), (windows, native)] = variants.as_slice() else {
+                panic!("expected one portable and one Windows feature-test task: {variants:?}");
+            };
+            assert_eq!(**linux, "linux-x86_64");
+            assert_eq!(**windows, "windows-x86_64");
+            assert_eq!(
+                portable.as_array().expect("Cargo arguments").last(),
+                Some(&json!("portable"))
+            );
+            assert_eq!(
+                native.as_array().expect("Cargo arguments").last(),
+                Some(&json!("native"))
+            );
+
+            let local = tasks(&metadata, &selection, "windows-x86_64")?;
+            assert_eq!(
+                local.iter().filter(|task| task.group == "feature-tests").count(),
+                2,
+                "local QA on Windows still includes the portable variants"
+            );
+        }
+
+        let unrelated = json!({"mode": "fast", "packages": ["internal-tools"]});
+        assert!(
+            !tasks(&metadata, &unrelated, "windows-x86_64")?
+                .iter()
+                .any(|task| task.group == "feature-tests")
+        );
         Ok(())
     }
 

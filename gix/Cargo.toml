@@ -708,6 +708,26 @@ tests = [
         "-E",
         "test(status::monitor::) | test(status_monitor::) | test(notify::status::)",
     ] },
+    # Keep the serial status paths free of feature bundles that imply `parallel`.
+    { args = [
+        "--no-default-features",
+        "--features",
+        "sha1,status,attributes",
+        "--test",
+        "gix",
+        "-E",
+        "test(/^status::/) | test(/^submodule::open::status::/)",
+    ] },
+    # Exercise HTTP configuration and loopback authentication without external services.
+    { args = [
+        "--no-default-features",
+        "--features",
+        "sha1,blocking-http-transport-reqwest",
+        "--test",
+        "gix",
+        "-E",
+        "test(=config::key::http_callback_can_return_a_concrete_cause) | test(/^config::tree::http::/) | test(/^repository::config::transport_options::http::/) | test(/^remote::connect::http_authentication::/)",
+    ] },
     { args = [
         "--no-default-features",
         "--features",

@@ -377,7 +377,8 @@ the shared QA runner inside a FreeBSD VM, with sources copied onto its local fil
 Its result participates in the ordinary `Tests pass` gate.
 
 Linux feature compilation checks and feature tests run in separate jobs, retaining every
-selected configuration.
+selected configuration. Feature test variants that request a specific platform run in that
+platform's feature-test job instead.
 
 Local and CI builds use `debug = 0` and `strip = "debuginfo"` in the workspace's `dev`
 profile, also inherited by `test` and `qa`. This reduces object files, libraries and linked
@@ -547,6 +548,10 @@ Cargo/nextest; the runner supplies package selection and the appropriate locked/
 Use `requires = ["xz"]` on a case that needs an extra system capability. Keep feature combinations
 separate when Cargo unification changes dependency features. Declare external crate input paths
 in `extra-inputs` (repository-relative files/directories, without globs).
+
+A non-isolated `tests` case can set `platforms = ["windows-x86_64"]` to run only on the
+named platform(s), both locally and in CI. Use catalogue labels; FreeBSD supports only
+baseline tests. Cases without `platforms` keep the usual assignments.
 
 Opt into baseline tests on an additional platform by its catalogue label:
 
