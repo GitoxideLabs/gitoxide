@@ -86,9 +86,9 @@ impl super::Store {
             // We have a more recent state already, provide it.
             Ok(Some(self.collect_snapshot()))
         } else {
-            // always compare to the latest state
-            // Nothing changed in the meantime, try to load another index…
-            if self.load_next_index(index) {
+            // Nothing changed relative to the caller's marker. Load another index, but keep that marker:
+            // a load can finish between the check above and the read inside the loader.
+            if self.load_next_index(index, marker) {
                 Ok(Some(self.collect_snapshot()))
             } else {
                 // …and if that didn't yield anything new consider refreshing our disk state.
@@ -104,13 +104,18 @@ impl super::Store {
         }
     }
 
-    /// load a new index (if not yet loaded), and return true if one was indeed loaded (leading to a `state_id()` change) of the current index.
-    /// Note that interacting with the slot-map is inherently racy and we have to deal with it, being conservative in what we even try to load
-    /// as our index might already be out-of-date as we try to use it to learn what's next.
+    /// Load one index that is not yet loaded.
+    ///
+    /// Returns true when the slot map has advanced relative to `marker`, so the caller can retry on a
+    /// fresh snapshot. Progress includes an index another worker finished after `marker` was sampled, and
+    /// a different generation that replaced `index`. The baseline stays `marker`: reading `state_id()` again
+    /// here would absorb that completed load and report that nothing changed.
+    ///
+    /// Interacting with the slot map is inherently racy. Be conservative about what to load, because this
+    /// index may already be out of date while it is used to learn what is next.
     #[allow(deprecated)] // `try_update` is newer than our MSRV; keep using `fetch_update`.
-    fn load_next_index(&self, mut index: arc_swap::Guard<Arc<SlotMapIndex>>) -> bool {
+    fn load_next_index(&self, mut index: arc_swap::Guard<Arc<SlotMapIndex>>, marker: types::SlotIndexMarker) -> bool {
         'retry_with_changed_index: loop {
-            let previous_state_id = index.state_id();
             'retry_with_next_slot_index: loop {
                 // Register before claiming a slot: otherwise another caller could see an
                 // exhausted cursor before the claimed load becomes observable.
@@ -167,21 +172,20 @@ impl super::Store {
                     }
                 }
             }
-            if previous_state_id == index.state_id() {
+            if marker.generation == index.generation && marker.state_id == index.state_id() {
                 let potentially_new_index = self.index.load();
                 if std::ptr::eq(Arc::as_ptr(&potentially_new_index), Arc::as_ptr(&index)) {
                     // There isn't a new index with which to retry the whole ordeal, so nothing could be done here.
                     return false;
-                } else {
-                    // the index changed, worth trying again
-                    index = potentially_new_index;
-                    continue 'retry_with_changed_index;
                 }
-            } else {
-                // something inarguably changed, probably an index was loaded. 'probably' because we consider failed loads valid attempts,
-                // even they don't change anything for the caller which would then do a round for nothing.
-                return true;
+                // A refresh replaced this slot map. Keep judging that generation against the caller's marker
+                // instead of adopting the replacement as a new baseline.
+                index = potentially_new_index;
+                continue 'retry_with_changed_index;
             }
+            // The caller's snapshot is behind, either because an index was loaded (including a failed attempt,
+            // which still counts as a try) or because another generation took its place.
+            return true;
         }
     }
 
@@ -461,7 +465,9 @@ impl super::Store {
             None
         } else {
             if load_new_index {
-                self.load_next_index(new_index);
+                // Opportunistic load for the index just published, judged against that index's own marker.
+                let marker = new_index.marker();
+                self.load_next_index(new_index, marker);
             }
             Some(self.collect_snapshot())
         })
@@ -782,5 +788,77 @@ impl PartialOrd<Self> for Either {
 impl Ord for Either {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.path().cmp(other.path())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        Store,
+        store::{IndexCtx, RefreshMode},
+    };
+    use gix_error::TestResult;
+
+    #[test]
+    fn last_index_loaded_since_marker() -> TestResult {
+        let store = Store::at_opts(
+            gix_testtools::fixture_path("repos/small-packs.git/objects"),
+            gix_hash::Kind::Sha1,
+            &mut std::iter::empty(),
+            Default::default(),
+        )?;
+
+        let mut snapshot = store.collect_snapshot();
+        let saved_marker = loop {
+            let metrics = store.metrics();
+            if metrics.known_reachable_indices > 1
+                && metrics.open_reachable_indices + 1 == metrics.known_reachable_indices
+            {
+                break snapshot.marker;
+            }
+            snapshot = store
+                .load_one_index(IndexCtx {
+                    refresh_mode: RefreshMode::Never,
+                    marker: snapshot.marker,
+                    loose_compression: store.loose_compression,
+                })?
+                .expect("the packed fixture still has an index to register or load");
+        };
+        let indices_before_last = snapshot.indices.len();
+        assert_eq!(
+            indices_before_last + 1,
+            store.metrics().known_reachable_indices,
+            "one packed index remains unloaded"
+        );
+
+        let loaded = store.load_all_indices()?;
+        assert_eq!(
+            loaded.indices.len(),
+            indices_before_last + 1,
+            "the shared store loaded the last index"
+        );
+        assert!(
+            loaded.store_state_changed_since(saved_marker),
+            "loading the last index advances the marker"
+        );
+
+        // The slot map is exhausted. A baseline taken from it now would miss the load that happened
+        // since `saved_marker`; that marker must still count as progress.
+        assert!(
+            store.load_next_index(store.index.load(), saved_marker),
+            "a last index loaded since the marker is progress on an exhausted slot map"
+        );
+        let snapshot = store.collect_snapshot();
+        assert_eq!(
+            snapshot.indices.len(),
+            loaded.indices.len(),
+            "the resulting snapshot includes the last index"
+        );
+
+        assert!(
+            !store.load_next_index(store.index.load(), snapshot.marker),
+            "exhausted slots and the current marker make no progress"
+        );
+        Ok(())
     }
 }
