@@ -146,17 +146,24 @@ fn listing<'index>(
     } {
         return Ok(None);
     }
+    // Parents precede their children in UNTR. An invalid parent may still supply ignore rules to a valid child.
+    let dirs = cache.directories();
+    let mut needed = vec![false; dirs.len()];
+    for (pos, dir) in dirs.iter().enumerate().rev() {
+        needed[pos] = dir.stat().is_some() || dir.sub_directories().iter().any(|&child| needed[child]);
+    }
     let mut out = CachedListing::default();
     let mut pending = vec![(0, BString::default())];
     while let Some((position, path)) = pending.pop() {
-        let Some(dir) = cache.directories().get(position) else {
-            continue;
-        };
+        let dir = &dirs[position];
         if let Some(lookup) = lookup
             && let Some(entry) = index.entry_closest_to_directory_or_directory_icase(path.as_bstr(), true, lookup)
             && entry.path(index).get(..path.len()) != Some(path.as_slice())
         {
             bail!(message("cached directory spelling differs from the index"));
+        }
+        if !needed[position] {
+            continue;
         }
         if (dir.stat().is_none() || dir.exclude_file_oid().is_some())
             && !validate_ignore(
