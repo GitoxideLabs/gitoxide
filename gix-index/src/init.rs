@@ -82,6 +82,22 @@ pub mod from_tree {
             Self::from_tree_inner(tree, objects, validate, Some(index))
         }
 
+        /// Return whether the root cache-tree proves that the index already represents `tree`.
+        ///
+        /// Apply the same entry and path checks as [`Self::from_tree_with_cache()`] without copying
+        /// entries or reading tree objects. A missing or ineligible cache gives no proof and returns `false`.
+        pub fn tree_is_known_equal(
+            &self,
+            tree: &gix_hash::oid,
+            validate: gix_validate::path::component::Options,
+        ) -> bool {
+            if self.is_sparse() || self.object_hash() != tree.kind() {
+                return false;
+            }
+            let mut check = CollectEntries::new(validate, Some(self));
+            check.use_cached_tree::<false>(tree) && check.invalid_path.is_none()
+        }
+
         fn from_tree_inner<Find>(
             tree: &gix_hash::oid,
             objects: Find,
@@ -96,7 +112,7 @@ pub mod from_tree {
                 validate,
                 index.filter(|index| !index.is_sparse() && index.object_hash() == tree.kind()),
             );
-            let traversal = if delegate.copy_cached_tree(tree) {
+            let traversal = if delegate.use_cached_tree::<true>(tree) {
                 Ok(())
             } else {
                 depthfirst(tree.to_owned(), depthfirst::State::default(), &objects, &mut delegate)
@@ -152,7 +168,7 @@ pub mod from_tree {
             }
         }
 
-        fn copy_cached_tree(&mut self, tree_id: &gix_hash::oid) -> bool {
+        fn use_cached_tree<const COPY_ENTRIES: bool>(&mut self, tree_id: &gix_hash::oid) -> bool {
             let Some(index) = self.index.filter(|_| self.invalid_path.is_none()) else {
                 return false;
             };
@@ -197,7 +213,9 @@ pub mod from_tree {
                 return false;
             }
 
-            self.entries.reserve(entries.len());
+            if COPY_ENTRIES {
+                self.entries.reserve(entries.len());
+            }
             let mut validated_directory = b"".as_slice();
             for entry in entries {
                 let path = entry.path(index);
@@ -222,6 +240,9 @@ pub mod from_tree {
                 ) {
                     self.invalid_path = Some((path.into(), err));
                     return true;
+                }
+                if !COPY_ENTRIES {
+                    continue;
                 }
                 let path_start = self.path_backing.len();
                 self.path_backing.extend_from_slice(path);
@@ -325,7 +346,7 @@ pub mod from_tree {
         }
 
         fn visit_tree(&mut self, entry: &gix_object::tree::EntryRef<'_>) -> Action {
-            if self.copy_cached_tree(entry.oid) && self.invalid_path.is_none() {
+            if self.use_cached_tree::<true>(entry.oid) && self.invalid_path.is_none() {
                 std::ops::ControlFlow::Continue(false)
             } else {
                 self.determine_action()
