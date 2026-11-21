@@ -29,6 +29,10 @@ fn from_tree() -> gix_testtools::TestResult {
         let actual_state = State::from_tree(&tree_id, &odb, Default::default())?;
 
         compare_states(&actual_state, &expected_state, fixture);
+        assert!(
+            expected_state.tree_is_known_equal(&tree_id, Default::default()),
+            "Git wrote a matching root cache-tree"
+        );
         let cached_state =
             State::from_tree_with_cache(&tree_id, gix_object::find::Never, Default::default(), &expected_state)?;
         compare_states(&cached_state, &actual_state, fixture);
@@ -63,6 +67,10 @@ fn cached_trees_fall_back_for_ineligible_entries_and_counts() -> TestResult {
     let odb = odb_at(root.join(".git/objects"))?;
     let expected = State::from_tree(&tree_id, &odb, Default::default())?;
     let assert_fallback = |index: &State| -> TestResult {
+        assert!(
+            !index.tree_is_known_equal(&tree_id, Default::default()),
+            "uncertain entries cannot prove the staged tree unchanged"
+        );
         assert!(
             State::from_tree_with_cache(&tree_id, gix_object::find::Never, Default::default(), index).is_err(),
             "an unusable cache must read the tree"
@@ -131,6 +139,10 @@ fn cached_entries_discard_worktree_flags_and_validate_paths() -> TestResult {
         let entry = index.remove_entry_at_index(0);
         index.dangerously_push_entry(entry.stat, entry.id, Flags::empty(), mode, path.into());
         index.set_tree(tree.clone());
+        assert!(
+            !index.tree_is_known_equal(&tree_id, Default::default()),
+            "invalid cached paths cannot prove equality"
+        );
         let err = State::from_tree_with_cache(&tree_id, gix_object::find::Never, Default::default(), &index)
             .expect_err("cached paths must receive mode-specific component validation");
         assert!(err.is_validation(), "invalid cached paths remain validation errors");
@@ -157,6 +169,10 @@ fn sparse_cached_trees_fall_back_to_traversal() -> TestResult {
     )?;
     assert!(index.is_sparse(), "the fixture contains collapsed directory entries");
     let tree_id = index.tree().expect("Git retained the full tree identity").id;
+    assert!(
+        !index.tree_is_known_equal(&tree_id, Default::default()),
+        "sparse entries require a full comparison"
+    );
     assert!(
         State::from_tree_with_cache(&tree_id, gix_object::find::Never, Default::default(), &index).is_err(),
         "sparse entries cannot substitute the full tree"
