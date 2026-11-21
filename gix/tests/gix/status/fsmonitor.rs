@@ -351,8 +351,12 @@ fn untrusted_configuration_cannot_enable_a_monitor() -> TestResult {
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
     }
-    let root = gix_testtools::scripted_fixture_read_only("make_status_fsmonitor.sh")?;
-    let repo = gix::open_opts(&root, gix::open::Options::isolated().filter_config_section(|_| false))?;
+    // Rejecting core.symlinks can trigger a temporary symlink probe in the worktree.
+    let fixture = gix_testtools::scripted_fixture_writable("make_status_fsmonitor.sh")?;
+    let repo = gix::open_opts(
+        fixture.path(),
+        gix::open::Options::isolated().filter_config_section(|_| false),
+    )?;
     assert_eq!(
         paths(&repo)?.len(),
         6,
