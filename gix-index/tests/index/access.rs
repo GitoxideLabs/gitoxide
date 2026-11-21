@@ -558,3 +558,91 @@ fn path_is_directory_icase_with_clashes() {
         "x is a symlink, not a directory"
     );
 }
+
+#[test]
+fn mutable_entry_and_path_access_invalidates_cached_trees() -> gix_testtools::TestResult {
+    use gix_index::{
+        State,
+        entry::{Flags, Mode, Stat},
+    };
+
+    let index = gix_index::File::at(
+        crate::fixture_index_path("v2"),
+        gix_testtools::object_hash(),
+        false,
+        Default::default(),
+    )?;
+    assert!(index.tree().is_some(), "Git stored the committed tree in its index");
+    let operations: &[fn(&mut State)] = &[
+        |index| index.entries_mut()[0].id = gix_testtools::object_hash().null(),
+        |index| index.entries_mut_and_pathbacking().0[0].mode = Mode::SYMLINK,
+        |index| {
+            index
+                .entries_mut_with_paths()
+                .next()
+                .expect("one entry")
+                .0
+                .flags
+                .insert(Flags::INTENT_TO_ADD);
+        },
+        |index| {
+            let paths = index.path_backing().to_owned();
+            index.entries_mut_with_paths_in(&paths).next().expect("one entry").0.id =
+                gix_testtools::object_hash().null();
+        },
+        |index| {
+            index
+                .entry_mut_by_path_and_stage("a".into(), Stage::Unconflicted)
+                .expect("the fixture tracks a")
+                .mode = Mode::FILE_EXECUTABLE;
+        },
+        |index| {
+            index.dangerously_push_entry(
+                Stat::default(),
+                gix_testtools::object_hash().null(),
+                Flags::empty(),
+                Mode::FILE,
+                "b".into(),
+            );
+        },
+        |index| index.sort_entries(),
+        |index| index.sort_entries_by(|_, _| std::cmp::Ordering::Equal),
+        |index| index.remove_entries(|_, _, _| true),
+        |index| {
+            index.remove_entry_at_index(0);
+        },
+        |index| {
+            index.take_path_backing();
+        },
+        |index| {
+            let mut paths = index.take_path_backing();
+            paths[0] = b'b';
+            index.return_path_backing(paths);
+        },
+    ];
+    let mut restored = index.clone();
+    let tree = restored.remove_tree();
+    assert!(
+        restored.set_tree(tree.clone()).is_none(),
+        "replacing an absent cache returns none"
+    );
+    let paths = restored.take_path_backing();
+    restored.set_tree(tree.clone());
+    restored.return_path_backing(paths);
+    assert!(
+        restored.tree().is_none(),
+        "returning path storage also invalidates an explicitly restored cache"
+    );
+    assert!(restored.set_tree(tree.clone()).is_none());
+    assert_eq!(restored.set_tree(None), tree, "removing an installed cache returns it");
+
+    for (operation_index, operation) in operations.iter().enumerate() {
+        let mut index = index.clone();
+        operation(&mut index);
+        assert!(
+            index.tree().is_none(),
+            "mutation {operation_index} cannot retain stale cached tree IDs"
+        );
+    }
+    Ok(())
+}
