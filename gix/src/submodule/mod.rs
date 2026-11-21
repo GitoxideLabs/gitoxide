@@ -636,7 +636,7 @@ pub mod status {
             if let Some(interrupt) = interrupt {
                 // Fully collect even for a dirty check: abandoning an iterator would leave its
                 // producer retaining this submodule repository after the monitor refresh returns.
-                let mut changes = platform.collect_internal(Vec::new(), true, true, interrupt, None)?;
+                let mut changes = platform.collect_internal(Vec::new(), true, true, interrupt, None, false)?;
                 if check_dirty {
                     changes.truncate(1);
                 }

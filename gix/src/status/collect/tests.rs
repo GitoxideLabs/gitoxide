@@ -42,6 +42,7 @@ fn synchronous_collection_matches_fully_drained_iterators() -> TestResult {
                     unstaged,
                     &AtomicBool::new(false),
                     None,
+                    false,
                 )?);
                 let expected: Vec<_> = expected
                     .iter()
@@ -67,14 +68,14 @@ fn cancellation_returns_no_partial_snapshot_and_allows_retry() -> TestResult {
     let repo = crate::open_opts(fixture.join("racy-git"), crate::open::Options::isolated())?;
     let interrupt = AtomicBool::new(true);
     let error = configured(&repo)?
-        .collect_internal(Vec::new(), true, true, &interrupt, None)
+        .collect_internal(Vec::new(), true, true, &interrupt, None, false)
         .expect_err("a cancelled collection must not return even an empty successful snapshot");
     assert!(
         error.to_string().contains("interrupted"),
         "cancellation is distinguishable from a clean result"
     );
     interrupt.store(false, Ordering::Relaxed);
-    let items = configured(&repo)?.collect_internal(Vec::new(), true, true, &interrupt, None)?;
+    let items = configured(&repo)?.collect_internal(Vec::new(), true, true, &interrupt, None, false)?;
     assert_eq!(items.len(), 2, "retry recomputes both staged and unstaged changes");
     Ok(())
 }
