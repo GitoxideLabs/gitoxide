@@ -211,10 +211,10 @@ fn differently_cased_cached_directories_fall_back_without_duplicate_paths() -> T
         })?;
         let repo = gix::open_opts(&root, gix::open::Options::isolated())?;
         let index = repo.index()?;
-        if ["mixed/tracked", "mixed/deep/tracked"]
+        let old_spelling_resolves = ["mixed/tracked", "mixed/deep/tracked"]
             .iter()
-            .all(|path| root.join(path).is_file())
-        {
+            .all(|path| root.join(path).is_file());
+        if old_spelling_resolves {
             assert!(
                 index
                     .entries()
@@ -253,11 +253,19 @@ fn differently_cased_cached_directories_fall_back_without_duplicate_paths() -> T
             .index_worktree
             .dirwalk
             .expect("untracked status walks directories");
-        assert_eq!(
-            walk.cached_dir_listings, 0,
-            "case mismatches fall back before merging tracked names"
-        );
+        if old_spelling_resolves {
+            assert_eq!(
+                walk.cached_dir_listings, 0,
+                "the spelling guard rejects an otherwise valid listing before merging tracked names"
+            );
+        }
+        // On a case-sensitive filesystem the fixture has to assume the old tracked spelling is valid.
+        // Those entries already invalidate the renamed subtree, so unrelated listings may be reused.
         assert!(walk.read_dir_calls > 0, "the walk obtains the actual directory names");
+        assert!(
+            actual.contains(&format!("{to}/visible")),
+            "status reports the spelling found on disk"
+        );
     }
     Ok(())
 }
@@ -646,6 +654,52 @@ fn directory_and_file_events_invalidate_additions_and_removals() -> TestResult {
             "affected root and nested listings are reread: {walk:?}"
         );
     }
+    Ok(())
+}
+
+#[test]
+fn nested_ignore_event_preserves_siblings_across_writeback() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let fixture = writable_fixture()?;
+    let root = fixture.path();
+    std::fs::write(root.join("mixed/.gitignore"), "visible\n")?;
+    std::fs::write(root.join(".git/fsmonitor-paths"), b"MIXED/.GITIGNORE\0")?;
+    let repo = gix::open_opts(
+        root,
+        gix::open::Options::isolated().config_overrides(["core.ignoreCase=true"]),
+    )?;
+    let (actual, mut outcome) = status(&repo)?;
+    assert_eq!(
+        actual,
+        git_paths(root, &[], false)?,
+        "nested rules apply to descendants"
+    );
+    assert!(!actual.iter().any(|p| p == "mixed/deep/visible"));
+    assert!(
+        outcome
+            .index_worktree
+            .dirwalk
+            .as_ref()
+            .expect("directory walk")
+            .cached_dir_listings
+            > 0,
+        "siblings still use Git's listings"
+    );
+    outcome.write_changes().expect("the invalidations must be written")?;
+    std::fs::write(root.join(".git/fsmonitor-paths"), b"")?;
+    assert_eq!(git_paths(root, &[], true)?, actual, "Git accepts the updated cache");
+    let (repeated, outcome) = status(&repo)?;
+    assert_eq!(repeated, actual, "advancing the checkpoint does not hide changes");
+    assert!(
+        outcome
+            .index_worktree
+            .dirwalk
+            .expect("directory walk")
+            .cached_dir_listings
+            > 0
+    );
     Ok(())
 }
 

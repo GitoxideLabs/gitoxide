@@ -240,10 +240,11 @@ fn invalidate<'a>(
         if let Some(cache) = &mut untracked {
             let ignore_case = lookup.is_some();
             let basename = path.rsplit(|byte| *byte == b'/').next().unwrap_or_default();
-            if basename == b".gitignore"
-                || (ignore_case && (!path.is_ascii() || basename.eq_ignore_ascii_case(b".gitignore")))
-            {
+            if ignore_case && !path.is_ascii() {
                 *changed |= cache.invalidate_all();
+            } else if basename == b".gitignore" || (ignore_case && basename.eq_ignore_ascii_case(b".gitignore")) {
+                let parent = path.rfind_byte(b'/').map_or(&b""[..], |pos| &path[..pos]);
+                *changed |= cache.invalidate_path(parent.as_bstr(), ignore_case);
             } else {
                 *changed |= cache.invalidate_path(path, ignore_case);
             }
