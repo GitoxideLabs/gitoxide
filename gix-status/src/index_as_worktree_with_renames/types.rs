@@ -342,6 +342,8 @@ pub struct DirwalkContext<'a> {
     ///
     /// [Read more in `gix-dir`](gix_dir::walk::Context::ignore_case_index_lookup).
     pub ignore_case_index_lookup: Option<&'a gix_index::AccelerateLookup<'a>>,
+    /// Directory listings known to be unchanged, subject to [`gix_dir::walk::CachedListing`]'s contract.
+    pub cached_listing: Option<&'a gix_dir::walk::CachedListing>,
 }
 
 /// Observe the status of an entry by comparing an index entry to the worktree, along
