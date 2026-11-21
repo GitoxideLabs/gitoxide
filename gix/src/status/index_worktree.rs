@@ -166,7 +166,7 @@ impl Repository {
                     self,
                     index,
                     accelerate_lookup.as_ref(),
-                    options.dirwalk_options,
+                    options,
                     pathspec.search.patterns().len() != 0,
                 )
             })

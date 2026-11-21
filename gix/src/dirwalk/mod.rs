@@ -66,6 +66,7 @@ pub struct Options {
     for_deletion: Option<ForDeletionMode>,
     emit_tracked: bool,
     emit_untracked: EmissionMode,
+    allow_untyped_untracked: bool,
     emit_empty_directories: bool,
     classify_untracked_bare_repositories: bool,
     emit_collapsed: Option<CollapsedEntriesEmissionMode>,

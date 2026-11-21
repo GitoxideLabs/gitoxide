@@ -413,48 +413,110 @@ fn absent_skipped_entries_do_not_become_cached_siblings() -> TestResult {
 }
 
 #[test]
-fn untyped_untracked_files_use_directory_reads() -> TestResult {
+fn cached_untracked_names_only_need_types_for_typed_status_and_rewrites() -> TestResult {
+    use gix::dir::entry::Kind;
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
     }
-    let root = fixture_with(154, |root| {
+    let root = fixture_with(254, |root| {
         #[cfg(unix)]
-        std::os::unix::fs::symlink("visible", root.join("stable/link"))?;
+        {
+            std::os::unix::fs::symlink("../mixed", root.join("stable/link"))?;
+            std::os::unix::fs::symlink("absent", root.join("stable/dangling"))?;
+            std::fs::write(root.join("stable/.gitignore"), "link/\n")?;
+        }
         prime_cache(root)
     })?;
     let repo = gix::open_opts(&root, gix::open::Options::isolated())?;
-    let mut iter = repo.status(gix::progress::Discard)?.into_index_worktree_iter(None)?;
-    let mut kinds = Vec::new();
-    for item in iter.by_ref() {
-        if let gix::status::index_worktree::Item::DirectoryContents { entry, .. } = item? {
-            kinds.push((entry.rela_path, entry.disk_kind));
+    let expected = git_paths(&root, &[], false)?;
+    for (allow_untyped, rewrites) in [(false, false), (true, false), (true, true)] {
+        let mut iter = repo
+            .status(gix::progress::Discard)?
+            .dirwalk_options(|opts| opts.allow_untyped_untracked(allow_untyped))
+            .index_worktree_rewrites(rewrites.then(gix::diff::Rewrites::default))
+            .into_index_worktree_iter(None)?;
+        let mut entries = std::collections::BTreeMap::new();
+        for item in iter.by_ref() {
+            if let gix::status::index_worktree::Item::DirectoryContents { entry, .. } = item? {
+                entries.insert(entry.rela_path.to_string(), entry.disk_kind);
+            }
         }
+        assert_eq!(
+            entries.keys().cloned().collect::<Vec<_>>(),
+            expected,
+            "uncached Git agrees"
+        );
+        let walk = iter
+            .into_outcome()
+            .expect("status completed")
+            .index_worktree
+            .dirwalk
+            .expect("dirwalk is enabled");
+        let typed = !allow_untyped || rewrites;
+        if typed {
+            assert!(
+                walk.read_dir_calls >= 4,
+                "exact types come from directory reads: {walk:?}"
+            );
+        } else {
+            assert!(
+                walk.read_dir_calls <= 1,
+                "only the collapsed untracked directory may need a disk listing: {walk:?}"
+            );
+        }
+        assert_eq!(
+            entries["stable/visible"],
+            typed.then_some(Kind::File),
+            "only typed status distinguishes regular files"
+        );
+        #[cfg(unix)]
+        for link in ["stable/link", "stable/dangling"] {
+            assert_eq!(
+                entries[link],
+                typed.then_some(Kind::Symlink),
+                "directory and dangling symlinks are both non-directories"
+            );
+        }
+        assert_eq!(
+            entries["untracked"],
+            Some(Kind::Directory),
+            "collapsed directories retain their trailing slash in status"
+        );
     }
-    assert!(
-        kinds
-            .iter()
-            .any(|(path, kind)| path == "stable/visible" && *kind == Some(gix::dir::entry::Kind::File))
+    Ok(())
+}
+
+#[test]
+fn cached_untracked_file_replacing_indexed_descendants_is_reported() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let root = fixture_with(255, |root| {
+        std::fs::remove_dir_all(root.join("mixed/deep"))?;
+        std::fs::write(root.join("mixed/deep"), "now a file\n")?;
+        std::fs::write(root.join(".git/fsmonitor-paths"), b"mixed/deep/\0")?;
+        prime_cache(root)?;
+        std::fs::write(root.join(".git/fsmonitor-paths"), b"")?;
+        Ok(())
+    })?;
+    let repo = gix::open_opts(&root, gix::open::Options::isolated())?;
+    let (actual, _) = collect(
+        repo.status(gix::progress::Discard)?
+            .dirwalk_options(|opts| opts.allow_untyped_untracked(true))
+            .into_index_worktree_iter(None)?,
+    )?;
+    assert_eq!(
+        actual,
+        git_paths(&root, &[], false)?,
+        "the replacement and missing tracked child agree with Git"
     );
-    #[cfg(unix)]
     assert!(
-        kinds
-            .iter()
-            .any(|(path, kind)| path == "stable/link" && *kind == Some(gix::dir::entry::Kind::Symlink)),
-        "file and symlink types remain distinct"
-    );
-    let walk = iter
-        .into_outcome()
-        .expect("status completed")
-        .index_worktree
-        .dirwalk
-        .expect("dirwalk is enabled");
-    assert!(
-        walk.cached_dir_listings > 0,
-        "the tracked-only branch is omitted from its cached ancestor: {walk:?}"
+        actual.iter().any(|p| p == "mixed/deep"),
+        "the replacement is an untracked file"
     );
     assert!(
-        walk.read_dir_calls >= 4,
-        "untracked file types come from read_dir rather than per-entry stat calls"
+        actual.iter().any(|p| p == "mixed/deep/tracked"),
+        "the indexed descendant is removed"
     );
     Ok(())
 }

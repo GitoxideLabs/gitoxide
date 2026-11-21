@@ -84,6 +84,7 @@ pub fn show(
     let mut status = repo
         .status(index_progress)?
         .skip_tree_index_if_unchanged(true)
+        .dirwalk_options(|opts| opts.allow_untyped_untracked(true))
         .should_interrupt_shared(&gix::interrupt::IS_INTERRUPTED);
     if let Some(untracked) = untracked {
         status = status.untracked_files(untracked);
@@ -180,7 +181,7 @@ pub fn show(
                         status = "?",
                         rela_path = gix::path::relativize_with_prefix(&gix::path::from_bstr(entry.rela_path)?, prefix)
                             .display(),
-                        slash = if entry.disk_kind.unwrap_or(gix::dir::entry::Kind::File).is_dir() {
+                        slash = if entry.disk_kind.is_some_and(|kind| kind.is_dir()) {
                             "/"
                         } else {
                             ""
