@@ -81,6 +81,42 @@ fn changes(
 }
 
 #[test]
+fn skipping_an_unchanged_tree_preserves_git_staged_changes() -> TestResult {
+    for (name, can_skip) in [
+        ("untracked-only", true),
+        ("index-changed-outside-subdir", false),
+        ("added-unborn", false),
+    ] {
+        let repo = super::repo(name)?;
+        let git = gix_testtools::git_command(repo.workdir().expect("worktree fixture"))
+            .args(["diff", "--cached", "--name-only", "-z"])
+            .output()?;
+        assert!(git.status.success(), "Git computes the staged baseline");
+        for skip in [false, true] {
+            let mut iter = repo
+                .status(gix::progress::Discard)?
+                .skip_tree_index_if_unchanged(skip)
+                .into_iter(None)?;
+            let mut paths = Vec::new();
+            for item in iter.by_ref() {
+                if let gix::status::Item::TreeIndex(change) = item? {
+                    paths.push(change.location().to_vec());
+                }
+            }
+            paths.sort();
+            let expected: Vec<_> = git.stdout.split(|b| *b == 0).filter(|p| !p.is_empty()).collect();
+            assert_eq!(paths, expected, "{name}: every staged path agrees with Git");
+            assert_eq!(
+                iter.into_outcome().expect("iteration completed").tree_index.is_none(),
+                can_skip && skip,
+                "{name}: callers retain the comparison index unless they explicitly permit skipping it"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn matching_root_cache_tree_avoids_object_reads() -> TestResult {
     let mut repo = super::repo("untracked-only")?;
     let index = repo.open_index()?;

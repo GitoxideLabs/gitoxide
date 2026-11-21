@@ -81,6 +81,7 @@ pub fn show(
     let index_progress = progress.add_child("traverse index");
     let mut status = repo
         .status(index_progress)?
+        .skip_tree_index_if_unchanged(true)
         .should_interrupt_shared(&gix::interrupt::IS_INTERRUPTED);
     if let Some(untracked) = untracked {
         status = status.untracked_files(untracked);

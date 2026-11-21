@@ -55,17 +55,41 @@ impl Repository {
             &gix_index::State,
         ) -> Result<gix_diff::index::Action>,
     ) -> Result<Outcome> {
+        Ok(self
+            .tree_index_status_inner(tree_id, worktree_index, pathspec, renames, false, cb)?
+            .expect("the complete tree index was requested"))
+    }
+
+    pub(super) fn tree_index_status_inner<'repo>(
+        &'repo self,
+        tree_id: &gix_hash::oid,
+        worktree_index: &gix_index::State,
+        pathspec: Option<&mut crate::Pathspec<'repo>>,
+        renames: TrackRenames,
+        skip_if_unchanged: bool,
+        cb: impl FnMut(
+            gix_diff::index::ChangeRef<'_, '_>,
+            &gix_index::State,
+            &gix_index::State,
+        ) -> Result<gix_diff::index::Action>,
+    ) -> Result<Option<Outcome>> {
         let _span = gix_trace::coarse!("gix::tree_index_status");
-        let tree_index =
-            gix_index::State::from_tree_with_cache(tree_id, self, self.config.protect_options()?, worktree_index)
-                .or_raise(|| message!("Could not create index from tree at {tree_id}"))?;
-        let rewrite = self.tree_index_status_from_index(&tree_index, worktree_index, pathspec, renames, cb)?;
-        Ok(Outcome { rewrite, tree_index })
+        let validate = self.config.protect_options()?;
+        let tree_index = if skip_if_unchanged && worktree_index.tree_is_known_equal(tree_id, validate) {
+            None
+        } else {
+            Some(
+                gix_index::State::from_tree_with_cache(tree_id, self, validate, worktree_index)
+                    .or_raise(|| message!("Could not create index from tree at {tree_id}"))?,
+            )
+        };
+        let rewrite = self.tree_index_status_from_index(tree_index.as_ref(), worktree_index, pathspec, renames, cb)?;
+        Ok(tree_index.map(|tree_index| Outcome { rewrite, tree_index }))
     }
 
     pub(crate) fn tree_index_status_from_index<'repo>(
         &'repo self,
-        tree_index: &gix_index::State,
+        tree_index: Option<&gix_index::State>,
         worktree_index: &gix_index::State,
         pathspec: Option<&mut crate::Pathspec<'repo>>,
         renames: TrackRenames,
@@ -95,6 +119,10 @@ impl Repository {
         if rewrites.is_some() {
             resource_cache = Some(self.diff_resource_cache_for_tree_diff()?);
         }
+        let Some(tree_index) = tree_index else {
+            gix_trace::debug!("matching root cache-tree; skipping staged comparison");
+            return Ok(None);
+        };
         let mut pathspec_storage = None;
         if pathspec.is_none() {
             pathspec_storage = self

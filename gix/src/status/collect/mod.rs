@@ -87,7 +87,7 @@ impl<P: gix_utils::progress::Progress> Platform<'_, P> {
             interrupted()?;
             self.repo
                 .tree_index_status_from_index(
-                    tree_index,
+                    Some(tree_index),
                     &index,
                     Some(&mut pathspec),
                     self.tree_index_renames,
