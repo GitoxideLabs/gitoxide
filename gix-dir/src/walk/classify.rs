@@ -27,7 +27,16 @@ pub fn root(
     let mut path_buf = worktree_root.to_owned();
     // These initial values kick in if worktree_relative_root.is_empty();
     let file_kind = path_buf.symlink_metadata().ok().map(|m| m.file_type().into());
-    let mut out = path(&mut path_buf, buf, 0, file_kind, || None, options, ctx)?;
+    let mut out = path(
+        &mut path_buf,
+        buf,
+        0,
+        file_kind,
+        || None,
+        options,
+        ctx.index.entries(),
+        ctx,
+    )?;
     let worktree_root_is_repository = out
         .disk_kind
         .is_some_and(|kind| matches!(kind, entry::Kind::Repository));
@@ -47,6 +56,7 @@ pub fn root(
             file_kind,
             || None,
             options,
+            ctx.index.entries(),
             ctx,
         )?;
         if !out.status.can_recurse(
@@ -130,6 +140,7 @@ impl<'a> EntryRef<'a> {
 /// and if `file_kind` is not a directory, the way the pathspec matched with `pathspec_matches_how`.
 ///
 /// Note that non-files are pruned by default.
+#[expect(clippy::too_many_arguments)]
 pub fn path(
     path: &mut PathBuf,
     rela_path: &mut BString,
@@ -146,6 +157,7 @@ pub fn path(
         worktree_relative_worktree_dirs,
         ..
     }: Options<'_>,
+    index_entries: &[gix_index::Entry],
     ctx: &mut Context<'_>,
 ) -> Result<Outcome> {
     let mut out = Outcome {
@@ -195,6 +207,7 @@ pub fn path(
     let (uptodate_index_kind, mut index_kind, property) = resolve_file_type_with_index(
         rela_path,
         ctx.index,
+        index_entries,
         ctx.ignore_case_index_lookup.filter(|_| ignore_case),
     );
     let mut kind = uptodate_index_kind.or(disk_kind).or_else(on_demand_disk_kind);
@@ -373,6 +386,7 @@ pub fn maybe_upgrade_to_repository(
 fn resolve_file_type_with_index(
     rela_path: &mut BString,
     index: &gix_index::State,
+    index_entries: &[gix_index::Entry],
     ignore_case: Option<&gix_index::AccelerateLookup<'_>>,
 ) -> (Option<entry::Kind>, Option<entry::Kind>, Option<entry::Property>) {
     // TODO: either get this to work for icase as well, or remove the need for it. Logic is different in both branches.
@@ -438,9 +452,15 @@ fn resolve_file_type_with_index(
             }
         }
     } else {
+        let start = index_entries.partition_point(|entry| entry.path(index) < rela_path.as_bstr());
+        let candidates = &index_entries[start..];
+        let end = candidates
+            .iter()
+            .take_while(|entry| entry.path(index) == rela_path)
+            .count();
         // Prefer our side's type, but conflicts without ours are tracked as well.
-        match index.entry_range(rela_path.as_bstr()) {
-            None => {
+        match &candidates[..end] {
+            [] => {
                 rela_path.push(b'/');
                 let res = index.prefixed_entries_range(rela_path.as_bstr());
                 rela_path.pop();
@@ -475,8 +495,7 @@ fn resolve_file_type_with_index(
                 }
                 (kind, is_tracked.then_some(entry::Kind::Directory))
             }
-            Some(range) => {
-                let entries = &index.entries()[range];
+            entries => {
                 let entry = entries
                     .iter()
                     .find(|entry| entry.stage() == gix_index::entry::Stage::Ours)
