@@ -3,7 +3,10 @@ use std::path::Path;
 use gix_config::Source;
 
 #[test]
-fn git_config_no_system() {
+fn git_config_no_system() -> gix_testtools::TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
     assert_eq!(
         Source::GitInstallation.storage_location(&mut |name| {
             assert_eq!(
@@ -46,10 +49,14 @@ fn git_config_no_system() {
             })
             .is_some()
     );
+    Ok(())
 }
 
 #[test]
-fn git_config_system() {
+fn git_config_system() -> gix_testtools::TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
     assert_eq!(
         Source::System
             .storage_location(&mut |name| {
@@ -79,6 +86,7 @@ fn git_config_system() {
         },
         "the override replaces system-scoped installation configuration but preserves other scopes"
     );
+    Ok(())
 }
 
 #[test]

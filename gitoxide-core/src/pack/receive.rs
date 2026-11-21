@@ -147,6 +147,7 @@ where
             shallow_file: "no shallow file required as we reject it to keep it simple".into(),
             shared_repository_permissions: gix::fs::SharedPermissions::Umask,
             shallow: &Default::default(),
+            filter: None,
             tags: Default::default(),
             reject_shallow_remote: true,
         },

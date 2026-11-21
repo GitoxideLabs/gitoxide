@@ -1,24 +1,11 @@
-use std::{
-    ffi::OsStr,
-    path::{Path, PathBuf},
-    process::Command,
-};
+use std::path::{Path, PathBuf};
 
 use super::git::{self, ConfigPaths};
 
 pub(super) const EXE_NAME: &str = "git";
-pub(super) const NULL_DEVICE: &str = "/dev/null";
 
 pub(super) fn exe_invocation() -> &'static Path {
     Path::new(EXE_NAME)
-}
-
-pub(super) fn alternative_executable() -> Option<&'static Path> {
-    None
-}
-
-pub(super) fn native_path(path: &Path) -> Option<PathBuf> {
-    Some(path.to_owned())
 }
 
 pub(super) fn core_dir() -> Option<PathBuf> {
@@ -60,7 +47,7 @@ pub(super) fn config_paths_without_git() -> Option<ConfigPaths> {
         if !is_system && executable != resolved {
             return None;
         }
-        return config_paths_at(config, is_system, system_config()?);
+        return config_paths_at(config, is_system, Path::new("/etc/gitconfig"));
     }
     None
 }
@@ -79,7 +66,7 @@ fn config_paths_at(config: PathBuf, is_system: bool, system_config: &Path) -> Op
 }
 
 #[cfg(unix)]
-fn config_path_from_executable(executable: &Path) -> Option<(PathBuf, bool)> {
+pub(in crate::env) fn config_path_from_executable(executable: &Path) -> Option<(PathBuf, bool)> {
     // shortcut: recognized layouts assume standard build-time config paths; query custom layouts instead.
     #[cfg(target_os = "linux")]
     if executable == Path::new("/usr/bin/git") || executable == Path::new("/bin/git") {
@@ -112,7 +99,11 @@ pub(super) fn system_prefix() -> Option<&'static Path> {
 }
 
 pub(super) fn system_config() -> Option<&'static Path> {
-    Some(Path::new("/etc/gitconfig"))
+    git::GIT_CONFIG_PATHS
+        .system
+        .as_ref()
+        .and_then(|path| crate::from_byte_slice(path).ok())
+        .or(Some(Path::new("/etc/gitconfig")))
 }
 
 pub(super) fn shell() -> super::Shell {
@@ -124,14 +115,6 @@ pub(super) fn shell() -> super::Shell {
 
 pub(super) fn associated_program(_name: &str) -> Option<PathBuf> {
     None
-}
-
-pub(super) fn command(executable: impl AsRef<OsStr>) -> Command {
-    Command::new(executable)
-}
-
-pub(super) fn config_query_cwd() -> PathBuf {
-    "/".into()
 }
 
 #[cfg(all(test, unix))]

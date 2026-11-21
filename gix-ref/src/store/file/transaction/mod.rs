@@ -78,6 +78,14 @@ impl file::Store {
 }
 
 impl<'p> Transaction<'_, 'p> {
+    /// Inspect the prepared edits without releasing their reference locks.
+    ///
+    /// Before [`Self::prepare()`] this iterator is empty. Prepared edits include symbolic
+    /// reference expansion and the previous values observed while holding the locks.
+    pub fn edits(&self) -> impl Iterator<Item = &RefEdit> {
+        self.updates.iter().flatten().map(|edit| &edit.update)
+    }
+
     /// Configure the way packed refs are handled during the transaction
     pub fn packed_refs(mut self, packed_refs: PackedRefs<'p>) -> Self {
         self.packed_refs = packed_refs;

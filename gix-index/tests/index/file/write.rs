@@ -235,7 +235,8 @@ fn default_write_invalidates_the_untracked_cache_after_an_index_edit() -> TestRe
 #[test]
 fn default_write_invalidates_all_tree_nodes_after_index_edits() -> TestResult {
     let mut index = Generated("v2_deeper_tree").open();
-    let original_tree = index.tree().expect("committing populates TREE").clone();
+    let original = index.clone();
+    let original_tree = original.tree().expect("committing populates TREE");
     let root = index
         .path()
         .parent()
@@ -251,17 +252,23 @@ fn default_write_invalidates_all_tree_nodes_after_index_edits() -> TestResult {
         .expect("the fixture tracks this deeply nested file")
         .flags
         .insert(entry::Flags::REMOVE);
+    index.copy_metadata_from(&original)?;
+    let before_write = index.tree().expect("metadata reuse restores TREE").clone();
+    assert!(
+        before_write.children.iter().any(|tree| tree.num_entries.is_some()),
+        "metadata reuse preserves valid nodes for unaffected directories"
+    );
 
     let temporary = gix_testtools::tempfile::TempDir::new()?;
     index.set_path(temporary.path().join("cached-index"));
     index.write(Options::default(), Default::default())?;
     assert_eq!(
         index.tree(),
-        Some(&original_tree),
+        Some(&before_write),
         "writing does not mutate the in-memory cache"
     );
     let reopened = gix_index::File::at(index.path(), index.object_hash(), false, Default::default())?;
-    assert_invalidated_tree(reopened.tree().expect("All retains TREE"), &original_tree);
+    assert_invalidated_tree(reopened.tree().expect("All retains TREE"), original_tree);
     reopened.verify_extensions(false, gix_object::find::Never)?;
 
     let uncached_path = temporary.path().join("uncached-index");

@@ -1,5 +1,5 @@
 use gix_error::Result;
-use std::{cmp::Ordering, io::Write, process::Stdio};
+use std::{cmp::Ordering, ffi::OsString, io::Write, process::Stdio};
 
 use bstr::{BStr, BString, ByteSlice};
 use gix_error::{ExnResult, OptionExt, ResultExt, bail, message, validation};
@@ -42,6 +42,7 @@ impl std::hash::Hash for CacheKey {
         if self.kind == CacheKeyKind::Object {
             self.id.hash(state);
             (self.mode == gix_object::tree::EntryKind::Link).hash(state);
+            self.location.hash(state);
         } else {
             self.location.hash(state);
         }
@@ -53,6 +54,7 @@ impl PartialEq for CacheKey {
         self.kind == other.kind
             && if self.kind == CacheKeyKind::Object {
                 self.id == other.id
+                    && self.location == other.location
                     && (self.mode == gix_object::tree::EntryKind::Link)
                         == (other.mode == gix_object::tree::EntryKind::Link)
             } else {
@@ -468,9 +470,9 @@ pub mod prepare_diff_command {
     pub struct Command {
         pub(crate) cmd: std::process::Command,
         /// Possibly a tempfile to be removed after the run, or `None` if there is no old version.
-        pub(crate) old: Option<gix_tempfile::Handle<gix_tempfile::handle::Closed>>,
+        pub(crate) _old: Option<gix_tempfile::Handle<gix_tempfile::handle::Closed>>,
         /// Possibly a tempfile to be removed after the run, or `None` if there is no new version.
-        pub(crate) new: Option<gix_tempfile::Handle<gix_tempfile::handle::Closed>>,
+        pub(crate) _new: Option<gix_tempfile::Handle<gix_tempfile::handle::Closed>>,
     }
 
     impl Deref for Command {
@@ -592,13 +594,13 @@ impl Platform {
         total: usize,
     ) -> Result<prepare_diff_command::Command> {
         fn add_resource(
-            cmd: &mut std::process::Command,
+            args: &mut Vec<OsString>,
             res: Resource<'_>,
             object_hash: gix_hash::Kind,
         ) -> Result<Option<gix_tempfile::Handle<gix_tempfile::handle::Closed>>> {
             let tmpfile = match res.data {
                 resource::Data::Missing => {
-                    cmd.args(["/dev/null", ".", "."]);
+                    args.extend(["/dev/null".into(), ".".into(), ".".into()]);
                     None
                 }
                 resource::Data::Buffer { buf, is_derived: _ } => {
@@ -620,7 +622,7 @@ impl Platform {
                         )
                     })?;
                     tmp.with_mut(|f| {
-                        cmd.arg(f.path());
+                        args.push(f.path().into());
                     })
                     .or_raise(|| {
                         message!(
@@ -628,8 +630,10 @@ impl Platform {
                             res.rela_path
                         )
                     })?;
-                    cmd.arg(res.id.unwrap_or(object_hash.null_ref()).to_string())
-                        .arg(res.mode.as_octal_str().to_string());
+                    args.extend([
+                        res.id.unwrap_or(object_hash.null_ref()).to_string().into(),
+                        res.mode.as_octal_str().to_string().into(),
+                    ]);
                     let tmp = tmp.close().or_raise(|| {
                         message!(
                             "Could not close tempfile for \"{}\" while preparing external diff command",
@@ -650,7 +654,7 @@ impl Platform {
         let (old, new) = self
             .resources()
             .ok_or_raise(|| message("Either the source or the destination of the diff operation were not set"))?;
-        let mut cmd: std::process::Command = gix_command::prepare(gix_path::from_bstring(diff_command)?)
+        let mut cmd = gix_command::prepare(gix_path::from_bstring(diff_command)?)
             .command_may_be_shell_script_disallow_manual_argument_splitting()
             .with_context(context)
             .env("GIT_DIFF_PATH_COUNTER", (count + 1).to_string())
@@ -658,23 +662,19 @@ impl Platform {
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
-            .try_into()?;
+            .arg(gix_path::from_bstr(old.rela_path)?.into_owned());
 
-        cmd.arg(gix_path::from_bstr(old.rela_path)?.into_owned());
-        let mut out = prepare_diff_command::Command {
-            cmd,
-            old: None,
-            new: None,
-        };
-
-        out.old = add_resource(&mut out.cmd, old, self.filter.worktree_filter.object_hash())?;
-        out.new = add_resource(&mut out.cmd, new, self.filter.worktree_filter.object_hash())?;
-
+        let old_file = add_resource(&mut cmd.args, old, self.filter.worktree_filter.object_hash())?;
+        let new_file = add_resource(&mut cmd.args, new, self.filter.worktree_filter.object_hash())?;
         if old.rela_path != new.rela_path {
-            out.cmd.arg(gix_path::from_bstr(new.rela_path)?.into_owned());
+            cmd = cmd.arg(gix_path::from_bstr(new.rela_path)?.into_owned());
         }
 
-        Ok(out)
+        Ok(prepare_diff_command::Command {
+            cmd: cmd.try_into()?,
+            _old: old_file,
+            _new: new_file,
+        })
     }
 
     /// Returns the resource of the given kind if it was set.

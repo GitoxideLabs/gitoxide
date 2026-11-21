@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use gix_ref::{
     Category, FullName,
@@ -37,11 +37,18 @@ impl ThreadSafeRepository {
     /// Similar to [`init`][Self::init()], but allows to determine how exactly to open the newly created repository.
     /// A newly created repository starts with [`Full`][gix_sec::Trust::Full] trust and undergoes the usual worktree checks.
     /// Invalid `init.defaultBranch` values include their bytes as `input` [metadata](gix_error::Error::metadata()).
+    /// Templates are selected by `GIT_TEMPLATE_DIR`, then trusted `init.templateDir`, then the built-in templates.
+    /// Relative paths use the process's current directory. An empty path disables templates.
+    /// A template's `HEAD` takes precedence over `init.defaultBranch`.
+    /// Missing templates and templates with unsupported repository formats are skipped.
     ///
     /// # Deviation
     ///
     /// Instead of naming the default branch `master`, we name it `main` unless configured explicitly using the `init.defaultBranch`
     /// configuration key.
+    ///
+    /// Required repository directories are created before copying templates, and updating template config replaces
+    /// a copied symlink rather than modifying its target.
     pub fn init_opts(
         directory: impl AsRef<Path>,
         kind: crate::create::Kind,
@@ -74,8 +81,14 @@ impl ThreadSafeRepository {
         let shared_repository_permissions = crate::config::file_mut::shared_repository_permissions(&config, filter)
             .with_lenient_default(open_options.lenient_config)
             .or_raise(|| gix_error::message("Could not load configuration before initializing the repository"))?;
-        let (path, capabilities) =
-            crate::create::into_with_capabilities(directory, kind, create_options, shared_repository_permissions)?;
+        let template = template_directory(&open_options)?;
+        let (path, capabilities, created_head) = crate::create::into_with_capabilities(
+            directory,
+            kind,
+            create_options,
+            shared_repository_permissions,
+            template.as_deref(),
+        )?;
         if !capabilities.symlink {
             open_options.api_config_overrides.push("core.symlinks=false".into());
         }
@@ -92,7 +105,7 @@ impl ThreadSafeRepository {
             .resolved
             .string(Init::DEFAULT_BRANCH)
             .unwrap_or_else(|| DEFAULT_BRANCH_NAME.into());
-        if branch_name.as_bstr() != DEFAULT_BRANCH_NAME {
+        if created_head && branch_name.as_bstr() != DEFAULT_BRANCH_NAME {
             let configured_branch_name = branch_name;
             let sym_ref: FullName = Category::LocalBranch
                 .to_full_name(configured_branch_name.as_bstr())
@@ -114,6 +127,28 @@ impl ThreadSafeRepository {
 
         Ok(repo)
     }
+}
+
+fn template_directory(options: &crate::open::Options) -> Result<Option<PathBuf>> {
+    if options.permissions.env.git_prefix != gix_sec::Permission::Deny
+        && let Some(path) = std::env::var_os("GIT_TEMPLATE_DIR")
+        && let Some(path) = options.permissions.env.git_prefix.check(path).or_error()?
+    {
+        return Ok(Some(path.into()));
+    }
+    let config = crate::config(None, options)?;
+    let filter = options
+        .filter_config_section
+        .unwrap_or(crate::config::section::is_trusted);
+    let Some(path) = config.path_filter(Init::TEMPLATE_DIR, filter) else {
+        return Ok(None);
+    };
+    let install_dir = crate::path::install_dir().ok();
+    let home = crate::config::cache::access::home_dir(options.permissions.env);
+    path.resolve(crate::config::cache::interpolate_context(
+        install_dir.as_deref(),
+        home.as_deref(),
+    ))
 }
 
 /// Read `init.defaultObjectFormat` without repository context, like Git's format selection.

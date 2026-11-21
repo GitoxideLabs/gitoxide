@@ -396,6 +396,9 @@ impl file::Store {
             .reference_path_with_base(name)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
         let ref_path = base.join(&relative_path);
+        if let Some(contents) = symbolic_link_ref_contents(&ref_path) {
+            return Ok(Some(contents));
+        }
         match std::fs::File::open(&ref_path) {
             Ok(mut file) => {
                 let mut buf = Vec::with_capacity(128);
@@ -422,6 +425,18 @@ impl file::Store {
             Err(err) => Err(err),
         }
     }
+}
+
+/// Normalized ref-name links encode symbolic refs; other links expose their file contents.
+pub(super) fn symbolic_link_ref_contents(path: &Path) -> Option<Vec<u8>> {
+    let target = std::fs::read_link(path).ok()?;
+    let target = gix_path::into_bstr(&target).ok()?;
+    if !target.starts_with(b"refs/") || gix_validate::reference::name(target.as_ref()).is_err() {
+        return None;
+    }
+    let mut contents = b"ref: ".to_vec();
+    contents.extend_from_slice(target.as_ref());
+    Some(contents)
 }
 
 #[cfg(windows)]

@@ -1,4 +1,5 @@
 mod checkout;
+mod checkout_changes;
 
 use std::path::{Path, PathBuf};
 

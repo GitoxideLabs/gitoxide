@@ -23,6 +23,7 @@ use std::{
 };
 
 use bstr::{BString, ByteSlice};
+use gix_error::Result;
 
 ///
 pub mod parse;
@@ -72,6 +73,9 @@ pub struct Prepare {
     pub command: OsString,
     /// Additional information to be passed to the spawned command.
     pub context: Option<Context>,
+    /// The child process's working directory, resolved to an absolute path when preparation finishes.
+    /// On Windows this also anchors relative executable paths, PATH entries, and shebang discovery.
+    pub current_dir: Option<PathBuf>,
     /// The way standard input is configured.
     pub stdin: std::process::Stdio,
     /// The way standard output is configured.
@@ -157,13 +161,20 @@ fn split_paths(joined_paths: &OsStr) -> impl Iterator<Item = PathBuf> + '_ {
 
 /// Return whether `command` is a single path component eligible for `PATH` lookup.
 fn is_bare_command(command: &Path) -> bool {
-    command.components().take(2).count() == 1
+    let mut components = command.components();
+    matches!(components.next(), Some(std::path::Component::Normal(_)))
+        && components.next().is_none()
+        && command.as_os_str().as_encoded_bytes().find_byteset(br"/\").is_none()
 }
 
 /// Try to find `command` in `joined_paths` using [`split_paths()`].
 /// Commands with an explicit extension are matched verbatim. Otherwise, `.exe` is preferred over an extensionless file.
 /// Note that just like Git, no lookup is performed if a slash or backslash is in `command`.
-fn win_path_lookup(command: &Path, joined_paths: &std::ffi::OsStr) -> Option<PathBuf> {
+fn win_path_lookup(
+    command: &Path,
+    joined_paths: &std::ffi::OsStr,
+    current_dir: Option<&Path>,
+) -> Result<Option<PathBuf>> {
     fn lookup(root: &Path, command: &Path, has_extension: bool) -> Option<PathBuf> {
         let mut path = root.join(command);
         if has_extension {
@@ -178,16 +189,55 @@ fn win_path_lookup(command: &Path, joined_paths: &std::ffi::OsStr) -> Option<Pat
         path.is_file().then_some(path)
     }
     if !is_bare_command(command) {
-        return None;
+        return Ok(None);
     }
     let has_extension = command.extension().is_some();
 
     for root in split_paths(joined_paths) {
+        let root = anchor_path(&root, current_dir)?;
         if let Some(executable) = lookup(&root, command, has_extension) {
-            return Some(executable);
+            return Ok(Some(executable));
         }
     }
-    None
+    Ok(None)
+}
+
+/// Anchor a path to the child's absolute working directory without resolving symlinks.
+fn anchor_path(path: &Path, current_dir: Option<&Path>) -> Result<PathBuf> {
+    let Some(current_dir) = current_dir else {
+        return Ok(path.to_owned());
+    };
+    #[cfg(windows)]
+    {
+        use std::path::{Component::Prefix, Prefix as PathPrefix};
+
+        use gix_error::{ResultExt, message};
+
+        let mut components = path.components();
+        if let Some(Prefix(prefix)) = components.next()
+            && let PathPrefix::Disk(drive) = prefix.kind()
+            && !path.has_root()
+        {
+            let same_drive = matches!(current_dir.components().next(), Some(Prefix(base))
+                if matches!(base.kind(), PathPrefix::Disk(base_drive) | PathPrefix::VerbatimDisk(base_drive)
+                    if drive.eq_ignore_ascii_case(&base_drive)));
+            if !same_drive {
+                return std::path::absolute(path)
+                    .or_raise(|| message("Could not resolve a command path on another drive"));
+            }
+            let mut anchored = current_dir.join(components.as_path());
+            if path
+                .as_os_str()
+                .as_encoded_bytes()
+                .last()
+                .is_some_and(|b| matches!(b, b'/' | b'\\'))
+            {
+                anchored.push("");
+            }
+            return Ok(anchored);
+        }
+    }
+    Ok(current_dir.join(path))
 }
 
 /// Parse the shebang (`#!<path>`) from the first line of `executable`, and return the shebang
@@ -223,6 +273,7 @@ pub fn prepare(cmd: impl Into<OsString>) -> Prepare {
         command: cmd.into(),
         shell_program: None,
         context: None,
+        current_dir: None,
         stdin: std::process::Stdio::null(),
         stdout: std::process::Stdio::piped(),
         stderr: std::process::Stdio::inherit(),

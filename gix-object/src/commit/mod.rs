@@ -19,6 +19,10 @@ pub fn signature_field_name(hash_kind: gix_hash::Kind) -> &'static str {
     SIGNATURE_FIELD_NAME
 }
 
+fn is_signature_field(name: &BStr) -> bool {
+    name == SIGNATURE_FIELD_NAME || name == SIGNATURE_FIELD_NAME_SHA256
+}
+
 mod decode;
 ///
 pub mod message;
@@ -50,6 +54,20 @@ impl<'a> CommitRef<'a> {
     /// what kind of hash to expect for validation.
     pub fn from_bytes(mut data: &'a [u8], object_hash: gix_hash::Kind) -> Result<CommitRef<'a>> {
         decode::commit(&mut data, object_hash)
+    }
+
+    /// Decode a commit and retain the exact bytes covered by its signature for `object_hash`.
+    ///
+    /// The optional signed data excludes both Git signature headers (`gpgsig` and `gpgsig-sha256`),
+    /// including continuation lines, without re-encoding any other fields. Duplicate active signature
+    /// headers are rejected as ambiguous. Obtain the corresponding signature from
+    /// [`extra_headers().pgp_signature()`][ExtraHeaders::pgp_signature]. Both results are produced in
+    /// one parsing pass; unsigned commits return `None` for the signed data.
+    pub fn from_bytes_with_signed_data(
+        mut data: &'a [u8],
+        object_hash: gix_hash::Kind,
+    ) -> Result<(CommitRef<'a>, Option<crate::signature::SignedData<'a>>)> {
+        decode::commit_with_signed_data::<true>(&mut data, object_hash)
     }
 }
 

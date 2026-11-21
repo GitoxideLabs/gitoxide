@@ -1,4 +1,4 @@
-//! An abstraction over [fetching][fetch()] a pack from the server.
+//! Abstractions for [fetching][fetch()] packs and [pushing][push::Request] reference updates.
 //!
 //! Generally, there is the following order of operations.
 //!
@@ -8,6 +8,7 @@
 //!     - [list references](LsRefsCommand)
 //!          - create a mapping between [refspecs and references](fetch::RefMap)
 //!     - [receive a pack](fetch())
+//! * alternatively, [send reference updates and a pack](push::Request) to receive-pack
 //!
 //! ## Feature Flags
 #![cfg_attr(
@@ -63,8 +64,11 @@ pub use gix_transport as transport;
 
 ///
 pub mod fetch;
+
+/// Sending reference updates and packs to a receive-pack service.
+pub mod push;
 #[cfg(any(feature = "blocking-client", feature = "async-client"))]
-pub use fetch::function::fetch;
+pub use fetch::function::{fetch, fetch_with_remote_progress};
 
 mod remote_progress;
 pub use remote_progress::RemoteProgress;

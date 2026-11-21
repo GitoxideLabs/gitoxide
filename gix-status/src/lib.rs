@@ -45,16 +45,7 @@ pub mod index_as_worktree_with_renames;
 #[cfg(feature = "worktree-rewrites")]
 pub use index_as_worktree_with_renames::function::index_as_worktree_with_renames;
 
-/// A stack that validates we are not going through a symlink in a way that is read-only.
-///
-/// It can efficiently validate paths when these are queried in sort-order, which leads to each component
-/// to only be checked once.
-pub struct SymlinkCheck {
-    /// Supports querying additional information, like the stack root.
-    pub inner: gix_fs::Stack,
-}
-
-mod stack;
+pub use gix_fs::SymlinkCheck;
 
 fn is_dir_to_mode(is_dir: bool) -> gix_index::entry::Mode {
     if is_dir {

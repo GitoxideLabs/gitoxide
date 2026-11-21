@@ -10,7 +10,21 @@ fn blob_id(repo: &Repository, data: &[u8]) -> gix_hash::ObjectId {
 mod attributes;
 #[cfg(feature = "blame")]
 mod blame;
+#[cfg(feature = "blame")]
+mod blame_paths;
+#[cfg(feature = "blame")]
+mod blame_sparse;
+#[cfg(feature = "blame")]
+mod blame_textconv;
+#[cfg(feature = "blame")]
+mod blame_worktree;
 mod branch;
+#[cfg(feature = "pack-generate")]
+mod bundle;
+#[cfg(feature = "worktree-mutation")]
+mod checkout;
+#[cfg(feature = "worktree-mutation")]
+mod clean;
 pub(crate) mod config;
 #[cfg(feature = "excludes")]
 mod excludes;
@@ -18,9 +32,15 @@ mod excludes;
 mod filter;
 #[cfg(feature = "fsmonitor-server")]
 mod fsmonitor;
+#[cfg(feature = "object-maintenance")]
+mod gc;
+#[cfg(feature = "command")]
+mod hooks;
 mod location;
 #[cfg(feature = "mailmap")]
 mod mailmap;
+#[cfg(feature = "index")]
+mod maintenance;
 #[cfg(feature = "merge")]
 mod merge;
 #[cfg(feature = "notes")]
@@ -29,10 +49,16 @@ mod note;
 mod notify;
 mod object;
 mod open;
+#[cfg(feature = "pack-generate")]
+mod pack;
+mod pack_refs;
 #[cfg(feature = "attributes")]
 mod pathspec;
 mod reference;
+mod reflog;
 mod remote;
+#[cfg(feature = "worktree-mutation")]
+mod reset;
 mod shallow;
 mod state;
 #[cfg(feature = "attributes")]
@@ -169,6 +195,50 @@ mod index {
                 "only eligible configuration can disable index checksum verification"
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn tree_constructor_reuses_index_metadata_without_writing() -> TestResult {
+        let repo = crate::basic_repo()?;
+        let before = std::fs::read(repo.index_path())?;
+        let mut previous = repo.open_index()?;
+        for entry in previous.entries_mut() {
+            entry.stat.mtime.secs = 1;
+            entry.flags |= gix::index::entry::Flags::ASSUME_VALID;
+        }
+        let index = repo.index_from_tree_with_index(&repo.head_tree_id()?, &previous)?;
+        assert_eq!(
+            index.path(),
+            repo.index_path(),
+            "the new index uses the repository's index path"
+        );
+        for (entry, previous) in index.entries().iter().zip(previous.entries()) {
+            assert_eq!(
+                entry.stat, previous.stat,
+                "the constructor reuses unchanged, non-racy stat"
+            );
+            assert_eq!(entry.flags, previous.flags, "unchanged files retain assume-valid");
+        }
+        assert_eq!(
+            std::fs::read(repo.index_path())?,
+            before,
+            "construction only changes memory"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn writing_index_trees_uses_repository_objects_without_writing_the_index() -> TestResult {
+        let (repo, _tmp) = crate::basic_rw_repo()?;
+        let before = std::fs::read(repo.index_path())?;
+        let index = repo.open_index()?;
+        assert_eq!(
+            repo.write_index_tree(&index)?,
+            repo.head_tree_id()?,
+            "a clean index produces HEAD's tree"
+        );
+        assert_eq!(std::fs::read(repo.index_path())?, before, "the index is unchanged");
         Ok(())
     }
 
@@ -316,7 +386,13 @@ fn size_in_memory() {
     // which grows the type by one more cached cell.
     // The ODB handle's sharing policy brings the Windows workspace layout to 1504 bytes.
     // The related-repository callback in `open::Options` brings the limit to 1512 bytes.
-    let limit = 1512;
+    // A Unix credential-cache launcher occupies one pointer in `open::Options`.
+    let limit = 1512
+        + if cfg!(all(unix, feature = "credentials")) {
+            std::mem::size_of::<usize>()
+        } else {
+            0
+        };
     assert!(
         actual_size <= limit,
         "size of Repository shouldn't change without us noticing, it's meant to be cloned: should have been at most {limit:?}, was {actual_size}"

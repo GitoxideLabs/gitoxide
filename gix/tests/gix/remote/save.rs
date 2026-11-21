@@ -109,12 +109,12 @@ mod save_as_to {
     #[test]
     fn anonymous_remotes_cannot_be_saved_lacking_a_name() -> TestResult {
         let repo = basic_repo()?;
-        let remote = repo.remote_at("https://example.com/path")?;
+        let remote = repo.remote_at("https://user:password-sentinel@example.com/path")?;
         insta::assert_debug_snapshot!(remote
                 .save_to(&mut gix::config::File::default())
                 .expect_err("anonymous remotes cannot be saved lacking a name"), "anonymous remotes cannot be saved lacking a name", @r#"
         Message {
-            message: "The remote pointing to https://example.com/path is anonymous and can't be saved.",
+            message: "The remote is anonymous and can't be saved.",
         }
         "#);
         Ok(())

@@ -16,6 +16,33 @@ fn parse_version() -> TestResult {
 }
 
 #[test]
+fn parse_version_development() -> TestResult {
+    for version in [
+        b"git version 2.56.GIT\n".as_slice(),
+        b"git version 2.56.GIT\r\n".as_slice(),
+        b"git version 2.56.GIT.12.gabcdef".as_slice(),
+    ] {
+        let parsed = git_version_from_bytes(version)?;
+        assert_eq!(parsed, (2, 56, 0), "development builds use patch level zero");
+    }
+    for version in [
+        b"git version 2.56.0.rc1".as_slice(),
+        b"git version 2.56.0.12.gabcdef".as_slice(),
+    ] {
+        assert_eq!(
+            git_version_from_bytes(version)?,
+            (2, 56, 0),
+            "numeric release-candidate and commit suffixes retain their version"
+        );
+    }
+    assert!(
+        git_version_from_bytes(b"git version 2.56.invalid").is_err(),
+        "unknown patch spellings remain errors"
+    );
+    Ok(())
+}
+
+#[test]
 fn parse_version_with_trailing_newline() -> TestResult {
     assert_eq!(git_version_from_bytes(b"git version 2.37.2\n")?, (2, 37, 2));
     Ok(())

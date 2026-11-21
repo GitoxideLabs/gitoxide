@@ -165,8 +165,9 @@ pub struct PathComponents<'a> {
 /// whereas [`Url::to_bstring()`] includes all URL parts.
 /// **Beware that some URLs still print secrets if they use them outside of the designated password fields.**
 ///
-/// Also note that URLs that fail to parse are typically stored in [the resulting error](gix_error::Error) type
-/// and printed in full using its display implementation.
+/// Inputs that fail to parse are retained in [the resulting error](gix_error::Error), except URL-like inputs
+/// containing `@`, which are omitted because malformed user information cannot reliably be redacted.
+/// Inputs with secrets elsewhere, such as query parameters, can still be included in diagnostics.
 #[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Url {

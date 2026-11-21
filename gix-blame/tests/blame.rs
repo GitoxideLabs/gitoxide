@@ -50,13 +50,16 @@ mod baseline {
             baseline_path: impl AsRef<Path>,
             source_file_name: gix_object::bstr::BString,
         ) -> std::io::Result<Vec<BlameEntry>> {
-            let content = std::fs::read(baseline_path)?;
+            Ok(Self::from_porcelain(&std::fs::read(baseline_path)?, source_file_name))
+        }
+
+        pub fn from_porcelain(content: &[u8], source_file_name: gix_object::bstr::BString) -> Vec<BlameEntry> {
             let baseline = Baseline {
                 lines: content.lines(),
                 filenames: BTreeMap::default(),
             };
 
-            Ok(baseline
+            baseline
                 .map(|entry| {
                     let source_file_name = if entry.source_file_name.as_ref() == Some(&source_file_name) {
                         None
@@ -69,7 +72,7 @@ mod baseline {
                         ..entry
                     }
                 })
-                .collect())
+                .collect()
         }
     }
 
@@ -277,6 +280,9 @@ macro_rules! mktest {
                     since: None,
                     rewrites: Some(gix_diff::Rewrites::default()),
                     debug_track_path: false,
+                    boundary_commits: Vec::new(),
+                    ignored_revisions: Vec::new(),
+                    contents_mode: None,
                 },
             )?
             .entries;
@@ -366,6 +372,9 @@ fn diff_algorithm_parity() {
                 since: None,
                 rewrites: Some(gix_diff::Rewrites::default()),
                 debug_track_path: false,
+                boundary_commits: Vec::new(),
+                ignored_revisions: Vec::new(),
+                contents_mode: None,
             },
         )
         .unwrap()
@@ -433,6 +442,9 @@ fn since() -> gix_testtools::TestResult {
             since: Some(gix_date::parse("2025-01-31", None)?),
             rewrites: Some(gix_diff::Rewrites::default()),
             debug_track_path: false,
+            boundary_commits: Vec::new(),
+            ignored_revisions: Vec::new(),
+            contents_mode: None,
         },
     )?
     .entries;
@@ -473,6 +485,9 @@ mod blame_ranges {
                 since: None,
                 rewrites: Some(gix_diff::Rewrites::default()),
                 debug_track_path: false,
+                boundary_commits: Vec::new(),
+                ignored_revisions: Vec::new(),
+                contents_mode: None,
             },
         )?
         .entries;
@@ -516,6 +531,9 @@ mod blame_ranges {
                 since: None,
                 rewrites: None,
                 debug_track_path: false,
+                boundary_commits: Vec::new(),
+                ignored_revisions: Vec::new(),
+                contents_mode: None,
             },
         )?
         .entries;
@@ -557,6 +575,9 @@ mod blame_ranges {
                 since: None,
                 rewrites: None,
                 debug_track_path: false,
+                boundary_commits: Vec::new(),
+                ignored_revisions: Vec::new(),
+                contents_mode: None,
             },
         )?
         .entries;
@@ -603,6 +624,9 @@ mod rename_tracking {
                 since: None,
                 rewrites: Some(gix_diff::Rewrites::default()),
                 debug_track_path: false,
+                boundary_commits: Vec::new(),
+                ignored_revisions: Vec::new(),
+                contents_mode: None,
             },
         )?
         .entries;
@@ -633,6 +657,9 @@ mod rename_tracking {
                     since: None,
                     rewrites: Some(gix_diff::Rewrites::default()),
                     debug_track_path: false,
+                    boundary_commits: Vec::new(),
+                    ignored_revisions: Vec::new(),
+                    contents_mode: None,
                 },
             )?
             .entries;
@@ -671,6 +698,9 @@ mod untracked_changes {
                     since: None,
                     rewrites: Some(gix_diff::Rewrites::default()),
                     debug_track_path: false,
+                    boundary_commits: Vec::new(),
+                    ignored_revisions: Vec::new(),
+                    contents_mode: None,
                 },
             )?
             .entries;
@@ -703,6 +733,9 @@ mod untracked_changes {
                     since: None,
                     rewrites: Some(gix_diff::Rewrites::default()),
                     debug_track_path: false,
+                    boundary_commits: Vec::new(),
+                    ignored_revisions: Vec::new(),
+                    contents_mode: None,
                 },
             )?
             .entries;
@@ -735,6 +768,9 @@ mod untracked_changes {
                     since: None,
                     rewrites: Some(gix_diff::Rewrites::default()),
                     debug_track_path: false,
+                    boundary_commits: Vec::new(),
+                    ignored_revisions: Vec::new(),
+                    contents_mode: None,
                 },
             )?
             .entries;
@@ -760,19 +796,22 @@ mod diff_resources {
     use crate::{Baseline, Fixture};
 
     #[test]
-    fn binary_comparisons_are_rejected() -> gix_error::TestResult {
+    fn binary_comparisons_blame_original_bytes() -> gix_error::TestResult {
         let worktree_path = gix_testtools::scripted_fixture_read_only("make_blame_diff_resources_repo.sh")?;
         for path in ["old-binary.txt", "new-binary.txt", "both-binary.txt"] {
             let mut fixture = Fixture::for_worktree_path(worktree_path.clone())?;
-            let err = fixture
-                .blame_file(path.into(), Default::default())
-                .expect_err("binary resources must not be replaced with empty text");
-            let message = err.to_string();
-            assert!(
-                message.contains("binary"),
-                "the error explains why blame cannot diff: {err}"
+            let outcome = fixture.blame_file(path.into(), Default::default())?;
+            assert_eq!(
+                outcome.blob,
+                std::fs::read(worktree_path.join(path))?,
+                "blame returns the original bytes of {path}"
             );
-            assert!(message.contains(path), "the error identifies the file to blame: {err}");
+            let oracle = gix_testtools::git(&worktree_path, &format!("blame --porcelain -- {path}"))?;
+            assert_eq!(
+                outcome.entries,
+                Baseline::from_porcelain(oracle.as_bytes(), path.into()),
+                "blame attributes binary lines like Git for {path}"
+            );
         }
         Ok(())
     }
@@ -869,10 +908,10 @@ mod diff_resources {
     }
 
     #[test]
-    fn text_converted_comparisons_are_rejected() -> gix_error::TestResult {
+    fn text_converted_comparisons_match_git() -> gix_error::TestResult {
         let worktree_path = gix_testtools::scripted_fixture_read_only("make_blame_diff_resources_repo.sh")?;
         // Removing the unchanged first line would attribute the raw "stable" line to the latest commit.
-        for command in ["sed '1d'", "cat"] {
+        for (command, expected_blob) in [("sed '1d'", b"new\n".as_slice()), ("cat", b"stable\nnew\n")] {
             let mut fixture = Fixture::for_worktree_path_with_drivers(
                 worktree_path.clone(),
                 vec![Driver {
@@ -883,17 +922,23 @@ mod diff_resources {
                 }],
             )?;
             fixture.resource_cache.filter_mode = Mode::ToGitUnlessBinaryToTextIsPresent;
-            let err = fixture
-                .blame_file("text.txt".into(), Default::default())
-                .expect_err("converted line numbers must not be applied to original blob content");
-            let message = err.to_string();
-            assert!(
-                message.contains("text conversion"),
-                "the error identifies the unsupported input: {err}"
-            );
-            assert!(
-                message.contains("text.txt"),
-                "the error identifies the file to blame: {err}"
+            let outcome = fixture.blame_file("text.txt".into(), Default::default())?;
+            assert_eq!(outcome.blob, expected_blob, "blame returns the converted bytes");
+            let oracle = gix_testtools::git_command(&worktree_path)
+                .args([
+                    "-c",
+                    &format!("diff.custom.textconv={command}"),
+                    "blame",
+                    "--porcelain",
+                    "--",
+                    "text.txt",
+                ])
+                .output()?;
+            assert!(oracle.status.success(), "Git blame succeeds: {oracle:?}");
+            assert_eq!(
+                outcome.entries,
+                Baseline::from_porcelain(&oracle.stdout, "text.txt".into()),
+                "converted line attribution matches Git for {command}"
             );
             assert!(
                 matches!(
@@ -928,6 +973,9 @@ mod symlinks {
                     since: None,
                     rewrites: Some(gix_diff::Rewrites::default()),
                     debug_track_path: false,
+                    boundary_commits: Vec::new(),
+                    ignored_revisions: Vec::new(),
+                    contents_mode: None,
                 },
             )?
             .entries;

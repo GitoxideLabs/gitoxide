@@ -6,6 +6,8 @@ use std::{
 use std::sync::LazyLock;
 
 mod git;
+mod installation;
+pub use installation::core_dir_from_environment;
 
 #[cfg(windows)]
 #[path = "windows/mod.rs"]
@@ -14,28 +16,14 @@ mod platform;
 #[path = "non_windows.rs"]
 mod platform;
 
-/// Return the unoverridden location at which an installation-specific Git configuration file can be found, or
-/// `None` if the binary could not be executed or its results could not be parsed.
+/// Return the unoverridden configuration path of a conventional Git installation.
 ///
-/// The Git query ignores `GIT_CONFIG_SYSTEM` and `GIT_CONFIG_NOSYSTEM`; callers must apply these
-/// variables according to their own environment-access policy.
+/// Discovery uses `PATH`, filesystem layouts, and on Windows `EXEPATH` and program-files
+/// locations. No executable is invoked. Unknown compile-time layouts require callers to supply
+/// configuration paths explicitly. Results are cached on first use.
 ///
-/// ### Performance
-///
-/// This can invoke the Git binary. An unambiguous Git for Windows
-/// installation identified by `EXEPATH`, or by `git.exe` in its `cmd` or `bin` directories,
-/// avoids that invocation when its modern configuration file exists.
-/// Prefixes derived from the selected executable are shared with core-directory, prefix, and shell discovery.
-/// Registered MSYS2 Git packages use their known configuration path, translated by `cygpath`.
-/// Their core and configuration paths share a single cached conversion.
-/// On Unix, the first executable in `PATH` is resolved through symlinks. Known Homebrew Cellar
-/// layouts, Linux `/usr/bin/git` and `/bin/git`, and direct Apple developer binaries avoid the query
-/// when their expected configuration file exists. Without `/etc/gitconfig`, Linux `/usr/bin/git` and
-/// `/bin/git` have no installation configuration, which also needs no query. Apple's `/usr/bin/git` shim still queries Git,
-/// leaving developer-directory and toolchain selection to the shim.
-/// Unknown layouts, relative `PATH` entries, and restricted execute bits also query Git.
-/// Indirect Apple Git invocations also query Git, as their config can differ from the symlink target's.
-/// These shortcuts assume the recognized installations use their standard build-time config paths.
+/// `GIT_EXEC_PATH`, `GIT_CONFIG_SYSTEM`, and `GIT_CONFIG_NOSYSTEM` do not affect discovery;
+/// callers must apply configuration overrides according to their own environment-access policy.
 pub fn installation_config() -> Option<&'static Path> {
     git::install_config_path().and_then(|p| crate::from_byte_slice(p).ok())
 }
@@ -61,7 +49,7 @@ pub fn installation_config_prefix() -> Option<&'static Path> {
 
 /// Return the unoverridden location of the system-wide Git configuration file.
 ///
-/// On Windows this shares the single Git invocation used by [`installation_config()`].
+/// On Windows this shares filesystem discovery with [`installation_config()`].
 /// The caller is responsible for applying `GIT_CONFIG_SYSTEM` and `GIT_CONFIG_NOSYSTEM`.
 pub fn system_config() -> Option<&'static Path> {
     platform::system_config()
@@ -131,7 +119,7 @@ pub fn shell_command() -> std::process::Command {
 /// File symlinks, including WinGet's portable links, are resolved for layout discovery while
 /// retaining the selected invocation.
 /// Plain Scoop shims are resolved through their `.shim` sidecars; shims with arguments or
-/// unsupported metadata still require querying Git.
+/// unsupported metadata cannot establish a native installation layout.
 pub fn exe_invocation() -> &'static Path {
     platform::exe_invocation()
 }
@@ -164,12 +152,13 @@ static GIT_CORE_DIR: LazyLock<Option<PathBuf>> = LazyLock::new(platform::core_di
 
 /// Return the directory that `git --exec-path` would report.
 ///
-/// Known Git for Windows layouts avoid starting Git when their core directory exists and
-/// `GIT_EXEC_PATH` is unset. Other installations and overrides are queried from Git.
+/// A nonempty `GIT_EXEC_PATH` overrides filesystem discovery without invoking Git.
+/// On Windows the selected executable supplies the layout when no earlier `PATH`
+/// entry identifies a helper-only installation.
 /// Registered MSYS2 Git packages also avoid the Git query, translating their known core path
 /// through the same installation's `cygpath` to respect custom mounts.
 /// This conversion is shared with configuration discovery.
-/// Returns `None` if Git could not be found, returned an error, or its path could not be translated.
+/// Returns `None` when the layout is unknown or an MSYS path could not be translated.
 pub fn core_dir() -> Option<&'static Path> {
     GIT_CORE_DIR.as_deref()
 }
@@ -221,17 +210,8 @@ fn is_bare_program_name(name: &str) -> bool {
 /// `C:/Program Files/Git/mingw64`. Git for Windows keeps its system configuration and attributes
 /// in the sibling `etc` directory. On other platforms this returns `/`.
 ///
-/// ### Performance
-///
-/// On Windows, the slowest part is the launch of the Git executable in the PATH. This is often
-/// avoided by inspecting the environment, when launched from inside a Git Bash MSYS2 shell,
-/// or by finding Git for Windows' `cmd` or `bin` directories in the PATH, including the
-/// launchers installed by Chocolatey portable and Conda/Mamba.
-///
-/// ### When `None` is returned
-///
-/// This happens only Windows if the git binary can't be found at all for obtaining its executable
-/// path, or if the git binary wasn't built with a well-known directory structure or environment.
+/// Discovery reads environment and filesystem layouts without executing Git.
+/// Returns `None` on Windows when no conventional runtime directory is found.
 pub fn system_prefix() -> Option<&'static Path> {
     platform::system_prefix()
 }
@@ -264,5 +244,5 @@ pub fn var(name: &str) -> Option<OsString> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests;

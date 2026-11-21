@@ -13,7 +13,7 @@ pub struct Matcher<'a> {
 }
 
 impl<'a> Matcher<'a> {
-    pub(crate) fn for_reverse_mapping(spec: RefSpecRef<'a>) -> Self {
+    pub(crate) fn for_literal_mapping(spec: RefSpecRef<'a>) -> Self {
         fn literal_or_glob(name: &BStr) -> Needle<'_> {
             match name.find_byte(b'*') {
                 Some(asterisk_pos) => Needle::Glob { name, asterisk_pos },

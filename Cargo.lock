@@ -1483,6 +1483,7 @@ dependencies = [
  "gix-tix",
  "prodash",
  "serde_derive",
+ "signal-hook 0.4.6",
  "terminal_size",
  "tracing",
 ]
@@ -1548,10 +1549,12 @@ dependencies = [
  "gix-error",
  "gix-filter",
  "gix-fs",
+ "gix-fsck",
  "gix-fsmonitor",
  "gix-glob",
  "gix-hash",
  "gix-hashtable",
+ "gix-hook",
  "gix-ignore",
  "gix-index",
  "gix-lock",
@@ -1600,6 +1603,7 @@ dependencies = [
  "serial_test",
  "signal-hook 0.4.6",
  "smallvec",
+ "tempfile",
  "termtree",
  "tokio",
 ]
@@ -1717,6 +1721,8 @@ dependencies = [
  "gix-testtools",
  "gix-trace",
  "insta",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1789,6 +1795,8 @@ dependencies = [
  "gix-config-value",
  "gix-date",
  "gix-error",
+ "gix-fs",
+ "gix-lock",
  "gix-path",
  "gix-prompt",
  "gix-quote",
@@ -1798,6 +1806,7 @@ dependencies = [
  "gix-url",
  "insta",
  "percent-encoding",
+ "rustix",
  "serde",
 ]
 
@@ -1839,6 +1848,7 @@ dependencies = [
  "gix-odb",
  "gix-path",
  "gix-pathspec",
+ "gix-regex",
  "gix-tempfile",
  "gix-testtools",
  "gix-trace",
@@ -1846,6 +1856,7 @@ dependencies = [
  "gix-worktree",
  "insta",
  "pretty_assertions",
+ "regex",
  "serde",
 ]
 
@@ -1966,12 +1977,15 @@ dependencies = [
 name = "gix-fsck"
 version = "0.27.1"
 dependencies = [
+ "bstr",
+ "gix-config",
  "gix-error",
  "gix-hash",
  "gix-hashtable",
  "gix-object",
  "gix-odb",
  "gix-testtools",
+ "gix-validate",
 ]
 
 [[package]]
@@ -2050,6 +2064,20 @@ dependencies = [
  "gix-hash",
  "hashbrown 0.17.1",
  "parking_lot 0.13.0",
+]
+
+[[package]]
+name = "gix-hook"
+version = "0.1.0"
+dependencies = [
+ "bstr",
+ "gix-command",
+ "gix-config",
+ "gix-error",
+ "gix-path",
+ "gix-sec",
+ "gix-testtools",
+ "libc",
 ]
 
 [[package]]
@@ -2448,6 +2476,7 @@ dependencies = [
  "gix-negotiate",
  "gix-object",
  "gix-packetline",
+ "gix-parallel",
  "gix-protocol",
  "gix-ref",
  "gix-refspec",
@@ -2511,6 +2540,14 @@ dependencies = [
  "gix-validate",
  "insta",
  "smallvec",
+]
+
+[[package]]
+name = "gix-regex"
+version = "0.1.0"
+dependencies = [
+ "gix-error",
+ "gix-testtools",
 ]
 
 [[package]]
@@ -2807,6 +2844,7 @@ dependencies = [
  "insta",
  "prodash",
  "unicode-normalization",
+ "unicode-width",
 ]
 
 [[package]]

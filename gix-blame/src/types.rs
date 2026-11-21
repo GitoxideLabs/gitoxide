@@ -3,7 +3,10 @@ use gix_error::{bail, validation};
 use gix_hash::ObjectId;
 use gix_object::bstr::BString;
 use smallvec::SmallVec;
-use std::ops::RangeInclusive;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::RangeInclusive,
+};
 use std::{
     num::NonZeroU32,
     ops::{AddAssign, Range, SubAssign},
@@ -167,6 +170,15 @@ pub struct Options {
     /// Collect debug information whenever there's a diff or rename that affects the outcome of a
     /// blame.
     pub debug_track_path: bool,
+    /// Treat these commits as roots, even if their parent objects are available.
+    /// Use this for shallow boundaries or an explicitly limited traversal.
+    pub boundary_commits: Vec<ObjectId>,
+    /// Reassign changes in these commits to their parents using line similarity.
+    /// Unmatched additions remain attributed to the ignored commit.
+    pub ignored_revisions: Vec<ObjectId>,
+    /// The kind of supplied [`Start::Contents`], defaulting to a regular blob.
+    /// This prevents attribution across a worktree file-type change.
+    pub contents_mode: Option<gix_object::tree::EntryKind>,
 }
 
 /// Represents a change during history traversal for blame. It is supposed to capture enough
@@ -203,7 +215,7 @@ pub enum Start<'a> {
     /// i.e. "not committed yet".
     ///
     /// It is assumed that the data in `contents` is ready to be used for diffing, in particular
-    /// that it has been run through the configured worktree filters.
+    /// that it has been run through the configured worktree filters and any enabled textconv driver.
     ///
     /// See [Pipeline::convert_to_diffable()](gix_diff::blob::Pipeline::convert_to_diffable) for
     /// how to obtain the contents of a worktree file by running them through the configured
@@ -212,8 +224,17 @@ pub enum Start<'a> {
         /// The commit to start from after it has been compared to `contents`.
         first_suspect: ObjectId,
         /// The contents to start the blame from, typically read from the worktree.
-        // TODO(blame): add a type so rename tracking can avoid comparing blobs with symlinks.
-        //              Blob is hard-coded in at least once place.
+        contents: std::borrow::Cow<'a, [u8]>,
+    },
+    /// Start from prepared contents with multiple parent origins, such as an uncommitted merge.
+    ///
+    /// Parent order determines attribution when more than one parent contains matching lines.
+    /// Each origin supplies the path in its parent, allowing renames. At least one parent is required.
+    /// As with [`Start::Contents`], the bytes must already be converted for diffing.
+    ContentsWithParents {
+        /// Commits and paths against which to compare the supplied contents, in parent order.
+        parents: Vec<PreviousOrigin>,
+        /// Contents whose new lines are attributed to the null id.
         contents: std::borrow::Cow<'a, [u8]>,
     },
 }
@@ -222,6 +243,11 @@ impl std::fmt::Debug for Start<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Start::Commit(id) => f.debug_tuple("Commit").field(id).finish(),
+            Start::ContentsWithParents { parents, contents } => f
+                .debug_struct("ContentsWithParents")
+                .field("parents", parents)
+                .field("contents_len", &contents.len())
+                .finish(),
             Start::Contents {
                 first_suspect,
                 contents,
@@ -233,6 +259,18 @@ impl std::fmt::Debug for Start<'_> {
         }
     }
 }
+/// The parent commit and path from which a blamed source file originated.
+///
+/// This is Git's porcelain `previous` metadata: the first parent with a matching file,
+/// including detected renames, even if all of its lines were changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviousOrigin {
+    /// The parent commit containing the earlier version of the file.
+    pub commit_id: ObjectId,
+    /// The repository-relative path in that parent commit.
+    pub source_file_name: BString,
+}
+
 /// The outcome of [`file()`](crate::file()).
 #[derive(Debug, Default, Clone)]
 pub struct Outcome {
@@ -245,6 +283,13 @@ pub struct Outcome {
     pub statistics: Statistics,
     /// Contains a log of all changes that affected the outcome of this blame.
     pub blame_path: Option<Vec<BlamePathEntry>>,
+    /// Previous origins keyed by [`BlameEntry::commit_id`] and [`BlameEntry::source_file_name`].
+    /// Roots and file additions have no previous origin. Supplied contents use the null commit id.
+    pub previous_origins: BTreeMap<(ObjectId, Option<BString>), PreviousOrigin>,
+    /// Zero-based final line indices reassigned through an ignored revision.
+    pub ignored_lines: BTreeSet<u32>,
+    /// Zero-based final line indices that could not be reassigned through an ignored revision.
+    pub unblamable_lines: BTreeSet<u32>,
 }
 
 /// Additional information about the performed operations.
@@ -352,7 +397,7 @@ impl SubAssign<u32> for Offset {
 /// A mapping of a section of the *Blamed File* to the section in a *Source File* that introduced it.
 ///
 /// Both ranges are of the same size, but may use different [starting points](Range::start). Naturally,
-/// they have the same content, which is the reason they are in what is returned by [`file()`](crate::file()).
+/// they have the same content, except when lines are reassigned through [`Options::ignored_revisions`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct BlameEntry {
     /// The index of the token in the *Blamed File* (typically lines) where this entry begins.
@@ -427,7 +472,8 @@ pub struct UnblamedHunk {
     /// The range in the file that is being blamed that this hunk represents.
     pub range_in_blamed_file: Range<u32>,
     /// Maps a commit to the range in a source file (i.e. *Blamed File* at a revision) that is
-    /// equal to `range_in_blamed_file`. Since `suspects` rarely contains more than 1 item, it can
+    /// the same length as `range_in_blamed_file`. The content also matches unless attribution passed
+    /// through an ignored revision. Since `suspects` rarely contains more than 1 item, it can
     /// efficiently be stored as a `SmallVec`.
     pub suspects: SmallVec<[(ObjectId, Range<u32>); 1]>,
     /// The *Source File*'s name, in case it differs from *Blamed File*'s name.

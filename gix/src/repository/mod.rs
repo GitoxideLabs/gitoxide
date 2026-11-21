@@ -90,13 +90,21 @@ pub mod attributes;
 ///
 #[cfg(feature = "blame")]
 mod blame;
+#[cfg(feature = "blame")]
+mod blame_ignore;
+#[cfg(feature = "blame")]
+mod blame_worktree;
 /// Local branch operations.
 pub mod branch;
 mod cache;
 #[cfg(feature = "worktree-mutation")]
 mod checkout;
+#[cfg(feature = "worktree-mutation")]
+mod clean;
 mod config;
 
+#[cfg(feature = "pack-generate")]
+mod bundle;
 ///
 #[cfg(feature = "blob-diff")]
 mod diff;
@@ -110,7 +118,12 @@ pub mod filter;
 pub mod freelist;
 #[cfg(feature = "fsmonitor-server")]
 mod fsmonitor;
+/// Repack and expire local objects.
+#[cfg(feature = "object-maintenance")]
+pub mod gc;
 mod graph;
+#[cfg(feature = "command")]
+mod hooks;
 pub(crate) mod identity;
 mod impls;
 #[cfg(feature = "index")]
@@ -119,6 +132,9 @@ pub(crate) mod init;
 mod location;
 #[cfg(feature = "mailmap")]
 mod mailmap;
+/// Repository object retention and maintenance.
+#[cfg(feature = "index")]
+pub mod maintenance;
 ///
 #[cfg(feature = "merge")]
 mod merge;
@@ -126,10 +142,19 @@ mod merge;
 #[cfg(feature = "notes")]
 mod note;
 mod object;
+/// Generate packs from repository objects.
+#[cfg(feature = "pack-generate")]
+pub mod pack;
+/// Reference packing.
+pub mod pack_refs;
 #[cfg(feature = "attributes")]
 mod pathspec;
 mod reference;
+/// Reflog expiration across worktrees.
+pub mod reflog;
 mod remote;
+#[cfg(feature = "worktree-mutation")]
+mod reset;
 mod revision;
 mod shallow;
 mod state;
@@ -152,5 +177,15 @@ pub mod blame_file {
         pub since: Option<gix_date::Time>,
         /// Determine if rename tracking should be performed, and how.
         pub rewrites: Option<gix_diff::Rewrites>,
+        /// The kind of supplied [`gix_blame::Start::Contents`], defaulting to a regular blob.
+        /// Ignored when blaming a commit.
+        pub contents_mode: Option<gix_object::tree::EntryKind>,
+        /// Apply configured textconv drivers to committed blobs. Disabled by default.
+        /// Supplied contents must already be converted to the same text representation.
+        pub textconv: bool,
+        /// Revisions whose changes should be attributed to surrounding commits, when possible.
+        /// `None` loads `blame.ignoreRevsFile`; `Some(Vec::new())` disables configured exclusions.
+        /// Explicit IDs must resolve to commits, possibly through annotated tags.
+        pub ignored_revisions: Option<Vec<gix_hash::ObjectId>>,
     }
 }

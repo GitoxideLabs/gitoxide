@@ -8,6 +8,7 @@ pub mod component {
     #[non_exhaustive]
     pub enum Error {
         Empty,
+        Nul,
         PathSeparator,
         WindowsPathPrefix,
         WindowsReservedName,
@@ -21,6 +22,7 @@ pub mod component {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self {
                 Error::Empty => write!(f, "A path component must not be empty"),
+                Error::Nul => write!(f, "NUL bytes are not allowed in path components"),
                 Error::PathSeparator => write!(f, r"Path separators like / or \ are not allowed"),
                 Error::WindowsPathPrefix => write!(f, "Windows path prefixes are not allowed"),
                 Error::WindowsReservedName => {
@@ -99,6 +101,9 @@ pub fn component(
     if input.is_empty() {
         return Err(component::Error::Empty);
     }
+    if input.contains(&0) {
+        return Err(component::Error::Nul);
+    }
     if input == ".." || input == "." {
         return Err(component::Error::Relative);
     }
@@ -152,6 +157,53 @@ pub fn component(
 /// When reading from `CON`, a console-program may block until the user provided input.
 pub fn component_is_windows_device(input: &BStr) -> bool {
     is_win_device(input)
+}
+
+/// Git metadata components whose filesystem aliases need special treatment.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SpecialComponent {
+    /// The repository metadata directory, `.git`.
+    Git,
+    /// The submodule configuration file, `.gitmodules`.
+    GitModules,
+    /// The attribute configuration file, `.gitattributes`.
+    GitAttributes,
+    /// The ignore file, `.gitignore`.
+    GitIgnore,
+    /// The identity mapping file, `.mailmap`.
+    Mailmap,
+}
+
+impl SpecialComponent {
+    /// Return whether `input` is this component or one of its HFS+/NTFS aliases.
+    /// This only recognizes the requested component; unrelated platform-specific names remain unmatched.
+    pub fn matches(self, input: &BStr) -> bool {
+        self.matches_hfs(input) || self.matches_ntfs(input)
+    }
+
+    /// Match case-insensitively, ignoring the Unicode characters omitted by HFS+ filename comparison.
+    pub fn matches_hfs(self, input: &BStr) -> bool {
+        is_dot_hfs(input, self.names().0)
+    }
+
+    /// Match case-insensitively with NTFS short names, trailing dots/spaces, and alternate data streams.
+    pub fn matches_ntfs(self, input: &BStr) -> bool {
+        if self == Self::Git {
+            return is_dot_git_ntfs(input);
+        }
+        let (name, short_prefix) = self.names();
+        is_dot_ntfs(input, name, short_prefix)
+    }
+
+    fn names(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Git => ("git", ""),
+            Self::GitModules => ("gitmodules", "gi7eba"),
+            Self::GitAttributes => ("gitattributes", "gi7d29"),
+            Self::GitIgnore => ("gitignore", "gi250a"),
+            Self::Mailmap => ("mailmap", "maba30"),
+        }
+    }
 }
 
 fn is_win_device(input: &BStr) -> bool {

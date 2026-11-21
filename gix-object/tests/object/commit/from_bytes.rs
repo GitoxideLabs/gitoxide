@@ -500,3 +500,69 @@ fn commit_fixture(path: &str) -> Result<Vec<u8>> {
 fn fixture_oid_hex(hex: &str) -> String {
     fixture_oid(hex).to_hex().to_string()
 }
+
+#[test]
+fn decoded_signed_data_preserves_original_bytes() -> gix_testtools::TestResult {
+    for fixture in [
+        "unsigned.txt",
+        "signed.txt",
+        "signed-singleline.txt",
+        "signed-with-encoding.txt",
+        "signed-whitespace.txt",
+        "two-multiline-headers.txt",
+    ] {
+        let data = commit_fixture(fixture)?;
+        let hash_kind = crate::fixture_hash_kind();
+        let (commit, signed_data) = CommitRef::from_bytes_with_signed_data(&data, hash_kind)?;
+        assert_eq!(commit, CommitRef::from_bytes(&data, hash_kind)?, "{fixture}");
+        let signature = CommitRefIter::signature(&data, hash_kind)?;
+        assert_eq!(
+            signed_data.as_ref().map(gix_object::signature::SignedData::to_bstring),
+            signature.as_ref().map(|(_, data)| data.to_bstring()),
+            "the payload retains the original byte layout: {fixture}"
+        );
+        assert_eq!(
+            commit.extra_headers().pgp_signature(),
+            signature.as_ref().map(|(signature, _)| signature.as_ref()),
+            "the decoded signature corresponds to the payload: {fixture}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn dual_signature_payloads_match_git() -> gix_testtools::TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_dual_signature_payloads.sh")?;
+    for (name, hash_kind) in [("sha1", gix_hash::Kind::Sha1), ("sha256", gix_hash::Kind::Sha256)] {
+        for first in ["gpgsig", "gpgsig-sha256"] {
+            let name = format!("{name}-{first}");
+            let data = std::fs::read(fixture.join(format!("{name}.commit")))?;
+            let expected = std::fs::read(fixture.join(format!("{name}.payload")))?;
+            let (commit, signed) = CommitRef::from_bytes_with_signed_data(&data, hash_kind)?;
+            let signed = signed.expect("the active signature is present");
+            assert_eq!(signed.to_bstring(), expected.as_bstr(), "decoded payload: {name}");
+            let (signature, signed) = CommitRefIter::signature(&data, hash_kind)?.expect("signed commit");
+            assert_eq!(signed.to_bstring(), expected.as_bstr(), "iterator payload: {name}");
+            assert_eq!(Some(signature.as_ref()), commit.extra_headers().pgp_signature());
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn signed_data_rejects_duplicate_active_signatures() -> gix_testtools::TestResult {
+    let data = b"tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904
+author A <a@example.com> 1000000000 +0000
+committer A <a@example.com> 1000000000 +0000
+gpgsig first
+gpgsig second
+
+message";
+    assert!(
+        CommitRef::from_bytes(data, gix_hash::Kind::Sha1).is_ok(),
+        "ordinary decoding preserves extra headers"
+    );
+    assert!(CommitRef::from_bytes_with_signed_data(data, gix_hash::Kind::Sha1).is_err());
+    assert!(CommitRefIter::signature(data, gix_hash::Kind::Sha1).is_err());
+    Ok(())
+}

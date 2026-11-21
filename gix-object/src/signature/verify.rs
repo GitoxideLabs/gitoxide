@@ -383,8 +383,7 @@ impl SignedData<'_> {
             .spawn()
             .or_raise(|| message("Could not execute signature verifier").with_program(program))?;
         let mut stdin = child.stdin.take().expect("configured as piped");
-        let [before, after] = self.segments();
-        if let Err(source) = stdin.write_all(before).and_then(|_| stdin.write_all(after)) {
+        if let Err(source) = self.segments().try_for_each(|segment| stdin.write_all(segment)) {
             // A verifier may reject the invocation and exit without consuming all input. Its status and output are
             // still authoritative, whereas other write failures indicate an actual communication problem.
             if source.kind() != std::io::ErrorKind::BrokenPipe {
