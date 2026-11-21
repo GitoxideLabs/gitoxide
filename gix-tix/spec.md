@@ -1687,11 +1687,11 @@ views.
   file renames. Worktree comparisons label staged and unstaged entries in the
   overview and at each file header.
   Each tree lists raw text line additions and deletions beside its filenames.
-  Binary files and paths without text counts show `n/a`. Hovering a directory
-  name in either tree shows the sum of counted descendants beside that name,
-  using the same addition and deletion colors as file counts, alongside the
-  number of descendants without counts. Production-only review
-  aggregates only listed files, using whole-file counts for those files.
+  Binary files and paths without text counts show `n/a`. The
+  `Changed files` heading totals the listed files. Hovering a directory name
+  shows the totals for its listed descendants. Both use whole-file counts,
+  the same addition and deletion colors as file counts, and a count of any
+  paths without line counts. Changes to the filters update the totals.
   With confirmed Kitty pixel graphics, both trees use one connector cell per
   nesting level and draw thin lines using the commit graph's tile backend.
   Otherwise the trees use the wider text connectors. Hit regions follow the

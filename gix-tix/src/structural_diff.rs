@@ -288,6 +288,22 @@ fn line_count_spans(added: u64, removed: u64, colors: &Palette) -> [Span<'static
 }
 
 impl FileTree {
+    fn add_line_counts(&mut self, counts: Option<(u32, u32)>) {
+        if let Some((added, removed)) = counts {
+            self.added += u64::from(added);
+            self.removed += u64::from(removed);
+        } else {
+            self.without_counts += 1;
+        }
+    }
+
+    fn append_line_counts(&self, spans: &mut Vec<Span<'static>>, colors: &Palette) {
+        spans.extend(line_count_spans(self.added, self.removed, colors));
+        if self.without_counts != 0 {
+            spans.push(Span::raw(format!(" · {} without line counts", self.without_counts)));
+        }
+    }
+
     fn render(
         &self,
         files: &[File],
@@ -309,16 +325,12 @@ impl FileTree {
             let name = quoted(name.as_bstr(), "");
             let indent = format!("{prefix}{}", branch(last));
             let start = Span::raw(indent.as_str()).width();
-            let mut counts = Line::from(Vec::from(line_count_spans(tree.added, tree.removed, colors)));
-            if tree.without_counts != 0 {
-                counts
-                    .spans
-                    .push(Span::raw(format!(" · {} without line counts", tree.without_counts)));
-            }
+            let mut counts = Vec::new();
+            tree.append_line_counts(&mut counts, colors);
             directories.push(DirectoryStat {
                 row: lines.len(),
                 columns: start..start + Span::raw(name.as_str()).width() + 1,
-                counts,
+                counts: Line::from(counts),
             });
             lines.push(Line::from(vec![
                 Span::styled(indent, colors.metadata),
@@ -398,22 +410,10 @@ impl Diff {
                 Some((index, outline))
             })
             .collect();
-        let mut lines = vec![Line::styled(
-            format!("Changed files ({})", visible.len()),
-            colors.header,
-        )];
-        if visible.is_empty() {
-            lines.push(Line::from(if options.hide_modifications {
-                "No additions, deletions, or renames."
-            } else if options.production_only {
-                "No production file changes."
-            } else {
-                "No file changes."
-            }));
-        }
         let mut tree = FileTree::default();
         for &(index, _) in &visible {
             let file = &self.files[index];
+            tree.add_line_counts(file.path.lines);
             let components = file
                 .path
                 .path
@@ -426,14 +426,24 @@ impl Diff {
             let mut node = &mut tree;
             for directory in directories {
                 node = node.directories.entry(BString::from(*directory)).or_default();
-                if let Some((added, removed)) = file.path.lines {
-                    node.added += u64::from(added);
-                    node.removed += u64::from(removed);
-                } else {
-                    node.without_counts += 1;
-                }
+                node.add_line_counts(file.path.lines);
             }
             node.files.insert((BString::from(*name), index));
+        }
+        let mut heading = vec![Span::styled(
+            format!("Changed files ({})", visible.len()),
+            colors.header,
+        )];
+        tree.append_line_counts(&mut heading, colors);
+        let mut lines = vec![Line::from(heading)];
+        if visible.is_empty() {
+            lines.push(Line::from(if options.hide_modifications {
+                "No additions, deletions, or renames."
+            } else if options.production_only {
+                "No production file changes."
+            } else {
+                "No file changes."
+            }));
         }
         let mut file_rows = vec![None; self.files.len()];
         let mut directories = Vec::new();
@@ -1723,9 +1733,22 @@ mod tests {
         let mut view = View::new(&diff, &mut settings, &colors, false);
         let area = Rect::new(2, 3, 120, 24);
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(125, 30))?;
-        for (filtered, expected) in [(false, "src/  +4 -4"), (true, "src/  +2 -2")] {
+        for (filtered, expected, aggregate) in [
+            (false, "src/  +4 -4", "Changed files (13)  +11 -11"),
+            (true, "src/  +2 -2", "Changed files (5)  +4 -4"),
+        ] {
             if filtered {
                 view.toggle(ViewOption::Production);
+            }
+            let heading = &view.lines[0].0;
+            assert_eq!(heading.to_string(), aggregate, "the heading totals the listed files");
+            for (span, kind) in heading
+                .spans
+                .iter()
+                .skip(1)
+                .zip([ChangeKind::Added, ChangeKind::Deleted])
+            {
+                assert_eq!(span.style, colors.path(kind), "the totals use the file diffstat style");
             }
             let output = text(&view.lines[..view.tree_line_count()]);
             assert!(
@@ -1889,6 +1912,14 @@ mod tests {
         let first_header = output.find("diff --git").expect("changed files have patch headers");
         let overview = &output[..first_header];
         assert!(overview.contains("binary.rs  n/a"), "binary files have no text counts");
+        let without_counts = diff.files.iter().filter(|file| file.path.lines.is_none()).count();
+        assert!(
+            lines[0]
+                .0
+                .to_string()
+                .ends_with(&format!(" · {without_counts} without line counts")),
+            "the overview reports how many files could not contribute to its totals"
+        );
         for name in [
             "Changed files",
             "src/",
@@ -2280,7 +2311,7 @@ mod tests {
         };
         assert_eq!(
             text(&diff.render(&options, &Palette::default(), false).0),
-            "Changed files (0)\nNo production file changes.",
+            "Changed files (0)  +0 -0\nNo production file changes.",
             "a selected file with only test edits has no tree entry, patch header, or false parent change"
         );
         Ok(())
