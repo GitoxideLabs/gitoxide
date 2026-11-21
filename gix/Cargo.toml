@@ -153,7 +153,7 @@ command = ["dep:gix-command", "gix-object/signature"]
 ## Obtain information similar to `git status`.
 status = ["gix-status", "dirwalk", "index", "blob-diff", "gix-diff/index"]
 
-## Check object connectivity for commits in a revision walk.
+## Expose object database connectivity checks as `gix::fsck`.
 fsck = ["dep:gix-fsck"]
 
 ## Utilities for interrupting computations and cleaning up tempfiles.
