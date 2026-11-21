@@ -72,11 +72,17 @@ impl RepositoryMonitor {
     }
 
     pub(super) fn install_async_wakers(&mut self) {
-        for domain in [&mut self.metadata, &mut self.worktree] {
-            if let Some(watcher) = &mut domain.watcher {
-                let wake = self.wake.clone();
-                watcher.set_waker(move || wake.notify_one());
-            }
+        for watcher in [
+            &mut self.metadata.watcher,
+            &mut self.worktree.watcher,
+            #[cfg(target_os = "macos")]
+            &mut self.external_ignores.native,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let wake = self.wake.clone();
+            watcher.set_waker(move || wake.notify_one());
         }
         for other in self.other_worktrees.values_mut() {
             other.wake = self.wake.clone();
@@ -86,19 +92,30 @@ impl RepositoryMonitor {
 
     fn async_ready(&self, now: Instant) -> bool {
         self.backlog
-            || [&self.metadata, &self.worktree]
-                .into_iter()
-                .any(|domain| domain.watcher.as_ref().is_some_and(gix_notify::Watcher::is_ready))
+            || [
+                &self.metadata.watcher,
+                &self.worktree.watcher,
+                #[cfg(target_os = "macos")]
+                &self.external_ignores.native,
+            ]
+            .into_iter()
+            .flatten()
+            .any(gix_notify::Watcher::is_ready)
             || self.async_deadline().is_some_and(|deadline| deadline <= now)
             || self.other_worktrees.values().any(|other| other.async_ready(now))
     }
 
     fn async_deadline(&self) -> Option<Instant> {
-        [self.maintenance, self.pending_metadata.deadline]
-            .into_iter()
-            .flatten()
-            .chain(self.other_worktrees.values().filter_map(Self::async_deadline))
-            .min()
+        [
+            self.maintenance,
+            self.pending_metadata.deadline,
+            #[cfg(target_os = "macos")]
+            self.external_ignores.retry,
+        ]
+        .into_iter()
+        .flatten()
+        .chain(self.other_worktrees.values().filter_map(Self::async_deadline))
+        .min()
     }
 
     /// Await native notifications or a publication/recovery deadline after servicing this monitor.

@@ -50,24 +50,32 @@ impl RepositoryMonitor {
     }
 
     fn needs_repair(&self) -> bool {
-        self.local_needs_repair()
+        #[cfg(target_os = "macos")]
+        if self.external_ignores.retry.is_some() {
+            return true;
+        }
+        self.registration_needs_repair()
             || !self.undiscovered_worktrees.is_empty()
             || self.other_worktrees.values().any(Self::needs_repair)
     }
 
-    fn local_needs_repair(&self) -> bool {
+    fn registration_needs_repair(&self) -> bool {
         self.maintenance_failed
             || self.metadata.rebuild && self.metadata_enabled()
             || self.worktree.rebuild && self.worktree_enabled()
     }
 
     fn recovery_retry_at(&self) -> Option<Instant> {
-        self.maintenance
-            .filter(|_| self.local_needs_repair())
-            .into_iter()
-            .chain(self.undiscovered_worktrees.values().copied())
-            .chain(self.other_worktrees.values().filter_map(Self::recovery_retry_at))
-            .min()
+        [
+            self.maintenance.filter(|_| self.registration_needs_repair()),
+            #[cfg(target_os = "macos")]
+            self.external_ignores.retry,
+        ]
+        .into_iter()
+        .flatten()
+        .chain(self.undiscovered_worktrees.values().copied())
+        .chain(self.other_worktrees.values().filter_map(Self::recovery_retry_at))
+        .min()
     }
 }
 
@@ -99,6 +107,18 @@ mod tests {
             },
             "ordinary parent verification does not advertise an earlier child repair"
         );
+        #[cfg(target_os = "macos")]
+        {
+            let ignore_retry = now + Duration::from_secs(3);
+            monitor.external_ignores.retry = Some(ignore_retry);
+            assert_eq!(
+                monitor.coverage_status(),
+                CoverageStatus::Recovering {
+                    retry_at: Some(ignore_retry)
+                },
+                "an external ignore retry contributes its own deadline"
+            );
+        }
         let discovery_retry = now + Duration::from_secs(2);
         monitor
             .undiscovered_worktrees
