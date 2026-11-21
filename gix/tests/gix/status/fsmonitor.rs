@@ -190,6 +190,57 @@ fn persisted_tokens_and_partial_status_keep_unvisited_dirty_entries() -> TestRes
 }
 
 #[test]
+fn partial_status_keeps_a_same_size_edit_outside_the_pathspec_visible() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let fixture = gix_testtools::scripted_fixture_writable("make_status_fsmonitor.sh")?;
+    let root = fixture.path();
+    gix_testtools::git(root, "config core.trustctime false")?;
+    gix_testtools::git(root, "config core.checkStat minimal")?;
+    // Model two edits within one filesystem clock tick. The later index write advances past that tick.
+    let tick = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+    let racy = root.join("racy");
+    std::fs::write(&racy, "old")?;
+    std::fs::File::options().write(true).open(&racy)?.set_modified(tick)?;
+    gix_testtools::git(root, "add racy")?;
+    std::fs::File::options()
+        .write(true)
+        .open(root.join(".git/index"))?
+        .set_modified(tick)?;
+    std::fs::write(&racy, "new")?;
+    std::fs::File::options().write(true).open(&racy)?.set_modified(tick)?;
+    std::fs::write(root.join(".git/fsmonitor-paths"), b"dir/b\0racy\0")?;
+    let repo = gix::open_opts(root, gix::open::Options::isolated())?;
+    assert!(
+        paths(&repo)?.iter().any(|p| p == "racy"),
+        "the same-size edit is visible initially"
+    );
+    let mut iter = repo
+        .status(gix::progress::Discard)?
+        .into_index_worktree_iter(["dir/b".into()])?;
+    iter.by_ref().collect::<gix::Result<Vec<_>>>()?;
+    iter.into_outcome()
+        .expect("status completed")
+        .write_changes()
+        .expect("dir/b was revalidated")?;
+    std::fs::write(root.join(".git/fsmonitor-paths"), b"")?;
+    assert!(
+        paths(&repo)?.iter().any(|p| p == "racy"),
+        "gix still sees the unvisited edit"
+    );
+    let git = gix_testtools::git_command(root)
+        .args(["diff-files", "--name-only", "--", "racy"])
+        .output()?;
+    assert!(git.status.success());
+    assert_eq!(
+        git.stdout, b"racy\n",
+        "Git also sees the edit after checkpoint writeback"
+    );
+    Ok(())
+}
+
+#[test]
 fn directory_events_ignore_case_and_full_invalidation() -> TestResult {
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
