@@ -265,6 +265,7 @@ fn default_write_invalidates_all_tree_nodes_after_index_edits() -> TestResult {
         .expect("the fixture tracks this deeply nested file")
         .flags
         .insert(entry::Flags::REMOVE);
+    index.set_tree(Some(original_tree.clone()));
 
     let temporary = gix_testtools::tempfile::TempDir::new()?;
     index.set_path(temporary.path().join("cached-index"));

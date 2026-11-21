@@ -48,6 +48,8 @@ impl File {
     /// A newly constructed index can use [`State::copy_metadata_from()`](crate::State::copy_metadata_from())
     /// with its original state to retain and selectively invalidate both caches before writing with
     /// [`write::Extensions::AllUnconditionally`].
+    /// Mutable entry or path access removes the tree-cache. Callers restoring it with
+    /// [`State::set_tree()`](crate::State::set_tree()) must ensure it is current.
     pub fn write(&mut self, options: write::Options, shared_repository_permissions: SharedPermissions) -> Result {
         use gix_error::{ErrorExt, ResultExt, bail, message};
 
