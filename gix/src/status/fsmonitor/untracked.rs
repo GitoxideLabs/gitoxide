@@ -223,7 +223,7 @@ fn listing<'index>(
             }
             if let Some(dir) = out.directories.get_mut(parent) {
                 if directory {
-                    dir.entries.push((path[start..end].into(), Kind::Directory));
+                    dir.entries.push((path[start..end].into(), Kind::Directory.into()));
                 }
                 dir.omitted_tracked = true;
             }

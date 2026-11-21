@@ -9,7 +9,7 @@ use gix_error::{Result, ResultExt, message};
 use crate::{
     Entry, EntryRef, entry,
     entry::PathspecMatch,
-    walk::{Context, ForDeletionMode, Options},
+    walk::{CachedEntryKind, Context, ForDeletionMode, Options},
 };
 
 /// Classify the `worktree_relative_root` path and return the first `PathKind` that indicates that
@@ -146,7 +146,7 @@ pub fn path(
     rela_path: &mut BString,
     filename_start_idx: usize,
     disk_kind: Option<entry::Kind>,
-    on_demand_disk_kind: impl FnOnce() -> Option<entry::Kind>,
+    on_demand_disk_kind: impl FnOnce() -> Option<CachedEntryKind>,
     Options {
         ignore_case,
         recurse_repositories,
@@ -210,7 +210,15 @@ pub fn path(
         index_entries,
         ctx.ignore_case_index_lookup.filter(|_| ignore_case),
     );
-    let mut kind = uptodate_index_kind.or(disk_kind).or_else(on_demand_disk_kind);
+    let observed = uptodate_index_kind
+        .or(disk_kind)
+        .map(Into::into)
+        .or_else(on_demand_disk_kind);
+    let is_directory = observed.map(CachedEntryKind::is_dir);
+    let mut kind = match observed {
+        Some(CachedEntryKind::Known(kind)) => Some(kind),
+        Some(CachedEntryKind::FileOrSymlink) | None => None,
+    };
     if kind == Some(entry::Kind::Directory) && index_kind.is_some_and(|kind| !kind.is_dir()) {
         // A conflict can index both a file and its children; keep the directory tracked.
         let has_indexed_children = if let Some(lookup) = ctx.ignore_case_index_lookup.filter(|_| ignore_case) {
@@ -230,7 +238,7 @@ pub fn path(
     // We always check the pathspec to have the value filled in reliably.
     out.pathspec_match = ctx
         .pathspec
-        .pattern_matching_relative_path(rela_path.as_bstr(), kind.map(|ft| ft.is_dir()), ctx.pathspec_attributes)
+        .pattern_matching_relative_path(rela_path.as_bstr(), is_directory, ctx.pathspec_attributes)
         .map(Into::into);
 
     if worktree_relative_worktree_dirs.is_some_and(|worktrees| worktrees.contains(&*rela_path)) {
@@ -240,7 +248,7 @@ pub fn path(
     }
 
     let maybe_status = if property.is_none() {
-        (index_kind == Some(entry::Kind::Repository) || index_kind.map(|k| k.is_dir()) == kind.map(|k| k.is_dir()))
+        (index_kind == Some(entry::Kind::Repository) || index_kind.map(|k| k.is_dir()) == is_directory)
             .then_some(entry::Status::Tracked)
     } else {
         out.property = property;
@@ -253,7 +261,7 @@ pub fn path(
     {
         path.metadata().ok().map(|md| is_dir_to_mode(md.is_dir()))
     } else {
-        kind.map(|ft| is_dir_to_mode(ft.is_dir()))
+        is_directory.map(is_dir_to_mode)
     };
 
     let mut maybe_upgrade_to_repository = |current_kind, find_harder: bool| {
