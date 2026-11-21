@@ -305,9 +305,9 @@ pub enum Resolution {
         merged_blob: ContentMerge,
     },
     /// Both sides replaced the ancestor with conflicting symlinks, and the
-    /// [symlink conflict policy](Options::symlink_conflicts) restored the whole ancestor entry.
+    /// [symlink conflict policy](Options::symlink_conflicts) selected the ancestor leaf.
     /// The selected ancestor need not be a blob; its mode and object ID are preserved in the result.
-    /// If the ancestor is absent, the entry is removed instead.
+    /// If the ancestor is absent or a directory, the symlink is removed. Directory children are merged independently.
     /// This counts as a forced content resolution for [`Conflict::is_unresolved()`].
     OursModifiedTheirsModifiedThenAncestor,
     /// This is a resolution failure was forcefully turned into a usable resolution, i.e. [making a choice](ResolveWith)

@@ -161,6 +161,8 @@ pub(super) fn merge(
     options: &Options,
     policy: ResolutionPolicy,
 ) -> Result<Option<Outcome>> {
+    // Directory ancestors are resolved through their children and cannot be selected as leaves.
+    let base = base.filter(|(_, mode)| mode.is_no_tree());
     let global_side = side.to_global(outer_side);
     let (current_mode, other_mode) = if global_side.is_swapped() {
         (their_mode, our_mode)

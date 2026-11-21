@@ -2149,3 +2149,98 @@ fn index_plans_reject_duplicate_and_overlapping_paths() -> TestResult {
     );
     Ok(())
 }
+
+#[test]
+fn symlink_ancestor_resolution_does_not_relocate_the_ancestor_directory() -> TestResult {
+    use gix_index::entry::{Mode, Stage};
+    use gix_merge::tree::TreatAsUnresolved;
+
+    let repo = Repo::new()?;
+    let child_blob_id = repo.blob("binary payload 0\0\n")?;
+    let old_target_blob_id = repo.blob("binary payload 6\0\n")?;
+    let new_target_blob_id = repo.blob("binary payload 7\0\n")?;
+    let executable = EntryKind::BlobExecutable;
+    // The opposing e/d -> a rename relocates e/a/a back under a, where both sides added a symlink.
+    let base_tree_id = repo.tree_from_paths(&[
+        ("a/a/a", executable, child_blob_id),
+        ("b", executable, new_target_blob_id),
+        ("e/d", EntryKind::Link, old_target_blob_id),
+    ])?;
+    let our_tree_id = repo.tree_from_paths(&[
+        ("a", EntryKind::Link, new_target_blob_id),
+        ("e/a/a", executable, child_blob_id),
+        ("e/d", EntryKind::Link, old_target_blob_id),
+        ("e/h", executable, new_target_blob_id),
+    ])?;
+    let their_tree_id = repo.tree_from_paths(&[
+        ("a", EntryKind::Link, old_target_blob_id),
+        ("e", executable, new_target_blob_id),
+    ])?;
+    let expected_tree_id = repo.tree_from_paths(&[
+        ("a/a", executable, child_blob_id),
+        ("e", executable, new_target_blob_id),
+        ("h", executable, new_target_blob_id),
+    ])?;
+
+    let mut options = gix_merge::tree::Options {
+        rewrites: Some(gix_diff::Rewrites {
+            percentage: Some(1.0),
+            limit: 0,
+            copies: None,
+            track_empty: false,
+        }),
+        symlink_conflicts: Some(ResolveWith::Ancestor),
+        marker_size_multiplier: 3,
+        ..Default::default()
+    };
+    options.blob_merge.resolve_binary_with = Some(ResolveWith::Theirs);
+    options.blob_merge.text.diff_algorithm = imara_diff::Algorithm::Histogram;
+    for (current, other, renamed_child, other_rename) in [
+        (our_tree_id, their_tree_id, Stage::Ours, Stage::Theirs),
+        (their_tree_id, our_tree_id, Stage::Theirs, Stage::Ours),
+    ] {
+        let mut outcome = gix_merge::tree(
+            &base_tree_id,
+            &current,
+            &other,
+            gix_merge::blob::builtin_driver::text::Labels {
+                ancestor: Some("BASE".into()),
+                current: Some("OURS".into()),
+                other: Some("THEIRS".into()),
+            },
+            &repo.objects,
+            |buf| repo.objects.write_buf(gix_object::Kind::Blob, buf),
+            &mut Default::default(),
+            &mut new_diff_resource_cache(repo.root.path()),
+            &mut new_blob_merge_platform(repo.root.path(), Some(1)),
+            Default::default(),
+            options.clone(),
+        )?;
+        assert_eq!(
+            outcome.tree.write(|tree| repo.objects.write(tree))?,
+            expected_tree_id,
+            "selecting the symlink ancestor preserves the relocated child without copying its old directory to a conflict path"
+        );
+        let index = outcome
+            .index
+            .to_index(TreatAsUnresolved::git(), None, &repo.objects, Default::default())?;
+        let entries: Vec<_> = index
+            .entries()
+            .iter()
+            .map(|entry| (entry.path(&index), entry.stage(), entry.mode, entry.id))
+            .collect();
+        let mode = Mode::from(executable);
+        assert_eq!(
+            entries,
+            [
+                ("a/a".into(), Stage::Base, mode, child_blob_id),
+                ("a/a".into(), renamed_child, mode, child_blob_id),
+                ("b".into(), Stage::Base, mode, new_target_blob_id),
+                ("e".into(), other_rename, mode, new_target_blob_id),
+                ("h".into(), renamed_child, mode, new_target_blob_id),
+            ],
+            "the index retains the original rename conflict stages in either orientation"
+        );
+    }
+    Ok(())
+}
