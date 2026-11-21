@@ -24,11 +24,19 @@ impl<P: gix_utils::progress::Progress> Platform<'_, P> {
         patterns: impl IntoIterator<Item = BString>,
         should_interrupt: &AtomicBool,
     ) -> Result<Vec<Item>> {
-        self.collect_internal(patterns.into_iter().collect(), true, true, should_interrupt, None)
+        self.collect_internal(
+            patterns.into_iter().collect(),
+            true,
+            true,
+            should_interrupt,
+            None,
+            false,
+        )
     }
 
     /// Collect owned changes, joining all scoped work before returning on success or failure.
     /// Borrow `tree_index` to reuse an already expanded head tree when available.
+    /// Keep stat-only index updates when they are needed as candidates for later copy detection.
     pub(crate) fn collect_internal(
         self,
         patterns: Vec<BString>,
@@ -36,6 +44,7 @@ impl<P: gix_utils::progress::Progress> Platform<'_, P> {
         unstaged: bool,
         interrupt: &AtomicBool,
         tree_index: Option<&gix_index::State>,
+        retain_needs_update: bool,
     ) -> Result<Vec<Item>> {
         let interrupted = || {
             if interrupt.load(Ordering::Relaxed) {
@@ -121,13 +130,14 @@ impl<P: gix_utils::progress::Progress> Platform<'_, P> {
                     .into_iter()
                     .map(index_worktree::Item::from)
                     .filter(|item| {
-                        !matches!(
-                            item,
-                            index_worktree::Item::Modification {
-                                status: EntryStatus::NeedsUpdate(_),
-                                ..
-                            }
-                        )
+                        retain_needs_update
+                            || !matches!(
+                                item,
+                                index_worktree::Item::Modification {
+                                    status: EntryStatus::NeedsUpdate(_),
+                                    ..
+                                }
+                            )
                     })
                     .map(Item::IndexWorktree),
             );

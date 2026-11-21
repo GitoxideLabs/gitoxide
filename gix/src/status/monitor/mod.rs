@@ -26,6 +26,7 @@ mod asynchronous;
 mod delta;
 pub use delta::Change;
 mod index;
+mod rewrites;
 mod submodules;
 #[cfg(test)]
 mod tests;
@@ -41,7 +42,8 @@ pub struct Options {
     pub submodules: Submodule,
     /// How staged rename/copy detection is configured. Defaults to repository configuration.
     pub tree_index_track_renames: crate::status::tree_index::TrackRenames,
-    /// Optional worktree rename/copy detection. Incremental refreshes become full scans when enabled.
+    /// Optional worktree rename/copy detection, recomputed over retained status candidates.
+    /// Scoped refreshes check changed paths and rehash untracked candidates without walking clean tracked files.
     pub worktree_rewrites: Option<gix_diff::Rewrites>,
     /// Limit the number of threads used for tracked worktree status.
     ///
@@ -130,6 +132,7 @@ pub struct Monitor {
     selected_namespace: Option<gix_ref::Namespace>,
     options: Options,
     snapshot: Option<Vec<Item>>,
+    unrewritten_snapshot: Option<Vec<Item>>,
     index: Option<index::Snapshot>,
     index_stamp: Option<(Option<gix_hash::ObjectId>, i64, u32)>,
     index_dirty: bool,
@@ -164,6 +167,7 @@ impl Monitor {
             repository,
             options,
             snapshot: None,
+            unrewritten_snapshot: None,
             index: None,
             index_stamp: None,
             index_dirty: true,
@@ -391,6 +395,7 @@ impl Monitor {
 
     fn clear_snapshot(&mut self) {
         self.snapshot = None;
+        self.unrewritten_snapshot = None;
         self.index = None;
         self.index_stamp = None;
         self.head = None;
@@ -782,7 +787,7 @@ impl Monitor {
             .filter(|_| staged)
             .map(|head| head.tree_id(repo))
             .transpose()?;
-        let unstaged = if repo.workdir().is_some() {
+        let mut unstaged = if repo.workdir().is_some() {
             self.effective_scope(repo, &index, pending)?
         } else {
             None
@@ -824,12 +829,21 @@ impl Monitor {
                 .untracked_files(self.options.untracked_files)
                 .tree_index_track_renames(self.options.tree_index_track_renames)
                 .index_worktree_submodules(self.options.submodules)
-                .index_worktree_rewrites(self.options.worktree_rewrites)
+                .index_worktree_rewrites(None)
                 .index_worktree_options_mut(|options| {
                     options.thread_limit = self.options.thread_limit;
                     options.sorting = Some(gix_status::index_as_worktree_with_renames::Sorting::ByPathCaseSensitive);
                 })
-                .collect_internal(patterns, staged, unstaged, interrupt, tree_index)
+                .collect_internal(
+                    patterns,
+                    staged,
+                    unstaged,
+                    interrupt,
+                    tree_index,
+                    self.options
+                        .worktree_rewrites
+                        .is_some_and(|options| options.copies.is_some()),
+                )
         };
         let replacement = match &unstaged {
             Some(Scope::All) => collect(Vec::new(), staged, true)?,
@@ -858,7 +872,12 @@ impl Monitor {
             .fs_capabilities(None)
             .or_raise(|| message("could not read status filesystem options"))?
             .ignore_case;
-        let mut next = self.snapshot.clone().unwrap_or_default();
+        let mut next = self
+            .unrewritten_snapshot
+            .as_ref()
+            .or(self.snapshot.as_ref())
+            .cloned()
+            .unwrap_or_default();
         next.retain(|item| match item {
             Item::TreeIndex(_) => !staged,
             Item::IndexWorktree(_) => !scope_contains(unstaged.as_ref(), item.location(), ignore_case),
@@ -868,11 +887,39 @@ impl Monitor {
             check_interrupted(interrupt)?;
             refresh_item_metadata(item, &index)?;
         }
+        // Without deleted sources or copy tracking, raw entries already are the final status.
+        let rewrite_options = self.options.worktree_rewrites.filter(|options| {
+            repo.workdir().is_some()
+                && (options.copies.is_some()
+                    || next.iter().any(|item| {
+                        matches!(
+                            item,
+                            Item::IndexWorktree(item)
+                                if item.summary() == Some(gix_status::index_as_worktree_with_renames::Summary::Removed)
+                        )
+                    }))
+        });
+        let unrewritten_snapshot = if let Some(options) = rewrite_options {
+            let rewritten = rewrites::apply(repo, &index, &next, options, interrupt)?;
+            // Global pairing rehashes retained candidates, so content caches need their coverage too.
+            let candidates: Vec<_> = next
+                .iter()
+                .filter(|item| matches!(item, Item::IndexWorktree(_)))
+                .map(|item| path_change(item.location().to_owned()))
+                .collect();
+            if !candidates.is_empty() {
+                merge_scopes(&mut unstaged, Some(Scope::Paths(candidates)));
+            }
+            Some(std::mem::replace(&mut next, rewritten))
+        } else {
+            None
+        };
         next.sort_by(|a, b| item_key(a).cmp(&item_key(b)));
         let changes = delta::changes(self.snapshot.as_deref().unwrap_or_default(), &next, interrupt)?;
         let changed = self.snapshot.is_none() || !changes.is_empty();
         check_interrupted(interrupt)?;
         self.snapshot = Some(next);
+        self.unrewritten_snapshot = unrewritten_snapshot;
         if let Some(index) = next_index {
             self.index = Some(index);
         }
@@ -905,9 +952,6 @@ impl Monitor {
         let Some(Scope::Paths(scopes)) = &pending else {
             return Ok(pending);
         };
-        if self.options.worktree_rewrites.is_some() {
-            return Ok(Some(Scope::All));
-        }
         // macOS Unicode aliases need not match the index's byte spelling; avoid retaining another path map.
         if cfg!(target_os = "macos") && scopes.iter().any(|change| !change.path.is_ascii()) {
             return Ok(Some(Scope::All));
