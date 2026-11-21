@@ -59,7 +59,14 @@ pub(super) fn recursive(
                     && ctx.excludes.is_some())
         })
         .and_then(|listing| {
-            listing.directories.get(current_bstr.as_bstr()).filter(|entries| {
+            listing.directories.get(current_bstr.as_bstr()).filter(|dir| {
+                if dir.omitted_tracked {
+                    return !listing.includes_ignored
+                        && !opts.emit_tracked
+                        && !opts.recurse_repositories
+                        && delegate.can_omit_tracked_directories();
+                }
+                let entries = &dir.entries;
                 listing.includes_ignored
                     || (!entries.is_empty()
                         && (!may_collapse
@@ -79,6 +86,7 @@ pub(super) fn recursive(
                                 }))))
             })
         });
+    let omitted_tracked = cached.is_some_and(|dir| dir.omitted_tracked);
     let disk = if cached.is_some() {
         out.cached_dir_listings += 1;
         None
@@ -97,7 +105,7 @@ pub(super) fn recursive(
     };
     let entries = cached
         .into_iter()
-        .flatten()
+        .flat_map(|dir| &dir.entries)
         .map(|entry| Ok(DirectoryEntry::Cached(entry)))
         .chain(disk.into_iter().flatten().map(|entry| entry.map(DirectoryEntry::Disk)));
 
@@ -109,9 +117,9 @@ pub(super) fn recursive(
         current_bstr.pop();
         entries
     };
-    let mut num_entries = 0;
+    let mut num_entries = usize::from(omitted_tracked);
     let mut mark = state.mark(may_collapse);
-    let mut prevent_collapse = false;
+    let mut prevent_collapse = omitted_tracked;
     for entry in entries {
         let Some(entry) = read_dir_result(entry, current, opts.for_deletion, out)? else {
             // Preserve earlier entries without treating the unreadable directory as empty or collapsible.

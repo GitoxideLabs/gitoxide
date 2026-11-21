@@ -41,6 +41,10 @@ pub mod delegate {
             true
         }
 
+        fn can_omit_tracked_directories(&self) -> bool {
+            true
+        }
+
         fn emit(&mut self, entry: EntryRef<'_>, dir_status: Option<entry::Status>) -> Action {
             self.unorded_entries.push((entry.to_owned(), dir_status));
             std::ops::ControlFlow::Continue(())
@@ -76,6 +80,11 @@ pub trait Delegate {
         false
     }
 
+    /// Permit skipping callbacks for tracked-only subtrees when tracked entries are hidden.
+    fn can_omit_tracked_directories(&self) -> bool {
+        false
+    }
+
     /// Return `true` if the given entry can be recursed into. Will only be called if the entry is a physical directory.
     /// The base implementation will act like Git does by default in `git status` or `git clean`.
     ///
@@ -87,7 +96,8 @@ pub trait Delegate {
     /// to allow traversing submodule worktrees.
     ///
     /// This method sees all directories unless [`can_omit_ignored_directories`](Self::can_omit_ignored_directories)
-    /// permits omissions from partial listings. Not all directories will end up being [emitted](Self::emit()).
+    /// or [`can_omit_tracked_directories`](Self::can_omit_tracked_directories) permits omissions from partial listings.
+    /// Not all directories will end up being [emitted](Self::emit()).
     /// If this method returns `false`, the `entry` will always be emitted.
     fn can_recurse(
         &mut self,
@@ -219,26 +229,47 @@ pub struct Options<'a> {
 
 /// Directory listings whose names and file types are known to be unchanged.
 ///
-/// Callers must include every immediate tracked and untracked entry, even entries they don't intend
-/// to emit: tracked siblings prevent an untracked directory from collapsing. Names must be single
+/// Include every immediate tracked and untracked entry, except those covered by
+/// [`CachedDirectory::omitted_tracked`]. Names must be single
 /// path components and use the Unicode composition selected by [`Options::precompose_unicode`].
 /// The caller is responsible for invalidating listings after filesystem, index, or ignore-rule changes,
 /// including configuration changes that alter which ignored entries may be omitted.
 #[derive(Debug, Default, Clone)]
 pub struct CachedListing {
     /// Maps worktree-relative directory paths (empty for the root, `/` separated) to their entries.
-    pub directories: HashMap<BString, Vec<(BString, entry::Kind)>>,
+    pub directories: HashMap<BString, CachedDirectory>,
     /// Whether the listings also include ignored and otherwise pruned entries, making them complete.
     ///
     /// If `false`, ignored and pruned entries may be omitted. Such listings require the delegate's
     /// [`can_omit_ignored_directories`](Delegate::can_omit_ignored_directories) permission and are only used with an
     /// excludes stack, without pathspecs, and with options that cannot expose or depend on omissions:
     /// no ignored, pruned, empty-directory, or collapsed-child output, and no deletion mode.
-    /// Empty partial listings are read from disk so omitted names cannot make a repository appear empty.
+    /// Empty partial listings without known tracked contents are read from disk so omitted names cannot make a repository appear empty.
     /// When collapsing untracked directories, partial listings containing subdirectories are also read
     /// from disk, unless the worktree root or a tracked file prevents collapsing. This preserves the distinction
     /// between empty descendants and descendants accompanied by omitted ignored files.
     pub includes_ignored: bool,
+}
+
+/// The reusable entries of one directory.
+#[derive(Debug, Default, Clone)]
+pub struct CachedDirectory {
+    /// Immediate entries the walk must classify.
+    pub entries: Vec<(BString, entry::Kind)>,
+    /// At least one tracked file is known to exist beneath this directory, preventing collapse.
+    /// A partial listing may then omit tracked files and entire tracked-only subtrees.
+    /// Only set this when their existence and the absence of reportable entries have been verified.
+    /// Walks that need tracked entries or directory callbacks read these directories from disk.
+    pub omitted_tracked: bool,
+}
+
+impl From<Vec<(BString, entry::Kind)>> for CachedDirectory {
+    fn from(entries: Vec<(BString, entry::Kind)>) -> Self {
+        Self {
+            entries,
+            omitted_tracked: false,
+        }
+    }
 }
 
 /// All information that is required to perform a dirwalk, and classify paths properly.
