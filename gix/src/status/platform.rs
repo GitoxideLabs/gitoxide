@@ -118,6 +118,14 @@ where
         self
     }
 
+    /// Skip constructing a second index when a validated cache-tree proves there are no staged changes.
+    /// The iterator still produces all status items. Its [`tree_index`](crate::status::Outcome::tree_index)
+    /// outcome is `None` when this shortcut is taken.
+    pub fn skip_tree_index_if_unchanged(mut self, enable: bool) -> Self {
+        self.skip_tree_index_if_unchanged = enable;
+        self
+    }
+
     /// Configure how rename tracking should be performed when looking at changes between the [head tree](Self::head_tree())
     /// and the index.
     pub fn tree_index_track_renames(mut self, renames: tree_index::TrackRenames) -> Self {

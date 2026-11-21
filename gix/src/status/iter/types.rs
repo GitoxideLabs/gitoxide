@@ -37,7 +37,7 @@ pub struct Iter {
     pub(super) rx_and_join: Option<(
         std::sync::mpsc::Receiver<Item>,
         std::thread::JoinHandle<Result<Outcome>>,
-        Option<std::thread::JoinHandle<Result<tree_index::Outcome>>>,
+        Option<std::thread::JoinHandle<Result<Option<tree_index::Outcome>>>>,
     )>,
     #[cfg(feature = "parallel")]
     pub(super) should_interrupt: crate::status::OwnedOrStaticAtomicBool,
@@ -66,7 +66,8 @@ pub struct Outcome {
     /// The outcome of the index-to-worktree comparison operation.
     pub index_worktree: gix_status::index_as_worktree_with_renames::Outcome,
     /// The outcome of the diff between `HEAD^{tree}` and the index, or `None` if this outcome
-    /// was produced with the [`into_index_worktree_iter()`](crate::status::Platform::into_index_worktree_iter()).
+    /// was skipped by [`skip_tree_index_if_unchanged()`](crate::status::Platform::skip_tree_index_if_unchanged)
+    /// or produced with the [`into_index_worktree_iter()`](crate::status::Platform::into_index_worktree_iter()).
     pub tree_index: Option<tree_index::Outcome>,
     /// The worktree index that was used for the operation.
     pub worktree_index: IndexPersistedOrInMemory,

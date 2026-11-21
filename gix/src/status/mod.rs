@@ -16,6 +16,7 @@ where
     submodules: Submodule,
     index_worktree_options: index_worktree::Options,
     tree_index_renames: tree_index::TrackRenames,
+    skip_tree_index_if_unchanged: bool,
     should_interrupt: Option<OwnedOrStaticAtomicBool>,
 }
 
@@ -118,6 +119,7 @@ impl Repository {
             submodules: Submodule::default(),
             should_interrupt: None,
             head_tree: Some(None),
+            skip_tree_index_if_unchanged: false,
             tree_index_renames: Default::default(),
             index_worktree_options: index_worktree::Options {
                 dirwalk_options: Some(self.dirwalk_options()?),
@@ -173,11 +175,12 @@ pub mod is_dirty {
                     )
                     .expect("Impossible for this to fail without patterns");
                 // Run this first as there is a high likelihood to find something, and it's very fast.
-                self.tree_index_status(
+                self.tree_index_status_inner(
                     &head_tree_id,
                     &*self.index_or_empty()?,
                     Some(&mut pathspec),
                     crate::status::tree_index::TrackRenames::Disabled,
+                    true,
                     |_, _, _| {
                         index_is_dirty = true;
                         Ok(std::ops::ControlFlow::Break(()))
