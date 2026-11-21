@@ -572,6 +572,78 @@ mod into_iter {
     }
 
     #[test]
+    fn submodule_status_preserves_parent_namespace_without_inheriting_it_in_children() -> TestResult {
+        use gix::status::plumbing::index_as_worktree::traits::SubmoduleStatus;
+
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let environment = gix_testtools::isolate_git_environment()?;
+        let fixture = gix_testtools::scripted_fixture_read_only("make_namespaced_submodule_status.sh")?;
+        let root = fixture.join("superproject");
+        let child_commit_id = gix::open_opts(root.join("d"), gix::open::Options::isolated())?
+            .head_id()?
+            .detach();
+        let ordinary = gix::open_opts(&root, gix::open::Options::isolated())?;
+        let mut runtime = ordinary.clone();
+        runtime.set_namespace("status")?;
+        let _environment = environment.set("GIT_NAMESPACE", "status");
+        let mut permissions = gix::open::Permissions::isolated();
+        permissions.env.git_prefix = gix_sec::Permission::Allow;
+        let environment = gix::open_opts(&root, gix::open::Options::isolated().permissions(permissions))?;
+
+        for (repo, ignored, source) in [
+            (ordinary, false, "ordinary"),
+            (environment, true, "environment"),
+            (runtime, true, "runtime"),
+        ] {
+            assert_eq!(
+                repo.namespace().is_some(),
+                ignored,
+                "{source}: the parent namespace is selected"
+            );
+            assert!(
+                repo.open_modules_file()?.is_none(),
+                "the fixture has no worktree .gitmodules"
+            );
+            let index = repo.index()?;
+            assert!(
+                index.entry_by_path(".gitmodules".into()).is_none(),
+                "the fixture forces .gitmodules fallback to the effective HEAD"
+            );
+            let entry = index.entry_by_path("d".into()).expect("the fixture has a gitlink");
+            let mut provider = gix::status::index_worktree::BuiltinSubmoduleStatus::new(
+                repo.clone().into_sync(),
+                Submodule::AsConfigured { check_dirty: false },
+            )?;
+            let mut cloned = provider.clone();
+            for provider in [&mut provider, &mut cloned] {
+                assert_eq!(
+                    provider.status(entry, "d".into())?.is_none(),
+                    ignored,
+                    "{source}: providers and their clones use the parent namespace's ignore configuration"
+                );
+            }
+            let mut provider = gix::status::index_worktree::BuiltinSubmoduleStatus::new(
+                repo.into_sync(),
+                Submodule::Given {
+                    ignore: gix::submodule::config::Ignore::None,
+                    check_dirty: false,
+                },
+            )?;
+            let status = provider
+                .status(entry, "d".into())?
+                .expect("the child commit differs from its indexed gitlink");
+            assert_eq!(
+                status.checked_out_head_id,
+                Some(child_commit_id),
+                "{source}: the child's HEAD is read from its own namespace"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn submodule_status_preserves_missing_configured_worktree() -> TestResult {
         use gix::status::plumbing::index_as_worktree::traits::SubmoduleStatus;
 
@@ -660,7 +732,7 @@ mod into_iter {
                         .into_iter(None)?
                         .collect::<gix::Result<Vec<_>>>()?;
                     let mut actual = String::new();
-                    for item in items {
+                    for item in &items {
                         match item {
                             Item::IndexWorktree(gix::status::index_worktree::Item::Modification {
                                 entry,
@@ -677,6 +749,17 @@ mod into_iter {
                     }
                     let expected = std::fs::read_to_string(repo.git_dir().join(format!("status-{name}.git")))?;
                     assert_eq!(actual, expected, "{modules}-{state} with ignore={name} agrees with Git");
+                    #[cfg(feature = "status-monitor")]
+                    assert_eq!(
+                        repo.status(gix::progress::Discard)?
+                            .index_worktree_submodules(Submodule::Given {
+                                ignore,
+                                check_dirty: false,
+                            })
+                            .into_vec(None, &std::sync::atomic::AtomicBool::new(false))?,
+                        items,
+                        "synchronous status preserves Git parity for {modules}-{state} with ignore={name}"
+                    );
                 }
                 let expected = std::fs::read_to_string(repo.git_dir().join("status-none.git"))?;
                 assert_eq!(

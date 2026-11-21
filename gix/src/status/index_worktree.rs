@@ -190,9 +190,13 @@ pub struct BuiltinSubmoduleStatus {
     #[cfg(not(feature = "parallel"))]
     git_dir: std::path::PathBuf,
     #[cfg(not(feature = "parallel"))]
-    open_options: crate::open::Options,
+    work_tree: Option<std::path::PathBuf>,
     #[cfg(not(feature = "parallel"))]
-    work_dir: Option<std::path::PathBuf>,
+    index_path: std::path::PathBuf,
+    #[cfg(not(feature = "parallel"))]
+    namespace: Option<gix_ref::Namespace>,
+    #[cfg(not(feature = "parallel"))]
+    open_options: crate::open::Options,
     submodule_paths: Vec<BString>,
 }
 
@@ -205,12 +209,24 @@ impl Clone for BuiltinSubmoduleStatus {
             #[cfg(not(feature = "parallel"))]
             git_dir: self.git_dir.clone(),
             #[cfg(not(feature = "parallel"))]
-            open_options: self.open_options.clone_with_trust(),
+            work_tree: self.work_tree.clone(),
             #[cfg(not(feature = "parallel"))]
-            work_dir: self.work_dir.clone(),
+            index_path: self.index_path.clone(),
+            #[cfg(not(feature = "parallel"))]
+            namespace: self.namespace.clone(),
+            #[cfg(not(feature = "parallel"))]
+            open_options: self.open_options.clone_with_trust(),
             submodule_paths: self.submodule_paths.clone(),
         }
     }
+}
+
+/// A submodule provider which borrows its cancellation flag and finishes nested status in its caller.
+#[cfg(feature = "status-monitor")]
+#[derive(Clone)]
+pub(crate) struct SynchronousSubmoduleStatus<'a> {
+    inner: BuiltinSubmoduleStatus,
+    interrupt: &'a AtomicBool,
 }
 
 ///
@@ -226,6 +242,14 @@ mod submodule_status {
     };
 
     impl BuiltinSubmoduleStatus {
+        #[cfg(feature = "status-monitor")]
+        pub(crate) fn synchronous(
+            self,
+            interrupt: &std::sync::atomic::AtomicBool,
+        ) -> super::SynchronousSubmoduleStatus<'_> {
+            super::SynchronousSubmoduleStatus { inner: self, interrupt }
+        }
+
         /// Create a new instance from a `repo` and a `mode` to control how the submodule status will be obtained.
         pub fn new(repo: crate::ThreadSafeRepository, mode: Submodule) -> Result<Self> {
             let local_repo = repo.to_thread_local();
@@ -245,9 +269,13 @@ mod submodule_status {
                 #[cfg(not(feature = "parallel"))]
                 git_dir: local_repo.git_dir().to_owned(),
                 #[cfg(not(feature = "parallel"))]
-                open_options: local_repo.open_options().clone_with_trust(),
+                work_tree: local_repo.work_tree.clone(),
                 #[cfg(not(feature = "parallel"))]
-                work_dir: local_repo.workdir().map(ToOwned::to_owned),
+                index_path: local_repo.index_path.clone(),
+                #[cfg(not(feature = "parallel"))]
+                namespace: local_repo.namespace().cloned(),
+                #[cfg(not(feature = "parallel"))]
+                open_options: local_repo.open_options().clone_with_trust(),
                 submodule_paths,
             })
         }
@@ -257,6 +285,31 @@ mod submodule_status {
         type Output = crate::submodule::Status;
 
         fn status(&mut self, entry: &gix_index::Entry, rela_path: &BStr) -> Result<Option<Self::Output>> {
+            self.status_inner(
+                entry,
+                rela_path,
+                #[cfg(feature = "status-monitor")]
+                None,
+            )
+        }
+    }
+
+    #[cfg(feature = "status-monitor")]
+    impl gix_status::index_as_worktree::traits::SubmoduleStatus for super::SynchronousSubmoduleStatus<'_> {
+        type Output = crate::submodule::Status;
+
+        fn status(&mut self, entry: &gix_index::Entry, rela_path: &BStr) -> Result<Option<Self::Output>> {
+            self.inner.status_inner(entry, rela_path, Some(self.interrupt))
+        }
+    }
+
+    impl BuiltinSubmoduleStatus {
+        fn status_inner(
+            &mut self,
+            entry: &gix_index::Entry,
+            rela_path: &BStr,
+            #[cfg(feature = "status-monitor")] interrupt: Option<&std::sync::atomic::AtomicBool>,
+        ) -> Result<Option<crate::submodule::Status>> {
             use bstr::ByteSlice;
             if matches!(
                 self.mode,
@@ -275,8 +328,10 @@ mod submodule_status {
             };
             #[cfg(not(feature = "parallel"))]
             {
-                // Preserve the captured state without requiring its checkout directory to still exist.
-                repo.work_tree.clone_from(&self.work_dir);
+                // Preserve the captured worktree/index without requiring its checkout directory to still exist.
+                repo.work_tree.clone_from(&self.work_tree);
+                repo.index_path.clone_from(&self.index_path);
+                repo.refs.namespace.clone_from(&self.namespace);
             }
             let sm = if self
                 .submodule_paths
@@ -322,7 +377,13 @@ mod submodule_status {
                 Submodule::Given { ignore, check_dirty } => (ignore, check_dirty),
             };
             let status = match sm {
-                Some(sm) => sm.status(ignore, check_dirty)?,
+                Some(sm) => sm.status_opts_inner(
+                    ignore,
+                    check_dirty,
+                    &mut |status| status,
+                    #[cfg(feature = "status-monitor")]
+                    interrupt,
+                )?,
                 None => {
                     if ignore == crate::submodule::config::Ignore::All {
                         return Ok(None);
@@ -348,7 +409,14 @@ mod submodule_status {
                         index_id: Some(entry.id),
                         ..Default::default()
                     }
-                    .with_worktree_status(&sm_repo, ignore, check_dirty, &mut |s| s)?
+                    .with_worktree_status(
+                        &sm_repo,
+                        ignore,
+                        check_dirty,
+                        &mut |s| s,
+                        #[cfg(feature = "status-monitor")]
+                        interrupt,
+                    )?
                 }
             };
             Ok(status.is_dirty().and_then(|dirty| dirty.then_some(status)))
