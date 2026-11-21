@@ -518,6 +518,10 @@ pub(super) mod function {
                 true
             }
 
+            fn can_omit_tracked_directories(&self) -> bool {
+                true
+            }
+
             fn emit(&mut self, entry: EntryRef<'_>, collapsed_directory_status: Option<Status>) -> Action {
                 // Status never shows untracked entries of untrackable type
                 if entry.disk_kind != Some(gix_dir::entry::Kind::Untrackable) {

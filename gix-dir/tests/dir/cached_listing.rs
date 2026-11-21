@@ -33,7 +33,11 @@ fn listing(includes_ignored: bool) -> walk::CachedListing {
         .map(|(dir, entries)| {
             (
                 dir.into(),
-                entries.into_iter().map(|(name, kind)| (name.into(), kind)).collect(),
+                entries
+                    .into_iter()
+                    .map(|(name, kind)| (name.into(), kind))
+                    .collect::<Vec<_>>()
+                    .into(),
             )
         })
         .collect(),
@@ -43,15 +47,17 @@ fn listing(includes_ignored: bool) -> walk::CachedListing {
             .directories
             .get_mut(&BString::default())
             .expect("the root has a listing")
+            .entries
             .extend([(".git".into(), Directory), ("generated".into(), Directory)]);
         listing
             .directories
             .get_mut(&BString::from("mixed"))
             .expect("mixed has a listing")
+            .entries
             .push(("secret.ignored".into(), File));
         listing
             .directories
-            .insert("generated".into(), vec![("data".into(), File)]);
+            .insert("generated".into(), vec![("data".into(), File)].into());
     }
     listing
 }
@@ -124,13 +130,27 @@ uncached/file
 #[test]
 fn partial_listings_only_apply_to_options_that_do_not_need_omitted_entries() -> TestResult {
     let root = gix_testtools::scripted_fixture_read_only("cached-listing.sh")?;
-    let listing = listing(false);
+    let mut listing = listing(false);
+    let mixed = listing
+        .directories
+        .get_mut(&BString::from("mixed"))
+        .expect("fixture directory");
+    mixed.entries.retain(|(name, _)| name != "tracked");
+    mixed.omitted_tracked = true;
     let collapsed = walk::Options {
         emit_untracked: CollapseDirectory,
         ..options()
     };
     for (options, pattern, use_cache) in [
         (collapsed, None, true),
+        (
+            walk::Options {
+                recurse_repositories: true,
+                ..collapsed
+            },
+            None,
+            true,
+        ),
         (
             walk::Options {
                 emit_tracked: true,
@@ -204,8 +224,9 @@ fn partial_listings_only_apply_to_options_that_do_not_need_omitted_entries() -> 
         );
         if use_cache {
             assert_eq!(
-                cached.read_dir_calls, 1,
-                "an empty partial listing still needs a directory read"
+                cached.read_dir_calls,
+                1 + u32::from(options.emit_tracked || options.recurse_repositories),
+                "the empty directory and any listing missing requested tracked entries need disk reads"
             );
             assert!(cached.cached_dir_listings > 0);
             assert!(actual.iter().any(|(entry, _)| entry.rela_path == "mixed/new"));
@@ -297,7 +318,7 @@ fn cached_names_cannot_escape_their_directory() -> TestResult {
     ] {
         let listing = walk::CachedListing {
             includes_ignored: true,
-            directories: [(BString::default(), vec![(name.into(), File)])].into(),
+            directories: [(BString::default(), vec![(name.into(), File)].into())].into(),
         };
         let err = try_collect_filtered_opts_collect(
             &root,
@@ -368,7 +389,7 @@ fn cached_walks_obey_interrupts_and_stop_after_the_delegate_breaks() -> TestResu
 fn empty_partial_listings_do_not_make_submodule_roots_appear_empty() -> TestResult {
     let root = gix_testtools::scripted_fixture_read_only("cached-listing-empty-submodule.sh")?.join("submodule");
     let listing = walk::CachedListing {
-        directories: [(BString::default(), Vec::new())].into(),
+        directories: [(BString::default(), Vec::new().into())].into(),
         includes_ignored: false,
     };
     for cached_listing in [None, Some(&listing)] {
@@ -424,7 +445,11 @@ fn partial_listings_preserve_collapses_with_empty_and_ignored_children() -> Test
         .map(|(path, entries)| {
             (
                 path.into(),
-                entries.into_iter().map(|(name, kind)| (name.into(), kind)).collect(),
+                entries
+                    .into_iter()
+                    .map(|(name, kind)| (name.into(), kind))
+                    .collect::<Vec<_>>()
+                    .into(),
             )
         })
         .collect(),
@@ -499,8 +524,15 @@ fn partial_listings_preserve_collapses_with_empty_and_ignored_children() -> Test
 #[test]
 fn custom_delegates_keep_directory_callbacks_without_opt_in() -> TestResult {
     #[derive(Default)]
-    struct RecordDirectories(Vec<BString>);
+    struct RecordDirectories {
+        paths: Vec<BString>,
+        omit_ignored: bool,
+    }
     impl walk::Delegate for RecordDirectories {
+        fn can_omit_ignored_directories(&self) -> bool {
+            self.omit_ignored
+        }
+
         fn emit(&mut self, _: EntryRef<'_>, _: Option<entry::Status>) -> walk::Action {
             std::ops::ControlFlow::Continue(())
         }
@@ -511,7 +543,7 @@ fn custom_delegates_keep_directory_callbacks_without_opt_in() -> TestResult {
             for_deletion: Option<ForDeletionMode>,
             worktree_root_is_repository: bool,
         ) -> bool {
-            self.0.push(entry.rela_path.as_ref().to_owned());
+            self.paths.push(entry.rela_path.as_ref().to_owned());
             entry.status.can_recurse(
                 entry.disk_kind,
                 entry.pathspec_match,
@@ -522,8 +554,11 @@ fn custom_delegates_keep_directory_callbacks_without_opt_in() -> TestResult {
     }
 
     let root = gix_testtools::scripted_fixture_read_only("cached-listing.sh")?;
-    let collect_callbacks = |cached_listing: Option<&walk::CachedListing>| -> TestResult<_> {
-        let mut delegate = RecordDirectories::default();
+    let collect_callbacks = |cached_listing: Option<&walk::CachedListing>, omit_ignored| -> TestResult<_> {
+        let mut delegate = RecordDirectories {
+            omit_ignored,
+            ..Default::default()
+        };
         let ((outcome, _), _) = try_collect_filtered_opts_collect(
             &root,
             None,
@@ -534,17 +569,17 @@ fn custom_delegates_keep_directory_callbacks_without_opt_in() -> TestResult {
                 ..Default::default()
             },
         )?;
-        delegate.0.sort();
-        Ok((outcome, delegate.0))
+        delegate.paths.sort();
+        Ok((outcome, delegate.paths))
     };
-    let (uncached, expected) = collect_callbacks(None)?;
+    let (uncached, expected) = collect_callbacks(None, false)?;
     assert!(
         expected.iter().any(|path| path == "generated"),
         "ignored directories are visible to the custom recursion callback"
     );
     for includes_ignored in [false, true] {
         let listing = listing(includes_ignored);
-        let (cached, actual) = collect_callbacks(Some(&listing))?;
+        let (cached, actual) = collect_callbacks(Some(&listing), false)?;
         assert_eq!(
             actual, expected,
             "caching must preserve the delegate's directory callbacks"
@@ -560,5 +595,16 @@ fn custom_delegates_keep_directory_callbacks_without_opt_in() -> TestResult {
             assert_eq!(cached.read_dir_calls, uncached.read_dir_calls);
         }
     }
+    let mut compact = listing(false);
+    compact.directories.retain(|path, _| path.is_empty());
+    let root = compact.directories.get_mut(&BString::default()).expect("root listing");
+    root.entries.retain(|(name, _)| name != ".gitignore");
+    root.omitted_tracked = true;
+    let (out, actual) = collect_callbacks(Some(&compact), true)?;
+    assert_eq!(
+        out.cached_dir_listings, 0,
+        "permission to omit ignored directories cannot omit tracked ones"
+    );
+    assert_eq!(actual, expected, "the delegate still sees every directory on disk");
     Ok(())
 }

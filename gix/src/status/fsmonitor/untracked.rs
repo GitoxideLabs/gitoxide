@@ -199,7 +199,7 @@ fn listing<'index>(
             }
             entries.push((name.to_owned(), Kind::Directory));
         }
-        out.directories.insert(path, entries);
+        out.directories.insert(path, entries.into());
     }
     // UNTR omits tracked names, which still prevent a mixed directory from collapsing.
     let mut previous = b"".as_slice();
@@ -217,7 +217,7 @@ fn listing<'index>(
             let start = path[..end].rfind_byte(b'/').map_or(0, |position| position + 1);
             let parent = path[..start.saturating_sub(1)].as_bstr();
             if let Some(entries) = out.directories.get_mut(parent) {
-                entries.push((path[start..end].into(), kind));
+                entries.entries.push((path[start..end].into(), kind));
             }
             // Adjacent paths share parents that have already been added and checked.
             if start != 0 && previous.starts_with(&path[..start]) {
@@ -238,7 +238,8 @@ fn listing<'index>(
         }
         previous = path.as_ref();
     }
-    for entries in out.directories.values_mut() {
+    for dir in out.directories.values_mut() {
+        let entries = &mut dir.entries;
         entries.sort_unstable();
         entries.dedup_by(|a, b| a.0 == b.0);
     }
