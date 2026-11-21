@@ -69,17 +69,14 @@ impl File {
     ) -> Result<Self> {
         let _span = gix_trace::detail!("gix_index::File::at()");
         let path = path.into();
-        let (data, mtime) = {
+        let (data, mtime, file) = {
             let mut file = std::fs::File::open(&path)
                 .map_err(|source| OpenError {
                     path: path.clone(),
                     source,
                 })
                 .or_error()?;
-            // SAFETY: we have to take the risk of somebody changing the file underneath. Git never writes into the same file.
-            #[expect(unsafe_code)]
-            let data = unsafe { memmap2::MmapOptions::new().map_copy_read_only(&file) }
-                .or_raise(|| message("An IO error occurred while opening the index"))?;
+            let data = super::map_index(&file).or_raise(|| message("An IO error occurred while opening the index"))?;
             // Validate the minimum header and trailer size before locating the checksum.
             decode::header::decode(&data, object_hash)?;
 
@@ -115,11 +112,16 @@ impl File {
                         .metadata()
                         .or_raise(|| message("An IO error occurred while opening the index"))?,
                 ),
+                file,
             )
         };
 
         let (state, checksum) = State::from_bytes(&data, mtime, object_hash, options)?;
-        let mut file = File { state, path, checksum };
+        let mut file = File {
+            state,
+            path,
+            snapshot: super::Snapshot::new(checksum.unwrap_or_else(|| object_hash.null()), Some(file)),
+        };
         if let Some(mut link) = file.link.take() {
             link.dissolve_into(&mut file, object_hash, skip_hash, options)?;
         }
@@ -134,7 +136,7 @@ impl File {
         File {
             state,
             path: path.into(),
-            checksum: None,
+            snapshot: None,
         }
     }
 }
