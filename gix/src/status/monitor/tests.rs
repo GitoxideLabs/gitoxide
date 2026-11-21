@@ -254,7 +254,7 @@ fn captured_head_tree_is_stable_after_reference_moves() -> TestResult {
     let items = repo
         .status(gix_utils::progress::Discard)?
         .head_tree(pinned_tree_id)
-        .collect_internal(Vec::new(), true, false, &AtomicBool::new(false), None)?;
+        .collect_internal(Vec::new(), true, false, &AtomicBool::new(false), None, false)?;
     assert!(
         matches!(
             items.as_slice(),
@@ -272,7 +272,7 @@ fn captured_head_tree_is_stable_after_reference_moves() -> TestResult {
     let items = repo
         .status(gix_utils::progress::Discard)?
         .head_tree(unborn.tree_id(&repo)?)
-        .collect_internal(Vec::new(), true, false, &AtomicBool::new(false), None)?;
+        .collect_internal(Vec::new(), true, false, &AtomicBool::new(false), None, false)?;
     assert!(
         matches!(
             items.as_slice(),
