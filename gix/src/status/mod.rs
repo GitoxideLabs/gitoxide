@@ -80,6 +80,8 @@ impl Repository {
     /// After changing that setting, remove the cache with `git update-index --no-untracked-cache` before warming it again.
     /// Call [`Outcome::write_changes()`] after consuming the iterator to save the refreshed monitor
     /// checkpoint, entry validity, and invalidated directory listings when a write is warranted.
+    /// Optional writes honor `gitoxide.core.optionalLocks` (overridden by `GIT_OPTIONAL_LOCKS` at open)
+    /// and skip the refresh if the index is locked or has changed since the scan.
     /// Token-only updates retain the old checkpoint on disk; `gitoxide.fsmonitor.forceUpdateThreshold`
     /// bounds the number of repeated events before requesting a write, as in Git (default: 100 paths).
     /// Daemon retry, timeout, and response-size limits are configured through

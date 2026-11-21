@@ -59,6 +59,11 @@ where
         };
 
         let stat_options = self.repo.stat_options()?;
+        let key = &crate::config::tree::gitoxide::Core::OPTIONAL_LOCKS;
+        let optional_locks = key
+            .enrich_error(self.repo.config.resolved.boolean(key))
+            .with_lenient_default(self.repo.config.lenient_config)?
+            .unwrap_or(true);
         let skip_hash = crate::config::tree::Index::SKIP_HASH
             .enrich_error(self.repo.config.resolved.boolean_filter(
                 crate::config::tree::Index::SKIP_HASH,
@@ -143,6 +148,7 @@ where
                             changes: None,
                             skip_hash,
                             stat_options,
+                            optional_locks,
                             shared_repository_permissions: repo.config.shared_repository_permissions,
                             fsmonitor,
                         })
@@ -214,6 +220,7 @@ where
                 changes: None,
                 skip_hash,
                 stat_options,
+                optional_locks,
                 shared_repository_permissions: self.repo.config.shared_repository_permissions,
                 fsmonitor,
             };

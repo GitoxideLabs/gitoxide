@@ -72,6 +72,7 @@ pub struct Outcome {
     pub worktree_index: IndexPersistedOrInMemory,
     pub(super) skip_hash: bool,
     pub(super) stat_options: gix_index::entry::stat::Options,
+    pub(super) optional_locks: bool,
     pub(super) shared_repository_permissions: gix_fs::SharedPermissions,
     pub(super) changes: Option<Vec<(usize, ApplyChange)>>,
     pub(in crate::status) fsmonitor: Option<crate::status::fsmonitor::Refresh>,
@@ -84,16 +85,19 @@ impl Outcome {
     /// additional work can be prevented by writing the changes back to the index.
     /// Filesystem-monitor token changes alone do not request a write unless the reported path count exceeds
     /// `gitoxide.fsmonitor.forceUpdateThreshold` (100 by default, matching Git).
+    /// Returns `false` when `gitoxide.core.optionalLocks` disables optional writes.
     pub fn has_changes(&self) -> bool {
-        self.changes.as_ref().is_some_and(|changes| !changes.is_empty())
-            || self
-                .fsmonitor
-                .as_ref()
-                .is_some_and(super::super::fsmonitor::Refresh::has_changes)
+        self.optional_locks
+            && (self.changes.as_ref().is_some_and(|changes| !changes.is_empty())
+                || self
+                    .fsmonitor
+                    .as_ref()
+                    .is_some_and(super::super::fsmonitor::Refresh::has_changes))
     }
 
     /// Write the changes if there are any back to the index file.
     /// This can only be done once as the changes are consumed in the process, if there were any.
+    /// Returns `None` when optional writes are disabled, the index is busy, or its original snapshot is no longer current.
     pub fn write_changes(&mut self) -> Option<Result> {
         let _span = gix_trace::coarse!("gix::status::index_worktree::Outcome::write_changes()");
         if !self.has_changes() {
@@ -137,13 +141,16 @@ impl Outcome {
 
         // Status only updates stat data and monitor flags, leaving cached tree contents unchanged.
         index.set_tree(tree);
-        Some(index.write(
+        match index.write_if_unchanged(
             crate::index::write::Options {
                 extensions: crate::index::write::Extensions::AllUnconditionally,
                 skip_hash: self.skip_hash,
             },
             self.shared_repository_permissions,
-        ))
+        ) {
+            Ok(false) => None,
+            result => Some(result.map(|_| ())),
+        }
     }
 }
 

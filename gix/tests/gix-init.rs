@@ -880,6 +880,7 @@ mod with_overrides {
             .set("GIT_PROTOCOL_FROM_USER", "false")
             .set("GIT_REPLACE_REF_BASE", "refs/replace-mine")
             .set("GIT_NO_REPLACE_OBJECTS", "no-replace")
+            .set("GIT_OPTIONAL_LOCKS", "0")
             .set("GIT_ALLOC_LIMIT", "7m")
             .set("GIT_COMMITTER_NAME", "committer name")
             .set("GIT_COMMITTER_EMAIL", "committer email")
@@ -1051,6 +1052,7 @@ mod with_overrides {
             ("gitoxide.allow.protocol", "file:ssh"),
             ("gitoxide.allow.protocolFromUser", "false"),
             ("core.useReplaceRefs", "false"),
+            ("gitoxide.core.optionalLocks", "0"),
             #[cfg(feature = "blob-diff")]
             ("diff.external", "external-diff-env"),
             ("gitoxide.objects.replaceRefBase", "refs/replace-mine"),

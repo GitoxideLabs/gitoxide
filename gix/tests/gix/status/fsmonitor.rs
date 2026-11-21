@@ -190,6 +190,59 @@ fn persisted_tokens_and_partial_status_keep_unvisited_dirty_entries() -> TestRes
 }
 
 #[test]
+fn optional_writeback_preserves_a_busy_or_newer_index() -> TestResult {
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let fixture = gix_testtools::scripted_fixture_writable("make_status_fsmonitor.sh")?;
+    let root = fixture.path();
+    let repo = gix::open_opts(root, gix::open::Options::isolated())?;
+    let index = repo.index_path();
+    let original = std::fs::read(&index)?;
+    let mut busy = status_outcome(&repo)?;
+    assert!(busy.has_changes(), "this scan would normally refresh the index");
+
+    let disabled = gix::open_opts(
+        root,
+        gix::open::Options::isolated().config_overrides(["gitoxide.core.optionalLocks=false"]),
+    )?;
+    let mut outcome = status_outcome(&disabled)?;
+    assert!(
+        !outcome.has_changes() && outcome.write_changes().is_none(),
+        "disabled optional locks suppress refresh"
+    );
+    assert_eq!(std::fs::read(&index)?, original, "the index stays byte-for-byte intact");
+
+    let lock = index.with_extension("lock");
+    std::fs::write(&lock, "busy")?;
+    assert!(
+        busy.write_changes().is_none(),
+        "status succeeds while another writer holds the lock"
+    );
+    assert_eq!(
+        std::fs::read(&lock)?,
+        b"busy",
+        "status preserves the other writer's lock"
+    );
+    std::fs::remove_file(lock)?;
+
+    let mut stale = status_outcome(&repo)?;
+    gix_testtools::git(root, "add untracked")?;
+    let staged = std::fs::read(&index)?;
+    assert_ne!(staged, original, "staging replaced the scanned index");
+    assert!(
+        stale.write_changes().is_none(),
+        "the pending refresh skips a newer index"
+    );
+    assert_eq!(
+        std::fs::read(index)?,
+        staged,
+        "the newer staging survives status writeback"
+    );
+    Ok(())
+}
+
+#[test]
 fn partial_status_keeps_a_same_size_edit_outside_the_pathspec_visible() -> TestResult {
     if gix_testtools::run_in_isolated_process()? {
         return Ok(());
