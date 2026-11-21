@@ -144,7 +144,11 @@ pub use gix_date as date;
 #[cfg(feature = "dirwalk")]
 pub use gix_dir as dir;
 pub use gix_error as error;
+/// Filesystem utilities re-exported from `gix-fs`.
+#[gix_macros::unstable(since = "2023-04-16")]
 pub use gix_fs as fs;
+#[cfg(feature = "fsck")]
+pub use gix_fsck as fsck;
 #[cfg(feature = "fsmonitor")]
 pub use gix_fsmonitor as fsmonitor;
 pub use gix_glob as glob;

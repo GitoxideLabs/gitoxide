@@ -111,13 +111,20 @@ mod capabilities;
 #[cfg_attr(not(feature = "unstable"), allow(dead_code))]
 mod file;
 pub use file::clear_readonly_attribute;
-#[gix_macros::unstable(since = "2026-09-30")]
+// Rustdoc duplicates notes on grouped re-exports, so document instability on the definitions.
+#[cfg(feature = "unstable")]
 pub use file::{FileOrSymlink, open_options_no_follow, open_read_only_no_follow};
+#[cfg(not(feature = "unstable"))]
+#[allow(unused_imports)]
+pub(crate) use file::{FileOrSymlink, open_options_no_follow, open_read_only_no_follow};
 
 #[cfg_attr(not(feature = "unstable"), allow(dead_code))]
 mod snapshot;
-#[gix_macros::unstable(since = "2023-04-13")]
+#[cfg(feature = "unstable")]
 pub use snapshot::{FileSnapshot, SharedFileSnapshot, SharedFileSnapshotMut};
+#[cfg(not(feature = "unstable"))]
+#[allow(unused_imports)]
+pub(crate) use snapshot::{FileSnapshot, SharedFileSnapshot, SharedFileSnapshotMut};
 
 // Inline module bodies keep attribute-macro inputs compatible with Rust 1.88.
 ///

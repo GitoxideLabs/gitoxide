@@ -4,6 +4,7 @@ use std::ops::Deref;
 use gix_parallel::{MutableOnDemand, OwnShared, get_mut, get_ref};
 
 /// A structure holding enough information to reload a value if its on-disk representation changes as determined by its modified time.
+#[gix_macros::unstable(since = "2023-04-13")]
 #[derive(Debug)]
 pub struct FileSnapshot<T: std::fmt::Debug> {
     value: T,
@@ -50,12 +51,14 @@ impl<T: Clone + std::fmt::Debug> FileSnapshot<T> {
 }
 
 /// A snapshot of a resource which is up-to-date in the moment it is retrieved.
+#[gix_macros::unstable(since = "2023-04-13")]
 pub type SharedFileSnapshot<T> = OwnShared<FileSnapshot<T>>;
 
 /// Use this type for fields in structs that are to store the [`FileSnapshot`], typically behind an [`OwnShared`].
 ///
 /// Note that the resource itself is behind another [`OwnShared`] to allow it to be used without holding any kind of lock, hence
 /// without blocking updates while it is used.
+#[gix_macros::unstable(since = "2023-04-13")]
 #[derive(Debug, Default)]
 pub struct SharedFileSnapshotMut<T: std::fmt::Debug>(pub MutableOnDemand<Option<SharedFileSnapshot<T>>>);
 

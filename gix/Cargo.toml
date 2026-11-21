@@ -34,6 +34,7 @@ default = [
     "extras",
     "auto-chain-error",
     "sha1",
+    "unstable",
     # These three add 1.4MB in compressed transcoding tables, but match Git.
     "encoding-western",
     "encoding-legacy",
@@ -64,6 +65,11 @@ default = [
 #!
 #! A bundle is a set of related feature toggles which can be activated with a single name that acts as a group.
 #! Bundles are for convenience only and bear no further meaning beyond the cargo manifest file.
+
+## Expose experimental APIs, currently only the `gix::fs` re-export.
+## Enabled by default for compatibility. Without default features, enable `unstable` explicitly
+## or depend on `gix-fs` directly if you need its APIs.
+unstable = []
 
 ## More fundamental components that most will be able to make good use of.
 basic = ["blob-diff", "revision", "index"]
@@ -146,6 +152,9 @@ command = ["dep:gix-command", "gix-object/signature"]
 
 ## Obtain information similar to `git status`.
 status = ["gix-status", "dirwalk", "index", "blob-diff", "gix-diff/index"]
+
+## Expose object database connectivity checks as `gix::fsck`.
+fsck = ["dep:gix-fsck"]
 
 ## Utilities for interrupting computations and cleaning up tempfiles.
 interrupt = ["dep:signal-hook", "gix-tempfile/signals", "dep:parking_lot"]
@@ -404,6 +413,8 @@ gix-utils = { version = "^0.5.2", path = "../gix-utils", features = [
     "progress",
 ] }
 gix-fs = { version = "~1.0.0", path = "../gix-fs", features = ["unstable"] }
+gix-fsck = { version = "^0.27.1", path = "../gix-fsck", optional = true }
+gix-macros = { version = "^0.2.1", path = "../gix-macros" }
 gix-ref = { version = "^0.69.1", path = "../gix-ref" }
 gix-discover = { version = "^0.57.1", path = "../gix-discover" }
 gix-tempfile = { version = "^27.0.0", path = "../gix-tempfile", default-features = false }
@@ -502,6 +513,7 @@ gix-tempfile = { path = "../gix-tempfile", default-features = false, features = 
     "unstable",
 ] }
 gix = { path = ".", default-features = false, features = [
+    "unstable",
     "merge",
     "tree-error",
 ] }
@@ -525,6 +537,7 @@ features = [
     "max-performance",
     "blocking-network-client",
     "blocking-http-transport-curl",
+    "fsck",
     "fsmonitor-daemon",
     "serde",
 ]
@@ -564,6 +577,7 @@ ignored = [
 [package.metadata.smart-release]
 # produce a GitHub release so it's easier to discover the changelog in the web-ui
 github-release = true
+unstable-features = ["unstable"]
 
 [package.metadata.qa]
 # Major external consumers with advisory compatibility checks.
