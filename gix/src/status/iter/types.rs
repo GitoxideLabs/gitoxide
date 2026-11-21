@@ -71,6 +71,7 @@ pub struct Outcome {
     /// The worktree index that was used for the operation.
     pub worktree_index: IndexPersistedOrInMemory,
     pub(super) skip_hash: bool,
+    pub(super) stat_options: gix_index::entry::stat::Options,
     pub(super) shared_repository_permissions: gix_fs::SharedPermissions,
     pub(super) changes: Option<Vec<(usize, ApplyChange)>>,
     pub(in crate::status) fsmonitor: Option<crate::status::fsmonitor::Refresh>,
@@ -108,7 +109,14 @@ impl Outcome {
 
         let tree = index.remove_tree();
         let untracked = index.set_untracked(None);
+        let timestamp = index.timestamp();
         let entries = index.entries_mut();
+        // Advancing the index timestamp must not make an unvisited same-size edit look clean.
+        for entry in &mut *entries {
+            if !entry.mode.is_submodule() && entry.stat.is_racy(timestamp, self.stat_options) {
+                entry.stat.size = 0;
+            }
+        }
         for (entry_index, change) in changes {
             let entry = &mut entries[entry_index];
             match change {

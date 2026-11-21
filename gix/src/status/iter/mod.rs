@@ -58,6 +58,7 @@ where
             })
         };
 
+        let stat_options = self.repo.stat_options()?;
         let skip_hash = crate::config::tree::Index::SKIP_HASH
             .enrich_error(self.repo.config.resolved.boolean_filter(
                 crate::config::tree::Index::SKIP_HASH,
@@ -141,6 +142,7 @@ where
                             worktree_index: index,
                             changes: None,
                             skip_hash,
+                            stat_options,
                             shared_repository_permissions: repo.config.shared_repository_permissions,
                             fsmonitor,
                         })
@@ -211,6 +213,7 @@ where
                 tree_index,
                 changes: None,
                 skip_hash,
+                stat_options,
                 shared_repository_permissions: self.repo.config.shared_repository_permissions,
                 fsmonitor,
             };
