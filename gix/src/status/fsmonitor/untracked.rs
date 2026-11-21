@@ -9,7 +9,7 @@ use crate::{
 };
 use gix_dir::{
     entry::Kind,
-    walk::{CachedListing, EmissionMode},
+    walk::{CachedDirectory, CachedEntryKind, CachedListing, EmissionMode},
 };
 use gix_index::extension::UntrackedCache;
 
@@ -19,7 +19,7 @@ impl super::Refresh {
         repo: &Repository,
         index: &'index gix_index::State,
         lookup: Option<&gix_index::AccelerateLookup<'index>>,
-        options: Option<crate::dirwalk::Options>,
+        options: crate::status::index_worktree::Options,
         has_pathspec: bool,
     ) -> Result<Option<CachedListing>> {
         let _span = gix_trace::detail!("gix::status::fsmonitor::cached_listing");
@@ -29,9 +29,10 @@ impl super::Refresh {
         if !self.use_untracked {
             return Ok(None);
         }
-        let Some(options) = options else { return Ok(None) };
-        let options = gix_dir::walk::Options::from(options);
-        let flags = if options.emit_untracked == EmissionMode::CollapseDirectory {
+        let Some(dirwalk) = options.dirwalk_options.map(gix_dir::walk::Options::from) else {
+            return Ok(None);
+        };
+        let flags = if dirwalk.emit_untracked == EmissionMode::CollapseDirectory {
             6
         } else {
             0
@@ -39,14 +40,14 @@ impl super::Refresh {
         if index.is_sparse()
             || cache.dir_flags() != flags
             || has_pathspec
-            || options.recurse_repositories
-            || options.emit_ignored.is_some()
-            || options.emit_tracked
-            || options.emit_pruned
-            || options.emit_empty_directories
-            || options.emit_collapsed.is_some()
-            || options.for_deletion.is_some()
-            || options.symlinks_to_directories_are_ignored_like_directories
+            || dirwalk.recurse_repositories
+            || dirwalk.emit_ignored.is_some()
+            || dirwalk.emit_tracked
+            || dirwalk.emit_pruned
+            || dirwalk.emit_empty_directories
+            || dirwalk.emit_collapsed.is_some()
+            || dirwalk.for_deletion.is_some()
+            || dirwalk.symlinks_to_directories_are_ignored_like_directories
         {
             gix_trace::debug!("untracked cache options differ from Git's cached walk");
             return Ok(None);
@@ -65,7 +66,13 @@ impl super::Refresh {
             gix_trace::debug!("untracked cache has no valid directory listings; scanning directories");
             return Ok(None);
         }
-        let listing = listing(repo, index, cache, lookup);
+        let listing = listing(
+            repo,
+            index,
+            cache,
+            lookup,
+            dirwalk.allow_untyped_untracked && options.rewrites.is_none(),
+        );
         match listing {
             Ok(Some(listing)) => {
                 gix_trace::debug!(
@@ -92,6 +99,7 @@ fn listing<'index>(
     index: &'index gix_index::State,
     cache: &UntrackedCache,
     lookup: Option<&gix_index::AccelerateLookup<'index>>,
+    allow_untyped: bool,
 ) -> Result<Option<CachedListing>> {
     let root = crate::path::realpath_opts(
         repo.workdir().expect("status has a worktree"),
@@ -184,29 +192,42 @@ fn listing<'index>(
             }
             pending.push((child, join(path.as_bstr(), name)));
         }
-        // UNTR identifies directories but cannot distinguish files from symlinks; read_dir obtains their types together.
-        if dir.stat().is_none() || dir.check_only() || dir.untracked_entries().iter().any(|name| !name.ends_with(b"/"))
+        if dir.stat().is_none()
+            || dir.check_only()
+            || (!allow_untyped && dir.untracked_entries().iter().any(|name| !name.ends_with(b"/")))
         {
             continue;
         }
         let mut entries = Vec::new();
-        for name in dir.untracked_entries().iter().map(|name| name.as_bstr()).chain(
-            dir.sub_directories()
-                .iter()
-                .map(|&child| cache.directories()[child].name()),
-        ) {
-            let name = name.strip_suffix(b"/").unwrap_or(name).as_bstr();
+        let untracked = dir
+            .untracked_entries()
+            .iter()
+            .map(|name| match name.strip_suffix(b"/") {
+                Some(dir) => (dir.as_bstr(), Kind::Directory.into()),
+                None => (name.as_bstr(), CachedEntryKind::FileOrSymlink),
+            });
+        let children = dir
+            .sub_directories()
+            .iter()
+            .map(|&child| (dirs[child].name(), Kind::Directory.into()));
+        for (name, kind) in untracked.chain(children) {
             if !component(name) {
                 bail!(message("invalid cached entry name"));
             }
-            entries.push((name.to_owned(), Kind::Directory));
+            entries.push((name.to_owned(), kind));
         }
         if !dir.sub_directories().is_empty() {
             parents.push(path.clone());
         }
-        out.directories.insert(path, entries.into());
+        out.directories.insert(
+            path,
+            CachedDirectory {
+                entries,
+                ..Default::default()
+            },
+        );
     }
-    // Only directories need names. A confirmed tracked file prevents collapsing its ancestors.
+    // Only tracked directories need names. A confirmed tracked file prevents collapsing its ancestors.
     let mut previous = b"".as_slice();
     for entry in index.entries() {
         let path = entry.path(index);
@@ -244,21 +265,28 @@ fn listing<'index>(
         }
         previous = path.as_ref();
     }
-    for dir in out.directories.values_mut() {
+    out.directories.retain(|_, dir| {
         dir.entries.sort_unstable();
-        dir.entries.dedup_by(|a, b| a.0 == b.0);
-    }
+        dir.entries.dedup();
+        // A non-directory can replace a directory that still has indexed descendants.
+        !dir.entries.windows(2).any(|pair| pair[0].0 == pair[1].0)
+    });
     // Children precede parents here. Once a tracked subtree has no remaining entries,
     // its parent's tracked marker represents it as well.
     for path in parents.into_iter().rev() {
-        let mut dir = out.directories.remove(path.as_bstr()).expect("recorded cached parent");
+        let Some(mut dir) = out.directories.remove(path.as_bstr()) else {
+            continue;
+        };
         if dir.omitted_tracked {
             let mut child_path = path.clone();
             if !child_path.is_empty() {
                 child_path.push(b'/');
             }
             let prefix = child_path.len();
-            dir.entries.retain(|(name, _)| {
+            dir.entries.retain(|(name, kind)| {
+                if *kind != CachedEntryKind::Known(Kind::Directory) {
+                    return true;
+                }
                 child_path.truncate(prefix);
                 child_path.extend_from_slice(name);
                 if out
