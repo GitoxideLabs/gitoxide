@@ -57,9 +57,66 @@ pub mod from_tree {
         where
             Find: gix_object::Find,
         {
+            Self::from_tree_inner(tree, objects, validate, None)
+        }
+
+        /// Like [`Self::from_tree()`], but reuse entries from `index` when its cache-tree identifies
+        /// a matching subtree. Matching trees need not be read from `objects`, including the root.
+        ///
+        /// Cached paths receive the same component validation as traversed paths, and the returned
+        /// entries have empty flags and stat information. No extension data is copied.
+        /// Invalid cache nodes, mismatched entry counts, and sparse, unmerged, intent-to-add, or
+        /// removed entries fall back to traversal. The cache-tree must describe the current entries;
+        /// mutable entry and path access invalidates it to preserve that invariant.
+        ///
+        /// The tree-shape limitations described in [`Self::from_tree()`] also apply here.
+        pub fn from_tree_with_cache<Find>(
+            tree: &gix_hash::oid,
+            objects: Find,
+            validate: gix_validate::path::component::Options,
+            index: &State,
+        ) -> Result<Self>
+        where
+            Find: gix_object::Find,
+        {
+            Self::from_tree_inner(tree, objects, validate, Some(index))
+        }
+
+        /// Return whether the root cache-tree proves that the index already represents `tree`.
+        ///
+        /// Apply the same entry and path checks as [`Self::from_tree_with_cache()`] without copying
+        /// entries or reading tree objects. A missing or ineligible cache gives no proof and returns `false`.
+        pub fn tree_is_known_equal(
+            &self,
+            tree: &gix_hash::oid,
+            validate: gix_validate::path::component::Options,
+        ) -> bool {
+            if self.is_sparse() || self.object_hash() != tree.kind() {
+                return false;
+            }
+            let mut check = CollectEntries::new(validate, Some(self));
+            check.use_cached_tree::<false>(tree) && check.invalid_path.is_none()
+        }
+
+        fn from_tree_inner<Find>(
+            tree: &gix_hash::oid,
+            objects: Find,
+            validate: gix_validate::path::component::Options,
+            index: Option<&State>,
+        ) -> Result<Self>
+        where
+            Find: gix_object::Find,
+        {
             let _span = gix_trace::coarse!("gix_index::State::from_tree()");
-            let mut delegate = CollectEntries::new(validate);
-            let traversal = depthfirst(tree.to_owned(), depthfirst::State::default(), &objects, &mut delegate);
+            let mut delegate = CollectEntries::new(
+                validate,
+                index.filter(|index| !index.is_sparse() && index.object_hash() == tree.kind()),
+            );
+            let traversal = if delegate.use_cached_tree::<true>(tree) {
+                Ok(())
+            } else {
+                depthfirst(tree.to_owned(), depthfirst::State::default(), &objects, &mut delegate)
+            };
 
             if let Some((path, err)) = delegate.invalid_path.take() {
                 bail!(err.and_raise(message!("The path \"{path}\" is invalid").validation()));
@@ -67,12 +124,7 @@ pub mod from_tree {
             traversal?;
 
             let CollectEntries {
-                entries,
-                path_backing,
-                path: _,
-                path_deque: _,
-                validate: _,
-                invalid_path: _,
+                entries, path_backing, ..
             } = delegate;
 
             Ok(State {
@@ -93,17 +145,18 @@ pub mod from_tree {
         }
     }
 
-    struct CollectEntries {
+    struct CollectEntries<'index> {
         entries: Vec<Entry>,
         path_backing: PathStorage,
         path: BString,
         path_deque: VecDeque<BString>,
         validate: gix_validate::path::component::Options,
         invalid_path: Option<(BString, gix_validate::path::component::Error)>,
+        index: Option<&'index State>,
     }
 
-    impl CollectEntries {
-        pub fn new(validate: gix_validate::path::component::Options) -> CollectEntries {
+    impl<'index> CollectEntries<'index> {
+        pub fn new(validate: gix_validate::path::component::Options, index: Option<&'index State>) -> Self {
             CollectEntries {
                 entries: Vec::new(),
                 path_backing: Vec::new(),
@@ -111,7 +164,97 @@ pub mod from_tree {
                 path_deque: VecDeque::new(),
                 validate,
                 invalid_path: None,
+                index,
             }
+        }
+
+        fn use_cached_tree<const COPY_ENTRIES: bool>(&mut self, tree_id: &gix_hash::oid) -> bool {
+            let Some(index) = self.index.filter(|_| self.invalid_path.is_none()) else {
+                return false;
+            };
+            let Some(mut cached) = index.tree().filter(|root| root.name.is_empty()) else {
+                return false;
+            };
+            if !self.path.is_empty() {
+                for component in self.path.split(|byte| *byte == b'/') {
+                    let Ok(position) = cached
+                        .children
+                        .binary_search_by(|child| child.name.as_slice().cmp(component))
+                    else {
+                        return false;
+                    };
+                    cached = &cached.children[position];
+                }
+            }
+            let Some(num_entries) = cached.num_entries.filter(|_| cached.id == tree_id) else {
+                return false;
+            };
+            let range = if self.path.is_empty() {
+                0..index.entries().len()
+            } else {
+                self.path.push(b'/');
+                let range = index.prefixed_entries_range(self.path.as_bstr()).unwrap_or(0..0);
+                self.path.pop();
+                range
+            };
+            let entries = &index.entries()[range];
+            if entries.len() != num_entries as usize
+                || entries.iter().any(|entry| {
+                    entry
+                        .flags
+                        .intersects(Flags::STAGE_MASK | Flags::INTENT_TO_ADD | Flags::REMOVE)
+                        || !matches!(
+                            entry.mode,
+                            Mode::FILE | Mode::FILE_EXECUTABLE | Mode::SYMLINK | Mode::COMMIT
+                        )
+                        || entry.path(index).split(|byte| *byte == b'/').any(<[u8]>::is_empty)
+                })
+            {
+                return false;
+            }
+
+            if COPY_ENTRIES {
+                self.entries.reserve(entries.len());
+            }
+            let mut validated_directory = b"".as_slice();
+            for entry in entries {
+                let path = entry.path(index);
+                let filename_start = path.rfind_byte(b'/').map_or(0, |pos| pos + 1);
+                let directory = &path[..filename_start];
+                if !directory.is_empty() && directory != validated_directory {
+                    let mut end = 0;
+                    for component in directory[..directory.len() - 1].split(|byte| *byte == b'/') {
+                        end += component.len();
+                        if let Err(err) = gix_validate::path::component(component.as_bstr(), None, self.validate) {
+                            self.invalid_path = Some((path[..end].into(), err));
+                            return true;
+                        }
+                        end += 1;
+                    }
+                    validated_directory = directory;
+                }
+                if let Err(err) = gix_validate::path::component(
+                    path[filename_start..].as_bstr(),
+                    (entry.mode == Mode::SYMLINK).then_some(gix_validate::path::component::Mode::Symlink),
+                    self.validate,
+                ) {
+                    self.invalid_path = Some((path.into(), err));
+                    return true;
+                }
+                if !COPY_ENTRIES {
+                    continue;
+                }
+                let path_start = self.path_backing.len();
+                self.path_backing.extend_from_slice(path);
+                self.entries.push(Entry {
+                    stat: Stat::default(),
+                    id: entry.id,
+                    flags: Flags::empty(),
+                    mode: entry.mode,
+                    path: path_start..self.path_backing.len(),
+                });
+            }
+            true
         }
 
         fn push_element(&mut self, name: &BStr) {
@@ -173,7 +316,7 @@ pub mod from_tree {
         }
     }
 
-    impl Visit for CollectEntries {
+    impl Visit for CollectEntries<'_> {
         fn pop_back_tracked_path_and_set_current(&mut self) {
             self.path = self.path_deque.pop_back().unwrap_or_default();
         }
@@ -202,8 +345,12 @@ pub mod from_tree {
             }
         }
 
-        fn visit_tree(&mut self, _entry: &gix_object::tree::EntryRef<'_>) -> Action {
-            self.determine_action()
+        fn visit_tree(&mut self, entry: &gix_object::tree::EntryRef<'_>) -> Action {
+            if self.use_cached_tree::<true>(entry.oid) && self.invalid_path.is_none() {
+                std::ops::ControlFlow::Continue(false)
+            } else {
+                self.determine_action()
+            }
         }
 
         fn visit_nontree(&mut self, entry: &gix_object::tree::EntryRef<'_>) -> Action {

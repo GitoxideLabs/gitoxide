@@ -106,6 +106,7 @@ impl Repository {
                 excludes: Some(&mut excludes.inner),
                 objects: &self.objects,
                 explicit_traversal_root: (!options.empty_patterns_match_prefix).then_some(workdir),
+                cached_listing: None,
             },
             opts,
             delegate,

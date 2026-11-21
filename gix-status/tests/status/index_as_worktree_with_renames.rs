@@ -226,6 +226,7 @@ fn changed_and_untracked() {
         gix_dir::walk::Outcome {
             read_dir_calls: 3,
             read_dir_errors: 0,
+            cached_dir_listings: 0,
             returned_entries: 2,
             seen_entries: 8,
         }
@@ -274,6 +275,7 @@ fn unreadable_untracked() {
         gix_dir::walk::Outcome {
             read_dir_calls: 1,
             read_dir_errors: 0,
+            cached_dir_listings: 0,
             returned_entries: 1,
             seen_entries: 3,
         }
@@ -320,8 +322,37 @@ fn untracked_file_changed_after_open(process: &'static str) -> gix_testtools::Te
     Ok(())
 }
 
+#[cfg(unix)]
+#[test]
+fn cached_rewrites_use_the_same_clean_filter_as_streaming() {
+    fixture_filtered_detailed(
+        "status_untracked_race.sh",
+        "",
+        &[],
+        &[
+            Expectation::DirwalkEntry {
+                rela_path: "renamed",
+                status: gix_dir::entry::Status::Untracked,
+                disk_kind: Some(gix_dir::entry::Kind::File),
+            },
+            Expectation::Modification {
+                rela_path: "source",
+                status: Change::Removed.into(),
+            },
+        ],
+        Some(gix_diff::Rewrites {
+            percentage: None,
+            ..Default::default()
+        }),
+        Some(Default::default()),
+        Fixture::ReadOnlyWithCleanFilter("sed s/original/transformed/"),
+    );
+}
+
 enum Fixture {
     ReadOnly,
+    #[cfg(unix)]
+    ReadOnlyWithCleanFilter(&'static str),
     ReadOnlyNeedsArchive,
     #[cfg(unix)]
     WritableExecuted,
@@ -345,12 +376,25 @@ fn fixture_filtered_detailed(
         out
     }
 
+    let compare_cached_entries = match &fixture {
+        Fixture::ReadOnly | Fixture::ReadOnlyNeedsArchive => true,
+        #[cfg(unix)]
+        Fixture::ReadOnlyWithCleanFilter(_) => true,
+        _ => false,
+    };
+    let clean_filter: Option<&str> = match &fixture {
+        #[cfg(unix)]
+        Fixture::ReadOnlyWithCleanFilter(clean) => Some(clean),
+        _ => None,
+    };
     let mut filter_process = None;
     let (worktree, _tmp) = match fixture {
         Fixture::ReadOnly => {
             let dir = fixture_path(script).join(subdir);
             (dir, None::<gix_testtools::tempfile::TempDir>)
         }
+        #[cfg(unix)]
+        Fixture::ReadOnlyWithCleanFilter(_) => (fixture_path(script).join(subdir), None),
         Fixture::ReadOnlyNeedsArchive => {
             let dir = gix_testtools::scripted_fixture_read_only_needs_archive(script)
                 .expect("script works")
@@ -401,6 +445,16 @@ fn fixture_filtered_detailed(
             required: true,
         });
     }
+    if let Some(clean) = clean_filter {
+        filter.driver_state_mut().context.worktree_dir = Some(worktree.clone());
+        filter.options_mut().drivers.push(gix_filter::Driver {
+            name: "race".into(),
+            clean: Some(clean.into()),
+            smudge: None,
+            process: None,
+            required: true,
+        });
+    }
     let resource_cache = gix_diff::blob::Platform::new(
         Default::default(),
         gix_diff::blob::Pipeline::new(
@@ -421,14 +475,17 @@ fn fixture_filtered_detailed(
 
     let git_dir_real = gix_path::realpath(&git_dir).unwrap();
     let cwd = gix_fs::current_dir(capabilities.precompose_unicode).unwrap();
-    let context = Context {
-        pathspec: search,
-        resource_cache,
-        should_interrupt: &Default::default(),
+    let interrupt = std::sync::atomic::AtomicBool::new(false);
+    let make_context = || Context {
+        pathspec: search.clone(),
+        resource_cache: resource_cache.clone(),
+        should_interrupt: &interrupt,
+        fsmonitor: None,
         dirwalk: DirwalkContext {
             git_dir_realpath: &git_dir_real,
             current_dir: &cwd,
             ignore_case_index_lookup: None,
+            cached_listing: None,
         },
     };
     let options = Options {
@@ -445,22 +502,111 @@ fn fixture_filtered_detailed(
 
     let mut recorder = Recorder::default();
     let objects = crate::odb_at(&git_dir, object_hash);
+    let cached_entries = if compare_cached_entries {
+        let mut raw = Recorder::default();
+        index_as_worktree_with_renames(
+            &index,
+            &worktree,
+            &mut raw,
+            FastEq,
+            crate::index_as_worktree::SubmoduleStatusMock { dirty: false },
+            objects.clone(),
+            &mut gix_utils::progress::Discard,
+            make_context(),
+            Options {
+                rewrites: None,
+                ..options.clone()
+            },
+        )
+        .expect("collecting underlying entries succeeds");
+        Some(raw.records)
+    } else {
+        None
+    };
     let outcome = index_as_worktree_with_renames(
         &index,
         &worktree,
         &mut recorder,
         FastEq,
         crate::index_as_worktree::SubmoduleStatusMock { dirty: false },
-        objects,
+        objects.clone(),
         &mut gix_utils::progress::Discard,
-        context,
-        options,
+        make_context(),
+        options.clone(),
     )
     .unwrap();
 
     let actual = records_to_expectations(&recorder.records);
     assert_eq!(actual, expected);
     assert_summary(&recorder.records, expected);
+    if let Some(entries) = cached_entries {
+        let mut cache = resource_cache.clone();
+        let mut recomputed = Recorder::default();
+        let rewrite_outcome = gix_status::index_as_worktree_with_renames::track_rewrites(
+            &index,
+            &worktree,
+            entries.clone(),
+            &mut recomputed,
+            &mut cache,
+            &objects,
+            &interrupt,
+            options.rewrites,
+            options.sorting,
+        )
+        .expect("cached entries use the existing rewrite engine");
+        assert_eq!(
+            records_to_expectations(&recomputed.records),
+            actual,
+            "cached and streaming entries produce the same rewrites and ordering"
+        );
+        assert_eq!(
+            rewrite_outcome, outcome.rewrites,
+            "cached and streaming tracking perform the same similarity/copy checks"
+        );
+        let cancelled = std::sync::atomic::AtomicBool::new(true);
+        let mut cancelled_records = Recorder::default();
+        assert!(
+            gix_status::index_as_worktree_with_renames::track_rewrites(
+                &index,
+                &worktree,
+                entries,
+                &mut cancelled_records,
+                &mut cache,
+                &objects,
+                &cancelled,
+                options.rewrites,
+                options.sorting,
+            )
+            .is_err(),
+            "cached tracking honors cancellation even before the first entry"
+        );
+        assert!(
+            cancelled_records.records.is_empty(),
+            "cancelled tracking emits no entries"
+        );
+        if let Some(rewrite) = recomputed
+            .records
+            .iter()
+            .find(|entry| matches!(entry, Entry::Rewrite { .. }))
+        {
+            let mut invalid = Recorder::default();
+            assert!(
+                gix_status::index_as_worktree_with_renames::track_rewrites(
+                    &index,
+                    &worktree,
+                    [rewrite.clone()],
+                    &mut invalid,
+                    &mut cache,
+                    &objects,
+                    &interrupt,
+                    options.rewrites,
+                    options.sorting,
+                )
+                .expect_err("already paired rewrites are not underlying input entries")
+                .is_validation()
+            );
+        }
+    }
     cleanup(outcome)
 }
 

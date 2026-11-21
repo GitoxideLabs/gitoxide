@@ -75,8 +75,8 @@ pub struct File {
     pub(crate) state: State,
     /// The path from which the index was read or to which it is supposed to be written.
     pub(crate) path: PathBuf,
-    /// The checksum of all bytes prior to the checksum itself.
-    pub(crate) checksum: Option<gix_hash::ObjectId>,
+    /// Identifies the on-disk index this state was read from or last written to.
+    pub(crate) snapshot: Option<file::Snapshot>,
 }
 
 /// The type to use and store paths to all entries.

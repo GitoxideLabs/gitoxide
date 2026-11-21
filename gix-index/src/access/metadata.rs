@@ -4,11 +4,11 @@ use gix_error::{Result, bail, message};
 use crate::{
     State,
     entry::{Flags, Stage},
-    extension::{Tree, UntrackedCache},
+    extension::{FsMonitor, Tree, UntrackedCache, fs_monitor::entry_is_eligible},
 };
 
 impl State {
-    /// Reuse `source`'s metadata in a this index.
+    /// Reuse `source`'s metadata in this index.
     ///
     /// Both indexes must be sorted; their entries are compared in one linear pass. Stage-zero entries
     /// with matching paths, modes, and object IDs inherit stat data, assume-valid, skip-worktree, and
@@ -21,7 +21,10 @@ impl State {
     /// added, deleted, and unmerged paths while preserving unaffected cached directories.
     /// `source` must describe the same worktree, and its caches must already match its entries.
     /// It is left untouched. No filesystem access occurs.
-    /// Resolve-undo, split-index, filesystem-monitor, and decoded layout extensions are discarded.
+    /// Remap a usable filesystem-monitor checkpoint to the new entry positions. Only unchanged,
+    /// eligible, non-racy entries with matching checking flags retain validity. A malformed bitmap
+    /// discards the checkpoint and its untracked listings. Resolve-undo, split-index, and decoded
+    /// layout extensions are discarded.
     pub fn copy_metadata_from(&mut self, source: &State) -> Result {
         if self.object_hash != source.object_hash {
             bail!(message("Cannot reuse index metadata across different object-hash kinds").validation());
@@ -31,16 +34,26 @@ impl State {
         source.verify_extensions(false, gix_object::find::Never)?;
 
         let mut tree = source.tree.clone();
-        let mut untracked = source.untracked.clone();
-        let mut old_entries = source.entries.iter().peekable();
+        let monitor = source.fs_monitor().and_then(|monitor| {
+            monitor
+                .valid_entries(source.entries.len())
+                .map(|valid| (monitor.token(), valid))
+        });
+        let mut untracked = if source.fs_monitor.is_some() && monitor.is_none() {
+            gix_trace::debug!("discarding unusable filesystem monitor and untracked cache data");
+            None
+        } else {
+            source.untracked.clone()
+        };
+        let mut old_entries = source.entries.iter().enumerate().peekable();
         for entry in &mut self.entries {
             let path = entry.path_in(&self.path_backing);
             entry.flags.remove(Flags::FSMONITOR_VALID);
-            while let Some(old) = old_entries.next_if(|old| old.path(source) < path) {
+            while let Some((_, old)) = old_entries.next_if(|(_, old)| old.path(source) < path) {
                 invalidate(old.path(source), &mut tree, &mut untracked);
             }
-            let old = old_entries.next_if(|old| old.path(source) == path);
-            if let Some(old) = old
+            let old = old_entries.next_if(|(_, old)| old.path(source) == path);
+            if let Some((pos, old)) = old
                 && entry.stage() == Stage::Unconflicted
                 && old.stage() == Stage::Unconflicted
                 && entry.mode == old.mode
@@ -57,12 +70,17 @@ impl State {
                 if entry.stat.is_racy(source.timestamp, Default::default()) {
                     entry.stat.size = 0;
                     entry.flags.remove(Flags::UPTODATE);
+                } else if monitor.as_ref().is_some_and(|(_, valid)| valid[pos])
+                    && entry_is_eligible(entry)
+                    && !(entry.flags ^ old.flags).intersects(Flags::ASSUME_VALID | Flags::SKIP_WORKTREE)
+                {
+                    entry.flags.insert(Flags::FSMONITOR_VALID);
                 }
             } else {
                 invalidate(path, &mut tree, &mut untracked);
             }
         }
-        for old in old_entries {
+        for (_, old) in old_entries {
             invalidate(old.path(source), &mut tree, &mut untracked);
         }
 
@@ -72,7 +90,7 @@ impl State {
         self.untracked = untracked;
         self.link = None;
         self.resolve_undo = None;
-        self.fs_monitor = None;
+        self.fs_monitor = monitor.map(|(token, _)| FsMonitor::from_entries(token.clone(), &self.entries));
         self.offset_table_at_decode_time = false;
         self.end_of_index_at_decode_time = false;
         Ok(())
@@ -84,6 +102,6 @@ fn invalidate(path: &BStr, tree: &mut Option<Tree>, untracked: &mut Option<Untra
         tree.invalidate_path(path);
     }
     if let Some(untracked) = untracked {
-        untracked.invalidate_path(path);
+        untracked.invalidate_index_path(path);
     }
 }

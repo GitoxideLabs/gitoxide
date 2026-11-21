@@ -37,7 +37,7 @@ pub struct Iter {
     pub(super) rx_and_join: Option<(
         std::sync::mpsc::Receiver<Item>,
         std::thread::JoinHandle<Result<Outcome>>,
-        Option<std::thread::JoinHandle<Result<tree_index::Outcome>>>,
+        Option<std::thread::JoinHandle<Result<Option<tree_index::Outcome>>>>,
     )>,
     #[cfg(feature = "parallel")]
     pub(super) should_interrupt: crate::status::OwnedOrStaticAtomicBool,
@@ -66,13 +66,17 @@ pub struct Outcome {
     /// The outcome of the index-to-worktree comparison operation.
     pub index_worktree: gix_status::index_as_worktree_with_renames::Outcome,
     /// The outcome of the diff between `HEAD^{tree}` and the index, or `None` if this outcome
-    /// was produced with the [`into_index_worktree_iter()`](crate::status::Platform::into_index_worktree_iter()).
+    /// was skipped by [`skip_tree_index_if_unchanged()`](crate::status::Platform::skip_tree_index_if_unchanged)
+    /// or produced with the [`into_index_worktree_iter()`](crate::status::Platform::into_index_worktree_iter()).
     pub tree_index: Option<tree_index::Outcome>,
     /// The worktree index that was used for the operation.
     pub worktree_index: IndexPersistedOrInMemory,
     pub(super) skip_hash: bool,
+    pub(super) stat_options: gix_index::entry::stat::Options,
+    pub(super) optional_locks: bool,
     pub(super) shared_repository_permissions: gix_fs::SharedPermissions,
     pub(super) changes: Option<Vec<(usize, ApplyChange)>>,
+    pub(in crate::status) fsmonitor: Option<crate::status::fsmonitor::Refresh>,
 }
 
 impl Outcome {
@@ -80,21 +84,44 @@ impl Outcome {
     ///
     /// If they are not written back, subsequent `status` operations will take longer to complete, whereas the
     /// additional work can be prevented by writing the changes back to the index.
+    /// Filesystem-monitor token changes alone do not request a write unless the reported path count exceeds
+    /// `gitoxide.fsmonitor.forceUpdateThreshold` (100 by default, matching Git).
+    /// Returns `false` when `gitoxide.core.optionalLocks` disables optional writes.
     pub fn has_changes(&self) -> bool {
-        self.changes.as_ref().is_some_and(|changes| !changes.is_empty())
+        self.optional_locks
+            && (self.changes.as_ref().is_some_and(|changes| !changes.is_empty())
+                || self
+                    .fsmonitor
+                    .as_ref()
+                    .is_some_and(super::super::fsmonitor::Refresh::has_changes))
     }
 
     /// Write the changes if there are any back to the index file.
     /// This can only be done once as the changes are consumed in the process, if there were any.
+    /// Returns `None` when optional writes are disabled, the index is busy, or its original snapshot is no longer current.
     pub fn write_changes(&mut self) -> Option<Result> {
         let _span = gix_trace::coarse!("gix::status::index_worktree::Outcome::write_changes()");
-        let changes = self.changes.take()?;
+        if !self.has_changes() {
+            self.changes = None;
+            self.fsmonitor = None;
+            return None;
+        }
+        let changes = self.changes.take().unwrap_or_default();
         let mut index = match &self.worktree_index {
             IndexPersistedOrInMemory::Persisted(persisted) => (***persisted).clone(),
             IndexPersistedOrInMemory::InMemory(index) => index.clone(),
         };
 
+        let tree = index.remove_tree();
+        let untracked = index.set_untracked(None);
+        let timestamp = index.timestamp();
         let entries = index.entries_mut();
+        // Advancing the index timestamp must not make an unvisited same-size edit look clean.
+        for entry in &mut *entries {
+            if !entry.mode.is_submodule() && entry.stat.is_racy(timestamp, self.stat_options) {
+                entry.stat.size = 0;
+            }
+        }
         for (entry_index, change) in changes {
             let entry = &mut entries[entry_index];
             match change {
@@ -107,13 +134,24 @@ impl Outcome {
             }
         }
 
-        Some(index.write(
+        if let Some(fsmonitor) = self.fsmonitor.take() {
+            fsmonitor.apply(&mut index);
+        } else {
+            index.set_untracked(untracked);
+        }
+
+        // Status only updates stat data and monitor flags, leaving cached tree contents unchanged.
+        index.set_tree(tree);
+        match index.write_if_unchanged(
             crate::index::write::Options {
-                extensions: Default::default(),
+                extensions: crate::index::write::Extensions::AllUnconditionally,
                 skip_hash: self.skip_hash,
             },
             self.shared_repository_permissions,
-        ))
+        ) {
+            Ok(false) => None,
+            result => Some(result.map(|_| ())),
+        }
     }
 }
 

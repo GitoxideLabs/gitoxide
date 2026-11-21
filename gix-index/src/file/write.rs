@@ -1,5 +1,5 @@
 use crate::{File, Version, write};
-use gix_error::Result;
+use gix_error::{Result, ResultExt, message};
 use gix_fs::SharedPermissions;
 
 impl File {
@@ -48,37 +48,54 @@ impl File {
     /// A newly constructed index can use [`State::copy_metadata_from()`](crate::State::copy_metadata_from())
     /// with its original state to retain and selectively invalidate both caches before writing with
     /// [`write::Extensions::AllUnconditionally`].
+    /// Mutable entry or path access removes the tree-cache. Callers restoring it with
+    /// [`State::set_tree()`](crate::State::set_tree()) must ensure it is current.
     pub fn write(&mut self, options: write::Options, shared_repository_permissions: SharedPermissions) -> Result {
-        use gix_error::{ErrorExt, ResultExt, bail, message};
-
         let _span = gix_trace::detail!("gix_index::File::write()", path = ?self.path);
-        let mut lock = std::io::BufWriter::with_capacity(
-            64 * 1024,
-            gix_lock::File::acquire(
-                &self.path,
-                gix_lock::acquire::Fail::Immediately,
-                None,
-                shared_repository_permissions,
-                None,
-            )
-            .or_raise(|| message("Could not acquire lock for index file"))?,
-        );
+        let lock = self.acquire_lock(shared_repository_permissions)?;
+        self.write_locked(lock, options)
+    }
+
+    /// Like [`write()`](Self::write), but only replace the index if its on-disk snapshot is still current.
+    /// Return `false` if the lock cannot be acquired immediately or the snapshot cannot be verified,
+    /// including for a newly constructed index. Errors writing or committing the locked index are propagated.
+    /// If the index has no checksum, verify the complete file against the original snapshot.
+    pub fn write_if_unchanged(
+        &mut self,
+        options: write::Options,
+        shared_repository_permissions: SharedPermissions,
+    ) -> Result<bool> {
+        let Some(snapshot) = &self.snapshot else {
+            return Ok(false);
+        };
+        let Ok(lock) = self.acquire_lock(shared_repository_permissions) else {
+            return Ok(false);
+        };
+        if !snapshot.matches(&self.path).unwrap_or(false) {
+            return Ok(false);
+        }
+        self.write_locked(lock, options)?;
+        Ok(true)
+    }
+
+    fn acquire_lock(&self, permissions: SharedPermissions) -> Result<gix_lock::File> {
+        gix_lock::File::acquire_to_update_resource(&self.path, gix_lock::acquire::Fail::Immediately, None, permissions)
+            .or_raise(|| message("Could not acquire lock for index file"))
+    }
+
+    fn write_locked(&mut self, lock: gix_lock::File, options: write::Options) -> Result {
+        let mut lock = std::io::BufWriter::with_capacity(64 * 1024, lock);
         let (version, digest) = self
             .write_to(&mut lock, options)
             .or_raise(|| message("Could not write index"))?;
-        match lock.into_inner() {
-            Ok(lock) => lock
-                .commit()
-                .or_raise(|| message("Could not commit lock for index file"))?,
-            Err(err) => {
-                bail!(
-                    err.into_error()
-                        .and_raise(message("Could not flush buffered index data"))
-                );
-            }
-        };
+        let (_, file) = lock
+            .into_inner()
+            .map_err(std::io::IntoInnerError::into_error)
+            .or_raise(|| message("Could not flush buffered index data"))?
+            .commit()
+            .or_raise(|| message("Could not commit lock for index file"))?;
         self.state.version = version;
-        self.checksum = (!digest.is_null()).then_some(digest);
+        self.snapshot = super::Snapshot::new(digest, file);
         Ok(())
     }
 }

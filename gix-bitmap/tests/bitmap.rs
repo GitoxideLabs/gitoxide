@@ -24,6 +24,21 @@ mod fuzzed {
     }
 
     #[test]
+    fn missing_declared_bits_are_rejected() -> gix_testtools::TestResult {
+        let bitmap = gix_bitmap::ewah::Vec::from_bits(&[]).expect("an empty bitmap fits into u32");
+        let mut encoded = Vec::new();
+        bitmap.write_to(&mut encoded)?;
+        encoded[..4].copy_from_slice(&1u32.to_be_bytes());
+        let (bitmap, _) = gix_bitmap::ewah::decode(&encoded)?;
+        assert_eq!(
+            bitmap.for_each_set_bit(|_| Some(())),
+            None,
+            "missing encoded bits must not be treated as clear bits"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn non_zero_padding_bits_in_last_literal_word_are_rejected() -> gix_testtools::TestResult {
         let bitmap = gix_bitmap::ewah::Vec::from_bits(&[false]).expect("small test fixtures must fit into u32");
         let mut data = Vec::new();

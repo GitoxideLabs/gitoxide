@@ -94,10 +94,11 @@ pub(super) fn watch_parent(layout: &Layout, watches: &mut BTreeMap<PathBuf, bool
     if let Some(parent) = path.parent() {
         if layout.contains(path) {
             watch_directory(layout, watches, parent, false);
-        } else if layout
-            .dependencies
-            .iter()
-            .any(|dependency| dependency.path == path && dependency.kind == DependencyKind::Ignore)
+        } else if !cfg!(target_os = "macos")
+            && layout
+                .dependencies
+                .iter()
+                .any(|dependency| dependency.path == path && dependency.kind == DependencyKind::Ignore)
         {
             // Global ignore files can be replaced atomically or created below missing parents.
             if let Some(parent) = parent.ancestors().find(|parent| parent.is_dir()) {
@@ -336,8 +337,7 @@ pub(super) fn worktree_directories_reusing(
     // Watch coverage is independent of command-line/environment pathspec settings.
     let mut pathspec = gix_pathspec::Search::from_specs(std::iter::empty(), None, root)
         .or_raise(|| message("could not prepare unrestricted monitor pathspec"))?;
-    let git_dir = gix_path::realpath_opts(repo.git_dir(), repo.current_dir(), gix_path::realpath::MAX_SYMLINKS)
-        .or_raise(|| message("could not resolve administrative directory for monitoring"))?;
+    let git_dir = super::absolute_path(repo.git_dir(), repo.current_dir(), caps.precompose_unicode)?;
     let lookup = caps.ignore_case.then(|| index.prepare_icase_backing());
     let mut directories = Directories {
         root: root.to_owned(),
@@ -377,6 +377,7 @@ pub(super) fn worktree_directories_reusing(
             excludes: Some(&mut excludes.inner),
             objects: &repo.objects,
             explicit_traversal_root: Some(root),
+            cached_listing: None,
         },
         gix_dir::walk::Options {
             precompose_unicode: caps.precompose_unicode,

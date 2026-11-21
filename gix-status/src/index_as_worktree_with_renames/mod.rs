@@ -3,6 +3,7 @@ mod types;
 pub use types::{Context, DirwalkContext, Entry, Options, Outcome, RewriteSource, Sorting, Summary, VisitEntry};
 
 mod recorder;
+pub use function::track_rewrites;
 pub use recorder::Recorder;
 
 pub(super) mod function {
@@ -10,7 +11,7 @@ pub(super) mod function {
     use std::{borrow::Cow, path::Path};
 
     use bstr::ByteSlice;
-    use gix_error::{ResultExt, message};
+    use gix_error::{ErrorExt, ResultExt, message};
     use gix_worktree::stack::State;
 
     use crate::{
@@ -87,7 +88,8 @@ pub(super) mod function {
             let (tx, rx) = std::sync::mpsc::channel();
             let walk_outcome = options
                 .dirwalk
-                .map(|options| {
+                .map(|mut dirwalk_options| {
+                    dirwalk_options.allow_untyped_untracked &= options.rewrites.is_none();
                     gix_parallel::build_thread()
                         .name("gix_status::dirwalk".into())
                         .spawn_scoped(
@@ -129,8 +131,9 @@ pub(super) mod function {
                                             excludes: excludes.as_mut(),
                                             objects: &objects,
                                             explicit_traversal_root: Some(worktree),
+                                            cached_listing: dirwalk_ctx.cached_listing,
                                         },
-                                        options,
+                                        dirwalk_options,
                                         &mut collect,
                                     )
                                 }
@@ -144,12 +147,6 @@ pub(super) mod function {
                 .prefixed_entries_range(ctx.pathspec.common_prefix())
                 .unwrap_or(0..index.entries().len())];
 
-            let filter = options.rewrites.is_some().then(|| {
-                (
-                    ctx.resource_cache.filter.worktree_filter.clone(),
-                    ctx.resource_cache.attr_stack.clone(),
-                )
-            });
             let tracked_modifications_outcome = gix_parallel::build_thread()
                 .name("gix_status::index_as_worktree".into())
                 .spawn_scoped(
@@ -173,6 +170,7 @@ pub(super) mod function {
                                     stack,
                                     filter,
                                     should_interrupt: ctx.should_interrupt,
+                                    fsmonitor: ctx.fsmonitor,
                                 },
                                 tracked_file_modifications,
                             )
@@ -181,176 +179,29 @@ pub(super) mod function {
                 )
                 .or_raise(|| message("Failed to spawn index-worktree status thread"))?;
 
-            let tracker = options
-                .rewrites
-                .map(gix_diff::rewrites::Tracker::<ModificationOrDirwalkEntry<'index, T, U>>::new)
-                .zip(filter);
-            let rewrite_outcome = match tracker {
-                Some((mut tracker, (mut filter, mut attrs))) => {
-                    let mut entries_for_sorting = options.sorting.map(|_| Vec::new());
-                    let mut buf = Vec::new();
-                    for event in rx {
-                        let (change, location) = match event {
-                            Event::IndexEntry(record) => {
-                                let location = Cow::Borrowed(record.relative_path);
-                                (ModificationOrDirwalkEntry::Modification(record), location)
-                            }
-                            Event::DirEntry(entry, collapsed_directory_status) => {
-                                let location = Cow::Owned(entry.rela_path.clone());
-                                (
-                                    ModificationOrDirwalkEntry::DirwalkEntry {
-                                        id: rewrite::calculate_worktree_id(
-                                            index.object_hash(),
-                                            worktree,
-                                            entry.disk_kind,
-                                            entry.rela_path.as_bstr(),
-                                            &mut filter,
-                                            &mut attrs,
-                                            &objects,
-                                            &mut buf,
-                                            ctx.should_interrupt,
-                                        )?,
-                                        entry,
-                                        collapsed_directory_status,
-                                    },
-                                    location,
-                                )
-                            }
-                        };
-                        if let Some(v) = entries_for_sorting.as_mut() {
-                            v.push((change, location));
-                        } else if let Some(change) = tracker.try_push_change(change, location.as_ref()) {
-                            collector.visit_entry(rewrite::change_to_entry(change, entries));
-                        }
-                    }
-
-                    let mut entries_for_sorting = entries_for_sorting.map(|mut v| {
-                        v.sort_by(|a, b| a.1.cmp(&b.1));
-                        let mut remaining = Vec::new();
-                        for (change, location) in v {
-                            if let Some(change) = tracker.try_push_change(change, location.as_ref()) {
-                                remaining.push(rewrite::change_to_entry(change, entries));
-                            }
-                        }
-                        remaining
-                    });
-
-                    let outcome = tracker
-                        .emit(
-                            |dest, src| {
-                                match src {
-                                    None => {
-                                        let entry = rewrite::change_to_entry(dest.change, entries);
-                                        if let Some(v) = entries_for_sorting.as_mut() {
-                                            v.push(entry);
-                                        } else {
-                                            collector.visit_entry(entry);
-                                        }
-                                    }
-                                    Some(src) => {
-                                        let ModificationOrDirwalkEntry::DirwalkEntry {
-                                            id,
-                                            entry,
-                                            collapsed_directory_status,
-                                        } = dest.change
-                                        else {
-                                            unreachable!(
-                                                "BUG: only possible destinations are dirwalk entries (additions)"
-                                            );
-                                        };
-                                        let source = match src.change {
-                                            ModificationOrDirwalkEntry::Modification(record) => {
-                                                RewriteSource::RewriteFromIndex {
-                                                    index_entries: entries,
-                                                    source_entry: record.entry,
-                                                    source_entry_index: record.entry_index,
-                                                    source_rela_path: record.relative_path,
-                                                    source_status: record.status.clone(),
-                                                }
-                                            }
-                                            ModificationOrDirwalkEntry::DirwalkEntry {
-                                                id,
-                                                entry,
-                                                collapsed_directory_status,
-                                            } => RewriteSource::CopyFromDirectoryEntry {
-                                                source_dirwalk_entry: entry.clone(),
-                                                source_dirwalk_entry_collapsed_directory_status:
-                                                    *collapsed_directory_status,
-                                                source_dirwalk_entry_id: *id,
-                                            },
-                                        };
-
-                                        let entry = Entry::Rewrite {
-                                            source,
-                                            dirwalk_entry: entry,
-                                            dirwalk_entry_collapsed_directory_status: collapsed_directory_status,
-                                            dirwalk_entry_id: id,
-                                            similarity: src.similarity,
-                                            copy: src.kind == gix_diff::rewrites::tracker::visit::SourceKind::Copy,
-                                        };
-                                        if let Some(v) = entries_for_sorting.as_mut() {
-                                            v.push(entry);
-                                        } else {
-                                            collector.visit_entry(entry);
-                                        }
-                                    }
-                                }
-                                std::ops::ControlFlow::Continue(())
-                            },
-                            &mut ctx.resource_cache,
-                            &objects,
-                            |_cb| {
-                                // NOTE: to make this work, we'd want to wait the index modification check to complete.
-                                //       Then it's possible to efficiently emit the tracked files along with what we already sent,
-                                //       i.e. untracked and ignored files.
-                                gix_trace::debug!("full-tree copy tracking isn't currently supported");
-                                Ok::<_, std::io::Error>(())
-                            },
-                            Default::default(),
-                        )
-                        .or_raise(|| message("Could not track worktree rewrites"))?;
-
-                    if let Some(mut v) = entries_for_sorting {
-                        v.sort_by(|a, b| a.destination_rela_path().cmp(b.destination_rela_path()));
-                        for entry in v {
-                            collector.visit_entry(entry);
-                        }
-                    }
-                    Some(outcome)
-                }
-                None => {
-                    let mut entries_for_sorting = options.sorting.map(|_| Vec::new());
-                    for event in rx {
-                        let entry = match event {
-                            Event::IndexEntry(record) => Entry::Modification {
-                                entries,
-                                entry: record.entry,
-                                entry_index: record.entry_index,
-                                rela_path: record.relative_path,
-                                status: record.status,
-                            },
-                            Event::DirEntry(entry, collapsed_directory_status) => Entry::DirectoryContents {
-                                entry,
-                                collapsed_directory_status,
-                            },
-                        };
-
-                        if let Some(v) = entries_for_sorting.as_mut() {
-                            v.push(entry);
-                        } else {
-                            collector.visit_entry(entry);
-                        }
-                    }
-
-                    if let Some(mut v) = entries_for_sorting {
-                        v.sort_by(|a, b| a.destination_rela_path().cmp(b.destination_rela_path()));
-                        for entry in v {
-                            collector.visit_entry(entry);
-                        }
-                    }
-                    None
-                }
-            };
+            let rewrite_outcome = track_rewrites(
+                index,
+                worktree,
+                rx.into_iter().map(|event| match event {
+                    Event::IndexEntry(record) => Entry::Modification {
+                        entries,
+                        entry: record.entry,
+                        entry_index: record.entry_index,
+                        rela_path: record.relative_path,
+                        status: record.status,
+                    },
+                    Event::DirEntry(entry, collapsed_directory_status) => Entry::DirectoryContents {
+                        entry,
+                        collapsed_directory_status,
+                    },
+                }),
+                collector,
+                &mut ctx.resource_cache,
+                &objects,
+                ctx.should_interrupt,
+                options.rewrites,
+                options.sorting,
+            )?;
 
             let walk_outcome = walk_outcome
                 .map(|handle| handle.join().expect("no panic"))
@@ -362,6 +213,251 @@ pub(super) mod function {
                 rewrites: rewrite_outcome,
             })
         })
+    }
+
+    /// Recompute worktree rewrites from already collected underlying status entries.
+    ///
+    /// This performs no directory walk or tracked-file modification checks. Input must contain only
+    /// [`Entry::Modification`] and [`Entry::DirectoryContents`], borrowing the supplied `index`.
+    /// Existing rewrites must first be expanded back to their underlying entries. Supply the complete
+    /// candidate set needed by the rewrite/copy options; omitted sources cannot participate.
+    /// Directory destinations are hashed with the same worktree filters and attributes as streaming
+    /// status, and similarity, limits, sorting and copy behavior use the same tracker. All-source copy
+    /// tracking retains streaming status's limitation: only the supplied candidate set participates.
+    /// Cancellation or errors may follow earlier visits; collectors must discard partial results.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "entry recomputation borrows the existing index and diff resources"
+    )]
+    pub fn track_rewrites<'index, T: Clone, U: Clone>(
+        index: &'index gix_index::State,
+        worktree: &Path,
+        entries: impl IntoIterator<Item = Entry<'index, T, U>>,
+        collector: &mut impl VisitEntry<'index, ContentChange = T, SubmoduleStatus = U>,
+        resource_cache: &mut gix_diff::blob::Platform,
+        objects: &(impl gix_object::Find + gix_object::FindHeader),
+        should_interrupt: &std::sync::atomic::AtomicBool,
+        rewrites: Option<gix_diff::Rewrites>,
+        sorting: Option<super::Sorting>,
+    ) -> Result<Option<gix_diff::rewrites::Outcome>> {
+        let check_interrupt = || -> Result<()> {
+            if should_interrupt.load(std::sync::atomic::Ordering::Relaxed) {
+                Err(message("worktree rewrite tracking was interrupted").raise())
+            } else {
+                Ok(())
+            }
+        };
+        check_interrupt()?;
+        // Rename hashing uses attributes; ignores were already applied when entries were collected.
+        let state = resource_cache.attr_stack.state_mut();
+        if let State::AttributesAndIgnoreStack { attributes, .. } = state {
+            *state = State::AttributesStack(std::mem::take(attributes));
+        }
+        let tracker = rewrites
+            .map(gix_diff::rewrites::Tracker::<ModificationOrDirwalkEntry<'index, T, U>>::new)
+            .map(|tracker| {
+                (
+                    tracker,
+                    (
+                        resource_cache.filter.worktree_filter.clone(),
+                        resource_cache.attr_stack.clone(),
+                    ),
+                )
+            });
+        let rewrite_outcome = match tracker {
+            Some((mut tracker, (mut filter, mut attrs))) => {
+                let mut entries_for_sorting = sorting.map(|_| Vec::new());
+                let mut buf = Vec::new();
+                for event in entries {
+                    check_interrupt()?;
+                    let (change, location) = match event {
+                        Entry::Modification {
+                            entries,
+                            entry,
+                            entry_index,
+                            rela_path,
+                            status,
+                        } => {
+                            let location = Cow::Borrowed(rela_path);
+                            (
+                                ModificationOrDirwalkEntry::Modification {
+                                    entries,
+                                    record: crate::index_as_worktree::Record {
+                                        entry,
+                                        entry_index,
+                                        relative_path: rela_path,
+                                        status,
+                                    },
+                                },
+                                location,
+                            )
+                        }
+                        Entry::Rewrite { .. } => {
+                            return Err(
+                                message("rewrite tracking requires underlying entries, not existing rewrites")
+                                    .validation()
+                                    .raise(),
+                            );
+                        }
+                        Entry::DirectoryContents {
+                            entry,
+                            collapsed_directory_status,
+                        } => {
+                            let location = Cow::Owned(entry.rela_path.clone());
+                            (
+                                ModificationOrDirwalkEntry::DirwalkEntry {
+                                    id: rewrite::calculate_worktree_id(
+                                        index.object_hash(),
+                                        worktree,
+                                        entry.disk_kind,
+                                        entry.rela_path.as_bstr(),
+                                        &mut filter,
+                                        &mut attrs,
+                                        objects,
+                                        &mut buf,
+                                        should_interrupt,
+                                    )?,
+                                    entry,
+                                    collapsed_directory_status,
+                                },
+                                location,
+                            )
+                        }
+                    };
+                    if let Some(v) = entries_for_sorting.as_mut() {
+                        v.push((change, location));
+                    } else if let Some(change) = tracker.try_push_change(change, location.as_ref()) {
+                        collector.visit_entry(rewrite::change_to_entry(change));
+                    }
+                }
+
+                let mut entries_for_sorting = entries_for_sorting.map(|mut v| {
+                    v.sort_by(|a, b| a.1.cmp(&b.1));
+                    let mut remaining = Vec::new();
+                    for (change, location) in v {
+                        if let Some(change) = tracker.try_push_change(change, location.as_ref()) {
+                            remaining.push(rewrite::change_to_entry(change));
+                        }
+                    }
+                    remaining
+                });
+
+                let outcome = tracker
+                    .emit(
+                        |dest, src| {
+                            match src {
+                                None => {
+                                    let entry = rewrite::change_to_entry(dest.change);
+                                    if let Some(v) = entries_for_sorting.as_mut() {
+                                        v.push(entry);
+                                    } else {
+                                        collector.visit_entry(entry);
+                                    }
+                                }
+                                Some(src) => {
+                                    let ModificationOrDirwalkEntry::DirwalkEntry {
+                                        id,
+                                        entry,
+                                        collapsed_directory_status,
+                                    } = dest.change
+                                    else {
+                                        unreachable!("BUG: only possible destinations are dirwalk entries (additions)");
+                                    };
+                                    let source = match src.change {
+                                        ModificationOrDirwalkEntry::Modification { record, entries } => {
+                                            RewriteSource::RewriteFromIndex {
+                                                index_entries: entries,
+                                                source_entry: record.entry,
+                                                source_entry_index: record.entry_index,
+                                                source_rela_path: record.relative_path,
+                                                source_status: record.status.clone(),
+                                            }
+                                        }
+                                        ModificationOrDirwalkEntry::DirwalkEntry {
+                                            id,
+                                            entry,
+                                            collapsed_directory_status,
+                                        } => RewriteSource::CopyFromDirectoryEntry {
+                                            source_dirwalk_entry: entry.clone(),
+                                            source_dirwalk_entry_collapsed_directory_status:
+                                                *collapsed_directory_status,
+                                            source_dirwalk_entry_id: *id,
+                                        },
+                                    };
+
+                                    let entry = Entry::Rewrite {
+                                        source,
+                                        dirwalk_entry: entry,
+                                        dirwalk_entry_collapsed_directory_status: collapsed_directory_status,
+                                        dirwalk_entry_id: id,
+                                        similarity: src.similarity,
+                                        copy: src.kind == gix_diff::rewrites::tracker::visit::SourceKind::Copy,
+                                    };
+                                    if let Some(v) = entries_for_sorting.as_mut() {
+                                        v.push(entry);
+                                    } else {
+                                        collector.visit_entry(entry);
+                                    }
+                                }
+                            }
+                            std::ops::ControlFlow::Continue(())
+                        },
+                        resource_cache,
+                        objects,
+                        |_cb| {
+                            // NOTE: to make this work, we'd want to wait the index modification check to complete.
+                            //       Then it's possible to efficiently emit the tracked files along with what we already sent,
+                            //       i.e. untracked and ignored files.
+                            gix_trace::debug!("full-tree copy tracking isn't currently supported");
+                            Ok::<_, std::io::Error>(())
+                        },
+                        Default::default(),
+                    )
+                    .or_raise(|| message("Could not track worktree rewrites"))?;
+
+                if let Some(mut v) = entries_for_sorting {
+                    v.sort_by(|a, b| a.destination_rela_path().cmp(b.destination_rela_path()));
+                    for entry in v {
+                        check_interrupt()?;
+                        collector.visit_entry(entry);
+                    }
+                }
+                check_interrupt()?;
+                Some(outcome)
+            }
+            None => {
+                let mut entries_for_sorting = sorting.map(|_| Vec::new());
+                for event in entries {
+                    check_interrupt()?;
+                    if matches!(event, Entry::Rewrite { .. }) {
+                        return Err(
+                            message("rewrite tracking requires underlying entries, not existing rewrites")
+                                .validation()
+                                .raise(),
+                        );
+                    }
+                    let entry = event;
+
+                    if let Some(v) = entries_for_sorting.as_mut() {
+                        v.push(entry);
+                    } else {
+                        collector.visit_entry(entry);
+                    }
+                }
+
+                if let Some(mut v) = entries_for_sorting {
+                    v.sort_by(|a, b| a.destination_rela_path().cmp(b.destination_rela_path()));
+                    for entry in v {
+                        check_interrupt()?;
+                        collector.visit_entry(entry);
+                    }
+                }
+                None
+            }
+        };
+
+        check_interrupt()?;
+        Ok(rewrite_outcome)
     }
 
     enum Event<'index, T, U> {
@@ -419,6 +515,14 @@ pub(super) mod function {
         }
 
         impl<T, U> gix_dir::walk::Delegate for Delegate<'_, '_, T, U> {
+            fn can_omit_ignored_directories(&self) -> bool {
+                true
+            }
+
+            fn can_omit_tracked_directories(&self) -> bool {
+                true
+            }
+
             fn emit(&mut self, entry: EntryRef<'_>, collapsed_directory_status: Option<Status>) -> Action {
                 // Status never shows untracked entries of untrackable type
                 if entry.disk_kind != Some(gix_dir::entry::Kind::Untrackable) {
@@ -457,7 +561,10 @@ pub(super) mod function {
             T: Clone,
             U: Clone,
         {
-            Modification(crate::index_as_worktree::Record<'index, T, U>),
+            Modification {
+                record: crate::index_as_worktree::Record<'index, T, U>,
+                entries: &'index [gix_index::Entry],
+            },
             DirwalkEntry {
                 id: Option<gix_hash::ObjectId>,
                 entry: gix_dir::Entry,
@@ -472,7 +579,7 @@ pub(super) mod function {
         {
             fn id(&self) -> Option<&oid> {
                 match self {
-                    ModificationOrDirwalkEntry::Modification(m) => {
+                    ModificationOrDirwalkEntry::Modification { record: m, .. } => {
                         (!m.entry.id.is_null()).then_some(m.entry.id.as_ref())
                     }
                     ModificationOrDirwalkEntry::DirwalkEntry { id, .. } => id.as_deref(),
@@ -481,7 +588,7 @@ pub(super) mod function {
 
             fn kind(&self) -> ChangeKind {
                 match self {
-                    ModificationOrDirwalkEntry::Modification(m) => match &m.status {
+                    ModificationOrDirwalkEntry::Modification { record: m, .. } => match &m.status {
                         EntryStatus::Conflict { .. } | EntryStatus::IntentToAdd | EntryStatus::NeedsUpdate(_) => {
                             ChangeKind::Modification
                         }
@@ -498,7 +605,7 @@ pub(super) mod function {
 
             fn entry_mode(&self) -> EntryMode {
                 match self {
-                    ModificationOrDirwalkEntry::Modification(c) => c.entry.mode.to_tree_entry_mode(),
+                    ModificationOrDirwalkEntry::Modification { record: c, .. } => c.entry.mode.to_tree_entry_mode(),
                     ModificationOrDirwalkEntry::DirwalkEntry { entry, .. } => entry.disk_kind.map(|kind| {
                         match kind {
                             Kind::Untrackable => {
@@ -622,16 +729,13 @@ pub(super) mod function {
         }
 
         #[inline]
-        pub(super) fn change_to_entry<'index, T, U>(
-            change: ModificationOrDirwalkEntry<'index, T, U>,
-            entries: &'index [gix_index::Entry],
-        ) -> Entry<'index, T, U>
+        pub(super) fn change_to_entry<T, U>(change: ModificationOrDirwalkEntry<'_, T, U>) -> Entry<'_, T, U>
         where
             T: Clone,
             U: Clone,
         {
             match change {
-                ModificationOrDirwalkEntry::Modification(r) => Entry::Modification {
+                ModificationOrDirwalkEntry::Modification { record: r, entries } => Entry::Modification {
                     entries,
                     entry: r.entry,
                     entry_index: r.entry_index,

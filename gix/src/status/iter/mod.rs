@@ -58,6 +58,12 @@ where
             })
         };
 
+        let stat_options = self.repo.stat_options()?;
+        let key = &crate::config::tree::gitoxide::Core::OPTIONAL_LOCKS;
+        let optional_locks = key
+            .enrich_error(self.repo.config.resolved.boolean(key))
+            .with_lenient_default(self.repo.config.lenient_config)?
+            .unwrap_or(true);
         let skip_hash = crate::config::tree::Index::SKIP_HASH
             .enrich_error(self.repo.config.resolved.boolean_filter(
                 crate::config::tree::Index::SKIP_HASH,
@@ -79,6 +85,7 @@ where
                         let should_interrupt = should_interrupt.clone();
                         let tx = tx.clone();
                         let tree_index_renames = self.tree_index_renames;
+                        let skip_if_unchanged = self.skip_tree_index_if_unchanged;
                         let index = index.clone();
                         let crate::Pathspec { repo: _, stack, search } = self.repo.index_worktree_status_pathspec(
                             &patterns,
@@ -92,11 +99,12 @@ where
                                 stack,
                                 search,
                             };
-                            repo.tree_index_status(
+                            repo.tree_index_status_inner(
                                 &tree_id,
                                 &index,
                                 Some(&mut pathspec),
                                 tree_index_renames,
+                                skip_if_unchanged,
                                 |change, _, _| {
                                     let action = if tx.send(change.into_owned().into()).is_err()
                                         || should_interrupt.load(Ordering::Acquire)
@@ -125,7 +133,7 @@ where
                     let mut progress = self.progress;
                     move || -> Result<_> {
                         let repo = repo.to_thread_local();
-                        let out = repo.index_worktree_status(
+                        let (out, fsmonitor) = repo.index_worktree_status_inner(
                             &index,
                             patterns,
                             &mut collect,
@@ -141,7 +149,10 @@ where
                             worktree_index: index,
                             changes: None,
                             skip_hash,
+                            stat_options,
+                            optional_locks,
                             shared_repository_permissions: repo.config.shared_repository_permissions,
+                            fsmonitor,
                         })
                     }
                 }))
@@ -170,11 +181,12 @@ where
                         self.index_worktree_options.dirwalk_options.as_ref(),
                     )?;
                     let mut items = Vec::new();
-                    let tree_index = self.repo.tree_index_status(
+                    let tree_index = self.repo.tree_index_status_inner(
                         &tree_id,
                         &index,
                         Some(&mut pathspec),
                         self.tree_index_renames,
+                        self.skip_tree_index_if_unchanged,
                         |change, _, _| {
                             items.push(change.into_owned().into());
                             let action = if should_interrupt.load(Ordering::Acquire) {
@@ -185,11 +197,11 @@ where
                             Ok(action)
                         },
                     )?;
-                    (items, Some(tree_index))
+                    (items, tree_index)
                 }
                 None => (Vec::new(), None),
             };
-            let out = repo.index_worktree_status(
+            let (out, fsmonitor) = repo.index_worktree_status_inner(
                 &index,
                 patterns,
                 &mut collect,
@@ -210,7 +222,10 @@ where
                 tree_index,
                 changes: None,
                 skip_hash,
+                stat_options,
+                optional_locks,
                 shared_repository_permissions: self.repo.config.shared_repository_permissions,
+                fsmonitor,
             };
             items.extend(
                 collect
@@ -252,7 +267,7 @@ impl Iterator for Iter {
                     let (_rx, worktree_handle, tree_handle) = self.rx_and_join.take()?;
                     let tree_index = if let Some(handle) = tree_handle {
                         match handle.join().expect("no panic") {
-                            Ok(out) => Some(out),
+                            Ok(out) => out,
                             Err(err) => break Some(Err(err)),
                         }
                     } else {

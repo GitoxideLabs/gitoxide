@@ -14,6 +14,7 @@ impl Options {
             for_deletion: None,
             emit_tracked: false,
             emit_untracked: Default::default(),
+            allow_untyped_untracked: false,
             emit_empty_directories: false,
             classify_untracked_bare_repositories: false,
             emit_collapsed: None,
@@ -34,6 +35,7 @@ impl From<Options> for gix_dir::walk::Options<'static> {
             for_deletion: v.for_deletion,
             emit_tracked: v.emit_tracked,
             emit_untracked: v.emit_untracked,
+            allow_untyped_untracked: v.allow_untyped_untracked,
             emit_empty_directories: v.emit_empty_directories,
             classify_untracked_bare_repositories: v.classify_untracked_bare_repositories,
             emit_collapsed: v.emit_collapsed,
@@ -125,6 +127,13 @@ impl Options {
     /// Like [`emit_untracked()`](Self::emit_untracked), but only requires a mutably borrowed instance.
     pub fn set_emit_untracked(&mut self, mode: EmissionMode) -> &mut Self {
         self.emit_untracked = mode;
+        self
+    }
+    /// Allow monitored status to report a cached untracked file or symlink with
+    /// [`disk_kind`](gix_dir::Entry::disk_kind) set to `None`. Directories keep their types.
+    /// Defaults to `false`. Index-to-worktree rename detection always requests exact types.
+    pub fn allow_untyped_untracked(mut self, toggle: bool) -> Self {
+        self.allow_untyped_untracked = toggle;
         self
     }
     /// If `toggle` is `true`, emit empty directories as well. Note that a directory also counts as empty if it has any

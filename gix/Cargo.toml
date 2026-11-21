@@ -145,7 +145,7 @@ encoding-asian = ["gix-filter?/encoding-asian"]
 command = ["dep:gix-command", "gix-object/signature"]
 
 ## Obtain information similar to `git status`.
-status = ["gix-status", "dirwalk", "index", "blob-diff", "gix-diff/index"]
+status = ["gix-status", "dirwalk", "index", "blob-diff", "gix-diff/index", "command", "fsmonitor"]
 
 ## Utilities for interrupting computations and cleaning up tempfiles.
 interrupt = ["dep:signal-hook", "gix-tempfile/signals", "dep:parking_lot"]
@@ -179,6 +179,9 @@ fsmonitor-daemon = ["fsmonitor-server", "gix-fsmonitor/daemon"]
 
 ## Tokio filesystem monitor server, alongside the blocking server.
 async-fsmonitor-server = ["fsmonitor-server", "async-fsmonitor"]
+
+## Maintain an owned status snapshot with filesystem and recursive submodule monitoring.
+status-monitor = ["notify", "status"]
 
 ## Access to credential helpers, which provide credentials for URLs.
 # Note that `gix-negotiate` just piggibacks here, as 'credentials' is equivalent to 'fetch & push' right now.

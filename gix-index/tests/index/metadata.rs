@@ -105,7 +105,16 @@ fn racy_stat_sizes_remain_untrustworthy_after_serializing_a_new_index() -> TestR
         ..Stat::default()
     };
     source.set_timestamp(filetime::FileTime::from_unix_time(100, 0));
-    source.dangerously_push_entry(stat, hash.empty_blob(), Flags::UPTODATE, Mode::FILE, "file".into());
+    source.dangerously_push_entry(
+        stat,
+        hash.empty_blob(),
+        Flags::UPTODATE | Flags::FSMONITOR_VALID,
+        Mode::FILE,
+        "file".into(),
+    );
+    source.set_fs_monitor_token(Some(gix_index::extension::fs_monitor::Token::V1 {
+        nanos_since_1970: 1,
+    }));
     let mut target = without_metadata(&source);
     target.copy_metadata_from(&source)?;
     assert_eq!(
@@ -120,8 +129,10 @@ fn racy_stat_sizes_remain_untrustworthy_after_serializing_a_new_index() -> TestR
     );
     let mut out = Vec::new();
     assert!(
-        !target.entries()[0].flags.contains(Flags::UPTODATE),
-        "racy entries still require a content check"
+        !target.entries()[0]
+            .flags
+            .intersects(Flags::UPTODATE | Flags::FSMONITOR_VALID),
+        "racy entries still require a content check even with a valid source checkpoint"
     );
     gix_index::File::from_state(target, "unused-index").write_to(&mut out, Default::default())?;
     let (rewritten, _) = State::from_bytes(

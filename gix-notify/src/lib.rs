@@ -59,6 +59,8 @@
 //! are unchanged.
 //! A transient rename and restoration between checks can go undetected. Root checks do not replace
 //! application-level refreshes for silent notification blind spots.
+//! A coalesced FSEvents subtree only invalidates coverage when it can intersect a logical watch.
+//! Stream-wide drops and ambiguous loss still require a new baseline.
 //!
 //! Linux installs one watch per directory without following descendant symlinks. Directory moves,
 //! removals, and native queue overflow can require re-registering the desired watches before a new
@@ -305,6 +307,10 @@ pub struct Watcher {
     options: Options,
     desired: Vec<Watch>,
     backend: Option<backend::Backend>,
+    #[cfg(target_os = "macos")]
+    file_backend: Option<backend::files::Backend>,
+    #[cfg(target_os = "macos")]
+    watch_files: bool,
 }
 
 impl Watcher {
@@ -323,12 +329,38 @@ impl Watcher {
     /// Zero queue limits or a zero root-check interval return a [validation error](Error::is_validation).
     pub fn new(options: Options) -> Result<Self> {
         options.validate()?;
-        Ok(Self {
-            state: OwnShared::new(Mutable::new(queue::State::new(options))),
+        Ok(Self::with_state(
+            options,
+            OwnShared::new(Mutable::new(queue::State::new(options))),
+        ))
+    }
+
+    fn with_state(options: Options, state: OwnShared<Mutable<queue::State>>) -> Self {
+        Self {
+            state,
             options,
             desired: Vec::new(),
             backend: None,
-        })
+            #[cfg(target_os = "macos")]
+            file_backend: None,
+            #[cfg(target_os = "macos")]
+            watch_files: false,
+        }
+    }
+
+    /// Observe individual file paths on macOS using vnode notifications. A non-recursive [`Watch`]
+    /// can name a regular file, a symlink, or an absent path. Events identify the requested path,
+    /// including when a symlink is retargeted or the file at that name is replaced.
+    ///
+    /// A missing path is checked when its nearest existing parent changes. Periodic identity checks
+    /// also catch changes through moved ancestors or intermediate links. The watcher holds file
+    /// descriptors for its subscriptions and is intended for a small number of file dependencies.
+    /// [`Self::synchronize_at()`] returns [`SynchronizeError::Unsupported`] for this watcher.
+    #[cfg(target_os = "macos")]
+    pub fn new_for_files(options: Options) -> Result<Self> {
+        let mut watcher = Self::new(options)?;
+        watcher.watch_files = true;
+        Ok(watcher)
     }
 
     /// Set a lightweight callback to wake an application's event loop when notifications arrive.
@@ -353,6 +385,10 @@ impl Watcher {
         for watch in watches {
             if !watch.path.is_absolute() {
                 return Err(message!("watched path must be absolute: {}", watch.path.display()).validation_error());
+            }
+            #[cfg(target_os = "macos")]
+            if self.watch_files && watch.recursive {
+                return Err(validation("file path watches must be non-recursive").raise());
             }
             paths
                 .entry(watch.path)
@@ -386,20 +422,12 @@ impl Watcher {
         self.desired = desired;
         if !reuse_backend {
             self.backend = None;
+            #[cfg(target_os = "macos")]
+            drop(self.file_backend.take());
         }
         queue::wake(&self.state);
         if !self.desired.is_empty() {
-            let result = match self.backend.as_mut() {
-                Some(backend) => backend.replace(&self.desired),
-                None => backend::Backend::new(
-                    &self.desired,
-                    queue::Sender::new(self.state.clone(), registration),
-                    self.options,
-                )
-                .map(|backend| {
-                    self.backend = Some(backend);
-                }),
-            };
+            let result = self.install(registration);
             if let Err(error) = result {
                 {
                     let mut state = lock(&self.state);
@@ -410,6 +438,20 @@ impl Watcher {
                 return Err(error);
             }
         }
+        Ok(())
+    }
+
+    fn install(&mut self, registration: u64) -> Result {
+        if let Some(backend) = self.backend.as_mut() {
+            return backend.replace(&self.desired);
+        }
+        let sender = queue::Sender::new(self.state.clone(), registration);
+        #[cfg(target_os = "macos")]
+        if self.watch_files {
+            self.file_backend = Some(backend::files::Backend::new(&self.desired, sender, self.options)?);
+            return Ok(());
+        }
+        self.backend = Some(backend::Backend::new(&self.desired, sender, self.options)?);
         Ok(())
     }
 

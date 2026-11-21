@@ -124,7 +124,10 @@ fn query_with_delayed_io(
                 }
                 if let Err(error) = stream.write_all(&[*byte]) {
                     return match error.kind() {
-                        io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset => Ok(()),
+                        // macOS can report ENOTCONN after the client closes at its deadline.
+                        io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset | io::ErrorKind::NotConnected => {
+                            Ok(())
+                        }
                         _ => Err(error),
                     };
                 }

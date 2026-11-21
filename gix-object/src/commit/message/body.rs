@@ -15,7 +15,7 @@ pub struct Trailers<'a> {
 /// An iterator over raw message portions and the contiguous trailers following each one.
 pub struct MessageBlocks<'a> {
     cursor: &'a [u8],
-    trailer_start: usize,
+    paragraph_end: usize,
 }
 
 /// A raw message portion and the contiguous trailers following it.
@@ -285,13 +285,28 @@ impl<'a> Iterator for MessageBlocks<'a> {
             return None;
         }
 
-        let mut message_len = self.trailer_start;
-        while message_len < self.cursor.len() && trailer_at_start(&self.cursor[message_len..]).is_none() {
+        let mut message_len = 0;
+        while message_len < self.cursor.len() {
+            if message_len == self.paragraph_end {
+                for line in self.cursor[message_len..].lines_with_terminator() {
+                    self.paragraph_end += line.len();
+                    if is_blank_line(trim_line_ending(line)) {
+                        break;
+                    }
+                }
+                if trailer_block_start(&self.cursor[message_len..self.paragraph_end]).is_none() {
+                    message_len = self.paragraph_end;
+                    continue;
+                }
+            }
+            if trailer_at_start(&self.cursor[message_len..self.paragraph_end]).is_some() {
+                break;
+            }
             message_len += self.cursor[message_len..].lines_with_terminator().next()?.len();
         }
 
         let trailer_start = message_len;
-        while let Some(trailer) = trailer_at_start(&self.cursor[message_len..]) {
+        while let Some(trailer) = trailer_at_start(&self.cursor[message_len..self.paragraph_end]) {
             message_len += trailer.len;
         }
         let block_len = message_len;
@@ -300,7 +315,7 @@ impl<'a> Iterator for MessageBlocks<'a> {
             trailers: &self.cursor[trailer_start..block_len],
         };
         self.cursor = &self.cursor[block_len..];
-        self.trailer_start = 0;
+        self.paragraph_end -= block_len;
         Some(block)
     }
 }
@@ -337,12 +352,14 @@ impl<'a> BodyRef<'a> {
 
     /// Return the entire body as raw message portions, each followed by a continuously parseable trailer run.
     ///
-    /// Message bytes aren't trimmed or normalized. Trailer-like lines outside the block accepted by Git's
-    /// trailer heuristic remain part of a message.
+    /// Message bytes aren't trimmed or normalized. Each paragraph uses Git's trailer-block heuristic,
+    /// including paragraphs followed by more message text. Trailer-like lines in rejected paragraphs
+    /// remain part of the message. Unlike [`trailers()`](BodyRef::trailers), this can expose trailers
+    /// outside the final paragraph.
     pub fn message_blocks(&self) -> MessageBlocks<'a> {
         MessageBlocks {
             cursor: self.body,
-            trailer_start: self.trailer_start,
+            paragraph_end: 0,
         }
     }
 }
