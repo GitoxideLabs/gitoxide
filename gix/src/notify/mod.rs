@@ -85,6 +85,8 @@ mod asynchronous;
 #[cfg(all(feature = "async-notify", feature = "status-monitor"))]
 pub(crate) use asynchronous::WorkerOwned;
 mod classify;
+#[cfg(target_os = "macos")]
+mod external_ignores;
 mod inventory;
 mod recovery;
 pub use recovery::CoverageStatus;
@@ -152,7 +154,8 @@ pub enum WorktreeCoverage {
     /// ordinary staging only invalidates the index. Reenabled subtrees need local discovery,
     /// and directory changes reuse unaffected recursive coverage. The monitor retains directory names
     /// and a fingerprint of coverage-relevant index data, not individual file paths or ignore blobs.
-    /// Global ignore dependencies are watched too. Loss requests a full baseline and discovery walk.
+    /// Global ignore dependencies are watched too. On macOS they use file watches separate from the
+    /// repository's FSEvents streams. Loss of worktree coverage requests a full baseline and discovery walk.
     #[default]
     IgnoreAware,
     /// Recursively observe the entire worktree, including ignored paths and nested repositories.
@@ -593,8 +596,9 @@ impl Domain {
 /// Repository subscriptions stay within the selected checkouts and their private and shared Git directories, without
 /// additional parent subscriptions to detect replacement of an entire root directory. External
 /// configuration and attribute files are not watched unless supplied in [`Options::additional_paths`].
-/// Ignore-aware worktree coverage also watches the nearest existing parents of external ignore
-/// dependencies. Reopen the repository to read current external configuration.
+/// Ignore-aware worktree coverage also observes external ignore dependencies. On macOS,
+/// these use a separate file watcher so unrelated activity under their parent directories stays
+/// out of the repository's FSEvents streams. Reopen the repository to read current external configuration.
 ///
 /// Reported event loss invalidates the affected caches at the next [`service()`](Self::service)
 /// call and requests inventory repair. Lost native root identities also require re-registration,
@@ -613,6 +617,8 @@ pub struct RepositoryMonitor {
     options: Options,
     metadata: Domain,
     worktree: Domain,
+    #[cfg(target_os = "macos")]
+    external_ignores: external_ignores::Watcher,
     directories: HashTable<PathBuf>,
     nested_repositories: HashSet<PathBuf>,
     index_fingerprint: Option<gix_hash::ObjectId>,
@@ -692,6 +698,8 @@ impl Repository {
             options,
             metadata: Domain::default(),
             worktree: Domain::default(),
+            #[cfg(target_os = "macos")]
+            external_ignores: external_ignores::Watcher::default(),
             directories: HashTable::new(),
             nested_repositories: HashSet::new(),
             index_fingerprint: None,
@@ -771,10 +779,15 @@ impl Layout {
                         && layout.worktree.is_some()
                         && dependency.kind == DependencyKind::Ignore
                 {
+                    // The file watcher follows external symlinks from their configured name.
+                    let watch_name = cfg!(target_os = "macos") && !layout.contains(&path);
                     layout.dependencies.push(Dependency {
                         path,
                         kind: dependency.kind,
                     });
+                    if watch_name {
+                        continue;
+                    }
                 }
             }
             let path = absolute(&dependency.path)?;
@@ -921,6 +934,8 @@ impl RepositoryMonitor {
         let now = Instant::now();
         #[cfg(feature = "status-monitor")]
         self.rescan_retained(now);
+        #[cfg(target_os = "macos")]
+        self.external_ignores.rescan(now, &mut self.pending_statistics);
         self.coverage_lost(false, now);
     }
 
@@ -954,6 +969,24 @@ impl RepositoryMonitor {
         }
         self.started = true;
         self.backlog = false;
+        #[cfg(target_os = "macos")]
+        if self
+            .external_ignores
+            .poll(now, self.options.retry_interval, out, &mut self.backlog)
+        {
+            self.inventory_dirty = true;
+            self.maintenance = Some(now);
+            self.pending_metadata.add(
+                Changes {
+                    ignores: true,
+                    worktree: Some(Scope::All),
+                    ..Changes::default()
+                },
+                now,
+                &self.options,
+                false,
+            );
+        }
         for worktree in [false, true] {
             let domain = if worktree {
                 &mut self.worktree
@@ -1118,21 +1151,31 @@ impl RepositoryMonitor {
     pub(crate) fn notification_deadline(&self, now: Instant) -> Option<Instant> {
         if self.backlog
             || !self.pending_worktree.is_empty()
-            || [&self.metadata.watcher, &self.worktree.watcher]
-                .into_iter()
-                .flatten()
-                .any(gix_notify::Watcher::is_ready)
+            || [
+                &self.metadata.watcher,
+                &self.worktree.watcher,
+                #[cfg(target_os = "macos")]
+                &self.external_ignores.native,
+            ]
+            .into_iter()
+            .flatten()
+            .any(gix_notify::Watcher::is_ready)
         {
             return Some(now);
         }
-        let deadlines = [self.maintenance, self.pending_metadata.deadline]
-            .into_iter()
-            .flatten()
-            .chain(
-                self.other_worktrees
-                    .values()
-                    .filter_map(|other| other.notification_deadline(now)),
-            );
+        let deadlines = [
+            self.maintenance,
+            self.pending_metadata.deadline,
+            #[cfg(target_os = "macos")]
+            self.external_ignores.retry,
+        ]
+        .into_iter()
+        .flatten()
+        .chain(
+            self.other_worktrees
+                .values()
+                .filter_map(|other| other.notification_deadline(now)),
+        );
         #[cfg(feature = "status-monitor")]
         let deadlines = deadlines.chain(self.retained_deadline(now));
         deadlines.min()
@@ -1155,11 +1198,15 @@ impl RepositoryMonitor {
         #[cfg(feature = "status-monitor")]
         let retained = self.retained_deadline(now);
         let polling = self.metadata.watcher.is_some() || self.worktree.watcher.is_some();
+        #[cfg(target_os = "macos")]
+        let polling = polling || self.external_ignores.native.is_some();
         [
             #[cfg(feature = "status-monitor")]
             retained,
             self.maintenance,
             self.pending_metadata.deadline,
+            #[cfg(target_os = "macos")]
+            self.external_ignores.retry,
         ]
         .into_iter()
         .flatten()
@@ -1222,7 +1269,7 @@ impl RepositoryMonitor {
         repo: &Repository,
         now: Instant,
         statistics: &mut Statistics,
-        _errors: &mut Vec<Error>,
+        errors: &mut Vec<Error>,
     ) -> Result {
         let layout = Layout::for_options(repo, &self.options)?;
         if self.layout != layout {
@@ -1251,6 +1298,11 @@ impl RepositoryMonitor {
             .or_raise(|| message("could not read filesystem options"))?;
         self.precompose_unicode = filesystem.precompose_unicode;
         self.ignore_case = filesystem.ignore_case;
+        #[cfg(target_os = "macos")]
+        self.external_ignores
+            .configure(&self.layout, now, self.options.retry_interval, statistics, errors);
+        #[cfg(not(target_os = "macos"))]
+        let _ = errors;
         let mut verify = false;
         if (self.options.metadata || self.worktree_enabled() && self.ignore_aware())
             && (self.metadata_dirty

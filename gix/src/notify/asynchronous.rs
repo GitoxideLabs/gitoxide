@@ -72,11 +72,17 @@ impl RepositoryMonitor {
     }
 
     pub(super) fn install_async_wakers(&mut self) {
-        for domain in [&mut self.metadata, &mut self.worktree] {
-            if let Some(watcher) = &mut domain.watcher {
-                let wake = self.wake.clone();
-                watcher.set_waker(move || wake.notify_waiters());
-            }
+        for watcher in [
+            &mut self.metadata.watcher,
+            &mut self.worktree.watcher,
+            #[cfg(target_os = "macos")]
+            &mut self.external_ignores.native,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let wake = self.wake.clone();
+            watcher.set_waker(move || wake.notify_waiters());
         }
         for other in self.other_worktrees.values_mut() {
             other.wake = self.wake.clone();

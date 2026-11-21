@@ -117,6 +117,11 @@ impl RepositoryMonitor {
         if !enabled {
             self.pending_statistics.removed += self.worktree.registered.len();
             self.worktree = Domain::default();
+            #[cfg(target_os = "macos")]
+            {
+                self.pending_statistics.removed += self.external_ignores.registered_len();
+                self.external_ignores = Default::default();
+            }
             self.directories.clear();
             self.nested_repositories.clear();
             self.directory_inventory = None;
