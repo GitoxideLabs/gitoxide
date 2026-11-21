@@ -691,10 +691,16 @@ fn apply_environment_overrides(
             "gitoxide",
             Some("core"),
             git_prefix,
-            &[{
-                let key = &gitoxide::Core::EXTERNAL_COMMAND_STDERR;
-                (env(key), key.name)
-            }],
+            &[
+                {
+                    let key = &gitoxide::Core::EXTERNAL_COMMAND_STDERR;
+                    (env(key), key.name)
+                },
+                {
+                    let key = &gitoxide::Core::OPTIONAL_LOCKS;
+                    (env(key), key.name)
+                },
+            ],
         ),
         (
             "author",

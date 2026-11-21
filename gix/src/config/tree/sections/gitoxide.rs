@@ -208,6 +208,11 @@ mod subsections {
         pub const USE_STDEV: keys::Boolean = keys::Boolean::new_boolean("useStdev", &Gitoxide::CORE)
             .with_note("A runtime version of the USE_STDEV build flag.");
 
+        /// The `gitoxide.core.optionalLocks` key controls optional writes such as refreshing the index during status.
+        pub const OPTIONAL_LOCKS: keys::Boolean = keys::Boolean::new_boolean("optionalLocks", &Gitoxide::CORE)
+            .with_default(b"true")
+            .with_environment_override("GIT_OPTIONAL_LOCKS");
+
         /// The `gitoxide.core.protectWindows` key.
         pub const PROTECT_WINDOWS: keys::Boolean = keys::Boolean::new_boolean("protectWindows", &Gitoxide::CORE)
             .with_note("enable protections that are enabled by default on Windows");
@@ -274,6 +279,7 @@ mod subsections {
                 &Self::DEFAULT_PACK_CACHE_MEMORY_LIMIT,
                 &Self::USE_NSEC,
                 &Self::USE_STDEV,
+                &Self::OPTIONAL_LOCKS,
                 &Self::SHALLOW_FILE,
                 &Self::INDEX_FILE,
                 &Self::PROTECT_WINDOWS,
