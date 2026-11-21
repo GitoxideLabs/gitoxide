@@ -1546,19 +1546,32 @@ fn draw_history(
             ChangePane::Tree => tree_changes.expect("visible tree changes exist"),
             ChangePane::Worktree => worktree_changes.expect("visible worktree changes exist"),
         };
-        let summary = match pane {
+        let mut summary = match pane {
             ChangePane::Tree => tree_summary.clone().expect("visible tree summary exists"),
             ChangePane::Worktree => worktree_summary.clone().expect("visible worktree summary exists"),
         };
+        let focused = app.changes_focus == Some(pane);
+        let root_selected = focused && app.changes(pane).root_selected;
         let area = outer.inner(Margin {
             horizontal: 2,
             vertical: 1,
         });
         frame.render_widget(Clear, *underlay);
         app.mouse_regions.push((*underlay, None));
+        if changes.is_visible() && outer.width > 2 && outer.height > 0 {
+            let title = &mut summary.spans[1];
+            if root_selected {
+                title.style = title.style.add_modifier(Modifier::BOLD | Modifier::REVERSED);
+            }
+            let title_width = (title.width() as u16).min(outer.width - 2);
+            app.mouse_regions.push((
+                Rect::new(outer.x + 2, outer.y, title_width, 1),
+                Some(Action::SelectChangeRoot(pane)),
+            ));
+        }
         frame.render_widget(Block::new().borders(Borders::TOP).title(summary), outer);
         render_changes(frame, area, changes, pane, app);
-        if app.changes_focus == Some(pane) || (pane == ChangePane::Worktree && app.worktree_watch_error.is_some()) {
+        if focused || (pane == ChangePane::Worktree && app.worktree_watch_error.is_some()) {
             let status = Rect::new(
                 outer.x.saturating_add(2),
                 outer.bottom().saturating_sub(1),
@@ -1566,6 +1579,9 @@ fn draw_history(
                 1,
             );
             let mut spans = Vec::new();
+            if root_selected && app.changes_error(pane).is_none() {
+                spans.push(Span::raw("↑↓/jk move · "));
+            }
             if pane == ChangePane::Tree
                 && let Some(parent) = changes.parent
             {
@@ -1586,11 +1602,15 @@ fn draw_history(
             }
             if let Some(error) = app.changes_error(pane) {
                 spans.push(Span::styled(format!("diff: {error}"), color(Color::LightRed)));
+            } else if root_selected {
+                spans.push(Span::raw("<enter> diff · <⇧enter> structure"));
             } else {
                 spans.push(Span::raw("↑↓/jk move · h/l pan · <enter> diff · <⇧enter> structure"));
             }
-            spans.push(Span::raw(" · "));
-            spans.extend(shortcut("copy", 'y', true));
+            if !root_selected {
+                spans.push(Span::raw(" · "));
+                spans.extend(shortcut("copy", 'y', true));
+            }
             if let Some(label) = match app.changes_mode {
                 Some(ChangesMode::Both) => Some("cycle tree"),
                 Some(ChangesMode::Tree) => Some("close"),
@@ -2052,7 +2072,10 @@ fn render_changes(frame: &mut Frame<'_>, area: Rect, changes: &Changes, pane: Ch
         return;
     }
     let focused = app.changes_focus == Some(pane);
-    let selected_index = app.changes(pane).selected.min(changes.paths.len().saturating_sub(1));
+    let selected_index = app
+        .changes(pane)
+        .selected_path_index()
+        .map(|index| index.min(changes.paths.len().saturating_sub(1)));
     let separators = changes_separators(pane, changes);
     let display_len = changes.paths.len() + separators.iter().flatten().count();
     let path_capacity = usize::from(area.height);
@@ -2067,7 +2090,7 @@ fn render_changes(frame: &mut Frame<'_>, area: Rect, changes: &Changes, pane: Ch
         .iter()
         .enumerate()
         .map(|(index, change)| {
-            let selected = focused && index == selected_index;
+            let selected = focused && Some(index) == selected_index;
             let path_style = if selected {
                 Style::default().add_modifier(Modifier::REVERSED)
             } else {
@@ -2344,7 +2367,7 @@ fn changes_summary(pane: ChangePane, app: &App, changes: &Changes) -> Line<'stat
                 },
                 |range| format!("{}..{}", range.base.to_hex_with_len(7), range.tip.to_hex_with_len(7)),
             );
-            let mut spans = vec![Span::raw(format!("─ Tree {label} "))];
+            let mut spans = vec![Span::raw("─ "), Span::raw("Tree"), Span::raw(format!(" {label} "))];
             if changes.paths.is_empty() {
                 spans.push(Span::styled("empty", color(Color::Green)));
                 spans.push(Span::raw(" "));
@@ -2353,11 +2376,13 @@ fn changes_summary(pane: ChangePane, app: &App, changes: &Changes) -> Line<'stat
             spans
         }
         ChangePane::Worktree if changes.paths.is_empty() => vec![
-            Span::raw("─ Worktree "),
+            Span::raw("─ "),
+            Span::raw("Worktree"),
+            Span::raw(" "),
             Span::styled("clean", color(Color::Green)),
             Span::raw(" ── "),
         ],
-        ChangePane::Worktree => vec![Span::raw("─ Worktree ── ")],
+        ChangePane::Worktree => vec![Span::raw("─ "), Span::raw("Worktree"), Span::raw(" ── ")],
     };
     let counts: Vec<_> = match pane {
         ChangePane::Tree => tree_change_counts(changes),
@@ -9725,6 +9750,28 @@ Native tests: 2s"
         app.changes_suppressed = false;
 
         app.update(Action::ToggleChangesFocus);
+        terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                None,
+                Some(&changes),
+            );
+        })?;
+        assert!(
+            terminal.backend().buffer()[(2, 7)]
+                .modifier
+                .contains(Modifier::REVERSED),
+            "the Tree title is highlighted when focus enters its list"
+        );
+        assert!(
+            rendered_line(&terminal, 14).contains("↑↓/jk move"),
+            "the title advertises navigation to and from the paths"
+        );
+        assert_eq!(app.mouse_action(2, 7), Some(Action::SelectChangeRoot(ChangePane::Tree)));
+        app.update(Action::MoveDown);
         app.update(Action::MoveDown);
         terminal.draw(|frame| {
             super::draw(

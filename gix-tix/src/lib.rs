@@ -4232,6 +4232,7 @@ fn event_loop(
                     | Effect::OpenCommitDiff(_)
                     | Effect::OpenStructuralDiff(..)
                     | Effect::OpenCommitStructuralDiff(_)
+                    | Effect::OpenWorktreeDiff { .. }
             ) {
                 fill_repository.retain = false;
                 fill_repository.retained = None;
@@ -4245,6 +4246,7 @@ fn event_loop(
                     | Effect::OpenCommitDiff(_)
                     | Effect::OpenStructuralDiff(..)
                     | Effect::OpenCommitStructuralDiff(_)
+                    | Effect::OpenWorktreeDiff { .. }
                     | Effect::Reword(_)
                     | Effect::NewCommit { .. }
                     | Effect::Split(_)
@@ -4346,18 +4348,7 @@ fn event_loop(
                             if matches!(effect, Effect::OpenStructuralDiff(..)) {
                                 let diff =
                                     structural_diff::prepare_file(&repository_path, repository_is_bare, change, path)?;
-                                let colors = terminal.backend().diff_colors();
-                                let graphics = terminal.backend().enabled();
-                                show_diff_view(
-                                    terminal,
-                                    DiffView::Structural(structural_diff::View::new(
-                                        &diff,
-                                        &mut app.structural_diff_settings,
-                                        &colors,
-                                        graphics,
-                                    )),
-                                    picker,
-                                )
+                                show_structural_diff(terminal, &diff, &mut app.structural_diff_settings, picker)
                             } else {
                                 let diff = prepare_file_diff(&repository_path, repository_is_bare, change, path)?;
                                 show_file_diff(terminal, diff, enhanced_keyboard, picker)
@@ -4366,6 +4357,30 @@ fn event_loop(
                     match result {
                         Ok(true) => app.focus_history(),
                         Err(err) => app.changes_mut(pane).error = Some(format!("{err:#}")),
+                        Ok(false) => {}
+                    }
+                }
+                Effect::OpenWorktreeDiff { structural } => {
+                    let picker = picker.as_deref().map(|picker| (picker, *picker_focused));
+                    let result = (|| {
+                        let mut repository = open_repository(&repository_path, repository_is_bare, false)?;
+                        repository.object_cache_size(OBJECT_CACHE_SIZE);
+                        let changes = load_worktree_diff_changes(&repository)?;
+                        if structural {
+                            let diff = structural_diff::prepare_changes(&repository, &changes, "Worktree".into());
+                            drop(changes);
+                            drop(repository);
+                            show_structural_diff(terminal, &diff, &mut app.structural_diff_settings, picker)
+                        } else {
+                            let diff = prepare_changes_diff(&repository, &changes, "Worktree".into())?;
+                            drop(changes);
+                            drop(repository);
+                            show_commit_diff(terminal, diff, enhanced_keyboard, picker)
+                        }
+                    })();
+                    match result {
+                        Ok(true) => app.focus_history(),
+                        Err(err) => app.worktree_changes.error = Some(format!("{err:#}")),
                         Ok(false) => {}
                     }
                 }
@@ -4390,16 +4405,10 @@ fn event_loop(
                     let result = if matches!(effect, Effect::OpenCommitStructuralDiff(_)) {
                         structural_diff::prepare_commit(&repository_path, repository_is_bare, target, title).and_then(
                             |diff| {
-                                let colors = terminal.backend().diff_colors();
-                                let graphics = terminal.backend().enabled();
-                                show_diff_view(
+                                show_structural_diff(
                                     terminal,
-                                    DiffView::Structural(structural_diff::View::new(
-                                        &diff,
-                                        &mut app.structural_diff_settings,
-                                        &colors,
-                                        graphics,
-                                    )),
+                                    &diff,
+                                    &mut app.structural_diff_settings,
                                     picker.as_deref().map(|picker| (picker, *picker_focused)),
                                 )
                             },
@@ -6618,11 +6627,12 @@ fn leave_tracked_success(
 }
 
 fn remembered_change_selection(view: &app::ChangesView, changes: Option<&Changes>) -> Option<(BString, usize)> {
+    let selected = view.selected_path_index()?;
     changes.and_then(|changes| {
         changes
             .paths
-            .get(view.selected)
-            .map(|change| (change.path.clone(), view.selected.saturating_sub(view.offset)))
+            .get(selected)
+            .map(|change| (change.path.clone(), selected.saturating_sub(view.offset)))
     })
 }
 
@@ -7463,18 +7473,38 @@ fn prepare_commit_diff_with_repository(
     let changes = cached
         .or(loaded.as_ref())
         .ok_or_raise(|| message("commit diff changes were neither cached nor loaded"))?;
+    prepare_changes_diff(repository, changes, title)
+}
+
+fn prepare_changes_diff(repository: &gix::Repository, changes: &Changes, title: BString) -> Result<CommitDiff> {
     let mut external = Vec::new();
     let mut lines = Vec::new();
     let mut file_headers = Vec::new();
     for (change, path) in changes.diffs.iter().zip(&changes.paths) {
-        match prepare_file_diff_content(repository, change, path)? {
+        let group = path.group.worktree_label();
+        let file_diff = if group.is_some()
+            && let FileChange::Unavailable(reason) = change
+        {
+            PreparedFileDiff::BuiltIn(BuiltInDiff::new(
+                path.path.clone(),
+                vec![format!("Diff unavailable: {reason}").into()],
+            ))
+        } else {
+            prepare_file_diff_content(repository, change, path)?
+        };
+        match file_diff {
             PreparedFileDiff::External(command) => external.push(command),
             PreparedFileDiff::BuiltIn(diff) => {
-                file_headers.extend(
-                    diff.file_headers
-                        .into_iter()
-                        .map(|(start, header)| (start + lines.len(), header + lines.len())),
-                );
+                if let Some(group) = group {
+                    file_headers.push((lines.len(), lines.len()));
+                    lines.push(format!("{group} · {}", path.path.to_str_lossy()).into());
+                } else {
+                    file_headers.extend(
+                        diff.file_headers
+                            .into_iter()
+                            .map(|(start, header)| (start + lines.len(), header + lines.len())),
+                    );
+                }
                 lines.extend(diff.lines);
             }
         }
@@ -7709,6 +7739,21 @@ fn show_file_diff(
         FileDiff::Pager { command, diff } => run_pager(terminal, command, &diff, enhanced_keyboard).map(|()| false),
         FileDiff::BuiltIn(diff) => show_diff_view(terminal, DiffView::Patch(&diff), picker),
     }
+}
+
+fn show_structural_diff(
+    terminal: &mut Terminal,
+    diff: &structural_diff::Diff,
+    settings: &mut structural_diff::Settings,
+    picker: Option<(&worktrunk::Worktrees, bool)>,
+) -> Result<bool> {
+    let colors = terminal.backend().diff_colors();
+    let graphics = terminal.backend().enabled();
+    show_diff_view(
+        terminal,
+        DiffView::Structural(structural_diff::View::new(diff, settings, &colors, graphics)),
+        picker,
+    )
 }
 
 fn show_commit_diff(
@@ -8848,9 +8893,18 @@ fn load_tree_changes_with_diff_options(
 
 fn add_line_counts(repository: &gix::Repository, changes: &mut Changes) -> Result<Vec<LineCounts>> {
     let mut cache = without_textconv(repository.diff_resource_cache_for_tree_diff()?);
+    let mut worktree = if changes
+        .diffs
+        .iter()
+        .any(|change| matches!(change, FileChange::Worktree { .. }))
+    {
+        worktree_diff_cache(repository, gix::diff::blob::pipeline::Mode::ToGit)?.map(without_textconv)
+    } else {
+        None
+    };
     let mut counts = Vec::with_capacity(changes.diffs.len());
     for (path, change) in changes.paths.iter_mut().zip(&changes.diffs) {
-        let lines = line_counts_for_change(repository, change, &mut cache, None)?;
+        let lines = line_counts_for_change(repository, change, &mut cache, worktree.as_mut())?;
         path.lines = lines;
         if let Some((added, removed)) = lines {
             changes.lines_added += u64::from(added);
@@ -8858,6 +8912,9 @@ fn add_line_counts(repository: &gix::Repository, changes: &mut Changes) -> Resul
         }
         counts.push(lines);
         cache.clear_resource_cache_keep_allocation();
+        if let Some(worktree) = &mut worktree {
+            worktree.clear_resource_cache_keep_allocation();
+        }
     }
     Ok(counts)
 }
@@ -9149,6 +9206,12 @@ fn load_worktree_changes_without_lines(
         })
         .into_vec(Vec::new(), &gix::interrupt::IS_INTERRUPTED)?;
     status_rows(items, repository.object_hash())
+}
+
+fn load_worktree_diff_changes(repository: &gix::Repository) -> Result<Changes> {
+    let mut changes = load_worktree_changes_without_lines(repository, gix::status::UntrackedFiles::Files)?;
+    add_line_counts(repository, &mut changes)?;
+    Ok(changes)
 }
 
 fn worktree_row_key(path: &PathChange) -> (bool, bool, &gix::bstr::BStr) {
@@ -9899,6 +9962,7 @@ fn action_allowed_during_rebase_continuation(action: Option<&Action>, changes_fo
                 | Action::MoveUpBy(_)
                 | Action::MoveDownBy(_)
                 | Action::SelectHistoryRow { .. }
+                | Action::SelectChangeRoot(_)
                 | Action::SelectChange { .. }
                 | Action::PanUpBy(_)
                 | Action::PanDownBy(_)
@@ -10058,7 +10122,7 @@ fn copy_selected_path_action(
         None => return action,
     };
     changes
-        .and_then(|changes| changes.paths.get(app.changes(pane).selected))
+        .and_then(|changes| changes.paths.get(app.changes(pane).selected_path_index()?))
         .map_or(action, |change| Action::CopyPath(change.path.clone()))
 }
 
@@ -13616,6 +13680,16 @@ added
         assert!(
             matches!(cached.diffs[directory], FileChange::Unavailable(_)),
             "a directory is not opened as an individual file diff"
+        );
+        let whole = load_worktree_diff_changes(&repository)?;
+        assert_eq!(
+            whole
+                .paths
+                .iter()
+                .filter(|change| change.path.starts_with(b"target/"))
+                .count(),
+            128,
+            "the whole worktree diff expands an untracked directory and excludes ignored paths"
         );
 
         for present in [true, false, true] {

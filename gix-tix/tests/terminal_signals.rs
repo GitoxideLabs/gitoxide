@@ -319,6 +319,42 @@ fn python_file_opens_in_the_structural_view() -> gix_error::TestResult {
 }
 
 #[test]
+fn worktree_title_opens_the_whole_patch_and_structural_diff() -> gix_error::TestResult {
+    let repository = structural_fixture()?;
+    let path = repository.path();
+    std::fs::write(path.join("src/api.rs"), "fn staged_change() {}\n")?;
+    git(path, "add src/api.rs")?;
+    std::fs::write(path.join("src/api.rs"), "fn unstaged_overlay() {}\n")?;
+    let (mut terminal, _) = Pty::spawn(path, true)?;
+    terminal.wait_for(|output| {
+        contains(output, b"second") && contains(output, b"Worktree") && contains(output, b"\x1b_Ga=p,")
+    })?;
+    let patch = terminal.output.len();
+    terminal.master.write_all(b"\t\tjk\r")?;
+    terminal
+        .wait_for(|output| contains(&output[patch..], b"Staged") && contains(&output[patch..], b"unstaged_overlay"))?;
+    assert!(
+        contains(&terminal.output[patch..], b"+fn staged_change()"),
+        "the patch includes the staged version as well as the later worktree edit"
+    );
+    let outline = terminal.output.len();
+    terminal.master.write_all(b"\r\x1b[13;2u")?;
+    terminal.wait_for(|output| {
+        contains(&output[outline..], b"Changed files (2)") && contains(&output[outline..], b"unstaged_overlay")
+    })?;
+    assert!(
+        contains(&terminal.output[outline..], b"staged_change"),
+        "the structural diff also includes both versions after closing the patch"
+    );
+    terminal.master.write_all(b"qqq")?;
+    assert!(
+        terminal.wait_for_exit()?.success(),
+        "closing both diff levels returns to Tix"
+    );
+    Ok(())
+}
+
+#[test]
 fn production_only_shortcut_filters_the_tree_and_survives_reopening() -> gix_error::TestResult {
     let repository = gix_testtools::scripted_fixture_writable("structural-diff-production.sh")?;
     let (mut terminal, original) = Pty::spawn(repository.path(), true)?;

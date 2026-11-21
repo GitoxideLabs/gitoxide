@@ -1632,6 +1632,10 @@ views.
 - If paths overflow, the final row reports the remaining line count and updates
   while scrolling. A single path is never replaced by overflow text.
 - `Tab` cycles focus in visual order through visible changes blocks and history.
+  Focus enters each list at its title. A clean Worktree title is skipped.
+  `j`/Down moves from the title to the first changed path. `k`/Up moves
+  from the first path to the title, then returns focus to history without
+  moving the selected commit. Click a title to select it directly.
   Inactive blocks, including paths and borders, are dimmed. Only the focused
   block shows its distinct status line. The history footer describes whether
   `q` will close the message, close changes, or quit.
@@ -1669,14 +1673,19 @@ views.
 
 ### Diffs
 
-- `Enter` in history opens the whole selected commit against the active parent.
-  `Enter` in a focused changes block opens only its selected path.
+- `Enter` in history or on the Tree title opens the whole comparison against
+  the active parent or branch comparison base. On the Worktree title it opens
+  staged and unstaged changes, including files inside untracked directories.
+  Changes to the same path in both groups have separate sections. Paths without
+  file diffs are listed with their reason. `Enter` on a path opens that path.
 - `Shift+Enter` opens the same scope in a separate, built-in structural mode.
   One continuous scrollable view starts with a directory tree of all changed,
   added, removed, renamed, and type-changed files. Each file then has Git-style
   `diff --git`, mode/rename, `---`, and `+++` headers followed by its structural
   changes. The file-tree overview precedes every per-file section; scrolling
-  traverses all sections from beginning to end. File renames are always detected.
+  traverses all sections from beginning to end. Tree comparisons always detect
+  file renames. Worktree comparisons label staged and unstaged entries in the
+  overview and at each file header.
   Each tree lists raw text line additions and deletions beside its filenames.
   Binary files and paths without text counts show `n/a`. Hovering a directory
   name in either tree shows the sum of counted descendants beside that name,

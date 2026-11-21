@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, ops::Range, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::Range,
+    path::Path,
+};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, MouseEvent, MouseEventKind};
 use gix::{
@@ -16,7 +20,7 @@ use ratatui::{
 
 use crate::{
     FileChange, OBJECT_CACHE_SIZE,
-    app::{ChangeKind, PathChange, TreeDiffTarget},
+    app::{ChangeKind, Changes, PathChange, TreeDiffTarget},
     command_menu::CommandGroup,
     diff_colors::Palette,
     graph_tiles::Tile,
@@ -81,7 +85,11 @@ fn prepare_commit_with_repository(
         Some(gix::diff::Options::default().with_rewrites(Some(Default::default()))),
     )?;
     crate::add_line_counts(repository, &mut changes)?;
-    Ok(Diff {
+    Ok(prepare_changes(repository, &changes, title))
+}
+
+pub(crate) fn prepare_changes(repository: &gix::Repository, changes: &Changes, title: BString) -> Diff {
+    Diff {
         title: format!("Structural diff · {}", title.to_str_lossy()).into(),
         files: changes
             .diffs
@@ -89,7 +97,7 @@ fn prepare_commit_with_repository(
             .zip(&changes.paths)
             .map(|(change, path)| File::prepare(repository, change, path))
             .collect(),
-    })
+    }
 }
 
 impl File {
@@ -129,9 +137,14 @@ impl File {
         })()
         .map_err(|err: gix::Error| format!("{err:#}"));
         let (_, _, old_mode, new_mode) = crate::diff_sides(path, change);
+        let mut headers = file_headers(path, change);
+        if let Some(group) = path.group.worktree_label() {
+            headers[0].push_str(" · ");
+            headers[0].push_str(group);
+        }
         Self {
             path: path.clone(),
-            headers: file_headers(path, change),
+            headers,
             language,
             metadata_changed: old_mode != new_mode || path.source.is_some(),
             outline,
@@ -255,7 +268,7 @@ fn quoted(path: &BStr, prefix: &str) -> String {
 #[derive(Default)]
 struct FileTree {
     directories: BTreeMap<BString, FileTree>,
-    files: BTreeMap<BString, usize>,
+    files: BTreeSet<(BString, usize)>,
     added: u64,
     removed: u64,
     without_counts: usize,
@@ -343,6 +356,9 @@ impl FileTree {
                     colors.metadata,
                 ));
             }
+            if let Some(group) = path.group.worktree_label() {
+                spans.push(Span::styled(format!(" · {group}"), colors.metadata));
+            }
             file_rows[*file] = Some(lines.len());
             lines.push(Line::from(spans));
         }
@@ -417,7 +433,7 @@ impl Diff {
                     node.without_counts += 1;
                 }
             }
-            node.files.insert(BString::from(*name), index);
+            node.files.insert((BString::from(*name), index));
         }
         let mut file_rows = vec![None; self.files.len()];
         let mut directories = Vec::new();
@@ -2073,6 +2089,36 @@ mod tests {
         };
         let reopened = View::new(&diff, &mut settings, &colors, false);
         assert_eq!(text(&reopened.lines), filtered, "the filter persists across views");
+        Ok(())
+    }
+
+    #[test]
+    fn whole_worktree_structural_diff_links_both_versions_of_a_path() -> TestResult {
+        let repository = repository()?;
+        let changes = crate::load_worktree_diff_changes(&repository)?;
+        let diff = prepare_changes(&repository, &changes, "Worktree".into());
+        let (rows, links, _) = diff.render(&Options::default(), &Palette::PLAIN, false);
+        let linked_header = |label: &str| {
+            links
+                .iter()
+                .find(|link| rows[link.row].0.to_string().contains(label))
+                .map(|link| rows[link.target].0.to_string())
+        };
+        for group in ["Staged", "Unstaged"] {
+            let label = format!("modified.rs · {group}");
+            assert_eq!(
+                linked_header(&label),
+                Some(format!("diff --git a/src/modified.rs b/src/modified.rs · {group}")),
+                "each stage of a path has a distinct jump target"
+            );
+        }
+        let output = text(&rows);
+        for content in ["value: u64", "value: u128", "+fn untracked()"] {
+            assert!(
+                output.contains(content),
+                "the whole outline contains {content}: {output}"
+            );
+        }
         Ok(())
     }
 

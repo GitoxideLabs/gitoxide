@@ -136,6 +136,7 @@ pub(crate) enum ChangesLayout {
 #[derive(Debug)]
 pub(crate) struct ChangesView {
     pub selected: usize,
+    pub root_selected: bool,
     pub offset: usize,
     pub horizontal_offset: usize,
     pub error: Option<String>,
@@ -152,6 +153,7 @@ impl Default for ChangesView {
     fn default() -> Self {
         Self {
             selected: 0,
+            root_selected: false,
             offset: 0,
             horizontal_offset: 0,
             error: None,
@@ -166,6 +168,17 @@ impl Default for ChangesView {
 }
 
 impl ChangesView {
+    pub(crate) fn selected_path_index(&self) -> Option<usize> {
+        (!self.root_selected).then_some(self.selected)
+    }
+
+    fn select_root(&mut self) {
+        self.root_selected = true;
+        self.selected = 0;
+        self.offset = 0;
+        self.error = None;
+    }
+
     pub(crate) fn display_index(&self, path_index: usize) -> usize {
         path_index
             + self
@@ -207,6 +220,16 @@ pub(crate) enum ChangeGroup {
     Tree,
     Staged,
     Unstaged,
+}
+
+impl ChangeGroup {
+    pub(crate) fn worktree_label(self) -> Option<&'static str> {
+        match self {
+            ChangeGroup::Tree => None,
+            ChangeGroup::Staged => Some("Staged"),
+            ChangeGroup::Unstaged => Some("Unstaged"),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -413,6 +436,7 @@ pub(crate) enum Action {
         index: usize,
         commit_id: ObjectId,
     },
+    SelectChangeRoot(ChangePane),
     SelectChange {
         pane: ChangePane,
         index: usize,
@@ -533,6 +557,9 @@ pub(crate) enum Effect {
     OpenCommitDiff(TreeDiffTarget),
     OpenStructuralDiff(ChangePane, usize),
     OpenCommitStructuralDiff(TreeDiffTarget),
+    OpenWorktreeDiff {
+        structural: bool,
+    },
     Reword(ObjectId),
     AutoMerge(crate::edit::auto_merge::Selection),
     NewCommit {
@@ -2406,16 +2433,16 @@ impl App {
                     self.select_history_index(index);
                 }
             }
+            Action::SelectChangeRoot(pane) if self.changes_visible() && self.change_pane_visible(pane) => {
+                self.changes_focus = Some(pane);
+                self.changes_mut(pane).select_root();
+            }
             Action::SelectChange { pane, index }
-                if self.changes_visible()
-                    && match pane {
-                        ChangePane::Tree => self.tree_changes_visible,
-                        ChangePane::Worktree => self.worktree_changes_visible,
-                    }
-                    && index < self.changes(pane).len =>
+                if self.changes_visible() && self.change_pane_visible(pane) && index < self.changes(pane).len =>
             {
                 self.changes_focus = Some(pane);
                 let changes = self.changes_mut(pane);
+                changes.root_selected = false;
                 changes.selected = index;
                 changes.error = None;
                 self.ensure_changes_visible();
@@ -2476,10 +2503,7 @@ impl App {
             Action::PageUp => self.move_selection(self.viewport_rows.max(1), false),
             Action::PageDown => self.move_selection(self.viewport_rows.max(1), true),
             Action::First if self.changes_focus.is_some() => {
-                let changes = self.focused_changes_mut();
-                changes.selected = 0;
-                changes.error = None;
-                self.ensure_changes_visible();
+                self.focused_changes_mut().select_root();
             }
             Action::First => {
                 if let Some(index) = (0..self.history_len()).find(|index| self.history_entry_selectable(*index)) {
@@ -2488,6 +2512,7 @@ impl App {
             }
             Action::Last if self.changes_focus.is_some() => {
                 let changes = self.focused_changes_mut();
+                changes.root_selected &= changes.len == 0;
                 changes.selected = changes.max;
                 changes.error = None;
                 self.ensure_changes_visible();
@@ -2665,6 +2690,8 @@ impl App {
                 if self.changes_mode.is_none() {
                     self.changes_suppressed = false;
                     self.changes_focus = None;
+                } else if let Some(pane) = self.changes_focus {
+                    self.changes_mut(pane).select_root();
                 }
             }
             Action::ToggleChangesFocus if self.changes_mode.is_some() && !self.commit_fullscreen => {
@@ -2685,11 +2712,25 @@ impl App {
                 let pane = self.changes_focus.expect("focus was checked");
                 let changes = self.focused_changes_mut();
                 changes.error = None;
-                return vec![if action == Action::OpenStructuralDiff {
-                    Effect::OpenStructuralDiff(pane, changes.selected)
-                } else {
-                    Effect::OpenDiff(pane, changes.selected)
-                }];
+                let structural = action == Action::OpenStructuralDiff;
+                match (pane, changes.selected_path_index()) {
+                    (_, Some(index)) if structural => return vec![Effect::OpenStructuralDiff(pane, index)],
+                    (_, Some(index)) => return vec![Effect::OpenDiff(pane, index)],
+                    (ChangePane::Worktree, None) => return vec![Effect::OpenWorktreeDiff { structural }],
+                    (ChangePane::Tree, None) => {
+                        return self
+                            .selected_tree_diff_target()
+                            .map(|target| {
+                                if structural {
+                                    Effect::OpenCommitStructuralDiff(target)
+                                } else {
+                                    Effect::OpenCommitDiff(target)
+                                }
+                            })
+                            .into_iter()
+                            .collect();
+                    }
+                }
             }
             Action::OpenDiff | Action::OpenStructuralDiff if self.expand_selected_segment() => {}
             Action::OpenDiff if self.review_return.is_some() => {
@@ -2960,7 +3001,7 @@ impl App {
                 self.state = State::Cancelling;
                 return vec![Effect::Cancel];
             }
-            Action::Copy => {
+            Action::Copy if self.changes_focus.is_none_or(|pane| !self.changes(pane).root_selected) => {
                 if let Some(commit_id) = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id) {
                     let text = match self.effective_id_mode() {
                         IdMode::Change => format!("{commit_id} {}", self.change_id(commit_id)),
@@ -3452,13 +3493,24 @@ impl App {
 
     fn move_changes(&mut self, distance: usize, down: bool) {
         let changes = self.focused_changes_mut();
+        if changes.root_selected && !down {
+            self.focus_history();
+            return;
+        }
         changes.error = None;
-        changes.selected = if down {
-            changes.selected.saturating_add(distance).min(changes.max)
+        let current = changes.selected_path_index().map_or(0, |index| index + 1);
+        let next = if down {
+            current.saturating_add(distance).min(changes.len)
         } else {
-            changes.selected.saturating_sub(distance)
+            current.saturating_sub(distance)
         };
-        self.ensure_changes_visible();
+        if next == 0 {
+            changes.select_root();
+        } else {
+            changes.root_selected = false;
+            changes.selected = next - 1;
+            changes.ensure_visible();
+        }
     }
 
     fn clear_reachability_selection(&mut self) {
@@ -4004,7 +4056,9 @@ impl App {
             && self.amend_available
             && match self.changes_focus {
                 None => true,
-                Some(ChangePane::Worktree) => self.worktree_path_amend_available,
+                Some(ChangePane::Worktree) => {
+                    self.worktree_path_amend_available && !self.worktree_changes.root_selected
+                }
                 Some(ChangePane::Tree) => false,
             }
     }
@@ -4013,6 +4067,7 @@ impl App {
         self.worktree_changes_available
             && self.changes_focus == Some(ChangePane::Worktree)
             && self.worktree_changes_visible
+            && !self.worktree_changes.root_selected
     }
 
     pub(crate) fn actions_visible(&self) -> bool {
@@ -4045,7 +4100,13 @@ impl App {
     }
 
     pub(crate) fn can_spill(&self) -> bool {
-        self.can_edit_head() && matches!(self.changes_focus, None | Some(ChangePane::Tree)) && self.spill_available
+        self.can_edit_head()
+            && match self.changes_focus {
+                None => true,
+                Some(ChangePane::Tree) => !self.tree_changes.root_selected,
+                Some(ChangePane::Worktree) => false,
+            }
+            && self.spill_available
     }
 
     pub(crate) fn can_split(&self) -> bool {
@@ -4242,7 +4303,7 @@ impl App {
     pub(crate) fn can_position_selection(&self) -> bool {
         !(self.show_commit && self.commit_fullscreen)
             && match self.changes_focus {
-                Some(pane) => self.changes(pane).len > 0,
+                Some(pane) => self.changes(pane).len > 0 && !self.changes(pane).root_selected,
                 None => self.selected_history_index().is_some(),
             }
     }
@@ -4290,7 +4351,7 @@ impl App {
         changes.max = len.saturating_sub(1);
         changes.separators =
             separators.map(|separator| separator.filter(|separator| *separator > 0 && *separator < len));
-        if len == 0 {
+        if len == 0 || changes.root_selected {
             changes.selected = 0;
             changes.offset = 0;
         } else {
@@ -4366,16 +4427,27 @@ impl App {
             ChangesLayout::SideBySide => (ChangePane::Tree, ChangePane::Worktree),
             ChangesLayout::Stacked => (ChangePane::Worktree, ChangePane::Tree),
         };
-        let visible = |pane| match pane {
-            ChangePane::Tree => self.tree_changes_visible,
-            ChangePane::Worktree => self.worktree_changes_visible,
-        };
-        self.changes_focus = match self.changes_focus {
-            None if visible(first) => Some(first),
-            None if visible(second) => Some(second),
-            Some(current) if current == first && visible(second) => Some(second),
+        let next = match self.changes_focus {
+            None if self.change_pane_visible(first) => Some(first),
+            None if self.change_pane_visible(second) => Some(second),
+            Some(current) if current == first && self.change_pane_visible(second) => Some(second),
             Some(_) | None => None,
         };
+        self.focus_change_root(next);
+    }
+
+    fn change_pane_visible(&self, pane: ChangePane) -> bool {
+        match pane {
+            ChangePane::Tree => self.tree_changes_visible,
+            ChangePane::Worktree => self.worktree_changes_visible,
+        }
+    }
+
+    fn focus_change_root(&mut self, pane: Option<ChangePane>) {
+        self.changes_focus = pane;
+        if let Some(pane) = pane {
+            self.changes_mut(pane).select_root();
+        }
     }
 
     pub(crate) fn set_changes_layout(&mut self, layout: ChangesLayout, tree_visible: bool, worktree_visible: bool) {
@@ -4383,9 +4455,9 @@ impl App {
         self.tree_changes_visible = tree_visible;
         self.worktree_changes_visible = worktree_visible;
         if self.changes_focus == Some(ChangePane::Tree) && !tree_visible {
-            self.changes_focus = worktree_visible.then_some(ChangePane::Worktree);
+            self.focus_change_root(worktree_visible.then_some(ChangePane::Worktree));
         } else if self.changes_focus == Some(ChangePane::Worktree) && !worktree_visible {
-            self.changes_focus = tree_visible.then_some(ChangePane::Tree);
+            self.focus_change_root(tree_visible.then_some(ChangePane::Tree));
         }
     }
 
@@ -11057,6 +11129,17 @@ mod tests {
         assert_eq!(app.focus_feedback.take(), Some("history"));
         app.update(Action::ToggleChangesFocus);
 
+        assert_eq!(
+            app.update(Action::OpenDiff),
+            vec![Effect::OpenCommitDiff(TreeDiffTarget::Commit { id: id(1), parent: 0 })],
+            "the Tree title opens the whole comparison"
+        );
+        app.update(Action::MoveDown);
+        assert_eq!(
+            app.update(Action::OpenDiff),
+            vec![Effect::OpenDiff(ChangePane::Tree, 0)],
+            "moving down from the title selects the first file"
+        );
         app.update(Action::MoveDown);
         assert_eq!((app.tree_changes.selected, app.tree_changes.offset), (1, 0));
         assert_eq!(
@@ -11081,7 +11164,6 @@ mod tests {
         assert_eq!((app.tree_changes.selected, app.tree_changes.offset), (9, 6));
         app.update(Action::First);
         assert_eq!((app.tree_changes.selected, app.tree_changes.offset), (0, 0));
-
         app.update(Action::ScrollRight);
         app.update(Action::ScrollRight);
         app.update(Action::ScrollRight);
@@ -11089,6 +11171,18 @@ mod tests {
         assert_eq!(app.horizontal_offset, 0, "path panning leaves the graph untouched");
         app.update(Action::ScrollLeft);
         assert_eq!(app.tree_changes.horizontal_offset, 25);
+        app.update(Action::MoveDown);
+        app.update(Action::MoveUp);
+        assert_eq!(
+            app.update(Action::OpenStructuralDiff),
+            vec![Effect::OpenCommitStructuralDiff(TreeDiffTarget::Commit {
+                id: id(1),
+                parent: 0
+            })],
+            "moving up from the first path selects the Tree title"
+        );
+        app.update(Action::MoveUp);
+        assert_eq!(app.changes_focus, None, "moving up from the title returns to history");
 
         app.update(Action::ToggleChanges);
         app.update(Action::ToggleChanges);
@@ -11449,8 +11543,21 @@ mod tests {
         app.update(Action::ToggleChangesFocus);
         assert_eq!(app.changes_focus, Some(ChangePane::Tree));
         app.update(Action::MoveDown);
+        app.update(Action::MoveDown);
         app.update(Action::ToggleChangesFocus);
         assert_eq!(app.changes_focus, Some(ChangePane::Worktree));
+        assert_eq!(
+            app.update(Action::OpenDiff),
+            vec![Effect::OpenWorktreeDiff { structural: false }],
+            "the Worktree title opens all worktree changes"
+        );
+        assert_eq!(
+            app.update(Action::OpenStructuralDiff),
+            vec![Effect::OpenWorktreeDiff { structural: true }],
+            "the structural shortcut uses the same scope"
+        );
+        assert!(!app.can_discard(), "the title cannot discard a path");
+        app.update(Action::MoveDown);
         app.update(Action::MoveDown);
         assert_eq!(app.tree_changes.selected, 1);
         assert_eq!(app.worktree_changes.selected, 1);
@@ -11499,6 +11606,7 @@ mod tests {
         );
 
         app.update(Action::First);
+        app.update(Action::MoveDown);
         app.set_changes_bounds(ChangePane::Worktree, 4, 5, [Some(1), Some(2)], 10, 0);
         app.update(Action::PageDown);
         assert_eq!(app.worktree_changes.selected, 2, "paging skips both visible dividers");
