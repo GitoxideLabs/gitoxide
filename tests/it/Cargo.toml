@@ -35,7 +35,7 @@ required-features = ["tools"]
 
 [dependencies]
 clap = { version = "4.5.60", features = ["derive"] }
-gix = { version = "^0.90.0", path = "../../gix", optional = true, default-features = false, features = ["unstable", "attributes", "blame", "blob-diff", "error-print-location", "parallel", "revision", "sha1"] }
+gix = { version = "^0.91.0", path = "../../gix", optional = true, default-features = false, features = ["unstable", "attributes", "blame", "blob-diff", "error-print-location", "parallel", "revision", "sha1"] }
 gix-testtools = { path = "../tools", optional = true, default-features = false, features = ["sha1"] }
 gix-error = { path = "../../gix-error" }
 regex = { version = "1.12.3", optional = true, default-features = false, features = ["std"] }

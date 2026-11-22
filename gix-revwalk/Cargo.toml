@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-revwalk"
-version = "0.38.0"
+version = "0.39.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate providing utilities for walking the revision graph"
@@ -21,12 +21,12 @@ sha1 = ["gix-hash/sha1"]
 sha256 = ["gix-hash/sha256"]
 
 [dependencies]
-gix-hash = { version = "^0.28.1", path = "../gix-hash" }
-gix-error = { version = "^0.5.2", path = "../gix-error" }
-gix-object = { version = "^0.66.1", path = "../gix-object" }
+gix-hash = { version = "^0.29.0", path = "../gix-hash" }
+gix-error = { version = "^0.5.3", path = "../gix-error" }
+gix-object = { version = "^0.67.0", path = "../gix-object" }
 gix-date = { version = "^0.19.0", path = "../gix-date" }
-gix-hashtable = { version = "^0.18.1", path = "../gix-hashtable" }
-gix-commitgraph = { version = "^0.42.0", path = "../gix-commitgraph" }
+gix-hashtable = { version = "^0.19.0", path = "../gix-hashtable" }
+gix-commitgraph = { version = "^0.43.0", path = "../gix-commitgraph" }
 
 smallvec = "1.15.1"
 

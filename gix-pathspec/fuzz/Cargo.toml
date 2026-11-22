@@ -9,7 +9,7 @@ edition = "2024"
 cargo-fuzz = true
 
 [dependencies]
-gix-error = { version = "^0.5.2", path = "../../gix-error" }
+gix-error = { version = "^0.5.3", path = "../../gix-error" }
 libfuzzer-sys = "0.4"
 
 [dependencies.gix-pathspec]

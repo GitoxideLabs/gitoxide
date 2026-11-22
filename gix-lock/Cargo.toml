@@ -28,10 +28,10 @@ profiles = [{ default-features = false, features = [] }]
 allowed-unstable-crates = ["gix_error"]
 
 [dependencies]
-gix-macros = { version = "^0.2.1", path = "../gix-macros" }
-gix-error = { version = "^0.5.2", path = "../gix-error" }
+gix-macros = { version = "^0.2.2", path = "../gix-macros" }
+gix-error = { version = "^0.5.3", path = "../gix-error" }
 gix-fs = { version = "^1.0.0", path = "../gix-fs" }
-gix-utils = { version = "^0.5.2", default-features = false, path = "../gix-utils" }
+gix-utils = { version = "^0.5.3", default-features = false, path = "../gix-utils" }
 gix-tempfile = { version = "~27.0.0", default-features = false, path = "../gix-tempfile" }
 
 [dev-dependencies]

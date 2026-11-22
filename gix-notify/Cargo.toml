@@ -21,8 +21,8 @@ tests = [{ args = [] }, { args = ["--features", "async"] }]
 async = ["dep:async-channel", "dep:event-listener"]
 
 [dependencies]
-gix-error = { version = "^0.5.1", path = "../gix-error" }
-gix-parallel = { version = "^0.50.0", path = "../gix-parallel", features = [
+gix-error = { version = "^0.5.3", path = "../gix-error" }
+gix-parallel = { version = "^0.50.2", path = "../gix-parallel", features = [
     "parallel",
 ] }
 async-channel = { version = "2.5.0", optional = true }

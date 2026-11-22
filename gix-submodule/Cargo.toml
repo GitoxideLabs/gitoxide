@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-submodule"
-version = "0.36.1"
+version = "0.37.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project dealing git submodules"
@@ -21,12 +21,12 @@ sha1 = ["gix-refspec/sha1"]
 sha256 = ["gix-refspec/sha256"]
 
 [dependencies]
-gix-pathspec = { version = "^0.22.1", path = "../gix-pathspec" }
-gix-error = { version = "^0.5.2", path = "../gix-error", features = ["bstr"] }
-gix-refspec = { version = "^0.47.1", path = "../gix-refspec" }
-gix-config = { version = "^0.62.2", path = "../gix-config" }
-gix-path = { version = "^0.14.1", path = "../gix-path" }
-gix-url = { version = "^0.40.1", path = "../gix-url" }
+gix-pathspec = { version = "^0.23.0", path = "../gix-pathspec" }
+gix-error = { version = "^0.5.3", path = "../gix-error", features = ["bstr"] }
+gix-refspec = { version = "^0.48.0", path = "../gix-refspec" }
+gix-config = { version = "^0.63.0", path = "../gix-config" }
+gix-path = { version = "^0.14.2", path = "../gix-path" }
+gix-url = { version = "^0.41.0", path = "../gix-url" }
 
 bstr = { version = "1.12.0", default-features = false }
 

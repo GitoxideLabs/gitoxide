@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-prompt"
-version = "0.19.1"
+version = "0.19.2"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project for handling prompts in the terminal"
@@ -15,9 +15,9 @@ rust-version = "1.95"
 doctest = false
 
 [dependencies]
-gix-command = { version = "^0.12.1", path = "../gix-command" }
-gix-config-value = { version = "^0.21.1", path = "../gix-config-value" }
-gix-error = { version = "^0.5.2", path = "../gix-error" }
+gix-command = { version = "^0.12.2", path = "../gix-command" }
+gix-config-value = { version = "^0.21.2", path = "../gix-config-value" }
+gix-error = { version = "^0.5.3", path = "../gix-error" }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.2", features = ["termios"] }
