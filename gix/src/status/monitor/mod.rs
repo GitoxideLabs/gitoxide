@@ -97,6 +97,39 @@ pub struct Update {
     pub unstaged: Option<Scope>,
 }
 
+/// The items from one successful status refresh, identified by checkout and baseline HEAD.
+/// Clones share immutable data and can cross threads with the `parallel` feature. A snapshot
+/// remains usable after a later refresh or after its status handle and repository are dropped.
+#[derive(Clone, Debug)]
+pub struct Snapshot(OwnShared<SnapshotData>);
+
+#[derive(Debug)]
+struct SnapshotData {
+    items: Vec<Item>,
+    git_dir: PathBuf,
+    head_id: Option<gix_hash::ObjectId>,
+}
+
+impl Snapshot {
+    /// The absolute private Git directory identifying the checkout.
+    pub fn git_dir(&self) -> &std::path::Path {
+        &self.0.git_dir
+    }
+
+    /// The commit used for this snapshot, or `None` for an unborn HEAD.
+    pub fn head_id(&self) -> Option<gix_hash::ObjectId> {
+        self.0.head_id
+    }
+}
+
+impl std::ops::Deref for Snapshot {
+    type Target = [Item];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0.items
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Head {
     reference: Option<gix_ref::FullName>,
@@ -150,7 +183,7 @@ pub struct WorktreeStatusHandle {
     pub(crate) subscription: OwnShared<Subscription>,
     notifications: crate::notify::Options,
     options: Options,
-    snapshot: Option<Vec<Item>>,
+    snapshot: Option<Snapshot>,
     unrewritten_snapshot: Option<Vec<Item>>,
     index: Option<index::Snapshot>,
     index_stamp: Option<(Option<gix_hash::ObjectId>, i64, u32)>,
@@ -214,16 +247,21 @@ impl WorktreeStatusHandle {
         self.snapshot.as_deref().filter(|_| !self.is_closed())
     }
 
+    /// Share the most recent successful snapshot, including its checkout and baseline HEAD.
+    pub fn shared_snapshot(&self) -> Option<Snapshot> {
+        self.snapshot.as_ref().filter(|_| !self.is_closed()).cloned()
+    }
+
     /// The HEAD commit used by the most recent successful snapshot.
     ///
     /// Returns `None` before a snapshot exists or when its HEAD is unborn. Dirty or failed refreshes
     /// retain the previous committed baseline. A cached, unchanged refresh does not relabel status
     /// with the repository's current HEAD; compare this ID before using cached status with new reads.
     pub fn snapshot_head_id(&self) -> Option<gix_hash::ObjectId> {
-        self.head
+        self.snapshot
             .as_ref()
             .filter(|_| !self.is_closed())
-            .and_then(|head| head.commit_id)
+            .and_then(Snapshot::head_id)
     }
 
     /// Whether the snapshot needs a refresh. To check for worktree changes, inspect the
@@ -684,9 +722,9 @@ impl WorktreeStatusHandle {
             .ignore_case;
         let mut next = self
             .unrewritten_snapshot
-            .as_ref()
-            .or(self.snapshot.as_ref())
-            .cloned()
+            .as_deref()
+            .or(self.snapshot.as_deref())
+            .map(<[_]>::to_vec)
             .unwrap_or_default();
         next.retain(|item| match item {
             Item::TreeIndex(_) => !staged,
@@ -728,7 +766,11 @@ impl WorktreeStatusHandle {
         let changes = delta::changes(self.snapshot.as_deref().unwrap_or_default(), &next, interrupt)?;
         let changed = self.snapshot.is_none() || !changes.is_empty();
         check_interrupted(interrupt)?;
-        self.snapshot = Some(next);
+        self.snapshot = Some(Snapshot(OwnShared::new(SnapshotData {
+            items: next,
+            git_dir: self.layout().git_dir.clone(),
+            head_id: head.as_ref().or(self.head.as_ref()).and_then(|head| head.commit_id),
+        })));
         self.unrewritten_snapshot = unrewritten_snapshot;
         if let Some(index) = next_index {
             self.index = Some(index);

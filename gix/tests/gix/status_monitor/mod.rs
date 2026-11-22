@@ -795,6 +795,22 @@ fn cached_snapshot_retains_its_committed_head_until_successful_refresh() -> Test
     );
     refresh(&mut monitor, root)?;
     let previous_head = open(root)?.head_id()?.detach();
+    let previous = monitor
+        .shared_snapshot()
+        .expect("a successful refresh can be handed to another worker");
+    assert_eq!(previous.git_dir(), monitor.layout().git_dir);
+    assert_eq!(previous.head_id(), Some(previous_head));
+    assert_eq!(
+        previous.as_ptr(),
+        monitor.snapshot().expect("the same snapshot").as_ptr()
+    );
+    #[cfg(feature = "parallel")]
+    {
+        let copy = previous.clone();
+        std::thread::spawn(move || assert_eq!(copy.head_id(), Some(previous_head)))
+            .join()
+            .expect("the snapshot crosses threads");
+    }
     assert_eq!(
         monitor.snapshot_head_id(),
         Some(previous_head),
@@ -836,6 +852,12 @@ fn cached_snapshot_retains_its_committed_head_until_successful_refresh() -> Test
         monitor.snapshot_head_id(),
         Some(current_head),
         "a successful refresh commits the new HEAD baseline"
+    );
+    drop(monitor);
+    assert_eq!(
+        previous.head_id(),
+        Some(previous_head),
+        "retained items keep their original commit"
     );
     Ok(())
 }
