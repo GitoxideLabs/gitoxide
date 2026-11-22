@@ -1,4 +1,4 @@
-use crate::{Id, Reference, bstr::BStr, ext::ReferenceExt, revision::Spec};
+use crate::{Id, Reference, bstr::BStr, revision::Spec};
 
 ///
 pub mod parse;
@@ -47,6 +47,11 @@ impl<'repo> Spec<'repo> {
 
 /// Access
 impl<'repo> Spec<'repo> {
+    /// Return the repository that owns this specification's IDs and references.
+    pub fn repo(&self) -> &'repo crate::Repository {
+        self.repo
+    }
+
     /// Detach the `Repository` from this instance, leaving only plain data that can be moved freely and serialized.
     pub fn detach(self) -> gix_revision::Spec {
         self.inner
@@ -56,11 +61,7 @@ impl<'repo> Spec<'repo> {
     /// `HEAD@{-1}..main` might be `(Some(refs/heads/previous-branch), Some(refs/heads/main))`,
     /// or `@` returns `(Some(refs/heads/main), None)`.
     pub fn into_references(self) -> (Option<Reference<'repo>>, Option<Reference<'repo>>) {
-        let repo = self.repo;
-        (
-            self.first_ref.map(|r| r.attach(repo)),
-            self.second_ref.map(|r| r.attach(repo)),
-        )
+        (self.first_ref, self.second_ref)
     }
 
     /// Return the path encountered in specs like `@:<path>` or `:<path>`, along with the kind of object it represents.
@@ -70,16 +71,16 @@ impl<'repo> Spec<'repo> {
         self.path.as_ref().map(|(p, mode)| (p.as_ref(), *mode))
     }
 
-    /// Return the name of the first reference we encountered while resolving the rev-spec, or `None` if a short hash
+    /// Borrow the first reference we encountered while resolving the rev-spec, or return `None` if a short hash
     /// was used. For example, `@` might yield `Some(HEAD)`, but `abcd` yields `None`.
-    pub fn first_reference(&self) -> Option<&gix_ref::Reference> {
+    pub fn first_reference(&self) -> Option<&Reference<'repo>> {
         self.first_ref.as_ref()
     }
 
-    /// Return the name of the second reference we encountered while resolving the rev-spec, or `None` if a short hash
+    /// Borrow the second reference we encountered while resolving the rev-spec, or return `None` if a short hash
     /// was used or there was no second reference. For example, `..@` might yield `Some(HEAD)`, but `..abcd` or `@`
     /// yields `None`.
-    pub fn second_reference(&self) -> Option<&gix_ref::Reference> {
+    pub fn second_reference(&self) -> Option<&Reference<'repo>> {
         self.second_ref.as_ref()
     }
 

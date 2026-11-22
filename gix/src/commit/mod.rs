@@ -178,8 +178,7 @@ pub mod describe {
     /// A support type to allow configuring a `git describe` operation
     pub struct Platform<'repo> {
         pub(crate) id: gix_hash::ObjectId,
-        /// The owning repository.
-        pub repo: &'repo crate::Repository,
+        pub(crate) repo: &'repo Repository,
         pub(crate) select: SelectRef,
         pub(crate) first_parent: bool,
         pub(crate) id_as_fallback: bool,
@@ -187,6 +186,11 @@ pub mod describe {
     }
 
     impl<'repo> Platform<'repo> {
+        /// Return the owning repository.
+        pub fn repo(&self) -> &'repo Repository {
+            self.repo
+        }
+
         /// Configure which names to `select` from which describe can chose.
         pub fn names(mut self, select: SelectRef) -> Self {
             self.select = select;

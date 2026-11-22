@@ -69,7 +69,7 @@ TIX_FIXUP_NOTE_FILE="$note_file" GIT_EDITOR='cp "$TIX_FIXUP_NOTE_FILE"' \
 
 The note command has no `--message` or `--file` flag. Require enrichment to succeed before continuing; if it fails, finish the note on the existing fixup instead of creating another commit.
 
-For a message-only request, inspect the target's contents and supply its complete replacement message:
+For a message-only request, inspect the target commit's diff and prepare the complete replacement message. Always rewrite the title to match the revised message and the commit's contents, even when the request mentions only the commit message. If the body contains `<!-- agent -->`, preserve the marker and all body text above it verbatim, and make body edits below the marker.
 
 ```bash
 tix reword "$target_change" --file "$message_file"

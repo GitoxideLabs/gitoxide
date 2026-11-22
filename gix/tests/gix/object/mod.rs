@@ -73,7 +73,10 @@ fn failed_object_conversions_return_the_original_object() -> gix_testtools::Test
         assert_eq!(object.kind, kind, "the original object kind is returned");
         assert_eq!(object.data, b"object bytes", "the original object data is returned");
         assert_eq!(object.data.as_ptr(), data_ptr, "the original allocation is returned");
-        assert!(std::ptr::eq(object.repo, &repo), "the original repository is retained");
+        assert!(
+            std::ptr::eq(object.repo(), &repo),
+            "the original repository is retained"
+        );
     }
     Ok(())
 }

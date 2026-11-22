@@ -22,10 +22,10 @@ sha256 = ["gix/sha256"]
 
 [dependencies]
 anyhow = "1.0.102"
-gix = { version = "^0.90.0", path = "../gix", default-features = false, features = ["fsmonitor-daemon"] }
+gix = { version = "^0.91.0", path = "../gix", default-features = false, features = ["fsmonitor-daemon"] }
 
 [dev-dependencies]
-gix-testtools = { version = "^0.22.0", path = "../tests/tools", default-features = false, features = ["sha1"] }
+gix-testtools = { version = "^0.23.0", path = "../tests/tools", default-features = false, features = ["sha1"] }
 gix-fsmonitor-daemon = { path = ".", features = ["sha1"] }
 
 [package.metadata.docs.rs]

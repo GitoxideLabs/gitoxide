@@ -77,10 +77,10 @@ pub(crate) mod function {
                         return display_object(&repo, spec, tree_mode, cache.as_mut().map(|c| (blob_format, c)), out);
                     }
                     if let Some(r) = spec.first_reference().filter(|_| show_reference) {
-                        writeln!(out, "{}", r.name).or_error()?;
+                        writeln!(out, "{}", r.name()).or_error()?;
                     }
                     if let Some(r) = spec.second_reference().filter(|_| show_reference) {
-                        writeln!(out, "{}", r.name).or_error()?;
+                        writeln!(out, "{}", r.name()).or_error()?;
                     }
                     writeln!(out, "{spec}", spec = spec.detach()).or_error()?;
                 }

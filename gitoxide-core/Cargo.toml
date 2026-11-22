@@ -4,7 +4,7 @@ lints.workspace = true
 name = "gitoxide-core"
 description = "The library implementing all capabilities of the gitoxide CLI"
 repository = "https://github.com/GitoxideLabs/gitoxide"
-version = "0.64.0"
+version = "0.65.0"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 license = "MIT OR Apache-2.0"
 edition = "2024"
@@ -56,12 +56,11 @@ serde = ["gix/serde", "dep:serde_json", "dep:serde", "bytesize/serde"]
 
 [dependencies]
 # deselect everything else (like "performance") as this should be controllable by the parent application.
-gix = { version = "^0.90.0", path = "../gix", default-features = false, features = ["merge", "blob-diff", "blame", "revision", "mailmap", "excludes", "attributes", "worktree-mutation", "credentials", "interrupt", "status", "dirwalk", "command", "notify", "fsmonitor-daemon"] }
-gix-pack-for-configuration-only = { package = "gix-pack", version = "^0.77.0", path = "../gix-pack", default-features = false, features = ["pack-cache-lru-dynamic", "pack-cache-lru-static", "generate", "streaming-input"] }
-gix-transport-configuration-only = { package = "gix-transport", version = "^0.62.0", path = "../gix-transport", default-features = false }
-gix-archive-for-configuration-only = { package = "gix-archive", version = "^0.39.0", path = "../gix-archive", optional = true, features = ["tar", "tar_gz"] }
-gix-status = { version = "^0.37.0", path = "../gix-status" }
-gix-fsck = { version = "^0.27.1", path = "../gix-fsck" }
+gix = { version = "^0.91.0", path = "../gix", default-features = false, features = ["unstable", "merge", "blob-diff", "blame", "revision", "mailmap", "excludes", "attributes", "worktree-mutation", "credentials", "interrupt", "status", "fsck", "dirwalk", "command", "notify", "fsmonitor-daemon"] }
+gix-pack-for-configuration-only = { package = "gix-pack", version = "^0.78.0", path = "../gix-pack", default-features = false, features = ["pack-cache-lru-dynamic", "pack-cache-lru-static", "generate", "streaming-input"] }
+gix-transport-configuration-only = { package = "gix-transport", version = "^0.63.0", path = "../gix-transport", default-features = false }
+gix-archive-for-configuration-only = { package = "gix-archive", version = "^0.40.0", path = "../gix-archive", optional = true, features = ["tar", "tar_gz"] }
+
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
 bytesize = "2.3.1"
 tempfile = "3.26.0"
@@ -77,7 +76,7 @@ blocking = { version = "1.6.2", optional = true }
 
 # for 'organize' functionality
 dua-core = { version = "6.1.0", optional = true }
-gix-url = { version = "^0.40.1", path = "../gix-url", optional = true }
+gix-url = { version = "^0.41.0", path = "../gix-url", optional = true }
 
 # for 'hours'
 crossbeam-channel = { version = "0.5.15", optional = true }
@@ -93,7 +92,7 @@ sysinfo = { version = "0.40.3", optional = true, default-features = false, featu
 serde_json = { version = "1.0.150", optional = true }
 
 # for 'tracing'
-gix-trace = { version = "^0.3.1", path = "../gix-trace", features = ["forest-ansi"], optional = true }
+gix-trace = { version = "^0.3.2", path = "../gix-trace", features = ["forest-ansi"], optional = true }
 tracing-subscriber = { version = "0.3.22", optional = true }
 tracing = { version = "0.1.43", optional = true }
 

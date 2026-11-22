@@ -207,7 +207,7 @@ pub(super) mod function {
             .object()?
             .peel_to_tree()?
             .id;
-        let refname = spec.first_reference().map(|r| r.name.shorten().as_bstr().to_owned());
+        let refname = spec.first_reference().map(|r| r.name().shorten().as_bstr().to_owned());
         Ok((refname, tree_id))
     }
 }

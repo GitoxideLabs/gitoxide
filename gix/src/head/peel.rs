@@ -1,8 +1,4 @@
-use crate::{
-    Error, Head, Result,
-    ext::{ObjectIdExt, ReferenceExt},
-    head::Kind,
-};
+use crate::{Error, Head, Result, ext::ObjectIdExt, head::Kind};
 
 impl<'repo> Head<'repo> {
     /// Peel this instance and consume it to make obtaining its final target id possible, while returning an error on unborn heads.
@@ -11,11 +7,9 @@ impl<'repo> Head<'repo> {
     /// typically is a commit, but can be any object.
     pub fn into_peeled_id(mut self) -> Result<crate::Id<'repo>> {
         self.try_peel_to_id()?;
-        self.id().ok_or_else(|| match self.kind {
-            Kind::Symbolic(gix_ref::Reference { name, .. }) | Kind::Unborn(name) => {
-                gix_error::message!("Branch '{name}' does not have any commits").not_found_error()
-            }
-            Kind::Detached { .. } => unreachable!("id can be returned after peeling"),
+        self.id().ok_or_else(|| {
+            let name = self.referent_name().expect("detached HEAD has an id after peeling");
+            gix_error::message!("Branch '{name}' does not have any commits").not_found_error()
         })
     }
 
@@ -78,12 +72,7 @@ impl<'repo> Head<'repo> {
                     }
                 }
             }
-            Kind::Symbolic(r) => {
-                let mut nr = r.clone().attach(self.repo);
-                let peeled = nr.peel_to_id();
-                *r = nr.detach();
-                peeled?
-            }
+            Kind::Symbolic(r) => r.peel_to_id()?,
         }))
     }
 

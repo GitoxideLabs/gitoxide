@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-pack"
-version = "0.77.0"
+version = "0.78.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 license = "MIT OR Apache-2.0"
@@ -46,20 +46,20 @@ testing = []
 
 [dependencies]
 crc32fast = "1.5.0"
-gix-trace = { version = "^0.3.1", path = "../gix-trace" }
-gix-utils = { version = "^0.5.2", path = "../gix-utils", features = ["interrupt", "progress"] }
-gix-parallel = { version = "^0.50.1", path = "../gix-parallel" }
-gix-zlib = { version = "^0.4.0", path = "../gix-zlib" }
-gix-path = { version = "^0.14.1", path = "../gix-path" }
-gix-hash = { version = "^0.28.1", path = "../gix-hash" }
-gix-chunk = { version = "^0.10.1", path = "../gix-chunk" }
-gix-error = { version = "^0.5.2", path = "../gix-error" }
-gix-object = { version = "^0.66.1", path = "../gix-object" }
-gix-hashtable = { version = "^0.18.1", path = "../gix-hashtable", optional = true }
+gix-trace = { version = "^0.3.2", path = "../gix-trace" }
+gix-utils = { version = "^0.5.3", path = "../gix-utils", features = ["interrupt", "progress"] }
+gix-parallel = { version = "^0.50.2", path = "../gix-parallel" }
+gix-zlib = { version = "^0.4.1", path = "../gix-zlib" }
+gix-path = { version = "^0.14.2", path = "../gix-path" }
+gix-hash = { version = "^0.29.0", path = "../gix-hash" }
+gix-chunk = { version = "^0.10.2", path = "../gix-chunk" }
+gix-error = { version = "^0.5.3", path = "../gix-error" }
+gix-object = { version = "^0.67.0", path = "../gix-object" }
+gix-hashtable = { version = "^0.19.0", path = "../gix-hashtable", optional = true }
 
 # for streaming of packs (input, output)
-gix-traverse = { version = "^0.64.0", path = "../gix-traverse", optional = true }
-gix-diff = { version = "^0.70.0", path = "../gix-diff", default-features = false, optional = true }
+gix-traverse = { version = "^0.65.0", path = "../gix-traverse", optional = true }
+gix-diff = { version = "^0.71.0", path = "../gix-diff", default-features = false, optional = true }
 
 memmap2 = "0.9.11"
 smallvec = "1.15.1"

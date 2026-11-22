@@ -147,7 +147,7 @@ pub mod tree {
             how: TreatAsUnresolved,
             existing: Option<&gix_index::State>,
         ) -> crate::Result<gix_index::State> {
-            self.index.to_index(how, existing, self.tree.repo, self.tree.validate)
+            self.index.to_index(how, existing, self.tree.repo(), self.tree.validate)
         }
 
         /// Create an index-file in memory from the recorded merge result, using [`Self::index()`].
@@ -159,7 +159,7 @@ pub mod tree {
         ) -> crate::Result<gix_index::File> {
             Ok(gix_index::File::from_state(
                 self.index(how, existing)?,
-                self.tree.repo.index_path(),
+                self.tree.repo().index_path(),
             ))
         }
     }

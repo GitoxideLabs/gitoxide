@@ -155,7 +155,7 @@ mod sibling_branch {
             for branch in ["", "main"] {
                 let actual = parse_spec(format!("{branch}@{{{op}}}"), &repo)?;
                 assert_eq!(actual.first_reference().expect("set"), "refs/remotes/origin/main");
-                assert_eq!(actual.second_reference(), None);
+                assert!(actual.second_reference().is_none());
                 assert_eq!(
                     actual.single().expect("just one"),
                     hex_to_id_sha1_only("55e825ebe8fd2ff78cad3826afb696b96b576a7e")
@@ -249,9 +249,9 @@ mod index {
 }
 
 #[test]
-fn names_are_made_available_via_references() {
-    let repo = repo("complex_graph").unwrap();
-    let spec = parse_spec_no_baseline("main..g", &repo).unwrap();
+fn names_are_made_available_via_references() -> TestResult {
+    let repo = repo("complex_graph")?;
+    let spec = repo.rev_parse("main..g")?;
     let (a, b) = spec.clone().into_references();
     assert_eq!(
         a.as_ref().map(|r| r.name().as_bstr().to_string()),
@@ -261,15 +261,31 @@ fn names_are_made_available_via_references() {
         b.as_ref().map(|r| r.name().as_bstr().to_string()),
         Some("refs/heads/g".into())
     );
-    assert_eq!(spec.first_reference(), a.as_ref().map(gix::Reference::inner));
-    assert_eq!(spec.second_reference(), b.as_ref().map(gix::Reference::inner));
-
-    let spec = parse_spec_no_baseline("@", &repo).unwrap();
-    assert_eq!(spec.second_reference(), None);
+    let first: &gix::Reference<'_> = spec.first_reference().expect("range start");
+    let second: &gix::Reference<'_> = spec.second_reference().expect("range end");
+    assert!(std::ptr::eq(first.repo(), &repo));
+    assert!(std::ptr::eq(second.repo(), &repo));
     assert_eq!(
-        spec.first_reference().map(|r| r.name.as_bstr().to_string()),
+        spec.first_reference(),
+        a.as_ref(),
+        "borrowing preserves the first snapshot"
+    );
+    assert_eq!(
+        spec.second_reference(),
+        b.as_ref(),
+        "borrowing preserves the second snapshot"
+    );
+
+    let spec = repo.rev_parse("@")?;
+    let id = spec.single().expect("HEAD resolves to one ID");
+    assert!(std::ptr::eq(spec.repo(), &repo), "the spec retains its owner");
+    assert!(std::ptr::eq(id.repo(), spec.repo()), "the ID shares the repository");
+    assert!(spec.second_reference().is_none());
+    assert_eq!(
+        spec.first_reference().map(|r| r.name().as_bstr().to_string()),
         Some("HEAD".into())
     );
+    Ok(())
 }
 
 #[test]

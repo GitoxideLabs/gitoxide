@@ -1,7 +1,7 @@
 use gix::{
-    ObjectId, Result,
+    Result,
     error::{ResultExt, message},
-    objs::Kind,
+    fsck::Connectivity,
 };
 
 pub fn function(mut repo: gix::Repository, spec: Option<String>, mut out: impl std::io::Write) -> Result<()> {
@@ -22,18 +22,12 @@ pub fn function(mut repo: gix::Repository, spec: Option<String>, mut out: impl s
         .ancestors()
         .all()?;
 
-    let on_missing = |oid: &ObjectId, kind: Kind| {
+    let mut check = Connectivity::new(&repo.objects, |oid, kind| {
         writeln!(out, "{oid}: {kind}").expect("failed to write output");
-    };
-
-    let mut check = gix_fsck::Connectivity::new(&repo.objects, on_missing);
-    // Walk all commits, checking each one for connectivity
+    });
+    // Leave ancestry to the revision walk so shallow boundaries are respected.
     for commit in commits {
-        let commit = commit?;
-        check.check_commit(&commit.id)?;
-        // Note that we leave parent-iteration to the commits iterator, as it will
-        // correctly handle shallow repositories which are expected to have the commits
-        // along the shallow boundary missing.
+        check.check_commit(&commit?.id)?;
     }
     Ok(())
 }

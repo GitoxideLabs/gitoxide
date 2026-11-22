@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-protocol"
-version = "0.68.0"
+version = "0.69.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project for implementing git protocols"
@@ -72,22 +72,22 @@ path = "tests/async-protocol.rs"
 required-features = ["async-client"]
 
 [dependencies]
-gix-error = { version = "^0.5.2", path = "../gix-error" }
-gix-transport = { version = "^0.62.0", path = "../gix-transport" }
-gix-hash = { version = "^0.28.1", path = "../gix-hash" }
-gix-shallow = { version = "^0.15.1", path = "../gix-shallow" }
+gix-error = { version = "^0.5.3", path = "../gix-error" }
+gix-transport = { version = "^0.63.0", path = "../gix-transport" }
+gix-hash = { version = "^0.29.0", path = "../gix-hash" }
+gix-shallow = { version = "^0.16.0", path = "../gix-shallow" }
 gix-date = { version = "^0.19.0", path = "../gix-date" }
-gix-utils = { version = "^0.5.2", path = "../gix-utils", features = ["progress"] }
-gix-ref = { version = "^0.69.1", path = "../gix-ref" }
+gix-utils = { version = "^0.5.3", path = "../gix-utils", features = ["progress"] }
+gix-ref = { version = "^0.70.0", path = "../gix-ref" }
 gix-fs = { version = "^1.0.0", path = "../gix-fs" }
-gix-macros = { version = "^0.2.1", path = "../gix-macros" }
+gix-macros = { version = "^0.2.2", path = "../gix-macros" }
 
-gix-trace = { version = "^0.3.1", path = "../gix-trace", optional = true }
-gix-negotiate = { version = "^0.38.0", path = "../gix-negotiate", optional = true }
-gix-object = { version = "^0.66.1", path = "../gix-object", optional = true }
-gix-revwalk = { version = "^0.38.0", path = "../gix-revwalk", optional = true }
-gix-credentials = { version = "^0.42.1", path = "../gix-credentials", optional = true }
-gix-refspec = { version = "^0.47.1", path = "../gix-refspec", optional = true }
+gix-trace = { version = "^0.3.2", path = "../gix-trace", optional = true }
+gix-negotiate = { version = "^0.39.0", path = "../gix-negotiate", optional = true }
+gix-object = { version = "^0.67.0", path = "../gix-object", optional = true }
+gix-revwalk = { version = "^0.39.0", path = "../gix-revwalk", optional = true }
+gix-credentials = { version = "^0.43.0", path = "../gix-credentials", optional = true }
+gix-refspec = { version = "^0.48.0", path = "../gix-refspec", optional = true }
 gix-lock = { version = "^27.0.0", path = "../gix-lock", optional = true }
 
 nonempty = "0.12.0"
@@ -110,7 +110,7 @@ document-features = { version = "0.2.0", optional = true }
 gix-testtools = { path = "../tests/tools", default-features = false, features = ["sha1"] }
 insta = "1.46.3"
 async-std = { version = "1.9.0", features = ["attributes"] }
-gix-packetline = { path = "../gix-packetline", version = "^0.24.1" }
+gix-packetline = { path = "../gix-packetline", version = "^0.24.2" }
 gix-protocol = { path = "../gix-protocol", features = ["sha1"] }
 
 [package.metadata.docs.rs]

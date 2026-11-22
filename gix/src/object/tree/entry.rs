@@ -1,8 +1,13 @@
 use crate::object::tree::EntryRef;
-use crate::{Result, bstr::BStr, ext::ObjectIdExt, object::tree::Entry};
+use crate::{Repository, Result, bstr::BStr, ext::ObjectIdExt, object::tree::Entry};
 
 /// Access
 impl<'repo> Entry<'repo> {
+    /// Return the owning repository.
+    pub fn repo(&self) -> &'repo Repository {
+        self.repo
+    }
+
     /// The kind of object to which `oid` is pointing to.
     pub fn mode(&self) -> gix_object::tree::EntryMode {
         self.inner.mode
@@ -43,6 +48,11 @@ impl Entry<'_> {
 }
 
 impl<'repo, 'a> EntryRef<'repo, 'a> {
+    /// Return the owning repository.
+    pub fn repo(&self) -> &'repo Repository {
+        self.repo
+    }
+
     /// The kind of object to which [`id()`][Self::id()] is pointing.
     pub fn mode(&self) -> gix_object::tree::EntryMode {
         self.inner.mode

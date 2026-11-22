@@ -15,12 +15,30 @@ pub struct Worktree<'repo> {
 /// The head reference, as created from looking at `.git/HEAD`, able to represent all of its possible states.
 ///
 /// Note that like [`Reference`], this type's data is snapshot of persisted state on disk.
+// TODO(api): align with `HeadOwned` and make every variant connected by introducing `FulLRefName<'repo>`
+//            to have provide all ref-name based functionality directly.
 #[derive(Clone)]
 pub struct Head<'repo> {
     /// One of various possible states for the HEAD reference
-    pub kind: head::Kind,
+    pub(crate) kind: head::Kind<'repo>,
     /// The owning repository.
-    pub repo: &'repo Repository,
+    pub(crate) repo: &'repo Repository,
+}
+
+/// An owned snapshot of [`Head`] that does not borrow a repository.
+#[derive(Debug, Clone)]
+pub enum HeadOwned {
+    /// The existing reference the symbolic HEAD points to.
+    Symbolic(gix_ref::Reference),
+    /// The yet-to-be-created reference the symbolic HEAD refers to.
+    Unborn(gix_ref::FullName),
+    /// HEAD points directly to an object, not to a symbolic reference.
+    Detached {
+        /// The object to which HEAD points.
+        target: ObjectId,
+        /// The final target after peeling tags, if already known.
+        peeled: Option<ObjectId>,
+    },
 }
 
 /// An [`ObjectId`] with access to a repository.
@@ -29,7 +47,7 @@ pub struct Id<'repo> {
     /// The actual object id
     pub(crate) inner: ObjectId,
     /// The owning repository.
-    pub repo: &'repo Repository,
+    pub(crate) repo: &'repo Repository,
 }
 
 /// A decoded object with a reference to its owning repository.
@@ -42,7 +60,7 @@ pub struct Object<'repo> {
     /// The fully decoded object data
     pub data: Vec<u8>,
     /// The owning repository.
-    pub repo: &'repo Repository,
+    pub(crate) repo: &'repo Repository,
 }
 
 impl Drop for Object<'_> {
@@ -59,7 +77,7 @@ pub struct Blob<'repo> {
     /// The blob's data.
     pub data: Vec<u8>,
     /// The owning repository.
-    pub repo: &'repo Repository,
+    pub(crate) repo: &'repo Repository,
 }
 
 impl Drop for Blob<'_> {
@@ -76,7 +94,7 @@ pub struct Tree<'repo> {
     /// The fully decoded tree data
     pub data: Vec<u8>,
     /// The owning repository.
-    pub repo: &'repo Repository,
+    pub(crate) repo: &'repo Repository,
 }
 
 impl Drop for Tree<'_> {
@@ -93,7 +111,7 @@ pub struct Tag<'repo> {
     /// The fully decoded tag data
     pub data: Vec<u8>,
     /// The owning repository.
-    pub repo: &'repo Repository,
+    pub(crate) repo: &'repo Repository,
 }
 
 impl Drop for Tag<'_> {
@@ -110,7 +128,7 @@ pub struct Commit<'repo> {
     /// The fully decoded commit data
     pub data: Vec<u8>,
     /// The owning repository.
-    pub repo: &'repo Repository,
+    pub(crate) repo: &'repo Repository,
 }
 
 impl Drop for Commit<'_> {
@@ -135,6 +153,9 @@ pub struct ObjectDetached {
 /// A reference that points to an object or reference, with access to its source repository.
 ///
 /// Note that these are snapshots and won't recognize if they are stale.
+/// Equality, ordering, and hashing use the underlying reference's name, target, and cached peeled ID,
+/// not the repository. Comparisons with [`gix_ref::Reference`] use the same fields; comparisons with
+/// names or strings use only the name.
 ///
 /// Access the underlying reference through [`inner()`](Self::inner) and [`inner_mut()`](Self::inner_mut).
 /// Use [`detach()`](Self::detach) to take ownership of it.
@@ -144,7 +165,7 @@ pub struct Reference<'repo> {
     pub(crate) name_from_freelist: bool,
     pub(crate) symbolic_target_from_freelist: bool,
     /// The owning repository.
-    pub repo: &'repo Repository,
+    pub(crate) repo: &'repo Repository,
 }
 
 /// A thread-local handle to interact with a repository from a single thread.
@@ -251,7 +272,7 @@ pub struct Remote<'repo> {
     // /// Delete tags that don't exist on the remote anymore, equivalent to pruning the refspec `refs/tags/*:refs/tags/*`.
     // pub(crate) prune_tags: bool,
     /// The owning repository.
-    pub repo: &'repo Repository,
+    pub(crate) repo: &'repo Repository,
 }
 
 /// A remote without access to its source repository.
@@ -284,7 +305,7 @@ pub(crate) struct RemoteDetached {
 #[cfg(feature = "attributes")]
 pub struct Pathspec<'repo> {
     /// The owning repository.
-    pub repo: &'repo Repository,
+    pub(crate) repo: &'repo Repository,
     /// The cache to power attribute access. It's only initialized if we have a pattern with attributes.
     pub(crate) stack: Option<gix_worktree::Stack>,
     /// The prepared search to use for checking matches.
@@ -315,6 +336,6 @@ pub struct Submodule<'repo> {
 #[cfg(any(feature = "attributes", feature = "excludes"))]
 pub struct AttributeStack<'repo> {
     /// The owning repository.
-    pub repo: &'repo Repository,
+    pub(crate) repo: &'repo Repository,
     pub(crate) inner: gix_worktree::Stack,
 }

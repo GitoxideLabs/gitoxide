@@ -78,6 +78,57 @@ mod set_namespace {
 }
 
 #[test]
+fn reference_snapshot_comparison_matches_plumbing() -> gix_error::TestResult {
+    use std::hash::{BuildHasher, RandomState};
+
+    let repo = crate::basic_repo()?;
+    let other_repo = crate::basic_repo()?;
+    let head = repo.find_reference("HEAD")?;
+    let other_head = other_repo.find_reference("HEAD")?;
+    assert_eq!(head, other_head, "the repository is not part of snapshot equality");
+    let raw = other_head.detach();
+    assert_eq!(head, raw, "an attached snapshot equals its plumbing equivalent");
+    assert_eq!(raw, head, "mixed equality is symmetric");
+
+    let commit_id = repo.head_id()?.detach();
+    let mut with_other_target = head.clone();
+    with_other_target.inner_mut().target = gix::refs::Target::Object(commit_id);
+    assert_ne!(
+        head, with_other_target,
+        "same-name snapshots can have different targets"
+    );
+    assert_eq!(with_other_target, "HEAD", "comparing to a name ignores the target");
+    assert_ne!(with_other_target, raw, "mixed equality includes the target");
+
+    let mut with_peeled = head.clone();
+    with_peeled.inner_mut().peeled = Some(commit_id);
+    assert_ne!(head, with_peeled, "snapshot equality includes the cached peeled ID");
+    assert_eq!(
+        head.cmp(&with_peeled),
+        head.inner().cmp(with_peeled.inner()),
+        "snapshot ordering matches the plumbing reference"
+    );
+    assert_ne!(raw, with_peeled, "mixed equality includes the cached peeled ID");
+    assert_eq!(
+        with_peeled.partial_cmp(&raw),
+        Some(with_peeled.inner().cmp(&raw)),
+        "mixed ordering matches plumbing ordering"
+    );
+    assert_eq!(
+        raw.partial_cmp(&with_peeled),
+        with_peeled.partial_cmp(&raw).map(std::cmp::Ordering::reverse),
+        "mixed ordering reverses when the operands are swapped"
+    );
+    let hasher = RandomState::new();
+    assert_eq!(
+        hasher.hash_one(&head),
+        hasher.hash_one(&raw),
+        "snapshot hashing matches the plumbing reference"
+    );
+    Ok(())
+}
+
+#[test]
 fn try_find_reference_with_existing_ref_as_path_prefix_returns_none() -> TestResult {
     let (repo, _tmp) = crate::repo_rw("make_references_repo.sh")?;
     std::fs::create_dir_all(repo.git_dir().join("refs/heads"))?;
@@ -221,42 +272,94 @@ mod iter_references {
 
 mod head {
 
-    use gix_ref::transaction::PreviousValue;
-    use gix_testtools::TestResult;
+    use gix_error::TestResult;
 
     use crate::util::hex_to_id;
 
     #[test]
     fn symbolic() -> TestResult {
         let repo = crate::basic_repo()?;
-        let head = repo.head()?;
-        match &head.kind {
-            gix::head::Kind::Symbolic(r) => {
-                assert_eq!(
-                    r.target.try_id().map(ToOwned::to_owned),
-                    Some(hex_to_id("3189cd3cb0af8586c39a838aa3e54fd72a872a41"))
-                );
-            }
-            _ => panic!("unexpected head kind"),
-        }
+        let mut head = repo.head()?;
+        let commit_id = hex_to_id("3189cd3cb0af8586c39a838aa3e54fd72a872a41");
+        assert!(std::ptr::eq(head.repo(), &repo), "HEAD retains its repository");
+        assert_eq!(head.id().expect("born"), commit_id);
         assert_eq!(head.referent_name().expect("born"), "refs/heads/main");
         assert!(!head.is_detached());
+        assert_eq!(head.try_peel_to_id()?.expect("born"), commit_id);
+        let referent = head.try_into_referent().expect("symbolic head");
+        assert_eq!(referent, "refs/heads/main");
+        assert!(std::ptr::eq(referent.repo(), &repo));
+
+        let snapshot: gix::HeadOwned = crate::basic_repo()?.head()?.detach_repo();
+        assert_eq!(snapshot.referent_name().expect("born"), "refs/heads/main");
+        assert_eq!(snapshot.id(), Some(commit_id), "the symbolic target ID is retained");
+        assert!(!snapshot.is_detached() && !snapshot.is_unborn());
+        let referent = snapshot.attach(&repo).try_into_referent().expect("symbolic head");
+        assert_eq!(referent, "refs/heads/main");
+        assert!(std::ptr::eq(referent.repo(), &repo));
+        Ok(())
+    }
+
+    #[test]
+    fn symbolic_snapshot_prefers_cached_peeled_id() -> TestResult {
+        let repo = crate::named_repo("make_head_with_packed_tag.sh")?;
+        let snapshot = repo.head()?.detach_repo();
+        let id = snapshot.id().expect("symbolic HEAD has a target");
+        assert_eq!(
+            repo.find_commit(id)?.id,
+            repo.head_commit()?.id,
+            "HEAD names an annotated tag, so the ref stores the tag object's ID. The snapshot has no repository \
+             to peel the tag itself, so it must use the peeled commit ID cached in packed-refs."
+        );
         Ok(())
     }
 
     #[test]
     fn detached() -> TestResult {
-        let (repo, _keep) = crate::basic_rw_repo()?;
-        repo.reference(
-            "HEAD",
-            hex_to_id("3189cd3cb0af8586c39a838aa3e54fd72a872a41"),
-            PreviousValue::Any,
-            "",
-        )?;
+        let repo = crate::named_subrepo_opts("make_head_repos.sh", "tag-detached", gix::open::Options::isolated())?;
+        let mut head = repo.head()?;
+        assert!(head.is_detached(), "HEAD points to the tag object directly");
+        assert!(head.referent_name().is_none(), "a direct HEAD has no referent name");
 
+        let tag_id = head.id().expect("a direct HEAD has a target").detach();
+        let commit_id = head.try_peel_to_id()?.expect("the tag peels to a commit").detach();
+        assert_ne!(tag_id, commit_id, "peeling follows the tag to a different object");
+        let snapshot = head.detach_repo();
+        assert!(
+            snapshot.is_detached() && !snapshot.is_unborn(),
+            "the Git state is unchanged"
+        );
+        assert!(snapshot.referent_name().is_none(), "the snapshot has no referent name");
+        assert_eq!(snapshot.id(), Some(commit_id), "the cached peeled ID is retained");
+        assert!(
+            matches!(snapshot, gix::HeadOwned::Detached { target, .. } if target == tag_id),
+            "the original tag ID is retained too"
+        );
+        let head = snapshot.attach(&repo);
+        assert!(
+            head.is_detached(),
+            "reattaching the Rust value does not change the Git state"
+        );
+        assert_eq!(
+            head.id().map(gix::Id::detach),
+            Some(commit_id),
+            "reattaching retains the peeled ID"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unborn() -> TestResult {
+        let repo = crate::named_subrepo_opts("make_basic_repo.sh", "unborn", gix::open::Options::isolated())?;
         let head = repo.head()?;
-        assert!(head.is_detached(), "head is detached");
-        assert!(head.referent_name().is_none());
+        let name = head.referent_name().expect("an unborn HEAD names a branch").to_owned();
+        let snapshot = head.detach_repo();
+        assert!(snapshot.is_unborn() && !snapshot.is_detached());
+        assert!(snapshot.id().is_none(), "an unborn HEAD has no object ID");
+        assert_eq!(snapshot.referent_name(), Some(name.as_ref()));
+        let head = snapshot.attach(&repo);
+        assert!(head.is_unborn());
+        assert_eq!(head.referent_name(), Some(name.as_ref()));
         Ok(())
     }
 }

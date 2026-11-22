@@ -77,11 +77,40 @@ fn valid_date(value: &str) -> bool {
 
 impl Instability {
     fn document(&self, attrs: &mut Vec<Attribute>) {
-        let mut note = format!("\n\n**Unstable:** Since {}.", self.since.value());
+        let mut note = format!("**Unstable:** Since {}.", self.since.value());
         if let Some(reason) = &self.reason {
             note.push(' ');
             note.push_str(&reason.value());
         }
+        for attr in attrs.iter_mut() {
+            let syn::Meta::NameValue(meta) = &mut attr.meta else {
+                continue;
+            };
+            if !meta.path.is_ident("doc") {
+                continue;
+            }
+            let syn::Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Str(doc),
+                ..
+            }) = &mut meta.value
+            else {
+                // The summary may come from an expression such as `include_str!`.
+                break;
+            };
+            let mut text = doc.value();
+            let mut offset = 0;
+            for line in text.split_inclusive('\n') {
+                let content = line.trim_end();
+                if !content.is_empty() {
+                    // Preserve trailing whitespace, which can be a Markdown line break.
+                    text.insert_str(offset + content.len(), &format!(" — {note}"));
+                    *doc = LitStr::new(&text, doc.span());
+                    return;
+                }
+                offset += line.len();
+            }
+        }
+        let note = format!("\n\n{note}");
         attrs.push(parse_quote!(#[doc = #note]));
     }
 }

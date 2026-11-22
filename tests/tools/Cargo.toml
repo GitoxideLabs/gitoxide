@@ -3,7 +3,7 @@ lints.workspace = true
 [package]
 name = "gix-testtools"
 description = "Shared code for gitoxide crates to facilitate testing"
-version = "0.22.0"
+version = "0.23.0"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
 license = "MIT OR Apache-2.0"
@@ -68,19 +68,19 @@ xz = ["dep:xz2"]
 sbom = ["dep:serde_json"]
 
 [dependencies]
-gix-error = { version = "^0.5.2", path = "../../gix-error", features = ["error-print-location"] }
-gix-hash = { version = "^0.28.1", path = "../../gix-hash" }
+gix-error = { version = "^0.5.3", path = "../../gix-error", features = ["error-print-location"] }
+gix-hash = { version = "^0.29.0", path = "../../gix-hash" }
 gix-lock = { version = "~27.0.0", path = "../../gix-lock", features = ["unstable"] }
-gix-path = { version = "^0.14.1", path = "../../gix-path" }
-gix-config = { version = "^0.62.2", path = "../../gix-config", optional = true, default-features = false }
-gix-discover = { version = "^0.57.1", path = "../../gix-discover", optional = true }
-gix-index = { version = "^0.58.0", path = "../../gix-index", optional = true, default-features = false }
-gix-object = { version = "^0.66.1", path = "../../gix-object", optional = true, default-features = false }
-gix-odb = { version = "^0.87.0", path = "../../gix-odb", optional = true, default-features = false }
-gix-ref = { version = "^0.69.1", path = "../../gix-ref", optional = true, default-features = false }
-gix-shallow = { version = "^0.15.1", path = "../../gix-shallow", optional = true }
-gix-worktree = { version = "^0.59.0", path = "../../gix-worktree", optional = true }
-gix-parallel = { version = "^0.50.1", path = "../../gix-parallel", optional = true }
+gix-path = { version = "^0.14.2", path = "../../gix-path" }
+gix-config = { version = "^0.63.0", path = "../../gix-config", optional = true, default-features = false }
+gix-discover = { version = "^0.58.0", path = "../../gix-discover", optional = true }
+gix-index = { version = "^0.59.0", path = "../../gix-index", optional = true, default-features = false }
+gix-object = { version = "^0.67.0", path = "../../gix-object", optional = true, default-features = false }
+gix-odb = { version = "^0.88.0", path = "../../gix-odb", optional = true, default-features = false }
+gix-ref = { version = "^0.70.0", path = "../../gix-ref", optional = true, default-features = false }
+gix-shallow = { version = "^0.16.0", path = "../../gix-shallow", optional = true }
+gix-worktree = { version = "^0.60.0", path = "../../gix-worktree", optional = true }
+gix-parallel = { version = "^0.50.2", path = "../../gix-parallel", optional = true }
 gix-tempfile = { version = "~27.0.0", path = "../../gix-tempfile", default-features = false, features = [
     "unstable",
     "signals",

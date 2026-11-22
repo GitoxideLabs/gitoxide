@@ -6,11 +6,17 @@ use std::{
 /// A buffer that is returned to the free-list after usage.
 #[derive(Clone)]
 pub struct Buffer<'repo> {
-    /// The buffer that would be returned to the freelist of `repo`.
+    /// The buffer that would be returned to the freelist of [`Self::repo()`].
     /// Note that buffers without capacity (i.e. without allocation) aren't returned.
     pub inner: Vec<u8>,
-    /// The repository from whose free-list the `inner` buffer was taken, and to which it will be returned.
-    pub repo: &'repo crate::Repository,
+    repo: &'repo crate::Repository,
+}
+
+impl<'repo> Buffer<'repo> {
+    /// Return the repository whose freelist the buffer was taken from and will be returned to.
+    pub fn repo(&self) -> &'repo crate::Repository {
+        self.repo
+    }
 }
 
 impl From<Buffer<'_>> for Vec<u8> {

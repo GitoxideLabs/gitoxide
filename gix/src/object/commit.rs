@@ -25,6 +25,11 @@ impl Commit<'_> {
 }
 
 impl<'repo> Commit<'repo> {
+    /// Return the owning repository.
+    pub fn repo(&self) -> &'repo crate::Repository {
+        self.repo
+    }
+
     /// Turn this objects id into a shortened id with a length in hex as configured by `core.abbrev`.
     ///
     /// # Examples

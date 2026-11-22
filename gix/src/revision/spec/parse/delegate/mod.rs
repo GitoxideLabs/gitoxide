@@ -130,8 +130,8 @@ impl<'repo> Delegate<'repo> {
         let inner = kind_to_spec(self.kind, range).map_err(|err| err.chain_all(self.delayed_errors).into_error())?;
         Ok(crate::revision::Spec {
             path: self.paths[0].take().or(self.paths[1].take()),
-            first_ref: self.refs[0].take(),
-            second_ref: self.refs[1].take(),
+            first_ref: self.refs[0].take().map(|r| r.attach(self.repo)),
+            second_ref: self.refs[1].take().map(|r| r.attach(self.repo)),
             inner,
             repo: self.repo,
         })

@@ -1,6 +1,11 @@
 use crate::{ObjectDetached, Result, Tag, ext::ObjectIdExt};
 
 impl<'repo> Tag<'repo> {
+    /// Return the owning repository.
+    pub fn repo(&self) -> &'repo crate::Repository {
+        self.repo
+    }
+
     /// Decode the entire tag object and return it for accessing all tag information.
     ///
     /// This never allocates.

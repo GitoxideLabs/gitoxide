@@ -83,6 +83,11 @@ impl Drop for Reference<'_> {
 }
 
 impl<'repo> Reference<'repo> {
+    /// Return the owning repository.
+    pub fn repo(&self) -> &'repo crate::Repository {
+        self.repo
+    }
+
     pub(crate) fn from_ref(reference: gix_ref::Reference, repo: &'repo crate::Repository) -> Self {
         Reference {
             inner: Some(reference),
@@ -280,6 +285,11 @@ impl<'repo> Reference<'repo> {
 }
 
 mod impls {
+    use std::{
+        cmp::Ordering,
+        hash::{Hash, Hasher},
+    };
+
     use gix_ref::{
         FullName, FullNameRef,
         bstr::{BStr, BString},
@@ -300,6 +310,52 @@ mod impls {
     impl Clone for Reference<'_> {
         fn clone(&self) -> Self {
             Reference::from_ref(self.inner().clone(), self.repo)
+        }
+    }
+
+    impl PartialEq for Reference<'_> {
+        fn eq(&self, other: &Self) -> bool {
+            self.inner() == other.inner()
+        }
+    }
+
+    impl Eq for Reference<'_> {}
+
+    impl Hash for Reference<'_> {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.inner().hash(state);
+        }
+    }
+
+    impl PartialOrd for Reference<'_> {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+
+    impl Ord for Reference<'_> {
+        fn cmp(&self, other: &Self) -> Ordering {
+            self.inner().cmp(other.inner())
+        }
+    }
+
+    impl_partial_eq!(gix_ref::Reference);
+
+    impl PartialEq<Reference<'_>> for gix_ref::Reference {
+        fn eq(&self, other: &Reference<'_>) -> bool {
+            self == other.inner()
+        }
+    }
+
+    impl PartialOrd<gix_ref::Reference> for Reference<'_> {
+        fn partial_cmp(&self, other: &gix_ref::Reference) -> Option<Ordering> {
+            self.inner().partial_cmp(other)
+        }
+    }
+
+    impl PartialOrd<Reference<'_>> for gix_ref::Reference {
+        fn partial_cmp(&self, other: &Reference<'_>) -> Option<Ordering> {
+            self.partial_cmp(other.inner())
         }
     }
 

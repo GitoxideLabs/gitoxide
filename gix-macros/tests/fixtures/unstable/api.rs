@@ -6,6 +6,8 @@ pub mod plumbing {
 }
 
 /// File-backed module documentation is preserved.
+///
+/// These details belong on the module page.
 #[gix_macros::unstable(since = "2026-10-13", reason = "This file-backed module still exposes plumbing.")]
 pub mod module {
     include!("module.rs");
@@ -22,6 +24,8 @@ pub struct Raw(pub usize);
 
 #[gix_macros::unstable_fields]
 pub struct Handle {
+    ///
+    /// The raw value.
     #[unstable(reason = "The field exposes plumbing state.", since = "2026-10-13",)]
     pub raw: Raw,
     #[unstable(since = "2026-10-13")]
@@ -46,6 +50,9 @@ impl Handle {
     }
 
     #[gix_macros::unstable(since = "2026-10-13")]
+    #[doc = "Return the raw value.
+
+This method is gated individually."]
     pub fn individual(&self) -> usize {
         self.raw.0
     }

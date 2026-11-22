@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-status"
-version = "0.37.0"
+version = "0.38.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project dealing with 'git status'-like functionality"
@@ -23,21 +23,21 @@ sha256 = ["gix-hash/sha256"]
 worktree-rewrites = ["dep:gix-dir", "dep:gix-diff"]
 
 [dependencies]
-gix-trace = { version = "^0.3.1", path = "../gix-trace" }
-gix-utils = { version = "^0.5.2", path = "../gix-utils", features = ["interrupt", "progress"] }
-gix-parallel = { version = "^0.50.1", path = "../gix-parallel" }
-gix-index = { version = "^0.58.0", path = "../gix-index" }
+gix-trace = { version = "^0.3.2", path = "../gix-trace" }
+gix-utils = { version = "^0.5.3", path = "../gix-utils", features = ["interrupt", "progress"] }
+gix-parallel = { version = "^0.50.2", path = "../gix-parallel" }
+gix-index = { version = "^0.59.0", path = "../gix-index" }
 gix-fs = { version = "~1.0.0", path = "../gix-fs", features = ["unstable"] }
-gix-hash = { version = "^0.28.1", path = "../gix-hash" }
-gix-error = { version = "^0.5.2", path = "../gix-error" }
-gix-object = { version = "^0.66.1", path = "../gix-object" }
-gix-path = { version = "^0.14.1", path = "../gix-path" }
-gix-filter = { version = "^0.36.1", path = "../gix-filter" }
-gix-worktree = { version = "^0.59.0", path = "../gix-worktree", default-features = false, features = ["attributes"] }
-gix-pathspec = { version = "^0.22.1", path = "../gix-pathspec" }
+gix-hash = { version = "^0.29.0", path = "../gix-hash" }
+gix-error = { version = "^0.5.3", path = "../gix-error" }
+gix-object = { version = "^0.67.0", path = "../gix-object" }
+gix-path = { version = "^0.14.2", path = "../gix-path" }
+gix-filter = { version = "^0.37.0", path = "../gix-filter" }
+gix-worktree = { version = "^0.60.0", path = "../gix-worktree", default-features = false, features = ["attributes"] }
+gix-pathspec = { version = "^0.23.0", path = "../gix-pathspec" }
 
-gix-dir = { version = "^0.32.0", path = "../gix-dir", optional = true }
-gix-diff = { version = "^0.70.0", path = "../gix-diff", default-features = false, features = ["blob"], optional = true }
+gix-dir = { version = "^0.33.0", path = "../gix-dir", optional = true }
+gix-diff = { version = "^0.71.0", path = "../gix-diff", default-features = false, features = ["blob"], optional = true }
 
 filetime = "0.2.29"
 bstr = { version = "1.12.0", default-features = false }

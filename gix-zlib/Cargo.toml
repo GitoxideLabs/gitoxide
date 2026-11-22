@@ -4,7 +4,7 @@ lints.workspace = true
 name = "gix-zlib"
 description = "Zlib-rs streaming compression and decompression utilities used by gitoxide"
 repository = "https://github.com/GitoxideLabs/gitoxide"
-version = "0.4.0"
+version = "0.4.1"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 license = "MIT OR Apache-2.0"
 edition = "2024"
@@ -24,7 +24,7 @@ serde = ["dep:serde"]
 sirocco = ["dep:sirocco"]
 
 [dependencies]
-gix-error = { version = "^0.5.2", path = "../gix-error" }
+gix-error = { version = "^0.5.3", path = "../gix-error" }
 zlib-rs = "0.6.2"
 sirocco = { version = "0.3.1", optional = true }
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }

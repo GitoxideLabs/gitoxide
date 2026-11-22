@@ -61,6 +61,11 @@ impl<'repo> Object<'repo> {
         }
     }
 
+    /// Return the owning repository.
+    pub fn repo(&self) -> &'repo crate::Repository {
+        self.repo
+    }
+
     /// Transform this object into a blob, or panic if it is none.
     pub fn into_blob(self) -> Blob<'repo> {
         self.try_into().expect("Object must be a blob")

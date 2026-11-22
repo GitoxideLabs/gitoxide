@@ -33,12 +33,12 @@ profiles = [{ default-features = false, features = [] }]
 allowed-unstable-crates = ["gix_error"]
 
 [dependencies]
-gix-macros = { version = "^0.2.1", path = "../gix-macros" }
-gix-parallel = { version = "^0.50.1", path = "../gix-parallel" }
+gix-macros = { version = "^0.2.2", path = "../gix-macros" }
+gix-parallel = { version = "^0.50.2", path = "../gix-parallel" }
 bstr = "1.12.0"
-gix-path = { version = "^0.14.1", path = "../gix-path" }
-gix-utils = { version = "^0.5.2", path = "../gix-utils" }
-gix-error = { version = "^0.5.2", path = "../gix-error" }
+gix-path = { version = "^0.14.2", path = "../gix-path" }
+gix-utils = { version = "^0.5.3", path = "../gix-utils" }
+gix-error = { version = "^0.5.3", path = "../gix-error" }
 
 serde = { version = "1.0.114", optional = true, default-features = false, features = [
     "std",

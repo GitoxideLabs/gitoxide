@@ -163,11 +163,10 @@ pub(crate) fn start(
         .workdir()
         .ok_or_raise(|| message("review requires a worktree"))?
         .to_owned();
-    let head = repo.head().or_raise(|| message("could not read HEAD before review"))?;
-    let restore = (
-        head.referent_name().map(ToOwned::to_owned),
-        head.id().map(gix::Id::detach),
-    );
+    let head = repo
+        .head()
+        .or_raise(|| message("could not read HEAD before review"))?
+        .detach_repo();
     if tip == base || !graph.is_ancestor(base, tip) {
         bail!("the review base must be an ancestor of the reviewed commit");
     }
@@ -182,9 +181,12 @@ pub(crate) fn start(
         }
     }
     let name = next_reference(&repo)?;
-    let departure_pin = match restore.1 {
+    let departure_pin = match head.id() {
         Some(id) => {
-            let target = restore.0.clone().map_or(Target::Object(id), Target::Symbolic);
+            let target = match head {
+                gix::HeadOwned::Symbolic(reference) => Target::Symbolic(reference.name),
+                _ => Target::Object(id),
+            };
             let pin_name = return_pin_reference(name.as_bstr())?;
             Some(super::time_travel::create_named_pin(
                 &repo,

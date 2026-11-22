@@ -19,8 +19,7 @@ use crate::{
 pub struct Pipeline<'repo> {
     inner: gix_filter::Pipeline,
     cache: gix_worktree::Stack,
-    /// The repository this pipeline is associated with.
-    pub repo: &'repo Repository,
+    repo: &'repo Repository,
 }
 
 /// Lifecycle
@@ -70,6 +69,11 @@ impl<'repo> Pipeline<'repo> {
             cache,
             repo,
         })
+    }
+
+    /// Return the repository this pipeline is associated with.
+    pub fn repo(&self) -> &'repo Repository {
+        self.repo
     }
 
     /// Detach the repository and obtain the individual functional parts.
