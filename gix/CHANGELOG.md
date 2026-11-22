@@ -129,10 +129,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - <csr-id-3a059543f3e26b87ec8469827d2bbb8a40358b13/> expose topological walks through `Repository`
   - Simplified the `gix log` command.
   - Removed unnecessary `rev_walk_topo()`, as TopoOrder is a sorting mode.
-    Only read the test-case names, but took my time to peruse the tests and
-    fixtures.
+  Only read the test-case names, but took my time to peruse the tests and
+  fixtures.
   - Algorithmic changes were explained and make sense, but implementation is
-    rubber-stamped, knowing that regression-protection exists for performance.
+  rubber-stamped, knowing that regression-protection exists for performance.
   - Rubber-stamp for tests after reading their names, validating they are read-only.
   
   <!-- agent -->
@@ -749,7 +749,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Run the writable fixture directly because its FIFO cannot be copied.
 - <csr-id-d65a1b05bbbfbdfc7e5cd8bab56a443676621dfb/> validate unconfigured gitlink paths during status
   - implementation is trivial, but was improved by refactor as it wasn't handling
-    all worktree cases correctly.
+  all worktree cases correctly.
   - test is quite simple and seems fine, but it's mostly a rubber-stamp as well.
   - This really expanded and probably fixed a lot of open-related inconsistencies
   
@@ -935,7 +935,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - <csr-id-cd7937599afb445d3ba903cf89d1fecdeb00f5d6/> apply `gitoxide.core.defaultPackCacheMemoryLimit` to the default pack cache.
   - The key caps the memory of the default pack delta cache (64 slots, 96MiB if unset).
   - It was never applied: the code read `gitoxide.core.deltaBaseCacheLimit`, a key that is not defined.
-    Since #851 the limit was fed by `core.deltaBaseCacheLimit`, which selects another cache and wins.
+  Since #851 the limit was fed by `core.deltaBaseCacheLimit`, which selects another cache and wins.
   - Read the documented key.
   - `gitoxide.core.deltaBaseCacheLimit` worked by accident and is no longer read.
 - <csr-id-e34fb56a014286c3729d205a9c6225129e1e963f/> attribute object-format validation errors to the supplied config key
@@ -973,7 +973,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
-- 108 commits contributed to the release.
+- 109 commits contributed to the release.
 - 31 days passed between releases.
 - 53 commits were understood as [conventional](https://www.conventionalcommits.org).
 - 13 unique issues were worked on: [#3089](https://github.com/GitoxideLabs/gitoxide/issues/3089), [#3090](https://github.com/GitoxideLabs/gitoxide/issues/3090), [#3095](https://github.com/GitoxideLabs/gitoxide/issues/3095), [#3096](https://github.com/GitoxideLabs/gitoxide/issues/3096), [#3100](https://github.com/GitoxideLabs/gitoxide/issues/3100), [#3102](https://github.com/GitoxideLabs/gitoxide/issues/3102), [#3103](https://github.com/GitoxideLabs/gitoxide/issues/3103), [#3112](https://github.com/GitoxideLabs/gitoxide/issues/3112), [#3114](https://github.com/GitoxideLabs/gitoxide/issues/3114), [#3128](https://github.com/GitoxideLabs/gitoxide/issues/3128), [#3133](https://github.com/GitoxideLabs/gitoxide/issues/3133), [#3167](https://github.com/GitoxideLabs/gitoxide/issues/3167), [#3189](https://github.com/GitoxideLabs/gitoxide/issues/3189)
@@ -1012,6 +1012,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **[#3189](https://github.com/GitoxideLabs/gitoxide/issues/3189)**
   - Honor directory hints in `AttributeStack::at_entry()` ([`9bb7d88`](https://github.com/GitoxideLabs/gitoxide/commit/9bb7d88f1bda647108752aed4b3fef5d0652d225))
 - **Uncategorized**
+  - Release gix-error v0.5.3, gix-macros v0.2.2, gix-date v0.19.0, gix-actor v0.45.0, gix-trace v0.3.2, gix-validate v0.13.2, gix-path v0.14.2, gix-utils v0.5.3, gix-quote v0.10.2, gix-command v0.12.2, gix-hash v0.29.0, gix-hashtable v0.19.0, gix-parallel v0.50.2, gix-fs v1.0.0, gix-tempfile v27.0.0, gix-object v0.67.0, gix-glob v0.30.0, gix-attributes v0.38.0, gix-zlib v0.4.1, gix-encoding v0.1.0, gix-packetline v0.24.2, gix-filter v0.37.0, gix-chunk v0.10.2, gix-commitgraph v0.43.0, gix-revwalk v0.39.0, gix-traverse v0.65.0, gix-worktree-stream v0.40.0, gix-archive v0.40.0, gix-bitmap v0.6.2, gix-lock v27.0.0, gix-index v0.59.0, gix-config-value v0.21.2, gix-pathspec v0.23.0, gix-ignore v0.25.0, gix-worktree v0.60.0, gix-imara-diff v0.3.4, gix-diff v0.71.0, gix-blame v0.21.0, gix-ref v0.70.0, gix-sec v0.17.0, gix-config v0.63.0, gix-prompt v0.19.2, gix-url v0.41.0, gix-credentials v0.43.0, gix-discover v0.58.0, gix-dir v0.33.0, gix-fsck v0.28.0, gix-notify v0.1.0, gix-fsmonitor v0.1.0, gix-mailmap v0.36.2, gix-revision v0.53.0, gix-merge v0.24.0, gix-negotiate v0.39.0, gix-note v0.4.0, gix-pack v0.78.0, gix-odb v0.88.0, gix-refspec v0.48.0, gix-shallow v0.16.0, gix-transport v0.63.0, gix-protocol v0.69.0, gix-status v0.38.0, gix-submodule v0.37.0, gix-worktree-state v0.38.0, gix v0.91.0, gitoxide-core v0.65.0, gix-tix v0.7.0, gitoxide v0.62.0, safety bump 44 crates ([`df27410`](https://github.com/GitoxideLabs/gitoxide/commit/df27410adf06a49413eb84b9d6bc0a633ff94b78))
   - Drop orphaned release metadata from `gix` ([`aab2dcc`](https://github.com/GitoxideLabs/gitoxide/commit/aab2dcce867a68c1ad88d9c1b0f69c2df4624b53))
   - Change `gix_ref::Reference` to `Reference<'repo>` and `attached.repo` to `.repo()` ([`3af2f76`](https://github.com/GitoxideLabs/gitoxide/commit/3af2f76b9d2e96823b5c7c9afe0f5fc5b4cc5e27))
   - Re-export `gix-fsck` as `gix::fsck` ([`1238c01`](https://github.com/GitoxideLabs/gitoxide/commit/1238c01ed7f26f5e7fabf58c79e6f9a39889459a))
@@ -1256,18 +1257,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Match Git's clone orchestration and reference selection:
   
   - Store bare-clone branches in `refs/heads/*`, without a default persisted
-    fetch refspec, tracking `HEAD`, or branch upstream configuration. Keep
-    explicit refspecs persistent and use `WithWorktree` plus `fetch_only()`
-    for ordinary clones without a checkout.
+  fetch refspec, tracking `HEAD`, or branch upstream configuration. Keep
+  explicit refspecs persistent and use `WithWorktree` plus `fetch_only()`
+  for ordinary clones without a checkout.
   - Select the advertised symbolic target or guess a branch matching a
-    detached `HEAD`, preferring `init.defaultBranch`, then `master`, then the
-    first matching branch by name. Record the selected branch's first mapped
-    peer before updating local `HEAD`, including overwriting a branch named
-    `HEAD`; omit tracking `HEAD` when the selected target is excluded.
+  detached `HEAD`, preferring `init.defaultBranch`, then `master`, then the
+  first matching branch by name. Record the selected branch's first mapped
+  peer before updating local `HEAD`, including overwriting a branch named
+  `HEAD`; omit tracking `HEAD` when the selected target is excluded.
   - Detach and peel tag and revision selections, check out the selected
-    `HEAD`, and align shallow selection, tag policy, initial packed-reference
-    reflogs, and persisted revision configuration with Git. Preserve the
-    reference directory required for repository discovery.
+  `HEAD`, and align shallow selection, tag policy, initial packed-reference
+  reflogs, and persisted revision configuration with Git. Preserve the
+  reference directory required for repository discovery.
   
   Preserve fetch-source identity when deriving an offline default branch.
   Recognize `refs/heads/` sources and exact `heads/<name>` sources, including

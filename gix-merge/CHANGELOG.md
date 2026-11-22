@@ -550,7 +550,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `Disabled` leaves new paths at their explicit locations.
   - `Enabled` relocates additions and rename destinations automatically.
   - `Conflict` performs the relocation but records a file-location conflict,
-    even when contents merge cleanly. This is the default.
+  even when contents merge cleanly. This is the default.
   
   Retain structural directory boundaries when relocation is disabled without
   disabling explicit file-rename detection. When `rewrites` is `None`,
@@ -582,11 +582,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ### Breaking changes
   
   - Exhaustive `gix_merge::tree::Options` struct literals must initialize the
-    new `directory_renames` field.
+  new `directory_renames` field.
   - Exhaustive `ResolutionFailure` matches must handle `DirectoryRename`.
   - The default policy now reports file-location conflicts, matching Git.
-    Select `DirectoryRenames::Enabled` explicitly to retain automatic
-    relocation without these conflicts when contents merge cleanly.
+  Select `DirectoryRenames::Enabled` explicitly to retain automatic
+  relocation without these conflicts when contents merge cleanly.
 
 ### Bug Fixes (BREAKING)
 
@@ -682,7 +682,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
-- 50 commits contributed to the release.
+- 51 commits contributed to the release.
 - 31 days passed between releases.
 - 27 commits were understood as [conventional](https://www.conventionalcommits.org).
 - 3 unique issues were worked on: [#3091](https://github.com/GitoxideLabs/gitoxide/issues/3091), [#3097](https://github.com/GitoxideLabs/gitoxide/issues/3097), [#3110](https://github.com/GitoxideLabs/gitoxide/issues/3110)
@@ -700,6 +700,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **[#3110](https://github.com/GitoxideLabs/gitoxide/issues/3110)**
   - Preserve overlapping edits when collecting text hunks ([`e1a1001`](https://github.com/GitoxideLabs/gitoxide/commit/e1a1001d0f53347a4cbbff15926511a401776437))
 - **Uncategorized**
+  - Release gix-error v0.5.3, gix-macros v0.2.2, gix-date v0.19.0, gix-actor v0.45.0, gix-trace v0.3.2, gix-validate v0.13.2, gix-path v0.14.2, gix-utils v0.5.3, gix-quote v0.10.2, gix-command v0.12.2, gix-hash v0.29.0, gix-hashtable v0.19.0, gix-parallel v0.50.2, gix-fs v1.0.0, gix-tempfile v27.0.0, gix-object v0.67.0, gix-glob v0.30.0, gix-attributes v0.38.0, gix-zlib v0.4.1, gix-encoding v0.1.0, gix-packetline v0.24.2, gix-filter v0.37.0, gix-chunk v0.10.2, gix-commitgraph v0.43.0, gix-revwalk v0.39.0, gix-traverse v0.65.0, gix-worktree-stream v0.40.0, gix-archive v0.40.0, gix-bitmap v0.6.2, gix-lock v27.0.0, gix-index v0.59.0, gix-config-value v0.21.2, gix-pathspec v0.23.0, gix-ignore v0.25.0, gix-worktree v0.60.0, gix-imara-diff v0.3.4, gix-diff v0.71.0, gix-blame v0.21.0, gix-ref v0.70.0, gix-sec v0.17.0, gix-config v0.63.0, gix-prompt v0.19.2, gix-url v0.41.0, gix-credentials v0.43.0, gix-discover v0.58.0, gix-dir v0.33.0, gix-fsck v0.28.0, gix-notify v0.1.0, gix-fsmonitor v0.1.0, gix-mailmap v0.36.2, gix-revision v0.53.0, gix-merge v0.24.0, gix-negotiate v0.39.0, gix-note v0.4.0, gix-pack v0.78.0, gix-odb v0.88.0, gix-refspec v0.48.0, gix-shallow v0.16.0, gix-transport v0.63.0, gix-protocol v0.69.0, gix-status v0.38.0, gix-submodule v0.37.0, gix-worktree-state v0.38.0, gix v0.91.0, gitoxide-core v0.65.0, gix-tix v0.7.0, gitoxide v0.62.0, safety bump 44 crates ([`df27410`](https://github.com/GitoxideLabs/gitoxide/commit/df27410adf06a49413eb84b9d6bc0a633ff94b78))
   - Merge pull request #3228 from GitoxideLabs/tree-panic ([`aa9d8f1`](https://github.com/GitoxideLabs/gitoxide/commit/aa9d8f14ded749590bc9267b357b702837cc5035))
   - Keep ancestor directories out of symlink conflict paths ([`5f2af64`](https://github.com/GitoxideLabs/gitoxide/commit/5f2af64257d4f6c93ea334eb895514443f013634))
   - Merge pull request #3207 from GitoxideLabs/fix/gix-merge-0.23-correctness ([`3e89f3b`](https://github.com/GitoxideLabs/gitoxide/commit/3e89f3b56f88f7080d0b42e9619ae4b843ba8b5d))
@@ -1869,14 +1870,14 @@ A maintenance release without user-facing changes.
   This updates `Byron/gitoxide` URLs to `GitoxideLabs/gitoxide` in:
   
   - Markdown documentation, except changelogs and other such files
-    where such changes should not be made.
+  where such changes should not be made.
   
   - Documentation comments (in .rs files).
   
   - Manifest (.toml) files, for the value of the `repository` key.
   
   - The comments appearing at the top of a sample hook that contains
-    a repository URL as an example.
+  a repository URL as an example.
   
   When making these changes, I also allowed my editor to remove
   trailing whitespace in any lines in files already being edited

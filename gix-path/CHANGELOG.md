@@ -397,7 +397,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
-- 35 commits contributed to the release.
+- 36 commits contributed to the release.
 - 31 days passed between releases.
 - 20 commits were understood as [conventional](https://www.conventionalcommits.org).
 - 1 unique issue was worked on: [#3182](https://github.com/GitoxideLabs/gitoxide/issues/3182)
@@ -411,6 +411,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **[#3182](https://github.com/GitoxideLabs/gitoxide/issues/3182)**
   - Infer known Unix config paths without running Git ([`499a855`](https://github.com/GitoxideLabs/gitoxide/commit/499a85577be6718f0fb66e918feddacaeae8a9d8))
 - **Uncategorized**
+  - Release gix-error v0.5.3, gix-macros v0.2.2, gix-date v0.19.0, gix-actor v0.45.0, gix-trace v0.3.2, gix-validate v0.13.2, gix-path v0.14.2, gix-utils v0.5.3, gix-quote v0.10.2, gix-command v0.12.2, gix-hash v0.29.0, gix-hashtable v0.19.0, gix-parallel v0.50.2, gix-fs v1.0.0, gix-tempfile v27.0.0, gix-object v0.67.0, gix-glob v0.30.0, gix-attributes v0.38.0, gix-zlib v0.4.1, gix-encoding v0.1.0, gix-packetline v0.24.2, gix-filter v0.37.0, gix-chunk v0.10.2, gix-commitgraph v0.43.0, gix-revwalk v0.39.0, gix-traverse v0.65.0, gix-worktree-stream v0.40.0, gix-archive v0.40.0, gix-bitmap v0.6.2, gix-lock v27.0.0, gix-index v0.59.0, gix-config-value v0.21.2, gix-pathspec v0.23.0, gix-ignore v0.25.0, gix-worktree v0.60.0, gix-imara-diff v0.3.4, gix-diff v0.71.0, gix-blame v0.21.0, gix-ref v0.70.0, gix-sec v0.17.0, gix-config v0.63.0, gix-prompt v0.19.2, gix-url v0.41.0, gix-credentials v0.43.0, gix-discover v0.58.0, gix-dir v0.33.0, gix-fsck v0.28.0, gix-notify v0.1.0, gix-fsmonitor v0.1.0, gix-mailmap v0.36.2, gix-revision v0.53.0, gix-merge v0.24.0, gix-negotiate v0.39.0, gix-note v0.4.0, gix-pack v0.78.0, gix-odb v0.88.0, gix-refspec v0.48.0, gix-shallow v0.16.0, gix-transport v0.63.0, gix-protocol v0.69.0, gix-status v0.38.0, gix-submodule v0.37.0, gix-worktree-state v0.38.0, gix v0.91.0, gitoxide-core v0.65.0, gix-tix v0.7.0, gitoxide v0.62.0, safety bump 44 crates ([`df27410`](https://github.com/GitoxideLabs/gitoxide/commit/df27410adf06a49413eb84b9d6bc0a633ff94b78))
   - Merge pull request #3207 from GitoxideLabs/fix/gix-merge-0.23-correctness ([`3e89f3b`](https://github.com/GitoxideLabs/gitoxide/commit/3e89f3b56f88f7080d0b42e9619ae4b843ba8b5d))
   - Merge pull request #3211 from GitoxideLabs/jiff-upgrade ([`12eff45`](https://github.com/GitoxideLabs/gitoxide/commit/12eff45f0e16fa7a9f75086034ccb0198f55b9f3))
   - Merge pull request #3188 from hood/fix/gix-path-absent-system-config ([`3247e95`](https://github.com/GitoxideLabs/gitoxide/commit/3247e9567c1487c746f3816facb5d7e9b478b891))
@@ -1848,90 +1849,90 @@ A maintenance release without user-facing changes.
   rather than the root of the system drive (usually `C:\`), because:
   
   - We are currently obtaining this information from environment
-    variables, and it is possible for our own parent process to pass
-    down an overly sanitized environment.
+  variables, and it is possible for our own parent process to pass
+  down an overly sanitized environment.
   
-    Although this can be so sanitized we cannot find the Windows
-    directory, this is less likely to occur than being unable to find
-    the root of the system drive.
+  Although this can be so sanitized we cannot find the Windows
+  directory, this is less likely to occur than being unable to find
+  the root of the system drive.
   
-    This due to moderately broad awareness that the `SystemRoot`
-    environment variable (which, somewhat confusingly, holds the path
-    of the Windows directory, not the root of the system drive)
-    should be preserved even when clearing most other variables.
+  This due to moderately broad awareness that the `SystemRoot`
+  environment variable (which, somewhat confusingly, holds the path
+  of the Windows directory, not the root of the system drive)
+  should be preserved even when clearing most other variables.
   
-    Some libraries will even automatically preserve `SystemRoot` when
-    clearing others or restore it. For example:
+  Some libraries will even automatically preserve `SystemRoot` when
+  clearing others or restore it. For example:
   
-    * https://go-review.googlesource.com/c/go/+/174318
+  * https://go-review.googlesource.com/c/go/+/174318
   
-    As far as I know, such treatment of `SystemDrive` is less common.
+  As far as I know, such treatment of `SystemDrive` is less common.
   
   And also these two considerations, which are minor by comparison:
   
   - Under the current behavior of `env::temp_dir()`, which is now a
-    fallback if we cannot determine the Windows directory, we already
-    fall back to the Windows directory evenutally, if temp dir
-    related environment variables are also unset.
+  fallback if we cannot determine the Windows directory, we already
+  fall back to the Windows directory evenutally, if temp dir
+  related environment variables are also unset.
   
-    This is because `env::temp_dir()` usually calls `GetTempDir2` in
-    the Windows API, which implements that fallback behavior (after
-    first trying the user's user profile directory).
+  This is because `env::temp_dir()` usually calls `GetTempDir2` in
+  the Windows API, which implements that fallback behavior (after
+  first trying the user's user profile directory).
   
-    Avoiding adding yet another place to fall back to that would not
-    otherwise be attempted slightly decreases behavioral complexity,
-    and there is no reason to think a directory like `C:\` would work
-    when a directory like `C:\Windows` doesn't.
+  Avoiding adding yet another place to fall back to that would not
+  otherwise be attempted slightly decreases behavioral complexity,
+  and there is no reason to think a directory like `C:\` would work
+  when a directory like `C:\Windows` doesn't.
   
   - The root of the system drive on a Windows system usually permits
-    limited user accounts to create new directories there, so a
-    directory like `C:\` on Windows actually has most of the
-    disadvantages of a location like `/tmp` on a Unix-like system.
+  limited user accounts to create new directories there, so a
+  directory like `C:\` on Windows actually has most of the
+  disadvantages of a location like `/tmp` on a Unix-like system.
   
-    * https://github.com/git-for-windows/git/security/advisories/GHSA-vw2c-22j4-2fh2
-    * https://github.com/Byron/gitoxide/security/advisories/GHSA-mgvv-9p9g-3jv4
+  * https://github.com/git-for-windows/git/security/advisories/GHSA-vw2c-22j4-2fh2
+  * https://github.com/Byron/gitoxide/security/advisories/GHSA-mgvv-9p9g-3jv4
   
-    This is actually a much less significant reason to prefer a
-    directory like `C:\Windows` to a directory like `C:\` than it
-    might seem. After all, if `C:\.git` exists and and `git` uses it
-    when run from `C:\`, then `git` would usually also use it when
-    run from `C:\Windows` (and from numerous other locations)!
+  This is actually a much less significant reason to prefer a
+  directory like `C:\Windows` to a directory like `C:\` than it
+  might seem. After all, if `C:\.git` exists and and `git` uses it
+  when run from `C:\`, then `git` would usually also use it when
+  run from `C:\Windows` (and from numerous other locations)!
   
-    However, the reason there is still a small reason to prefer a
-    location like `C:\Windows` to a location like `C:\` is that, if a
-    system has a vulnerable `git` but a user or system administrator
-    has sought to work around it by listing `C:\` in
-    `GIT_CEILING_DIRECTORIES`, then that may keep `git` from
-    traversing upward into `C:\`, but it would not keep `C:\` from
-    being used if that is where we already are.
+  However, the reason there is still a small reason to prefer a
+  location like `C:\Windows` to a location like `C:\` is that, if a
+  system has a vulnerable `git` but a user or system administrator
+  has sought to work around it by listing `C:\` in
+  `GIT_CEILING_DIRECTORIES`, then that may keep `git` from
+  traversing upward into `C:\`, but it would not keep `C:\` from
+  being used if that is where we already are.
   
-    An even more significant reason this motivation is a minor one is
-    that the other measures we are taking, including setting
-    `GIT_DIR`, should be sufficient to avoid at least the security
-    dimension of the problem, which arises from actually using the
-    configuration from a repo that is discovered.
+  An even more significant reason this motivation is a minor one is
+  that the other measures we are taking, including setting
+  `GIT_DIR`, should be sufficient to avoid at least the security
+  dimension of the problem, which arises from actually using the
+  configuration from a repo that is discovered.
   
   The reason we do not prefer the user's user profile directory is:
   
   - The user profile directory may be more deeply nested.
   
   - The user profile directory may sometimes be on slow network
-    storage when the discovered Windows directory is not.
+  storage when the discovered Windows directory is not.
   
   - In some situations, the user profile directory does not actually
-    exist, or does not exist yet.
+  exist, or does not exist yet.
   
   - Overly sanitized environments are more likely to lack the
-    `USERPROFILE` vairable than the `SystemRoot` variable.
+  `USERPROFILE` vairable than the `SystemRoot` variable.
   
   - Users may occasionally choose to have their entire user profile
-    directory be a Git repository.
+  directory be a Git repository.
   
   - It's no easier to avoid the problem of using `C:\.git` in a user
-    profile directory than in `C:\Windows`: they're usually both under
-    `C:\`, and are both not the same as `C:\`. (If the user profile
-    directory is a repository, then that will avoid that problem, yet
-    be its own problem, if not for other measures that prevent both.)
+  profile directory than in `C:\Windows`: they're usually both under
+  `C:\`, and are both not the same as `C:\`. (If the user profile
+  directory is a repository, then that will avoid that problem, yet
+  be its own problem, if not for other measures that prevent both.)
 - <csr-id-7280a2d2f8b55a594ae134dd9a0a7a1668b7b56c/> More robustly ensure "installation" config is not local
   When invoking `git` to find the configuration file path associated
   with the `git` installation itself, this sets `GIT_DIR` to a path
@@ -1956,19 +1957,19 @@ A maintenance release without user-facing changes.
   This change further hardens against two edge cases:
   
   - If the `git` command is an old and unpatched vulnerable version
-    in which `safe.directory` is not yet implemented, or in which
-    https://github.com/git/git/security/advisories/GHSA-j342-m5hw-rr3v
-    or other vulnerabilities where `git` would perform operations on
-    untrusted local repositories owned by other users are unpatched,
-    then a `.git` subdirectory of a shared `/tmp` or `/tmp`-like
-    directory could be created by another account, and its local
-    configuration would still have been used. (This is not a bug in
-    gitoxide per se; having vulnerable software installed that other
-    software may use is inherently insecure. But it is nice to offer
-    a small amount of protection against this when readily feasible.)
+  in which `safe.directory` is not yet implemented, or in which
+  https://github.com/git/git/security/advisories/GHSA-j342-m5hw-rr3v
+  or other vulnerabilities where `git` would perform operations on
+  untrusted local repositories owned by other users are unpatched,
+  then a `.git` subdirectory of a shared `/tmp` or `/tmp`-like
+  directory could be created by another account, and its local
+  configuration would still have been used. (This is not a bug in
+  gitoxide per se; having vulnerable software installed that other
+  software may use is inherently insecure. But it is nice to offer
+  a small amount of protection against this when readily feasible.)
   
   - If the `/tmp`-like location is a Git repository owned by the
-    current user, then its local configuration would have been used.
+  current user, then its local configuration would have been used.
   
   Any path guaranteed to point to a nonexistent entry or one that is
   guaranteed to be (or to be treated as) an empty file or directory
@@ -2015,24 +2016,24 @@ A maintenance release without user-facing changes.
   associated with the `git` installation itself. The benefits are:
   
   - Parsing is more reliable for paths containing unusual characters,
-    because `-z`/`--null` causes all paths to be output literally.
+  because `-z`/`--null` causes all paths to be output literally.
   
-    Previously, `"` characters were trimmed from the ends, but this
-    would not always extract a correct path, because when a path
-    contains characters that cause `git` to enclose it in double
-    quotes, those characters are usually represented in a symbolic
-    form, usually with `\` escapes.
+  Previously, `"` characters were trimmed from the ends, but this
+  would not always extract a correct path, because when a path
+  contains characters that cause `git` to enclose it in double
+  quotes, those characters are usually represented in a symbolic
+  form, usually with `\` escapes.
   
-    In some scenarios, such as usually on Windows when the escaped
-    character is itself a `\` and not in the leading position, the
-    mangled path would be usable, but more often it would not.
+  In some scenarios, such as usually on Windows when the escaped
+  character is itself a `\` and not in the leading position, the
+  mangled path would be usable, but more often it would not.
   
   - The volume of output is less, because `--name-only` casues values
-    not to be included in the output.
+  not to be included in the output.
   
   - The combination of `-z`/`--null` and `--name-only` makes the
-    output format simpler, and the parsing logic is accordingly
-    simpler.
+  output format simpler, and the parsing logic is accordingly
+  simpler.
   
   `git` has supported the `-z`/`--null` and `--name-only` options
   even before support for `--show-origin` was added in Git 2.8.0, so

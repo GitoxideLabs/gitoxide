@@ -11,9 +11,9 @@
   API stays on `zlib-rs`, as `Decompress` does.
   
   - Encoders are reused across writers on a thread, up to two, by level:
-    their tables are about 340 KiB, and a writer is made per object.
+  their tables are about 340 KiB, and a writer is made per object.
   - Input is buffered up to 1 MiB, so objects up to that size are
-    compressed in one call; larger ones stream through that buffer.
+  compressed in one call; larger ones stream through that buffer.
   - Writes after `flush()` fail until `reset()`, as with `zlib-rs`.
   
   On git.git's objects, with a writer per object as gitoxide makes them,
@@ -27,7 +27,7 @@
 
 <csr-read-only-do-not-edit/>
 
-- 6 commits contributed to the release.
+- 7 commits contributed to the release.
 - 31 days passed between releases.
 - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
 - 0 issues like '(#ID)' were seen in commit messages
@@ -39,6 +39,7 @@
 <details><summary>view details</summary>
 
 - **Uncategorized**
+  - Release gix-error v0.5.3, gix-macros v0.2.2, gix-date v0.19.0, gix-actor v0.45.0, gix-trace v0.3.2, gix-validate v0.13.2, gix-path v0.14.2, gix-utils v0.5.3, gix-quote v0.10.2, gix-command v0.12.2, gix-hash v0.29.0, gix-hashtable v0.19.0, gix-parallel v0.50.2, gix-fs v1.0.0, gix-tempfile v27.0.0, gix-object v0.67.0, gix-glob v0.30.0, gix-attributes v0.38.0, gix-zlib v0.4.1, gix-encoding v0.1.0, gix-packetline v0.24.2, gix-filter v0.37.0, gix-chunk v0.10.2, gix-commitgraph v0.43.0, gix-revwalk v0.39.0, gix-traverse v0.65.0, gix-worktree-stream v0.40.0, gix-archive v0.40.0, gix-bitmap v0.6.2, gix-lock v27.0.0, gix-index v0.59.0, gix-config-value v0.21.2, gix-pathspec v0.23.0, gix-ignore v0.25.0, gix-worktree v0.60.0, gix-imara-diff v0.3.4, gix-diff v0.71.0, gix-blame v0.21.0, gix-ref v0.70.0, gix-sec v0.17.0, gix-config v0.63.0, gix-prompt v0.19.2, gix-url v0.41.0, gix-credentials v0.43.0, gix-discover v0.58.0, gix-dir v0.33.0, gix-fsck v0.28.0, gix-notify v0.1.0, gix-fsmonitor v0.1.0, gix-mailmap v0.36.2, gix-revision v0.53.0, gix-merge v0.24.0, gix-negotiate v0.39.0, gix-note v0.4.0, gix-pack v0.78.0, gix-odb v0.88.0, gix-refspec v0.48.0, gix-shallow v0.16.0, gix-transport v0.63.0, gix-protocol v0.69.0, gix-status v0.38.0, gix-submodule v0.37.0, gix-worktree-state v0.38.0, gix v0.91.0, gitoxide-core v0.65.0, gix-tix v0.7.0, gitoxide v0.62.0, safety bump 44 crates ([`df27410`](https://github.com/GitoxideLabs/gitoxide/commit/df27410adf06a49413eb84b9d6bc0a633ff94b78))
   - Merge pull request #3143 from GitoxideLabs/fast-ci ([`c4a28f8`](https://github.com/GitoxideLabs/gitoxide/commit/c4a28f8c9331603ee2e2928974ee587a23026c49))
   - Discover QA work from manifests and share it between local runs and CI ([`8bf25a2`](https://github.com/GitoxideLabs/gitoxide/commit/8bf25a232d00f71f73b964f39d509ac9ae976efe))
   - Merge pull request #3127 from srijs/gix-zlib-sirocco-deflate ([`8644bf3`](https://github.com/GitoxideLabs/gitoxide/commit/8644bf3a05ec10a9fcf6bfa461b79d0378825aad))
@@ -58,10 +59,10 @@
   fallback to `zlib-rs`:
   
   - `Inflate::once()` and `Inflate::prefix()` decode with `sirocco`. A
-    short output buffer gets `sirocco`'s partial output.
+  short output buffer gets `sirocco`'s partial output.
   - The new `Inflate::rest()` continues the stream `prefix()` started, which
-    loose objects use for their bodies instead of `Inflate::state`.
-    Without the feature it continues with `zlib-rs` as before.
+  loose objects use for their bodies instead of `Inflate::state`.
+  Without the feature it continues with `zlib-rs` as before.
   - `stream::inflate::Measure` uses `sirocco::inflate::Scanner`.
   
   `sirocco`'s errors map to the classes and messages `zlib-rs` produces,
@@ -73,14 +74,14 @@
   With the feature enabled:
   
   - `Inflate::once()` decodes whole streams with `sirocco`, and falls back to `zlib-rs`
-    on any error, so partial output, statuses and errors stay what they were.
+  on any error, so partial output, statuses and errors stay what they were.
   - The new `Inflate::prefix()` always uses `zlib-rs`, for callers that only want the
-    start of a stream: the delta-size probe in `gix-pack` and the loose object header.
+  start of a stream: the delta-size probe in `gix-pack` and the loose object header.
   - The new `stream::inflate::Measure` finds the compressed and decompressed size of a
-    stream read from a `BufRead`. `BytesToEntriesIter` uses it instead of decompressing
-    into `io::sink()`. With `sirocco`, the decompressed bytes aren't produced, so the
-    Adler-32 checksum isn't checked in that pass; the delta-resolution pass of index
-    creation still decodes and checks every object.
+  stream read from a `BufRead`. `BytesToEntriesIter` uses it instead of decompressing
+  into `io::sink()`. With `sirocco`, the decompressed bytes aren't produced, so the
+  Adler-32 checksum isn't checked in that pass; the delta-resolution pass of index
+  creation still decodes and checks every object.
   
   `zlib-rs` is still used for everything else, including all compression.
   

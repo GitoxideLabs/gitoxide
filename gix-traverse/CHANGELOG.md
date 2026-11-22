@@ -25,13 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   generation makes this stop exact, without Git's date slop:
   
   - If the queue head has a usable generation number, so does every queued
-    commit. Generations strictly decrease along parent edges, so no queued
-    commit is an ancestor of one that already popped, and popped commits
-    keep their flags.
+  commit. Generations strictly decrease along parent edges, so no queued
+  commit is an ancestor of one that already popped, and popped commits
+  keep their flags.
   - The walk only asks about its tips and the parents of the commits it
-    yields. Each of those was queued with visible paint. It has either
-    popped, with final flags, or is still queued, and then it carries both
-    flags and is on the frontier, as it would be after the full paint.
+  yields. Each of those was queued with visible paint. It has either
+  popped, with final flags, or is still queued, and then it carries both
+  flags and is on the frontier, as it would be after the full paint.
   
   The walk therefore yields the same commits in the same order. The stop
   waits while a commit outside the commit-graph is queued, as those sort
@@ -141,7 +141,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
-- 15 commits contributed to the release.
+- 16 commits contributed to the release.
 - 31 days passed between releases.
 - 5 commits were understood as [conventional](https://www.conventionalcommits.org).
 - 2 unique issues were worked on: [#3104](https://github.com/GitoxideLabs/gitoxide/issues/3104), [#3105](https://github.com/GitoxideLabs/gitoxide/issues/3105)
@@ -157,6 +157,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **[#3105](https://github.com/GitoxideLabs/gitoxide/issues/3105)**
   - Exclude hidden tips and all hidden parents in topo walks ([`a8ef0a2`](https://github.com/GitoxideLabs/gitoxide/commit/a8ef0a2d31137714e9f0ff8cf376fadb09eaca01))
 - **Uncategorized**
+  - Release gix-error v0.5.3, gix-macros v0.2.2, gix-date v0.19.0, gix-actor v0.45.0, gix-trace v0.3.2, gix-validate v0.13.2, gix-path v0.14.2, gix-utils v0.5.3, gix-quote v0.10.2, gix-command v0.12.2, gix-hash v0.29.0, gix-hashtable v0.19.0, gix-parallel v0.50.2, gix-fs v1.0.0, gix-tempfile v27.0.0, gix-object v0.67.0, gix-glob v0.30.0, gix-attributes v0.38.0, gix-zlib v0.4.1, gix-encoding v0.1.0, gix-packetline v0.24.2, gix-filter v0.37.0, gix-chunk v0.10.2, gix-commitgraph v0.43.0, gix-revwalk v0.39.0, gix-traverse v0.65.0, gix-worktree-stream v0.40.0, gix-archive v0.40.0, gix-bitmap v0.6.2, gix-lock v27.0.0, gix-index v0.59.0, gix-config-value v0.21.2, gix-pathspec v0.23.0, gix-ignore v0.25.0, gix-worktree v0.60.0, gix-imara-diff v0.3.4, gix-diff v0.71.0, gix-blame v0.21.0, gix-ref v0.70.0, gix-sec v0.17.0, gix-config v0.63.0, gix-prompt v0.19.2, gix-url v0.41.0, gix-credentials v0.43.0, gix-discover v0.58.0, gix-dir v0.33.0, gix-fsck v0.28.0, gix-notify v0.1.0, gix-fsmonitor v0.1.0, gix-mailmap v0.36.2, gix-revision v0.53.0, gix-merge v0.24.0, gix-negotiate v0.39.0, gix-note v0.4.0, gix-pack v0.78.0, gix-odb v0.88.0, gix-refspec v0.48.0, gix-shallow v0.16.0, gix-transport v0.63.0, gix-protocol v0.69.0, gix-status v0.38.0, gix-submodule v0.37.0, gix-worktree-state v0.38.0, gix v0.91.0, gitoxide-core v0.65.0, gix-tix v0.7.0, gitoxide v0.62.0, safety bump 44 crates ([`df27410`](https://github.com/GitoxideLabs/gitoxide/commit/df27410adf06a49413eb84b9d6bc0a633ff94b78))
   - Merge pull request #3211 from GitoxideLabs/jiff-upgrade ([`12eff45`](https://github.com/GitoxideLabs/gitoxide/commit/12eff45f0e16fa7a9f75086034ccb0198f55b9f3))
   - Merge pull request #3175 from MarkBlum-Shopify/gix-traverse-hidden-paint-stop ([`b2bcbcf`](https://github.com/GitoxideLabs/gitoxide/commit/b2bcbcf97cb979b1a2643cfa945a8fb11138e574))
   - Review ([`175aae2`](https://github.com/GitoxideLabs/gitoxide/commit/175aae2239a32273f21a4c9341372d9ca26665e4))
