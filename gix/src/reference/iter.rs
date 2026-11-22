@@ -1,36 +1,38 @@
 //!
 #![allow(clippy::empty_docs)]
 
-use crate::error::Error;
 use gix_error::ResultExt;
 
 use gix_path::RelativePath;
 use gix_ref::file::ReferenceExt;
 
-use crate::Result;
+use crate::{Result, error::Error, repository::freelist::Buffer};
 
 /// A platform to create iterators over references.
 #[must_use = "Iterators should be obtained from this iterator platform"]
-pub struct Platform<'r> {
-    pub(crate) platform: gix_ref::file::iter::Platform<'r>,
+pub struct Platform<'repo> {
+    pub(crate) platform: gix_ref::file::iter::Platform<'repo>,
     /// The owning repository.
-    pub repo: &'r crate::Repository,
+    pub repo: &'repo crate::Repository,
 }
 
 /// An iterator over references, with or without filter.
 pub struct Iter<'packed, 'repo> {
     inner: gix_ref::file::iter::LooseThenPacked<'packed, 'repo>,
-    peel_with_packed: Option<gix_ref::file::packed::SharedBufferSnapshot>,
-    peel: bool,
+    peel: Option<Peel<'repo>>,
     repo: &'repo crate::Repository,
+}
+
+struct Peel<'repo> {
+    packed: Option<gix_ref::file::packed::SharedBufferSnapshot>,
+    buf: Buffer<'repo>,
 }
 
 impl<'packed, 'repo> Iter<'packed, 'repo> {
     fn new(repo: &'repo crate::Repository, platform: gix_ref::file::iter::LooseThenPacked<'packed, 'repo>) -> Self {
         Iter {
             inner: platform,
-            peel_with_packed: None,
-            peel: false,
+            peel: None,
             repo,
         }
     }
@@ -90,33 +92,41 @@ impl<'repo> Platform<'repo> {
 impl Iter<'_, '_> {
     /// Automatically peel references before yielding them during iteration.
     ///
-    /// This has the same effect as using `iter.map(|r| {r.peel_to_id(); r})`.
-    ///
-    /// # Note
-    ///
-    /// Doing this is necessary as the packed-refs buffer is already held by the iterator, disallowing the consumer of the iterator
-    /// to peel the returned references themselves.
+    /// This reuses a single object buffer and packed-refs snapshot across the iterator.
     pub fn peeled(mut self) -> Result<Self> {
-        self.peel_with_packed = self.repo.refs.cached_packed_buffer()?;
-        self.peel = true;
+        self.peel = Some(Peel {
+            packed: self.repo.refs.cached_packed_buffer()?,
+            buf: self.repo.empty_reusable_buffer(),
+        });
         Ok(self)
     }
 }
 
-impl<'r> Iterator for Iter<'_, 'r> {
-    type Item = Result<crate::Reference<'r>>;
+impl<'repo> Iterator for Iter<'_, 'repo> {
+    type Item = Result<crate::Reference<'repo>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().map(|res| {
-            let mut r = res?;
-            if self.peel {
-                r.peel_to_id_packed(
+        let mut name_buf = self.repo.empty_reusable_buffer();
+        let name_from_freelist = name_buf.capacity() != 0;
+        let mut symbolic_target_from_freelist = false;
+        let next = self.inner.next_with_buffers(&mut name_buf, || {
+            let buf = self.repo.free_buf();
+            symbolic_target_from_freelist = buf.capacity() != 0;
+            buf
+        });
+        next.map(|res| {
+            let mut reference = crate::Reference::from_ref(res?, self.repo);
+            reference.name_from_freelist = name_from_freelist;
+            reference.symbolic_target_from_freelist = symbolic_target_from_freelist;
+            if let Some(peel) = &mut self.peel {
+                reference.inner_mut().peel_to_id_packed_with_buffer(
                     &self.repo.refs,
                     &self.repo.objects,
-                    self.peel_with_packed.as_ref().map(|p| &***p),
+                    peel.packed.as_ref().map(|p| &***p),
+                    &mut peel.buf,
                 )?;
             }
-            Ok(crate::Reference::from_ref(r, self.repo))
+            Ok(reference)
         })
     }
 }

@@ -78,6 +78,12 @@ impl std::fmt::Display for FullNameRef {
 }
 
 impl FullNameRef {
+    pub(crate) fn to_owned_with_buffer(&self, buf: &mut Vec<u8>) -> FullName {
+        buf.clear();
+        buf.extend_from_slice(self.as_bstr());
+        FullName(std::mem::take(buf).into())
+    }
+
     /// Interpret this fully qualified reference name as partial name.
     pub fn as_partial_name(&self) -> &PartialNameRef {
         PartialNameRef::new_unchecked(self.0.as_bstr())

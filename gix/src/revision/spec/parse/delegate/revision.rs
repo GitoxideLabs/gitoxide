@@ -296,7 +296,7 @@ impl delegate::Revision for Delegate<'_> {
                         .erased(),
                 ),
                 Ok(r) => {
-                    self.refs[self.idx] = r.inner.into();
+                    self.refs[self.idx] = r.detach().into();
                     return Ok(());
                 }
             },

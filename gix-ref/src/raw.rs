@@ -47,10 +47,16 @@ mod convert {
 
     impl<'p> From<packed::Reference<'p>> for Reference {
         fn from(value: packed::Reference<'p>) -> Self {
+            value.into_reference(&mut Vec::new())
+        }
+    }
+
+    impl packed::Reference<'_> {
+        pub(crate) fn into_reference(self, name_buf: &mut Vec<u8>) -> Reference {
             Reference {
-                name: value.name.into(),
-                target: Target::Object(value.target()),
-                peeled: value
+                name: self.name.to_owned_with_buffer(name_buf),
+                target: Target::Object(self.target()),
+                peeled: self
                     .object
                     .map(|hex| ObjectId::from_hex(hex).expect("parser validation")),
             }

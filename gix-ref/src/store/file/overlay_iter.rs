@@ -11,7 +11,7 @@ use std::{
 };
 
 use crate::{
-    BStr, FullName, Namespace, Reference,
+    BStr, FullNameRef, Namespace, Reference,
     file::loose::{self, iter::SortedLoosePaths},
     store_impl::{file, packed},
 };
@@ -26,8 +26,8 @@ pub struct LooseThenPacked<'p, 's> {
     object_hash: gix_hash::Kind,
     namespace: Option<&'s Namespace>,
     iter_packed: Option<Peekable<packed::Iter<'p>>>,
-    iter_git_dir: Peekable<SortedLoosePaths>,
-    iter_common_dir: Option<Peekable<SortedLoosePaths>>,
+    iter_git_dir: SortedLoosePaths,
+    iter_common_dir: Option<SortedLoosePaths>,
     buf: Vec<u8>,
 }
 
@@ -52,87 +52,88 @@ impl<'p> LooseThenPacked<'p, '_> {
         r
     }
 
-    fn loose_iter(&mut self, kind: IterKind) -> &mut Peekable<SortedLoosePaths> {
-        match kind {
-            IterKind::GitAndConsumeCommon => {
-                drop(self.iter_common_dir.as_mut().map(Iterator::next));
-                &mut self.iter_git_dir
-            }
-            IterKind::Git => &mut self.iter_git_dir,
-            IterKind::Common => self
-                .iter_common_dir
-                .as_mut()
-                .expect("caller knows there is a common iter"),
-        }
-    }
-
-    fn convert_packed(&mut self, packed: Result<packed::Reference<'p>>) -> Result<Reference> {
-        packed.map(Into::into).map(|r| self.strip_namespace(r))
+    fn convert_packed(&self, packed: Result<packed::Reference<'p>>, name_buf: &mut Vec<u8>) -> Result<Reference> {
+        packed.map(|r| self.strip_namespace(r.into_reference(name_buf)))
     }
 
     /// Read failures include [metadata](gix_error::Error::metadata()) `path` (native path), the loose reference being
     /// visited.
-    fn convert_loose(&mut self, res: std::io::Result<(PathBuf, FullName)>) -> Result<Reference> {
+    fn next_loose(
+        &mut self,
+        kind: IterKind,
+        name_buf: &mut Vec<u8>,
+        symbolic_target_buf: impl FnOnce() -> Vec<u8>,
+    ) -> Result<Reference> {
+        let iter = match kind {
+            IterKind::GitAndConsumeCommon => {
+                drop(self.iter_common_dir.as_mut().and_then(SortedLoosePaths::take_peeked));
+                &mut self.iter_git_dir
+            }
+            IterKind::Git => &mut self.iter_git_dir,
+            IterKind::Common => self.iter_common_dir.as_mut().expect("peeked a common ref"),
+        };
+        let entry = iter
+            .take_peeked()
+            .expect("the loose ref was peeked")
+            .or_raise(|| message("Could not traverse reference directory"))?;
         let buf = &mut self.buf;
         let git_dir = self.git_dir;
         let common_dir = self.common_dir;
-        let (refpath, name) = res.or_raise(|| message("Could not traverse reference directory"))?;
-        std::fs::File::open(&refpath)
+        std::fs::File::open(entry.path)
             .and_then(|mut f| {
                 buf.clear();
                 f.read_to_end(buf)
             })
-            .or_raise(|| file::find::read_reference_error(refpath.as_path()))?;
-        loose::Reference::try_from_path(name, buf, self.object_hash)
-            .or_raise(|| {
-                let relative_path = refpath
-                    .strip_prefix(git_dir)
-                    .ok()
-                    .or_else(|| common_dir.and_then(|common_dir| refpath.strip_prefix(common_dir).ok()))
-                    .expect("one of our bases contains the path");
-                file::find::ReferenceDecode {
-                    relative_path: relative_path.into(),
-                }
-            })
-            .map(Into::into)
-            .map(|r| self.strip_namespace(r))
+            .or_raise(|| file::find::read_reference_error(entry.path))?;
+        let target = loose::Reference::decode_target(buf, self.object_hash, symbolic_target_buf).or_raise(|| {
+            let relative_path = entry
+                .path
+                .strip_prefix(git_dir)
+                .ok()
+                .or_else(|| common_dir.and_then(|common_dir| entry.path.strip_prefix(common_dir).ok()))
+                .expect("one of our bases contains the path");
+            file::find::ReferenceDecode {
+                relative_path: relative_path.into(),
+            }
+        })?;
+        let reference = Reference {
+            name: entry.name.to_owned_with_buffer(name_buf),
+            target,
+            peeled: None,
+        };
+        Ok(self.strip_namespace(reference))
     }
 }
 
-impl Iterator for LooseThenPacked<'_, '_> {
-    type Item = Result<Reference>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        fn advance_to_non_private(iter: &mut Peekable<SortedLoosePaths>) {
-            while iter
-                .next_if(|entry| {
-                    matches!(entry, Ok((_path, name)) if name.category().is_some_and(|cat| cat.is_worktree_private()))
-                })
-                .is_some()
-            {}
-        }
-
+impl LooseThenPacked<'_, '_> {
+    /// Like [`Iterator::next()`], but reuse storage for the returned reference's name and symbolic target name.
+    ///
+    /// On success, the iterator clears `name_buf` and moves its allocation into the reference name.
+    /// It calls `symbolic_target_buf` only after validating a symbolic target name and moves the returned
+    /// buffer's allocation into that name. Recover either allocation with
+    /// [`FullName::into_inner()`](crate::FullName::into_inner()).
+    pub fn next_with_buffers(
+        &mut self,
+        name_buf: &mut Vec<u8>,
+        symbolic_target_buf: impl FnOnce() -> Vec<u8>,
+    ) -> Option<Result<Reference>> {
         fn peek_loose<'a>(
-            git_dir: &'a mut Peekable<SortedLoosePaths>,
-            common_dir: Option<&'a mut Peekable<SortedLoosePaths>>,
-        ) -> Option<(&'a std::io::Result<(PathBuf, FullName)>, IterKind)> {
+            git_dir: &'a mut SortedLoosePaths,
+            common_dir: Option<&'a mut SortedLoosePaths>,
+        ) -> Option<(std::result::Result<&'a FullNameRef, ()>, IterKind)> {
+            let git = git_dir.peek_name(false);
             match common_dir {
-                Some(common_dir) => match (git_dir.peek(), {
-                    advance_to_non_private(common_dir);
-                    common_dir.peek()
-                }) {
+                Some(common_dir) => match (git, common_dir.peek_name(true)) {
                     (None, None) => None,
                     (None, Some(res)) | (Some(_), Some(res @ Err(_))) => Some((res, IterKind::Common)),
                     (Some(res), None) | (Some(res @ Err(_)), Some(_)) => Some((res, IterKind::Git)),
-                    (Some(r_gitdir @ Ok((_, git_dir_name))), Some(r_cd @ Ok((_, common_dir_name)))) => {
-                        match git_dir_name.cmp(common_dir_name) {
-                            Ordering::Less => Some((r_gitdir, IterKind::Git)),
-                            Ordering::Equal => Some((r_gitdir, IterKind::GitAndConsumeCommon)),
-                            Ordering::Greater => Some((r_cd, IterKind::Common)),
-                        }
-                    }
+                    (Some(r_gitdir @ Ok(git_name)), Some(r_cd @ Ok(common_name))) => match git_name.cmp(common_name) {
+                        Ordering::Less => Some((r_gitdir, IterKind::Git)),
+                        Ordering::Equal => Some((r_gitdir, IterKind::GitAndConsumeCommon)),
+                        Ordering::Greater => Some((r_cd, IterKind::Common)),
+                    },
                 },
-                None => git_dir.peek().map(|r| (r, IterKind::Git)),
+                None => git.map(|r| (r, IterKind::Git)),
             }
         }
         match self.iter_packed.as_mut() {
@@ -143,33 +144,36 @@ impl Iterator for LooseThenPacked<'_, '_> {
                 (None, None) => None,
                 (None, Some(_)) | (Some(_), Some(Err(_))) => {
                     let res = packed_iter.next().expect("peeked value exists");
-                    Some(self.convert_packed(res))
+                    Some(self.convert_packed(res, name_buf))
                 }
                 (Some((_, kind)), None) | (Some((Err(_), kind)), Some(_)) => {
-                    let res = self.loose_iter(kind).next().expect("prior peek");
-                    Some(self.convert_loose(res))
+                    Some(self.next_loose(kind, name_buf, symbolic_target_buf))
                 }
-                (Some((Ok((_, loose_name)), kind)), Some(Ok(packed))) => match loose_name.as_ref().cmp(packed.name) {
-                    Ordering::Less => {
-                        let res = self.loose_iter(kind).next().expect("prior peek");
-                        Some(self.convert_loose(res))
-                    }
+                (Some((Ok(name), kind)), Some(Ok(packed))) => match name.cmp(packed.name) {
+                    Ordering::Less => Some(self.next_loose(kind, name_buf, symbolic_target_buf)),
                     Ordering::Equal => {
                         drop(packed_iter.next());
-                        let res = self.loose_iter(kind).next().expect("prior peek");
-                        Some(self.convert_loose(res))
+                        Some(self.next_loose(kind, name_buf, symbolic_target_buf))
                     }
                     Ordering::Greater => {
                         let res = packed_iter.next().expect("name retrieval configured");
-                        Some(self.convert_packed(res))
+                        Some(self.convert_packed(res, name_buf))
                     }
                 },
             },
-            None => match peek_loose(&mut self.iter_git_dir, self.iter_common_dir.as_mut()) {
-                None => None,
-                Some((_, kind)) => self.loose_iter(kind).next().map(|res| self.convert_loose(res)),
-            },
+            None => {
+                let (_, kind) = peek_loose(&mut self.iter_git_dir, self.iter_common_dir.as_mut())?;
+                Some(self.next_loose(kind, name_buf, symbolic_target_buf))
+            }
         }
+    }
+}
+
+impl Iterator for LooseThenPacked<'_, '_> {
+    type Item = Result<Reference>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.next_with_buffers(&mut Vec::new(), Vec::new)
     }
 }
 
@@ -205,6 +209,7 @@ impl file::Store {
     /// Return a platform to obtain iterator over all references, or prefixed ones, loose or packed, sorted by their name.
     ///
     /// Errors are returned similarly to what would happen when loose and packed refs were iterated by themselves.
+    /// Loose iteration reuses path and sorting storage across directory entries.
     ///
     /// Note that since packed-refs are storing refs as precomposed unicode if [`Self::precompose_unicode`] is true, for consistency
     /// we also return loose references as precomposed unicode.
@@ -261,41 +266,34 @@ impl<'a> IterInfo<'a> {
         .transpose()
     }
 
-    fn into_iter(self) -> Peekable<SortedLoosePaths> {
+    fn into_iter(self) -> SortedLoosePaths {
         match self {
             IterInfo::Base {
                 base,
                 precompose_unicode,
-            } => SortedLoosePaths::at(&base.join("refs"), base.into(), None, None, precompose_unicode),
+            } => SortedLoosePaths::at(base.join("refs"), base, None, None, precompose_unicode),
             IterInfo::BaseAndIterRoot {
                 base,
                 iter_root,
                 prefix: _,
                 precompose_unicode,
-            } => SortedLoosePaths::at(&iter_root, base.into(), None, None, precompose_unicode),
+            } => SortedLoosePaths::at(iter_root, base, None, None, precompose_unicode),
             IterInfo::PrefixAndBase {
                 base,
                 prefix,
                 precompose_unicode,
-            } => SortedLoosePaths::at(&base.join(prefix), base.into(), None, None, precompose_unicode),
+            } => SortedLoosePaths::at(base.join(prefix), base, None, None, precompose_unicode),
             IterInfo::ComputedIterationRoot {
                 iter_root,
                 base,
                 prefix,
                 precompose_unicode,
-            } => SortedLoosePaths::at(
-                &iter_root,
-                base.into(),
-                Some(prefix.into_owned()),
-                None,
-                precompose_unicode,
-            ),
+            } => SortedLoosePaths::at(iter_root, base, Some(prefix.into_owned()), None, precompose_unicode),
             IterInfo::Pseudo {
                 base,
                 precompose_unicode,
-            } => SortedLoosePaths::at(base, base.into(), None, Some("HEAD".into()), precompose_unicode),
+            } => SortedLoosePaths::at(base.into(), base, None, Some("HEAD".into()), precompose_unicode),
         }
-        .peekable()
     }
 
     fn from_prefix(base: &'a Path, prefix: &'a RelativePath, precompose_unicode: bool) -> std::io::Result<Self> {

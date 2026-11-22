@@ -1,4 +1,4 @@
-use gix_error::{OptionExt, Result};
+use gix_error::{ErrorExt, OptionExt, Result, ensure};
 use std::{borrow::Cow, ops::Range};
 
 use bstr::BStr;
@@ -133,16 +133,20 @@ impl<'a> CommitRefIter<'a> {
 
     /// Returns the message if there is no decoding error.
     ///
-    /// It may contain white space surrounding it, and is exactly as
-    //  parsed.
+    /// The message borrows all bytes after the blank line that separates it from the headers.
+    /// The separator is excluded, but any leading or trailing whitespace in the message is preserved.
+    ///
+    /// To reach the message, this method checks the syntax of any remaining extra headers, including
+    /// their continuation lines. It skips their values without interpreting them or allocating buffers
+    /// to unfold multi-line values.
     pub fn message(mut self) -> Result<&'a BStr> {
-        self.find_map(|t| match t {
-            Ok(Token::Message(msg)) => Some(Ok(msg)),
-            Err(err) => Some(Err(err)),
-            _ => None,
-        })
-        .transpose()
-        .map(Option::unwrap_or_default)
+        while !self.data.is_empty() {
+            if let Token::Message(message) = Self::parse_token::<true>(&mut self.data, &mut self.state, self.hash_kind)?
+            {
+                return Ok(message);
+            }
+        }
+        Ok(Default::default())
     }
 }
 
@@ -153,34 +157,35 @@ fn missing_field() -> gix_error::Message {
 impl<'a> CommitRefIter<'a> {
     #[inline]
     fn next_inner(mut i: &'a [u8], state: &mut State, hash_kind: gix_hash::Kind) -> Result<(&'a [u8], Token<'a>)> {
-        let input = &mut i;
-        match Self::next_inner_(input, state, hash_kind) {
-            Ok(token) => Ok((*input, token)),
-            Err(err) => Err(err),
-        }
+        let token = Self::parse_token::<false>(&mut i, state, hash_kind)?;
+        Ok((i, token))
     }
 
-    fn next_inner_(input: &mut &'a [u8], state: &mut State, hash_kind: gix_hash::Kind) -> Result<Token<'a>> {
+    fn parse_token<const SKIP_EXTRA_HEADERS: bool>(
+        input: &mut &'a [u8],
+        state: &mut State,
+        hash_kind: gix_hash::Kind,
+    ) -> Result<Token<'a>> {
         use State::*;
+        let parse_id = |hex: &[u8]| {
+            ensure!(hex.len() == hash_kind.len_in_hex(), crate::decode::empty_error());
+            ObjectId::from_hex(hex).map_err(|_| crate::decode::empty_error().raise())
+        };
         Ok(match state {
             Tree => {
-                let tree = parse::header_field(input, b"tree", |value| parse::hex_hash(value, hash_kind))?;
+                let id = parse::header_field(input, b"tree", parse_id)?;
                 *state = State::Parents;
-                Token::Tree {
-                    id: ObjectId::from_hex(tree).expect("parsing validation"),
-                }
+                Token::Tree { id }
             }
             Parents => {
                 if input.starts_with(b"parent ") {
-                    let parent = parse::header_field(input, b"parent", |value| parse::hex_hash(value, hash_kind))?;
-                    Token::Parent {
-                        id: ObjectId::from_hex(parent).expect("parsing validation"),
-                    }
+                    let id = parse::header_field(input, b"parent", parse_id)?;
+                    Token::Parent { id }
                 } else {
                     *state = State::Signature {
                         of: SignatureKind::Author,
                     };
-                    Self::next_inner_(input, state, hash_kind)?
+                    Self::parse_token::<SKIP_EXTRA_HEADERS>(input, state, hash_kind)?
                 }
             }
             Signature { of } => {
@@ -207,24 +212,24 @@ impl<'a> CommitRefIter<'a> {
                     let encoding = parse::header_field(input, b"encoding", Ok)?;
                     Token::Encoding(encoding.as_bstr())
                 } else {
-                    Self::next_inner_(input, state, hash_kind)?
+                    Self::parse_token::<SKIP_EXTRA_HEADERS>(input, state, hash_kind)?
                 }
             }
             ExtraHeaders => {
-                if input.starts_with(b"\n") {
-                    *state = State::Message;
-                    Self::next_inner_(input, state, hash_kind)?
-                } else {
-                    let before = *input;
-                    {
-                        let extra_header = parse::any_header_field_multi_line(input)
-                            .map(|(k, o)| (k.as_bstr(), Cow::Owned(o)))
-                            .or_else(|_| {
-                                *input = before;
-                                parse::any_header_field(input).map(|(k, o)| (k.as_bstr(), Cow::Borrowed(o.as_bstr())))
-                            })?;
-                        Token::ExtraHeader(extra_header)
+                if SKIP_EXTRA_HEADERS {
+                    while !input.is_empty() && !input.starts_with(parse::NL) {
+                        parse::any_header_field(input)?;
                     }
+                    if input.is_empty() {
+                        return Ok(Token::Message(Default::default()));
+                    }
+                }
+                if input.starts_with(parse::NL) {
+                    *state = State::Message;
+                    Self::parse_token::<SKIP_EXTRA_HEADERS>(input, state, hash_kind)?
+                } else {
+                    let (name, value) = parse::any_header_field(input)?;
+                    Token::ExtraHeader((name, value.unfold()))
                 }
             }
             Message => {

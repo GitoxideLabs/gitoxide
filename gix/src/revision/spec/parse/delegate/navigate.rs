@@ -262,7 +262,7 @@ impl delegate::Navigate for Delegate<'_> {
                             .or_raise(|| message("Couldn't configure iterator for peeling"))?
                             .filter_map(Result::ok)
                             .filter(|r| r.id().header().ok().is_some_and(|obj| obj.kind().is_commit()))
-                            .filter_map(|r| r.detach().peeled),
+                            .filter_map(|r| r.inner().peeled),
                     )
                     .sorting(crate::revision::walk::Sorting::ByCommitTime(Default::default()))
                     .all()?;

@@ -28,7 +28,7 @@ fn compares_with_name_representations() -> TestResult {
     assert_eq!(reference, name_ref, "an attached reference matches FullNameRef");
 
     let mut other_target = reference.clone();
-    other_target.inner.target = Target::Symbolic(FullName::try_from("refs/heads/other")?);
+    other_target.inner_mut().target = Target::Symbolic(FullName::try_from("refs/heads/other")?);
     assert_eq!(
         other_target, text,
         "reference-name equality is independent of the target"
@@ -148,7 +148,7 @@ mod find {
         assert_eq!(packed_tag_ref, expected);
 
         assert_eq!(
-            packed_tag_ref.inner.target,
+            packed_tag_ref.inner().target,
             Target::Object(hex_to_id("4c3f4cce493d7beb45012e478021b5f65295e5a3")),
             "it points to a tag object"
         );
@@ -178,7 +178,7 @@ mod find {
             TargetRef::Symbolic("refs/tags/dt2".try_into()?),
             "the ref points at another tag"
         );
-        assert_eq!(tag_ref.inner.peeled, None, "it wasn't peeled yet, nothing is stored");
+        assert_eq!(tag_ref.inner().peeled, None, "it wasn't peeled yet, nothing is stored");
         let obj = tag_ref.peel_to_kind(gix::object::Kind::Tag)?;
         assert_eq!(tag_ref.peel_to_tag()?.id, obj.id);
         assert_eq!(obj.kind, gix::object::Kind::Tag);
@@ -196,7 +196,7 @@ mod find {
         );
         let target_commit_id = hex_to_id("134385f6d781b7e97062102c6a483440bfda2a03");
         assert_eq!(
-            tag_ref.inner.peeled,
+            tag_ref.inner().peeled,
             Some(target_commit_id),
             "It only counts as peeled as this ref is packed, and peeling in place is a way to 'make it the target' officially."
         );
@@ -227,7 +227,7 @@ mod find {
             "nothing changed - it still points to the target"
         );
         assert_eq!(
-            tag_ref.inner.peeled,
+            tag_ref.inner().peeled,
             Some(target_commit_id),
             "the peeling cache wasn't changed"
         );
@@ -253,7 +253,7 @@ mod find {
             "it now points to the first tag as well"
         );
         assert_eq!(
-            tag_ref.inner.peeled,
+            tag_ref.inner().peeled,
             Some(target_commit_id),
             "as it was read from a packed-ref, it contains peeling information nonetheless"
         );

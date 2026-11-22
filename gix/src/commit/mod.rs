@@ -131,7 +131,7 @@ pub mod describe {
                             peeled_id.inner,
                             prio,
                             tag_time,
-                            Cow::from(r.inner.name.shorten().to_owned()),
+                            Cow::from(r.name().shorten().to_owned()),
                         )
                             .into()
                     })

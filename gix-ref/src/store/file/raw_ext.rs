@@ -64,6 +64,15 @@ pub trait ReferenceExt: Sealed {
         packed: Option<&packed::Buffer>,
     ) -> Result<ObjectId>;
 
+    /// Like [`ReferenceExt::peel_to_id_packed()`], using `buf` as scratch space for object lookups.
+    fn peel_to_id_packed_with_buffer(
+        &mut self,
+        store: &file::Store,
+        objects: &dyn gix_object::Find,
+        packed: Option<&packed::Buffer>,
+        buf: &mut Vec<u8>,
+    ) -> Result<ObjectId>;
+
     /// Like [`ReferenceExt::follow()`], but follows all symbolic references while gracefully handling loops,
     /// altering this instance in place.
     #[deprecated = "Use `follow_to_object_packed()` instead"]
@@ -130,6 +139,16 @@ impl ReferenceExt for Reference {
         objects: &dyn gix_object::Find,
         packed: Option<&packed::Buffer>,
     ) -> Result<ObjectId> {
+        self.peel_to_id_packed_with_buffer(store, objects, packed, &mut Vec::new())
+    }
+
+    fn peel_to_id_packed_with_buffer(
+        &mut self,
+        store: &file::Store,
+        objects: &dyn gix_object::Find,
+        packed: Option<&packed::Buffer>,
+        buf: &mut Vec<u8>,
+    ) -> Result<ObjectId> {
         match self.peeled {
             Some(peeled) => {
                 self.target = Target::Object(peeled.to_owned());
@@ -137,14 +156,14 @@ impl ReferenceExt for Reference {
             }
             None => {
                 let mut object_id = self.follow_to_object_packed(store, packed)?;
-                let mut buf = Vec::new();
+                buf.clear();
                 let peeled_id = loop {
                     let gix_object::Data {
                         kind,
                         data,
                         object_hash: hash_kind,
                     } = objects
-                        .try_find(&object_id, &mut buf)
+                        .try_find(&object_id, buf)
                         .or_raise(|| {
                             Message::new("Could not peel reference to an object")
                                 .with("object_id", object_id.to_string())

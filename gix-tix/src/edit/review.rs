@@ -1662,9 +1662,8 @@ mod tests {
         super::super::time_travel::checkout_without_replay(fixture.path(), false, combined, &[], false)?;
 
         let repo = open()?;
-        let mut return_ref = repo.find_reference(return_name.as_ref())?;
         assert_eq!(
-            return_ref.peel_to_id()?.detach(),
+            repo.find_reference(return_name.as_ref())?.into_fully_peeled_id()?,
             combined,
             "checking out a rewritten destination preserves the review's return pin"
         );

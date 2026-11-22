@@ -138,6 +138,68 @@ fn error_handling() -> gix_testtools::TestResult {
 }
 
 #[test]
+fn message_preserves_extra_header_validation() -> gix_testtools::TestResult {
+    let data = fixture_name("commit", "signed-singleline.txt");
+    let header_start = data.find(b"gpgsig ").expect("the fixture contains a signature");
+    let with_headers = |suffix: &[u8]| {
+        let mut input = data[..header_start].to_vec();
+        input.extend_from_slice(suffix);
+        input
+    };
+    let unterminated = b"gpgsig first line
+ unterminated";
+    for suffix in [
+        b"gpgsig first line
+ continuation
+missing-separator
+
+message
+"
+        .as_slice(),
+        unterminated,
+    ] {
+        let input = with_headers(suffix);
+        let iter = CommitRefIter::from_bytes(&input, gix_hash::Kind::Sha1);
+        let mut tokens = iter;
+        let token_error = tokens
+            .find_map(std::result::Result::err)
+            .expect("token parsing rejects the malformed header");
+        let message_error = iter.message().expect_err("message lookup rejects the malformed header");
+        assert!(message_error.is_validation(), "malformed headers are validation errors");
+        assert_eq!(
+            message_error.to_string(),
+            token_error.to_string(),
+            "both paths report the same error"
+        );
+    }
+
+    let input = with_headers(unterminated);
+    let mut iter = CommitRefIter::from_bytes(&input, gix_hash::Kind::Sha1).skip(4);
+    assert_eq!(
+        iter.next().expect("a token preceding the malformed continuation")?,
+        Token::ExtraHeader((b"gpgsig".as_bstr(), b"first line".as_bstr().into())),
+        "an unterminated continuation leaves the first line as a single-line token"
+    );
+    assert!(
+        iter.next().expect("a result for the continuation").is_err(),
+        "the unterminated line is rejected on the next iteration"
+    );
+
+    let data = with_headers(
+        b"gpgsig first line
+ continuation
+",
+    );
+    assert!(
+        CommitRefIter::from_bytes(&data, gix_hash::Kind::Sha1)
+            .message()?
+            .is_empty(),
+        "ending at a complete header preserves the empty-message result"
+    );
+    Ok(())
+}
+
+#[test]
 fn mergetag() -> gix_testtools::TestResult {
     let input = fixture_name("commit", "mergetag.txt");
     let iter = CommitRefIter::from_bytes(&input, gix_hash::Kind::Sha1);
