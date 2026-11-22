@@ -25,7 +25,7 @@ fn native_batches_are_published_before_the_fence_and_keep_byte_paths() {
             reply,
         })),
         sender: sender.clone(),
-        watches: BTreeMap::from([(PathBuf::from("/watched"), true)]),
+        watches: MutableOnDemand::new(BTreeMap::from([(PathBuf::from("/watched"), true)])),
     };
     let names = [
         CString::new(b"/watched/first".as_slice()).expect("no NUL"),
@@ -79,7 +79,7 @@ fn loss_after_a_marker_and_queue_overflow_both_abort_its_fence() {
         let (reply, receive) = mpsc::sync_channel(1);
         let context = Context {
             sender: OwnShared::new(queue::Sender::new(state.clone(), 0)),
-            watches: BTreeMap::from([(PathBuf::from("/watched"), true)]),
+            watches: MutableOnDemand::new(BTreeMap::from([(PathBuf::from("/watched"), true)])),
             pending: Mutable::new(Some(PendingFence {
                 path: PathBuf::from("/watched/cookie"),
                 generation: 0,
@@ -132,7 +132,7 @@ fn late_marker_from_a_timed_out_request_cannot_complete_its_successor() {
     let (reply, receive) = mpsc::sync_channel(1);
     let context = Context {
         sender: OwnShared::new(queue::Sender::new(state, 0)),
-        watches: BTreeMap::from([(PathBuf::from("/watched"), true)]),
+        watches: MutableOnDemand::new(BTreeMap::from([(PathBuf::from("/watched"), true)])),
         pending: Mutable::new(Some(PendingFence {
             path: PathBuf::from("/watched/new-cookie"),
             generation: 0,
@@ -164,7 +164,7 @@ fn stream_wide_loss_is_processed_even_for_filtered_native_paths() {
     let context = Context {
         pending: Mutable::new(None),
         sender: sender.clone(),
-        watches: BTreeMap::from([(PathBuf::from("/watched"), false)]),
+        watches: MutableOnDemand::new(BTreeMap::from([(PathBuf::from("/watched"), false)])),
     };
     let name = CString::new("/unrelated").expect("no NUL");
     let path = name.as_ptr();
@@ -207,11 +207,11 @@ fn coalesced_subtrees_preserve_coverage_only_when_disjoint_from_the_logical_watc
         let context = Context {
             pending: Mutable::new(None),
             sender: sender.clone(),
-            watches: BTreeMap::from([
+            watches: MutableOnDemand::new(BTreeMap::from([
                 (PathBuf::from("/repo"), false),
                 (PathBuf::from("/repo/source"), true),
                 (PathBuf::from("/parent/deep/file"), false),
-            ]),
+            ])),
         };
         let names = [
             CString::new(subtree).expect("no NUL"),
@@ -313,6 +313,7 @@ fn disconnected_control_workers_require_recovery() {
     let mut backend = Backend {
         commands: Some(commands),
         worker: None,
+        context: WeakShared::new(),
     };
     let error = backend.replace(&[]).expect_err("the control receiver has stopped");
     assert!(error.is_conflict(), "a stopped worker must be recreated");

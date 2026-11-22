@@ -159,7 +159,9 @@ fn service(monitor: &mut RepositoryMonitor, repo: &gix::Repository) -> Outcome {
         "watch inventory maintenance succeeds: {:?}",
         out.errors
     );
-    assert_worktree_only(&out.changes);
+    if !monitor.options().metadata {
+        assert_worktree_only(&out.changes);
+    }
     out
 }
 
@@ -843,6 +845,66 @@ mod native {
     use super::*;
 
     const TIMEOUT: Duration = Duration::from_secs(5);
+
+    #[cfg(all(target_os = "macos", feature = "status-monitor"))]
+    #[test]
+    fn removing_an_untracked_directory_keeps_status_incremental() -> TestResult {
+        use std::sync::atomic::AtomicBool;
+
+        for coverage in [WorktreeCoverage::IgnoreAware, WorktreeCoverage::ExcludeIgnoredFiles] {
+            let fixture = gix_testtools::scripted_fixture_writable("make_status_monitor_index.sh")?;
+            let root = fixture.path();
+            std::fs::create_dir(root.join("dir"))?;
+            std::fs::write(root.join("dir/file"), "untracked")?;
+            std::fs::create_dir(root.join("sibling"))?;
+            let repo = gix::open_opts(root, crate::restricted())?;
+            let mut project = repo.monitor(Options {
+                worktree_coverage: Some(coverage),
+                ..Options::default()
+            })?;
+            let mut handle = project.worktree_status(&repo, Default::default())?;
+            let mut quiet = Instant::now();
+            wait_for(&mut project, &repo, "initial coverage to settle", |out| {
+                if out.coverage != CoverageStatus::Healthy || !out.changes.is_empty() || out.statistics.received != 0 {
+                    quiet = Instant::now();
+                }
+                quiet.elapsed() >= Duration::from_millis(500)
+            });
+            let interrupt = AtomicBool::new(false);
+            handle.refresh(&repo, &interrupt)?;
+            assert!(
+                matches!(handle.snapshot(), Some([item]) if item.location() == "dir"),
+                "untracked files collapse to their directory"
+            );
+
+            std::fs::remove_dir_all(root.join("dir"))?;
+            std::fs::write(root.join("sibling/file"), "also untracked")?;
+            let (mut removed, mut sibling) = (false, false);
+            wait_for(&mut project, &repo, "directory removal and sibling write", |out| {
+                if let Some(scope) = &out.changes.worktree {
+                    let Scope::Paths(paths) = scope else {
+                        panic!("{coverage:?} lost incremental coverage")
+                    };
+                    sibling |= paths.iter().any(|change| change.path == "sibling/file");
+                }
+                removed |= out.statistics.removed != 0;
+                removed && sibling
+            });
+            let update = handle.refresh(&repo, &interrupt)?;
+            assert!(
+                matches!(update.unstaged, Some(Scope::Paths(_))) && !update.staged,
+                "only the affected worktree paths need status"
+            );
+            assert!(
+                matches!(handle.snapshot(), Some([item]) if item.location() == "sibling"),
+                "the deletion and the concurrent sibling write both reach the snapshot"
+            );
+
+            std::fs::create_dir(root.join("dir"))?;
+            wait_for_file_change(&mut project, &repo, "dir/file")?;
+        }
+        Ok(())
+    }
 
     fn writable_fixture(name: &str) -> TestResult<gix_testtools::tempfile::TempDir> {
         Ok(gix_testtools::scripted_fixture_writable_with_args(

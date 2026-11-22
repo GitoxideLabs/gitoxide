@@ -156,6 +156,7 @@ pub enum WorktreeCoverage {
     /// ordinary staging only invalidates the index. Reenabled subtrees need local discovery,
     /// and directory changes reuse unaffected recursive coverage. The monitor retains directory names
     /// and a fingerprint of coverage-relevant index data, not individual file paths or ignore blobs.
+    /// On macOS, removing a watched directory below a retained root can invalidate just that subtree.
     /// Global ignore dependencies are watched too. On macOS they use file watches separate from the
     /// repository's FSEvents streams. Loss of worktree coverage requests a full baseline and discovery walk.
     #[default]
@@ -554,6 +555,20 @@ struct Domain {
 }
 
 impl Domain {
+    fn retire_directory(&mut self, _path: &Path) {
+        #[cfg(target_os = "macos")]
+        if !self.rebuild
+            && self
+                .watcher
+                .as_mut()
+                .is_some_and(|watcher| watcher.try_remove_subtree(_path))
+        {
+            self.registered.retain(|watch, _| !watch.starts_with(_path));
+            return;
+        }
+        self.rebuild = true;
+    }
+
     fn replace(&mut self, desired: BTreeMap<PathBuf, bool>, statistics: &mut Statistics) -> Result<bool> {
         if self.rebuild {
             self.watcher = None;
@@ -1061,6 +1076,7 @@ impl RepositoryMonitor {
                 }
             }
             out.statistics.received += batch.events.len();
+            let worktree_watches = self.worktree.registered.len();
             for event in batch.events {
                 out.errors.extend(self.observe(&event, worktree, now));
                 if !worktree && self.all_worktrees_enabled() && !self.loss_pending_for(false) {
@@ -1071,6 +1087,7 @@ impl RepositoryMonitor {
                     }
                 }
             }
+            out.statistics.removed += worktree_watches - self.worktree.registered.len();
             if let Some(error) = batch.error {
                 self.coverage_lost(worktree, now);
                 let domain = if worktree {
@@ -1692,7 +1709,7 @@ impl RepositoryMonitor {
                         self.maintenance = Some(now);
                     }
                     if registered_directory && matches!(event.kind, EventKind::Remove | EventKind::Rename) {
-                        self.worktree.rebuild = true;
+                        self.worktree.retire_directory(path);
                     }
                 }
                 let name = path.file_name().map(std::ffi::OsStr::as_encoded_bytes);

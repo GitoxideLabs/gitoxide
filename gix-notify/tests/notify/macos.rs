@@ -4,6 +4,64 @@ use std::time::{Duration, Instant};
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 #[test]
+fn removing_nested_watches_preserves_queued_events_and_the_generation() -> gix_error::TestResult {
+    let fixture = tempfile::tempdir()?;
+    let root = fixture.path().canonicalize()?;
+    let child = root.join("child");
+    let sibling = root.join("sibling");
+    let deep = child.join("deep");
+    std::fs::create_dir_all(&deep)?;
+    std::fs::create_dir(&sibling)?;
+    let mut watcher = Watcher::new(Options::default())?;
+    let alias = root.join("alias");
+    std::os::unix::fs::symlink(&child, &alias)?;
+    watcher.replace([&root, &child, &alias].map(|path| Watch {
+        path: path.clone(),
+        recursive: false,
+    }))?;
+    assert!(
+        !watcher.try_remove_subtree(&child),
+        "a second subscription through a symlink shares the canonical child watch"
+    );
+    watcher.replace(
+        [(&root, false), (&child, false), (&deep, true), (&sibling, true)].map(|(path, recursive)| Watch {
+            path: path.clone(),
+            recursive,
+        }),
+    )?;
+    let generation = watcher.drain(Budget::default()).generation;
+    assert!(
+        !watcher.try_remove_subtree(&root),
+        "a request that includes the physical root must leave coverage intact"
+    );
+    let queued = deep.join("queued");
+    std::fs::write(&queued, "before removal")?;
+    watcher.synchronize_at(&root, Instant::now() + Duration::from_secs(5))?;
+    assert!(
+        watcher.try_remove_subtree(&child),
+        "the shallow parent keeps the native stream alive"
+    );
+    let excluded = deep.join("later");
+    let included = sibling.join("later");
+    std::fs::write(&excluded, "retired subscription")?;
+    std::fs::write(&included, "retained subscription")?;
+    let fence = watcher.synchronize_at(&root, Instant::now() + Duration::from_secs(5))?;
+    let batch = watcher.drain(Budget::default());
+    assert_eq!(fence.generation, generation, "both fences span one native registration");
+    assert_eq!(batch.loss, None, "retiring the nested watch preserves continuity");
+    let paths: Vec<_> = batch.events.into_iter().flat_map(|event| event.paths).collect();
+    assert!(
+        paths.contains(&queued) && paths.contains(&included),
+        "both old and new events are delivered"
+    );
+    assert!(
+        !paths.contains(&excluded),
+        "future descendants of the retired subscription are filtered"
+    );
+    Ok(())
+}
+
+#[test]
 fn unicode_and_case_aliases_keep_native_coverage() -> TestResult {
     let directory = tempfile::tempdir()?;
     let directory = directory.path().canonicalize()?;

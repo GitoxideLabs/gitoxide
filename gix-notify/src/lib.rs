@@ -363,6 +363,24 @@ impl Watcher {
         Ok(watcher)
     }
 
+    /// Remove the watch at `path` and its descendants while preserving the FSEvents stream, generation and queue.
+    ///
+    /// The path must itself be watched below another watch on the same stream. Returns `false` without
+    /// changing coverage if the path is unknown or removing it requires ordinary [replacement](Self::replace),
+    /// including for native roots and aliased registrations. Events in flight for removed paths may still arrive.
+    #[cfg(target_os = "macos")]
+    pub fn try_remove_subtree(&mut self, path: &std::path::Path) -> bool {
+        if lock(&self.state).needs_restart {
+            return false;
+        }
+        let Some(backend) = &self.backend else { return false };
+        if !backend.remove_subtree(&self.desired, path) {
+            return false;
+        }
+        self.desired.retain(|watch| !watch.path.starts_with(path));
+        true
+    }
+
     /// Set a lightweight callback to wake an application's event loop when notifications arrive.
     ///
     /// It may run on a native backend thread and must return promptly. It is called without the
