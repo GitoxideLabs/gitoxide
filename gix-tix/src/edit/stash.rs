@@ -302,10 +302,11 @@ pub(super) fn save(
 
     let repo = open_repository(repository_path, bare, false)
         .or_raise(|| gix::error::message("could not reopen repository after stashing"))?;
-    let mut stash = repo
+    let id = repo
         .try_find_reference("refs/stash")?
-        .ok_or_raise(|| gix::error::message("git stash push did not create refs/stash"))?;
-    let id = stash.peel_to_id()?.detach();
+        .ok_or_raise(|| gix::error::message("git stash push did not create refs/stash"))?
+        .into_fully_peeled_id()?
+        .detach();
     if previous == Some(id) {
         bail!("git stash push did not create a new stash");
     }

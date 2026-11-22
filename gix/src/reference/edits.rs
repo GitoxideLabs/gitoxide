@@ -18,7 +18,7 @@ pub mod set_target_id {
             id: impl Into<gix_hash::ObjectId>,
             reflog_message: impl Into<BString>,
         ) -> Result<()> {
-            match &self.inner.target {
+            match &self.inner().target {
                 Target::Symbolic(name) => {
                     bail!("Cannot change symbolic reference {name:?} into a direct one by setting it to an id");
                 }
@@ -50,8 +50,8 @@ pub mod delete {
         pub fn delete(&self) -> Result<()> {
             self.repo
                 .edit_reference(RefEdit::delete(
-                    self.inner.name.clone(),
-                    PreviousValue::MustExistAndMatch(self.inner.target.clone()),
+                    self.name().to_owned(),
+                    PreviousValue::MustExistAndMatch(self.inner().target.clone()),
                 ))
                 .map(|_| ())
         }

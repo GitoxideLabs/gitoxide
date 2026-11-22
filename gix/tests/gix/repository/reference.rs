@@ -103,7 +103,7 @@ mod iter_references {
 
     #[test]
     fn all() -> TestResult {
-        let repo = repo()?;
+        let mut repo = repo()?;
         assert_eq!(
             repo.references()?
                 .all()?
@@ -127,6 +127,12 @@ mod iter_references {
                 "refs/tags/multi-link-target2",
                 "refs/tags/t1"
             ]
+        );
+        let cached_buffers = repo.set_freelist(None).expect("the repository has a default freelist");
+        assert_eq!(
+            cached_buffers.len(),
+            2,
+            "dropping a collection bounds name buffer retention"
         );
         Ok(())
     }

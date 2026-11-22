@@ -25,14 +25,14 @@ impl crate::Repository {
         let mut edits = self.edit_reference(RefEdit::update(name, id, constraint, ""))?;
         assert_eq!(edits.len(), 1, "reference splits should ever happen");
         let edit = edits.pop().expect("exactly one item");
-        Ok(Reference {
-            inner: gix_ref::Reference {
+        Ok(Reference::from_ref(
+            gix_ref::Reference {
                 name: edit.name,
                 target: id.into(),
                 peeled: None,
             },
-            repo: self,
-        })
+            self,
+        ))
     }
 
     /// Returns the currently set namespace for references, or `None` if it is not set.
@@ -169,10 +169,10 @@ impl crate::Repository {
     /// ```
     pub fn head(&self) -> Result<crate::Head<'_>> {
         let mut head = self.find_reference("HEAD")?;
-        Ok(match head.inner.target {
+        Ok(match head.inner().target {
             Target::Symbolic(_) => match head.follow_to_object() {
-                Ok(_) => crate::head::Kind::Symbolic(head.inner),
-                Err(err) if err.is_not_found() => match head.inner.target {
+                Ok(_) => crate::head::Kind::Symbolic(head.detach()),
+                Err(err) if err.is_not_found() => match head.detach().target {
                     Target::Symbolic(branch) => crate::head::Kind::Unborn(branch),
                     Target::Object(_) => return Err(err),
                 },
@@ -180,7 +180,7 @@ impl crate::Repository {
             },
             Target::Object(target) => crate::head::Kind::Detached {
                 target,
-                peeled: head.inner.peeled,
+                peeled: head.inner().peeled,
             },
         }
         .attach(self))
@@ -312,6 +312,7 @@ impl crate::Repository {
     ///
     /// Common kinds of iteration are [all](crate::reference::iter::Platform::all()) or [prefixed](crate::reference::iter::Platform::prefixed())
     /// references.
+    /// Dropping references as they are processed lets the repository reuse their name and symbolic target buffers for subsequent items.
     ///
     /// # Examples
     ///

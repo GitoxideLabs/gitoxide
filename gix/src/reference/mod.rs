@@ -21,7 +21,7 @@ pub use edits::{delete, set_target_id};
 impl<'repo> Reference<'repo> {
     /// Returns the attached id we point to, or `None` if this is a symbolic ref.
     pub fn try_id(&self) -> Option<Id<'repo>> {
-        match self.inner.target {
+        match self.inner().target {
             gix_ref::Target::Symbolic(_) => None,
             gix_ref::Target::Object(oid) => oid.to_owned().attach(self.repo).into(),
         }
@@ -47,23 +47,49 @@ impl<'repo> Reference<'repo> {
     /// # Ok(()) }
     /// ```
     pub fn target(&self) -> gix_ref::TargetRef<'_> {
-        self.inner.target.to_ref()
+        self.inner().target.to_ref()
     }
 
     /// Return the reference's full name.
     pub fn name(&self) -> &gix_ref::FullNameRef {
-        self.inner.name.as_ref()
+        self.inner().name.as_ref()
     }
 
-    /// Turn this instances into a stand-alone reference.
-    pub fn detach(self) -> gix_ref::Reference {
-        self.inner
+    /// Borrow the underlying reference.
+    pub fn inner(&self) -> &gix_ref::Reference {
+        self.inner.as_ref().expect("the reference is attached")
+    }
+
+    /// Mutably borrow the underlying reference.
+    pub fn inner_mut(&mut self) -> &mut gix_ref::Reference {
+        self.inner.as_mut().expect("the reference is attached")
+    }
+
+    /// Turn this instance into a stand-alone reference, retaining its name storage.
+    pub fn detach(mut self) -> gix_ref::Reference {
+        self.inner.take().expect("the reference is attached")
+    }
+}
+
+impl Drop for Reference<'_> {
+    fn drop(&mut self) {
+        if let Some(reference) = self.inner.take() {
+            if let gix_ref::Target::Symbolic(name) = reference.target {
+                self.repo.reuse_ref_name(name, self.symbolic_target_from_freelist);
+            }
+            self.repo.reuse_ref_name(reference.name, self.name_from_freelist);
+        }
     }
 }
 
 impl<'repo> Reference<'repo> {
     pub(crate) fn from_ref(reference: gix_ref::Reference, repo: &'repo crate::Repository) -> Self {
-        Reference { inner: reference, repo }
+        Reference {
+            inner: Some(reference),
+            name_from_freelist: false,
+            symbolic_target_from_freelist: false,
+            repo,
+        }
     }
 }
 
@@ -76,8 +102,7 @@ impl<'repo> Reference<'repo> {
     /// the chain of symbolic refs and annotated tags.
     #[deprecated = "Use `peel_to_id()` instead"]
     pub fn peel_to_id_in_place(&mut self) -> Result<Id<'repo>> {
-        let oid = self.inner.peel_to_id(&self.repo.refs, &self.repo.objects)?;
-        Ok(Id::from_id(oid, self.repo))
+        self.peel_to_id()
     }
 
     /// Follow all symbolic targets this reference might point to and peel all annotated tags
@@ -105,8 +130,8 @@ impl<'repo> Reference<'repo> {
     /// # Ok(()) }
     /// ```
     pub fn peel_to_id(&mut self) -> Result<Id<'repo>> {
-        let oid = self.inner.peel_to_id(&self.repo.refs, &self.repo.objects)?;
-        Ok(Id::from_id(oid, self.repo))
+        let packed = self.repo.refs.cached_packed_buffer()?;
+        self.peel_to_id_packed(packed.as_ref().map(|p| &***p))
     }
 
     /// Follow all symbolic targets this reference might point to and peel all annotated tags
@@ -116,10 +141,7 @@ impl<'repo> Reference<'repo> {
     /// the chain of symbolic refs and annotated tags.
     #[deprecated = "Use `peel_to_id_packed()` instead"]
     pub fn peel_to_id_in_place_packed(&mut self, packed: Option<&gix_ref::packed::Buffer>) -> Result<Id<'repo>> {
-        let oid = self
-            .inner
-            .peel_to_id_packed(&self.repo.refs, &self.repo.objects, packed)?;
-        Ok(Id::from_id(oid, self.repo))
+        self.peel_to_id_packed(packed)
     }
 
     /// Follow all symbolic targets this reference might point to and peel all annotated tags
@@ -131,10 +153,14 @@ impl<'repo> Reference<'repo> {
     /// Note that this method mutates `self` in place if it does not already point to a
     /// non-symbolic object.
     pub fn peel_to_id_packed(&mut self, packed: Option<&gix_ref::packed::Buffer>) -> Result<Id<'repo>> {
-        let oid = self
-            .inner
-            .peel_to_id_packed(&self.repo.refs, &self.repo.objects, packed)?;
-        Ok(Id::from_id(oid, self.repo))
+        let repo = self.repo;
+        let oid = self.inner_mut().peel_to_id_packed_with_buffer(
+            &repo.refs,
+            &repo.objects,
+            packed,
+            &mut repo.empty_reusable_buffer(),
+        )?;
+        Ok(Id::from_id(oid, repo))
     }
 
     /// Similar to [`peel_to_id()`](Reference::peel_to_id()), but consumes this instance.
@@ -205,10 +231,7 @@ impl<'repo> Reference<'repo> {
         kind: gix_object::Kind,
         packed: Option<&gix_ref::packed::Buffer>,
     ) -> Result<Object<'repo>> {
-        let target = self
-            .inner
-            .follow_to_object_packed(&self.repo.refs, packed)?
-            .attach(self.repo);
+        let target = self.follow_to_object_packed(packed)?;
         target.object()?.peel_to_kind(kind)
     }
 
@@ -226,10 +249,11 @@ impl<'repo> Reference<'repo> {
     /// look up `packed` each time, but can reuse it instead.
     #[doc(alias = "resolve", alias = "git2")]
     pub fn follow_to_object_packed(&mut self, packed: Option<&gix_ref::packed::Buffer>) -> Result<Id<'repo>> {
+        let repo = self.repo;
         Ok(self
-            .inner
-            .follow_to_object_packed(&self.repo.refs, packed)?
-            .attach(self.repo))
+            .inner_mut()
+            .follow_to_object_packed(&repo.refs, packed)?
+            .attach(repo))
     }
 
     /// Follow this symbolic reference one level and return the ref it refers to.
@@ -249,12 +273,9 @@ impl<'repo> Reference<'repo> {
     /// # Ok(()) }
     /// ```
     pub fn follow(&self) -> Option<Result<Reference<'repo>>> {
-        self.inner.follow(&self.repo.refs).map(|res| {
-            res.map(|r| Reference {
-                inner: r,
-                repo: self.repo,
-            })
-        })
+        self.inner()
+            .follow(&self.repo.refs)
+            .map(|res| res.map(|r| Reference::from_ref(r, self.repo)))
     }
 }
 
@@ -270,10 +291,16 @@ mod impls {
         ($other:ty) => {
             impl PartialEq<$other> for Reference<'_> {
                 fn eq(&self, other: &$other) -> bool {
-                    self.inner.eq(other)
+                    self.inner().eq(other)
                 }
             }
         };
+    }
+
+    impl Clone for Reference<'_> {
+        fn clone(&self) -> Self {
+            Reference::from_ref(self.inner().clone(), self.repo)
+        }
     }
 
     impl_partial_eq!(str);
@@ -288,7 +315,7 @@ mod impls {
 
     impl std::fmt::Debug for Reference<'_> {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            std::fmt::Debug::fmt(&self.inner, f)
+            std::fmt::Debug::fmt(self.inner(), f)
         }
     }
 }

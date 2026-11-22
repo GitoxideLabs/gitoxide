@@ -176,7 +176,7 @@ pub(crate) fn checkout_review_return_reporting(
         .workdir()
         .ok_or_raise(|| message("review cancellation requires a worktree"))?
         .to_owned();
-    let mut target = repository
+    let target = repository
         .find_reference(name.as_ref())
         .or_raise(|| message("the review return reference is missing"))?;
     let pin_target = target.target().into_owned();
@@ -186,7 +186,7 @@ pub(crate) fn checkout_review_return_reporting(
         Some(name.clone())
     };
     let selected = target
-        .peel_to_id()
+        .into_fully_peeled_id()
         .or_raise(|| message("the review return reference does not resolve"))?
         .detach();
     let return_pin = name

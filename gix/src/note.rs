@@ -396,7 +396,7 @@ fn add_refs(repo: &Repository, pattern: &BStr, out: &mut Vec<FullName>) -> Resul
         for reference in references {
             let reference = reference.or_raise(|| message!("Could not read notes reference matching {pattern}"))?;
             if parsed.matches(reference.name().as_bstr(), gix_glob::wildmatch::Mode::empty()) {
-                push_unique(reference.inner.name);
+                push_unique(reference.detach().name);
             }
         }
     } else {

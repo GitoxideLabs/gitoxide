@@ -508,9 +508,11 @@ mod blocking_and_async_io {
                     .fetch_only(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())
                     .await?
                     .0;
-                    let remote_head = repo.find_reference("refs/remotes/origin/HEAD")?;
                     assert_eq!(
-                        remote_head.target().try_name().map(gix::refs::FullNameRef::as_bstr),
+                        repo.find_reference("refs/remotes/origin/HEAD")?
+                            .target()
+                            .try_name()
+                            .map(gix::refs::FullNameRef::as_bstr),
                         Some(gix::bstr::BStr::new("refs/remotes/origin/b8")),
                         "cloning records the advertised default as a symbolic tracking reference"
                     );

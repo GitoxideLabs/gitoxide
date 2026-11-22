@@ -106,18 +106,11 @@ impl<'p> LooseThenPacked<'p, '_> {
 }
 
 impl LooseThenPacked<'_, '_> {
-    /// Like [`Iterator::next()`], but reuse `name_buf` to store the returned reference's name.
+    /// Like [`Iterator::next()`], but reuse storage for the returned reference's name and symbolic target name.
     ///
-    /// On success, the buffer is cleared and its allocation moves into the name. Recover it with
-    /// [`FullName::into_inner()`](crate::FullName::into_inner()) once the reference is no longer needed.
-    pub fn next_with_name_buffer(&mut self, name_buf: &mut Vec<u8>) -> Option<Result<Reference>> {
-        self.next_with_buffers(name_buf, Vec::new)
-    }
-
-    /// Like [`Self::next_with_name_buffer()`], also reusing storage for symbolic target names.
-    ///
-    /// The iterator calls `symbolic_target_buf` only after validating a symbolic target name.
-    /// Its allocation moves into the symbolic target and can be recovered through
+    /// On success, the iterator clears `name_buf` and moves its allocation into the reference name.
+    /// It calls `symbolic_target_buf` only after validating a symbolic target name and moves the returned
+    /// buffer's allocation into that name. Recover either allocation with
     /// [`FullName::into_inner()`](crate::FullName::into_inner()).
     pub fn next_with_buffers(
         &mut self,
@@ -180,7 +173,7 @@ impl Iterator for LooseThenPacked<'_, '_> {
     type Item = Result<Reference>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.next_with_name_buffer(&mut Vec::new())
+        self.next_with_buffers(&mut Vec::new(), Vec::new)
     }
 }
 

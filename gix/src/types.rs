@@ -25,11 +25,11 @@ pub struct Head<'repo> {
 
 /// An [`ObjectId`] with access to a repository.
 #[derive(Clone, Copy)]
-pub struct Id<'r> {
+pub struct Id<'repo> {
     /// The actual object id
     pub(crate) inner: ObjectId,
     /// The owning repository.
-    pub repo: &'r Repository,
+    pub repo: &'repo Repository,
 }
 
 /// A decoded object with a reference to its owning repository.
@@ -135,12 +135,16 @@ pub struct ObjectDetached {
 /// A reference that points to an object or reference, with access to its source repository.
 ///
 /// Note that these are snapshots and won't recognize if they are stale.
-#[derive(Clone)]
-pub struct Reference<'r> {
-    /// The actual reference data
-    pub inner: gix_ref::Reference,
+///
+/// Access the underlying reference through [`inner()`](Self::inner) and [`inner_mut()`](Self::inner_mut).
+/// Use [`detach()`](Self::detach) to take ownership of it.
+/// Dropping a reference allows the repository to reuse its name and symbolic target storage.
+pub struct Reference<'repo> {
+    pub(crate) inner: Option<gix_ref::Reference>,
+    pub(crate) name_from_freelist: bool,
+    pub(crate) symbolic_target_from_freelist: bool,
     /// The owning repository.
-    pub repo: &'r Repository,
+    pub repo: &'repo Repository,
 }
 
 /// A thread-local handle to interact with a repository from a single thread.
@@ -168,7 +172,7 @@ pub struct Repository {
     pub(crate) index_path: PathBuf,
     /// The path to the resolved common directory if this is a linked worktree repository or it is otherwise set.
     pub(crate) common_dir: Option<PathBuf>,
-    /// A free-list of reusable object backing buffers
+    /// A free-list of reusable backing buffers
     pub(crate) bufs: Option<RefCell<Vec<Vec<u8>>>>,
     /// A pre-assembled selection of often-accessed configuration values for quick access.
     pub(crate) config: crate::config::Cache,
