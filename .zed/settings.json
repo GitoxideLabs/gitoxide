@@ -1,0 +1,25 @@
+{
+  "lsp": {
+    "rust-analyzer": {
+      "initialization_options": {
+        "cargo": {
+          "features": [
+            "gix/anyhow",
+            "gix/async-fsmonitor-server",
+            "gix/async-notify",
+            "gix/blocking-http-transport-curl-openssl",
+            "gix/cache-efficiency-debug",
+            "gix/error-print-location",
+            "gix/fsmonitor-daemon",
+            "gix/hp-tempfile-registry",
+            "gix/progress-tree",
+            "gix/serde",
+            "gix/sha256",
+            "gix/tracing-detail",
+            "gix/zlib-sirocco",
+          ],
+        },
+      },
+    },
+  },
+}
