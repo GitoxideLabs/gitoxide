@@ -164,8 +164,7 @@ impl<'repo> Info<'repo> {
 /// author or commit messages will be required of *all* commits traversed here, it should be better to avoid trying to load it
 /// by [turning commit-graph support off][Platform::use_commit_graph()]. This certainly is a micro-optimization though.
 pub struct Platform<'repo> {
-    /// The owning repository.
-    pub repo: &'repo Repository,
+    repo: &'repo Repository,
     pub(crate) tips: Vec<ObjectId>,
     pub(crate) hidden: Vec<ObjectId>,
     pub(crate) boundary: Vec<ObjectId>,
@@ -187,6 +186,11 @@ impl<'repo> Platform<'repo> {
             commit_graph: None,
             boundary: Vec::new(),
         }
+    }
+
+    /// Return the owning repository.
+    pub fn repo(&self) -> &'repo Repository {
+        self.repo
     }
 }
 
@@ -384,9 +388,15 @@ pub(crate) mod iter_impl {
 
     /// The iterator returned by [`crate::revision::walk::Platform::all()`].
     pub struct Walk<'repo> {
-        /// The owning repository.
-        pub repo: &'repo crate::Repository,
+        pub(super) repo: &'repo crate::Repository,
         pub(crate) inner: Box<dyn Iterator<Item = Result<gix_traverse::commit::Info>> + 'repo>,
+    }
+
+    impl<'repo> Walk<'repo> {
+        /// Return the owning repository.
+        pub fn repo(&self) -> &'repo crate::Repository {
+            self.repo
+        }
     }
 
     impl<'repo> Iterator for Walk<'repo> {

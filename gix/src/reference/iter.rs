@@ -12,8 +12,7 @@ use crate::{Result, error::Error, repository::freelist::Buffer};
 #[must_use = "Iterators should be obtained from this iterator platform"]
 pub struct Platform<'repo> {
     pub(crate) platform: gix_ref::file::iter::Platform<'repo>,
-    /// The owning repository.
-    pub repo: &'repo crate::Repository,
+    pub(crate) repo: &'repo crate::Repository,
 }
 
 /// An iterator over references, with or without filter.
@@ -39,6 +38,11 @@ impl<'packed, 'repo> Iter<'packed, 'repo> {
 }
 
 impl<'repo> Platform<'repo> {
+    /// Return the owning repository.
+    pub fn repo(&self) -> &'repo crate::Repository {
+        self.repo
+    }
+
     /// Return an iterator over all references in the repository, excluding
     /// pseudo references.
     ///

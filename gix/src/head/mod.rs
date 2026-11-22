@@ -4,17 +4,17 @@ use gix_hash::ObjectId;
 use gix_ref::FullNameRef;
 
 use crate::{
-    Head,
+    Head, HeadOwned, Reference,
     ext::{ObjectIdExt, ReferenceExt},
 };
 
 /// Represents the kind of `HEAD` reference.
 #[derive(Clone)]
-pub enum Kind {
+pub enum Kind<'repo> {
     /// The existing reference the symbolic HEAD points to.
     ///
     /// This is the common case.
-    Symbolic(gix_ref::Reference),
+    Symbolic(Reference<'repo>),
     /// The yet-to-be-created reference the symbolic HEAD refers to.
     ///
     /// This is the case in a newly initialized repository.
@@ -30,15 +30,76 @@ pub enum Kind {
     },
 }
 
-impl Kind {
-    /// Attach this instance to a `repo` to produce a [`Head`].
+impl Kind<'_> {
+    /// Attach this instance to a `repo`, reattaching the symbolic referent if present, to produce a [`Head`].
     pub fn attach(self, repo: &crate::Repository) -> Head<'_> {
-        Head { kind: self, repo }
+        let kind = match self {
+            Self::Symbolic(r) => Kind::Symbolic(r.detach().attach(repo)),
+            Self::Unborn(name) => Kind::Unborn(name),
+            Self::Detached { target, peeled } => Kind::Detached { target, peeled },
+        };
+        Head { kind, repo }
+    }
+}
+
+impl HeadOwned {
+    /// Attach this snapshot to `repo` without rereading `HEAD`.
+    pub fn attach(self, repo: &crate::Repository) -> Head<'_> {
+        let kind = match self {
+            Self::Symbolic(r) => Kind::Symbolic(r.attach(repo)),
+            Self::Unborn(name) => Kind::Unborn(name),
+            Self::Detached { target, peeled } => Kind::Detached { target, peeled },
+        };
+        Head { kind, repo }
+    }
+
+    /// Returns the full reference name that HEAD points to, even if it is unborn.
+    pub fn referent_name(&self) -> Option<&FullNameRef> {
+        match self {
+            Self::Symbolic(r) => Some(r.name.as_ref()),
+            Self::Unborn(name) => Some(name.as_ref()),
+            Self::Detached { .. } => None,
+        }
+    }
+
+    /// Returns true if HEAD points directly to an object.
+    pub fn is_detached(&self) -> bool {
+        matches!(self, Self::Detached { .. })
+    }
+
+    /// Returns true if HEAD points to a reference that does not yet exist.
+    pub fn is_unborn(&self) -> bool {
+        matches!(self, Self::Unborn(_))
+    }
+
+    /// Returns the cached peeled ID if known, or the target ID otherwise.
+    /// This uses only the snapshot, including peeled IDs from packed references.
+    pub fn id(&self) -> Option<ObjectId> {
+        match self {
+            Self::Symbolic(r) => r.peeled.or_else(|| r.target.try_id().map(ToOwned::to_owned)),
+            Self::Unborn(_) => None,
+            Self::Detached { target, peeled } => Some(peeled.unwrap_or(*target)),
+        }
     }
 }
 
 /// Access
 impl<'repo> Head<'repo> {
+    /// Return the repository that owns this HEAD and its symbolic referent.
+    pub fn repo(&self) -> &'repo crate::Repository {
+        self.repo
+    }
+
+    /// Consume this instance and return its snapshot without borrowing the repository or changing `HEAD`.
+    #[doc(alias = "detach")]
+    pub fn detach_repo(self) -> HeadOwned {
+        match self.kind {
+            Kind::Symbolic(r) => HeadOwned::Symbolic(r.detach()),
+            Kind::Unborn(name) => HeadOwned::Unborn(name),
+            Kind::Detached { target, peeled } => HeadOwned::Detached { target, peeled },
+        }
+    }
+
     /// Returns the name of this references, always `HEAD`.
     pub fn name(&self) -> &'static FullNameRef {
         // TODO: use a statically checked version of this when available.
@@ -60,7 +121,7 @@ impl<'repo> Head<'repo> {
     /// ```
     pub fn referent_name(&self) -> Option<&FullNameRef> {
         Some(match &self.kind {
-            Kind::Symbolic(r) => r.name.as_ref(),
+            Kind::Symbolic(r) => r.name(),
             Kind::Unborn(name) => name.as_ref(),
             Kind::Detached { .. } => return None,
         })
@@ -93,7 +154,7 @@ impl<'repo> Head<'repo> {
     /// ```
     pub fn id(&self) -> Option<crate::Id<'repo>> {
         match &self.kind {
-            Kind::Symbolic(r) => r.target.try_id().map(|oid| oid.to_owned().attach(self.repo)),
+            Kind::Symbolic(r) => r.try_id(),
             Kind::Detached { peeled, target } => {
                 (*peeled).unwrap_or_else(|| target.to_owned()).attach(self.repo).into()
             }
@@ -114,9 +175,9 @@ impl<'repo> Head<'repo> {
     /// assert_eq!(branch, "refs/heads/main");
     /// # Ok(()) }
     /// ```
-    pub fn try_into_referent(self) -> Option<crate::Reference<'repo>> {
+    pub fn try_into_referent(self) -> Option<Reference<'repo>> {
         match self.kind {
-            Kind::Symbolic(r) => r.attach(self.repo).into(),
+            Kind::Symbolic(r) => Some(r),
             _ => None,
         }
     }

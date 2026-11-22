@@ -119,8 +119,9 @@ fn prepare_inner(
         .ok_or_raise(|| message("creating a commit requires a worktree"))?;
     let head = repo
         .head()
-        .or_raise(|| message("could not read HEAD before creating a commit"))?;
-    let head_id = head.id().map(gix::Id::detach);
+        .or_raise(|| message("could not read HEAD before creating a commit"))?
+        .detach_repo();
+    let head_id = head.id();
     if parent.is_none() && !head.is_unborn() {
         bail!("an unborn history is required to create a root commit");
     }

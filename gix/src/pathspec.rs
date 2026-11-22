@@ -86,6 +86,10 @@ impl<'repo> Pathspec<'repo> {
 
 /// Access
 impl<'repo> Pathspec<'repo> {
+    /// Return the owning repository.
+    pub fn repo(&self) -> &'repo Repository {
+        self.repo
+    }
     /// Return the attributes cache which is used when matching attributes in pathspecs, or `None` if none of the pathspecs require that.
     pub fn attributes(&self) -> Option<&gix_worktree::Stack> {
         self.stack.as_ref()

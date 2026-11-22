@@ -8,6 +8,11 @@ use crate::{Id, Object, Result};
 
 /// An [object id][ObjectId] infused with a [`Repository`][crate::Repository].
 impl<'repo> Id<'repo> {
+    /// Return the owning repository.
+    pub fn repo(&self) -> &'repo crate::Repository {
+        self.repo
+    }
+
     /// Find the [`Object`] associated with this object id, and consider it an error if it doesn't exist.
     pub fn object(&self) -> Result<Object<'repo>> {
         self.repo.find_object(self.inner)

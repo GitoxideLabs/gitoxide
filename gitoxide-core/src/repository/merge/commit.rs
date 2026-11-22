@@ -87,6 +87,6 @@ fn refname_and_commit(repo: &gix::Repository, revspec: BString) -> Result<(Optio
         .object()?
         .peel_to_commit()?
         .id;
-    let refname = spec.first_reference().map(|r| r.name.shorten().as_bstr().to_owned());
+    let refname = spec.first_reference().map(|r| r.name().shorten().as_bstr().to_owned());
     Ok((refname, commit_id))
 }

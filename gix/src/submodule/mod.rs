@@ -28,7 +28,7 @@ mod url;
 
 /// A platform maintaining state needed to interact with submodules, created by [`Repository::submodules()].
 pub(crate) struct SharedState<'repo> {
-    pub repo: &'repo Repository,
+    repo: &'repo Repository,
     pub(crate) modules: ModulesSnapshot,
     is_active: RefCell<Option<IsActiveState>>,
     index: RefCell<Option<IndexPersistedOrInMemory>>,
@@ -42,6 +42,10 @@ impl<'repo> SharedState<'repo> {
             is_active: RefCell::new(None),
             index: RefCell::new(None),
         }
+    }
+
+    fn repo(&self) -> &'repo Repository {
+        self.repo
     }
 
     fn index(&self) -> Result<Ref<'_, IndexPersistedOrInMemory>> {
@@ -148,7 +152,7 @@ impl Submodule<'_> {
         Ok(match self.state.modules.fetch_recurse(self.name())? {
             Some(val) => Some(val),
             None => {
-                let repo = self.state.repo;
+                let repo = self.state.repo();
                 let key = &crate::config::tree::Fetch::RECURSE_SUBMODULES;
                 key.try_into_recurse_submodules(repo.config.resolved.boolean_filter(key, repo.filter_config_section()))?
             }
@@ -181,7 +185,7 @@ impl Submodule<'_> {
         let is_active = platform.is_active(config, self.name.as_ref(), &mut |relative_path, case, is_dir, out| {
             attributes
                 .set_case(case)
-                .at_entry(relative_path, Some(is_dir_to_mode(is_dir)), &self.state.repo.objects)
+                .at_entry(relative_path, Some(is_dir_to_mode(is_dir)), &self.state.repo().objects)
                 .is_ok_and(|platform| platform.matching_attributes(out))
         })?;
         Ok(is_active)
@@ -211,7 +215,7 @@ impl Submodule<'_> {
         let path = self.path()?;
         Ok(self
             .state
-            .repo
+            .repo()
             .head_commit()?
             .tree()?
             .peel_to_entry_by_path(gix_path::from_bstring(path)?)?
@@ -223,7 +227,7 @@ impl Submodule<'_> {
     /// Linked superprojects keep submodule repositories in their private Git directory.
     /// The returned directory might not exist yet.
     pub fn git_dir(&self) -> Result<PathBuf> {
-        git_dir_from_name(self.state.repo.git_dir(), self.validated_name()?)
+        git_dir_from_name(self.state.repo().git_dir(), self.validated_name()?)
     }
 
     /// Return the submodule's checkout location, or `None` if the superproject has no working directory.
@@ -231,7 +235,7 @@ impl Submodule<'_> {
     /// The returned directory might not exist yet. Use [`path()`](Self::path()) to obtain the configured
     /// relative path regardless of whether the superproject has a working directory.
     pub fn work_dir(&self) -> Result<Option<PathBuf>> {
-        let Some(work_dir) = self.state.repo.workdir() else {
+        let Some(work_dir) = self.state.repo().workdir() else {
             return Ok(None);
         };
         work_dir_from_relative_path(work_dir, self.path()?.as_ref()).map(Some)
@@ -278,7 +282,7 @@ impl Submodule<'_> {
     fn state_inner(&self, validate_gitdir_file_target: bool) -> Result<State> {
         let maybe_old_path = self.git_dir_try_old_form_inner(validate_gitdir_file_target)?;
         let worktree_git = self.worktree_gitdir()?;
-        let repo = self.state.repo;
+        let repo = self.state.repo();
         let superproject_configuration = repo
             .config
             .resolved
@@ -320,7 +324,7 @@ impl Submodule<'_> {
     }
 
     fn open_inner(&self) -> Result<ControlFlow<PathBuf, Option<Repository>>> {
-        open(self.state.repo, &self.git_dir_try_old_form()?, self.path()?.as_ref())
+        open(self.state.repo(), &self.git_dir_try_old_form()?, self.path()?.as_ref())
     }
 
     /// Return the location of the submodule checkout's `.git` entry, or `None` if the superproject has no worktree.
@@ -328,7 +332,7 @@ impl Submodule<'_> {
     /// This is usually a file containing a `gitdir:` pointer to the submodule's repository, but is a directory
     /// in old-form submodules.
     fn worktree_gitdir(&self) -> Result<Option<PathBuf>> {
-        worktree_gitdir(self.state.repo, self.path()?.as_ref())
+        worktree_gitdir(self.state.repo(), self.path()?.as_ref())
     }
 }
 

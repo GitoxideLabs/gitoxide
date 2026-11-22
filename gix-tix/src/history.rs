@@ -1875,14 +1875,14 @@ pub(crate) fn referenced_refs(
             .or_raise(|| message!("could not parse revision {revision}"))?;
         for reference in [spec.first_reference(), spec.second_reference()].into_iter().flatten() {
             gix::error::ensure!(
-                !crate::edit::undo::ref_chain_reaches_internal(repo, reference.name.as_ref())?,
+                !crate::edit::undo::ref_chain_reaches_internal(repo, reference.name())?,
                 message("internal Tix state is not a selectable revision")
             );
             gix::error::ensure!(
-                !crate::edit::replay_refs::ref_chain_reaches(repo, reference.name.as_ref())?,
+                !crate::edit::replay_refs::ref_chain_reaches(repo, reference.name())?,
                 "merge replay resources are not selectable revisions"
             );
-            insert_ref_chain(repo, reference.name.as_bstr(), &mut out)?;
+            insert_ref_chain(repo, reference.name().as_bstr(), &mut out)?;
         }
     }
     Ok(out)
@@ -2149,14 +2149,14 @@ pub(crate) fn resolve_revision(
     revision: &BStr,
 ) -> Result<(ObjectId, Option<gix::refs::FullName>)> {
     let spec = repo.rev_parse(revision)?;
-    let first_reference = spec.first_reference().map(|reference| reference.name.clone());
+    let first_reference = spec.first_reference().map(|reference| reference.name().to_owned());
     for reference in [spec.first_reference(), spec.second_reference()].into_iter().flatten() {
         gix::error::ensure!(
-            !crate::edit::undo::ref_chain_reaches_internal(repo, reference.name.as_ref())?,
+            !crate::edit::undo::ref_chain_reaches_internal(repo, reference.name())?,
             message("internal Tix state is not a selectable revision")
         );
         gix::error::ensure!(
-            !crate::edit::replay_refs::ref_chain_reaches(repo, reference.name.as_ref())?,
+            !crate::edit::replay_refs::ref_chain_reaches(repo, reference.name())?,
             "merge replay resources are not selectable revisions"
         );
     }

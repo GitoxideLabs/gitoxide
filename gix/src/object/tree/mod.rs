@@ -11,8 +11,14 @@ use crate::{Id, ObjectDetached, Repository, Result, Tree};
 pub struct Editor<'repo> {
     pub(crate) inner: gix_object::tree::Editor<'repo>,
     pub(crate) validate: gix_validate::path::component::Options,
-    /// The owning repository.
-    pub repo: &'repo crate::Repository,
+    pub(crate) repo: &'repo Repository,
+}
+
+impl<'repo> Editor<'repo> {
+    /// Return the owning repository.
+    pub fn repo(&self) -> &'repo Repository {
+        self.repo
+    }
 }
 
 /// Initialization
@@ -29,6 +35,11 @@ impl<'repo> Tree<'repo> {
 
 /// Access
 impl<'repo> Tree<'repo> {
+    /// Return the owning repository.
+    pub fn repo(&self) -> &'repo Repository {
+        self.repo
+    }
+
     /// Return this tree's identifier.
     pub fn id(&self) -> Id<'repo> {
         Id::from_id(self.id, self.repo)
@@ -234,16 +245,14 @@ impl std::fmt::Debug for Tree<'_> {
 pub struct EntryRef<'repo, 'a> {
     /// The actual entry ref we are wrapping.
     pub inner: gix_object::tree::EntryRef<'a>,
-    /// The owning repository.
-    pub repo: &'repo Repository,
+    pub(crate) repo: &'repo Repository,
 }
 
 /// An entry in a [`Tree`], similar to an entry in a directory.
 #[derive(PartialEq, Debug, Clone)]
 pub struct Entry<'repo> {
     pub(crate) inner: gix_object::tree::Entry,
-    /// The owning repository.
-    pub repo: &'repo crate::Repository,
+    pub(crate) repo: &'repo Repository,
 }
 
 mod entry;

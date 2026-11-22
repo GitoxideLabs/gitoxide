@@ -3714,10 +3714,10 @@ fn worktree_transitions(
         if !seen.insert(worktree_repo.git_dir().to_owned()) {
             continue;
         }
-        let Ok(head) = worktree_repo.head() else {
+        let Ok(head) = worktree_repo.head().map(gix::Head::detach_repo) else {
             continue;
         };
-        let Some(old) = head.id().map(gix::Id::detach) else {
+        let Some(old) = head.id() else {
             continue;
         };
         let planned = head.referent_name().and_then(|name| {
@@ -3749,7 +3749,7 @@ fn worktree_transitions(
         };
         let new_tree = match new {
             Some(new) => repo.find_commit(new)?.tree_id()?.detach(),
-            None if worktree_repo.head()?.referent_name().is_some() => repo.empty_tree().id,
+            None if head.referent_name().is_some() => repo.empty_tree().id,
             None => bail!("a detached checked-out root commit cannot be removed"),
         };
         if old_tree == new_tree {

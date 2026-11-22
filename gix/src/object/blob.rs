@@ -133,6 +133,13 @@ pub mod diff {
     }
 }
 
+impl<'repo> Blob<'repo> {
+    /// Return the owning repository.
+    pub fn repo(&self) -> &'repo crate::Repository {
+        self.repo
+    }
+}
+
 /// Remove Lifetime
 impl Blob<'_> {
     /// Create an owned instance of this object, copying our data in the process.

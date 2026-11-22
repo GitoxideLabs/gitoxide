@@ -14,6 +14,11 @@ impl<'repo> AttributeStack<'repo> {
         AttributeStack { repo, inner: stack }
     }
 
+    /// Return the owning repository.
+    pub fn repo(&self) -> &'repo Repository {
+        self.repo
+    }
+
     /// Detach the repository and return the underlying plumbing datatype.
     pub fn detach(self) -> gix_worktree::Stack {
         self.inner

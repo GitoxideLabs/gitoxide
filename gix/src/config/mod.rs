@@ -30,8 +30,7 @@ pub struct FileTransaction {
 ///
 /// Note that these values won't update even if the underlying file(s) change.
 pub struct Snapshot<'repo> {
-    /// The owning repository.
-    pub repo: &'repo Repository,
+    pub(crate) repo: &'repo Repository,
 }
 
 /// A platform to access configuration values and modify them in memory, while making them available when this platform is dropped

@@ -169,9 +169,9 @@ impl crate::Repository {
     /// ```
     pub fn head(&self) -> Result<crate::Head<'_>> {
         let mut head = self.find_reference("HEAD")?;
-        Ok(match head.inner().target {
+        let kind = match head.inner().target {
             Target::Symbolic(_) => match head.follow_to_object() {
-                Ok(_) => crate::head::Kind::Symbolic(head.detach()),
+                Ok(_) => crate::head::Kind::Symbolic(head),
                 Err(err) if err.is_not_found() => match head.detach().target {
                     Target::Symbolic(branch) => crate::head::Kind::Unborn(branch),
                     Target::Object(_) => return Err(err),
@@ -182,8 +182,8 @@ impl crate::Repository {
                 target,
                 peeled: head.inner().peeled,
             },
-        }
-        .attach(self))
+        };
+        Ok(crate::Head { kind, repo: self })
     }
 
     /// Resolve the `HEAD` reference, follow and peel its target and obtain its object id,

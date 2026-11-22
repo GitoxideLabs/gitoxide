@@ -84,7 +84,7 @@ fn nth_prior_checkout() {
     ] {
         let parsed = parse_spec(spec, &repo).unwrap_or_else(|_| panic!("{spec} to be parsed successfully"));
         assert_eq!(parsed.first_reference().expect("present"), prior_branch);
-        assert_eq!(parsed.second_reference(), None);
+        assert!(parsed.second_reference().is_none());
     }
 
     insta::assert_debug_snapshot!(parse_spec("@{-6}", &repo).expect_err("nth prior checkout").probable_cause(), "nth prior checkout", @r#"
@@ -162,7 +162,11 @@ fn by_index() {
             "refs/heads/main",
             "it sets the reference name even if it is implied"
         );
-        assert_eq!(spec.second_reference(), None);
+        assert_eq!(
+            spec.second_reference(),
+            None,
+            "a reflog selector resolves a single revision"
+        );
     }
 
     {
@@ -172,11 +176,15 @@ fn by_index() {
             Spec::from_id(hex_to_id_sha1_only("5b3f9e24965d0b28780b7ce5daf2b5b7f7e0459f").attach(repo))
         );
         assert_eq!(
-            spec.first_reference().map(|r| r.name.to_string()),
+            spec.first_reference().map(|r| r.name().to_string()),
             Some("HEAD".into()),
             "explicit references are picked up as usual"
         );
-        assert_eq!(spec.second_reference(), None);
+        assert_eq!(
+            spec.second_reference(),
+            None,
+            "a reflog selector resolves a single revision"
+        );
     }
 
     insta::assert_debug_snapshot!(parse_spec("main@{12345}", repo)

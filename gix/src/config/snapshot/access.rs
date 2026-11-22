@@ -4,7 +4,7 @@ use crate::error::{bail, validation};
 use gix_parallel::OwnShared;
 
 use crate::{
-    Result,
+    Repository, Result,
     bstr::{BString, ByteSlice},
     config::{CommitAutoRollback, Snapshot, SnapshotMut},
 };
@@ -81,7 +81,12 @@ impl Snapshot<'_> {
 }
 
 /// Utilities and additional access
-impl Snapshot<'_> {
+impl<'repo> Snapshot<'repo> {
+    /// Return the owning repository.
+    pub fn repo(&self) -> &'repo Repository {
+        self.repo
+    }
+
     /// Returns the underlying configuration implementation for a complete API, despite being a little less convenient.
     ///
     /// It's expected that more functionality will move up depending on demand.

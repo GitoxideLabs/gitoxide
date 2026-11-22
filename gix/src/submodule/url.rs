@@ -17,7 +17,7 @@ impl Submodule<'_> {
     /// An error is returned if traversal exhausts the upstream URL's components or the result cannot be parsed.
     pub fn resolved_url(&self) -> Result<gix_url::Url> {
         let mut url = self.url()?;
-        let repo = self.state.repo;
+        let repo = self.state.repo();
         let root = repo.workdir().unwrap_or_else(|| repo.git_dir());
         let root = gix_path::realpath_opts(root, repo.current_dir(), gix_path::realpath::MAX_SYMLINKS)
             .or_raise(|| message("Could not resolve the superproject's directory"))?;
