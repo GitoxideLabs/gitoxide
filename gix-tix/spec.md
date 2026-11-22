@@ -1785,10 +1785,11 @@ views.
   highlighting edits to them. The filter works with the production, context,
   and declaration-rename settings. An empty result says
   `No additions, deletions, or renames.`
-- Structural mode uses lexical syntax foregrounds and muted red, green, and
-  yellow backgrounds for removed, added, and modified declarations. Names and
-  language keywords are bold, including in plain mode. Changed words use
-  stronger red/green backgrounds and bold text. In color mode the declaration
+- Structural mode uses lexical syntax foregrounds, pronounced red and green
+  backgrounds for removed and added declarations, and a softer yellow
+  background for modified declarations. Names and language keywords are bold,
+  including in plain mode. Changed words use stronger red and green
+  backgrounds and bold text. In color mode the declaration
   markers and word-change delimiters are omitted. File-tree statuses, line
   counts, and patch metadata use the same terminal palette.
 - `v c` toggles structural diff colors and updates the View popout. Plain mode shows

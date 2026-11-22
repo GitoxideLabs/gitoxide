@@ -79,14 +79,14 @@ impl Palette {
         };
         let backgrounds = [
             background,
-            blend(background, source(Color::Green), 12),
-            blend(background, source(Color::Red), 12),
+            blend(background, source(Color::Green), 26),
+            blend(background, source(Color::Red), 26),
             blend(background, source(Color::Yellow), 7),
         ];
         let mut rows = backgrounds.map(text_on);
         rows[0].bg = None;
         let emphasized = [Color::Green, Color::Red]
-            .map(|color| text_on(blend(background, source(color), 35)).add_modifier(Modifier::BOLD));
+            .map(|color| text_on(blend(background, source(color), 45)).add_modifier(Modifier::BOLD));
         let syntax = backgrounds.map(|background| {
             [
                 Color::Magenta,
@@ -526,16 +526,18 @@ mod tests {
                 palette.rows[1].bg, palette.rows[2].bg,
                 "theme red and green produce different tints"
             );
-            assert_eq!(
-                palette.row(Change::Added).bg.map(rgb),
-                Some(blend(background, ansi[2], 12)),
-                "the row tint stays close to the terminal background"
-            );
-            assert_eq!(
-                palette.emphasis(Change::Added).bg.map(rgb),
-                Some(blend(background, ansi[2], 35)),
-                "changed words are still more distinct than their row"
-            );
+            for (change, color) in [(Change::Added, ansi[2]), (Change::Removed, ansi[1])] {
+                assert_eq!(
+                    palette.row(change).bg.map(rgb),
+                    Some(blend(background, color, 26)),
+                    "added and removed rows have a stronger theme-relative tint"
+                );
+                assert_eq!(
+                    palette.emphasis(change).bg.map(rgb),
+                    Some(blend(background, color, 45)),
+                    "word changes stand out within a tinted row"
+                );
+            }
             assert!(
                 palette.rows[0].bg.is_none(),
                 "unchanged rows preserve terminal background transparency"
