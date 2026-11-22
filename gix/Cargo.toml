@@ -577,7 +577,6 @@ ignored = [
 [package.metadata.smart-release]
 # produce a GitHub release so it's easier to discover the changelog in the web-ui
 github-release = true
-unstable-features = ["unstable"]
 
 [package.metadata.qa]
 # Major external consumers with advisory compatibility checks.
