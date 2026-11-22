@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use bstr::{BStr, BString, ByteSlice, ByteVec};
 use gix_error::{ErrorExt, OptionExt, Result, ResultExt, bail, ensure};
 
@@ -5,49 +7,32 @@ pub(crate) const NL: &[u8] = b"\n";
 pub(crate) const SPACE: &[u8] = b" ";
 const SPACE_OR_NL: &[u8] = b" \n";
 
-/// Parse any multi-line object header field.
-///
-/// Typical input is `gpgsig -----BEGIN...\n <continued>\nnext ...`, where the
-/// field name is followed by a space, an initial value line, and at least one
-/// continuation line starting with a space.
-///
-/// The returned tuple contains the field name and the unfolded value,
-/// with the leading space removed from each continuation line.
-///
-/// On success, `i` is advanced to the first byte after the final continuation
-/// line.
-pub(crate) fn any_header_field_multi_line<'a>(i: &mut &'a [u8]) -> Result<(&'a [u8], BString)> {
-    let mut c = *i;
-    let input = c;
-    let name_end = c
-        .find_byteset(SPACE_OR_NL)
-        .filter(|pos| *pos > 0)
-        .ok_or_raise(crate::decode::empty_error)?;
-    ensure!(c.get(name_end) == Some(&b' '), crate::decode::empty_error());
+pub(crate) enum HeaderValue<'a> {
+    SingleLine(&'a BStr),
+    MultiLine(&'a BStr),
+}
 
-    c = &c[name_end + 1..];
-    let first_line_end = c.find_byte(b'\n').ok_or_raise(crate::decode::empty_error)?;
-    c = &c[first_line_end + 1..];
-
-    let mut continuation_end = name_end + 1 + first_line_end + 1;
-    let mut continuation_count = 0usize;
-    while c.first() == Some(&b' ') {
-        let line_end = c.find_byte(b'\n').ok_or_raise(crate::decode::empty_error)?;
-        continuation_end += line_end + 1;
-        c = &c[line_end + 1..];
-        continuation_count += 1;
+impl<'a> HeaderValue<'a> {
+    /// Return the header value without its continuation markers.
+    ///
+    /// A single-line value is borrowed unchanged, without its terminating newline.
+    /// For a multiline value, allocate a buffer and strip exactly one leading space from each
+    /// continuation line, preserving all other bytes, including the final newline.
+    /// For example, `b"first\n  second\n"` becomes `b"first\n second\n"`.
+    pub(crate) fn unfold(self) -> Cow<'a, BStr> {
+        match self {
+            HeaderValue::SingleLine(value) => Cow::Borrowed(value),
+            HeaderValue::MultiLine(bytes) => {
+                let mut lines = bytes.lines_with_terminator();
+                let mut out = BString::from(Vec::with_capacity(bytes.len()));
+                out.push_str(lines.next().expect("multiline values have a first line"));
+                for line in lines {
+                    out.push_str(&line[1..]);
+                }
+                Cow::Owned(out)
+            }
+        }
     }
-    ensure!(continuation_count != 0, crate::decode::empty_error());
-
-    let bytes = input[name_end + 1..continuation_end].as_bstr();
-    let mut out = BString::from(Vec::with_capacity(bytes.len()));
-    let mut lines = bytes.lines_with_terminator();
-    out.push_str(lines.next().expect("first line"));
-    for line in lines {
-        out.push_str(&line[1..]);
-    }
-    *i = &input[continuation_end..];
-    Ok((input[..name_end].as_bstr(), out))
 }
 
 /// Parse a specific single-line object header field.
@@ -76,29 +61,36 @@ pub(crate) fn header_field<'a, T>(
     Ok(value)
 }
 
-/// Parse any single-line object header field and return its raw value.
+/// Parse an object header and borrow its raw value.
 ///
-/// Typical input is `<field> <value>\n...`. The returned tuple contains the
-/// field name and the value bytes without the trailing newline.
-///
-/// On success, `i` is advanced past the newline.
-pub(crate) fn any_header_field<'a>(i: &mut &'a [u8]) -> Result<(&'a [u8], &'a [u8])> {
-    let mut c = *i;
-    let input = c;
-    let name_end = c
+/// A single-line value excludes its newline. A multiline value includes the
+/// line endings and the leading space of each continuation line.
+pub(crate) fn any_header_field<'a>(i: &mut &'a [u8]) -> Result<(&'a BStr, HeaderValue<'a>)> {
+    let input = *i;
+    let name_end = input
         .find_byteset(SPACE_OR_NL)
         .filter(|pos| *pos > 0)
         .ok_or_raise(crate::decode::empty_error)?;
-    ensure!(c.get(name_end) == Some(&b' '), crate::decode::empty_error());
-    c = &c[name_end + 1..];
-    if let Some(value_end) = c.find_byte(b'\n') {
-        let value = &c[..value_end];
-        let rest = &c[value_end + 1..];
-        *i = rest;
-        Ok((&input[..name_end], value))
-    } else {
-        Err(crate::decode::empty_error().raise())
+    ensure!(input[name_end] == b' ', crate::decode::empty_error());
+    let value = &input[name_end + 1..];
+    let first_line_end = value.find_byte(b'\n').ok_or_raise(crate::decode::empty_error)?;
+    let after_first_line = &value[first_line_end + 1..];
+    let mut rest = after_first_line;
+    while rest.first() == Some(&b' ') {
+        let Some(line_end) = rest.find_byte(b'\n') else {
+            // Preserve the single-line token and let the next parse report the malformed continuation.
+            rest = after_first_line;
+            break;
+        };
+        rest = &rest[line_end + 1..];
     }
+    *i = rest;
+    let value = if rest.len() == after_first_line.len() {
+        HeaderValue::SingleLine(value[..first_line_end].as_bstr())
+    } else {
+        HeaderValue::MultiLine(value[..value.len() - rest.len()].as_bstr())
+    };
+    Ok((input[..name_end].as_bstr(), value))
 }
 
 /// Parse a complete hexadecimal object id of the given `object_hash`.

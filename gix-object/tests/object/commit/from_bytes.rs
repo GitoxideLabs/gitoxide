@@ -107,6 +107,11 @@ message";
     let commit = CommitRef::from_bytes(input, gix_hash::Kind::Sha1)?;
     assert_eq!(commit.tree, b"7989DFB2EC2F41914611A22FB30BBC2B3849DF9A".as_bstr());
     assert_eq!(commit.tree(), "7989dfb2ec2f41914611a22fb30bbc2b3849df9a");
+    assert_eq!(
+        CommitRefIter::from_bytes(input, gix_hash::Kind::Sha1).tree_id()?,
+        commit.tree(),
+        "both decoders accept uppercase hex"
+    );
     Ok(())
 }
 

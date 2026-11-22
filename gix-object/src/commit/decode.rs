@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use gix_error::{ErrorExt, Result};
 use smallvec::SmallVec;
 
@@ -66,20 +64,11 @@ pub fn commit<'a>(i: &mut &'a [u8], object_hash: gix_hash::Kind) -> Result<Commi
     };
 
     let mut extra_headers = Vec::new();
-    loop {
-        let before = *i;
-        match parse::any_header_field_multi_line(i)
-            .map(|(k, v)| (k.as_bstr(), Cow::Owned(v)))
-            .or_else(|_| {
-                *i = before;
-                parse::any_header_field(i).map(|(k, v)| (k.as_bstr(), Cow::Borrowed(v.as_bstr())))
-            }) {
-            Ok(header) => extra_headers.push(header),
-            Err(_) => {
-                *i = before;
-                break;
-            }
-        }
+    while !i.starts_with(parse::NL) {
+        let Ok((name, value)) = parse::any_header_field(i) else {
+            break;
+        };
+        extra_headers.push((name, value.unfold()));
     }
 
     let message = message(i)?;
