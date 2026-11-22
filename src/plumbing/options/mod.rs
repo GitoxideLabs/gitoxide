@@ -335,6 +335,8 @@ pub mod watch {
         /// Watch tracked and unignored directories, stopping at nested repositories.
         #[default]
         IgnoreAware,
+        /// Also suppress individual ignored, untracked files in watched directories.
+        ExcludeIgnoredFiles,
         /// Include ignored paths and nested repositories.
         All,
         /// Disable automatic worktree coverage.
@@ -364,7 +366,7 @@ pub mod watch {
         /// Request full invalidations when an application file or directory changes; repeatable.
         #[clap(long = "additional-path", value_name = "PATH")]
         pub additional_paths: Vec<PathBuf>,
-        /// Select directory coverage. File invalidations remain unfiltered.
+        /// Select worktree coverage and whether to filter individual ignored files.
         #[clap(long, value_enum, default_value_t = Coverage::default())]
         pub worktree_coverage: Coverage,
         /// Metadata quiet period in milliseconds; zero publishes immediately.
@@ -426,6 +428,7 @@ pub mod watch {
                         .collect(),
                     worktree_coverage: match self.worktree_coverage {
                         Coverage::IgnoreAware => Some(gix::notify::WorktreeCoverage::IgnoreAware),
+                        Coverage::ExcludeIgnoredFiles => Some(gix::notify::WorktreeCoverage::ExcludeIgnoredFiles),
                         Coverage::All => Some(gix::notify::WorktreeCoverage::All),
                         Coverage::None => None,
                     },

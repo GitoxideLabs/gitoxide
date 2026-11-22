@@ -1505,6 +1505,7 @@ mod tests {
 
         for arguments in [
             vec!["gix", "notify"],
+            vec!["gix", "watch", "--worktree-coverage", "exclude-ignored-files"],
             vec![
                 "gix",
                 "notify",

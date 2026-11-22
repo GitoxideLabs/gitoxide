@@ -41,8 +41,9 @@
 //! do not interpret repository layout, apply ignore rules or maintain repository dependencies.
 //!
 //! [`WorktreeCoverage::IgnoreAware`](crate::notify::WorktreeCoverage::IgnoreAware) skips fully ignored
-//! directories, preserving coverage for tracked
-//! paths. Individual file invalidations are not filtered; callers check their current ignore rules.
+//! directories and preserves coverage for tracked paths. Choose
+//! [`WorktreeCoverage::ExcludeIgnoredFiles`](crate::notify::WorktreeCoverage::ExcludeIgnoredFiles)
+//! to suppress individual ignored, untracked files before publishing to callers and status handles.
 //! Directory scopes and full invalidations still require reconciliation using current repository state.
 //!
 //! With `async-notify`, keep constructing monitors synchronously with [`Repository::monitor()`].
@@ -51,7 +52,7 @@
 //! publication/recovery deadlines without polling. Service returns the owned monitor and the full
 //! outcome; cancellation shuts down that stream after active work completes.
 //! Use `RepositoryMonitor::service_async_with()` to process the outcome on that same worker,
-//! for example to apply individual-file ignore rules or update application dependencies.
+//! for example to service status handles or update application dependencies.
 //! [`Outcome::coverage`](crate::notify::Outcome::coverage) distinguishes pending registration verification from failed coverage
 //! awaiting repair. Clear coverage diagnostics after [`CoverageStatus::Healthy`](crate::notify::CoverageStatus::Healthy).
 //! Inspect coverage even on replies without changes or errors to observe completed verification.
@@ -85,6 +86,7 @@ mod asynchronous;
 #[cfg(all(feature = "async-notify", feature = "status-monitor"))]
 pub(crate) use asynchronous::WorkerOwned;
 mod classify;
+mod excludes;
 #[cfg(target_os = "macos")]
 mod external_ignores;
 mod inventory;
@@ -141,7 +143,7 @@ pub struct Layout {
     pub dependencies: Vec<Dependency>,
 }
 
-/// Which worktree directories receive native notification coverage.
+/// Which worktree paths receive notification coverage.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum WorktreeCoverage {
     /// Use the index and ignore rules to select directories, stopping at nested repositories.
@@ -158,6 +160,11 @@ pub enum WorktreeCoverage {
     /// repository's FSEvents streams. Loss of worktree coverage requests a full baseline and discovery walk.
     #[default]
     IgnoreAware,
+    /// Use the same directory watches as [`Self::IgnoreAware`] and suppress events for ignored,
+    /// untracked files. Each covered checkout retains tracked names, Git's exclude stack, and
+    /// index-backed ignore blobs so ordinary file events can be filtered without opening a repository.
+    /// Tracked files, directory changes and events whose file type cannot be resolved remain visible.
+    ExcludeIgnoredFiles,
     /// Recursively observe the entire worktree, including ignored paths and nested repositories.
     ///
     /// No index or ignore evaluation is needed to select directories. Classified worktree scopes
@@ -491,9 +498,9 @@ pub struct Outcome {
     /// Paths within each entry are relative to that entry's `worktree`, not the selected checkout.
     /// Shared configuration can invalidate several checkouts, but is subscribed to only once.
     pub other_worktrees: Vec<WorktreeChanges>,
-    /// Discovery or native watcher failures, retained with their error chains.
+    /// Discovery, exclude lookup, or native watcher failures, retained with their error chains.
     pub errors: Vec<Error>,
-    /// Coverage at the end of this service call, as reported by [`RepositoryMonitor::coverage_status()`].
+    /// Coverage at the end of this service call, including any status handles serviced with the project.
     /// Use [`CoverageStatus::Healthy`] to establish verified recovery before clearing diagnostics.
     pub coverage: CoverageStatus,
     /// Native-event and registration counts.
@@ -757,7 +764,8 @@ impl Layout {
                     .any(|path| same_path(path, &git_dir, filesystem.ignore_case))
             })
         });
-        let dependencies = options.metadata || coverage == Some(WorktreeCoverage::IgnoreAware);
+        let ignore_aware = coverage.is_some_and(|coverage| coverage != WorktreeCoverage::All);
+        let dependencies = options.metadata || ignore_aware;
         let index = if dependencies {
             absolute(&repo.index_path())?
         } else {
@@ -784,9 +792,7 @@ impl Layout {
                 };
                 let path = absolute(parent)?.join(name);
                 if layout.contains(&path)
-                    || coverage == Some(WorktreeCoverage::IgnoreAware)
-                        && layout.worktree.is_some()
-                        && dependency.kind == DependencyKind::Ignore
+                    || ignore_aware && layout.worktree.is_some() && dependency.kind == DependencyKind::Ignore
                 {
                     // The file watcher follows external symlinks from their configured name.
                     let watch_name = cfg!(target_os = "macos") && !layout.contains(&path);
@@ -801,9 +807,7 @@ impl Layout {
             }
             let path = absolute(&dependency.path)?;
             if layout.contains(&path)
-                || coverage == Some(WorktreeCoverage::IgnoreAware)
-                    && layout.worktree.is_some()
-                    && dependency.kind == DependencyKind::Ignore
+                || ignore_aware && layout.worktree.is_some() && dependency.kind == DependencyKind::Ignore
             {
                 layout.dependencies.push(Dependency {
                     path,
@@ -989,7 +993,9 @@ impl RepositoryMonitor {
     }
 
     fn ignore_aware(&self) -> bool {
-        self.options.worktree_coverage == Some(WorktreeCoverage::IgnoreAware)
+        self.options
+            .worktree_coverage
+            .is_some_and(|coverage| coverage != WorktreeCoverage::All)
     }
 
     fn active(&self) -> bool {
@@ -1056,11 +1062,11 @@ impl RepositoryMonitor {
             }
             out.statistics.received += batch.events.len();
             for event in batch.events {
-                self.observe(&event, worktree, now);
+                out.errors.extend(self.observe(&event, worktree, now));
                 if !worktree && self.all_worktrees_enabled() && !self.loss_pending_for(false) {
                     self.observe_index(&event, now);
                     for other in self.other_worktrees.values_mut() {
-                        other.observe(&event, false, now);
+                        out.errors.extend(other.observe(&event, false, now));
                         other.observe_index(&event, now);
                     }
                 }
@@ -1461,6 +1467,7 @@ impl RepositoryMonitor {
             let index = repo
                 .index_or_empty()
                 .or_raise(|| message("could not load index for filesystem monitoring"))?;
+            let previous_files = self.directory_inventory.as_mut().and_then(|dirs| dirs.files.take());
             let fingerprint = self
                 .directory_inventory
                 .as_ref()
@@ -1510,6 +1517,18 @@ impl RepositoryMonitor {
                 self.nested_repositories = std::mem::take(&mut directories.repositories);
                 self.index_fingerprint = Some(directories.index_fingerprint(&index, self.ignore_case)?);
                 self.directory_inventory = Some(directories);
+            }
+            if self.options.worktree_coverage == Some(WorktreeCoverage::ExcludeIgnoredFiles)
+                && let (Some(root), Some(directories)) = (&self.layout.worktree, &mut self.directory_inventory)
+            {
+                let files = excludes::FileFilter::new(repo, root, &index, self.ignore_case)?;
+                if changed_index
+                    || !self.options.metadata
+                        && previous_files.is_some_and(|previous| !files.same_tracked_paths(&previous))
+                {
+                    self.pending_worktree.merge(Changes::worktree_all());
+                }
+                directories.files = Some(Box::new(files));
             }
             self.index_dirty = false;
             self.inventory_dirty = false;
@@ -1580,14 +1599,15 @@ impl RepositoryMonitor {
         Ok(changed)
     }
 
-    fn observe(&mut self, event: &Event, worktree: bool, now: Instant) {
+    fn observe(&mut self, event: &Event, worktree: bool, now: Instant) -> Option<Error> {
         if event.paths.is_empty() || matches!(event.kind, EventKind::Any) {
             self.defer_loss(worktree, now);
-            return;
+            return None;
         }
         if self.loss_pending_for(worktree) {
-            return;
+            return None;
         }
+        let mut filter_error = None;
         let mut changes = Changes::default();
         for original in &event.paths {
             let path = if self.precompose_unicode {
@@ -1644,9 +1664,12 @@ impl RepositoryMonitor {
                         .registered
                         .keys()
                         .any(|directory| same_path(path, directory, self.ignore_case));
-                let is_directory = event.path_kind == PathKind::Directory
-                    || known_directory
-                    || std::fs::symlink_metadata(path).is_ok_and(|m| m.is_dir());
+                let directory = if event.path_kind == PathKind::Directory || known_directory {
+                    Some(true)
+                } else {
+                    std::fs::symlink_metadata(path).ok().map(|m| m.is_dir())
+                };
+                let is_directory = directory == Some(true);
                 if is_directory
                     && (self.ignore_aware() || registered_directory)
                     && matches!(
@@ -1745,11 +1768,28 @@ impl RepositoryMonitor {
                                 .all(|c| matches!(c, std::path::Component::Normal(_))) =>
                     {
                         match gix_path::into_bstr(relative) {
-                            Ok(relative) => changes.insert_worktree_path(PathChange {
-                                path: gix_path::to_unix_separators_on_windows(relative).into_owned(),
-                                kind,
-                                path_kind,
-                            }),
+                            Ok(relative) => {
+                                let path = gix_path::to_unix_separators_on_windows(relative).into_owned();
+                                if !is_directory
+                                    && (path_kind == PathKind::File
+                                        || path_kind == PathKind::Any && directory == Some(false))
+                                    && !self.inventory_dirty
+                                    && !self.index_dirty
+                                    && !self.maintenance_failed
+                                    && let Some(files) =
+                                        self.directory_inventory.as_mut().and_then(|dirs| dirs.files.as_mut())
+                                {
+                                    match files.is_ignored(path.as_ref()) {
+                                        Ok(true) => continue,
+                                        Ok(false) => {}
+                                        Err(err) => {
+                                            self.inventory_dirty = true;
+                                            filter_error = Some(err);
+                                        }
+                                    }
+                                }
+                                changes.insert_worktree_path(PathChange { path, kind, path_kind });
+                            }
                             Err(_) => changes.worktree = Some(Scope::All),
                         }
                     }
@@ -1830,6 +1870,10 @@ impl RepositoryMonitor {
             }
             self.pending_metadata.add(changes, now, &self.options, false);
         }
+        if filter_error.is_some() {
+            self.maintenance_failed(now);
+        }
+        filter_error
     }
 }
 

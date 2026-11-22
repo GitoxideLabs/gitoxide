@@ -616,6 +616,68 @@ fn file_scopes_are_literal_and_do_not_reopen_a_repository() {
 }
 
 #[test]
+fn ignored_file_events_are_filtered_before_scope_limits_and_status_publication() -> TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only_with_args("make_notify_repo.sh", ["event-filter"])?;
+    let repo = crate::open_opts(
+        &fixture,
+        crate::open::Options::isolated().config_overrides(["core.ignoreCase=true"]),
+    )?;
+    let mut project = monitor();
+    project.options.worktree_coverage = Some(WorktreeCoverage::ExcludeIgnoredFiles);
+    project.layout = Layout::for_options(&repo, &project.options)?;
+    let root = project.layout.worktree.clone().expect("the fixture has a checkout");
+    {
+        let index = repo.index()?;
+        let mut dirs = inventory::worktree_directories(&repo, &index)?;
+        dirs.files = Some(Box::new(excludes::FileFilter::new(&repo, &root, &index, true)?));
+        project.directory_inventory = Some(dirs);
+    }
+    #[cfg(feature = "status-monitor")]
+    let status = {
+        let mut status = project.worktree_status(&repo, Default::default())?;
+        status.refresh(&repo, &std::sync::atomic::AtomicBool::new(false))?;
+        status
+    };
+    drop(repo);
+    let now = Instant::now();
+    for n in 0..=MAX_SCOPES {
+        let err = project.observe(&modified(root.join(format!("{n}.ignored"))), true, now);
+        assert!(err.is_none(), "ignore lookup succeeds for a file-only hint");
+    }
+    project.observe(
+        &event(root.join("drop.ignored"), EventKind::Modify, PathKind::Any),
+        true,
+        now,
+    );
+    let outcome = project.service(now, || panic!("ordinary file filtering must not reopen the repository"));
+    assert!(
+        outcome.changes.is_empty(),
+        "ignored files consume no publication budget"
+    );
+    #[cfg(feature = "status-monitor")]
+    assert!(!status.needs_refresh(), "ignored files leave the cached status current");
+
+    project.observe(
+        &event(root.join("unknown.ignored"), EventKind::Remove, PathKind::Any),
+        true,
+        now,
+    );
+    project.observe(&modified(root.join("MISSING.IGNORED")), true, now);
+    let outcome = project.service(now, || panic!("removal hints also use the cached rules"));
+    assert_eq!(
+        outcome.changes.worktree,
+        Some(Scope::Paths(vec![
+            path_change("MISSING.IGNORED", EventKind::Modify, PathKind::File),
+            path_change("unknown.ignored", EventKind::Remove, PathKind::Any),
+        ])),
+        "tracked names and unknown deletions that might be directories remain visible"
+    );
+    #[cfg(feature = "status-monitor")]
+    assert!(status.needs_refresh(), "a tracked path still invalidates status");
+    Ok(())
+}
+
+#[test]
 fn literal_scopes_preserve_native_hints_and_both_rename_endpoints() {
     let now = Instant::now();
     for coverage in [WorktreeCoverage::IgnoreAware, WorktreeCoverage::All] {

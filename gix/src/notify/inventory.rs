@@ -237,6 +237,7 @@ pub(super) fn recursive_root_watch(root: &Path) -> Result<Watch> {
 #[derive(Default)]
 pub(super) struct Directories {
     root: PathBuf,
+    pub(super) files: Option<Box<super::excludes::FileFilter>>,
     pub watches: BTreeMap<PathBuf, bool>,
     pub repositories: HashSet<PathBuf>,
     /// Known directory names, with whether their descendants have been discovered.
@@ -341,6 +342,7 @@ pub(super) fn worktree_directories_reusing(
     let lookup = caps.ignore_case.then(|| index.prepare_icase_backing());
     let mut directories = Directories {
         root: root.to_owned(),
+        files: None,
         watches: BTreeMap::from([(root.to_owned(), false)]),
         repositories: HashSet::new(),
         paths: previous.map_or_else(BTreeMap::new, |previous| previous.paths.clone()),

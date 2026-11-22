@@ -41,7 +41,7 @@ impl RepositoryMonitor {
     ///
     /// Like [`Self::service_async()`], cancellation leaves native work and teardown on workers.
     /// `process` runs after servicing, with access to the monitor for subscription updates and to
-    /// the owned outcome for filesystem work such as individual-file ignore filtering. It must
+    /// the owned outcome for work such as servicing status handles. It must
     /// handle all invalidations and errors in the outcome; its return value replaces the outcome
     /// in the reply. Returning a [`Result`] from `process` retains the monitor even if processing
     /// fails. A panic in either callback instead shuts down the monitor and returns a task error.

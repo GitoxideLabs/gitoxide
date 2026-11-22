@@ -143,17 +143,10 @@ where
     T: gix_object::Find,
 {
     fn try_find<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> Result<Option<Data<'a>>> {
-        if let Some(map) = self.memory.as_ref() {
-            let map = map.borrow();
-            if let Some((kind, data)) = map.get(id) {
-                buffer.clear();
-                buffer.extend_from_slice(data);
-                return Ok(Some(Data {
-                    kind: *kind,
-                    object_hash: id.kind(),
-                    data: &*buffer,
-                }));
-            }
+        if let Some(map) = &self.memory
+            && let Some(object) = map.borrow().get(id)
+        {
+            return Ok(Some(copy_object(id, object, buffer)));
         }
         self.inner.try_find(id, buffer)
     }
@@ -300,6 +293,26 @@ impl<T> DerefMut for Proxy<T> {
 /// A mapping between an object id and all data corresponding to an object, acting like a `HashMap<ObjectID, (Kind, Data)>`.
 #[derive(Default, Debug, Clone, Eq, PartialEq)]
 pub struct Storage(gix_hashtable::HashMap<gix_hash::ObjectId, (gix_object::Kind, Vec<u8>)>);
+
+impl gix_object::Find for Storage {
+    fn try_find<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>) -> Result<Option<Data<'a>>> {
+        Ok(self.get(id).map(|object| copy_object(id, object, buffer)))
+    }
+}
+
+fn copy_object<'a>(
+    id: &gix_hash::oid,
+    (kind, data): &(gix_object::Kind, Vec<u8>),
+    buffer: &'a mut Vec<u8>,
+) -> Data<'a> {
+    buffer.clear();
+    buffer.extend_from_slice(data);
+    Data {
+        kind: *kind,
+        object_hash: id.kind(),
+        data: buffer,
+    }
+}
 
 impl Deref for Storage {
     type Target = gix_hashtable::HashMap<gix_hash::ObjectId, (gix_object::Kind, Vec<u8>)>;

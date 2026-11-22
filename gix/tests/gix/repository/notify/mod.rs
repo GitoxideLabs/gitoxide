@@ -955,9 +955,8 @@ mod native {
         config.set_raw_value("core.excludesFile", gix::path::into_bstr(ignore.as_path())?)?;
         std::fs::write(config_path, config.to_bstring())?;
         let repo = gix::open_opts(&root, crate::restricted())?;
-        let mut monitor = repo.monitor(worktree_only(WorktreeCoverage::IgnoreAware))?;
-        service(&mut monitor, &repo);
-        service(&mut monitor, &repo);
+        let mut monitor = repo.monitor(worktree_only(WorktreeCoverage::ExcludeIgnoredFiles))?;
+        check_generated_file_is_filtered(&mut monitor, &repo)?;
         assert!(
             has_dependency(monitor.layout(), &ignore.canonicalize()?, DependencyKind::Ignore),
             "global ignores are monitored outside repository roots"
@@ -976,6 +975,7 @@ mod native {
             },
         );
         wait_for_file_change(&mut monitor, &repo, "ignored/deep/file")?;
+        wait_for_file_change(&mut monitor, &repo, "sample.generated")?;
         Ok(())
     }
 
@@ -1076,7 +1076,7 @@ mod native {
     }
 
     #[test]
-    fn file_events_are_unfiltered_in_both_coverage_modes() -> TestResult {
+    fn file_exclusions_are_opt_in_and_preserve_tracked_files_and_negations() -> TestResult {
         let interesting = [
             "this",
             "keep.ignored",
@@ -1085,8 +1085,13 @@ mod native {
             "only-dir",
             "sub/keep.blocked",
         ];
-        let ignored = ["drop.ignored", "sub/drop.blocked"];
-        for coverage in [WorktreeCoverage::IgnoreAware, WorktreeCoverage::All] {
+        let ignored = ["drop.ignored", "sub/drop.blocked", "info.local"];
+        for coverage in [
+            WorktreeCoverage::IgnoreAware,
+            WorktreeCoverage::All,
+            WorktreeCoverage::ExcludeIgnoredFiles,
+        ] {
+            let filter_files = coverage == WorktreeCoverage::ExcludeIgnoredFiles;
             let fixture = writable_fixture("event-filter")?;
             let repo = gix::open_opts(fixture.path(), crate::restricted())?;
             let root = repo.workdir().expect("the fixture has a worktree");
@@ -1103,7 +1108,7 @@ mod native {
                 std::fs::write(root.join(path), "changed after startup\n")?;
             }
             let mut seen = std::collections::BTreeSet::<gix::bstr::BString>::new();
-            wait_for(&mut monitor, &repo, "unfiltered file events", |out| {
+            wait_for(&mut monitor, &repo, "file invalidations", |out| {
                 if let Some(scope) = &out.changes.worktree {
                     let Scope::Paths(paths) = scope else {
                         panic!("settled file writes must retain incremental scopes: {coverage:?}");
@@ -1111,12 +1116,14 @@ mod native {
                     seen.extend(paths.iter().map(|change| change.path.clone()));
                 }
                 let contains = |path: &str| seen.contains(gix::bstr::BStr::new(path));
-                interesting.iter().all(|path| contains(path)) && ignored.iter().all(|path| contains(path))
+                interesting.iter().all(|path| contains(path))
+                    && (filter_files || ignored.iter().all(|path| contains(path)))
             });
-            for path in interesting.iter().chain(&ignored) {
-                assert!(
+            for path in ignored {
+                assert_eq!(
                     seen.contains(gix::bstr::BStr::new(path)),
-                    "{coverage:?}: callers receive {path} and decide whether to exclude individual files"
+                    !filter_files,
+                    "{coverage:?} applies its file exclusion policy to {path}"
                 );
             }
 
@@ -1135,7 +1142,14 @@ mod native {
                 }
                 seen_removed.iter().all(|seen| *seen)
             });
-            if coverage == WorktreeCoverage::IgnoreAware {
+            if filter_files {
+                gix_testtools::git(root, "add -f -- sub/drop.blocked")?;
+                wait_for(&mut monitor, &repo, "the force-added path to enter coverage", |out| {
+                    out.changes.worktree == Some(Scope::All)
+                });
+                wait_for_file_change(&mut monitor, &repo, "sub/drop.blocked")?;
+            }
+            if coverage != WorktreeCoverage::All {
                 std::fs::write(root.join(".gitignore"), "*.ignored\n!drop.ignored\n")?;
                 wait_for(&mut monitor, &repo, "changed file-only ignore rules", |out| {
                     out.changes.worktree == Some(Scope::All)
@@ -1169,14 +1183,8 @@ mod native {
         let mut updated_index = Vec::new();
         index.write_to(&mut updated_index, Default::default())?;
 
-        let mut monitor = repo.monitor(worktree_only(WorktreeCoverage::IgnoreAware))?;
-        let mut quiet_since = Instant::now();
-        wait_for(&mut monitor, &repo, "initial coverage to settle", |out| {
-            if !out.changes.is_empty() || out.statistics.received != 0 || out.statistics.added != 0 {
-                quiet_since = Instant::now();
-            }
-            quiet_since.elapsed() >= Duration::from_millis(500)
-        });
+        let mut monitor = repo.monitor(worktree_only(WorktreeCoverage::ExcludeIgnoredFiles))?;
+        check_generated_file_is_filtered(&mut monitor, &repo)?;
 
         std::fs::write(repo.git_dir().join("index"), updated_index)?;
         let mut added = 0;
@@ -1194,6 +1202,34 @@ mod native {
             subtree_watch_count(),
             "changing only the ignore blob adds subtree coverage without an explicit rescan"
         );
+        wait_for_file_change(&mut monitor, &repo, "sample.generated")?;
+        Ok(())
+    }
+
+    fn check_generated_file_is_filtered(monitor: &mut RepositoryMonitor, repo: &gix::Repository) -> TestResult {
+        let root = repo.workdir().expect("the fixture has a checkout");
+        let mut quiet_since = Instant::now();
+        wait_for(monitor, repo, "initial coverage to settle", |out| {
+            if !out.changes.is_empty() || out.statistics.received != 0 || out.statistics.added != 0 {
+                quiet_since = Instant::now();
+            }
+            quiet_since.elapsed() >= Duration::from_millis(500)
+        });
+        std::fs::write(root.join("sample.generated"), "ignored\n")?;
+        std::fs::write(root.join("this"), "still tracked\n")?;
+        wait_for(monitor, repo, "the tracked file alongside the ignored file", |out| {
+            let Some(scope) = &out.changes.worktree else {
+                return false;
+            };
+            let Scope::Paths(paths) = scope else {
+                panic!("ordinary writes have incremental scopes")
+            };
+            assert!(
+                paths.iter().all(|change| change.path != "sample.generated"),
+                "the current source excludes generated files"
+            );
+            paths.iter().any(|change| change.path == "this")
+        });
         Ok(())
     }
 
@@ -2303,6 +2339,36 @@ mod all_worktrees {
                     "metadata-only membership discovers new checkouts"
                 );
             }
+            Ok(())
+        }
+
+        #[test]
+        fn linked_checkouts_filter_the_same_filename_with_their_own_rules() -> TestResult {
+            let Some(fixture) = writable_fixture("files")? else {
+                return Ok(());
+            };
+            let main = gix::open_opts(fixture.path().join("main"), crate::restricted())?;
+            let a = fixture.path().join("linked-a");
+            let b = fixture.path().join("linked-b");
+            std::fs::write(a.join(".gitignore"), "output.log\n")?;
+            let mut monitor = main.monitor(options(WorktreeCoverage::ExcludeIgnoredFiles))?;
+            wait_for_quiet(&mut monitor, &main, "checkout registration", |_| true);
+            std::fs::write(a.join("output.log"), "ignored in A\n")?;
+            std::fs::write(b.join("output.log"), "visible in B\n")?;
+            let visible = b.canonicalize()?;
+            wait_for_quiet(&mut monitor, &main, "B's visible file", |out| {
+                let mut seen = false;
+                for other in &out.other_worktrees {
+                    if let Some(scope) = &changed(other).worktree {
+                        assert_eq!(
+                            other.worktree, visible,
+                            "the ignored file in A never invalidates its checkout"
+                        );
+                        seen |= matches!(scope, Scope::Paths(paths) if paths.iter().any(|change| change.path == "output.log"));
+                    }
+                }
+                seen
+            });
             Ok(())
         }
 
