@@ -1,13 +1,13 @@
-//! An abstraction over [fetching][fetch()] a pack from the server.
+//! An abstraction over [fetching a pack](mod@fetch) from the server.
 //!
 //! Generally, there is the following order of operations.
 //!
 //! * create a `Transport`, either blocking or async
-//! * perform a [`handshake()`]
+//! * perform a [handshake](mod@handshake)
 //! * execute a [`Command`]
-//!     - [list references](LsRefsCommand)
-//!          - create a mapping between [refspecs and references](fetch::RefMap)
-//!     - [receive a pack](fetch())
+//!     - [list references](ls_refs)
+//!          - create a mapping between refspecs and references
+//!     - receive a pack
 //!
 //! ## Feature Flags
 #![cfg_attr(

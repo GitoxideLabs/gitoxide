@@ -135,18 +135,17 @@ impl Response {
         Ok(())
     }
 
-    /// Return all acknowledgements [parsed previously][Response::from_line_reader()].
+    /// Return all acknowledgements parsed from the server response.
     pub fn acknowledgements(&self) -> &[Acknowledgement] {
         &self.acks
     }
 
-    /// Return all shallow update lines [parsed previously][Response::from_line_reader()].
+    /// Return all shallow updates from the server.
     pub fn shallow_updates(&self) -> &[ShallowUpdate] {
         &self.shallows
     }
 
-    /// Append the given `updates` which may have been obtained from a
-    /// (handshake::Outcome)[crate::Handshake::v1_shallow_updates].
+    /// Append `updates` obtained during a [handshake](mod@crate::handshake).
     ///
     /// In V2, these are received as part of the pack, but V1 sends them early, so we
     /// offer to re-integrate them here.
@@ -154,7 +153,7 @@ impl Response {
         self.shallows.extend(updates.into_iter().flatten());
     }
 
-    /// Return all wanted-refs [parsed previously][Response::from_line_reader()].
+    /// Return all wanted refs parsed from the server response.
     pub fn wanted_refs(&self) -> &[WantedRef] {
         &self.wanted_refs
     }
