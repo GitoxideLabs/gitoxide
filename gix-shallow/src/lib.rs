@@ -45,7 +45,7 @@ pub enum Update {
     Unshallow(gix_hash::ObjectId),
 }
 
-/// Return a list of shallow commits as unconditionally read from `shallow_file`.
+/// Return a sorted list of shallow commits as unconditionally read from `shallow_file`.
 ///
 /// The list of shallow commits represents the shallow boundary, beyond which we are lacking all (parent) commits.
 /// Note that the list is never empty, as `Ok(None)` is returned in that case indicating the repository

@@ -230,9 +230,8 @@ where
         self
     }
 
-    /// Define what to do when the current repository is a shallow clone.
-    ///
-    /// *Has no effect if the current repository is not as shallow clone.*
+    /// Set how this fetch may change the local shallow boundary.
+    /// By default, the fetch fails if it requires changing that boundary.
     pub fn with_shallow(mut self, shallow: remote::fetch::Shallow) -> Self {
         self.inner.shallow = shallow;
         self

@@ -148,7 +148,7 @@ where
             shared_repository_permissions: gix::fs::SharedPermissions::Umask,
             shallow: &Default::default(),
             tags: Default::default(),
-            reject_shallow_remote: true,
+            unrequested_shallow_updates: gix::protocol::fetch::UnrequestedShallowUpdates::Reject,
         },
     )
     .await?;

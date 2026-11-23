@@ -15,9 +15,21 @@ pub struct Options<'a> {
     pub shallow: &'a Shallow,
     /// Describe how to handle tags when fetching.
     pub tags: Tags,
-    /// If `true`, if we fetch from a remote that only offers shallow clones, the operation will fail with an error
-    /// instead of writing the shallow boundary to the shallow file.
-    pub reject_shallow_remote: bool,
+    /// How to handle shallow updates from the remote when `shallow` is [`Shallow::NoChange`].
+    pub unrequested_shallow_updates: UnrequestedShallowUpdates,
+}
+
+/// How to handle shallow updates from the remote when no change to the local boundary was requested.
+#[derive(Default, Debug, Copy, Clone, PartialEq, Eq)]
+pub enum UnrequestedShallowUpdates {
+    /// Reject any shallow update, even if it would leave the local boundary unchanged.
+    Reject,
+    /// Fetch only if the local boundary can stay unchanged: each update must declare a boundary
+    /// that is already recorded locally or for which the local repository already has the history.
+    #[default]
+    KeepLocal,
+    /// Apply the remote's shallow updates to the local boundary. Use only for a newly created clone.
+    Accept,
 }
 
 /// For use in [`crate::Handshake::prepare_lsrefs_or_extract_refmap()`] and [`fetch`](crate::fetch()).
@@ -41,6 +53,8 @@ pub struct Context<'a, T> {
 
 #[cfg(feature = "fetch")]
 mod with_fetch {
+    use std::sync::atomic::AtomicBool;
+
     use bstr::ByteSlice;
     use gix_error::Result;
 
@@ -77,6 +91,15 @@ mod with_fetch {
         /// Returns `true` if wants were added, or `false` if the negotiation should be aborted.
         #[must_use]
         fn add_wants(&mut self, arguments: &mut fetch::Arguments, remote_ref_target_known: &[bool]) -> bool;
+        /// Return whether all `commit_ids` and their ancestors are available under the existing local shallow boundary.
+        /// The default assumes the history is unavailable when the implementation cannot inspect local objects.
+        fn has_local_commit_history(
+            &mut self,
+            _commit_ids: &[gix_hash::ObjectId],
+            _should_interrupt: &AtomicBool,
+        ) -> Result<bool> {
+            Ok(false)
+        }
         /// Typically invokes [`negotiate::one_round()`].
         fn one_round(
             &mut self,
@@ -181,9 +204,8 @@ pub use with_fetch::*;
 /// The *shallow boundary* is a set of commits whose parents are not present in the repository.
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub enum Shallow {
-    /// Fetch all changes from the remote without affecting the shallow boundary at all.
-    ///
-    /// This also means that repositories that aren't shallow will remain like that.
+    /// Don't request a change to the local shallow boundary.
+    /// [`Options::unrequested_shallow_updates`] controls how to handle updates sent by the remote anyway.
     #[default]
     NoChange,
     /// Receive update to `depth` commits in the history of the refs to fetch (from the viewpoint of the remote),
