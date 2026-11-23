@@ -21,12 +21,12 @@ impl crate::Repository {
     /// # Ok(()) }
     /// ```
     pub fn remote_names(&self) -> remote::Names {
+        let filter = self.filter_config_section();
         self.config
             .resolved
             .sections_by_name(Remote.name())
             .map(|it| {
-                let filter = self.filter_config_section();
-                it.filter(move |s| filter(s.meta()))
+                it.filter(|s| filter(s.meta()))
                     .filter_map(|section| section.header().subsection_name().map(ToOwned::to_owned))
                     .collect()
             })
@@ -66,7 +66,7 @@ impl crate::Repository {
             .then(|| {
                 self.config
                     .resolved
-                    .string_filter(Remote::PUSH_DEFAULT, &mut self.filter_config_section())
+                    .string_filter(Remote::PUSH_DEFAULT, self.filter_config_section())
             })
             .flatten();
         name.or_else(|| {

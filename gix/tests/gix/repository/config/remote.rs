@@ -413,6 +413,26 @@ mod branch_remote {
     }
 
     #[test]
+    fn push_tracking_does_not_require_a_usable_remote_url() -> TestResult {
+        let repo = named_subrepo_opts(
+            "make_remote_config_repos.sh",
+            "fetch",
+            gix::open::Options::isolated().config_overrides([
+                "remote.remote_repo.pushurl=ssh://host",
+                "remote.remote_repo.push=refs/heads/main:refs/heads/publish",
+            ]),
+        )?;
+        assert!(repo.find_remote("remote_repo").is_err(), "the push URL is malformed");
+        assert_eq!(
+            repo.branch_remote_tracking_ref_name("refs/heads/main".try_into()?, remote::Direction::Push)
+                .expect("the push destination has a local tracking ref")?,
+            "refs/remotes/remote_repo/publish",
+            "mapping the push destination does not need the remote URL"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn push_mapped() -> TestResult {
         let repo = repo("push-mapped")?;
 

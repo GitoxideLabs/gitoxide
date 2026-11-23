@@ -232,14 +232,8 @@ fn print_ahead_behind(repo: &gix::Repository, out: &mut dyn io::Write) -> Result
     let Some(mut branch) = repo.head()?.try_into_referent() else {
         return Ok(());
     };
-    let direction = gix::remote::Direction::Fetch;
-    let upstream_name = if branch.remote_name(direction).is_some_and(|name| name == ".") {
-        // A local upstream uses branch.<name>.merge directly, without a fetch refspec mapping.
-        branch.remote_ref_name(direction)
-    } else {
-        branch.remote_tracking_ref_name(direction)
-    };
-    let Some(upstream_name) = upstream_name
+    let Some(upstream_name) = branch
+        .remote_tracking_ref_name(gix::remote::Direction::Fetch)
         .transpose()
         .or_raise(|| message("Could not resolve the current branch's upstream"))?
     else {
