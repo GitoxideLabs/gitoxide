@@ -89,8 +89,7 @@ impl PrepareFetch {
     /// configuration and settings.
     ///
     /// [`Kind::Bare`][crate::create::Kind::Bare] uses Git's bare-clone branch layout and omits the default fetch and upstream
-    /// configuration. [`Kind::WithWorktree`][crate::create::Kind::WithWorktree] with [`fetch_only()`][Self::fetch_only()]
-    /// clones without a checkout.
+    /// configuration. [`Kind::WithWorktree`][crate::create::Kind::WithWorktree] with `fetch_only()` clones without a checkout.
     /// Explicit refspecs supplied through [`Self::configure_remote()`] are still honored and persisted.
     /// For bare clones that callback receives no default refspecs; leaving it empty uses the bare
     /// branch mapping for the initial fetch only.

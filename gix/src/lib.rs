@@ -356,8 +356,7 @@ pub fn init_bare(directory: impl AsRef<std::path::Path>) -> Result<Repository> {
 ///
 /// Like `git clone --bare`, branches are stored in `refs/heads/`, with no default fetch refspec,
 /// remote-tracking `HEAD`, or branch upstream configuration. For a non-bare clone without checkout
-/// (like `git clone --no-checkout`), use [`prepare_clone()`] followed by
-/// [`fetch_only()`][clone::PrepareFetch::fetch_only()]
+/// (like `git clone --no-checkout`), use [`prepare_clone()`] followed by `PrepareFetch::fetch_only()`
 /// with the `blocking-network-client` or `async-network-client-async-std` feature enabled.
 /// This creates `path/.git` and fetches the repository without populating the working tree.
 ///

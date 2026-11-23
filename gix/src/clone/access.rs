@@ -73,8 +73,7 @@ impl PrepareFetch {
     ///
     /// A revision is either `HEAD`, a full reference name like `refs/heads/main`, or a full object ID.
     /// No local or remote-tracking references are created and no fetch refspec is persisted.
-    /// It replaces any extra refspecs supplied with [`with_fetch_options()`](Self::with_fetch_options)
-    /// before fetching.
+    /// It replaces any extra refspecs supplied with `with_fetch_options()` before fetching.
     /// Setting `revision` to `Some(_)` clears a ref name previously set with [`with_ref_name()`](Self::with_ref_name).
     /// Passing `None` leaves the ref name unchanged.
     pub fn with_revision(mut self, revision: Option<impl Into<BString>>) -> Result<Self> {

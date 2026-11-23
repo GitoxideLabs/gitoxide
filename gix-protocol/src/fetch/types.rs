@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::fetch::response::{Acknowledgement, ShallowUpdate, WantedRef};
 
-/// Options for use in [`fetch()`](`crate::fetch()`)
+/// Options for [fetching a pack](mod@crate::fetch).
 #[derive(Debug, Clone)]
 pub struct Options<'a> {
     /// The path to the file containing the shallow commit boundary.
