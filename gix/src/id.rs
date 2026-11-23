@@ -89,7 +89,7 @@ impl<'repo> Id<'repo> {
 
 impl<'repo> Id<'repo> {
     /// Obtain a platform for traversing ancestors of this commit.
-    pub fn ancestors(&self) -> crate::revision::walk::Platform<'repo> {
+    pub fn ancestors(&self) -> crate::revision::walk::Platform<'repo, 'repo> {
         crate::revision::walk::Platform::new(Some(self.inner), self.repo)
     }
 }

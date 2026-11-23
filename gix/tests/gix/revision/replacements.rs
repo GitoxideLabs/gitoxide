@@ -75,6 +75,14 @@ fn replacements_match_git_with_default_opening_and_raw_commit_graphs() -> TestRe
                 Some(archive_id),
                 "lower-level repository graphs also follow replacements"
             );
+            let tip = repo.head_id()?;
+            let walk = || repo.rev_walk([tip]).with_hidden([archive_id]);
+            let mut cache = repo.rev_walk_cache();
+            assert_eq!(
+                ids(walk().with_cache(&mut cache).all()?)?,
+                ids(walk().all()?)?,
+                "hidden walks with a cache follow replacement ancestry"
+            );
         }
 
         for enabled in [false, true] {

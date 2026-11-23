@@ -24,6 +24,11 @@ tip=$(commit tip 946684808 -p "$merge")
 git symbolic-ref HEAD refs/heads/tip
 git commit-graph write --reachable
 
+# Use a second graph snapshot for the same objects, covering only main and its ancestors.
+mkdir partial-graph
+cp -R .git partial-graph/.git
+printf '%s\n' "$main" | git -C partial-graph commit-graph write --stdin-commits
+
 for order in topo-order date-order; do
   for parents in all first; do
     args=("--$order")
@@ -49,3 +54,19 @@ mkdir shallow-with-objects
 cp -R .git shallow-with-objects/.git
 echo "$main" >shallow-with-objects/.git/shallow
 git -C shallow-with-objects -c core.commitGraph=false rev-list --topo-order tip ^main >shallow-hidden.baseline
+
+# The older hidden chain reaches a root with a newer timestamp. Without generations, the
+# five-commit lookahead stops before the root unless it follows metadata from outside the walk.
+git init -q skewed
+(
+  cd skewed
+  tree=$(git mktree </dev/null)
+  root=$(commit root 946684880)
+  hidden=$root
+  for ((i=1; i<=6; i++)); do
+    hidden=$(commit "hidden-$i" "$((946684800 + i))" -p "$hidden")
+  done
+  commit base 946684807 -p "$hidden"
+  commit tip 946684900 -p "$root"
+  git symbolic-ref HEAD refs/heads/tip
+)

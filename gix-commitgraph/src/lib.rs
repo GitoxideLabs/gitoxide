@@ -16,7 +16,6 @@
 #![deny(missing_docs, unsafe_code)]
 
 use gix_error::Result;
-use gix_parallel::OwnShared;
 use std::path::Path;
 
 /// A single commit-graph file.
@@ -60,11 +59,8 @@ pub struct File {
 /// The data in the commit graph may come from a monolithic `objects/info/commit-graph` file, or it
 /// may come from one or more `objects/info/commit-graphs/graph-*.graph` files. These files are
 /// generated via `git commit-graph write ...` commands.
-///
-/// Cloning a graph shares the same memory-mapped files without reopening them.
-#[derive(Clone)]
 pub struct Graph {
-    files: OwnShared<nonempty::NonEmpty<File>>,
+    files: nonempty::NonEmpty<File>,
     corrected_commit_dates_available: bool,
 }
 

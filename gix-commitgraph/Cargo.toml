@@ -16,8 +16,6 @@ rust-version = "1.95"
 doctest = false
 
 [features]
-## Allow commit graphs to be sent and shared across threads.
-parallel = ["gix-parallel/parallel"]
 ## Enable support for the SHA-1 hash by enabling the respective feature in the `gix-hash` crate.
 sha1 = ["gix-hash/sha1"]
 ## Enable support for the SHA-256 hash by enabling the respective feature in the `gix-hash` crate.
@@ -29,7 +27,6 @@ serde = ["dep:serde", "gix-hash/serde", "bstr/serde"]
 gix-hash = { version = "^0.29.0", path = "../gix-hash" }
 gix-chunk = { version = "^0.10.2", path = "../gix-chunk" }
 gix-error = { version = "^0.5.3", path = "../gix-error" }
-gix-parallel = { version = "^0.50.2", path = "../gix-parallel" }
 
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
 memmap2 = "0.9.11"

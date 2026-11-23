@@ -18,23 +18,6 @@ fn legacy_graph_has_no_generation_numbers() -> gix_testtools::TestResult {
 }
 
 #[test]
-fn cloned_graph_shares_the_snapshot() {
-    let (graph, refs) = graph_and_expected("single_parent.sh", &["parent", "child"]);
-    let pos = refs["child"].pos();
-    let clone = graph.clone();
-    assert!(
-        std::ptr::eq(graph.id_at(pos), clone.id_at(pos)),
-        "cloning shares the mapped commit data"
-    );
-    drop(graph);
-    assert_eq!(
-        clone.commit_at(pos).generation(),
-        2,
-        "the clone keeps the snapshot alive"
-    );
-}
-
-#[test]
 fn single_parent() {
     let (cg, refs) = graph_and_expected("single_parent.sh", &["parent", "child"]);
     check_common(&cg, &refs);

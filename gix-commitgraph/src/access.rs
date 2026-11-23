@@ -76,7 +76,7 @@ impl Graph {
 impl Graph {
     fn lookup_by_id(&self, id: &gix_hash::oid) -> Option<LookupByIdResult<'_>> {
         let mut current_file_start = 0;
-        for file in self.files.iter() {
+        for file in &self.files {
             if let Some(lex_pos) = file.lookup(id) {
                 return Some(LookupByIdResult {
                     file,

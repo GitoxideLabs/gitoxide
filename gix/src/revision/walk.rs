@@ -2,7 +2,12 @@ use gix_hash::ObjectId;
 use gix_object::{Find, WriteTo};
 pub use gix_traverse::commit::simple::CommitTimeOrder;
 
-use crate::{Repository, Result, error::ResultExt, ext::ObjectIdExt, revision};
+use crate::{
+    Repository, Result,
+    error::{ResultExt, bail, message},
+    ext::ObjectIdExt,
+    revision,
+};
 
 /// Specify how to sort commits during a [revision::Walk] traversal.
 ///
@@ -163,7 +168,7 @@ impl<'repo> Info<'repo> {
 /// **Note that we automatically leverage the commitgraph data structure**, but if you know that additional information like
 /// author or commit messages will be required of *all* commits traversed here, it should be better to avoid trying to load it
 /// by [turning commit-graph support off][Platform::use_commit_graph()]. This certainly is a micro-optimization though.
-pub struct Platform<'repo> {
+pub struct Platform<'repo, 'cache> {
     repo: &'repo Repository,
     pub(crate) tips: Vec<ObjectId>,
     pub(crate) hidden: Vec<ObjectId>,
@@ -172,9 +177,87 @@ pub struct Platform<'repo> {
     pub(crate) parents: gix_traverse::commit::Parents,
     pub(crate) use_commit_graph: Option<bool>,
     pub(crate) commit_graph: Option<gix_commitgraph::Graph>,
+    hidden_cache: Option<&'cache mut Cache<'repo>>,
 }
 
-impl<'repo> Platform<'repo> {
+/// Reusable state for revision walks on one repository handle, created by [`Repository::rev_walk_cache()`].
+///
+/// Currently, [`Platform::with_cache()`] speeds up repeated breadth-first walks with hidden
+/// commits by reusing commit metadata both when computing the hidden frontier and when walking
+/// visible commits. The first compatible walk also pins the optional on-disk commit-graph so it
+/// need not be reopened for later walks.
+///
+/// Tips, exclusions, the first-parent setting, and predicates can vary between walks: paint flags,
+/// the hidden frontier, and predicate decisions are not cached. Other traversal modes currently
+/// bypass the cache. Retained metadata grows with the number of distinct commits seen by the batch.
+pub struct Cache<'repo> {
+    repo: &'repo Repository,
+    commit_graph: gix_parallel::OnceCell<Option<SharedCommitGraph>>,
+    metadata: CommitMetadata,
+    metadata_source: MetadataSource,
+}
+
+type CommitMetadata = gix_revwalk::graph::IdMap<gix_revwalk::graph::Commit<()>>;
+
+/// Shared ownership of an open commit-graph. Cloning the handle keeps the same file mappings alive.
+/// Create one with `SharedCommitGraph::new(repo.commit_graph()?)`.
+pub type SharedCommitGraph = gix_parallel::OwnShared<gix_commitgraph::Graph>;
+
+/// The source of cached commit metadata, used to decide whether another walk can reuse it.
+#[derive(Default, PartialEq, Eq)]
+enum MetadataSource {
+    /// No graph was enabled or available. Metadata comes from objects and has no generation numbers.
+    #[default]
+    ObjectDatabase,
+    /// Use the repository graph pinned by the cache, falling back to objects for commits it does not cover.
+    RepositoryGraph,
+    /// Use a caller-supplied graph for one walk. Its snapshot identity is not tracked, so metadata
+    /// is never reused across walks that supply a graph, even when both supply the same snapshot.
+    SuppliedGraph,
+}
+
+impl<'repo> Cache<'repo> {
+    pub(crate) fn new(repo: &'repo Repository) -> Self {
+        Cache {
+            repo,
+            commit_graph: Default::default(),
+            metadata: Default::default(),
+            metadata_source: Default::default(),
+        }
+    }
+
+    fn prepare(
+        &mut self,
+        use_disk_graph: bool,
+        supplied_graph: Option<gix_commitgraph::Graph>,
+    ) -> (&mut CommitMetadata, Option<SharedCommitGraph>) {
+        let has_supplied_graph = supplied_graph.is_some();
+        let graph = supplied_graph.map(SharedCommitGraph::new).or_else(|| {
+            if use_disk_graph {
+                self.commit_graph
+                    .get_or_init(|| self.repo.commit_graph().ok().map(SharedCommitGraph::new))
+                    .clone()
+            } else {
+                None
+            }
+        });
+        let source = if has_supplied_graph {
+            MetadataSource::SuppliedGraph
+        } else if graph.is_some() {
+            MetadataSource::RepositoryGraph
+        } else {
+            MetadataSource::ObjectDatabase
+        };
+        // Cached generation availability must match the graph selected for this walk.
+        if self.metadata_source != source || has_supplied_graph {
+            self.metadata.clear();
+        }
+        self.metadata_source = source;
+        (&mut self.metadata, graph)
+    }
+}
+
+impl<'repo> Platform<'repo, 'repo> {
     pub(crate) fn new(tips: impl IntoIterator<Item = impl Into<ObjectId>>, repo: &'repo Repository) -> Self {
         revision::walk::Platform {
             repo,
@@ -185,9 +268,12 @@ impl<'repo> Platform<'repo> {
             use_commit_graph: None,
             commit_graph: None,
             boundary: Vec::new(),
+            hidden_cache: None,
         }
     }
+}
 
+impl<'repo> Platform<'repo, '_> {
     /// Return the owning repository.
     pub fn repo(&self) -> &'repo Repository {
         self.repo
@@ -195,7 +281,7 @@ impl<'repo> Platform<'repo> {
 }
 
 /// Create-time builder methods
-impl Platform<'_> {
+impl<'repo> Platform<'repo, '_> {
     /// Set the sort mode for commits. [`Repository::rev_walk()`] defaults to [`Sorting::BreadthFirst`].
     pub fn sorting(mut self, sorting: Sorting) -> Self {
         self.sorting = sorting;
@@ -273,22 +359,65 @@ impl Platform<'_> {
     ///
     /// The side effect of this is that commits can't be returned immediately as one still has to wait and see if they may be unwanted later.
     /// This makes traversals with hidden commits more costly, with a chance to traverse all commits if the hidden and non-hidden commits are disjoint.
+    /// Use [`Self::with_cache()`] to reuse commit metadata across repeated breadth-first walks.
     /// Without usable commit-graph generation numbers, Git's date-based stopping heuristic limits
     /// hidden traversal; extreme clock skew can leave hidden ancestors beyond the stopping point.
     pub fn with_hidden(mut self, tips: impl IntoIterator<Item = impl Into<ObjectId>>) -> Self {
         self.hidden = tips.into_iter().map(Into::into).collect();
         self
     }
+
+    /// Attach a [cache](Cache) to this walk, or pass `None` to remove it.
+    ///
+    /// Create `cache` with [`Repository::rev_walk_cache()`] and release each walk and its attached
+    /// results before reusing it. Currently the cache speeds up breadth-first walks with hidden tips.
+    /// Walks without hidden tips, or with boundaries, other sort orders, shallow history, or active
+    /// replacements, use the regular traversal without changing the cache.
+    ///
+    /// To reuse metadata across walks, leave [`Self::with_commit_graph()`] unset and let the cache
+    /// retain the repository's commit-graph when enabled. An explicitly supplied graph, if used,
+    /// clears the cached metadata before the walk, even if it is the same graph as before.
+    ///
+    /// ```
+    /// # fn visit(repo: &gix::Repository, tips: &[gix::ObjectId], base: gix::ObjectId) -> gix::Result<()> {
+    /// let mut cache = repo.rev_walk_cache();
+    /// for &tip in tips {
+    ///     let ids = repo
+    ///         .rev_walk([tip])
+    ///         .with_hidden([base])
+    ///         .with_cache(&mut cache)
+    ///         .all()?
+    ///         .map(|info| info.map(|info| info.id))
+    ///         .collect::<gix::Result<Vec<_>>>()?;
+    ///     // Use the detached IDs for this tip.
+    ///     # let _ = ids;
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_cache<'cache>(self, cache: impl Into<Option<&'cache mut Cache<'repo>>>) -> Platform<'repo, 'cache> {
+        Platform {
+            repo: self.repo,
+            tips: self.tips,
+            hidden: self.hidden,
+            boundary: self.boundary,
+            sorting: self.sorting,
+            parents: self.parents,
+            use_commit_graph: self.use_commit_graph,
+            commit_graph: self.commit_graph,
+            hidden_cache: cache.into(),
+        }
+    }
 }
 
 /// Produce the iterator
-impl<'repo> Platform<'repo> {
+impl<'repo: 'cache, 'cache> Platform<'repo, 'cache> {
     /// For each commit, let `filter` return `true` if it and its parents should be included in the traversal, or `false`
     /// if the traversal should exclude it and its ancestry entirely.
     ///
     /// An ancestor can still be reached along another included path. The predicate is called at
     /// most once per commit, and its call order depends on the traversal. Use [`Self::all()`] for no pruning.
-    pub fn selected(self, mut filter: impl FnMut(&gix_hash::oid) -> bool + 'repo) -> Result<revision::Walk<'repo>> {
+    pub fn selected(self, mut filter: impl FnMut(&gix_hash::oid) -> bool + 'cache) -> Result<revision::Walk<'cache>> {
         let Platform {
             repo,
             tips,
@@ -298,21 +427,43 @@ impl<'repo> Platform<'repo> {
             commit_graph,
             mut boundary,
             hidden,
+            hidden_cache,
         } = self;
+        if hidden_cache
+            .as_ref()
+            .is_some_and(|cache| !std::ptr::eq(repo, cache.repo))
+        {
+            bail!(message("The hidden walk cache belongs to a different repository handle").validation());
+        }
         boundary.sort();
         let objects = Objects {
             repo,
             shallow: repo.shallow_commits()?,
         };
-        let commit_graph = if repo.has_object_replacements() || objects.shallow.is_some() {
-            None
-        } else if use_commit_graph.map_or_else(|| repo.config.may_use_commit_graph(), Ok)? {
-            commit_graph.or_else(|| repo.commit_graph().ok())
-        } else {
-            None
-        };
+        let unmodified = objects.shallow.is_none() && !repo.has_object_replacements();
+        let use_disk_graph = unmodified && use_commit_graph.map_or_else(|| repo.config.may_use_commit_graph(), Ok)?;
+        let supplied_graph = commit_graph.filter(|_| use_disk_graph);
+        let has_boundary = !boundary.is_empty();
         let filter = move |id: &gix_hash::oid| filter(id) && boundary.binary_search(&id.to_owned()).is_err();
-        let inner: Box<dyn Iterator<Item = Result<gix_traverse::commit::Info>> + 'repo> =
+        if let Some(cache) = hidden_cache
+            && !hidden.is_empty()
+            && matches!(sorting, Sorting::BreadthFirst)
+            && !has_boundary
+            && unmodified
+        {
+            let (metadata, graph) = cache.prepare(use_disk_graph, supplied_graph);
+            let inner = gix_traverse::commit::Simple::filtered(tips, objects, filter)
+                .parents(parents)
+                .with_commit_graph(graph)
+                .hide_with_cache(hidden, metadata)?;
+            return Ok(revision::Walk {
+                repo,
+                inner: Box::new(inner),
+            });
+        }
+
+        let commit_graph = supplied_graph.or_else(|| if use_disk_graph { repo.commit_graph().ok() } else { None });
+        let inner: Box<dyn Iterator<Item = Result<gix_traverse::commit::Info>> + 'cache> =
             if let Some(simple_sorting) = sorting.into_simple() {
                 Box::new(
                     gix_traverse::commit::Simple::filtered(tips, objects, filter)
@@ -343,7 +494,7 @@ impl<'repo> Platform<'repo> {
     ///
     /// It's highly recommended to set an [`object cache`](Repository::object_cache_size()) on the parent repo
     /// to greatly speed up performance if the returned id is supposed to be looked up right after.
-    pub fn all(self) -> Result<revision::Walk<'repo>> {
+    pub fn all(self) -> Result<revision::Walk<'cache>> {
         self.selected(|_| true)
     }
 }

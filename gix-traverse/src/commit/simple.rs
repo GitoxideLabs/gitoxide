@@ -355,23 +355,25 @@ fn paint_frontier(
         })?;
     }
 
-    while queue.iter_unordered().any(|id| {
-        graph.get(id).is_some_and(|commit| {
-            !commit.flags.contains(PaintFlags::STALE)
-                || !(1..gix_commitgraph::GENERATION_NUMBER_MAX).contains(&commit.priority.generation)
-        })
-    }) {
-        if unhidden_tips == 0 {
-            break;
-        }
-        // With zero-generation layers ruled out, a usable queue head means all queued commits have one.
-        if visible_only_commit_ids.is_empty()
-            && !saw_uncomputed_generation
-            && queue
-                .peek()
-                .is_some_and(|(key, _)| (1..gix_commitgraph::GENERATION_NUMBER_MAX).contains(&key.generation))
-        {
-            break;
+    while unhidden_tips != 0 {
+        // A queued visible-only commit already proves there is non-stale work.
+        if visible_only_commit_ids.is_empty() {
+            // With zero-generation layers ruled out, a usable queue head means all queued commits have one.
+            if !saw_uncomputed_generation
+                && queue
+                    .peek()
+                    .is_some_and(|(key, _)| (1..gix_commitgraph::GENERATION_NUMBER_MAX).contains(&key.generation))
+            {
+                break;
+            }
+            if queue.iter_unordered().all(|id| {
+                graph.get(id).is_none_or(|commit| {
+                    commit.flags.contains(PaintFlags::STALE)
+                        && (1..gix_commitgraph::GENERATION_NUMBER_MAX).contains(&commit.priority.generation)
+                })
+            }) {
+                break;
+            }
         }
         let (_info, commit_id) = match queue.pop() {
             Some(v) => v,

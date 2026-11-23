@@ -273,11 +273,20 @@ impl crate::Repository {
     /// to visit children before parents and keep branches together, like `git log --topo-order`, or
     /// [`DateOrder`](revision::walk::Sorting::DateOrder) to prioritize newer commits while still visiting children before parents.
     /// Without a commit-graph, these topological modes must explore the visible history before yielding the first commit.
+    ///
+    /// Use [`Self::rev_walk_cache()`] to reuse commit metadata across compatible walks.
     #[doc(alias = "revwalk", alias = "git2")]
     pub fn rev_walk(
         &self,
         tips: impl IntoIterator<Item = impl Into<gix_hash::ObjectId>>,
-    ) -> revision::walk::Platform<'_> {
+    ) -> revision::walk::Platform<'_, '_> {
         revision::walk::Platform::new(tips, self)
+    }
+
+    /// Create a [cache](revision::walk::Cache) for repeated revision walks on this repository handle.
+    ///
+    /// Attach it to a walk with [`revision::walk::Platform::with_cache()`].
+    pub fn rev_walk_cache(&self) -> revision::walk::Cache<'_> {
+        revision::walk::Cache::new(self)
     }
 }

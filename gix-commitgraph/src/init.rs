@@ -40,7 +40,7 @@ impl Graph {
             .validation_error())
         }?;
         if let Some(limit) = alloc_limit_bytes {
-            for file in graph.files.iter() {
+            for file in &graph.files {
                 if let Some(edges) = file.extra_edges_data() {
                     // shortcut: estimate from the whole EDGE chunk, scan individual lists if valid graphs hit the limit.
                     // Include the inline parent and spare capacity for traversal buffers that double when growing.
@@ -141,7 +141,7 @@ impl Graph {
         }
         let corrected_commit_dates_available = files.iter().all(|file| file.generation_data_offset.is_some());
         Ok(Self {
-            files: files.into(),
+            files,
             corrected_commit_dates_available,
         })
     }
