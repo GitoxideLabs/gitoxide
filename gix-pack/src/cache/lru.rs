@@ -1,13 +1,10 @@
-use super::DecodeEntry;
-
 #[cfg(feature = "pack-cache-lru-dynamic")]
 mod memory {
     use std::num::NonZeroUsize;
 
     use clru::WeightScale;
 
-    use super::DecodeEntry;
-    use crate::cache::set_vec_to_slice;
+    use crate::cache::{self, DecodeEntry, set_vec_to_slice};
 
     struct Entry {
         data: Vec<u8>,
@@ -15,7 +12,7 @@ mod memory {
         compressed_size: usize,
     }
 
-    type Key = (u32, u64);
+    type Key = (cache::Id, u64);
     struct CustomScale;
 
     impl WeightScale<Key, Entry> for CustomScale {
@@ -47,7 +44,14 @@ mod memory {
     }
 
     impl DecodeEntry for MemoryCappedHashmap {
-        fn put(&mut self, pack_id: u32, offset: u64, data: &[u8], kind: gix_object::Kind, compressed_size: usize) {
+        fn put(
+            &mut self,
+            pack_id: cache::Id,
+            offset: u64,
+            data: &[u8],
+            kind: gix_object::Kind,
+            compressed_size: usize,
+        ) {
             self.debug.put();
             let Some(data) = set_vec_to_slice(self.free_list.pop().unwrap_or_default(), data) else {
                 return;
@@ -67,7 +71,7 @@ mod memory {
             }
         }
 
-        fn get(&mut self, pack_id: u32, offset: u64, out: &mut Vec<u8>) -> Option<(gix_object::Kind, usize)> {
+        fn get(&mut self, pack_id: cache::Id, offset: u64, out: &mut Vec<u8>) -> Option<(gix_object::Kind, usize)> {
             let res = self.inner.get(&(pack_id, offset)).and_then(|e| {
                 set_vec_to_slice(out, &e.data)?;
                 Some((e.kind, e.compressed_size))
@@ -87,10 +91,9 @@ pub use memory::MemoryCappedHashmap;
 
 #[cfg(feature = "pack-cache-lru-static")]
 mod _static {
-    use super::DecodeEntry;
-    use crate::cache::set_vec_to_slice;
+    use crate::cache::{self, DecodeEntry, set_vec_to_slice};
     struct Entry {
-        pack_id: u32,
+        pack_id: cache::Id,
         offset: u64,
         data: Vec<u8>,
         kind: gix_object::Kind,
@@ -130,7 +133,14 @@ mod _static {
     }
 
     impl<const SIZE: usize> DecodeEntry for StaticLinkedList<SIZE> {
-        fn put(&mut self, pack_id: u32, offset: u64, data: &[u8], kind: gix_object::Kind, compressed_size: usize) {
+        fn put(
+            &mut self,
+            pack_id: cache::Id,
+            offset: u64,
+            data: &[u8],
+            kind: gix_object::Kind,
+            compressed_size: usize,
+        ) {
             // We cannot possibly hold this much.
             if data.len() > self.mem_limit {
                 return;
@@ -168,7 +178,7 @@ mod _static {
             }
         }
 
-        fn get(&mut self, pack_id: u32, offset: u64, out: &mut Vec<u8>) -> Option<(gix_object::Kind, usize)> {
+        fn get(&mut self, pack_id: cache::Id, offset: u64, out: &mut Vec<u8>) -> Option<(gix_object::Kind, usize)> {
             let res = self.inner.lookup(|e: &mut Entry| {
                 if e.pack_id == pack_id && e.offset == offset {
                     set_vec_to_slice(&mut *out, &e.data)?;
@@ -206,10 +216,11 @@ mod _static {
             assert_eq!(c.mem_limit, 100);
             assert_eq!(c.mem_used, 0);
 
+            let pack_id = cache::Id(0);
             // enough memory for normal operation
             let mut last_mem_used = 0;
             for _ in 0..10 {
-                c.put(0, 0, &[0], gix_object::Kind::Blob, 1);
+                c.put(pack_id, 0, &[0], gix_object::Kind::Blob, 1);
                 assert!(c.mem_used > last_mem_used);
                 last_mem_used = c.mem_used;
             }
@@ -217,17 +228,17 @@ mod _static {
             assert_eq!(c.inner.len(), 10);
             assert_eq!(c.last_evicted.len(), 0);
 
-            c.put(0, 0, &(0..20).collect::<Vec<_>>(), gix_object::Kind::Blob, 1);
+            c.put(pack_id, 0, &(0..20).collect::<Vec<_>>(), gix_object::Kind::Blob, 1);
             assert_eq!(c.inner.len(), 10);
             assert_eq!(c.mem_used, 80 + 20);
             assert_eq!(c.last_evicted.len(), 1);
 
-            c.put(0, 0, &(0..50).collect::<Vec<_>>(), gix_object::Kind::Blob, 1);
+            c.put(pack_id, 0, &(0..50).collect::<Vec<_>>(), gix_object::Kind::Blob, 1);
             assert_eq!(c.inner.len(), 1, "cache clearance wasn't necessary");
             assert_eq!(c.last_evicted.len(), 0, "the free list was cleared");
             assert_eq!(c.mem_used, 50);
 
-            c.put(0, 0, &(0..101).collect::<Vec<_>>(), gix_object::Kind::Blob, 1);
+            c.put(pack_id, 0, &(0..101).collect::<Vec<_>>(), gix_object::Kind::Blob, 1);
             assert_eq!(
                 c.inner.len(),
                 1,

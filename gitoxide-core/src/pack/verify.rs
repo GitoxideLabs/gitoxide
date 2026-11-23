@@ -5,7 +5,10 @@ use gix::{
     NestedProgress, Result,
     error::{ResultExt, message},
     object, odb,
-    odb::{pack, pack::index},
+    odb::{
+        pack,
+        pack::{cache, index},
+    },
 };
 pub use index::verify::Mode;
 pub const PROGRESS_RANGE: std::ops::RangeInclusive<u8> = 1..=2;
@@ -70,14 +73,14 @@ enum EitherCache<const SIZE: usize> {
 }
 
 impl<const SIZE: usize> pack::cache::DecodeEntry for EitherCache<SIZE> {
-    fn put(&mut self, pack_id: u32, offset: u64, data: &[u8], kind: object::Kind, compressed_size: usize) {
+    fn put(&mut self, pack_id: cache::Id, offset: u64, data: &[u8], kind: object::Kind, compressed_size: usize) {
         match self {
             EitherCache::Left(v) => v.put(pack_id, offset, data, kind, compressed_size),
             EitherCache::Right(v) => v.put(pack_id, offset, data, kind, compressed_size),
         }
     }
 
-    fn get(&mut self, pack_id: u32, offset: u64, out: &mut Vec<u8>) -> Option<(object::Kind, usize)> {
+    fn get(&mut self, pack_id: cache::Id, offset: u64, out: &mut Vec<u8>) -> Option<(object::Kind, usize)> {
         match self {
             EitherCache::Left(v) => v.get(pack_id, offset, out),
             EitherCache::Right(v) => v.get(pack_id, offset, out),

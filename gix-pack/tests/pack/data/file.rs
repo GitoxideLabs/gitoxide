@@ -142,8 +142,62 @@ mod decode_entry {
 
     use crate::{SMALL_PACK, data::file::pack_at, fixture_path, fixup};
 
+    const BLOB_DELTA_OFFSET: u64 = 3569;
+
     fn content_of(path: &str) -> Vec<u8> {
         fixup(std::fs::read(fixture_path(path)).expect("valid fixture"))
+    }
+
+    #[test]
+    fn cache_keys_are_stable_only_for_the_open_pack() -> gix_testtools::TestResult {
+        #[derive(Default)]
+        struct RecordKey(Option<cache::Id>);
+
+        impl cache::DecodeEntry for RecordKey {
+            fn put(&mut self, pack_id: cache::Id, _offset: u64, _data: &[u8], _kind: gix_object::Kind, _size: usize) {
+                assert_eq!(self.0, Some(pack_id), "cache reads and writes use the same key");
+            }
+
+            fn get(
+                &mut self,
+                pack_id: cache::Id,
+                _offset: u64,
+                _out: &mut Vec<u8>,
+            ) -> Option<(gix_object::Kind, usize)> {
+                self.0 = Some(pack_id);
+                None
+            }
+        }
+
+        let key = |pack: &gix_pack::data::File| -> gix_testtools::TestResult<cache::Id> {
+            let mut cache = RecordKey::default();
+            pack.decode_entry(
+                pack.entry(BLOB_DELTA_OFFSET)?,
+                &mut Vec::new(),
+                &mut Default::default(),
+                &|_, _| Ok(None),
+                &mut cache,
+            )?;
+            Ok(cache.0.expect("the fixture delta was looked up in the cache"))
+        };
+
+        let pack = pack_at(SMALL_PACK);
+        let pack_id = pack.id;
+        let first = key(&pack)?;
+        assert_eq!(key(&pack)?, first, "one open pack reuses its cache entries");
+        drop(pack);
+
+        let reopened = pack_at(SMALL_PACK);
+        assert_eq!(
+            reopened.id, pack_id,
+            "the public location ID still identifies the same path"
+        );
+        assert_ne!(
+            key(&reopened)?,
+            first,
+            "reopening a pack cannot reuse a stale cache key"
+        );
+        Ok(())
     }
 
     #[test]
@@ -174,7 +228,7 @@ mod decode_entry {
 
     #[test]
     fn blob_ofs_delta_single_link() {
-        let buf = decode_entry_at_offset(3569);
+        let buf = decode_entry_at_offset(BLOB_DELTA_OFFSET);
         assert_eq!(buf.len(), 1163, "buffer length is the actual object size");
         assert_eq!(
             buf.capacity(),

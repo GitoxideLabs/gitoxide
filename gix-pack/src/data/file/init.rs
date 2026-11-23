@@ -1,9 +1,8 @@
-use gix_error::Result;
 use std::path::{Path, PathBuf};
 
-use gix_error::{ResultExt, bail, message};
+use gix_error::{Result, ResultExt, bail, message};
 
-use crate::data;
+use crate::{cache, data};
 
 /// Instantiation
 impl data::File<crate::MMap> {
@@ -50,6 +49,7 @@ where
             data,
             path,
             id,
+            cache_id: cache::Id::allocate(),
             version: kind,
             num_objects,
             object_hash,
