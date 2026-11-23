@@ -162,7 +162,12 @@ fn reflog_by_entry_for_hex_named_ref() -> gix_testtools::TestResult {
 
 #[test]
 fn sibling_branch_current_branch() {
-    for (spec, kind_name) in [("@{u}", "Upstream"), ("@{push}", "Push"), ("@{UPSTREAM}", "Upstream")] {
+    for (spec, kind_name) in [
+        ("@{u}", "Upstream"),
+        ("@{push}", "Push"),
+        ("@{p}", "Push"),
+        ("@{UPSTREAM}", "Upstream"),
+    ] {
         let rec = parse(spec);
 
         assert!(rec.kind.is_none());
@@ -178,6 +183,7 @@ fn sibling_branch_for_branch_name() {
     for (spec, ref_name, kind_name) in [
         ("r1@{U}", "r1", "Upstream"),
         ("refs/heads/main@{Push}", "refs/heads/main", "Push"),
+        ("r1@{P}", "r1", "Push"),
         ("refs/worktree/private@{UpStreaM}", "refs/worktree/private", "Upstream"),
     ] {
         let rec = parse(spec);
@@ -196,7 +202,12 @@ fn sibling_branch_for_branch_name() {
 
 #[test]
 fn sibling_branch_then_reflog() -> gix_testtools::TestResult {
-    for (selector, kind) in [("u", "Upstream"), ("upstream", "Upstream"), ("push", "Push")] {
+    for (selector, kind) in [
+        ("u", "Upstream"),
+        ("upstream", "Upstream"),
+        ("push", "Push"),
+        ("p", "Push"),
+    ] {
         for (query, expected) in [("1", "1"), ("2000-01-01 00:00:00 +0000", "946684800 +0000")] {
             let rec = try_parse(&format!("main@{{{selector}}}@{{{query}}}"))?;
             assert_eq!(
@@ -210,7 +221,7 @@ fn sibling_branch_then_reflog() -> gix_testtools::TestResult {
                 "then select its reflog value"
             );
         }
-        for query in ["-1", "u", "upstream", "push"] {
+        for query in ["-1", "u", "upstream", "push", "p"] {
             assert!(
                 try_parse(&format!("@{{{selector}}}@{{{query}}}")).is_err(),
                 "@{{{selector}}}@{{{query}}}: only reflog lookups may follow a tracking selector"

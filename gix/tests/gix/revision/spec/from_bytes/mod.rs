@@ -136,6 +136,28 @@ mod sibling_branch {
                     !expected.is_empty(),
                     "{setup}-{mode}: tracking availability"
                 );
+                for op in ["p", "P"] {
+                    let spec = format!("{branch}@{{{op}}}");
+                    let short = repo.rev_parse(spec.as_str());
+                    assert_eq!(
+                        short.as_deref().ok(),
+                        parsed.as_deref().ok(),
+                        "{setup}-{mode}: {spec} resolves the same commit as @{{push}}"
+                    );
+                    assert_eq!(
+                        short
+                            .as_ref()
+                            .ok()
+                            .and_then(|spec| spec.first_reference())
+                            .map(gix::Reference::name),
+                        parsed
+                            .as_ref()
+                            .ok()
+                            .and_then(|spec| spec.first_reference())
+                            .map(gix::Reference::name),
+                        "{setup}-{mode}: {spec} resolves Git's push-tracking reference"
+                    );
+                }
             }
             assert_eq!(
                 repo.branch_remote_tracking_ref_name("refs/heads/main".try_into()?, gix::remote::Direction::Push)
