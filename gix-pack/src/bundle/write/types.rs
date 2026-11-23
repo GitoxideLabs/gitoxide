@@ -3,8 +3,8 @@ use std::{hash::Hash, io, io::SeekFrom, path::PathBuf, sync::Arc};
 
 use gix_tempfile::handle::Writable;
 
-/// Configuration for [`write_to_directory`][crate::Bundle::write_to_directory()] or
-/// [`write_to_directory_eagerly`][crate::Bundle::write_to_directory_eagerly()]
+/// Configuration for [writing][crate::Bundle::write_to_directory()] or
+/// [preparing][crate::Bundle::prepare_to_directory()] a pack bundle.
 #[derive(Debug, Clone)]
 pub struct Options {
     /// The amount of threads to use at most when resolving the pack. If `None`, all logical cores are used.

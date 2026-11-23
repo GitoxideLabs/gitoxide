@@ -17,6 +17,12 @@ pub struct Outcome {
 
     /// The hash of the '.pack' file, also found in its trailing bytes
     pub data_hash: gix_hash::ObjectId,
+    /// The size of the indexed pack in bytes, including its header and trailer.
+    ///
+    /// For an unchanged pack, this counts the streamed bytes from the start of the pack through its trailer,
+    /// excluding any bytes read ahead past the trailer. If a thin pack is completed, this measures the
+    /// rewritten pack, including any inserted bases, rather than the original input.
+    pub pack_size: u64,
     /// The amount of objects that were verified, always the amount of objects in the pack.
     pub num_objects: u32,
 }
@@ -275,10 +281,12 @@ pub(super) mod function {
             progress::count("objects").expect("unit always set"),
             progress::MessageLevel::Success,
         );
+        let pack_size = pack_entries_end.max(crate::data::header::SIZE as u64) + object_hash.len_in_bytes() as u64;
         Ok(Outcome {
             index_version: version,
             index_hash,
             data_hash: pack_hash,
+            pack_size,
             num_objects,
         })
     }

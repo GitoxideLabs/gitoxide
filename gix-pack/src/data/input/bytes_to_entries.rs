@@ -57,7 +57,7 @@ where
         read.read_exact(&mut header_data).map_err(io_error)?;
 
         let (version, num_objects) = crate::data::header::decode(&header_data)?;
-        Ok(BytesToEntriesIter {
+        let mut entries = BytesToEntriesIter {
             read,
             measure: inflate::Measure::default(),
             compressed,
@@ -74,7 +74,11 @@ where
             compressed_buf: None,
             hash_len: object_hash.len_in_bytes(),
             object_hash,
-        })
+        };
+        if num_objects == 0 && mode == input::Mode::Verify {
+            entries.try_read_trailer()?;
+        }
+        Ok(entries)
     }
 
     fn next_inner(&mut self) -> Result<input::Entry> {
