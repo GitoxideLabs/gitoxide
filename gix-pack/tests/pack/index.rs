@@ -17,6 +17,40 @@ fn memory_backed_index(at: &str) -> gix_pack::index::File<&'static [u8]> {
 mod fuzzed;
 
 #[test]
+fn lookup_file_agrees_with_the_validated_index() -> gix_testtools::TestResult {
+    let temp = gix_testtools::tempfile::tempdir()?;
+    let large_offsets = temp.path().join("large-offsets.idx");
+    let status = gix_testtools::git_command(temp.path())
+        .args(["index-pack", "--index-version=2,0", "-o"])
+        .arg(&large_offsets)
+        .arg(fixture_path(SMALL_PACK).canonicalize()?)
+        .output()?;
+    assert!(status.status.success(), "{}", String::from_utf8_lossy(&status.stderr));
+    let small = fixture_path(SMALL_PACK_INDEX);
+    let expected = gix_pack::index::File::at(&small, gix_hash::Kind::Sha1)?;
+    assert_eq!(
+        large_offsets.metadata()?.len(),
+        small.metadata()?.len() + 8 * u64::from(expected.num_objects())
+    );
+    let with_large_offsets = gix_pack::index::LookupFile::at(&large_offsets, gix_hash::Kind::Sha1)?;
+    assert!(with_large_offsets.validated()?.iter().eq(expected.iter()));
+    for path in [fixture_path(INDEX_V1), small, large_offsets] {
+        let full = gix_pack::index::File::at(&path, gix_hash::Kind::Sha1)?;
+        let lookup = gix_pack::index::LookupFile::at(&path, gix_hash::Kind::Sha1)?;
+        assert_eq!(lookup.num_objects(), full.num_objects());
+        for (i, entry) in full.iter().enumerate() {
+            let i = u32::try_from(i)?;
+            assert_eq!(lookup.lookup(entry.oid), Some(i));
+            assert_eq!(lookup.oid_at_index(i), entry.oid.as_ref());
+            assert_eq!(lookup.pack_offset_at_index(i)?, entry.pack_offset);
+        }
+        assert!(lookup.pack_offset_at_index(lookup.num_objects()).is_err());
+        assert!(lookup.validated()?.iter().eq(full.iter()));
+    }
+    Ok(())
+}
+
+#[test]
 fn unsupported_version_is_classified() -> gix_testtools::TestResult {
     let mut data = std::fs::read(fixture_path(SMALL_PACK_INDEX))?;
     data[4..8].copy_from_slice(&3u32.to_be_bytes());

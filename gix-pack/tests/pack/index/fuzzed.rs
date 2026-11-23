@@ -73,6 +73,35 @@ fn invalid_large_offset_index_is_reported_without_panicking() {
     assert!(result.is_ok(), "malformed pack indices must not panic");
 }
 
+#[test]
+fn on_demand_offset_errors_are_classified_as_corruption() -> gix_testtools::TestResult {
+    let truncated = gix_pack::index::LookupFile::from_data(
+        malformed_v2_index_with_missing_large_offset_table(),
+        PathBuf::from("truncated.idx"),
+        gix_hash::Kind::Sha1,
+    );
+    assert!(truncated.err().expect("fixed tables must fit on open").is_corrupted());
+
+    let file = gix_pack::index::LookupFile::from_data(
+        malformed_v2_index_with_out_of_range_large_offset_index(),
+        PathBuf::from("index.idx"),
+        gix_hash::Kind::Sha1,
+    )?;
+    assert_eq!(file.oid_at_index(0), gix_hash::Kind::Sha1.null().as_ref());
+    assert!(
+        file.pack_offset_at_index(0)
+            .expect_err("invalid offset reference")
+            .is_corrupted()
+    );
+    assert!(
+        file.validated()
+            .err()
+            .expect("full verification rejects the table")
+            .is_corrupted()
+    );
+    Ok(())
+}
+
 fn malformed_v2_index_with_out_of_range_large_offset_index() -> Vec<u8> {
     let mut data = Vec::with_capacity(1108);
     data.extend_from_slice(b"\xfftOc");

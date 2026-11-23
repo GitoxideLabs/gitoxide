@@ -13,7 +13,7 @@ use crate::store::{RefreshMode, handle, types};
 
 pub(crate) enum SingleOrMultiIndex {
     Single {
-        index: Arc<gix_pack::index::File>,
+        index: Arc<gix_pack::index::LookupFile>,
         data: Option<Arc<gix_pack::data::File>>,
     },
     Multi {
@@ -24,7 +24,7 @@ pub(crate) enum SingleOrMultiIndex {
 
 /// A utility to allow looking up pack offsets for a particular pack
 pub(crate) enum IntraPackLookup<'a> {
-    Single(&'a gix_pack::index::File),
+    Single(&'a gix_pack::index::LookupFile),
     /// the internal pack-id inside of a multi-index for which the lookup is supposed to be.
     /// Used to prevent ref-delta OIDs to, for some reason, point to a different pack.
     Multi {
@@ -38,7 +38,8 @@ impl IntraPackLookup<'_> {
         Ok(match self {
             IntraPackLookup::Single(index) => index
                 .lookup(id)
-                .map(|entry_index| index.pack_offset_at_index(entry_index)),
+                .map(|entry_index| index.pack_offset_at_index(entry_index))
+                .transpose()?,
             IntraPackLookup::Multi {
                 index,
                 required_pack_index,
@@ -89,7 +90,10 @@ pub(crate) mod index_lookup {
         ) -> Option<Box<dyn Iterator<Item = Result<gix_pack::index::Entry>> + '_>> {
             (self.id == pack_id.index).then(|| -> Box<dyn Iterator<Item = Result<gix_pack::index::Entry>> + '_> {
                 match &self.file {
-                    handle::SingleOrMultiIndex::Single { index, .. } => Box::new(index.iter().map(Ok)),
+                    handle::SingleOrMultiIndex::Single { index, .. } => match index.validated() {
+                        Ok(file) => Box::new(file.iter().map(Ok)),
+                        Err(err) => Box::new(std::iter::once(Err(err))),
+                    },
                     handle::SingleOrMultiIndex::Multi { index, .. } => {
                         let pack_index = pack_id.multipack_index.expect(
                             "BUG: multi-pack index must be set if this is a multi-pack, pack-indices seem unstable",
@@ -173,17 +177,22 @@ pub(crate) mod index_lookup {
         pub(crate) fn lookup(&mut self, object_id: &oid) -> Result<Option<Outcome<'_>>> {
             let id = self.id;
             Ok(match &mut self.file {
-                handle::SingleOrMultiIndex::Single { index, data } => index.lookup(object_id).map(move |idx| Outcome {
-                    object_index: handle::IndexForObjectInPack {
-                        pack_id: types::PackId {
-                            index: id,
-                            multipack_index: None,
+                handle::SingleOrMultiIndex::Single { index, data } => {
+                    let Some(idx) = index.lookup(object_id) else {
+                        return Ok(None);
+                    };
+                    Some(Outcome {
+                        object_index: handle::IndexForObjectInPack {
+                            pack_id: types::PackId {
+                                index: id,
+                                multipack_index: None,
+                            },
+                            pack_offset: index.pack_offset_at_index(idx)?,
                         },
-                        pack_offset: index.pack_offset_at_index(idx),
-                    },
-                    index_file: IntraPackLookup::Single(index),
-                    pack: data,
-                }),
+                        index_file: IntraPackLookup::Single(index),
+                        pack: data,
+                    })
+                }
                 handle::SingleOrMultiIndex::Multi { index, data } => {
                     let Some(idx) = index.lookup(object_id) else {
                         return Ok(None);

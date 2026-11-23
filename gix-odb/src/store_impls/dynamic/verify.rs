@@ -140,7 +140,7 @@ impl super::Store {
                     IndexAndPacks::Index(bundle) => {
                         let index;
                         let index = match bundle.index.loaded() {
-                            Some(index) => index.deref(),
+                            Some(index) => index.validated()?,
                             None => {
                                 index =
                                     pack::index::File::at(bundle.index.path(), self.object_hash).or_raise(|| {

@@ -235,7 +235,7 @@ impl<T: Clone> OnDiskFile<T> {
 
 #[derive(Clone)]
 pub(crate) struct IndexFileBundle {
-    pub index: OnDiskFile<Arc<gix_pack::index::File>>,
+    pub index: OnDiskFile<Arc<gix_pack::index::LookupFile>>,
     pub data: OnDiskFile<Arc<gix_pack::data::File>>,
 }
 
@@ -322,7 +322,7 @@ impl IndexAndPacks {
     ) -> std::io::Result<()> {
         match self {
             IndexAndPacks::Index(bundle) => bundle.index.load_strict(|path| {
-                gix_pack::index::File::at(path, object_hash)
+                gix_pack::index::LookupFile::at(path, object_hash)
                     .map(Arc::new)
                     .map_err(super::error_to_io)
             }),

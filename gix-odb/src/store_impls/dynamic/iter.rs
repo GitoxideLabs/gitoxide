@@ -79,6 +79,11 @@ impl AllObjects {
     /// Create a new iterator from a dynamic store, which will be forced to load all indices eagerly and in the current thread.
     pub fn new(db: &dynamic::Store) -> Result<Self> {
         let snapshot = db.load_all_indices()?;
+        for index in &snapshot.indices {
+            if let SingleOrMultiIndex::Single { index, .. } = &index.file {
+                index.validated()?;
+            }
+        }
 
         let packed_objects = snapshot
             .indices
@@ -121,6 +126,8 @@ fn maybe_sort_entries(index: &handle::IndexLookup, order: Ordering) -> Option<Ve
         Ordering::PackAscendingOffsetThenLooseLexicographical => match &index.file {
             // We know that we cannot have more than u32 entry indices per pack.
             SingleOrMultiIndex::Single { index, .. } => index
+                .validated()
+                .ok()?
                 .iter()
                 .enumerate()
                 .map(|(idx, e)| EntryForOrdering {

@@ -1,11 +1,10 @@
-use gix_error::Result;
 use std::{
     borrow::Cow,
     mem::size_of,
     path::{Path, PathBuf},
 };
 
-use gix_error::{ResultExt, bail, message};
+use gix_error::{Result, ResultExt, bail, message};
 
 use crate::index::{self, FAN_LEN, V2_SIGNATURE, Version};
 
@@ -22,6 +21,13 @@ impl index::File<crate::MMap> {
     /// The `object_hash` is a way to read (and write) the same file format with different hashes, as the hash kind
     /// isn't stored within the file format itself.
     pub fn at(path: impl AsRef<Path>, object_hash: gix_hash::Kind) -> Result<Self> {
+        index::LookupFile::at(path, object_hash)?.into_validated()
+    }
+}
+
+impl index::LookupFile<crate::MMap> {
+    /// Open an index for lookups without walking its offset table.
+    pub fn at(path: impl AsRef<Path>, object_hash: gix_hash::Kind) -> Result<Self> {
         Self::at_inner(path.as_ref(), object_hash)
     }
 
@@ -37,6 +43,13 @@ where
     T: crate::FileData,
 {
     /// Instantiate an index file from `data` as assumed to be read or memory-mapped from `path`.
+    pub fn from_data(data: T, path: PathBuf, object_hash: gix_hash::Kind) -> Result<Self> {
+        index::LookupFile::from_data(data, path, object_hash)?.into_validated()
+    }
+}
+
+impl<T: crate::FileData> index::LookupFile<T> {
+    /// Open memory-backed index data for checked, on-demand offset lookups.
     pub fn from_data(data: T, path: PathBuf, object_hash: gix_hash::Kind) -> Result<Self> {
         let idx_len = data.len();
         let hash_len = object_hash.len_in_bytes();
@@ -75,16 +88,61 @@ where
             (kind, fan, num_objects)
         };
         validate_fan(&fan)?;
-        validate_size(&data, kind, num_objects, hash_len)?;
+        validate_layout(idx_len, kind, num_objects, hash_len)?;
         Ok(Self {
-            data,
-            path,
-            version: kind,
-            num_objects,
-            fan,
-            hash_len,
-            object_hash,
+            file: index::File {
+                data,
+                path,
+                version: kind,
+                num_objects,
+                fan,
+                hash_len,
+                object_hash,
+            },
+            offset_validation: Default::default(),
         })
+    }
+
+    /// Check every offset reference once, returning an index suitable for full traversal.
+    pub fn validated(&self) -> Result<&index::File<T>> {
+        match self.offset_validation.get_or_init(|| self.check_offsets()) {
+            Ok(()) => Ok(&self.file),
+            Err(message) => Err(corrupt(message.clone())),
+        }
+    }
+
+    fn check_offsets(&self) -> std::result::Result<(), String> {
+        let file = &self.file;
+        if file.version == Version::V2 {
+            let end = file.offset_pack_offset64_v2();
+            let offsets = file.data[file.offset_pack_offset_v2()..end].as_chunks::<N32_SIZE>().0;
+            let large_offsets = (file.data.len() - end - 2 * file.hash_len) / size_of::<u64>();
+            let (references, max_slot) = offsets
+                .iter()
+                .filter_map(|offset| {
+                    let offset = crate::read_u32(offset);
+                    (offset & (1 << 31) != 0).then_some((offset ^ (1 << 31)) as usize)
+                })
+                .fold((0usize, 0usize), |(count, max_slot), slot| {
+                    (count + 1, max_slot.max(slot))
+                });
+            if references != 0 && max_slot >= large_offsets {
+                return Err(format!(
+                    "Pack index references large offset {max_slot}, but only {large_offsets} are present"
+                ));
+            }
+            if references != large_offsets {
+                return Err(format!(
+                    "Pack index has {large_offsets} large offsets for {references} references"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn into_validated(self) -> Result<index::File<T>> {
+        self.check_offsets().map_err(corrupt)?;
+        Ok(self.file)
     }
 }
 
@@ -105,71 +163,27 @@ fn validate_fan(fan: &[u32; FAN_LEN]) -> Result {
     Ok(())
 }
 
-fn validate_size(data: &[u8], kind: Version, num_objects: u32, hash_len: usize) -> Result {
-    let num_objects = num_objects as usize;
-    let footer_size = hash_len * 2;
-    let expected_size = match kind {
-        Version::V1 => FAN_LEN
-            .checked_mul(N32_SIZE)
-            .and_then(|size| size.checked_add(num_objects.checked_mul(N32_SIZE + hash_len)?))
-            .and_then(|size| size.checked_add(footer_size))
-            .ok_or_else(|| corrupt("Pack index size overflowed while validating version 1 layout"))?,
-        Version::V2 => {
-            let v2_header_size = V2_SIGNATURE.len() + N32_SIZE + FAN_LEN * N32_SIZE;
-            let oid_bytes = num_objects
-                .checked_mul(hash_len)
-                .ok_or_else(|| corrupt("Pack index size overflowed while validating object ids"))?;
-            let table_bytes = num_objects
-                .checked_mul(N32_SIZE)
-                .ok_or_else(|| corrupt("Pack index size overflowed while validating 32-bit tables"))?;
-            let offset32_start = v2_header_size
-                .checked_add(oid_bytes)
-                .and_then(|size| size.checked_add(table_bytes))
-                .ok_or_else(|| corrupt("Pack index size overflowed while locating 32-bit offsets"))?;
-            let offset32_end = offset32_start
-                .checked_add(table_bytes)
-                .ok_or_else(|| corrupt("Pack index size overflowed while locating 32-bit offsets"))?;
-            if offset32_end > data.len() {
-                return Err(corrupt(format!(
-                    "Pack index of size {} is too small for {} objects in version 2",
-                    data.len(),
-                    num_objects
-                )));
-            }
-            let (large_offsets, max_large_offset_index) = data[offset32_start..offset32_end]
-                .as_chunks::<N32_SIZE>()
-                .0
-                .iter()
-                .filter_map(|offset| {
-                    let offset = crate::read_u32(offset);
-                    (offset & (1 << 31) != 0).then_some((offset ^ (1 << 31)) as usize)
-                })
-                .fold((0usize, 0usize), |(count, max_index), index| {
-                    (count + 1, max_index.max(index))
-                });
-            v2_header_size
-                .checked_add(oid_bytes)
-                .and_then(|size| size.checked_add(table_bytes))
-                .and_then(|size| size.checked_add(table_bytes))
-                .and_then(|size| size.checked_add(large_offsets.checked_mul(size_of::<u64>())?))
-                .and_then(|size| size.checked_add(footer_size))
-                .ok_or_else(|| corrupt("Pack index size overflowed while validating version 2 layout"))
-                .and_then(|expected_size| {
-                    if large_offsets > 0 && max_large_offset_index >= large_offsets {
-                        return Err(corrupt(format!(
-                            "Pack index references large offset {max_large_offset_index}, but only {large_offsets} large offsets are present"
-                        )));
-                    }
-                    Ok(expected_size)
-                })?
-        }
+fn validate_layout(len: usize, kind: Version, num_objects: u32, hash_len: usize) -> Result {
+    let (header, entry_bytes) = match kind {
+        Version::V1 => (FAN_LEN * N32_SIZE, hash_len + N32_SIZE),
+        Version::V2 => (V2_SIGNATURE.len() + (1 + FAN_LEN) * N32_SIZE, hash_len + 2 * N32_SIZE),
     };
-    if data.len() != expected_size {
-        // Aborting here is needed for protection against malformed inputs, or the offset access done later can panic
-        // as it's done without explicit error handling.
+    let fixed_bytes = (num_objects as usize)
+        .checked_mul(entry_bytes)
+        .and_then(|entries| entries.checked_add(header + 2 * hash_len))
+        .ok_or_else(|| corrupt("Pack index size overflowed while locating its tables"))?;
+    let tail = len.checked_sub(fixed_bytes).ok_or_else(|| {
+        corrupt(format!(
+            "Pack index of size {len} is too small for {num_objects} objects in version {kind:?}"
+        ))
+    })?;
+    let valid = match kind {
+        Version::V1 => tail == 0,
+        Version::V2 => tail.is_multiple_of(size_of::<u64>()) && tail / size_of::<u64>() <= num_objects as usize,
+    };
+    if !valid {
         return Err(corrupt(format!(
-            "Pack index size is incorrect, expected {expected_size} bytes for {num_objects} objects in version {kind:?}, but got {} bytes",
-            data.len()
+            "Invalid pack index size {len} for {num_objects} objects in version {kind:?}"
         )));
     }
     Ok(())

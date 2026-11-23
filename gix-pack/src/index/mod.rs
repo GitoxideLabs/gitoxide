@@ -108,6 +108,14 @@ pub struct File<T = MMap> {
     object_hash: gix_hash::Kind,
 }
 
+/// A pack index for object lookups. Opening checks the fan-out and the bounds of
+/// every table. Each lookup checks its own large-offset reference. Use
+/// [`LookupFile::validated()`] before traversing all offsets.
+pub struct LookupFile<T = MMap> {
+    file: File<T>,
+    offset_validation: std::sync::OnceLock<Result<(), String>>,
+}
+
 /// Basic file information
 impl<T> File<T>
 where
