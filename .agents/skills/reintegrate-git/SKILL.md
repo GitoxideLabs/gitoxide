@@ -75,7 +75,15 @@ Every row must name its class; the following hashes are illustrative, not entrie
 
 Describe the change in your own words and explain the classification. Keep only the source hash in each row: no produced Gitoxide hashes, hash ranges, nested bullets, paragraphs, personal identities, or scratch notes. When one Gitoxide commit covers several source commits, give each source commit its own row explaining its contribution or decision. Never add fictitious records, duplicate rows, or unsupported decisions; unresolved analysis stays in scratch notes.
 
-Create **one self-contained local Gitoxide commit per ported source commit or coherent dependent range**, including the code, tests, related documentation, and those `PORTED` ledger rows atomically. Persist `ALREADY-COVERED`, `NOT-APPLICABLE`, and evidenced `POSTPONED` decisions in a ledger-only commit per coherent batch of source commits, rather than losing decisions or attaching unrelated classifications to a port. An unchanged postponed row needs no new row or commit. Stage only task-owned paths/hunks and inspect the entire index, `git diff --cached`, and `git diff --check` before committing; recheck for concurrent work before each mutation.
+Create **one self-contained local Gitoxide commit per ported source commit or coherent dependent range**. Include the code, tests, related documentation, and its `PORTED` ledger rows atomically. Keep new or revised `ALREADY-COVERED`, `NOT-APPLICABLE`, and `POSTPONED` decisions in scratch until the next validated port, then include them in that port's commit. An unchanged postponed row needs no new row or commit.
+
+Consolidate tracking automatically before handoff.
+
+- If the sweep produced ports, fold any outstanding tracking rows into its final port commit and extend the message with their source citations and reasons. If the sweep already created tracking-only commits, fold each into the next port, or the final port for trailing commits. Preserve each port's boundary and title, the order of ledger edits, and all source citations and reasons.
+- If the sweep produced no port, commit all new and revised tracking rows in one ledger-only commit, consolidating any tracking-only commits already made by this sweep. If there are no tracking changes, skip the commit.
+- Rewrite only commits from this sweep and preserve existing review marks and concurrent work. If a safe rewrite is unavailable, use one ledger-only commit for any outstanding rows when the destination is safe to edit, and report the remaining separate commits. For any consolidation of existing commits, verify the resulting tip tree matches the tree before the rewrite.
+
+Stage only task-owned paths or hunks. Inspect the entire index, `git diff --cached`, and `git diff --check` before each commit or amendment. Recheck for concurrent work before each mutation.
 
 Use the executing agent's own author identity, never the user or upstream author. For Codex, use the machine identity `Codex <codex@openai.com>`, with command-local identity overrides. Write complete Markdown messages to task-owned files outside the checkout, following the repository's scoped conventional-commit rules. Explain the upstream motivation, behavior, adaptations, and validation, and cite **full source hashes and source repository names in the commit body** so the correspondence remains reviewable without putting Gitoxide hashes in the log.
 
@@ -85,6 +93,8 @@ For a Tix-managed destination, read and follow the repository's [tix skill](../t
 tix new --index --author='Codex <codex@openai.com>' --file "$message_file"
 ```
 
+For trailing rows on an editable Tix port tip, use `tix amend --index` and reword the same change with the combined message. To consolidate existing tracking commits in Tix, scope the rebase todo to the affected sweep commits and preserve its checkout marker and branch attachment. Use the todo's squash or fixup commands with the prepared combined messages. For ordinary Git, amend the final port directly or use interactive rebase to fold existing tracking commits.
+
 For a destination without Tix-managed history, use ordinary Git commits:
 
 ```bash
@@ -92,11 +102,11 @@ git -c user.name=Codex -c user.email=codex@openai.com \
   commit --author='Codex <codex@openai.com>' --file "$message_file"
 ```
 
-Verify each new commit's author, contents, ledger rows, and checks. Preserve pre-existing commits and review marks; do not publish the series. On interruption, retain scratch evidence and unfinished task-owned changes, and report their state without recording them as `PORTED`.
+Verify each new commit's author, contents, ledger rows, and checks. Preserve pre-existing commits and review marks; do not publish the series. On interruption, retain scratch evidence, pending tracking rows, and unfinished task-owned changes, and report their state without recording them as `PORTED`.
 
 ## Handoff
 
-Check the complete series and ledger for duplicate source IDs, explicit classes with supporting reasons, unique abbreviations, and source-only hashes. Confirm that `POSTPONED` entries name prerequisites and revisit conditions and remain open. Run appropriate cumulative validation and verify the final worktree state.
+Verify the series contains one commit per port or coherent dependent range, or one ledger-only commit for a sweep with tracking changes and no port. Account for any separate tracking commits kept to preserve review state or concurrent work. Check the complete ledger for duplicate source IDs, explicit classes with supporting reasons, unique abbreviations, and source-only hashes. Confirm that `POSTPONED` entries name prerequisites and revisit conditions and remain open. Run appropriate cumulative validation and verify the final worktree state.
 
 Report both source paths and pinned tips, any requested bounds or missing history, Gitoxide's starting and final revisions, decisions by class, postponed prerequisites, unclassified pending candidates, checks and limitations, and the scratch directory for resuming unfinished work. Give concrete local review commands such as `git log --reverse <start>..HEAD` and `git diff <start>..HEAD`. State that the commits are agent-authored and local, and do not claim complete integration while postponed or pending candidates or source coverage remain unresolved.
 
