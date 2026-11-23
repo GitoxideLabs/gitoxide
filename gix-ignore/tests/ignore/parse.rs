@@ -74,6 +74,39 @@ fn line_endings_can_be_windows_or_unix() {
 }
 
 #[test]
+fn trailing_carriage_return_without_newline_is_a_line_ending() {
+    fn parse(input: &[u8]) -> Vec<(BString, Mode, usize, gix_ignore::Kind)> {
+        gix_ignore::parse(input, false).map(flat_map).collect()
+    }
+
+    assert_eq!(
+        parse(b"unix\nlast\r"),
+        vec![pat("unix", Mode::NO_SUB_DIR, 1), pat("last", Mode::NO_SUB_DIR, 2)],
+        "Git terminates an unterminated last line with `\\n`, which makes its trailing `\\r` part of a Windows line ending"
+    );
+    assert_eq!(
+        parse(b"last \r"),
+        vec![pat("last", Mode::NO_SUB_DIR, 1)],
+        "spaces in front of it are trailing spaces, as they would be in front of `\\r\\n`"
+    );
+    assert_eq!(
+        parse(b"last\r\r"),
+        vec![pat("last\r", Mode::NO_SUB_DIR, 1)],
+        "only one of them is part of the line ending, exactly like `last\\r\\r\\n`"
+    );
+    assert_eq!(
+        parse(b"first\n\r"),
+        vec![pat("first", Mode::NO_SUB_DIR, 1)],
+        "a last line that is nothing but the line ending is empty"
+    );
+    assert_eq!(
+        parse(b"in\rside\n"),
+        vec![pat("in\rside", Mode::NO_SUB_DIR, 1)],
+        "anywhere else it is an ordinary character"
+    );
+}
+
+#[test]
 fn comments_are_ignored_as_well_as_empty_ones() {
     assert!(gix_ignore::parse(b"# hello world", false).next().is_none());
     assert!(gix_ignore::parse(b"\n\r\n\t\t   \n", false).next().is_none());

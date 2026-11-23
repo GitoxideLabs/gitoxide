@@ -16,8 +16,12 @@ impl<'a> Lines<'a> {
     /// will then not be ignored anymore, instead it ignores `houdini`.
     pub fn new(buf: &'a [u8], support_precious: bool) -> Self {
         let bom = unicode_bom::Bom::from(buf);
+        let buf = &buf[bom.len()..];
+        // Git appends `\n` to the content of an ignore file before splitting it into lines, so a `\r`
+        // at the very end is the first half of a Windows line ending, just like any other `\r\n`.
+        let buf = buf.strip_suffix(b"\r").unwrap_or(buf);
         Lines {
-            lines: buf[bom.len()..].lines(),
+            lines: buf.lines(),
             line_no: 0,
             support_precious,
         }
