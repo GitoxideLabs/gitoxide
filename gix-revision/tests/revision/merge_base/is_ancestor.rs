@@ -66,6 +66,14 @@ fn reliable_generations_limit_traversal() -> TestResult {
 
         let mut graph = gix_revision::Graph::new(&odb, cache.as_ref());
         assert!(
+            is_ancestor(pl_commit_id, pl_commit_id, &mut graph)?,
+            "a commit is its own ancestor"
+        );
+        assert!(
+            graph.is_empty(),
+            "equal IDs can be answered without inserting either tip"
+        );
+        assert!(
             is_ancestor(c2_commit_id, pl_commit_id, &mut graph)?,
             "C2 is a parent of PL"
         );

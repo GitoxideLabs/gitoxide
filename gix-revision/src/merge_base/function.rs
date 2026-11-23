@@ -39,17 +39,21 @@ pub fn merge_base(
     graph.clear_commit_data(|f| *f = Flags::empty());
     let bases = paint_down_to_common(first, others, None, false, graph)?;
 
-    let mut bases = remove_redundant(&bases, graph)?;
+    let mut bases = match bases.as_slice() {
+        [] => return Ok(None),
+        [(base_commit_id, _)] => return Ok(Some(nonempty::NonEmpty::new(*base_commit_id))),
+        _ => remove_redundant(&bases, graph)?,
+    };
     bases.sort_by_key(|commit_id| Reverse(graph.get(commit_id).expect("merge bases were traversed").commit_time));
     Ok(nonempty::NonEmpty::from_vec(bases))
 }
 
 /// Return `true` if `ancestor_commit_id` can be reached from `descendant_commit_id` by following parents, similar to
-/// `git merge-base --is-ancestor`. A commit is its own ancestor, and commits of unrelated histories aren't ancestors
-/// of each other.
+/// `git merge-base --is-ancestor`. Equal IDs return `true` without consulting the graph.
+/// Queries across unrelated histories return `false`.
 ///
-/// All input commits and traversed parents must exist. Callers representing intentional shallow boundaries must
-/// remove those roots' parents from the graph instead of relying on missing objects to end traversal.
+/// For distinct IDs, both input commits and all traversed parents must exist. Represent intentional shallow
+/// boundaries by clearing those roots' parents in the graph.
 ///
 /// # Performance
 ///
@@ -68,10 +72,10 @@ pub fn is_ancestor(
         ?ancestor_commit_id,
         ?descendant_commit_id
     );
-    insert_input_commits(ancestor_commit_id, &[descendant_commit_id], graph)?;
     if ancestor_commit_id == descendant_commit_id {
         return Ok(true);
     }
+    insert_input_commits(ancestor_commit_id, &[descendant_commit_id], graph)?;
 
     let ancestor = GenThenTime::from(graph.get(&ancestor_commit_id).expect("input commits were inserted"));
     let descendant = GenThenTime::from(graph.get(&descendant_commit_id).expect("input commits were inserted"));
@@ -111,13 +115,11 @@ pub(crate) fn insert_input_commits(
 
 /// Remove all those commits from `commits` if they are in the history of another commit in `commits`.
 /// That way, we return only the topologically most recent commits in `commits`.
+/// Called with multiple candidate commits.
 fn remove_redundant(
     commits: &[(ObjectId, GenThenTime)],
     graph: &mut Graph<'_, '_, graph::Commit<Flags>>,
 ) -> Result<Vec<ObjectId>> {
-    if commits.is_empty() {
-        return Ok(Vec::new());
-    }
     graph.clear_commit_data(|f| *f = Flags::empty());
     let _span = gix_trace::detail!("gix_revision::remove_redundant()", num_commits = %commits.len());
     let sorted_commits = {
