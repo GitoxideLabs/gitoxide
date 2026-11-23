@@ -639,6 +639,83 @@ mod blocking_and_async_io {
     #[bisync::bisync]
     #[cfg_attr(feature = "blocking-network-client", test)]
     #[cfg_attr(feature = "async-network-client-async-std", async_std::test)]
+    async fn ordinary_fetch_requires_local_history_at_remote_shallow_boundaries() -> TestResult {
+        #[cfg(feature = "blocking-network-client")]
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let fixture = gix_testtools::scripted_fixture_read_only("make_fetch_from_shallow_remote.sh")?;
+        let shallow_tip_commit_id = gix::open_opts(fixture.join("shallow"), crate::restricted())?
+            .head_id()?
+            .detach();
+        let daemon = spawn_git_daemon_if_async(&fixture)?;
+        let temp = TempDir::new()?;
+        for version in ["1", "2"] {
+            let mut repo = gix::ThreadSafeRepository::init_opts(
+                temp.path().join(version),
+                gix::create::Kind::WithWorktree,
+                gix::create::Options {
+                    object_hash: Some(shallow_tip_commit_id.kind()),
+                    ..Default::default()
+                },
+                crate::restricted(),
+            )?
+            .to_thread_local();
+            repo.config_snapshot_mut().set_value(&Protocol::VERSION, version)?;
+            let remote = |name| -> Result<_> {
+                Ok(into_daemon_remote_if_async(
+                    repo.remote_at(fixture.join(name).as_path())?
+                        .with_refspecs(Some("HEAD:refs/remotes/origin/main"), Fetch)?
+                        .with_fetch_tags(fetch::Tags::None),
+                    daemon.as_ref(),
+                    Some(name),
+                ))
+            };
+            let result = remote("shallow")?
+                .connect(Fetch)
+                .await?
+                .prepare_fetch(progress::Discard, Default::default())
+                .await?
+                .receive(progress::Discard, &AtomicBool::default())
+                .await;
+            let err = result.expect_err("an ordinary fetch cannot establish a shallow boundary");
+            assert!(err.is_validation(), "protocol v{version}: {err:#}");
+            assert_eq!(
+                err.to_string(),
+                "The remote requires changing shallow boundaries, but no change was requested",
+                "protocol v{version} fails because a different boundary would be needed"
+            );
+            assert!(
+                !repo.is_shallow()?,
+                "protocol v{version} leaves the repository complete"
+            );
+            assert!(
+                repo.try_find_reference("refs/remotes/origin/main")?.is_none(),
+                "protocol v{version} leaves refs that require a new boundary untouched"
+            );
+
+            for source in ["full", "shallow"] {
+                remote(source)?
+                    .connect(Fetch)
+                    .await?
+                    .prepare_fetch(progress::Discard, Default::default())
+                    .await?
+                    .receive(progress::Discard, &AtomicBool::default())
+                    .await?;
+            }
+            assert_eq!(
+                repo.find_reference("refs/remotes/origin/main")?.id(),
+                shallow_tip_commit_id,
+                "protocol v{version} fetches new commits once their ancestry is present locally"
+            );
+            assert!(!repo.is_shallow()?, "protocol v{version} keeps the full local history");
+        }
+        Ok(())
+    }
+
+    #[bisync::bisync]
+    #[cfg_attr(feature = "blocking-network-client", test)]
+    #[cfg_attr(feature = "async-network-client-async-std", async_std::test)]
     async fn fetch_shallow_deepen_zero_does_not_fail() -> TestResult {
         // Even without deepening, blocking local transport spawns `upload-pack` with ambient Git config.
         // Isolate it in a child to keep fetch I/O parallel without changing the parent environment.
