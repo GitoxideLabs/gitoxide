@@ -8,7 +8,9 @@ use std::{
 use bstr::ByteSlice;
 use gix_error::Result;
 
-use crate::{Context, Prepare, extract_interpreter, is_bare_command, split_paths, win_path_lookup};
+use crate::{
+    Context, Prepare, extract_interpreter, is_bare_command, split_paths, win_exe_suffix_lookup, win_path_lookup,
+};
 
 /// Builder
 impl Prepare {
@@ -177,7 +179,7 @@ impl Prepare {
     pub fn spawn(self) -> std::io::Result<std::process::Child> {
         let mut cmd =
             Command::try_from(self).map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?;
-        gix_trace::debug!(cmd = ?cmd);
+        gix_trace::debug!(program = ?cmd.get_program(), args = ?cmd.get_args().collect::<Vec<_>>());
         cmd.spawn()
     }
 }
@@ -185,8 +187,31 @@ impl Prepare {
 impl TryFrom<Prepare> for Command {
     type Error = gix_error::Error;
 
-    fn try_from(mut prep: Prepare) -> Result<Self> {
+    fn try_from(prep: Prepare) -> Result<Self> {
+        prep.into_command(false)
+    }
+}
+
+/// Lifecycle
+impl Prepare {
+    /// Finish preparation using Git for Windows' additional argument quoting on Windows.
+    ///
+    /// Use this for external Git transports whose arguments may be parsed again by MSYS2 or Cygwin.
+    /// As with the bundled shell, `Command::get_args()` includes quoting for arguments passed with `raw_arg`.
+    /// For other programs, disabling globbing in `MSYS` or `CYGWIN` can make literal double quotes
+    /// ambiguous, so preparation rejects them in that mode.
+    /// On other platforms this is identical to converting with [`Command::try_from()`].
+    pub fn into_command_with_git_quoting(self) -> Result<Command> {
+        self.into_command(true)
+    }
+
+    fn into_command(self, git_quoting: bool) -> Result<Command> {
+        #[cfg(not(windows))]
+        let _ = git_quoting;
+        let mut prep = self;
         let mut inline_env = Vec::new();
+        #[cfg(windows)]
+        let mut bundled_shell = false;
         let mut cmd = if prep.use_shell {
             let split_args = prep
                 .allow_manual_arg_splitting
@@ -213,7 +238,15 @@ impl TryFrom<Prepare> for Command {
                 None => {
                     let mut cmd = match prep.shell_program {
                         Some(shell) => Command::new(shell),
-                        None => gix_path::env::shell_command(),
+                        None => {
+                            let shell = gix_path::env::shell_command();
+                            #[cfg(windows)]
+                            {
+                                // Discovery returns a full path for Git's MSYS2 shell or its shim.
+                                bundled_shell = Path::new(shell.get_program()).is_absolute();
+                            }
+                            shell
+                        }
                     };
                     // Passed as `command_name` after `-c <script>`; the shell uses it
                     // as `$0`, which prefixes its own diagnostic messages. If the
@@ -250,6 +283,9 @@ impl TryFrom<Prepare> for Command {
         } else {
             Command::new(prep.command)
         };
+        cmd.args(prep.args);
+        #[cfg(windows)]
+        let mut cmd = crate::windows::quote_arguments(cmd, git_quoting, bundled_shell, &prep.env, &inline_env)?;
         // We never want to have terminals pop-up on Windows if this runs from a GUI application.
         #[cfg(windows)]
         {
@@ -260,8 +296,7 @@ impl TryFrom<Prepare> for Command {
         cmd.stdin(prep.stdin)
             .stdout(prep.stdout)
             .stderr(prep.stderr)
-            .envs(prep.env)
-            .args(prep.args);
+            .envs(prep.env);
         if let Some(ctx) = prep.context {
             if let Some(git_dir) = ctx.git_dir {
                 cmd.env("GIT_DIR", &git_dir);
@@ -307,18 +342,7 @@ impl TryFrom<Prepare> for Command {
 /// arguments. If `PATH` does not resolve a bare command, the missing program remains anchored in its first entry
 /// so Rust's broader Windows lookup cannot find it elsewhere.
 fn windows_command(command: OsString, env: &[(OsString, OsString)], inline_env: &[(String, OsString)]) -> Command {
-    let explicit_joined_paths = inline_env
-        .iter()
-        .rev()
-        .find(|(name, _)| name.eq_ignore_ascii_case("PATH"))
-        .map(|(_, value)| value.as_os_str())
-        .or_else(|| {
-            env.iter()
-                .rev()
-                .find(|(name, _)| name.to_str().is_some_and(|name| name.eq_ignore_ascii_case("PATH")))
-                .map(|(_, value)| value.as_os_str())
-        });
-    let joined_paths = explicit_joined_paths
+    let joined_paths = windows_env_override("PATH", env, inline_env)
         .map(Cow::Borrowed)
         .or_else(|| std::env::var_os("PATH").map(Cow::Owned));
     let looked_up = joined_paths
@@ -329,21 +353,41 @@ fn windows_command(command: OsString, env: &[(OsString, OsString)], inline_env: 
         Some(program) => Cow::Owned(program),
         // A bare PATH miss must neither probe a worktree file nor use Rust's broader Windows search.
         None if is_bare_command(Path::new(&command)) => {
-            return Command::new(prevent_further_path_lookup(
+            let missing = prevent_further_path_lookup(
                 command.as_ref(),
                 joined_paths.as_deref().unwrap_or_else(|| OsStr::new("")),
-            ));
+            );
+            return Command::new(win_exe_suffix_lookup(&missing).unwrap_or(missing));
         }
         None => Cow::Borrowed(command.as_ref()),
     };
+    let program = win_exe_suffix_lookup(program.as_ref())
+        .map(Cow::Owned)
+        .unwrap_or(program);
     if let Some(shebang) = extract_interpreter(program.as_ref()) {
-        let mut cmd = Command::new(shebang.interpreter);
+        let interpreter = win_exe_suffix_lookup(&shebang.interpreter).unwrap_or(shebang.interpreter);
+        let mut cmd = Command::new(interpreter);
         // Git for Windows ignores shebang arguments and passes only the script path.
         cmd.arg(program.as_ref());
         cmd
     } else {
         Command::new(program.as_ref())
     }
+}
+
+/// Find the value that will be applied last when preparing the Windows child environment.
+pub(super) fn windows_env_override<'a>(
+    key: &str,
+    env: &'a [(OsString, OsString)],
+    inline_env: &'a [(String, OsString)],
+) -> Option<&'a OsStr> {
+    inline_env
+        .iter()
+        .rev()
+        .map(|(name, value)| (name.as_bytes(), value))
+        .chain(env.iter().rev().map(|(name, value)| (name.as_encoded_bytes(), value)))
+        .find(|(name, _)| name.eq_ignore_ascii_case(key.as_bytes()))
+        .map(|(_, value)| value.as_os_str())
 }
 
 /// Represent the failed lookup of `command` in `PATH` without permitting another search.
@@ -361,6 +405,15 @@ fn prevent_further_path_lookup(command: &Path, joined_paths: &OsStr) -> PathBuf 
         missing.push("");
         missing
     }
+}
+
+/// Detect either trailing Windows path separator, including the one added by
+/// [`prevent_further_path_lookup()`], so `.exe` lookup doesn't turn `ssh\` into `ssh\.exe`.
+pub(super) fn has_trailing_windows_separator(path: &Path) -> bool {
+    path.as_os_str()
+        .as_encoded_bytes()
+        .last()
+        .is_some_and(|c| matches!(c, b'/' | b'\\'))
 }
 
 #[cfg(test)]
