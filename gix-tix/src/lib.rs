@@ -185,6 +185,8 @@ fn unseen_filesystem_redraw(current: bool, focused: bool, filesystem_frame: bool
     !focused && (current || filesystem_frame)
 }
 
+const WORKTREE_MONITOR_COVERAGE: gix::notify::WorktreeCoverage = gix::notify::WorktreeCoverage::ExcludeIgnoredFiles;
+
 fn worktree_watcher_needed(repository_is_bare: bool, mode: Option<ChangesMode>) -> bool {
     !repository_is_bare && mode == Some(ChangesMode::Both)
 }
@@ -253,10 +255,9 @@ fn sync_worktree_monitor(
     if !repository_changed && current.repository.options().worktree_coverage.is_some() == enabled {
         return Ok(());
     }
-    let notifications = gix::notify::Options {
-        worktree_coverage: enabled.then(|| current.repository.options().worktree_coverage.unwrap_or_default()),
-        ..current.repository.options().clone()
-    };
+    let mut notifications = current.repository.options().clone();
+    notifications.worktree_coverage =
+        enabled.then_some(notifications.worktree_coverage.unwrap_or(WORKTREE_MONITOR_COVERAGE));
     let status_options = current.status_options.clone();
     let repository = open().or_raise(|| message("could not reopen repository for filesystem monitoring"))?;
     drop(monitor.take());
@@ -1227,7 +1228,7 @@ fn event_loop(
             &view_repository,
             gix::notify::Options {
                 worktree_coverage: worktree_watcher_needed(view_repository.workdir().is_none(), app.changes_mode)
-                    .then_some(Default::default()),
+                    .then_some(WORKTREE_MONITOR_COVERAGE),
                 ..Default::default()
             },
             gix::status::monitor::Options {
@@ -14233,8 +14234,8 @@ added
                 );
                 assert_eq!(
                     actual.worktree_coverage,
-                    enabled.then_some(gix::notify::WorktreeCoverage::IgnoreAware),
-                    "enabling restores default coverage; disabling removes it"
+                    enabled.then_some(gix::notify::WorktreeCoverage::ExcludeIgnoredFiles),
+                    "enabling excludes ignored file notifications; disabling removes worktree coverage"
                 );
                 assert_eq!(
                     (

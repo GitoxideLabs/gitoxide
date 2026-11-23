@@ -2318,9 +2318,10 @@ views.
   covering external branch and StGit patch rewrites. If none remains visible,
   selection falls back to the first selectable row.
 - Worktree subscriptions are enabled only while the combined worktree block is enabled.
-  It observes the index when it is within those roots and the ignore-aware
-  directories that Git status would walk, using non-recursive registrations so
-  ignored build trees do not generate work.
+  The repository monitor observes the index and skips fully ignored directories
+  without tracked paths. In watched directories it filters out notifications for
+  ignored, untracked files before they can invalidate the status snapshot.
+  Tracked paths, directory changes, and ambiguous events still reach status.
   Unrepresentable directory or index paths fail the refresh before updating
   registrations or the saved index projection; partial directory sets are not used.
 - Changing worktree coverage replaces the project monitor using a freshly opened,
