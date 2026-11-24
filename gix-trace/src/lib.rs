@@ -580,6 +580,23 @@ macro_rules! debug {
     );
 }
 
+/// Emit a debug event with a [`std::process::Command`]'s `program` and `args` fields,
+/// and an optional format message.
+///
+/// Pass a command variable to log its program and arguments without logging environment
+/// overrides or printing control characters from Windows raw arguments verbatim.
+///
+/// ```
+/// let cmd = std::process::Command::new("ssh");
+/// gix_trace::debug_command!(cmd, "checking SSH features");
+/// ```
+#[macro_export]
+macro_rules! debug_command {
+    ($cmd:ident $(, $($message:tt)+)?) => (
+        $crate::debug!(program = ?$cmd.get_program(), args = ?$cmd.get_args().collect::<::std::vec::Vec<_>>() $(, $($message)+)?)
+    );
+}
+
 /// Emit a trace event.
 #[macro_export]
 macro_rules! trace {
