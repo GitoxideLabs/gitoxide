@@ -118,14 +118,14 @@ fn compare_whitespace_baseline_with_ours() -> gix_testtools::TestResult {
         assert!(remainder.is_empty(), "each baseline record has five fields");
         assert_eq!(
             records.len(),
-            12,
-            "both classes are tested against all six whitespace bytes"
+            18,
+            "both classes and the literal tab are tested against all six whitespace bytes"
         );
         for record in records {
             let [pattern, source, _line, matched_pattern, value] = record;
             let is_match = !source.is_empty();
             if is_match {
-                assert_eq!(matched_pattern, pattern, "Git matched the requested character class");
+                assert_eq!(matched_pattern, pattern, "Git matched the requested pattern");
             }
             assert_eq!(
                 match_file(&pat(*pattern), *value, case),

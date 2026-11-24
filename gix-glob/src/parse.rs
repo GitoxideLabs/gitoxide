@@ -11,9 +11,6 @@ use crate::{pattern, pattern::Mode};
 /// Returns `(pattern, mode, no_wildcard_len)`
 pub fn pattern(mut pat: &[u8], may_alter: bool) -> Option<(&[u8], pattern::Mode, Option<usize>)> {
     let mut mode = Mode::empty();
-    if pat.is_empty() {
-        return None;
-    }
     if may_alter {
         if pat.first() == Some(&b'!') {
             mode |= Mode::NEGATIVE;
@@ -25,7 +22,7 @@ pub fn pattern(mut pat: &[u8], may_alter: bool) -> Option<(&[u8], pattern::Mode,
             }
         }
     }
-    if pat.iter().all(u8::is_ascii_whitespace) {
+    if pat.is_empty() {
         return None;
     }
     if pat.first() == Some(&b'/') {

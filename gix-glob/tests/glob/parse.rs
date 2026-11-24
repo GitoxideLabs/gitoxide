@@ -35,8 +35,17 @@ fn pat(pattern: &str, mode: Mode, first_glob_char_pos: Option<usize>) -> Option<
 }
 
 #[test]
-fn whitespace_only_is_ignored() {
-    assert!(gix_glob::parse(b"\n\r\n\t\t   \n").is_none());
+fn only_empty_patterns_are_ignored() -> gix_testtools::TestResult {
+    assert!(gix_glob::parse(b"").is_none(), "an empty input has no pattern");
+    assert!(gix_glob::parse(b"!").is_none(), "negation alone has no pattern");
+    for text in [" ", "\t", "\r", "\n"] {
+        assert_eq!(
+            gix_glob::parse(text),
+            pat(text, Mode::NO_SUB_DIR, None),
+            "whitespace is literal even when it makes up the entire pattern"
+        );
+    }
+    Ok(())
 }
 
 #[test]

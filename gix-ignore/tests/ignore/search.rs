@@ -182,6 +182,26 @@ fn from_overrides() {
     );
 }
 
+#[test]
+fn from_overrides_preserves_literal_trailing_carriage_return() -> gix_testtools::TestResult {
+    let group = gix_ignore::Search::from_overrides(["last\r"], Default::default());
+    let case = gix_glob::pattern::Case::Sensitive;
+
+    assert!(
+        group
+            .pattern_matching_relative_path("last\r".into(), None, case)
+            .is_some(),
+        "the explicit pattern matches a path ending in a carriage return"
+    );
+    assert!(
+        group
+            .pattern_matching_relative_path("last".into(), None, case)
+            .is_none(),
+        "the carriage return in an explicit pattern is not a line ending"
+    );
+    Ok(())
+}
+
 fn pattern_to_match(pattern: &gix_glob::Pattern, sequence_number: usize, kind: gix_ignore::Kind) -> Match<'_> {
     Match {
         pattern,

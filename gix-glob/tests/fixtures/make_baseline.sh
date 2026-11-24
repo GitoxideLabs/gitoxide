@@ -167,9 +167,10 @@ EOF
 # Preserve whitespace-only paths, including newline, with NUL-delimited input and output.
 # Each record contains the requested pattern followed by Git's source, line, matched pattern and path.
 # Git's [:blank:] accepts space/tab; [:space:] also accepts LF/CR, but neither accepts VT/FF.
+# A tab by itself is a literal ignore rule, not an empty line.
 for ignorecase in false true; do
   git config core.ignorecase "$ignorecase"
-  for pattern in '[[:blank:]]' '[[:space:]]'; do
+  for pattern in '[[:blank:]]' '[[:space:]]' $'\t'; do
     printf '%s\n' "$pattern" > .gitignore
     for value in ' ' $'\t' $'\n' $'\v' $'\f' $'\r'; do
       printf '%s\0' "$pattern"
