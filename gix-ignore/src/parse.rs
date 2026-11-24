@@ -9,19 +9,22 @@ pub struct Lines<'a> {
 }
 
 impl<'a> Lines<'a> {
-    /// Create a new instance from `buf` to parse ignore patterns from.
+    /// Create a new instance to parse ignore patterns from the contents of an ignore file.
     ///
     /// If `support_precious` is `true`, we will parse `$` prefixed entries as precious.
     /// This is backward-incompatible as files that actually start with `$` like `$houdini`
     /// will then not be ignored anymore, instead it ignores `houdini`.
     pub fn new(buf: &'a [u8], support_precious: bool) -> Self {
-        let bom = unicode_bom::Bom::from(buf);
-        let buf = &buf[bom.len()..];
         // Git appends `\n` to the content of an ignore file before splitting it into lines, so a `\r`
         // at the very end is the first half of a Windows line ending, just like any other `\r\n`.
         let buf = buf.strip_suffix(b"\r").unwrap_or(buf);
+        Self::without_implicit_lf(buf, support_precious)
+    }
+
+    pub(crate) fn without_implicit_lf(buf: &'a [u8], support_precious: bool) -> Self {
+        let bom = unicode_bom::Bom::from(buf);
         Lines {
-            lines: buf.lines(),
+            lines: buf[bom.len()..].lines(),
             line_no: 0,
             support_precious,
         }

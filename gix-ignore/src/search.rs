@@ -78,6 +78,7 @@ impl Search {
     }
 
     /// Parse a list of ignore patterns, using slashes as path separators.
+    /// Unlike in an ignore file, a carriage return at the end of an override is literal.
     /// `parse` is a way to parse bytes to ignore patterns.
     pub fn from_overrides(patterns: impl IntoIterator<Item = impl Into<OsString>>, parse: Ignore) -> Self {
         Self::from_overrides_inner(&mut patterns.into_iter().map(Into::into), parse)
@@ -90,7 +91,7 @@ impl Search {
                     .enumerate()
                     .filter_map(|(seq_id, pattern)| {
                         let pattern = gix_path::into_bstr(PathBuf::from(pattern)).ok()?;
-                        crate::parse(pattern.as_ref(), parse.support_precious)
+                        crate::parse::Lines::without_implicit_lf(pattern.as_ref(), parse.support_precious)
                             .next()
                             .map(|(p, _seq_id, kind)| pattern::Mapping {
                                 pattern: p,

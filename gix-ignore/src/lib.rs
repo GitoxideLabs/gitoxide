@@ -68,7 +68,7 @@ pub enum Kind {
 ///
 pub mod parse;
 
-/// Parse git ignore patterns, line by line, from `bytes`.
+/// Parse git ignore patterns, line by line, from the ignore file contents in `bytes`.
 ///
 /// If `support_precious` is `true`, we will parse `$` prefixed entries as precious.
 /// This is backward-incompatible as files that actually start with `$` like `$houdini`
