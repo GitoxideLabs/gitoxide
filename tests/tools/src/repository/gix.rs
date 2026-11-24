@@ -249,16 +249,10 @@ fn references(store: &gix_ref::file::Store) -> Result<(Vec<Reference>, Vec<Objec
 }
 
 fn shallow_commits(common_dir: &Path, hash: Kind) -> Result<BTreeSet<ObjectId>> {
-    let mut out = BTreeSet::new();
-    if let Some(boundaries) = gix_shallow::read(&common_dir.join("shallow"))? {
-        for id in boundaries {
-            if id.kind() != hash {
-                return Err(format!("shallow boundary {id} uses the wrong hash kind").into());
-            }
-            out.insert(id);
-        }
-    }
-    Ok(out)
+    Ok(gix_shallow::read(&common_dir.join("shallow"), hash)?
+        .into_iter()
+        .flatten()
+        .collect())
 }
 
 fn commits(

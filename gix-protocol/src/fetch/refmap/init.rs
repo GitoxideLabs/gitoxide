@@ -94,7 +94,7 @@ impl RefMap {
 /// don't advertise it at all, and even newer ones may omit it for empty repositories.
 /// In builds whose `gix-hash` lacks the `sha1` feature, it's treated as unknown object format error.
 /// Errors include the object format bytes as `input` [metadata](gix_error::Error::metadata()).
-fn extract_object_hash(capabilities: &Capabilities) -> Result<gix_hash::Kind> {
+pub(crate) fn extract_object_hash(capabilities: &Capabilities) -> Result<gix_hash::Kind> {
     let object_format = match capabilities.capability("object-format").and_then(|c| c.value()) {
         Some(object_format) => object_format.to_str().or_raise(|| {
             corruption("The object format used by the remote isn't valid UTF-8").with_input(object_format.as_bytes())

@@ -2572,7 +2572,6 @@ version = "0.0.0"
 name = "gix-shallow"
 version = "0.16.0"
 dependencies = [
- "bstr",
  "gix-error",
  "gix-hash",
  "gix-lock",
