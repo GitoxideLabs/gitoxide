@@ -18,14 +18,9 @@ mod fuzzed;
 
 #[test]
 fn lookup_file_agrees_with_the_validated_index() -> gix_testtools::TestResult {
-    let temp = gix_testtools::tempfile::tempdir()?;
-    let large_offsets = temp.path().join("large-offsets.idx");
-    let status = gix_testtools::git_command(temp.path())
-        .args(["index-pack", "--index-version=2,0", "-o"])
-        .arg(&large_offsets)
-        .arg(fixture_path(SMALL_PACK).canonicalize()?)
-        .output()?;
-    assert!(status.status.success(), "{}", String::from_utf8_lossy(&status.stderr));
+    let large_offsets =
+        gix_testtools::scripted_fixture_read_only_with_args("make_large_offset_index.sh", [SMALL_PACK])?
+            .join("large-offsets.idx");
     let small = fixture_path(SMALL_PACK_INDEX);
     let expected = gix_pack::index::File::at(&small, gix_hash::Kind::Sha1)?;
     assert_eq!(
