@@ -113,7 +113,7 @@ pub struct File<T = MMap> {
 /// [`LookupFile::validated()`] before traversing all offsets.
 pub struct LookupFile<T = MMap> {
     file: File<T>,
-    offset_validation: std::sync::OnceLock<Result<(), String>>,
+    offsets_validated: std::sync::atomic::AtomicBool,
 }
 
 /// Basic file information

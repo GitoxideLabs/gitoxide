@@ -93,12 +93,15 @@ fn on_demand_offset_errors_are_classified_as_corruption() -> gix_testtools::Test
             .expect_err("invalid offset reference")
             .is_corrupted()
     );
-    assert!(
-        file.validated()
-            .err()
-            .expect("full verification rejects the table")
-            .is_corrupted()
-    );
+    for attempt in 1..=2 {
+        assert!(
+            file.validated()
+                .err()
+                .expect("full verification rejects the table")
+                .is_corrupted(),
+            "a failed check is not remembered as a success (attempt {attempt})"
+        );
+    }
     Ok(())
 }
 

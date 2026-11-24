@@ -17,6 +17,12 @@ fn memory_backed_index(at: &str) -> gix_pack::index::File<&'static [u8]> {
 mod fuzzed;
 
 #[test]
+fn lookup_file_is_send_and_sync() {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<gix_pack::index::LookupFile>();
+}
+
+#[test]
 fn lookup_file_agrees_with_the_validated_index() -> gix_testtools::TestResult {
     let large_offsets =
         gix_testtools::scripted_fixture_read_only_with_args("make_large_offset_index.sh", [SMALL_PACK])?

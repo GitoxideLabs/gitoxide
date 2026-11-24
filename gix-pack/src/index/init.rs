@@ -2,6 +2,7 @@ use std::{
     borrow::Cow,
     mem::size_of,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use gix_error::{Result, ResultExt, bail, message};
@@ -99,19 +100,22 @@ impl<T: crate::FileData> index::LookupFile<T> {
                 hash_len,
                 object_hash,
             },
-            offset_validation: Default::default(),
+            offsets_validated: AtomicBool::new(false),
         })
     }
 
-    /// Check every offset reference once, returning an index suitable for full traversal.
+    /// Check every offset reference, returning an index suitable for full traversal.
+    ///
+    /// A successful check is remembered, so only an index that failed it is checked again.
     pub fn validated(&self) -> Result<&index::File<T>> {
-        match self.offset_validation.get_or_init(|| self.check_offsets()) {
-            Ok(()) => Ok(&self.file),
-            Err(message) => Err(corrupt(message.clone())),
+        if !self.offsets_validated.load(Ordering::Relaxed) {
+            self.check_offsets()?;
+            self.offsets_validated.store(true, Ordering::Relaxed);
         }
+        Ok(&self.file)
     }
 
-    fn check_offsets(&self) -> std::result::Result<(), String> {
+    fn check_offsets(&self) -> Result {
         let file = &self.file;
         if file.version == Version::V2 {
             let end = file.offset_pack_offset64_v2();
@@ -127,21 +131,21 @@ impl<T: crate::FileData> index::LookupFile<T> {
                     (count + 1, max_slot.max(slot))
                 });
             if references != 0 && max_slot >= large_offsets {
-                return Err(format!(
+                return Err(corrupt(format!(
                     "Pack index references large offset {max_slot}, but only {large_offsets} are present"
-                ));
+                )));
             }
             if references != large_offsets {
-                return Err(format!(
+                return Err(corrupt(format!(
                     "Pack index has {large_offsets} large offsets for {references} references"
-                ));
+                )));
             }
         }
         Ok(())
     }
 
     fn into_validated(self) -> Result<index::File<T>> {
-        self.check_offsets().map_err(corrupt)?;
+        self.check_offsets()?;
         Ok(self.file)
     }
 }
