@@ -2,10 +2,10 @@ use std::{
     borrow::Cow,
     ops::ControlFlow,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use gix_error::{ResultExt, message};
-use gix_parallel::OwnShared;
 
 use super::{Options, RelatedRepository, RelatedRepositoryKind, RepositoryTrust};
 use crate::{Repository, Result, bstr::BString, open::Permissions};
@@ -104,7 +104,7 @@ impl Options {
         mut self,
         configure: impl Fn(RelatedRepository<'_>, Self) -> Result<ControlFlow<(), Self>> + Send + Sync + 'static,
     ) -> Self {
-        self.configure_related_repository = Some(OwnShared::new(configure));
+        self.configure_related_repository = Some(Arc::new(configure));
         self
     }
 
@@ -136,7 +136,7 @@ impl Options {
         mut self,
         configure: impl Fn(gix_sec::Trust, &gix_config::File) -> Result<Vec<BString>> + Send + Sync + 'static,
     ) -> Self {
-        self.config_overrides_by_trust = Some(OwnShared::new(configure));
+        self.config_overrides_by_trust = Some(Arc::new(configure));
         self
     }
 
