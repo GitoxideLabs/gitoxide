@@ -72,7 +72,7 @@ jobs:
       QA_PLAN: ${{ needs.plan.outputs.plan }}
       QA_JOB: ${{ matrix.id }}
       # Main provides reusable indexes; PR cache misses run ordinary QA without collecting throwaway data.
-      GIX_QA_COVERAGE: ${{ vars.QA_COVERAGE != 'off' && (contains(matrix.tasks, 'native-tests') || contains(matrix.tasks, 'isolated-tests') || contains(matrix.tasks, 'feature-tests')) && (github.event_name == 'pull_request' && (vars.QA_COVERAGE == 'shadow' && 'shadow' || 'prune') || github.ref == 'refs/heads/main' && 'collect') || 'off' }}
+      GIX_QA_COVERAGE: ${{ vars.QA_COVERAGE != 'off' && (contains(matrix.tasks, 'native-tests') || contains(matrix.tasks, 'isolated-tests') || startsWith(matrix.id, 'feature-tests@')) && (github.event_name == 'pull_request' && (vars.QA_COVERAGE == 'shadow' && 'shadow' || 'prune') || github.ref == 'refs/heads/main' && 'collect') || 'off' }}
     steps:
       # Native 32-bit containers need libraries for the runner's 64-bit Node.js.
       - name: Install container prerequisites

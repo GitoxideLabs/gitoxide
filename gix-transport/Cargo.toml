@@ -167,9 +167,10 @@ tests = [
     { args = ["--features", "http-client-reqwest"] },
     { args = ["--no-default-features", "--features", "blocking-client,http-client-reqwest,http-client-insecure-credentials", "--test", "blocking-transport"] },
     { args = ["--features", "async-client"] },
-    # As of 2026-10-13, only `handshake_v1_and_request` and
-    # `handshake_v2_and_request` have been made `GIX_TEST_FIXTURE_HASH`-aware.
-    { args = ["--features", "blocking-client,http-client-insecure-credentials", "--test", "blocking-transport", "-E", "test(handshake_v1_and_request) | test(handshake_v2_and_request)"], env = { GIX_TEST_FIXTURE_HASH = "sha1" } },
+    { args = ["--features", "async-client,async-std", "--test", "async-transport", "-E", "test(unused_url_components_are_validation_failures) | test(unsupported_schemes_are_classified) | test(ipv6_address_in_brackets_is_connected_to) | test(refused_connections_remain_retryable)"] },
+    # Keep the SHA-256 filter to the two handshake tests that honor
+    # `GIX_TEST_FIXTURE_HASH`; the missing-backend test needs no fixture.
+    { args = ["--features", "blocking-client,http-client-insecure-credentials", "--test", "blocking-transport", "-E", "test(handshake_v1_and_request) | test(handshake_v2_and_request) | test(unavailable_http_backends_are_unsupported)"], env = { GIX_TEST_FIXTURE_HASH = "sha1" } },
     { args = ["--features", "blocking-client,http-client-insecure-credentials", "--test", "blocking-transport", "-E", "test(handshake_v1_and_request) | test(handshake_v2_and_request)"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },
     { args = ["--features", "async-client", "--test", "async-transport", "-E", "test(handshake_v1_and_request) | test(handshake_v2_and_request)"], env = { GIX_TEST_FIXTURE_HASH = "sha1" } },
     { args = ["--features", "async-client", "--test", "async-transport", "-E", "test(handshake_v1_and_request) | test(handshake_v2_and_request)"], env = { GIX_TEST_FIXTURE_HASH = "sha256" } },

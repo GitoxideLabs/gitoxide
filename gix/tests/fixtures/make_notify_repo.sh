@@ -58,9 +58,24 @@ case "${1:-coverage}" in
     done
     printf 'ignore-refresh/\nindex-refresh/\n' >.gitignore
     ;;
+  ignore-sources)
+    # Both tests start with a hidden subtree and replace the source of its ignore
+    # rule while monitoring. The external file is a sibling of the checkouts so
+    # the test can point its copied config at the relocated path.
+    for repo in external-ignore index-backed-ignore; do
+      init_repo "$repo"
+      mkdir -p "$repo/ignored/deep"
+      printf 'initial\n' >"$repo/ignored/deep/file"
+    done
+    mkdir outside
+    printf 'ignored/\n*.generated\n' | tee outside/ignore index-backed-ignore/.gitignore >/dev/null
+    git -C index-backed-ignore add -- .gitignore
+    git -C index-backed-ignore update-index --skip-worktree -- .gitignore
+    rm index-backed-ignore/.gitignore
+    ;;
   event-filter)
-    # File-only exclusions leave directories watched. Callers receive ignored and
-    # tracked file events alike, including forced entries absent at startup.
+    # File-only exclusions leave directories watched. Negations and forced
+    # entries, including a tracked file absent at startup, must remain visible.
     init_repo .
     mkdir sub
     cat <<'EOF' >.gitignore
@@ -72,6 +87,7 @@ EOF
 *.blocked
 !keep.blocked
 EOF
+    printf '*.local\n' >>.git/info/exclude
     for path in drop.ignored keep.ignored tracked.ignored missing.ignored only-dir sub/drop.blocked sub/keep.blocked; do
       printf 'initial\n' >"$path"
     done

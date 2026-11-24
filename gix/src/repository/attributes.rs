@@ -132,6 +132,21 @@ impl Repository {
         overrides: Option<gix_ignore::Search>,
         source: gix_worktree::stack::state::ignore::Source,
     ) -> Result<AttributeStack<'_>> {
+        // Bare repositories use a virtual worktree for these read-only queries.
+        let root = self.workdir().unwrap_or(self.git_dir());
+        Ok(AttributeStack::new(
+            self.exclude_stack(root, index, overrides, source)?,
+            self,
+        ))
+    }
+
+    pub(crate) fn exclude_stack(
+        &self,
+        root: &std::path::Path,
+        index: &gix_index::State,
+        overrides: Option<gix_ignore::Search>,
+        source: gix_worktree::stack::state::ignore::Source,
+    ) -> Result<gix_worktree::Stack> {
         let case = if self.config.ignore_case {
             gix_glob::pattern::Case::Fold
         } else {
@@ -143,16 +158,6 @@ impl Repository {
                 .assemble_exclude_globals(self.common_dir(), self.current_dir(), overrides, source, &mut buf)?;
         let state = gix_worktree::stack::State::IgnoreStack(ignore);
         let attribute_list = state.id_mappings_from_index(index, index.path_backing(), case);
-        Ok(AttributeStack::new(
-            gix_worktree::Stack::new(
-                // this is alright as we don't cause mutation of that directory, it's virtual.
-                self.workdir().unwrap_or(self.git_dir()),
-                state,
-                case,
-                buf,
-                attribute_list,
-            ),
-            self,
-        ))
+        Ok(gix_worktree::Stack::new(root, state, case, buf, attribute_list))
     }
 }

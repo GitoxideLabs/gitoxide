@@ -4,6 +4,64 @@ use std::time::{Duration, Instant};
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 #[test]
+fn removing_nested_watches_preserves_queued_events_and_the_generation() -> gix_error::TestResult {
+    let fixture = tempfile::tempdir()?;
+    let root = fixture.path().canonicalize()?;
+    let child = root.join("child");
+    let sibling = root.join("sibling");
+    let deep = child.join("deep");
+    std::fs::create_dir_all(&deep)?;
+    std::fs::create_dir(&sibling)?;
+    let mut watcher = Watcher::new(Options::default())?;
+    let alias = root.join("alias");
+    std::os::unix::fs::symlink(&child, &alias)?;
+    watcher.replace([&root, &child, &alias].map(|path| Watch {
+        path: path.clone(),
+        recursive: false,
+    }))?;
+    assert!(
+        !watcher.try_remove_subtree(&child),
+        "a second subscription through a symlink shares the canonical child watch"
+    );
+    watcher.replace(
+        [(&root, false), (&child, false), (&deep, true), (&sibling, true)].map(|(path, recursive)| Watch {
+            path: path.clone(),
+            recursive,
+        }),
+    )?;
+    let generation = watcher.drain(Budget::default()).generation;
+    assert!(
+        !watcher.try_remove_subtree(&root),
+        "a request that includes the physical root must leave coverage intact"
+    );
+    let queued = deep.join("queued");
+    std::fs::write(&queued, "before removal")?;
+    watcher.synchronize_at(&root, Instant::now() + Duration::from_secs(5))?;
+    assert!(
+        watcher.try_remove_subtree(&child),
+        "the shallow parent keeps the native stream alive"
+    );
+    let excluded = deep.join("later");
+    let included = sibling.join("later");
+    std::fs::write(&excluded, "retired subscription")?;
+    std::fs::write(&included, "retained subscription")?;
+    let fence = watcher.synchronize_at(&root, Instant::now() + Duration::from_secs(5))?;
+    let batch = watcher.drain(Budget::default());
+    assert_eq!(fence.generation, generation, "both fences span one native registration");
+    assert_eq!(batch.loss, None, "retiring the nested watch preserves continuity");
+    let paths: Vec<_> = batch.events.into_iter().flat_map(|event| event.paths).collect();
+    assert!(
+        paths.contains(&queued) && paths.contains(&included),
+        "both old and new events are delivered"
+    );
+    assert!(
+        !paths.contains(&excluded),
+        "future descendants of the retired subscription are filtered"
+    );
+    Ok(())
+}
+
+#[test]
 fn unicode_and_case_aliases_keep_native_coverage() -> TestResult {
     let directory = tempfile::tempdir()?;
     let directory = directory.path().canonicalize()?;
@@ -163,6 +221,106 @@ fn file_scope_filters_siblings_and_rejects_uncovered_marker_directories() -> Tes
     assert!(
         !batch.events.iter().any(|event| event.paths.contains(&sibling)),
         "native parent coverage does not leak sibling events"
+    );
+    Ok(())
+}
+
+#[test]
+fn file_path_watches_follow_replacement_and_symlink_retargeting() -> gix_error::TestResult {
+    let fixture = tempfile::tempdir()?;
+    let scratch = fixture.path().canonicalize()?;
+    let root = scratch.join("work");
+    let link = root.join("ignore");
+    let target = root.join("rules");
+    let replacement = root.join("replacement");
+    let other = root.join("other-rules");
+    let nested = root.join("ignored/deep");
+    std::fs::create_dir_all(&nested)?;
+    std::fs::write(nested.join("unrelated"), "unrelated")?;
+
+    let mut watcher = Watcher::new_for_files(Options {
+        root_check_interval: Some(Duration::from_millis(50)),
+        ..Default::default()
+    })?;
+    watcher.replace([Watch {
+        path: link.clone(),
+        recursive: false,
+    }])?;
+    assert_eq!(
+        watcher.drain(Budget::default()).loss,
+        Some(Loss::WatchSetChanged),
+        "initial registration of a missing path needs a baseline"
+    );
+    let (wake, ready) = std::sync::mpsc::channel();
+    watcher.set_waker(move || {
+        let _ = wake.send(());
+    });
+    ready.try_recv()?;
+    std::fs::remove_file(nested.join("unrelated"))?;
+    assert!(
+        ready.recv_timeout(Duration::from_millis(200)).is_err(),
+        "a deletion below an unrelated directory does not wake a file watcher"
+    );
+
+    let mut wait_for_change = || -> gix_error::TestResult {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let batch = watcher.drain(Budget::default());
+            assert!(
+                batch.loss.is_none(),
+                "rebinding a pathname preserves coverage: {batch:?}"
+            );
+            assert!(batch.error.is_none(), "file watching stays healthy: {:?}", batch.error);
+            if !batch.events.is_empty() {
+                assert!(
+                    batch
+                        .events
+                        .iter()
+                        .all(|event| event.paths.as_slice() == std::slice::from_ref(&link)),
+                    "file watches report the subscribed name for changes to either inode"
+                );
+                return Ok(());
+            }
+            ready.recv_timeout(deadline.saturating_duration_since(Instant::now()))?;
+        }
+    };
+
+    std::fs::write(&link, "file created")?;
+    wait_for_change()?;
+    std::fs::write(&replacement, "file replaced")?;
+    std::fs::rename(&replacement, &link)?;
+    wait_for_change()?;
+    std::fs::write(&link, "replacement edited")?;
+    wait_for_change()?;
+
+    std::os::unix::fs::symlink(&target, &replacement)?;
+    std::fs::rename(&replacement, &link)?;
+    wait_for_change()?;
+    std::fs::write(&target, "missing target created")?;
+    wait_for_change()?;
+    std::fs::write(&target, "target edited")?;
+    wait_for_change()?;
+    std::fs::write(&other, "retargeted")?;
+    std::os::unix::fs::symlink(&other, &replacement)?;
+    std::fs::rename(&replacement, &link)?;
+    wait_for_change()?;
+    std::fs::write(&other, "new target edited")?;
+    wait_for_change()?;
+    std::fs::remove_file(&link)?;
+    wait_for_change()?;
+    std::fs::write(&link, "name recreated")?;
+    wait_for_change()?;
+
+    std::fs::rename(&root, scratch.join("moved"))?;
+    wait_for_change()?;
+    std::fs::create_dir(&root)?;
+    std::fs::write(&link, "ancestor recreated")?;
+    wait_for_change()?;
+
+    assert_eq!(
+        watcher.synchronize_at(&root, Instant::now() + Duration::from_secs(1)),
+        Err(SynchronizeError::Unsupported),
+        "vnode events do not provide the FSEvents marker contract"
     );
     Ok(())
 }
