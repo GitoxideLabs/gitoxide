@@ -1073,6 +1073,74 @@ fn disappearing_loose_objects_keep_retryable_diagnostics() -> gix_testtools::Tes
 }
 
 #[test]
+fn verification_names_the_index_with_an_invalid_large_offset_reference() -> gix_testtools::TestResult {
+    use std::sync::atomic::AtomicBool;
+
+    const V2_HEADER_SIZE: usize = 8 + 256 * 4;
+    let object_hash = gix_testtools::object_hash();
+    let (repo, index_path) =
+        gix_testtools::scripted_fixture_read_only_with_post("make_single_pack_repo.sh", 1, |fixture| {
+            let index_path = std::fs::read_dir(fixture.path().join(".git/objects/pack"))?
+                .map(|entry| entry.map(|entry| entry.path()))
+                .collect::<io::Result<Vec<_>>>()?
+                .into_iter()
+                .find(|path| path.extension().is_some_and(|ext| ext == "idx"))
+                .ok_or("the script writes a pack index")?;
+            if let gix_testtools::FixtureState::Uninitialized(_) = fixture {
+                let mut data = std::fs::read(&index_path)?;
+                let hash_len = object_hash.len_in_bytes();
+                let num_objects = u32::from_be_bytes(data[V2_HEADER_SIZE - 4..V2_HEADER_SIZE].try_into()?) as usize;
+                let first_offset = V2_HEADER_SIZE + num_objects * (hash_len + 4);
+                // The high bit selects large-offset slot 0, but a pack this small has no large-offset table.
+                data[first_offset..][..4].copy_from_slice(&(1u32 << 31).to_be_bytes());
+                let checksum_start = data.len() - hash_len;
+                let mut hasher = gix_hash::hasher(object_hash);
+                hasher.update(&data[..checksum_start]);
+                data[checksum_start..].copy_from_slice(hasher.try_finalize()?.as_slice());
+                // Replace Git's read-only file rather than changing its permissions.
+                let replacement = index_path.with_extension("corrupt-idx");
+                std::fs::write(&replacement, data)?;
+                gix_testtools::rename(replacement, &index_path)?;
+                let git = gix_testtools::git_command(fixture.path())
+                    .arg("verify-pack")
+                    .arg(&index_path)
+                    .output()?;
+                assert!(
+                    !git.status.success(),
+                    "Git rejects the large-offset reference in the prepared index"
+                );
+            }
+            Ok(index_path)
+        })?;
+    let blob_id = gix_object::compute_hash(object_hash, Kind::Blob, b"content\n")?;
+    for load_index_first in [false, true] {
+        let handle = crate::odb_at(repo.join(".git/objects"))?;
+        if load_index_first {
+            assert!(
+                gix_object::Exists::exists(&handle, &blob_id),
+                "a lookup loads the index without reading its offsets"
+            );
+        }
+        let err = handle
+            .store_ref()
+            .verify_integrity(
+                &mut gix_utils::progress::Discard,
+                &AtomicBool::new(false),
+                Default::default(),
+            )
+            .err()
+            .expect("verification checks every offset reference");
+        assert!(err.is_corrupted(), "the invalid reference is corruption: {err}");
+        assert_eq!(
+            err.metadata().next().expect("verification adds context")["path"],
+            MetadataValue::from(index_path.as_path()),
+            "the failing index is named whether or not a lookup loaded it first (loaded: {load_index_first})"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn in_pack_ref_delta_preserves_malformed_base_entry() -> gix_testtools::TestResult {
     use gix_pack::data;
     use std::io::Write;

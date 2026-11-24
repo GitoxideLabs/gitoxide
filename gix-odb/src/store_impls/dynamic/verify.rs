@@ -138,15 +138,15 @@ impl super::Store {
                 let start = Instant::now();
                 let (mut child_progress, num_objects, index_path) = match files {
                     IndexAndPacks::Index(bundle) => {
+                        let open_failed = || {
+                            Message::new("Could not open pack index for verification").with("path", bundle.index.path())
+                        };
                         let index;
                         let index = match bundle.index.loaded() {
-                            Some(index) => index.validated()?,
+                            Some(index) => index.validated().or_raise(open_failed)?,
                             None => {
-                                index =
-                                    pack::index::File::at(bundle.index.path(), self.object_hash).or_raise(|| {
-                                        Message::new("Could not open pack index for verification")
-                                            .with("path", bundle.index.path())
-                                    })?;
+                                index = pack::index::File::at(bundle.index.path(), self.object_hash)
+                                    .or_raise(open_failed)?;
                                 &index
                             }
                         };
