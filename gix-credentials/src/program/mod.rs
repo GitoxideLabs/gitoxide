@@ -172,6 +172,9 @@ mod tests {
 
     #[test]
     fn git_program_with_spaces_is_quoted_in_external_name_shell_scripts() -> gix_testtools::TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
         let cmd = super::external_name_command(
             Path::new(r"C:\Program Files\Git\mingw64\bin\git.exe"),
             "manager --config=~/credentials".into(),
@@ -186,11 +189,11 @@ mod tests {
         assert_eq!(
             script,
             OsStr::new(if cfg!(windows) {
-                r#"'C:/Program Files/Git/mingw64/bin/git.exe' credential-manager --config=~/credentials "$@""#
+                r#""'C:/Program Files/Git/mingw64/bin/git.exe' credential-manager --config=~/credentials \"$@\"""#
             } else {
                 r#"'C:\Program Files\Git\mingw64\bin\git.exe' credential-manager --config=~/credentials "$@""#
             }),
-            "the Git executable is a single shell token even when its path contains spaces"
+            "the Git executable stays a single shell token through runtime quoting even when its path contains spaces"
         );
         Ok(())
     }

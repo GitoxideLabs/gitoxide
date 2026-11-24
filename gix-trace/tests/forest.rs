@@ -28,6 +28,37 @@ fn collecting_processor() -> (impl Processor, mpsc::Receiver<Tree>) {
 }
 
 #[test]
+fn debug_command_logs_only_the_program_and_escaped_arguments() -> TestResult {
+    let (dispatch, receiver) = collector();
+    let mut cmd = std::process::Command::new("ssh");
+    cmd.env("EXAMPLE", "not logged");
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::raw_arg(&mut cmd, "argument\n");
+    #[cfg(not(windows))]
+    cmd.arg("argument\n");
+
+    tracing::dispatcher::with_default(&dispatch, || {
+        gix_trace::debug_command!(cmd);
+        gix_trace::debug_command!(cmd, "checking {}", "ssh");
+    });
+    for message in [None, Some("checking ssh")] {
+        let tree = receiver.try_recv()?;
+        let event = tree.event()?;
+        assert_eq!(event.message(), message, "the optional message is formatted separately");
+        assert_eq!(
+            event
+                .fields()
+                .iter()
+                .map(|field| (field.key(), field.value()))
+                .collect::<Vec<_>>(),
+            [("program", r#""ssh""#), ("args", r#"["argument\n"]"#)],
+            "arguments are escaped and environment overrides are not logged"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn in_thread_keeps_nested_workers_in_the_captured_tree() -> TestResult {
     let (dispatch, receiver) = collector();
     let work = tracing::dispatcher::with_default(&dispatch, || {

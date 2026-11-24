@@ -28,6 +28,8 @@ use bstr::{BString, ByteSlice};
 pub mod parse;
 
 mod prepare;
+#[cfg(windows)]
+mod windows;
 
 ///
 pub mod shebang {
@@ -65,8 +67,10 @@ pub mod shebang {
 /// after creating it with [`prepare()`].
 ///
 /// Convert it to [`std::process::Command`] with [`TryFrom::try_from()`] to finish preparation
-/// without spawning. Preparation reports an error when shell quoting or namespace conversion
-/// requires an encoding the platform cannot represent.
+/// without spawning. Preparation reports an error when argument quoting or namespace conversion
+/// requires an encoding the selected parser or platform cannot represent.
+/// On Windows, arguments to the bundled Git shell can use `CommandExt::raw_arg`, so
+/// `Command::get_args()` can include command-line quoting rather than only the decoded contents.
 pub struct Prepare {
     /// The command to invoke, either directly or with a shell depending on `use_shell`.
     pub command: OsString,
@@ -160,21 +164,39 @@ fn is_bare_command(command: &Path) -> bool {
     command.components().take(2).count() == 1
 }
 
+/// Return `Some(path)` if appending `.exe` to `command` yields a path to a file, as in Rust's
+/// Windows process launcher for explicit paths. For example, `bin/ssh` returns `Some(bin/ssh.exe)`
+/// if `bin/ssh.exe` is a file, even if `bin/ssh` also exists.
+///
+/// Return `None` if there is no such file, if `command` already has an `.exe` extension (ignoring
+/// ASCII case), or if it ends in a [Windows path separator](prepare::has_trailing_windows_separator).
+fn win_exe_suffix_lookup(command: &Path) -> Option<PathBuf> {
+    if prepare::has_trailing_windows_separator(command)
+        || command
+            .extension()
+            .is_some_and(|ext| ext.as_encoded_bytes().eq_ignore_ascii_case(b"exe"))
+    {
+        return None;
+    }
+    let mut executable = command.as_os_str().to_owned();
+    executable.push(".exe");
+    let executable = PathBuf::from(executable);
+    executable.is_file().then_some(executable)
+}
+
 /// Try to find `command` in `joined_paths` using [`split_paths()`].
 /// Commands with an explicit extension are matched verbatim. Otherwise, `.exe` is preferred over an extensionless file.
 /// Note that just like Git, no lookup is performed if a slash or backslash is in `command`.
 fn win_path_lookup(command: &Path, joined_paths: &std::ffi::OsStr) -> Option<PathBuf> {
     fn lookup(root: &Path, command: &Path, has_extension: bool) -> Option<PathBuf> {
-        let mut path = root.join(command);
+        let path = root.join(command);
         if has_extension {
             return path.is_file().then_some(path);
         }
 
-        path.set_extension("exe");
-        if path.is_file() {
-            return Some(path);
+        if let Some(executable) = win_exe_suffix_lookup(&path) {
+            return Some(executable);
         }
-        path.set_extension("");
         path.is_file().then_some(path)
     }
     if !is_bare_command(command) {
@@ -212,6 +234,9 @@ pub fn extract_interpreter(executable: &Path) -> Option<shebang::Data> {
 /// - `stderr` is inherited to allow the command to provide context to the user
 ///
 /// On Windows, terminal Windows will be suppressed automatically.
+/// Explicit program paths also prefer an existing `.exe` sibling, matching Rust's process launcher.
+/// The bundled Git shell receives MSYS2 quoting. For external Git transports use
+/// [`Prepare::into_command_with_git_quoting()`] to enable Git's additional Windows quoting.
 ///
 /// ### Warning
 ///
