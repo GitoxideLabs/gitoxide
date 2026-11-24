@@ -42,7 +42,8 @@ pub enum Case {
 
 /// Instantiation
 impl Pattern {
-    /// Parse the given `text` as pattern, or return `None` if `text` was empty.
+    /// Parse the given `text` as pattern, or return `None` if it is empty or consists of just `!`.
+    /// Whitespace is literal, including in patterns made entirely of whitespace.
     pub fn from_bytes(text: &[u8]) -> Option<Self> {
         crate::parse::pattern(text, true).map(|(text, mode, first_wildcard_pos)| Pattern {
             text: text.into(),
@@ -53,7 +54,7 @@ impl Pattern {
 
     /// Parse the given `text` as pattern without supporting leading `!` or `\\!` , or return `None` if `text` was empty.
     ///
-    /// This assures that `text` remains entirely unaltered, but removes built-in support for negation as well.
+    /// As with [`Self::from_bytes()`], whitespace is literal.
     pub fn from_bytes_without_negation(text: &[u8]) -> Option<Self> {
         crate::parse::pattern(text, false).map(|(text, mode, first_wildcard_pos)| Pattern {
             text: text.into(),

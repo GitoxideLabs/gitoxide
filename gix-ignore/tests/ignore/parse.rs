@@ -109,7 +109,12 @@ fn trailing_carriage_return_without_newline_is_a_line_ending() {
 #[test]
 fn comments_are_ignored_as_well_as_empty_ones() {
     assert!(gix_ignore::parse(b"# hello world", false).next().is_none());
-    assert!(gix_ignore::parse(b"\n\r\n\t\t   \n", false).next().is_none());
+    for line in [b"\n".as_slice(), b"\r\n", b"   \n"] {
+        assert!(
+            gix_ignore::parse(line, false).next().is_none(),
+            "empty lines and lines containing only spaces do not produce patterns"
+        );
+    }
 }
 
 #[test]
@@ -121,13 +126,18 @@ fn backslashes_before_hashes_are_no_comments() {
 }
 
 #[test]
-fn trailing_spaces_can_be_escaped_to_be_literal() {
+fn trailing_spaces_can_be_escaped_to_be_literal() -> gix_testtools::TestResult {
     fn parse_one(input: &str) -> (BString, Mode, usize, gix_ignore::Kind) {
         let actual: Vec<_> = gix_ignore::parse(input.as_bytes(), false).map(flat_map).collect();
         assert_eq!(actual.len(), 1, "{input:?} should match");
         actual.into_iter().next().expect("present")
     }
 
+    assert_eq!(
+        parse_one("\t\t   \n"),
+        pat("\t\t", Mode::NO_SUB_DIR, 1),
+        "trimming unescaped trailing spaces leaves a literal tab-only pattern"
+    );
     assert_eq!(
         parse_one(r"a  \ "),
         pat(r"a  \ ", Mode::NO_SUB_DIR, 1),
@@ -163,6 +173,7 @@ fn trailing_spaces_can_be_escaped_to_be_literal() {
         pat(r"a   \\", Mode::NO_SUB_DIR, 1),
         "strange things like these work as well, but trailers are removed if the backslash is escaped"
     );
+    Ok(())
 }
 
 fn flatten(
