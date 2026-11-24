@@ -24,7 +24,11 @@ pub fn discard(_attrs: TokenStream, _input: TokenStream) -> TokenStream {
     TokenStream::new()
 }
 
-/// Expose an item only within its crate unless the consuming crate enables `unstable`.
+/// Keep an item crate-private in a stable release and expose it in the companion `0.x` release.
+///
+/// In workspace builds, the annotated crate can enable its internal `unstable` feature to
+/// expose the experimental API. Cargo smart-release enables it by default for the `0.x`
+/// release and removes it from the stable release.
 ///
 /// Supply `#[gix_macros::unstable(since = "YYYY-MM-DD")]` with the date the item was introduced.
 /// The date must be a valid calendar date. When enabled, the instability note follows the first
@@ -49,7 +53,7 @@ pub fn unstable(attrs: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// Mark each field with `#[unstable(since = "YYYY-MM-DD")]`, dating its introduction.
 /// Add an optional, nonempty `reason = "..."` only when the rationale is not obvious.
-/// With the consuming crate's `unstable` feature enabled, the field remains public and gets the
+/// In the companion `0.x` release or a workspace build with `unstable` enabled, the field remains public and gets the
 /// same documentation note as [`unstable`]. Otherwise it becomes `pub(crate)`.
 /// All unmarked fields are unchanged.
 #[proc_macro_attribute]

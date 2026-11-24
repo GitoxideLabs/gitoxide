@@ -25,7 +25,7 @@ gix-error = { version = "^0.5.3", path = "../gix-error" }
 gix-trace = { version = "^0.3.2", path = "../gix-trace" }
 gix-index = { version = "^0.59.0", path = "../gix-index" }
 gix-discover = { version = "^0.58.0", path = "../gix-discover" }
-gix-fs = { version = "~1.0.0", path = "../gix-fs", features = ["unstable"] }
+gix-fs = { version = "^1.0.0", path = "../gix-fs", features = ["unstable"] }
 gix-path = { version = "^0.14.2", path = "../gix-path" }
 gix-pathspec = { version = "^0.23.0", path = "../gix-pathspec" }
 gix-worktree = { version = "^0.60.0", path = "../gix-worktree", default-features = false }

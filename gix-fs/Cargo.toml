@@ -9,13 +9,13 @@ description = "A crate providing file system specific utilities to `gitoxide`"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2024"
 rust-version = "1.95"
-include = ["/src/**/*", "/LICENSE-*"]
+include = ["/src/**/*", "/LICENSE-*", "/build.rs"]
 
 [lib]
 doctest = true
 
 [features]
-## Expose filesystem APIs beyond stable lock-file creation, cleanup, and permission handling. Restrict updates to the same minor series when using them.
+# Workspace switch used by cargo smart-release.
 unstable = []
 
 ## The experimental `Capabilities` type implements `serde::Serialize` and `serde::Deserialize`.
@@ -27,6 +27,7 @@ walkdir = ["unstable", "dep:walkdir"]
 [package.metadata.smart-release]
 api-check = ["etc/scripts/check-api.sh"]
 unstable-features = ["unstable", "serde", "walkdir"]
+unstable-stable-dependency = true
 
 [package.metadata.api-check]
 profiles = [{ default-features = false, features = [] }]

@@ -31,7 +31,7 @@ doctest = true
 test = true
 
 [dependencies]
-gix-fs = { version = "~1.0.0", path = "../gix-fs" }
+gix-fs = { version = "^1.0.0", path = "../gix-fs" }
 parking_lot = "0.13.0"
 dashmap = { version = "6.2.1", optional = true }
 tempfile = "3.26.0"
@@ -43,7 +43,7 @@ document-features = { version = "0.2.0", optional = true }
 
 [features]
 default = ["hp-hashmap"]
-## Expose experimental directory helpers from `gix-fs`. Restrict updates to the same minor series when using them.
+# Workspace switch used by cargo smart-release.
 unstable = ["gix-fs/unstable"]
 ## Support for signal handlers to cleanup tempfiles when a signal is received.
 signals = ["dep:signal-hook", "dep:signal-hook-registry"]

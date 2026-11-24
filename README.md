@@ -78,7 +78,7 @@ Follow linked crate name for detailed status. Please note that all crates follow
 ### Stabilization Candidates
 
 Crates whose chosen supported public API is nearly ready for a 1.0 compatibility commitment.
-Remaining experimental public APIs can stay behind a non-default `unstable` feature.
+Remaining experimental public APIs can be published in parallel `0.x` releases.
 Documentation for the supported API is complete and was reviewed at least once.
 
 * [gix-mailmap](https://github.com/GitoxideLabs/gitoxide/blob/main/crate-status.md#gix-mailmap)
