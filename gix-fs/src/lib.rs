@@ -4,12 +4,12 @@
 //! [`dir::create::Retries`], [`dir::create::all()`], [`dir::remove::empty_upward_until_boundary()`],
 //! [`SharedPermissions`], [`set_shared_repository_permissions()`], and [`clear_readonly_attribute()`].
 //!
-//! All other public APIs require the `unstable` feature and may break in minor releases.
-//! Restrict updates to the same minor series when using them. The `serde` and `walkdir` features also enable `unstable`.
+//! The parallel `0.x` releases include experimental APIs and may break in minor releases.
+//! The `serde` and `walkdir` features are available in those releases.
 //!
 //! ## Examples
 //!
-//! With `unstable` enabled, delegate side effects as a stack's current path changes:
+//! In a `0.x` release, delegate side effects as a stack's current path changes:
 //!
 //! ```
 //! # #[cfg(feature = "unstable")]
@@ -177,7 +177,12 @@ pub fn current_dir(precompose_unicode: bool) -> std::io::Result<PathBuf> {
     })
 }
 
+// Keep permission types interchangeable across both published versions.
+#[cfg(reexport_stable_types)]
+pub use smart_release_stable::SharedPermissions;
+
 /// Git's `core.sharedRepository` policy for permissions on newly created repository data.
+#[cfg(not(reexport_stable_types))]
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SharedPermissions {
     /// Keep permissions as set by the process umask.

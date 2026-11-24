@@ -412,7 +412,7 @@ gix-utils = { version = "^0.5.3", path = "../gix-utils", features = [
     "interrupt",
     "progress",
 ] }
-gix-fs = { version = "~1.0.0", path = "../gix-fs", features = ["unstable"] }
+gix-fs = { version = "^1.0.0", path = "../gix-fs", features = ["unstable"] }
 gix-fsck = { version = "^0.28.0", path = "../gix-fsck", optional = true }
 gix-macros = { version = "^0.2.2", path = "../gix-macros" }
 gix-ref = { version = "^0.70.0", path = "../gix-ref" }

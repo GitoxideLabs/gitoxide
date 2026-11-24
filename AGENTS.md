@@ -230,7 +230,7 @@ Do not gate an API solely because it exposes a declared exception. A type except
 does not admit other types from the same crate or types exposed by its supported
 fields, methods, bounds, or trait implementations. Gate experimental members with
 `gix_macros::unstable(since = "YYYY-MM-DD")`, using the item's introduction date from Git
-history, even when dependency feature unification makes it public. Keep `reason` optional and
+history, even when a workspace build enables experimental APIs. Keep `reason` optional and
 use it only to explain something beyond the signature or the fact that the API is experimental.
 
 ### Plumbing vs Porcelain

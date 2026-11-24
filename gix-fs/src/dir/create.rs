@@ -3,8 +3,12 @@ use std::path::Path;
 
 use crate::SharedPermissions;
 
+#[cfg(reexport_stable_types)]
+pub use smart_release_stable::dir::create::Retries;
+
 /// The amount of retries to do during various aspects of the directory creation.
 /// A zero budget allows the initial attempt but no retries for that failure.
+#[cfg(not(reexport_stable_types))]
 #[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq)]
 pub struct Retries {
     /// How many times the whole directory can be created in the light of racy interference.
@@ -18,6 +22,7 @@ pub struct Retries {
     pub on_interrupt: usize,
 }
 
+#[cfg(not(reexport_stable_types))]
 impl Default for Retries {
     fn default() -> Self {
         Retries {

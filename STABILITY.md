@@ -18,12 +18,11 @@ The guide itself may evolve as requirements change.
     releases. This says nothing about its quality, completeness, or suitability for production use.
 - _major-positive crate_
   - A crate whose major version is one or higher and which makes a _supported API_ compatibility commitment.
-    It may also provide _experimental APIs_ behind `unstable`.
+    It may also have a parallel _major-zero release_ from the same source.
 - _supported API_
   - The public API for which a _major-positive crate_ makes normal semver compatibility commitments.
 - _experimental API_
-  - Additional public API available through a non-default `unstable` feature, with the more limited
-    compatibility commitments described below.
+  - Additional public API available in that parallel `0.x` release.
 - _breaking change_
   - A change requiring a _dependent crate_ to adapt, for example because code no longer compiles or
     documented behavior changes incompatibly.
@@ -45,13 +44,12 @@ its own API and types, and update or replace that dependency without changing it
 ### Publicly exposed crates
 
 A crate exposed through another crate's public API must become a _major-positive crate_ and support the exposed
-API. Keep its remaining _experimental APIs_ behind its non-default `unstable` feature. Private
-implementation code needs neither stabilization nor an `unstable` gate.
+API. Gate remaining _experimental APIs_ for the parallel `0.x` release. Private
+implementation code needs neither stabilization nor a gate.
 
 Exposure includes re-exports and types reachable through fields, variants, methods, associated types,
-bounds, and trait implementations, not only direct function signatures. Exposing a _major-zero crate_ behind
-`unstable` still exposes it; gating does not let it remain a _major-zero crate_ indefinitely.
-A _supported API_ must not depend on an _experimental API_, even when feature unification makes it public.
+bounds, trait implementations, and direct function signatures. Keep _experimental APIs_ and the types
+they expose out of the _supported API_.
 
 The same rule applies to workspace and external dependencies. Existing departures from it are covered by
 [temporary migration exceptions](#temporary-migration-exceptions), not a permanent alternative to stabilization.
@@ -66,63 +64,37 @@ precedence or compatibility requirements.
 
 ## Supported and experimental public APIs
 
-A _major-positive crate_ need not stabilize every capability. It commits to a chosen _supported API_ while
-allowing additional _experimental APIs_ behind a non-default `unstable` feature.
-These rules apply to all _major-positive crates_, including `gix` once it reaches 1.0.
+A _major-positive crate_ can publish experimental APIs from the same source as a second, `0.x` release.
+Cargo smart-release publishes the stable package first, then allocates a new minor series after the highest
+published `0.x` version. Experimental API changes do not set the stable version increment.
 
 ### Version increments
 
-For a _major-positive crate_, the minimum version increment depends on the changes included in the _release_:
-
-| Change | Minimum increment | Example from `1.2.3` |
+| Change to the stable release | Minimum increment | Example from `1.2.3` |
 | --- | --- | --- |
 | Backward-compatible fixes or internal changes | Patch | `1.2.4` |
 | New public functionality without breaking the _supported API_ | Minor | `1.3.0` |
-| _Breaking changes_ confined to _experimental APIs_ | Minor | `1.3.0` |
 | _Breaking changes_ to the _supported API_ | Major | `2.0.0` |
 
-Patch releases must preserve both _supported APIs_ and _experimental APIs_. A _release_ containing multiple
-kinds of changes takes the strongest required increment. Explicit major bumps and breaking commit intent
-retain any stronger release requirement.
-
-**A minor release need not add features.** It may contain only _breaking changes_ behind `unstable` while
-leaving the _supported API_ unchanged. _Downstream crates_ using only the _supported API_ can accept that update
-normally; those using _experimental APIs_ must review it before upgrading.
+Explicit major bumps and breaking commit intent retain any stronger release requirement.
 
 ### Consuming experimental APIs
 
-_Downstream applications_ using a workspace crate solely as an implementation detail
-may opt into its _experimental APIs_, but must restrict updates to the same minor series.
-Once `gix` is a _major-positive crate_, for example:
+Choose the version series in `Cargo.toml`. For example, `gix-fs = "1.0"` uses the supported API.
+A dependency such as `gix-fs = "0.25"` selects an experimental series and accepts compatible patch
+releases within that series. Cargo can resolve the stable series and multiple experimental minor
+series in the same dependency graph. Types defined independently by different crate versions are
+distinct. Shared types re-exported from the stable package retain their identity.
 
-```toml
-gix = { version = "~1.2.3", features = ["unstable"] }
-```
-
-This admits `1.2.x` updates from `1.2.3` onward but excludes `1.3.0`, protecting the _dependent crate_ from
-accidental _breaking changes_ to _experimental APIs_. Plain `"1.2.3"` permits minor updates and lacks that protection.
-An exact requirement such as `"=1.2.3"` also protects against those changes, but excludes patch updates too.
-This minor-series requirement also applies within this workspace. Each _dependent crate_ must constrain any
-dependency whose _experimental APIs_ it uses; pinning the _dependent crate_ itself does not constrain that
-dependency's minor series.
-
-_Downstream libraries_ outside this workspace that expose a workspace crate or its types in their _supported API_
-should use only that dependency's _supported API_, including internally, rather than enable or forward `unstable`.
-This avoids imposing an experimental minor-series pin on the libraries' own _downstream crates_ using those types.
-These downstream libraries can accept normal semver-compatible updates:
-
-```toml
-gix = { version = "1.2.3" }
-```
-
-_Downstream applications_ using those libraries can opt into the dependency's _experimental APIs_ independently.
-Those _experimental APIs_ must not become part of a downstream library's _supported API_.
+With workspace path dependencies, use the internal `unstable` switch to select experimental APIs.
+Cargo smart-release translates these dependency edges to the corresponding `0.x` requirement in the
+published manifest. Downstream manifests select experimental APIs by version.
 
 ### Gating experimental APIs
 
 `gix_macros::unstable` keeps annotated items available within the crate while exposing them publicly only
-with its `unstable` feature enabled. Gate experimental members as well as whole types or modules where needed;
-supporting a type does not imply supporting every member it could expose.
+in the parallel `0.x` release or when a workspace build enables the internal `unstable` switch.
+Gate experimental members as well as whole types or modules where needed.
 
 Every gate requires `#[gix_macros::unstable(since = "YYYY-MM-DD")]`. Use the item's introduction date
 from Git history, following renames when necessary. The date must be a valid calendar date and is
@@ -136,7 +108,7 @@ The workspace is still transitioning to the public-exposure rule. Until `gix` re
 manifest-declared exceptions provisionally support selected types from _major-zero crates_. These are
 migration allowances, not permission for publicly exposed dependencies to remain _major-zero crates_ forever.
 Before releasing `gix` 1.0, make the exposed crates _major-positive crates_ or remove their exposure.
-Gate their remaining _experimental APIs_ behind non-default `unstable`.
+Gate their remaining _experimental APIs_ for the parallel `0.x` release.
 
 Each _dependent crate_'s Cargo manifest is the source of truth for its exceptions:
 
@@ -148,8 +120,7 @@ allowed-unstable-crates = []
 ```
 
 Use fully qualified Rust type paths without generic arguments, and Rust crate names with underscores.
-A type exception applies to that type, not its entire crate. An API does not require the enclosing crate's
-`unstable` feature solely because it exposes a declared exception. Other types exposed by supported fields,
+A type exception applies to that type, not its entire crate. Exposure covered by a declared exception does not require an experimental gate. Other types exposed by supported fields,
 variants, methods, associated types, bounds, and trait implementations still need their own assessment.
 
 An exception permits exposure; it does not establish compatibility across breaking dependency releases.
@@ -159,15 +130,10 @@ must retain those checks even for exempt dependencies.
 
 ### API checks
 
-Release planning compares the _supported API_ and the full API separately. Supported comparisons cover the
-feature profiles declared in `package.metadata.api-check.profiles`, excluding features listed in
-`package.metadata.smart-release.unstable-features`. Full comparisons enable all those experimental features
-together on each profile and include _experimental APIs_. The declared features must work together;
-a failed check aborts planning rather than establishing compatibility.
-
-Full API compatibility permits patch releases; _breaking changes_ confined to _experimental APIs_ require
-at least a minor increment. _Breaking changes_ to a _major-positive crate_'s _supported API_ require a major
-increment. Stronger version requirements are preserved.
+For parallel releases, release planning checks the _supported API_. Comparisons cover the
+feature profiles declared in `package.metadata.api-check.profiles`, excluding `unstable` and entries in
+`package.metadata.smart-release.unstable-features`. The planned `0.x` release starts a new minor
+series with the experimental feature set available.
 
 Standalone `compare` and `boundary` checks cover only the _supported API_.
 
@@ -175,11 +141,10 @@ Standalone `compare` and `boundary` checks cover only the _supported API_.
 exceptions. Direct checks inspect the _dependent crate_'s API and the stability of its referenced dependency
 types. Set `package.metadata.api-check.recursive = true` to also follow the supported members of reachable
 workspace dependency types; this is planned for `gix`. Experimental members are excluded using the
-documentation markers emitted by `gix_macros::unstable`, regardless of whether feature unification made them
-public. Dependency rustdoc is generated with the features resolved for each profile of the _dependent crate_.
+documentation markers emitted by `gix_macros::unstable`, even when a workspace build makes them public. Dependency rustdoc is generated with the features resolved for each profile of the _dependent crate_.
 
 These boundary checks supplement release compatibility checks. Because they inspect supported profiles,
-also review _experimental APIs_ for exposed _major-zero crates_: gating alone does not satisfy the public-exposure rule.
+also review _experimental APIs_ and the dependencies they expose.
 
 ## Downstream compatibility testing
 
@@ -196,9 +161,8 @@ Each crate declares its MSRV through `package.rust-version` in its Cargo manifes
 dependency graph are tested at its MSRV by the [`ci.yml` workflow](.github/workflows/ci.yml).
 
 MSRV increases are assessed per crate and are made only when adopting a newer Rust version improves the
-quality of that specific crate's code. Such increases are **not** considered _breaking changes_ under this
-project's versioning policy. API compatibility, including a patch release's _experimental API_ guarantee,
-does not imply an unchanged compiler requirement.
+quality of that specific crate's code. Supported API compatibility and compiler requirements are
+assessed independently.
 
 Please let us know if you need a different compiler support policy so we can consider accommodating it.
 
@@ -206,7 +170,7 @@ Please let us know if you need a different compiler support policy so we can con
 
 Implementation-only _major-zero crates_ need not become _major-positive crates_. Public exposure requires that
 transition, but not completion of every feature. Stabilize the API that _downstream crates_ need; the remaining
-_experimental API_ can stay behind `unstable`. The `gix-fs` 1.0 API illustrates this approach.
+_experimental API_ can ship in the parallel `0.x` release. The `gix-fs` API illustrates this approach.
 
 Before exposing a crate as part of a public API:
 
@@ -216,14 +180,13 @@ Before exposing a crate as part of a public API:
 - Ensure the crate and its publicly exposed dependencies are _major-positive crates_. Keep implementation-only
   dependencies private; they may remain _major-zero crates_. Resolve existing [migration exceptions](#temporary-migration-exceptions)
   before `gix` 1.0 rather than treating them as permanent support for exposed `0.x` crates.
-- Keep _experimental APIs_ behind a non-default `unstable` feature with dated `gix_macros::unstable` gates.
-  Review types and their members, bounds, and implementations. _Supported APIs_ must not require _experimental APIs_
-  even if dependency feature unification makes them public.
+- Gate _experimental APIs_ with dated `gix_macros::unstable` annotations. Review types and their
+  members, bounds, and implementations for experimental exposure.
 - Declare `package.metadata.api-check.profiles` and pass their boundary checks. Enable recursive checking
   where transitive commitments are intended, and review the dependency exposure of _experimental APIs_ separately.
 - Configure `package.metadata.smart-release.api-check` and, when applicable,
-  `package.metadata.smart-release.unstable-features` so release planning checks the _supported API_ and the full API.
-  Constrain dependencies providing _experimental APIs_ to a minor series, and run the relevant tests, builds,
+  `package.metadata.smart-release.unstable-features` so release planning checks the _supported API_.
+  Run the relevant tests, builds,
   documentation checks, and CI checks of _downstream crates_.
 
 A first stable release has no historical stable baseline; passing boundary checks does not establish

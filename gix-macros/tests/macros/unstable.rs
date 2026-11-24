@@ -57,11 +57,24 @@ path = {consumer:?}
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    let output = run("check", &["--bin", "consumer"]);
+    let manifest_path = fixture.join("Cargo.toml");
+    let workspace = std::fs::read_to_string(&manifest_path).expect("the workspace fixture manifest exists");
+    let stable = workspace
+        .replace("version = \"0.0.0\"", "version = \"1.0.0\"")
+        .replace("unstable = []", "")
+        + "\n[lints.rust]\nunexpected_cfgs = { level = \"deny\", check-cfg = ['cfg(feature, values(\"unstable\"))'] }\n";
+    std::fs::write(&manifest_path, stable).expect("the stable release manifest can be written");
+    let output = run("check", &["--lib", "--all-features"]);
+    assert!(
+        output.status.success(),
+        "the stable release builds without the switch: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let output = run("check", &["--bin", "consumer", "--all-features"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         !output.status.success(),
-        "downstream unstable access must require the feature"
+        "stable releases must keep experimental APIs private, even with all features enabled"
     );
     for diagnostic in [
         "module `plumbing` is private",
@@ -82,6 +95,16 @@ path = {consumer:?}
             "missing expected visibility diagnostic {diagnostic:?}: {stderr}"
         );
     }
+
+    let unstable = workspace.replace("unstable = []", "default = [\"unstable\"]\nunstable = []");
+    std::fs::write(&manifest_path, unstable).expect("the major-zero release manifest can be written");
+    let output = run("check", &["--bin", "consumer"]);
+    assert!(
+        output.status.success(),
+        "major-zero releases expose experimental APIs by default: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::write(&manifest_path, workspace).expect("the workspace manifest can be restored");
 
     let docs = root.join("../target/gix-macros-unstable/build/doc/unstable_macro_fixture");
     for features in [&["--features", "unstable"][..], &[][..]] {
