@@ -795,7 +795,6 @@ mod into_iter {
         Ok(())
     }
 
-    #[cfg(not(feature = "parallel"))]
     mod progress_hook {
         pub(super) enum Hook {
             Init,
@@ -1053,6 +1052,93 @@ mod into_iter {
                 !SHARED.load(Ordering::Relaxed) && !owned.load(Ordering::Relaxed),
                 "caller flags stay clear after iterator drop"
             );
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "parallel")]
+    fn status_worker_exit_without_a_result_is_an_error() -> TestResult {
+        let progress = progress_hook::Progress(Box::new(|hook| {
+            if matches!(hook, progress_hook::Hook::Init) {
+                panic!("the worker exited before publishing its result");
+            }
+        }));
+        let repo = repo("untracked-unborn")?;
+        let mut iter = repo
+            .status(progress)?
+            .untracked_files(gix::status::UntrackedFiles::None)
+            .into_index_worktree_iter(None)?;
+        let err = iter
+            .next()
+            .expect("worker exit is reported")
+            .expect_err("the scan failed");
+        assert!(
+            err.to_string().contains("exited without reporting its result"),
+            "expected a missing worker result, got {err:?}"
+        );
+        assert!(iter.next().is_none(), "the error is reported once");
+        assert!(iter.into_outcome().is_none(), "an incomplete scan has no outcome");
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "parallel")]
+    fn status_completes_while_worktree_progress_is_dropping() -> TestResult {
+        use std::{
+            sync::{Mutex, mpsc},
+            thread,
+            time::Duration,
+        };
+
+        let repo = repo("untracked-unborn")?;
+        for invalid_tree in [true, false] {
+            let (finishing, wait_for_finishing) = mpsc::channel();
+            let (release, wait_for_release) = mpsc::channel::<()>();
+            let mut wait_for_release = Mutex::new(wait_for_release);
+            let progress = progress_hook::Progress(Box::new(move |hook| {
+                if matches!(hook, progress_hook::Hook::Drop) {
+                    finishing.send(()).ok();
+                    wait_for_release.get_mut().expect("exclusive access").recv().ok();
+                }
+            }));
+            let mut platform = repo
+                .status(progress)?
+                .untracked_files(gix::status::UntrackedFiles::None);
+            if invalid_tree {
+                platform = platform.head_tree(repo.object_hash().empty_blob());
+            }
+            let mut iter = platform.into_iter(None)?;
+            wait_for_finishing.recv_timeout(Duration::from_secs(5))?;
+
+            let (returned, wait_for_next) = mpsc::channel();
+            thread::scope(|scope| {
+                let release_cleanup = scope.spawn(move || {
+                    let returned = wait_for_next.recv_timeout(Duration::from_secs(2));
+                    drop(release);
+                    returned
+                });
+                let item = iter.next();
+                returned.send(()).ok();
+                release_cleanup
+                    .join()
+                    .expect("helper thread completed")
+                    .expect("next() must return even while worktree cleanup is blocked");
+                if invalid_tree {
+                    let err = item
+                        .expect("the iterator reports the tree error")
+                        .expect_err("there are no status entries to report");
+                    assert!(
+                        err.to_string().contains("Could not create index from tree"),
+                        "expected the tree error, got {err:?}"
+                    );
+                    assert!(iter.next().is_none(), "the error is reported once");
+                    assert!(iter.into_outcome().is_none(), "a failed scan has no outcome");
+                } else {
+                    assert!(item.is_none(), "there are no status entries to report");
+                    assert!(iter.into_outcome().is_some(), "both scans completed successfully");
+                }
+            });
         }
         Ok(())
     }

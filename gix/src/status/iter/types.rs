@@ -32,14 +32,10 @@ use crate::{
 /// to interrupt unless [`status::Platform::should_interrupt_*()`](crate::status::Platform::should_interrupt_shared()) was
 /// configured.
 /// Dropping the iterator requests cancellation of its own workers and returns while they wind down.
+/// The scan can finish while the workers are still cleaning up.
 pub struct Iter {
     #[cfg(feature = "parallel")]
-    #[expect(clippy::type_complexity)]
-    pub(super) rx_and_join: Option<(
-        std::sync::mpsc::Receiver<Item>,
-        std::thread::JoinHandle<Result<Outcome>>,
-        Option<std::thread::JoinHandle<Result<tree_index::Outcome>>>,
-    )>,
+    pub(super) pending: Option<super::Pending>,
     #[cfg(feature = "parallel")]
     pub(super) should_interrupt: crate::status::OwnedOrStaticAtomicBool,
     #[cfg(feature = "parallel")]
