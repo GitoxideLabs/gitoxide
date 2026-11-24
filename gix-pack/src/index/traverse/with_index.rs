@@ -114,7 +114,7 @@ where
                     pack.path(),
                     sorted_entries.into_iter().map(Entry::from),
                     &|e| e.index_entry.pack_offset,
-                    &|id| Ok(self.lookup(id).map(|idx| self.pack_offset_at_index(idx))),
+                    &|id| self.lookup(id).map(|idx| self.pack_offset_at_index(idx)).transpose(),
                     &mut progress.add_child_with_id("indexing".into(), ProgressId::TreeFromOffsetsObjects.into()),
                     should_interrupt,
                     self.object_hash,

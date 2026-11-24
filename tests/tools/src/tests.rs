@@ -86,6 +86,33 @@ fn configure_command_clears_external_config() -> TestResult {
 }
 
 #[test]
+fn configure_command_limits_repository_discovery_to_the_fixture() -> TestResult {
+    let parent = tempfile::tempdir()?;
+    git(parent.path(), "init")?;
+    git(parent.path(), "config fixture.scope parent")?;
+    let fixture = parent.path().join("fixture");
+    let nested = fixture.join("nested");
+    std::fs::create_dir_all(&nested)?;
+
+    let mut cmd = git_command(&fixture);
+    let result = configure_command(&mut cmd, object_hash(), ["config", "--get", "fixture.scope"], &fixture).output()?;
+    assert_eq!(result.status.code(), Some(1), "Git must skip the parent config");
+
+    git(&fixture, "init")?;
+    git(&fixture, "config fixture.scope fixture")?;
+    let mut cmd = git_command(&fixture);
+    let result = configure_command(&mut cmd, object_hash(), ["config", "--get", "fixture.scope"], &fixture)
+        .current_dir(nested)
+        .output()?;
+    assert!(
+        result.status.success(),
+        "Git can discover a repository inside the fixture"
+    );
+    assert_eq!(result.stdout.to_str()?.trim(), "fixture");
+    Ok(())
+}
+
+#[test]
 fn configure_command_keeps_destructive_git_operations_in_the_fixture() -> TestResult {
     let fixture = tempfile::TempDir::new()?;
     let outside = tempfile::TempDir::new()?;

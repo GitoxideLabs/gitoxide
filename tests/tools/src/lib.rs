@@ -38,6 +38,7 @@
 //! and set `init.defaultBranch=main` and `core.longpaths=true`. The latter lets Git for Windows use long paths
 //! without depending on external configuration. A script's own `GIT_CONFIG_COUNT` entries coexist with this
 //! configuration, with isolation taking precedence for shared keys. Explicit `git -c` options can override isolation.
+//! Fixture scripts stop Git's upward repository discovery at the fixture root.
 //! Bash fixtures trace commands to a separate descriptor so redirected stderr baselines remain unchanged.
 //! Bash older than 4.1 reports failed commands instead. Captured diagnostics are printed only on failure.
 //!
@@ -2026,7 +2027,9 @@ pub fn git(current_dir: impl AsRef<Path>, arguments: &str) -> Result<String> {
     Ok(String::from_utf8(output.stdout)?)
 }
 
-/// Prepare an isolated Git command in `current_dir`, using the same environment as fixture scripts.
+/// Prepare an isolated Git command in `current_dir`.
+///
+/// Repository discovery may walk above `current_dir`, which allows commands from fixture subdirectories.
 ///
 /// The inherited environment is captured at construction, so subsequent process-wide changes
 /// cannot bypass the command's isolation before it is spawned.
@@ -2450,8 +2453,12 @@ fn configure_command<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     args: I,
     script_result_directory: &Path,
 ) -> &'a mut std::process::Command {
-    configure_git_environment(cmd, script_result_directory)
-        .args(args)
+    configure_git_environment(cmd, script_result_directory);
+    if let Some(parent) = script_result_directory.parent() {
+        // Git may discover a repository in the fixture itself, including from its subdirectories.
+        cmd.env("GIT_CEILING_DIRECTORIES", parent);
+    }
+    cmd.args(args)
         .current_dir(script_result_directory)
         .env("GIT_DEFAULT_HASH", object_hash.to_string())
 }

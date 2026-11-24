@@ -83,6 +83,41 @@ fn interrupted_before_writing() {
 }
 
 #[test]
+fn rejects_unused_large_offsets_before_writing() -> gix_testtools::TestResult {
+    let object_hash = gix_hash::Kind::Sha1;
+    let (_, index_path) = gix_testtools::scripted_fixture_read_only_with_args_with_post(
+        "make_large_offset_index.sh",
+        [crate::SMALL_PACK],
+        1,
+        |fixture| {
+            let path = fixture.path().join("unused-large-offset.idx");
+            if let gix_testtools::FixtureState::Uninitialized(_) = fixture {
+                let mut index = std::fs::read(fixture_path(crate::SMALL_PACK_INDEX))?;
+                let footer = index.split_off(index.len() - 2 * object_hash.len_in_bytes());
+                index.extend_from_slice(&0u64.to_be_bytes());
+                index.extend(footer);
+                std::fs::write(&path, index)?;
+            }
+            Ok(path)
+        },
+    )?;
+
+    let mut out = Vec::new();
+    let err = gix_pack::multi_index::write_from_index_paths(
+        vec![index_path],
+        &mut out,
+        &mut progress::Discard,
+        &AtomicBool::new(false),
+        gix_pack::multi_index::write::Options { object_hash },
+    )
+    .err()
+    .expect("the large-offset table has an unused slot");
+    assert!(err.is_corrupted(), "the source index has inconsistent tables");
+    assert!(out.is_empty(), "the inconsistent source must produce no output");
+    Ok(())
+}
+
+#[test]
 fn interrupted_while_writing_chunks() {
     struct InterruptOnWrite<'a>(&'a AtomicBool);
 

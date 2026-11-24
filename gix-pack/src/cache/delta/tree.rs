@@ -602,9 +602,9 @@ mod tests {
             let idx = pack::index::File::at(fixture_path(index_path), gix_hash::Kind::Sha1)?;
             crate::cache::delta::Tree::from_offsets_in_pack(
                 &fixture_path(pack_path),
-                idx.sorted_offsets().into_iter(),
+                idx.sorted_offsets()?.into_iter(),
                 &|ofs| *ofs,
-                &|id| Ok(idx.lookup(id).map(|index| idx.pack_offset_at_index(index))),
+                &|id| idx.lookup(id).map(|index| idx.pack_offset_at_index(index)).transpose(),
                 &mut gix_utils::progress::Discard,
                 &AtomicBool::new(false),
                 gix_hash::Kind::Sha1,

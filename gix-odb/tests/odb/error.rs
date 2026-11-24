@@ -405,6 +405,67 @@ fn corrupt_multi_index_reference(
     Ok(())
 }
 
+#[test]
+fn corrupt_single_pack_offsets_are_propagated() -> gix_error::TestResult {
+    use gix_pack::Find as _;
+    use gix_testtools::FixtureState;
+
+    let object_hash = gix_testtools::object_hash();
+    let shared = gix_object::compute_hash(object_hash, Kind::Blob, b"shared\n")?;
+    let loose = gix_object::compute_hash(object_hash, Kind::Blob, b"filler 38\n")?;
+    let broken = gix_object::compute_hash(object_hash, Kind::Blob, b"filler 39\n")?;
+    let (fixture, ()) =
+        gix_testtools::scripted_fixture_read_only_with_post("make_overlapping_packs.sh", 4, |fixture| {
+            if let FixtureState::Uninitialized(path) = fixture {
+                let objects = path.join(".git/objects");
+                gix_odb::loose::Store::at(&objects, object_hash).write_buf(Kind::Blob, b"filler 38\n")?;
+                let mut indices = Vec::new();
+                for entry in std::fs::read_dir(objects.join("pack"))? {
+                    let entry = entry?;
+                    if entry.path().extension().is_some_and(|ext| ext == "idx") {
+                        indices.push((entry.metadata()?.len(), entry.path()));
+                    }
+                }
+                let (_, path) = indices.into_iter().max().expect("the largest pack is searched first");
+                let mut data = std::fs::read(&path)?;
+                let index = gix_pack::index::File::from_data(data.as_slice(), path.clone(), object_hash)?;
+                let entries = [shared, loose, broken].map(|id| index.lookup(id).expect("object in the largest pack"));
+                let table = 8 + 256 * 4 + index.num_objects() as usize * (object_hash.len_in_bytes() + 4);
+                for entry in entries {
+                    let offset = table + entry as usize * 4;
+                    data[offset..offset + 4].copy_from_slice(&(1u32 << 31).to_be_bytes());
+                }
+                let replacement = path.with_extension("idx.new");
+                std::fs::write(&replacement, data)?;
+                gix_testtools::rename(replacement, path)?;
+            }
+            Ok(())
+        })?;
+
+    let mut handle = crate::odb_at(fixture.join(".git/objects"))?;
+    handle.prevent_pack_unload();
+    let err = handle
+        .location_by_oid(&shared, &mut Vec::new())
+        .expect_err("location lookup must not fall back to the healthy packed copy");
+    assert!(err.is_corrupted(), "location lookup reports index corruption");
+
+    // Reuse this handle so the bad index is already loaded when looking up the loose object.
+    for id in [shared, loose, broken] {
+        let err = gix_object::Find::try_find(&handle, &id, &mut Vec::new())
+            .expect_err("object lookup must report the bad offset even if a healthy copy exists");
+        assert!(err.is_corrupted(), "object lookup reports index corruption for {id}");
+
+        let err = gix_odb::Header::try_header(&handle, &id)
+            .expect_err("header lookup must report the bad offset even if a healthy copy exists");
+        assert!(err.is_corrupted(), "header lookup reports index corruption for {id}");
+    }
+    assert!(
+        !handle.exists_without_refresh(&broken),
+        "an unusable index match must not suppress an object write"
+    );
+    Ok(())
+}
+
 fn multi_index_corrupt_reference_is_fallible(large_offset: bool) -> gix_error::TestResult {
     use gix_pack::Find as _;
 

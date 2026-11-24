@@ -128,12 +128,11 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url> {
     if bytes_to_path > MAX_LEN || protocol_end > MAX_LEN {
         let truncated_url = &input[..(protocol_end + "://".len() + MAX_LEN).min(input.len())];
         bail!(
-            validation(format!(
-                "The host portion of the URL is too long ({} bytes shown, {} bytes total)",
-                truncated_url.len(),
-                input.len()
-            ))
-            .with_input(truncated_url)
+            "The host portion of the URL is too long ({} bytes shown, {} bytes total)"
+                .validation()
+                .with_input(truncated_url),
+            truncated_url.len(),
+            input.len(),
         );
     }
     let (input, url) = input_to_utf8_and_url(input, UrlKind::Url)?;
@@ -324,11 +323,10 @@ pub(crate) fn file_url(input: &BStr, protocol_colon: usize) -> Result<crate::Url
 pub(crate) fn local(input: &BStr) -> Result<crate::Url> {
     if input.is_empty() {
         bail!(
-            validation(format!(
-                "{} is empty and does not specify a path to a repository",
-                UrlKind::Local.as_str()
-            ))
-            .with_input(input.as_bytes())
+            "{} is empty and does not specify a path to a repository"
+                .validation()
+                .with_input(input.as_bytes()),
+            UrlKind::Local.as_str(),
         );
     }
 

@@ -39,9 +39,7 @@ where
         let pack_len = data.len();
         let id = crc32fast::hash(path.as_os_str().to_string_lossy().as_bytes());
         if pack_len < data::header::SIZE + hash_len {
-            bail!(gix_error::corruption(format!(
-                "Pack data of size {pack_len} is too small for even an empty pack with shortest hash"
-            )));
+            bail!("Pack data of size {pack_len} is too small for even an empty pack with shortest hash".corrupted());
         }
         let (kind, num_objects) = data::header::decode(
             &data[..data::header::SIZE]

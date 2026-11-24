@@ -126,6 +126,7 @@ where
 
     /// The most thorough validation of integrity of both index file and the corresponding pack data file, if provided.
     /// Returns the checksum of the index file, the traversal outcome and the given progress if the integrity check is successful.
+    /// All large-offset references are verified even if only the index is provided.
     ///
     /// If `pack` is provided, it is expected (and validated to be) the pack belonging to this index.
     /// It will be used to validate internal integrity of the pack before checking each objects integrity
@@ -157,6 +158,7 @@ where
                 "The fan at index {first_invalid} is out of order as it's larger then the following value."
             )));
         }
+        self.verify_offsets(should_interrupt)?;
 
         match pack {
             Some(PackContext {

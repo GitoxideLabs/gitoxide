@@ -116,19 +116,22 @@ impl AllObjects {
 }
 
 fn maybe_sort_entries(index: &handle::IndexLookup, order: Ordering) -> Option<Vec<EntryForOrdering>> {
-    let mut order: Vec<_> = match order {
+    // Fall back to lexical ordering if offsets cannot be sorted.
+    let mut order = match order {
         Ordering::PackLexicographicalThenLooseLexicographical => return None,
         Ordering::PackAscendingOffsetThenLooseLexicographical => match &index.file {
-            // We know that we cannot have more than u32 entry indices per pack.
-            SingleOrMultiIndex::Single { index, .. } => index
-                .iter()
-                .enumerate()
-                .map(|(idx, e)| EntryForOrdering {
-                    pack_offset: e.pack_offset,
-                    entry_index: idx as u32,
-                    pack_index: 0,
-                })
-                .collect(),
+            SingleOrMultiIndex::Single { index, .. } => {
+                let mut entries = Vec::new();
+                entries.try_reserve_exact(index.num_objects() as usize).ok()?;
+                for entry_index in 0..index.num_objects() {
+                    entries.push(EntryForOrdering {
+                        pack_offset: index.pack_offset_at_index(entry_index).ok()?,
+                        entry_index,
+                        pack_index: 0,
+                    });
+                }
+                Ok(entries)
+            }
             SingleOrMultiIndex::Multi { index, .. } => index
                 .iter()
                 .enumerate()
@@ -146,12 +149,10 @@ fn maybe_sort_entries(index: &handle::IndexLookup, order: Ordering) -> Option<Ve
                         },
                     })
                 })
-                // Object IDs remain iterable even if their pack references are corrupt. Keep the
-                // public iterator's filesystem-only error type and fall back to lexical ordering.
-                .collect::<Result<Vec<_>>>()
-                .ok()?,
+                .collect::<Result<Vec<_>>>(),
         },
-    };
+    }
+    .ok()?;
     order.sort_by(|a, b| {
         a.pack_index
             .cmp(&b.pack_index)

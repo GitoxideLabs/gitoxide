@@ -1,4 +1,10 @@
-use std::{mem::size_of, ops::Range};
+use std::{
+    mem::size_of,
+    ops::Range,
+    sync::atomic::{AtomicBool, Ordering},
+};
+
+use gix_error::{OptionExt, Result, bail, cancelled, message, validation};
 
 use crate::{
     data,
@@ -31,50 +37,6 @@ impl<T> index::File<T>
 where
     T: crate::FileData,
 {
-    fn iter_v1(&self) -> impl Iterator<Item = Entry> + '_ {
-        match self.version {
-            index::Version::V1 => self.data[V1_HEADER_SIZE..]
-                .chunks_exact(N32_SIZE + self.hash_len)
-                .take(self.num_objects as usize)
-                .map(|c| {
-                    let (ofs, oid) = c.split_at(N32_SIZE);
-                    Entry {
-                        oid: gix_hash::ObjectId::from_bytes_or_panic(oid),
-                        pack_offset: u64::from(crate::read_u32(ofs)),
-                        crc32: None,
-                    }
-                }),
-            _ => panic!("Cannot use iter_v1() on index of type {:?}", self.version),
-        }
-    }
-
-    fn iter_v2(&self) -> impl Iterator<Item = Entry> + '_ {
-        let pack64_offset = self.offset_pack_offset64_v2();
-        let oids = self.data[V2_HEADER_SIZE..]
-            .chunks_exact(self.hash_len)
-            .take(self.num_objects as usize);
-        let crcs = self.data[self.offset_crc32_v2()..]
-            .as_chunks::<N32_SIZE>()
-            .0
-            .iter()
-            .take(self.num_objects as usize);
-        let offsets = self.data[self.offset_pack_offset_v2()..]
-            .as_chunks::<N32_SIZE>()
-            .0
-            .iter()
-            .take(self.num_objects as usize);
-        assert_eq!(oids.len(), crcs.len());
-        assert_eq!(crcs.len(), offsets.len());
-        match self.version {
-            index::Version::V2 => izip!(oids, crcs, offsets).map(move |(oid, crc32, ofs32)| Entry {
-                oid: gix_hash::ObjectId::from_bytes_or_panic(oid),
-                pack_offset: self.pack_offset_from_offset_v2(ofs32, pack64_offset),
-                crc32: Some(crate::read_u32(crc32)),
-            }),
-            _ => panic!("Cannot use iter_v2() on index of type {:?}", self.version),
-        }
-    }
-
     /// Returns the object hash at the given index in our list of (sorted) sha1 hashes.
     /// The index ranges from 0 to `self.num_objects()`
     ///
@@ -92,19 +54,30 @@ where
 
     /// Returns the offset into our pack data file at which to start reading the object at `index`.
     ///
-    /// # Panics
-    ///
-    /// If `index` is out of bounds.
-    pub fn pack_offset_at_index(&self, index: EntryIndex) -> data::Offset {
+    /// Returns an error if `index` is out of bounds or its large-offset reference is corrupt.
+    pub fn pack_offset_at_index(&self, index: EntryIndex) -> Result<data::Offset> {
+        if index >= self.num_objects {
+            bail!(validation("Pack index entry index is out of bounds"));
+        }
         let index = index as usize;
         match self.version {
             index::Version::V2 => {
                 let start = self.offset_pack_offset_v2() + index * N32_SIZE;
-                self.pack_offset_from_offset_v2(&self.data[start..][..N32_SIZE], self.offset_pack_offset64_v2())
+                let offset = crate::read_u32(&self.data[start..][..N32_SIZE]);
+                if offset & N32_HIGH_BIT == 0 {
+                    return Ok(u64::from(offset));
+                }
+                let slot = (offset ^ N32_HIGH_BIT) as usize;
+                self.large_offsets_v2()
+                    .get(slot)
+                    .map(|offset| u64::from_be_bytes(*offset))
+                    .ok_or_raise(|| {
+                        message!("Pack index entry {index} references missing large offset {slot}").corrupted()
+                    })
             }
             index::Version::V1 => {
                 let start = V1_HEADER_SIZE + index * (N32_SIZE + self.hash_len);
-                u64::from(crate::read_u32(&self.data[start..][..N32_SIZE]))
+                Ok(u64::from(crate::read_u32(&self.data[start..][..N32_SIZE])))
             }
         }
     }
@@ -158,36 +131,29 @@ where
         )
     }
 
-    /// An iterator over all [`Entries`][Entry] of this index file.
-    pub fn iter<'a>(&'a self) -> Box<dyn Iterator<Item = Entry> + 'a> {
-        match self.version {
-            index::Version::V2 => Box::new(self.iter_v2()),
-            index::Version::V1 => Box::new(self.iter_v1()),
-        }
+    /// Iterate over all entries in this index, reporting corrupt offset references as errors.
+    pub fn iter(&self) -> impl Iterator<Item = Result<Entry>> + '_ {
+        (0..self.num_objects).map(|index| {
+            Ok(Entry {
+                pack_offset: self.pack_offset_at_index(index)?,
+                oid: self.oid_at_index(index).to_owned(),
+                crc32: self.crc32_at_index(index),
+            })
+        })
     }
 
     /// Return a vector of ascending offsets into our respective pack data file.
     ///
     /// Useful to control an iteration over all pack entries in a cache-friendly way.
-    pub fn sorted_offsets(&self) -> Vec<data::Offset> {
-        let mut ofs: Vec<_> = match self.version {
-            index::Version::V1 => self.iter().map(|e| e.pack_offset).collect(),
-            index::Version::V2 => {
-                let offset32_start = &self.data[self.offset_pack_offset_v2()..];
-                let offsets32 = offset32_start
-                    .as_chunks::<N32_SIZE>()
-                    .0
-                    .iter()
-                    .take(self.num_objects as usize);
-                assert_eq!(self.num_objects as usize, offsets32.len());
-                let pack_offset_64_start = self.offset_pack_offset64_v2();
-                offsets32
-                    .map(|offset| self.pack_offset_from_offset_v2(offset, pack_offset_64_start))
-                    .collect()
-            }
-        };
-        ofs.sort_unstable();
-        ofs
+    ///
+    /// Returns an error if any offset reference is corrupt or the offsets cannot be allocated.
+    pub fn sorted_offsets(&self) -> Result<Vec<data::Offset>> {
+        let mut offsets = crate::try_exact_vec(self.num_objects as usize, None)?;
+        for index in 0..self.num_objects {
+            offsets.push(self.pack_offset_at_index(index)?);
+        }
+        offsets.sort_unstable();
+        Ok(offsets)
     }
 
     #[inline]
@@ -206,15 +172,36 @@ where
     }
 
     #[inline]
-    fn pack_offset_from_offset_v2(&self, offset: &[u8], pack64_offset: usize) -> data::Offset {
-        debug_assert_eq!(self.version, index::Version::V2);
-        let ofs32 = crate::read_u32(offset);
-        if (ofs32 & N32_HIGH_BIT) == N32_HIGH_BIT {
-            let from = pack64_offset + (ofs32 ^ N32_HIGH_BIT) as usize * N64_SIZE;
-            crate::read_u64(&self.data[from..][..N64_SIZE])
-        } else {
-            u64::from(ofs32)
+    fn large_offsets_v2(&self) -> &[[u8; N64_SIZE]] {
+        let table_end = self.data.len() - 2 * self.hash_len;
+        self.data[self.offset_pack_offset64_v2()..table_end]
+            .as_chunks::<N64_SIZE>()
+            .0
+    }
+
+    /// Check large-offset references and the correspondence between the two offset tables.
+    pub(crate) fn verify_offsets(&self, should_interrupt: &AtomicBool) -> Result {
+        if should_interrupt.load(Ordering::Relaxed) {
+            bail!(cancelled("Interrupted"));
         }
+        if self.version == index::Version::V2 {
+            let offsets = &self.data[self.offset_pack_offset_v2()..self.offset_pack_offset64_v2()];
+            let mut references = 0;
+            for (index, offset) in offsets.as_chunks::<N32_SIZE>().0.iter().enumerate() {
+                if index.is_multiple_of(10_000) && should_interrupt.load(Ordering::Relaxed) {
+                    bail!(cancelled("Interrupted"));
+                }
+                if crate::read_u32(offset) & N32_HIGH_BIT != 0 {
+                    self.pack_offset_at_index(index as EntryIndex)?;
+                    references += 1;
+                }
+            }
+            let large_offsets = self.large_offsets_v2().len();
+            if references != large_offsets {
+                bail!("Pack index has {large_offsets} large offsets for {references} references".corrupted());
+            }
+        }
+        Ok(())
     }
 }
 

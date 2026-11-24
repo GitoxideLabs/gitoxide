@@ -104,6 +104,7 @@ pub(super) mod function {
                     .and_then(|m| m.modified())
                     .unwrap_or(SystemTime::UNIX_EPOCH);
                 let index = crate::index::File::at(index, object_hash)?;
+                index.verify_offsets(should_interrupt)?;
 
                 entries.try_reserve(index.num_objects() as usize).or_raise(|| {
                     gix_error::resource_exhaustion(
@@ -111,12 +112,15 @@ pub(super) mod function {
                         "Too many index entries to fit in memory",
                     )
                 })?;
-                entries.extend(index.iter().map(|e| Entry {
-                    id: e.oid,
-                    pack_index: index_id as u32,
-                    pack_offset: e.pack_offset,
-                    index_mtime: mtime,
-                }));
+                for entry in index.iter() {
+                    let entry = entry?;
+                    entries.push(Entry {
+                        id: entry.oid,
+                        pack_index: index_id as u32,
+                        pack_offset: entry.pack_offset,
+                        index_mtime: mtime,
+                    });
+                }
                 progress.inc();
                 ensure!(!should_interrupt.load(Ordering::Relaxed), cancelled("Interrupted"));
             }

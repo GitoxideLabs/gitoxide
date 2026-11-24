@@ -18,22 +18,11 @@ fn artifact_inputs_can_be_opened_without_panicking() {
 /// dereferencing a 64-bit pack offset that is missing from the file.
 #[test]
 fn truncated_large_offset_table_is_reported_without_panicking() {
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        match gix_pack::index::File::from_data(
-            malformed_v2_index_with_missing_large_offset_table(),
-            PathBuf::from("fuzzed.idx"),
-            gix_hash::Kind::Sha1,
-        ) {
-            Ok(index) => {
-                let _ = index.iter().take(1).count();
-            }
-            Err(err) => {
-                let _ = err;
-            }
-        }
-    }));
-
-    assert!(result.is_ok(), "malformed pack indices must not panic");
+    let data = malformed_v2_index_with_missing_large_offset_table();
+    let err = gix_pack::index::File::from_data(data.as_slice(), PathBuf::from("fuzzed.idx"), gix_hash::Kind::Sha1)
+        .err()
+        .expect("fixed tables and checksums must fit on open");
+    assert!(err.is_corrupted(), "a truncated index is classified as corruption");
 }
 
 fn malformed_v2_index_with_missing_large_offset_table() -> Vec<u8> {
@@ -51,26 +40,52 @@ fn malformed_v2_index_with_missing_large_offset_table() -> Vec<u8> {
     data
 }
 
-/// Reproducer for the out-of-range large-offset fuzz case: malformed V2 indices must not panic if
-/// an offset entry points past the available 64-bit offset table.
 #[test]
-fn invalid_large_offset_index_is_reported_without_panicking() {
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        match gix_pack::index::File::from_data(
-            malformed_v2_index_with_out_of_range_large_offset_index(),
-            PathBuf::from("fuzzed-large-offset.idx"),
-            gix_hash::Kind::Sha1,
-        ) {
-            Ok(index) => {
-                let _ = index.iter().take(1).count();
-            }
-            Err(err) => {
-                let _ = err;
-            }
-        }
-    }));
+fn invalid_large_offset_index_is_reported_when_read() -> gix_testtools::TestResult {
+    let data = malformed_v2_index_with_out_of_range_large_offset_index();
+    let file = gix_pack::index::File::from_data(data.as_slice(), PathBuf::from("index.idx"), gix_hash::Kind::Sha1)?;
+    assert_eq!(file.oid_at_index(0), gix_hash::Kind::Sha1.null().as_ref());
+    assert!(
+        file.pack_offset_at_index(0)
+            .expect_err("invalid offset reference")
+            .is_corrupted()
+    );
+    assert!(
+        file.iter()
+            .next()
+            .expect("one indexed object")
+            .expect_err("invalid offset reference")
+            .is_corrupted()
+    );
+    assert!(
+        file.sorted_offsets()
+            .expect_err("invalid offset reference")
+            .is_corrupted()
+    );
+    let err = file
+        .verify_integrity(
+            None::<gix_pack::index::verify::PackContext<'_, fn() -> gix_pack::cache::Never>>,
+            &mut gix_utils::progress::Discard,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .err()
+        .expect("index-only verification rejects the invalid offset reference");
+    assert!(err.is_corrupted());
+    assert!(err.to_string().contains("large offset"), "{err}");
 
-    assert!(result.is_ok(), "malformed pack indices must not panic");
+    let err = file
+        .verify_integrity(
+            None::<gix_pack::index::verify::PackContext<'_, fn() -> gix_pack::cache::Never>>,
+            &mut gix_utils::progress::Discard,
+            &std::sync::atomic::AtomicBool::new(true),
+        )
+        .err()
+        .expect("verification was cancelled");
+    assert!(
+        err.is_cancelled(),
+        "an already cancelled scan never reaches the corrupt offset"
+    );
+    Ok(())
 }
 
 fn malformed_v2_index_with_out_of_range_large_offset_index() -> Vec<u8> {

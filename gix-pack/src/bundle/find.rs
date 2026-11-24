@@ -26,9 +26,7 @@ impl crate::Bundle {
     /// [index::File::](crate::index::File::lookup()).
     /// `inflate` is used to decompress objects, and will be reset before first use, but not after the last use.
     ///
-    /// # Panics
-    ///
-    /// If `index` is out of bounds.
+    /// Returns an error if `idx` is out of bounds or its offset reference is corrupt.
     pub fn get_object_by_index<'a>(
         &self,
         idx: u32,
@@ -36,7 +34,7 @@ impl crate::Bundle {
         inflate: &mut gix_zlib::Inflate,
         cache: &mut dyn crate::cache::DecodeEntry,
     ) -> Result<(gix_object::Data<'a>, crate::data::entry::Location)> {
-        let ofs = self.index.pack_offset_at_index(idx);
+        let ofs = self.index.pack_offset_at_index(idx)?;
         let pack_entry = self.pack.entry(ofs)?;
         let header_size = pack_entry.header_size();
         self.pack
@@ -49,7 +47,7 @@ impl crate::Bundle {
                         .lookup(id)
                         .map(|idx| {
                             self.pack
-                                .entry(self.index.pack_offset_at_index(idx))
+                                .entry(self.index.pack_offset_at_index(idx)?)
                                 .map(crate::data::decode::entry::ResolvedBase::InPack)
                         })
                         .transpose()

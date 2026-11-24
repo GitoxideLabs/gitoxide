@@ -33,6 +33,7 @@ mod locate {
 
                 let mut buf = Vec::new();
                 for entry in bundle.index.iter() {
+                    let entry = entry?;
                     let (obj, _location) = bundle
                         .find(
                             &entry.oid,

@@ -30,9 +30,7 @@ impl file::Index {
             let (kind, offset) = toc_entry.split_at(4);
             let kind = to_kind(kind);
             if kind == crate::SENTINEL {
-                bail!(validation(format!(
-                    "Sentinel value encountered while processing chunks {chunk_idx} of {num_chunks}"
-                )));
+                bail!("Sentinel value encountered while processing chunks {chunk_idx} of {num_chunks}".validation());
             }
             if chunks.iter().any(|c: &index::Entry| c.kind == kind) {
                 bail!(validation(format!(
@@ -68,10 +66,7 @@ impl file::Index {
 
         let sentinel = to_kind(&toc_entry[..4]);
         if sentinel != crate::SENTINEL {
-            bail!(validation(format!(
-                "Sentinel value wasn't found, saw '{}'",
-                sentinel.as_bstr()
-            )));
+            bail!("Sentinel value wasn't found, saw '{}'".validation(), sentinel.as_bstr());
         }
 
         Ok(file::Index {
