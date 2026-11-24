@@ -1885,14 +1885,15 @@ views.
   Git-style whitespace cleanup.
 - Missing `Assisted-by` and `Co-authored-by` trailers are offered as adjacent
   `;`-prefixed opt-ins. Their values come from `tix.trailer.assistedBy` and
-  `tix.trailer.coAuthoredBy`. Both keys are multi-value: every configured value
-  is offered in configuration order, including values from different sources
+  `tix.trailer.coAuthoredBy`. Both keys are multi-value. Suggestions follow
+  configuration order, including values from different sources
   and repeated identities, so users can select among different models. An unset
   key defaults to `GPT 5.6` or `GPT 5.6 <codex@openai.com>` respectively.
   Following comments identify each value's configuration file, a non-file
   override source, or the key that can replace a default. Every configured value
-  must be non-empty and single-line. A case-insensitive existing trailer key
-  suppresses all its suggestions, regardless of value.
+  must be non-empty and single-line. An existing trailer anywhere in the message
+  body suppresses only suggestions with the same key and value. Keys match
+  case-insensitively, and parsed values match case-sensitively.
 - An unchanged editor document is a no-op. Otherwise tix recreates the commit,
   signs it when commit-signing configuration is enabled, and rewrites every
   descendant with corrected parentage, preserving its tree when parent content is
@@ -1989,9 +1990,10 @@ views.
   creates nothing. Explicit `-m`/`--file` input supplies the final message instead.
   Edited messages retain the usual comment and whitespace cleanup and must be
   non-empty before committing. Existing attribution trailers in the configured
-  text suppress their optional suggestions. A following comment identifies the
-  winning configuration file or non-file override for `tix.new.message`, or its
-  built-in default, even when no trailer suggestions are needed.
+  text suppress suggestions with a matching key and value. A following comment
+  identifies the winning configuration file or non-file override for
+  `tix.new.message`, or its built-in default, even when no trailer suggestions
+  are needed.
 
   Configure the text globally with the examples below, or omit `--global` to
   configure only the current repository. Removing an override reveals any

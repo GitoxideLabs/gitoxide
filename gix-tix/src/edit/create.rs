@@ -691,7 +691,12 @@ mod tests {
     #[test]
     fn configured_message_trailers_suppress_duplicate_suggestions() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
-        let message = "Title\n\nAssisted-by: Custom Assistant\nCo-authored-by: Contributor <contributor@example.com>";
+        let message = "Title
+
+ASSISTED-BY: GPT 5.6
+Co-authored-by: GPT 5.6 <codex@openai.com>
+
+More message text";
         let repository = crate::test_repository::open_with(fixture.path(), [format!("tix.new.message={message}")])?;
         let parent_commit_id = repository.head_id()?.detach();
         let prepared = prepare(repository, Some(parent_commit_id))?;
@@ -702,7 +707,7 @@ mod tests {
         );
         assert!(
             prepared.document.find(b";Assisted-by:").is_none() && prepared.document.find(b";Co-authored-by:").is_none(),
-            "existing configured trailers suppress their optional suggestions"
+            "matching trailers suppress defaults even with different key casing or later message text"
         );
         assert!(
             prepared
