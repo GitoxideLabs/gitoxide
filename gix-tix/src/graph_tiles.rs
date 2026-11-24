@@ -18,6 +18,7 @@ pub(crate) struct Colors {
     pub background: [u8; 3],
     pub routes: [[u8; 3]; ROUTE_COLORS.len()],
     pub highlight: [u8; 3],
+    pub pin: [u8; 3],
 }
 
 impl Colors {
@@ -33,11 +34,13 @@ impl Colors {
                 ]
             }),
             highlight: ansi.map_or([0, 255, 255], |ansi| ansi[14]),
+            pin: ansi.map_or([255, 100, 110], |ansi| ansi[1]),
         }
     }
 }
 
 pub(crate) const SUBLANES_PER_CELL: i32 = 3;
+pub(crate) const PIN_COLUMNS: u16 = 2;
 // Ninths of a column also represent third-cell offsets over a three-quarter-row straight run.
 const DIRECTION_SCALE: i32 = SUBLANES_PER_CELL * 3;
 
@@ -47,6 +50,7 @@ pub(crate) struct Tile {
     pub highlighted_paths: u16,
     pub path_colors: [u8; 10],
     pub marker: char,
+    pub pinned: bool,
     // Incoming NODE_UP direction, in the same units as Edge::incoming.
     pub incoming: Option<i32>,
     pub edges: Vec<Edge>,
@@ -451,6 +455,7 @@ impl Default for Tile {
             highlighted_paths: 0,
             path_colors: [0; 10],
             marker: ' ',
+            pinned: false,
             incoming: None,
             edges: Vec::new(),
         }
@@ -468,6 +473,7 @@ impl Tile {
     pub const NODE_DOWN: u16 = 128;
     pub const NODE_LEFT: u16 = 256;
     pub const NODE_RIGHT: u16 = 512;
+    const PIN_FLAG: i32 = 1 << 11;
 
     fn has_explicit_incoming(&self) -> bool {
         self.edges.iter().any(|edge| edge.to_node && edge.end() == 0)
@@ -551,8 +557,11 @@ impl Tile {
         let mut out = char::from_u32(0xf0000 + u32::from(self.paths & 1023) * 16 + marker)
             .expect("ten path bits and four marker bits fit in the private-use plane")
             .to_string();
+        let header = i32::from(self.highlighted_paths)
+            | (i32::from(self.incoming.is_some()) << 10)
+            | (i32::from(self.pinned) * Self::PIN_FLAG);
         // Supplementary variation selectors keep the cell one column wide until backend decoding.
-        for value in std::iter::once(i32::from(self.highlighted_paths) | (i32::from(self.incoming.is_some()) << 10))
+        for value in std::iter::once(header)
             .chain(self.incoming)
             .chain(
                 self.path_colors
@@ -625,7 +634,7 @@ impl Tile {
             }
         }
         let (&header, mut values) = values.split_first()?;
-        if shift != 0 || !(0..2048).contains(&header) {
+        if shift != 0 || !(0..Self::PIN_FLAG * 2).contains(&header) {
             return None;
         }
         let incoming = if header & 1024 != 0 {
@@ -686,6 +695,7 @@ impl Tile {
             highlighted_paths: (header & 1023) as u16,
             path_colors,
             incoming,
+            pinned: header & Self::PIN_FLAG != 0,
             marker: match value % 16 {
                 1 => '●',
                 2 => '○',
@@ -1009,6 +1019,49 @@ impl Tile {
         }
         pixels
     }
+}
+
+pub(crate) fn pin_pixels(width: u16, height: u16, color: [u8; 3], dim: bool) -> Vec<u8> {
+    const NEEDLE: [u8; 3] = [221, 229, 236];
+    const OUTLINE: [u8; 3] = [44, 31, 38];
+    let cell_width = f32::from(width) / f32::from(PIN_COLUMNS);
+    let height_pixels = f32::from(height);
+    let size = cell_width.min(height_pixels * 0.45);
+    let tip = (cell_width / 2.0, height_pixels / 2.0 + size * 0.16);
+    let opacity = if dim { 0.55 } else { 1.0 };
+    let coverage = |distance: f32| (distance + 0.5).clamp(0.0, 1.0);
+    let mut pixels = Vec::with_capacity(usize::from(width) * usize::from(height) * 4);
+    for y in 0..height {
+        for x in 0..width {
+            let dx = f32::from(x) + 0.5 - tip.0;
+            let dy = f32::from(y) + 0.5 - tip.1;
+            let along = (dx - dy) * std::f32::consts::FRAC_1_SQRT_2;
+            let across = (dx + dy).abs() * std::f32::consts::FRAC_1_SQRT_2;
+            let crossbar = |center: f32, half_width: f32, radius: f32| {
+                radius * size - (along - center * size).hypot((across - half_width * size).max(0.0))
+            };
+            let body = (size * 0.30 - (along - size * 0.86).abs()).min(size * 0.16 - across);
+            let red = body.max(crossbar(0.62, 0.19, 0.13)).max(crossbar(1.18, 0.19, 0.16));
+            let needle = (size * 0.018 + along * 0.105 - across)
+                .min(along)
+                .min(size * 0.66 - along);
+            let shape = red.max(needle);
+            let alpha = coverage(shape + size * 0.055);
+            if alpha == 0.0 {
+                pixels.extend_from_slice(&[0; 4]);
+                continue;
+            }
+            let fill = coverage(red);
+            let metal = coverage(shape) - fill;
+            let rim = alpha - fill - metal;
+            for ((red, metal_color), outline) in color.into_iter().zip(NEEDLE).zip(OUTLINE) {
+                let value = f32::from(red) * fill + f32::from(metal_color) * metal + f32::from(outline) * rim;
+                pixels.push((value / alpha).round() as u8);
+            }
+            pixels.push((alpha * opacity * 255.0).round() as u8);
+        }
+    }
+    pixels
 }
 
 fn intersection(a: (f32, f32), b: (f32, f32), c: (f32, f32), d: (f32, f32)) -> Option<(f32, f32)> {
@@ -2299,6 +2352,49 @@ mod tests {
         }
         .rasterize(20, 40, [10, 20, 30], [0; 3], false);
         assert_eq!(alpha(&tip, 10, 0), 0, "tips have no invented incoming edge");
+    }
+
+    #[test]
+    fn graphical_pin_has_its_own_transparent_pixels() {
+        let node = Tile {
+            paths: Tile::NODE_UP | Tile::NODE_DOWN,
+            highlighted_paths: Tile::NODE_UP,
+            incoming: Some(0),
+            marker: '●',
+            ..Tile::default()
+        };
+        let pinned = Tile {
+            pinned: true,
+            ..node.clone()
+        };
+        assert_eq!(
+            Tile::decode(&pinned.encode()),
+            Some(pinned.clone()),
+            "the pin shares the node tile"
+        );
+
+        for (cell_width, height) in [(8, 16), (20, 40), (32, 64)] {
+            let rasterize = |tile: &Tile| tile.rasterize(cell_width, height, [30, 120, 240], [0; 3], false);
+            assert_eq!(
+                rasterize(&node),
+                rasterize(&pinned),
+                "the pin leaves the node image reusable"
+            );
+
+            let width = cell_width * super::PIN_COLUMNS;
+            let pixels = super::pin_pixels(width, height, [255, 100, 110], false);
+            let alpha = |x, y| pixels[(usize::from(y) * usize::from(width) + usize::from(x)) * 4 + 3];
+            assert_eq!(alpha(0, 0), 0, "the pin background is transparent");
+            assert_eq!(alpha(width - 1, height - 1), 0, "the pin stays inside its placement");
+            assert!(
+                (0..height / 2).any(|y| (cell_width..width).any(|x| alpha(x, y) == 255)),
+                "the opaque head extends into the second column at {cell_width}×{height}"
+            );
+            assert!(
+                (cell_width / 2 - 1..=cell_width / 2 + 1).any(|x| alpha(x, height / 2) > 0),
+                "the needle reaches the commit marker at {cell_width}×{height}"
+            );
+        }
     }
 
     #[test]

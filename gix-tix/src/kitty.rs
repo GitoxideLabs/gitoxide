@@ -14,7 +14,7 @@ use ratatui::{
 
 use crate::{
     diff_colors,
-    graph_tiles::{Colors, Tile},
+    graph_tiles::{Colors, PIN_COLUMNS, Tile, pin_pixels},
 };
 
 const MAX_TILES: usize = 1024;
@@ -105,12 +105,24 @@ fn decode_tile(cell: &Cell) -> Option<Tile> {
 }
 
 #[derive(Clone, Eq, Hash, PartialEq)]
-struct TileKey {
-    symbol: String,
-    foreground: Color,
-    background: Color,
-    modifier: Modifier,
-    size: (u16, u16),
+enum ImageKey {
+    Graph {
+        symbol: String,
+        foreground: Color,
+        background: Color,
+        modifier: Modifier,
+        size: (u16, u16),
+    },
+    Pin {
+        size: (u16, u16),
+        dim: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum Layer {
+    Graph,
+    Pin,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -127,8 +139,8 @@ pub(crate) struct Backend<W: Write> {
     colors: Colors,
     ansi: Option<[[u8; 3]; 16]>,
     diff_colors: diff_colors::Palette,
-    tiles: HashMap<TileKey, u32>,
-    placements: HashMap<(u16, u16), Placement>,
+    images: HashMap<ImageKey, u32>,
+    placements: HashMap<(u16, u16, Layer), Placement>,
     placement_counts: HashMap<u32, usize>,
     free_placements: Vec<u32>,
     next_placement: u32,
@@ -146,7 +158,7 @@ impl<W: Write> Backend<W> {
             colors: Colors::new([229, 229, 229], [0, 0, 0], None),
             ansi: None,
             diff_colors: diff_colors::Palette::default(),
-            tiles: HashMap::new(),
+            images: HashMap::new(),
             placements: HashMap::new(),
             placement_counts: HashMap::new(),
             free_placements: Vec::new(),
@@ -212,11 +224,11 @@ impl<W: Write> Backend<W> {
     }
 
     fn delete_images(&mut self) -> io::Result<()> {
-        for number in self.tiles.values().copied() {
+        for number in self.images.values().copied() {
             delete_image(&mut self.inner, number)?;
             gix::parallel::lock(&OWNED_IMAGES).retain(|owned| *owned != number);
         }
-        self.tiles.clear();
+        self.images.clear();
         self.placements.clear();
         self.placement_counts.clear();
         self.free_placements.clear();
@@ -235,8 +247,8 @@ impl<W: Write> Backend<W> {
         }
     }
 
-    fn take_placement(&mut self, x: u16, y: u16) -> Option<Placement> {
-        let placement = self.placements.remove(&(x, y))?;
+    fn take_placement(&mut self, key: (u16, u16, Layer)) -> Option<Placement> {
+        let placement = self.placements.remove(&key)?;
         self.release_image(placement.number);
         Some(placement)
     }
@@ -251,20 +263,22 @@ impl<W: Write> Backend<W> {
         Ok(())
     }
 
-    fn remove_placement(&mut self, x: u16, y: u16) -> io::Result<()> {
-        if let Some(placement) = self.take_placement(x, y) {
-            self.delete_placement(placement)?;
+    fn remove_placements(&mut self, x: u16, y: u16) -> io::Result<()> {
+        for layer in [Layer::Graph, Layer::Pin] {
+            if let Some(placement) = self.take_placement((x, y, layer)) {
+                self.delete_placement(placement)?;
+            }
         }
         Ok(())
     }
 
     fn trim_unused_images(&mut self) -> io::Result<()> {
         let excess = self
-            .tiles
+            .images
             .len()
             .saturating_sub(MAX_TILES.max(self.placement_counts.len()));
         let unused: Vec<_> = self
-            .tiles
+            .images
             .iter()
             .filter(|(_, number)| !self.placement_counts.contains_key(number))
             .take(excess)
@@ -272,21 +286,21 @@ impl<W: Write> Backend<W> {
             .collect();
         for (key, number) in unused {
             delete_image(&mut self.inner, number)?;
-            self.tiles.remove(&key);
+            self.images.remove(&key);
             gix::parallel::lock(&OWNED_IMAGES).retain(|owned| *owned != number);
         }
         Ok(())
     }
 
     fn image(&mut self, cell: &Cell, tile: &Tile, size: (u16, u16)) -> io::Result<u32> {
-        let key = TileKey {
+        let key = ImageKey::Graph {
             symbol: cell.symbol().to_owned(),
             foreground: cell.fg,
             background: cell.bg,
             modifier: cell.modifier,
             size,
         };
-        if let Some(number) = self.tiles.get(&key) {
+        if let Some(number) = self.images.get(&key) {
             return Ok(*number);
         }
         let mut colors = Colors {
@@ -298,6 +312,20 @@ impl<W: Write> Backend<W> {
             std::mem::swap(&mut colors.foreground, &mut colors.background);
         }
         let pixels = tile.rasterize_with_colors(size.0, size.1, &colors, cell.modifier.contains(Modifier::DIM));
+        self.upload_image(key, size, &pixels)
+    }
+
+    fn pin_image(&mut self, cell_size: (u16, u16), dim: bool) -> io::Result<u32> {
+        let size = (cell_size.0 * PIN_COLUMNS, cell_size.1);
+        let key = ImageKey::Pin { size, dim };
+        if let Some(number) = self.images.get(&key) {
+            return Ok(*number);
+        }
+        let pixels = pin_pixels(size.0, size.1, self.colors.pin, dim);
+        self.upload_image(key, size, &pixels)
+    }
+
+    fn upload_image(&mut self, key: ImageKey, size: (u16, u16), pixels: &[u8]) -> io::Result<u32> {
         let number = {
             let mut owned = gix::parallel::lock(&OWNED_IMAGES);
             loop {
@@ -309,8 +337,8 @@ impl<W: Write> Backend<W> {
             }
         };
         // Image numbers allocate fresh storage even when another application chose the same number.
-        self.tiles.insert(key, number);
-        upload(&mut self.inner, number, size, &pixels)?;
+        self.images.insert(key, number);
+        upload(&mut self.inner, number, size, pixels)?;
         Ok(number)
     }
 
@@ -341,17 +369,14 @@ impl<W: Write> Backend<W> {
         let mut reusable = HashMap::<u32, Vec<u32>>::new();
         for (x, y, cell) in &cells {
             if decode_tile(cell).is_some() {
-                if self.graph_cells.get(&(*x, *y)) != Some(cell)
-                    && let Some(placement) = self.take_placement(*x, *y)
-                {
-                    reusable.entry(placement.number).or_default().push(placement.id);
-                }
                 self.graph_cells.insert((*x, *y), cell.clone());
             } else {
                 for covered_x in *x..x.saturating_add(cell.cell_width().max(1)) {
                     self.graph_cells.remove(&(covered_x, *y));
-                    if let Some(placement) = self.take_placement(covered_x, *y) {
-                        reusable.entry(placement.number).or_default().push(placement.id);
+                    for layer in [Layer::Graph, Layer::Pin] {
+                        if let Some(placement) = self.take_placement((covered_x, *y, layer)) {
+                            reusable.entry(placement.number).or_default().push(placement.id);
+                        }
                     }
                 }
             }
@@ -367,26 +392,41 @@ impl<W: Write> Backend<W> {
         }
         let mut pending = Vec::new();
         for (index, (x, y, cell)) in cells.iter_mut().enumerate() {
-            let mut fallback = ' ';
-            let image = if let Some(tile) = decode_tile(cell) {
-                fallback = tile.fallback();
-                let number = match size {
-                    Some(size) => Some(self.image(cell, &tile, size)?),
-                    None => None,
+            let (graph, pin, fallback) = if let Some(mut tile) = decode_tile(cell) {
+                let fallback = tile.fallback();
+                let (graph, pin) = if let Some(size) = size {
+                    let pinned = std::mem::take(&mut tile.pinned);
+                    if pinned {
+                        cell.set_symbol(&tile.encode());
+                    }
+                    let graph = self.image(cell, &tile, size)?;
+                    let pin = pinned
+                        .then(|| self.pin_image(size, cell.modifier.contains(Modifier::DIM)))
+                        .transpose()?;
+                    (Some(graph), pin)
+                } else {
+                    (None, None)
                 };
-                cell.set_char(if number.is_some() { tile.text() } else { tile.fallback() });
-                number
+                cell.set_char(if graph.is_some() { tile.text() } else { fallback });
+                (graph, pin, fallback)
             } else {
-                None
+                (None, None, ' ')
             };
-            if image != self.placements.get(&(*x, *y)).map(|placement| placement.number) {
-                self.remove_placement(*x, *y)?;
-                if let Some(number) = image {
-                    *self.placement_counts.entry(number).or_default() += 1;
-                    let id = reusable.get_mut(&number).and_then(Vec::pop);
-                    pending.push((index, number, id, fallback));
+            for (layer, image) in [(Layer::Graph, graph), (Layer::Pin, pin)] {
+                let key = (*x, *y, layer);
+                if image != self.placements.get(&key).map(|placement| placement.number) {
+                    if let Some(placement) = self.take_placement(key) {
+                        reusable.entry(placement.number).or_default().push(placement.id);
+                    }
+                    if let Some(number) = image {
+                        *self.placement_counts.entry(number).or_default() += 1;
+                        pending.push((index, layer, number, None, fallback));
+                    }
                 }
             }
+        }
+        for (_, _, number, id, _) in &mut pending {
+            *id = reusable.get_mut(number).and_then(Vec::pop);
         }
         // Release unmatched IDs before allocating new placements; reused IDs stay live.
         for (number, ids) in reusable {
@@ -395,7 +435,7 @@ impl<W: Write> Backend<W> {
             }
         }
         let mut images = Vec::with_capacity(pending.len());
-        for (index, number, id, fallback) in pending {
+        for (index, layer, number, id, fallback) in pending {
             let id = id.or_else(|| self.free_placements.pop()).or_else(|| {
                 self.next_placement = self.next_placement.checked_add(1)?;
                 Some(self.next_placement)
@@ -403,10 +443,12 @@ impl<W: Write> Backend<W> {
             let (x, y, cell) = &mut cells[index];
             if let Some(id) = id {
                 let placement = Placement { number, id };
-                self.placements.insert((*x, *y), placement);
-                images.push((*x, *y, placement));
+                self.placements.insert((*x, *y, layer), placement);
+                images.push((*x, *y, layer, placement));
             } else {
-                cell.set_char(fallback);
+                if layer == Layer::Graph {
+                    cell.set_char(fallback);
+                }
                 self.release_image(number);
             }
         }
@@ -414,10 +456,14 @@ impl<W: Write> Backend<W> {
         if !images.is_empty() {
             let mut commands = Vec::with_capacity(images.len() * 80 + 4);
             commands.extend_from_slice(b"\x1b7");
-            for (x, y, placement) in images {
+            for (x, y, layer, placement) in images {
+                let (columns, z) = match layer {
+                    Layer::Graph => (1, -1),
+                    Layer::Pin => (PIN_COLUMNS, 1),
+                };
                 write!(
                     commands,
-                    "\x1b[{};{}H\x1b_Ga=p,I={},p={},c=1,r=1,C=1,z=-1,q=2\x1b\\",
+                    "\x1b[{};{}H\x1b_Ga=p,I={},p={},c={columns},r=1,C=1,z={z},q=2\x1b\\",
                     u32::from(y) + 1,
                     u32::from(x) + 1,
                     placement.number,
@@ -507,7 +553,7 @@ impl<W: Write> ratatui::backend::Backend for Backend<W> {
                 })
                 .collect();
             for (x, y) in cleared {
-                self.remove_placement(x, y)?;
+                self.remove_placements(x, y)?;
                 self.graph_cells.remove(&(x, y));
             }
             self.trim_unused_images()?;
@@ -1047,6 +1093,87 @@ mod tests {
     }
 
     #[test]
+    fn commit_pins_share_a_separate_image_and_move_independently_of_nodes() -> gix_error::TestResult {
+        let output = Output::default();
+        let mut backend = Backend::new(output.clone(), true);
+        let plain = graph_cell();
+        let mut tile = decode_tile(&plain).expect("the fixture is a graph tile");
+        tile.pinned = true;
+        let mut pinned = plain.clone();
+        pinned.set_symbol(&tile.encode());
+        backend.draw_with_size(
+            [(2, 0, &pinned), (2, 1, &pinned), (2, 2, &plain)].into_iter(),
+            Some((8, 16)),
+        )?;
+        let first = output.text();
+        assert_eq!(
+            first.matches("a=t,").count(),
+            2,
+            "the three nodes share one image and one pin asset"
+        );
+        assert_eq!(
+            first.matches("s=16,v=16,").count(),
+            1,
+            "the pin image spans two columns"
+        );
+        assert_eq!(
+            first.matches("c=2,r=1,C=1,z=1").count(),
+            2,
+            "both transparent pins sit above the graph"
+        );
+        assert_eq!(
+            first.matches("c=1,r=1,C=1,z=-1").count(),
+            3,
+            "nodes keep their own placements"
+        );
+        assert_synchronized_frame(&first);
+        assert_placement_ownership(&backend);
+
+        output.reset();
+        backend.draw_with_size(
+            [(2, 0, &plain), (2, 1, &plain), (2, 2, &pinned)].into_iter(),
+            Some((8, 16)),
+        )?;
+        let moved = output.text();
+        assert_eq!(moved.matches("a=p,").count(), 1, "only the pin moves");
+        assert_eq!(
+            moved.matches("a=d,d=n,").count(),
+            1,
+            "the surplus pin placement is removed"
+        );
+        assert!(!moved.contains("a=t,"), "all image pixels are reused");
+        assert_placement_ownership(&backend);
+
+        output.reset();
+        backend.draw_with_size(std::iter::empty(), Some((12, 24)))?;
+        assert_eq!(
+            output.text().matches("s=24,v=24,").count(),
+            1,
+            "resizing rebuilds the shared pin"
+        );
+        assert_eq!(
+            output.text().matches("c=2,r=1,C=1,z=1").count(),
+            1,
+            "only the visible pin is rebuilt"
+        );
+
+        output.reset();
+        backend.draw_with_size([(2, 2, &Cell::new(" "))].into_iter(), Some((12, 24)))?;
+        assert_eq!(
+            output.text().matches("a=d,d=n,").count(),
+            2,
+            "covering the anchor removes both layers"
+        );
+        assert_placement_ownership(&backend);
+        backend.cleanup()?;
+        assert!(
+            backend.placement_counts.is_empty(),
+            "cleanup releases pin and node images"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn placement_commands_share_one_write_and_restore_the_cursor() -> gix_error::TestResult {
         struct RecordWrites<'a>(&'a mut Vec<Vec<u8>>);
         impl Write for RecordWrites<'_> {
@@ -1168,13 +1295,13 @@ mod tests {
             "scrolling retains exactly the visible placements"
         );
         assert_eq!(
-            backend.placements[&(0, 0)],
-            first[&(1, 0)],
+            backend.placements[&(0, 0, Layer::Graph)],
+            first[&(1, 0, Layer::Graph)],
             "the red placement keeps its ID"
         );
         assert_eq!(
-            backend.placements[&(1, 0)],
-            first[&(0, 0)],
+            backend.placements[&(1, 0, Layer::Graph)],
+            first[&(0, 0, Layer::Graph)],
             "the blue placement keeps its ID"
         );
         assert_placement_ownership(&backend);
@@ -1223,7 +1350,7 @@ mod tests {
         let cell = graph_cell();
         let blank = Cell::new(" ");
         backend.draw_with_size([(0, 0, &cell), (1, 0, &cell), (2, 0, &cell)].into_iter(), Some((8, 16)))?;
-        let unchanged = backend.placements[&(1, 0)];
+        let unchanged = backend.placements[&(1, 0, Layer::Graph)];
         output.reset();
         backend.draw_with_size(
             [(0, 0, &blank), (2, 0, &blank), (3, 0, &cell)].into_iter(),
@@ -1236,7 +1363,7 @@ mod tests {
         );
         assert_eq!(output.text().matches("a=p,").count(), 1, "the other removed use moves");
         assert_eq!(
-            backend.placements[&(1, 0)],
+            backend.placements[&(1, 0, Layer::Graph)],
             unchanged,
             "untouched cells keep their placement"
         );
@@ -1251,7 +1378,7 @@ mod tests {
         red.fg = Color::Red;
         backend.draw_with_size([(4, 0, &red)].into_iter(), Some((8, 16)))?;
         assert_eq!(
-            backend.placements[&(4, 0)].id,
+            backend.placements[&(4, 0, Layer::Graph)].id,
             recycled,
             "new images reuse released IDs"
         );
@@ -1273,11 +1400,11 @@ mod tests {
         let mut red = cell.clone();
         red.fg = Color::Red;
         backend.draw_with_size([(0, 0, &cell)].into_iter(), Some((8, 16)))?;
-        let released = backend.placements[&(0, 0)].id;
+        let released = backend.placements[&(0, 0, Layer::Graph)].id;
         backend.next_placement = u32::MAX;
         backend.draw_with_size([(0, 0, &Cell::new(" ")), (1, 0, &red)].into_iter(), Some((8, 16)))?;
         assert_eq!(
-            backend.placements[&(1, 0)].id,
+            backend.placements[&(1, 0, Layer::Graph)].id,
             released,
             "a freed ID remains usable at exhaustion"
         );
@@ -1339,7 +1466,7 @@ mod tests {
             "uploading a new image fails after the frame has chosen reused placements"
         );
         assert_synchronized_frame(&output.text());
-        let numbers: Vec<_> = backend.tiles.values().copied().collect();
+        let numbers: Vec<_> = backend.images.values().copied().collect();
         backend.cleanup()?;
         assert_eq!(
             output.text().matches("a=d,d=N,").count(),
@@ -1371,10 +1498,10 @@ mod tests {
                 cell
             })
             .collect();
-        let position = |index: usize| ((index % 64) as u16, (index / 64) as u16);
+        let position = |index: usize| ((index % 64) as u16, (index / 64) as u16, Layer::Graph);
         backend.draw_with_size(
             cells.iter().enumerate().map(|(index, cell)| {
-                let (x, y) = position(index);
+                let (x, y, _) = position(index);
                 (x, y, cell)
             }),
             Some((1, 1)),
@@ -1385,7 +1512,7 @@ mod tests {
         output.reset();
         backend.draw_with_size(
             std::iter::once((0, 0, &new)).chain(cells.iter().enumerate().map(|(index, cell)| {
-                let (x, y) = position(index + 1);
+                let (x, y, _) = position(index + 1);
                 (x, y, cell)
             })),
             Some((1, 1)),
@@ -1426,8 +1553,8 @@ mod tests {
             (0..MAX_TILES * 2).map(|index| ((index % 64) as u16, (index / 64) as u16, &cells[index % MAX_TILES])),
             Some((1, 1)),
         )?;
-        let old_number = backend.placements[&(0, 0)].number;
-        assert_eq!(backend.tiles.len(), MAX_TILES, "the viewport fills the bounded cache");
+        let old_number = backend.placements[&(0, 0, Layer::Graph)].number;
+        assert_eq!(backend.images.len(), MAX_TILES, "the viewport fills the bounded cache");
         assert_eq!(
             backend.placements.len(),
             MAX_TILES * 2,
@@ -1454,11 +1581,11 @@ mod tests {
             "every visible variant remains graphical even when the cache target is exceeded"
         );
         assert_eq!(
-            backend.tiles.len(),
+            backend.images.len(),
             MAX_TILES + 1,
             "visible images can exceed the idle cache target"
         );
-        let excess_number = backend.placements[&(64, 0)].number;
+        let excess_number = backend.placements[&(64, 0, Layer::Graph)].number;
         output.reset();
         backend.draw_with_size([(64, 0, &Cell::new(" "))].into_iter(), Some((1, 1)))?;
         assert!(
@@ -1466,7 +1593,7 @@ mod tests {
             "unused excess images are deleted as soon as their placements disappear"
         );
         assert_eq!(
-            backend.tiles.len(),
+            backend.images.len(),
             MAX_TILES,
             "only visible images may exceed the target"
         );
@@ -1480,7 +1607,7 @@ mod tests {
         output.reset();
         backend.draw_with_size([(0, 16, &replacement)].into_iter(), Some((1, 1)))?;
         assert!(
-            backend.placements.contains_key(&(0, 16)),
+            backend.placements.contains_key(&(0, 16, Layer::Graph)),
             "replacing the last placement makes its image available within the same frame"
         );
         assert!(
@@ -1492,7 +1619,7 @@ mod tests {
             "unmatched pooled placements are released before end-of-frame image eviction"
         );
         assert_eq!(
-            backend.tiles.len(),
+            backend.images.len(),
             MAX_TILES,
             "replacement keeps the image cache bounded"
         );
@@ -1506,12 +1633,12 @@ mod tests {
         backend.draw_with_size([(64, 0, &replacement)].into_iter(), Some((1, 1)))?;
         assert!(!output.text().contains("a=t,"), "the replacement image is shared too");
         assert_eq!(
-            backend.placements[&(64, 0)].number,
-            backend.placements[&(0, 16)].number,
+            backend.placements[&(64, 0, Layer::Graph)].number,
+            backend.placements[&(0, 16, Layer::Graph)].number,
             "both replacement cells refer to the same cached image"
         );
         assert_eq!(
-            backend.placement_counts[&backend.placements[&(64, 0)].number],
+            backend.placement_counts[&backend.placements[&(64, 0, Layer::Graph)].number],
             2,
             "sharing the replacement records both live uses"
         );
@@ -1606,7 +1733,7 @@ mod tests {
             "cleanup preserves the caller's cursor"
         );
         assert!(
-            backend.tiles.is_empty() && backend.graph_cells.is_empty(),
+            backend.images.is_empty() && backend.graph_cells.is_empty(),
             "cleanup leaves no renderer resources"
         );
         Ok(())

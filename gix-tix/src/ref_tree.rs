@@ -996,7 +996,7 @@ impl Tree {
             {
                 let area = Rect::new(body.x, body.y + y as u16, body.width, 1);
                 if app.graphics_enabled {
-                    crate::ui::tag_graph(frame, area, &row.tiles, offset.x);
+                    crate::ui::tag_graph(frame, area, &row.tiles, offset.x, false);
                 } else {
                     crate::ui::highlight_graph(frame, area, &row.tiles, offset.x);
                 }

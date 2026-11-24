@@ -1007,7 +1007,7 @@ impl<'a> View<'a> {
                     .take(usize::from(area.width))
                     .map(|ch| Tile::from_text(ch).unwrap_or_default()),
             );
-            crate::ui::tag_graph(frame, Rect::new(area.x, y, area.width, 1), &tiles, 0);
+            crate::ui::tag_graph(frame, Rect::new(area.x, y, area.width, 1), &tiles, 0, false);
         }
     }
 }

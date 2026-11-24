@@ -968,6 +968,7 @@ fn draw_history(
                         },
                         use_mailmap: app.use_mailmap && copy_feedback != Some(CopyKind::Author),
                         ref_mode,
+                        graphical_pins: app.graphics_enabled && !lanes.tiles(index).is_empty(),
                         selected: row_selected || compared_parent == Some(row.id),
                         copy_feedback: if row_selected { copy_feedback } else { None },
                     },
@@ -1103,20 +1104,20 @@ fn draw_history(
         .into_iter()
         .enumerate()
         .map(|(index, metadata)| {
-            metadata.map(|metadata| match alignment_for(index) {
-                HistoryAlignment::None => {
-                    let (metadata, prefix_width) = metadata.into_line_with_prefix();
-                    (metadata, 0, prefix_width)
-                }
-                HistoryAlignment::Title | HistoryAlignment::Compressed => {
-                    let lane_width = aligned_lane_width(index);
-                    let (metadata, prefix_width) = metadata.align_title(title_column.saturating_sub(lane_width));
-                    (metadata, lane_width, prefix_width)
-                }
-                HistoryAlignment::Columns => {
-                    let (metadata, prefix_width) = metadata.align_columns(column_widths);
-                    (metadata, max_lane_width, prefix_width)
-                }
+            metadata.map(|metadata| {
+                let pinned = metadata.graphical_pin;
+                let (metadata_x, (line, prefix_width)) = match alignment_for(index) {
+                    HistoryAlignment::None => (0, metadata.into_line_with_prefix()),
+                    HistoryAlignment::Title | HistoryAlignment::Compressed => {
+                        let lane_width = aligned_lane_width(index);
+                        (
+                            lane_width,
+                            metadata.align_title(title_column.saturating_sub(lane_width)),
+                        )
+                    }
+                    HistoryAlignment::Columns => (max_lane_width, metadata.align_columns(column_widths)),
+                };
+                (line, metadata_x, prefix_width, pinned)
             })
         })
         .collect();
@@ -1127,7 +1128,7 @@ fn draw_history(
             (HistoryEntry::Segment { count, .. }, _) => {
                 aligned_lane_width(index).saturating_add(format!("[{count}]").chars().count())
             }
-            (HistoryEntry::Commit(_), Some((metadata, metadata_x, _))) => match alignment_for(index) {
+            (HistoryEntry::Commit(_), Some((metadata, metadata_x, _, _))) => match alignment_for(index) {
                 HistoryAlignment::None => displayed_lane(index).chars().count().saturating_add(metadata.width()),
                 HistoryAlignment::Title | HistoryAlignment::Columns | HistoryAlignment::Compressed => {
                     metadata_x.saturating_add(metadata.width())
@@ -1222,6 +1223,7 @@ fn draw_history(
                         row_area,
                         &lanes.tiles(index)[..lane.chars().count()],
                         horizontal_offset,
+                        false,
                     );
                 }
                 if !selectable {
@@ -1238,7 +1240,8 @@ fn draw_history(
         };
         let row = &app.rows[row_index];
         let row_alignment = alignment_for(index);
-        let (metadata, metadata_x, metadata_prefix_width) = metadata.expect("commit history entries have metadata");
+        let (metadata, metadata_x, metadata_prefix_width, pinned) =
+            metadata.expect("commit history entries have metadata");
         let selected = app.selected == Some(row_index);
         let head = decorations.get(&row.id).is_some_and(|decorations| {
             decorations
@@ -1384,6 +1387,7 @@ fn draw_history(
                 row_area,
                 &lanes.tiles(index)[..lane.chars().count()],
                 horizontal_offset,
+                pinned,
             );
         }
         if selected {
@@ -3154,12 +3158,14 @@ struct MetadataOptions<'a> {
     title_format: TitleFormat,
     use_mailmap: bool,
     ref_mode: RefMode,
+    graphical_pins: bool,
     selected: bool,
     copy_feedback: Option<CopyKind>,
 }
 
 struct MetadataColumns<'a> {
     fields: [Line<'a>; 6],
+    graphical_pin: bool,
 }
 
 impl<'a> MetadataColumns<'a> {
@@ -3220,6 +3226,7 @@ fn metadata_columns<'a>(
         title_format,
         use_mailmap,
         ref_mode,
+        graphical_pins,
         selected,
         copy_feedback,
     } = options;
@@ -3276,11 +3283,12 @@ fn metadata_columns<'a>(
                 .pin_target(row.id, decoration.name.as_bstr())
                 .is_none_or(|target| !labels.contains(&target))
     });
-    if has_pin {
+    let text_pin = has_pin && !graphical_pins;
+    if text_pin {
         refs.push(Span::styled(" 📌", decoration_style(DecorationKind::Pin)));
     }
     if decorations.has_stash(row.id, change_id) {
-        let marker = if has_pin { "🎁" } else { " 🎁" };
+        let marker = if text_pin { "🎁" } else { " 🎁" };
         refs.push(Span::styled(marker, decoration_style(DecorationKind::Stash)));
     }
     if !labels.is_empty() {
@@ -3444,6 +3452,7 @@ fn metadata_columns<'a>(
         title_spans.extend(commit_title_spans(title, title_format));
     }
     MetadataColumns {
+        graphical_pin: has_pin && graphical_pins,
         fields: [
             Line::from(id),
             Line::from(refs),
@@ -3494,6 +3503,7 @@ pub(crate) fn plain_history_metadata(
             title_format: TitleFormat::Original,
             use_mailmap: app.use_mailmap,
             ref_mode: app.ref_mode,
+            graphical_pins: false,
             selected: false,
             copy_feedback: None,
         },
@@ -3531,6 +3541,7 @@ pub(crate) fn todo_metadata(app: &App, row: &CommitRow, mailmap: &gix::mailmap::
             title_format: TitleFormat::Original,
             use_mailmap: app.use_mailmap,
             ref_mode: app.ref_mode,
+            graphical_pins: false,
             selected: false,
             copy_feedback: None,
         },
@@ -3711,7 +3722,7 @@ pub(crate) fn highlight_graph(frame: &mut Frame<'_>, area: Rect, tiles: &[Tile],
     }
 }
 
-pub(crate) fn tag_graph(frame: &mut Frame<'_>, area: Rect, tiles: &[Tile], offset: usize) {
+pub(crate) fn tag_graph(frame: &mut Frame<'_>, area: Rect, tiles: &[Tile], offset: usize, pinned: bool) {
     for (x, mut tile) in tiles
         .iter()
         .skip(offset)
@@ -3725,6 +3736,7 @@ pub(crate) fn tag_graph(frame: &mut Frame<'_>, area: Rect, tiles: &[Tile], offse
         let cell = &mut frame.buffer_mut()[(area.x + x as u16, area.y)];
         if tile.marker != ' ' {
             tile.marker = cell.symbol().chars().next().unwrap_or(tile.marker);
+            tile.pinned = pinned;
         }
         cell.set_symbol(&tile.encode())
             .set_diff_option(CellDiffOption::ForcedWidth(std::num::NonZeroU16::MIN));
@@ -6891,6 +6903,56 @@ Native tests: 2s"
             rendered_row(&terminal).contains("📌 ★main"),
             "an ordinary symbolic pin keeps the hero reference's star"
         );
+
+        app.graphics_enabled = true;
+        terminal.clear()?;
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        let row = rendered_row(&terminal);
+        assert_eq!(
+            row.matches('📌').count(),
+            3,
+            "only reference labels keep their text pins"
+        );
+        assert!(
+            row.contains("📌 ★main"),
+            "the hero reference keeps its pin in graphical mode"
+        );
+        let pinned_markers = |terminal: &Terminal<TestBackend>| {
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .filter_map(|cell| Tile::decode(cell.symbol()))
+                .filter(|tile| tile.pinned)
+                .map(|tile| tile.marker)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(pinned_markers(&terminal), ['@'], "the pin decorates the HEAD node");
+
+        decorations
+            .entry(commit_id)
+            .or_default()
+            .retain(|item| item.name != "pin:direct");
+        terminal.clear()?;
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(
+            pinned_markers(&terminal).is_empty(),
+            "visible reference pins stay with their labels"
+        );
+
+        app.ref_mode = RefMode::None;
+        terminal.clear()?;
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(
+            !rendered_row(&terminal).contains('📌'),
+            "pins without a visible reference label use the graphical marker"
+        );
+        assert_eq!(
+            pinned_markers(&terminal),
+            ['@'],
+            "hidden reference pins share the node overlay"
+        );
         Ok(())
     }
 
@@ -8151,7 +8213,7 @@ Native tests: 2s"
         };
         let mut terminal = Terminal::new(TestBackend::new(2, 1))?;
         terminal.draw(|frame| {
-            tag_graph(frame, Rect::new(0, 0, 2, 1), &[tile.clone(), Tile::default()], 0);
+            tag_graph(frame, Rect::new(0, 0, 2, 1), &[tile.clone(), Tile::default()], 0, false);
         })?;
 
         let cell = &terminal.backend().buffer()[(0, 0)];
@@ -8221,7 +8283,7 @@ Native tests: 2s"
                             }),
                         );
                         if graphical {
-                            tag_graph(frame, area, &tiles, usize::from(offset));
+                            tag_graph(frame, area, &tiles, usize::from(offset), false);
                         }
                     }
                     frame.render_widget(Clear, Rect::new(2, 3, 1, 1));
@@ -11381,6 +11443,7 @@ Clippy: 1s"
                 title_format: TitleFormat::Original,
                 use_mailmap: false,
                 ref_mode: RefMode::All,
+                graphical_pins: false,
                 selected: false,
                 copy_feedback: None,
             },
@@ -11506,6 +11569,7 @@ Clippy: 1s"
                 title_format: TitleFormat::Original,
                 use_mailmap: false,
                 ref_mode: RefMode::None,
+                graphical_pins: false,
                 selected: false,
                 copy_feedback: None,
             },

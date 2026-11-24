@@ -1445,13 +1445,18 @@ selection, and submission behavior.
   `📌topic`, `📌@main`, or `📌★remembered`. An alias is marked independently from
   its referent, and multiple pins of the same reference share one marker.
   Direct pins and symbolic pins whose target label is hidden or unavailable
-  share a single `📌` resource marker immediately after the hash. It uses the
-  default text color and remains visible when references are hidden. Internal
-  pin names are omitted from history rows. Time travel to a pinned
-  tip uses a local-branch pin to attach or a direct pin to detach, then removes
-  that one pin. Symbolic pins for other reference namespaces are ignored and
-  retained. Multiple matching checkout pins prefer local branches and then
-  lexical ref-name order.
+  share one marker per commit. With Kitty graphics, a transparent pushpin
+  image spans two columns and one row above the graph layer, with its tip
+  overlapping the commit node. The renderer shares that image across pins of
+  the same size and brightness and tracks its placements separately from the
+  underlying graph tiles. The visible graph tile gets its pin state from the
+  row's existing decorations. Text history shows `📌` immediately
+  after the hash in the default text color. Both forms remain visible when
+  references are hidden. Internal pin names are omitted from history rows.
+  Time travel to a pinned tip uses a local-branch pin to attach or a direct pin
+  to detach, then removes that one pin. Symbolic pins for other reference
+  namespaces are ignored and retained. Multiple matching checkout pins prefer
+  local branches and then lexical ref-name order.
 - The HEAD pin instead marks its target branch as `★branch` in the local-branch
   style. It adds no `📌`, is never selected as a return destination, and does not
   offer `unpin`; its branch keeps normal tracking-relation behavior.
