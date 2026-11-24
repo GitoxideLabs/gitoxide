@@ -17,6 +17,40 @@ fn memory_backed_index(at: &str) -> gix_pack::index::File<&'static [u8]> {
 mod fuzzed;
 
 #[test]
+fn lookup_and_iteration_agree_with_git_generated_large_offsets() -> gix_testtools::TestResult {
+    let fixture = gix_testtools::scripted_fixture_read_only_with_args("make_large_offset_index.sh", [SMALL_PACK])?;
+    let large_offsets = fixture.join("large-offsets.idx");
+    let small = fixture_path(SMALL_PACK_INDEX);
+    let expected = gix_pack::index::File::at(&small, gix_hash::Kind::Sha1)?;
+    assert_eq!(
+        large_offsets.metadata()?.len(),
+        small.metadata()?.len() + 8 * u64::from(expected.num_objects() - 1),
+        "Git encoded all but the first offset in the 64-bit table"
+    );
+    let index = gix_pack::index::File::at(&large_offsets, gix_hash::Kind::Sha1)?;
+    assert_eq!(
+        index.num_objects(),
+        expected.num_objects(),
+        "same objects in both indices"
+    );
+    for (actual, expected) in index.iter().zip(expected.iter()) {
+        let expected = expected?;
+        assert_eq!(actual?, expected, "large and small encodings resolve to the same entry");
+        let entry_index = index.lookup(expected.oid).expect("object is in both indices");
+        assert_eq!(index.pack_offset_at_index(entry_index)?, expected.pack_offset);
+    }
+    assert_eq!(index.sorted_offsets()?, expected.sorted_offsets()?);
+    assert!(
+        index
+            .pack_offset_at_index(index.num_objects())
+            .expect_err("entry past the end")
+            .is_validation(),
+        "an out-of-bounds entry index is a caller error"
+    );
+    Ok(())
+}
+
+#[test]
 fn unsupported_version_is_classified() -> gix_testtools::TestResult {
     let mut data = std::fs::read(fixture_path(SMALL_PACK_INDEX))?;
     data[4..8].copy_from_slice(&3u32.to_be_bytes());
@@ -53,10 +87,11 @@ mod version {
                 );
             }
             for (entry_index, entry) in file.iter().enumerate() {
+                let entry = entry?;
                 for mut candidates in [None, Some(0..0)] {
                     let index = file.lookup(entry.oid).expect("id present");
                     assert_eq!(entry.oid.as_ref(), file.oid_at_index(index));
-                    assert_eq!(entry.pack_offset, file.pack_offset_at_index(index));
+                    assert_eq!(entry.pack_offset, file.pack_offset_at_index(index)?);
                     assert_eq!(entry.crc32, file.crc32_at_index(index));
 
                     let hex_len = (entry_index % object_hash.len_in_hex()).max(7);
@@ -106,10 +141,11 @@ mod version {
                 }
             }
             for (entry_index, entry) in file.iter().enumerate() {
+                let entry = entry?;
                 for mut candidates in [None, Some(0..0)] {
                     let index = file.lookup(entry.oid).expect("id present");
                     assert_eq!(entry.oid.as_ref(), file.oid_at_index(index));
-                    assert_eq!(entry.pack_offset, file.pack_offset_at_index(index));
+                    assert_eq!(entry.pack_offset, file.pack_offset_at_index(index)?);
                     assert_eq!(entry.crc32, file.crc32_at_index(index), "{index} {entry:?}");
 
                     let hex_len = (entry_index % object_hash.len_in_hex()).max(7);
@@ -319,7 +355,7 @@ fn traverse_with_index_and_forward_ref_deltas() {
 fn tree_from_offsets_respects_alloc_limit() -> gix_testtools::TestResult {
     for (index_path, pack_path) in crate::PACKS_AND_INDICES {
         let index = index::File::at(fixture_path(index_path), gix_hash::Kind::Sha1)?;
-        let offsets = index.sorted_offsets();
+        let offsets = index.sorted_offsets()?;
         let item_bytes = std::mem::size_of::<gix_pack::cache::delta::tree::Item<u64>>();
         let allocation_bytes = offsets.len() * item_bytes;
         for limit in [Some(0), Some(allocation_bytes.div_ceil(64)), None] {
@@ -328,9 +364,10 @@ fn tree_from_offsets_respects_alloc_limit() -> gix_testtools::TestResult {
                 offsets.iter().copied(),
                 &|offset| *offset,
                 &|object_id| {
-                    Ok(index
+                    index
                         .lookup(object_id)
-                        .map(|entry_index| index.pack_offset_at_index(entry_index)))
+                        .map(|entry_index| index.pack_offset_at_index(entry_index))
+                        .transpose()
                 },
                 &mut progress::Discard,
                 &AtomicBool::new(false),
@@ -580,9 +617,10 @@ fn pack_lookup() -> gix_testtools::TestResult {
             .values()
             .map(|v| *v as usize)
             .sum::<usize>();
-        let sorted_offsets = idx.sorted_offsets();
+        let sorted_offsets = idx.sorted_offsets()?;
         assert_eq!(num_objects, sorted_offsets.len());
         for idx_entry in idx.iter() {
+            let idx_entry = idx_entry?;
             let pack_entry = pack.entry(idx_entry.pack_offset)?;
             assert_ne!(pack_entry.data_offset, idx_entry.pack_offset);
             assert!(sorted_offsets.binary_search(&idx_entry.pack_offset).is_ok());

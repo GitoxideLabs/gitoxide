@@ -204,9 +204,7 @@ impl crate::Repository {
                 .map(|name| name.as_bstr().to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
-            bail!(validation(format!(
-                "Found ambiguous remotes without 1:1 mapping or more than one match: {remotes}"
-            )));
+            bail!("Found ambiguous remotes without 1:1 mapping or more than one match: {remotes}".validation());
         }
         Ok(None)
     }

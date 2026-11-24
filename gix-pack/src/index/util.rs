@@ -15,7 +15,7 @@ pub(crate) fn index_entries_sorted_by_offset_ascending(
 
     let mut v = try_exact_vec(idx.num_objects as usize, crate::metadata_alloc_limit(alloc_limit_bytes))?;
     for entry in idx.iter() {
-        v.push(entry);
+        v.push(entry?);
         progress.inc();
     }
     v.sort_by_key(|e| e.pack_offset);

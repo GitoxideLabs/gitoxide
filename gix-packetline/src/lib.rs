@@ -176,9 +176,7 @@ impl<'a> PacketLineRef<'a> {
             2 => BandRef::Progress(d),
             3 => BandRef::Error(d),
             band => {
-                bail!(gix_error::validation(format!(
-                    "attempt to decode a non-side channel line or input was malformed: {band}"
-                )));
+                bail!("attempt to decode a non-side channel line or input was malformed: {band}".validation());
             }
         })
     }

@@ -180,7 +180,7 @@ where
             &|id, _| {
                 self.lookup(id)
                     .map(|index| {
-                        pack.entry(self.pack_offset_at_index(index))
+                        pack.entry(self.pack_offset_at_index(index)?)
                             .map(crate::data::decode::entry::ResolvedBase::InPack)
                     })
                     .transpose()

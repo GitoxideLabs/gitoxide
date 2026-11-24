@@ -152,9 +152,7 @@ impl Pipeline {
         use gix_error::{OptionExt, ResultExt, message};
 
         if !matches!(mode, EntryKind::Blob | EntryKind::BlobExecutable) {
-            bail!(gix_error::validation(format!(
-                "Entry at '{rela_path}' must be regular file or symlink, but was {mode:?}"
-            )));
+            bail!("Entry at '{rela_path}' must be regular file or symlink, but was {mode:?}".validation());
         }
 
         let id = id.filter(|id| !id.is_null());

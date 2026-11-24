@@ -61,7 +61,10 @@ mod blocking_and_async_io {
     fn pack_object_ids(index_path: Option<&std::path::Path>, hash: gix::hash::Kind) -> Vec<gix::ObjectId> {
         let index = gix::odb::pack::index::File::at(index_path.expect("pack index was written"), hash)
             .expect("written index can be read back");
-        let mut ids: Vec<_> = index.iter().map(|e| e.oid).collect();
+        let mut ids: Vec<_> = index
+            .iter()
+            .map(|e| e.expect("written index entry is valid").oid)
+            .collect();
         ids.sort();
         ids
     }

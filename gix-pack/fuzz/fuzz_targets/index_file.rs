@@ -1,10 +1,10 @@
 #![no_main]
 
 use gix_error::Result;
-use gix_utils::progress;
 use gix_hash::Prefix;
 use gix_pack::index;
 use gix_pack_fuzz::{empty_candidates, interrupt_flag, virtual_path};
+use gix_utils::progress;
 use libfuzzer_sys::fuzz_target;
 use std::hint::black_box;
 
@@ -24,7 +24,9 @@ fn fuzz(input: &[u8]) -> Result<()> {
     _ = black_box(index.pack_checksum());
     _ = black_box(index.index_checksum());
     _ = black_box(index.verify_checksum(&mut progress::Discard, &interrupt_flag()));
-    _ = black_box(index.iter().take(8).count());
+    for entry in index.iter().take(8) {
+        _ = black_box(entry);
+    }
     _ = black_box(index.sorted_offsets());
 
     if index.num_objects() > 0 {

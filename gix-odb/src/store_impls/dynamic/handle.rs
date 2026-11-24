@@ -38,7 +38,8 @@ impl IntraPackLookup<'_> {
         Ok(match self {
             IntraPackLookup::Single(index) => index
                 .lookup(id)
-                .map(|entry_index| index.pack_offset_at_index(entry_index)),
+                .map(|entry_index| index.pack_offset_at_index(entry_index))
+                .transpose()?,
             IntraPackLookup::Multi {
                 index,
                 required_pack_index,
@@ -89,7 +90,7 @@ pub(crate) mod index_lookup {
         ) -> Option<Box<dyn Iterator<Item = Result<gix_pack::index::Entry>> + '_>> {
             (self.id == pack_id.index).then(|| -> Box<dyn Iterator<Item = Result<gix_pack::index::Entry>> + '_> {
                 match &self.file {
-                    handle::SingleOrMultiIndex::Single { index, .. } => Box::new(index.iter().map(Ok)),
+                    handle::SingleOrMultiIndex::Single { index, .. } => Box::new(index.iter()),
                     handle::SingleOrMultiIndex::Multi { index, .. } => {
                         let pack_index = pack_id.multipack_index.expect(
                             "BUG: multi-pack index must be set if this is a multi-pack, pack-indices seem unstable",
@@ -122,7 +123,9 @@ pub(crate) mod index_lookup {
         /// Return true if the given object id exists in this index
         pub(crate) fn contains(&self, object_id: &oid) -> bool {
             match &self.file {
-                handle::SingleOrMultiIndex::Single { index, .. } => index.lookup(object_id).is_some(),
+                handle::SingleOrMultiIndex::Single { index, .. } => index
+                    .lookup(object_id)
+                    .is_some_and(|entry| index.pack_offset_at_index(entry).is_ok()),
                 handle::SingleOrMultiIndex::Multi { index, .. } => index.lookup(object_id).is_some(),
             }
         }
@@ -170,20 +173,27 @@ pub(crate) mod index_lookup {
         /// Also return the index itself as it's needed to resolve intra-pack ref-delta objects. They are a possibility even though
         /// they won't be used in practice as it's more efficient to store their offsets.
         /// If it is not loaded, ask it to be loaded and put it into the returned mutable option for safe-keeping.
+        /// Returns `Ok(None)` if the object ID is absent, or `Err` if its pack location cannot be read from the index.
         pub(crate) fn lookup(&mut self, object_id: &oid) -> Result<Option<Outcome<'_>>> {
             let id = self.id;
             Ok(match &mut self.file {
-                handle::SingleOrMultiIndex::Single { index, data } => index.lookup(object_id).map(move |idx| Outcome {
-                    object_index: handle::IndexForObjectInPack {
-                        pack_id: types::PackId {
-                            index: id,
-                            multipack_index: None,
+                handle::SingleOrMultiIndex::Single { index, data } => {
+                    let Some(idx) = index.lookup(object_id) else {
+                        return Ok(None);
+                    };
+                    let pack_offset = index.pack_offset_at_index(idx)?;
+                    Some(Outcome {
+                        object_index: handle::IndexForObjectInPack {
+                            pack_id: types::PackId {
+                                index: id,
+                                multipack_index: None,
+                            },
+                            pack_offset,
                         },
-                        pack_offset: index.pack_offset_at_index(idx),
-                    },
-                    index_file: IntraPackLookup::Single(index),
-                    pack: data,
-                }),
+                        index_file: IntraPackLookup::Single(index),
+                        pack: data,
+                    })
+                }
                 handle::SingleOrMultiIndex::Multi { index, data } => {
                     let Some(idx) = index.lookup(object_id) else {
                         return Ok(None);

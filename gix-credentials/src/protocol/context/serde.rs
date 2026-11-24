@@ -228,15 +228,12 @@ fn validate(key: &str, value: &BStr, protect_protocol: bool) -> Result {
         || (protect_protocol && value.contains(&b'\r'))
     {
         if is_secret_field(key) {
-            bail!(gix_error::validation(format!(
-                "{key:?} must not contain null bytes or newlines"
-            )));
+            bail!("{key:?} must not contain null bytes or newlines".validation());
         }
         bail!(
-            gix_error::validation(format!(
-                "{key:?}={value:?} must not contain null bytes or newlines neither in key nor in value."
-            ))
-            .with_input(value)
+            "{key:?}={value:?} must not contain null bytes or newlines neither in key nor in value."
+                .validation()
+                .with_input(value)
         );
     }
     Ok(())

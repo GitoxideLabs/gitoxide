@@ -34,12 +34,10 @@ impl Bundle {
                 pack: crate::data::File::at(path, object_hash)?,
                 index: crate::index::File::at(path.with_extension("idx"), object_hash)?,
             },
-            _ => {
-                bail!(validation(format!(
-                    "An 'idx' extension is expected of an index file: \"{}\"",
-                    path.display()
-                )));
-            }
+            _ => bail!(
+                "An 'idx' extension is expected of an index file: \"{}\"".validation(),
+                path.display()
+            ),
         })
     }
 }

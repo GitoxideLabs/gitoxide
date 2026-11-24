@@ -106,9 +106,7 @@ pub(crate) fn from_capabilities<'a>(
             message!("{symref:?} could not be parsed. A symref is expected to look like <NAME>:<target>.").corrupted()
         })?);
         if left.is_empty() || right.is_empty() {
-            bail!(corruption(format!(
-                "{symref:?} could not be parsed. A symref is expected to look like <NAME>:<target>."
-            )));
+            bail!("{symref:?} could not be parsed. A symref is expected to look like <NAME>:<target>.".corrupted());
         }
         out_refs.push(InternalRef::SymbolicForLookup {
             path: left.into(),
@@ -133,9 +131,7 @@ pub(in crate::handshake::refs) fn parse_v1(
     })?);
     let path = &path[1..];
     if path.is_empty() {
-        bail!(corruption(format!(
-            "{trimmed:?} could not be parsed. A V1 ref line should be '<hex-hash> <path>'."
-        )));
+        bail!("{trimmed:?} could not be parsed. A V1 ref line should be '<hex-hash> <path>'.".corrupted());
     }
     match path.strip_suffix(b"^{}") {
         Some(stripped) => {

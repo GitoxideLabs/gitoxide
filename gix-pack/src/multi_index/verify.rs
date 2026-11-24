@@ -143,9 +143,7 @@ where
                 let rhs = self.oid_at_index(entry_index + 1);
 
                 if rhs.cmp(lhs) != Ordering::Greater {
-                    bail!(corruption(format!(
-                        "The object id at multi-index entry {entry_index} wasn't in order"
-                    )));
+                    bail!("The object id at multi-index entry {entry_index} wasn't in order".corrupted());
                 }
                 let (pack_id, _) = self.pack_id_and_pack_offset_at_index(entry_index)?;
                 pack_ids_and_offsets.push((pack_id, entry_index));
@@ -170,7 +168,7 @@ where
             progress.inc();
 
             let mut bundle = None;
-            let index;
+            let index_file;
             let index_path = parent.join(index_file_name);
             let index = if deep_check {
                 let mut opened_bundle = crate::Bundle::at(index_path, self.object_hash)?;
@@ -178,8 +176,9 @@ where
                 bundle = Some(opened_bundle);
                 bundle.as_ref().map(|b| &b.index).expect("just set")
             } else {
-                index = Some(index::File::at(index_path, self.object_hash)?);
-                index.as_ref().expect("just set")
+                index_file = index::File::at(index_path, self.object_hash)?;
+                index_file.verify_offsets(should_interrupt)?;
+                &index_file
             };
 
             let slice_end = pack_ids_slice.partition_point(|e| e.0 == pack_id as crate::data::Id);
@@ -199,7 +198,7 @@ where
                     let entry_in_bundle_index = index.lookup(oid).ok_or_raise(|| {
                         message!("{oid} wasn't found in the index referenced in the multi-pack index").corrupted()
                     })?;
-                    let actual_pack_offset = index.pack_offset_at_index(entry_in_bundle_index);
+                    let actual_pack_offset = index.pack_offset_at_index(entry_in_bundle_index)?;
                     if actual_pack_offset != expected_pack_offset {
                         bail!(
                             "Object {oid} should be at pack-offset {expected_pack_offset} but was found at {actual_pack_offset}".corrupted()
