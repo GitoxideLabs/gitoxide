@@ -140,9 +140,17 @@ impl Arguments {
         }
     }
     /// Deepen the commit history in a relative instead of absolute fashion.
+    ///
+    /// In V0 and V1, this must be called before the first [`want()`](Self::want()).
     pub fn deepen_relative(&mut self) {
         debug_assert!(self.deepen_relative, "'deepen-relative' feature required");
         if self.deepen_relative {
+            #[cfg(any(feature = "async-client", feature = "blocking-client"))]
+            if matches!(self.version, gix_transport::Protocol::V0 | gix_transport::Protocol::V1) {
+                // Before V2, it's a capability of the first `want`, and `git upload-pack` rejects it as a line.
+                self.add_feature("deepen-relative");
+                return;
+            }
             self.args.push("deepen-relative".into());
         }
     }
@@ -220,7 +228,9 @@ impl Arguments {
                 let baked_features = features
                     .iter()
                     .filter(
-                        |(f, _)| *f != "include-tag", /* not a capability in that sense, needs to be turned on by caller later */
+                        // Not capabilities in that sense, they need to be turned on by the caller later.
+                        // `deepen-relative` would otherwise make every `deepen` relative to the current shallow boundary.
+                        |(f, _)| *f != "include-tag" && *f != "deepen-relative",
                     )
                     .map(|(n, v)| match v {
                         Some(v) => format!("{n}={v}"),

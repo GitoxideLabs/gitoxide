@@ -355,8 +355,18 @@ mod blocking_io {
         if gix_testtools::run_in_isolated_process()? {
             return Ok(());
         }
-        let tmp = gix_testtools::tempfile::TempDir::new()?;
-        let (repo, _change) = gix::prepare_clone(remote::repo("base").path(), tmp.path())?
+        for version in [
+            gix::protocol::transport::Protocol::V1,
+            gix::protocol::transport::Protocol::V2,
+        ] {
+            let tmp = gix_testtools::tempfile::TempDir::new()?;
+            let (repo, _change) = gix::clone::PrepareFetch::new(
+                remote::repo("base").path(),
+                tmp.path(),
+                gix::create::Kind::WithWorktree,
+                Default::default(),
+                restricted().config_overrides(Some(format!("protocol.version={}", version as u8))),
+            )?
             .with_shallow(Shallow::DepthAtRemote(2.try_into()?))
             .configure_remote(|mut r| {
                 r.replace_refspecs(Some("refs/heads/main:refs/remotes/origin/main"), Direction::Fetch)?;
@@ -364,55 +374,57 @@ mod blocking_io {
             })
             .fetch_only(gix::progress::Discard, &AtomicBool::default())?;
 
-        assert!(repo.is_shallow()?);
-        assert_eq!(
-            shallow_ids(&repo, "present")?,
-            sorted([
-                hex_to_id("2d9d136fb0765f2e24c44a0f91984318d580d03b"),
-                hex_to_id("dfd0954dabef3b64f458321ef15571cc1a46d552"),
-            ])
-        );
+            assert!(repo.is_shallow()?, "{version:?}: a depth of 2 yields a shallow clone");
+            assert_eq!(
+                shallow_ids(&repo, "present")?,
+                sorted([
+                    hex_to_id("2d9d136fb0765f2e24c44a0f91984318d580d03b"),
+                    hex_to_id("dfd0954dabef3b64f458321ef15571cc1a46d552"),
+                ]),
+                "{version:?}: the depth is counted from the tips, not from a previous boundary"
+            );
 
-        let shallow_commit_count = repo.head_id()?.ancestors().all()?.count();
+            let shallow_commit_count = repo.head_id()?.ancestors().all()?.count();
 
-        let remote = repo.head()?.into_remote(Direction::Fetch).expect("present")?;
-        remote
-            .connect(Direction::Fetch)?
-            .prepare_fetch(gix::progress::Discard, Default::default())?
-            .with_shallow(Shallow::Deepen(1))
-            .receive(gix::progress::Discard, &AtomicBool::default())?;
+            let remote = repo.head()?.into_remote(Direction::Fetch).expect("present")?;
+            remote
+                .connect(Direction::Fetch)?
+                .prepare_fetch(gix::progress::Discard, Default::default())?
+                .with_shallow(Shallow::Deepen(1))
+                .receive(gix::progress::Discard, &AtomicBool::default())?;
 
-        assert_eq!(
-            shallow_ids(&repo, "present")?,
-            sorted([
-                hex_to_id("27e71576a6335294aa6073ab767f8b36bdba81d0"),
-                hex_to_id("82024b2ef7858273337471cbd1ca1cedbdfd5616"),
-                hex_to_id("b5152869aedeb21e55696bb81de71ea1bb880c85"),
-            ]),
-            "the shallow boundary was changed"
-        );
-        assert!(
-            repo.head_id()?.ancestors().all()?.count() > shallow_commit_count,
-            "there are more commits now as the history was deepened"
-        );
+            assert_eq!(
+                shallow_ids(&repo, "present")?,
+                sorted([
+                    hex_to_id("27e71576a6335294aa6073ab767f8b36bdba81d0"),
+                    hex_to_id("82024b2ef7858273337471cbd1ca1cedbdfd5616"),
+                    hex_to_id("b5152869aedeb21e55696bb81de71ea1bb880c85"),
+                ]),
+                "{version:?}: the shallow boundary was changed"
+            );
+            assert!(
+                repo.head_id()?.ancestors().all()?.count() > shallow_commit_count,
+                "{version:?}: there are more commits now as the history was deepened"
+            );
 
-        let shallow_commit_count = repo.head_id()?.ancestors().all()?.count();
-        remote
-            .connect(Direction::Fetch)?
-            .prepare_fetch(gix::progress::Discard, Default::default())?
-            .with_shallow(Shallow::Since {
-                cutoff: gix::date::Time::new(1112354053, 0),
-            })
-            .receive(gix::progress::Discard, &AtomicBool::default())?;
+            let shallow_commit_count = repo.head_id()?.ancestors().all()?.count();
+            remote
+                .connect(Direction::Fetch)?
+                .prepare_fetch(gix::progress::Discard, Default::default())?
+                .with_shallow(Shallow::Since {
+                    cutoff: gix::date::Time::new(1112354053, 0),
+                })
+                .receive(gix::progress::Discard, &AtomicBool::default())?;
 
-        assert!(
-            !repo.is_shallow()?,
-            "the cutoff date is before the first commit, effectively unshallowing"
-        );
-        assert!(
-            repo.head_id()?.ancestors().all()?.count() > shallow_commit_count,
-            "there is even more commits than previously"
-        );
+            assert!(
+                !repo.is_shallow()?,
+                "{version:?}: the cutoff date is before the first commit, effectively unshallowing"
+            );
+            assert!(
+                repo.head_id()?.ancestors().all()?.count() > shallow_commit_count,
+                "{version:?}: there is even more commits than previously"
+            );
+        }
         Ok(())
     }
 

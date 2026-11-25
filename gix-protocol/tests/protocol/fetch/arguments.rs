@@ -234,7 +234,11 @@ mod v1 {
     async fn haves_and_wants_for_fetch_stateless() {
         let mut out = Vec::new();
         let mut t = transport(&mut out, false);
-        let mut arguments = arguments_v1(["feature-a", "shallow", "deepen-since", "deepen-not"].iter().copied());
+        let mut arguments = arguments_v1(
+            ["feature-a", "shallow", "deepen-since", "deepen-not", "deepen-relative"]
+                .iter()
+                .copied(),
+        );
 
         arguments.deepen(1);
         arguments.shallow(id("7b333369de1221f9bfbbe03a3a13e9a09bc1c9ff"));
@@ -262,7 +266,8 @@ mod v1 {
 00000032have 1111111111111111111111111111111111111111
 0009done
 "
-            .as_bstr()
+            .as_bstr(),
+            "an advertised `deepen-relative` isn't requested unless asked for, as it would make `deepen` relative"
         );
     }
 
@@ -272,9 +277,10 @@ mod v1 {
     async fn haves_and_wants_for_fetch_stateful() {
         let mut out = Vec::new();
         let mut t = transport(&mut out, true);
-        let mut arguments = arguments_v1(["feature-a", "shallow"].iter().copied());
+        let mut arguments = arguments_v1(["feature-a", "shallow", "deepen-relative"].iter().copied());
 
         arguments.deepen(1);
+        arguments.deepen_relative();
         arguments.want(id("7b333369de1221f9bfbbe03a3a13e9a09bc1c907"));
         arguments.have(id("0000000000000000000000000000000000000000"));
         arguments.send(&mut t, false).await.expect("sending to buffer to work");
@@ -283,13 +289,14 @@ mod v1 {
         arguments.send(&mut t, true).await.expect("sending to buffer to work");
         assert_eq!(
             out.as_bstr(),
-            b"0044want 7b333369de1221f9bfbbe03a3a13e9a09bc1c907 feature-a shallow
+            b"0054want 7b333369de1221f9bfbbe03a3a13e9a09bc1c907 feature-a shallow deepen-relative
 000ddeepen 1
 00000032have 0000000000000000000000000000000000000000
 00000032have 1111111111111111111111111111111111111111
 0009done
 "
-            .as_bstr()
+            .as_bstr(),
+            "in V1, `deepen-relative` is a capability of the first `want`, not a line of its own"
         );
     }
 }
