@@ -44,6 +44,31 @@ mod into_iter {
 
     use crate::status::{repo, submodule_repo};
 
+    #[cfg(unix)]
+    #[test]
+    fn status_does_not_write_to_the_worktree() -> TestResult {
+        let (fixture, ()) = gix_testtools::scripted_fixture_read_only_with_post("make_status_repos.sh", 1, |state| {
+            if let gix_testtools::FixtureState::Uninitialized(path) = state {
+                // An old timestamp exposes even short-lived probes on coarse filesystems.
+                std::fs::File::open(path.join("untracked-only"))?
+                    .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000))?;
+            }
+            Ok(())
+        })?;
+        let root = fixture.join("untracked-only");
+        let repo = gix::open_opts(&root, gix::open::Options::isolated().filter_config_section(|_| false))?;
+        let before = std::fs::metadata(&root)?.modified()?;
+        for item in repo.status(gix::progress::Discard)?.into_iter(None)? {
+            item?;
+        }
+        assert_eq!(
+            std::fs::metadata(&root)?.modified()?,
+            before,
+            "reading status must not create temporary entries that invalidate the monitor"
+        );
+        Ok(())
+    }
+
     #[test]
     fn index_writes_respect_checksum_configuration_trust() -> TestResult {
         for trust in [gix_sec::Trust::Reduced, gix_sec::Trust::Full] {

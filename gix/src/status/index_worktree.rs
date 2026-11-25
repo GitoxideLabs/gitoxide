@@ -113,7 +113,7 @@ impl Repository {
 
         let cwd = self.current_dir();
         let git_dir_realpath = crate::path::realpath_opts(self.git_dir(), cwd, crate::path::realpath::MAX_SYMLINKS)?;
-        let fs_caps = self.filesystem_options()?;
+        let fs_caps = self.config.fs_capabilities(None)?;
         let fscache = config::tree::Core::FS_CACHE
             .enrich_error(self.config.resolved.boolean(config::tree::Core::FS_CACHE))
             .with_lenient_default(self.config.lenient_config)?

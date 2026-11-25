@@ -197,7 +197,6 @@ pub(crate) mod utils {
         roots: gix_diff::blob::pipeline::WorktreeRoots,
     ) -> Result<gix_diff::blob::Platform> {
         let diff_algo = repo.config.diff_algorithm()?;
-        let worktree = (!roots.is_unset()).then_some(repo);
         let diff_cache = gix_diff::blob::Platform::new(
             gix_diff::blob::platform::Options {
                 algorithm: Some(diff_algo),
@@ -211,7 +210,7 @@ pub(crate) mod utils {
                     crate::filter::Pipeline::options(repo)?,
                 ),
                 repo.config.diff_drivers()?,
-                repo.config.diff_pipeline_options(worktree)?,
+                repo.config.diff_pipeline_options()?,
             ),
             mode,
             attr_stack,

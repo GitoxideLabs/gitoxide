@@ -132,13 +132,10 @@ impl Cache {
     }
 
     #[cfg(feature = "blob-diff")]
-    pub(crate) fn diff_pipeline_options(
-        &self,
-        probe_worktree: Option<&crate::Repository>,
-    ) -> Result<gix_diff::blob::pipeline::Options> {
+    pub(crate) fn diff_pipeline_options(&self) -> Result<gix_diff::blob::pipeline::Options> {
         Ok(gix_diff::blob::pipeline::Options {
             large_file_threshold_bytes: self.big_file_threshold()?,
-            fs: self.fs_capabilities(probe_worktree)?,
+            fs: self.fs_capabilities(None)?,
         })
     }
 

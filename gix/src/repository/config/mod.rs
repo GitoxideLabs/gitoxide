@@ -203,12 +203,14 @@ impl crate::Repository {
         }
     }
 
-    /// Return filesystem options as retrieved from the repository configuration.
+    /// Return filesystem options from the repository configuration, with defaults for unset values.
     ///
-    /// When `core.symlinks` has no usable value, try a temporary link in the worktree if
-    /// repository trust is reduced or a custom section filter is in use. If the probe is skipped
-    /// or cannot inspect or remove the link, use the platform default. If it cannot create
-    /// the link, report that symlinks are not supported.
+    /// If the repository has a worktree but no usable `core.symlinks` value, this method probes symlink support
+    /// when the Git directory isn't fully trusted or a custom configuration section filter is in use.
+    /// The probe attempts to create and remove a temporary symlink at the worktree root.
+    ///
+    /// If the probe is skipped or cannot inspect or remove the symlink, use the platform default for symlink
+    /// support. If it cannot create the symlink, report that symlinks are not supported.
     pub fn filesystem_options(&self) -> Result<gix_fs::Capabilities> {
         self.config.fs_capabilities(Some(self))
     }

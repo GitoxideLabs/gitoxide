@@ -36,6 +36,9 @@ pub mod main_worktree {
         /// Note that this is a no-op if the remote was empty, leaving this repository empty as well. This can be validated by checking
         /// if the `head()` of the returned repository is *not* unborn.
         ///
+        /// Before checking out files, this may create and remove a temporary symlink in the worktree to probe
+        /// symlink support; see [`Repository::filesystem_options()`] for when this happens.
+        ///
         /// # Interruption
         ///
         /// Like [`gix_worktree_state::checkout()`], interruption alone does not return an error: this method writes the
