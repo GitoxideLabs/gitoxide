@@ -135,7 +135,7 @@ mod access {
                     }
                 }
             }
-            Some(())
+            (index == num_bits).then_some(())
         }
 
         /// The amount of bits we are currently holding.

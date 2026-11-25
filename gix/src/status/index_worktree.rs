@@ -79,6 +79,8 @@ impl Repository {
     /// ### Note
     ///
     /// This is a lower-level method, prefer the [`status`](Repository::status()) method for greater ease of use.
+    /// Configured filesystem monitor hooks are queried for every call. To persist their refreshed checkpoint
+    /// and avoid repeated work, use the status iterator and its [`write_changes()`](crate::status::Outcome::write_changes).
     #[expect(clippy::too_many_arguments)]
     pub fn index_worktree_status<'index, T, U>(
         &self,
@@ -95,6 +97,42 @@ impl Repository {
         should_interrupt: &AtomicBool,
         options: Options,
     ) -> Result<gix_status::index_as_worktree_with_renames::Outcome>
+    where
+        T: Send + Clone,
+        U: Send + Clone,
+    {
+        self.index_worktree_status_inner(
+            index,
+            patterns,
+            delegate,
+            compare,
+            submodule,
+            progress,
+            should_interrupt,
+            options,
+        )
+        .map(|(out, _)| out)
+    }
+
+    #[expect(clippy::too_many_arguments)]
+    pub(in crate::status) fn index_worktree_status_inner<'index, T, U>(
+        &self,
+        index: &'index gix_index::State,
+        patterns: impl IntoIterator<Item = impl AsRef<BStr>>,
+        delegate: &mut impl gix_status::index_as_worktree_with_renames::VisitEntry<
+            'index,
+            ContentChange = T,
+            SubmoduleStatus = U,
+        >,
+        compare: impl CompareBlobs<Output = T> + Send + Clone,
+        submodule: impl SubmoduleStatus<Output = U> + Send + Clone,
+        progress: &mut dyn gix_utils::progress::Progress,
+        should_interrupt: &AtomicBool,
+        options: Options,
+    ) -> Result<(
+        gix_status::index_as_worktree_with_renames::Outcome,
+        Option<super::fsmonitor::Refresh>,
+    )>
     where
         T: Send + Clone,
         U: Send + Clone,
@@ -120,6 +158,20 @@ impl Repository {
             // if unset, default to enabled on Windows. Good for missing Git installations that would turn it on by installation config
             .unwrap_or(cfg!(windows));
         let accelerate_lookup = fs_caps.ignore_case.then(|| index.prepare_icase_backing());
+        let mut fsmonitor = super::fsmonitor::refresh(self, index, accelerate_lookup.as_ref(), progress)?;
+        let cached_listing = fsmonitor
+            .as_mut()
+            .map(|monitor| {
+                monitor.cached_listing(
+                    self,
+                    index,
+                    accelerate_lookup.as_ref(),
+                    options,
+                    pathspec.search.patterns().len() != 0,
+                )
+            })
+            .transpose()?
+            .flatten();
         let resource_cache = crate::diff::resource_cache(
             self,
             gix_diff::blob::pipeline::Mode::ToGit,
@@ -139,6 +191,7 @@ impl Repository {
             self.objects.clone().into_arc().expect("arc conversion always works"),
             progress,
             gix_status::index_as_worktree_with_renames::Context {
+                fsmonitor: fsmonitor.as_ref().and_then(super::fsmonitor::Refresh::status),
                 pathspec: pathspec.search,
                 resource_cache,
                 should_interrupt,
@@ -146,6 +199,7 @@ impl Repository {
                     git_dir_realpath: git_dir_realpath.as_path(),
                     current_dir: cwd,
                     ignore_case_index_lookup: accelerate_lookup.as_ref(),
+                    cached_listing: cached_listing.as_ref(),
                 },
             },
             gix_status::index_as_worktree_with_renames::Options {
@@ -161,7 +215,14 @@ impl Repository {
                 rewrites: options.rewrites,
             },
         )?;
-        Ok(out)
+        if let Some(_walk) = &out.dirwalk {
+            gix_trace::debug!(
+                read_dir_calls = _walk.read_dir_calls,
+                cached_dir_listings = _walk.cached_dir_listings,
+                "status directory walk finished"
+            );
+        }
+        Ok((out, fsmonitor))
     }
 
     pub(super) fn index_worktree_status_pathspec(
@@ -190,9 +251,13 @@ pub struct BuiltinSubmoduleStatus {
     #[cfg(not(feature = "parallel"))]
     git_dir: std::path::PathBuf,
     #[cfg(not(feature = "parallel"))]
-    open_options: crate::open::Options,
+    work_tree: Option<std::path::PathBuf>,
     #[cfg(not(feature = "parallel"))]
-    work_dir: Option<std::path::PathBuf>,
+    index_path: std::path::PathBuf,
+    #[cfg(not(feature = "parallel"))]
+    namespace: Option<gix_ref::Namespace>,
+    #[cfg(not(feature = "parallel"))]
+    open_options: crate::open::Options,
     submodule_paths: Vec<BString>,
 }
 
@@ -205,12 +270,24 @@ impl Clone for BuiltinSubmoduleStatus {
             #[cfg(not(feature = "parallel"))]
             git_dir: self.git_dir.clone(),
             #[cfg(not(feature = "parallel"))]
-            open_options: self.open_options.clone_with_trust(),
+            work_tree: self.work_tree.clone(),
             #[cfg(not(feature = "parallel"))]
-            work_dir: self.work_dir.clone(),
+            index_path: self.index_path.clone(),
+            #[cfg(not(feature = "parallel"))]
+            namespace: self.namespace.clone(),
+            #[cfg(not(feature = "parallel"))]
+            open_options: self.open_options.clone_with_trust(),
             submodule_paths: self.submodule_paths.clone(),
         }
     }
+}
+
+/// A submodule provider which borrows its cancellation flag and finishes nested status in its caller.
+#[cfg(feature = "status-monitor")]
+#[derive(Clone)]
+pub(crate) struct SynchronousSubmoduleStatus<'a> {
+    inner: BuiltinSubmoduleStatus,
+    interrupt: &'a AtomicBool,
 }
 
 ///
@@ -226,6 +303,14 @@ mod submodule_status {
     };
 
     impl BuiltinSubmoduleStatus {
+        #[cfg(feature = "status-monitor")]
+        pub(crate) fn synchronous(
+            self,
+            interrupt: &std::sync::atomic::AtomicBool,
+        ) -> super::SynchronousSubmoduleStatus<'_> {
+            super::SynchronousSubmoduleStatus { inner: self, interrupt }
+        }
+
         /// Create a new instance from a `repo` and a `mode` to control how the submodule status will be obtained.
         pub fn new(repo: crate::ThreadSafeRepository, mode: Submodule) -> Result<Self> {
             let local_repo = repo.to_thread_local();
@@ -245,9 +330,13 @@ mod submodule_status {
                 #[cfg(not(feature = "parallel"))]
                 git_dir: local_repo.git_dir().to_owned(),
                 #[cfg(not(feature = "parallel"))]
-                open_options: local_repo.open_options().clone_with_trust(),
+                work_tree: local_repo.work_tree.clone(),
                 #[cfg(not(feature = "parallel"))]
-                work_dir: local_repo.workdir().map(ToOwned::to_owned),
+                index_path: local_repo.index_path.clone(),
+                #[cfg(not(feature = "parallel"))]
+                namespace: local_repo.namespace().cloned(),
+                #[cfg(not(feature = "parallel"))]
+                open_options: local_repo.open_options().clone_with_trust(),
                 submodule_paths,
             })
         }
@@ -257,6 +346,31 @@ mod submodule_status {
         type Output = crate::submodule::Status;
 
         fn status(&mut self, entry: &gix_index::Entry, rela_path: &BStr) -> Result<Option<Self::Output>> {
+            self.status_inner(
+                entry,
+                rela_path,
+                #[cfg(feature = "status-monitor")]
+                None,
+            )
+        }
+    }
+
+    #[cfg(feature = "status-monitor")]
+    impl gix_status::index_as_worktree::traits::SubmoduleStatus for super::SynchronousSubmoduleStatus<'_> {
+        type Output = crate::submodule::Status;
+
+        fn status(&mut self, entry: &gix_index::Entry, rela_path: &BStr) -> Result<Option<Self::Output>> {
+            self.inner.status_inner(entry, rela_path, Some(self.interrupt))
+        }
+    }
+
+    impl BuiltinSubmoduleStatus {
+        fn status_inner(
+            &mut self,
+            entry: &gix_index::Entry,
+            rela_path: &BStr,
+            #[cfg(feature = "status-monitor")] interrupt: Option<&std::sync::atomic::AtomicBool>,
+        ) -> Result<Option<crate::submodule::Status>> {
             use bstr::ByteSlice;
             if matches!(
                 self.mode,
@@ -275,8 +389,10 @@ mod submodule_status {
             };
             #[cfg(not(feature = "parallel"))]
             {
-                // Preserve the captured state without requiring its checkout directory to still exist.
-                repo.work_tree.clone_from(&self.work_dir);
+                // Preserve the captured worktree/index without requiring its checkout directory to still exist.
+                repo.work_tree.clone_from(&self.work_tree);
+                repo.index_path.clone_from(&self.index_path);
+                repo.refs.namespace.clone_from(&self.namespace);
             }
             let sm = if self
                 .submodule_paths
@@ -322,7 +438,13 @@ mod submodule_status {
                 Submodule::Given { ignore, check_dirty } => (ignore, check_dirty),
             };
             let status = match sm {
-                Some(sm) => sm.status(ignore, check_dirty)?,
+                Some(sm) => sm.status_opts_inner(
+                    ignore,
+                    check_dirty,
+                    &mut |status| status,
+                    #[cfg(feature = "status-monitor")]
+                    interrupt,
+                )?,
                 None => {
                     if ignore == crate::submodule::config::Ignore::All {
                         return Ok(None);
@@ -348,7 +470,14 @@ mod submodule_status {
                         index_id: Some(entry.id),
                         ..Default::default()
                     }
-                    .with_worktree_status(&sm_repo, ignore, check_dirty, &mut |s| s)?
+                    .with_worktree_status(
+                        &sm_repo,
+                        ignore,
+                        check_dirty,
+                        &mut |s| s,
+                        #[cfg(feature = "status-monitor")]
+                        interrupt,
+                    )?
                 }
             };
             Ok(status.is_dirty().and_then(|dirty| dirty.then_some(status)))

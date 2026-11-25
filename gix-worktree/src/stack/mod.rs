@@ -208,6 +208,11 @@ impl Stack {
         &self.state
     }
 
+    /// Paths whose rules can be read from the object database and their indexed blob IDs.
+    pub fn id_mappings(&self) -> &[(bstr::BString, gix_hash::ObjectId)] {
+        &self.id_mappings
+    }
+
     /// Return the base path against which all entries or paths should be relative to when querying.
     ///
     /// Note that this path _may_ not be canonicalized.

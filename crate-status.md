@@ -121,6 +121,10 @@ The top-level crate that acts as hub to all functionality provided by the `gix-*
         * [x] tree or index with working tree
              - [x] rename tracking
              - [x] submodule status (recursive)
+             - [x] optional synchronous status collection and independently owned, incremental worktree snapshots on a shared repository monitor
+             - [x] scoped worktree refresh after index changes using a compact, prefix-compressed index baseline
+             - [x] exact per-refresh item changes alongside complete snapshots and content refresh coverage
+             - [x] live recursive monitoring of initialized, configured submodules
         * [x] diffs between modified blobs with various algorithms
         * [ ] tree with index (via index-from-tree and index)
             - [ ] rename tracking
@@ -893,6 +897,9 @@ A git directory walk.
 ### gix-index
 
 The git staging area.
+
+* [x] construct indexes from trees while reusing matching cache-tree nodes
+* [x] invalidate cache-trees on entry or path mutation
 
 * read
   * [x] V2 - the default, including long-paths support

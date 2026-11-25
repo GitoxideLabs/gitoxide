@@ -1,3 +1,66 @@
+#[derive(Clone)]
+pub(crate) enum Snapshot {
+    Checksum(gix_hash::ObjectId),
+    // Git replaces the index by rename. Its open file still contains the bytes we read.
+    #[cfg(not(windows))]
+    Checksumless(std::sync::Arc<std::fs::File>),
+    // Windows can refuse to replace an index with an open handle. Keep a digest of its bytes.
+    #[cfg(windows)]
+    Checksumless(gix_hash::ObjectId),
+}
+
+impl Snapshot {
+    fn new(checksum: gix_hash::ObjectId, file: Option<std::fs::File>) -> Option<Self> {
+        if !checksum.is_null() {
+            return Some(Self::Checksum(checksum));
+        }
+        #[cfg(not(windows))]
+        {
+            file.map(|file| Self::Checksumless(file.into()))
+        }
+        #[cfg(windows)]
+        {
+            Some(Self::Checksumless(hash_index(file.as_ref()?, checksum.kind()).ok()?))
+        }
+    }
+
+    fn matches(&self, path: &std::path::Path) -> std::io::Result<bool> {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut file = std::fs::File::open(path)?;
+        match self {
+            Self::Checksum(expected) => {
+                let mut actual = expected.kind().null();
+                if file.seek(SeekFrom::End(-(actual.as_slice().len() as i64)))? < crate::decode::header::SIZE as u64 {
+                    return Ok(false);
+                }
+                file.read_exact(actual.as_mut_slice())?;
+                Ok(actual == *expected)
+            }
+            #[cfg(not(windows))]
+            Self::Checksumless(original) => {
+                Ok(original.metadata()?.len() == file.metadata()?.len() && *map_index(original)? == *map_index(&file)?)
+            }
+            #[cfg(windows)]
+            Self::Checksumless(expected) => Ok(hash_index(&file, expected.kind())? == *expected),
+        }
+    }
+}
+
+#[cfg(windows)]
+fn hash_index(file: &std::fs::File, kind: gix_hash::Kind) -> std::io::Result<gix_hash::ObjectId> {
+    let mut hasher = gix_hash::hasher(kind);
+    hasher.update(&map_index(file)?);
+    hasher.try_finalize().map_err(std::io::Error::other)
+}
+
+fn map_index(file: &std::fs::File) -> std::io::Result<memmap2::Mmap> {
+    // SAFETY: Git writers replace the locked index by rename and never modify its mapped bytes in place.
+    #[expect(unsafe_code)]
+    unsafe {
+        memmap2::MmapOptions::new().map_copy_read_only(file)
+    }
+}
+
 mod impls {
     use std::ops::{Deref, DerefMut};
 
@@ -29,7 +92,7 @@ mod impl_ {
                 return f
                     .debug_struct("File")
                     .field("path", &self.path.display())
-                    .field("checksum", &self.checksum)
+                    .field("checksum", &self.checksum())
                     .field("object_hash", &self.state.object_hash)
                     .field("timestamp", &self.state.timestamp)
                     .field("version", &self.state.version)
@@ -53,7 +116,7 @@ mod impl_ {
             }
             f.debug_struct("File")
                 .field("path", &self.path.display())
-                .field("checksum", &self.checksum)
+                .field("checksum", &self.checksum())
                 .finish_non_exhaustive()
         }
     }
@@ -110,7 +173,10 @@ mod access {
         ///
         /// Note that even if `Some`, it will only represent the state in memory right after reading or [writing][File::write()].
         pub fn checksum(&self) -> Option<gix_hash::ObjectId> {
-            self.checksum
+            match self.snapshot {
+                Some(super::Snapshot::Checksum(id)) => Some(id),
+                _ => None,
+            }
         }
     }
 }

@@ -33,7 +33,8 @@ pub struct EntryRef<'a> {
     /// Additional properties of the entry.
     pub property: Option<entry::Property>,
     /// Further specify what the entry is on disk, similar to a file mode.
-    /// This is `None` if we decided it's not worth it to exit early and avoid trying to obtain this information.
+    /// This is `None` if classification ended early, the type could not be read, or
+    /// [untyped cached untracked entries](walk::Options::allow_untyped_untracked) were requested.
     pub disk_kind: Option<entry::Kind>,
     /// The kind of entry according to the index, if tracked. *Usually* the same as `disk_kind`.
     pub index_kind: Option<entry::Kind>,
@@ -51,7 +52,7 @@ pub struct Entry {
     pub status: entry::Status,
     /// Additional flags that further clarify properties of the entry.
     pub property: Option<entry::Property>,
-    /// Further specify what the entry is on disk, similar to a file mode.
+    /// See [`EntryRef::disk_kind`] for details.
     pub disk_kind: Option<entry::Kind>,
     /// The kind of entry according to the index, if tracked. *Usually* the same as `disk_kind`.
     /// Note that even if tracked, this might be `None` which indicates this is a worktree placed

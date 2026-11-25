@@ -1,4 +1,4 @@
-use gix_error::Result;
+use gix_error::{Result, bail};
 use std::{
     path::Path,
     slice::Chunks,
@@ -18,7 +18,7 @@ use crate::index_as_worktree::types::ConflictIndexEntry;
 use crate::{
     AtomicU64, SymlinkCheck,
     index_as_worktree::{
-        Change, Conflict, Context, EntryStatus, Outcome, VisitEntry, traits,
+        Change, Conflict, Context, EntryStatus, FsMonitor, Outcome, VisitEntry, traits,
         traits::{CompareBlobs, SubmoduleStatus, read_data::Stream},
         types::Options,
     },
@@ -66,6 +66,7 @@ pub fn index_as_worktree<'index, T, U, Find>(
         stack,
         filter,
         should_interrupt,
+        fsmonitor,
     }: Context<'_>,
     options: Options,
 ) -> Result<Outcome>
@@ -74,6 +75,9 @@ where
     U: Send,
     Find: gix_object::Find + Send + Clone,
 {
+    if fsmonitor.is_some_and(|monitor| monitor.valid.len() != index.entries().len()) {
+        bail!(message("Filesystem-monitor validity must match the index entry count"));
+    }
     // the order is absolutely critical here we use the old timestamp to detect racy index entries
     // (modified at or after the last index update) during the index update we then set those
     // entries size to 0 (see below) to ensure they keep showing up as racy and reset the timestamp.
@@ -100,7 +104,8 @@ where
                                              thread_limit = ?thread_limit);
 
     let entries_skipped_by_common_prefix = num_entries - entries.len();
-    let (skipped_by_pathspec, skipped_by_entry_flags, symlink_metadata_calls, entries_to_update) = Default::default();
+    let (skipped_by_pathspec, symlink_metadata_calls, entries_to_update) = Default::default();
+    let skipped_by_entry_flags = AtomicUsize::default();
     let (worktree_bytes, worktree_reads, odb_bytes, odb_reads, racy_clean) = Default::default();
 
     num_entries = entries.len();
@@ -109,7 +114,7 @@ where
 
     let new_state = {
         let options = &options;
-        let (skipped_by_pathspec, skipped_by_entry_flags) = (&skipped_by_pathspec, &skipped_by_entry_flags);
+        let skipped_by_pathspec = &skipped_by_pathspec;
         let (symlink_metadata_calls, entries_to_update) = (&symlink_metadata_calls, &entries_to_update);
         let (racy_clean, worktree_bytes) = (&racy_clean, &worktree_bytes);
         let (worktree_reads, odb_bytes, odb_reads) = (&worktree_reads, &odb_bytes, &odb_reads);
@@ -124,11 +129,12 @@ where
                     path_backing,
                     filter,
                     options,
+                    fsmonitor,
                     #[cfg(windows)]
                     fscache: options.fscache.then(|| FsCache::new(worktree)),
 
                     skipped_by_pathspec,
-                    skipped_by_entry_flags,
+                    skipped_by_entry_flags: 0,
                     symlink_metadata_calls,
                     entries_to_update,
                     racy_clean,
@@ -186,6 +192,7 @@ where
                         continue;
                     }
                 }
+                let skipped_before = state.skipped_by_entry_flags;
                 let res = state.process(
                     all_entries,
                     entry,
@@ -197,11 +204,17 @@ where
                     &mut idx,
                 );
                 idx += 1;
-                count.fetch_add(1, Ordering::Relaxed);
+                if state.skipped_by_entry_flags == skipped_before {
+                    count.fetch_add(1, Ordering::Relaxed);
+                }
                 if let Some(res) = res {
                     out.push(res);
                 }
             }
+            // Batch cheap skips while keeping progress immediate for filesystem checks.
+            let skipped = std::mem::take(&mut state.skipped_by_entry_flags);
+            skipped_by_entry_flags.fetch_add(skipped, Ordering::Relaxed);
+            count.fetch_add(skipped, Ordering::Relaxed);
             out
         },
         ReduceChange {
@@ -240,13 +253,14 @@ struct State<'a, 'b> {
     filter: gix_filter::Pipeline,
     path_backing: &'b gix_index::PathStorageRef,
     options: &'a Options,
+    fsmonitor: Option<FsMonitor<'a>>,
     /// Optional lazy worktree stats cache for faster status checks on Windows.
     /// Lookups happen before falling back to per-file syscalls.
     #[cfg(windows)]
     fscache: Option<FsCache>,
 
     skipped_by_pathspec: &'a AtomicUsize,
-    skipped_by_entry_flags: &'a AtomicUsize,
+    skipped_by_entry_flags: usize,
     symlink_metadata_calls: &'a AtomicUsize,
     entries_to_update: &'a AtomicUsize,
     racy_clean: &'a AtomicUsize,
@@ -274,13 +288,17 @@ impl<'index> State<'_, 'index> {
     where
         Find: gix_object::Find,
     {
+        let can_use_fsmonitor = entry.stage_raw() == 0
+            && !entry.mode.is_submodule()
+            && !entry.flags.contains(gix_index::entry::Flags::INTENT_TO_ADD);
+        let fsmonitor_valid = self.fsmonitor.and_then(|monitor| monitor.valid.get(entry_index));
         if entry.flags.intersects(
             gix_index::entry::Flags::UPTODATE
                 | gix_index::entry::Flags::SKIP_WORKTREE
-                | gix_index::entry::Flags::ASSUME_VALID
-                | gix_index::entry::Flags::FSMONITOR_VALID,
-        ) {
-            self.skipped_by_entry_flags.fetch_add(1, Ordering::Relaxed);
+                | gix_index::entry::Flags::ASSUME_VALID,
+        ) || (can_use_fsmonitor && fsmonitor_valid.is_some_and(|valid| valid.load(Ordering::Relaxed)))
+        {
+            self.skipped_by_entry_flags += 1;
             return None;
         }
         let path = entry.path_in(self.path_backing);
@@ -323,6 +341,13 @@ impl<'index> State<'_, 'index> {
         } else {
             self.compute_status(entry, path, diff, submodule, objects)
         };
+        if can_use_fsmonitor
+            && matches!(status, Ok(None | Some(EntryStatus::NeedsUpdate(_))))
+            && let Some(monitor) = self.fsmonitor
+        {
+            monitor.valid[entry_index].store(true, Ordering::Relaxed);
+            monitor.changed.store(true, Ordering::Relaxed);
+        }
         match status {
             Ok(None) => None,
             Ok(Some(status)) => Some(Ok((entry, entry_index, path, status))),

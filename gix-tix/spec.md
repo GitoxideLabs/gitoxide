@@ -2273,11 +2273,21 @@ views.
 
 ## Refresh, focus, and diagnostics
 
-- `gix::notify::RepositoryMonitor`, backed by `gix-notify`,
-  owns native watcher handles and paths without retaining a repository while idle.
-  Metadata coverage is established before the initial history snapshot, with
-  worktree coverage selected for the initial view without a redundant reset.
-  It observes `HEAD`, loose and packed refs, linked-worktree
+- `gix::notify::RepositoryMonitor` owns project notifications. The changes pane
+  requests a `gix::status::WorktreeStatusHandle` when it needs its first snapshot.
+  Dirty checkouts keep the handle and reuse its status baseline. A clean snapshot
+  releases the handle immediately. The project keeps observing the checkout and
+  its discovered submodules, so a commit inside a clean submodule can trigger a
+  new snapshot and show the modified gitlink in the changes pane.
+  The event loop services the project and any retained status handle together,
+  including their earliest deadline while the changes pane is hidden.
+  The status handle retains detached data and a compressed index-entry projection.
+  The monitor and handle release repositories and open index files while idle.
+  Status collection runs synchronously and borrows the repository during refresh.
+  Metadata notifications remain enabled to keep index and HEAD comparisons current.
+  Metadata coverage is established before the initial history snapshot, with worktree
+  coverage selected for the initial view without a redundant reset. It observes
+  `HEAD`, loose and packed refs, linked-worktree
   HEAD and membership changes, and the direct or symbolic refs used by view and
   hide revspecs. Linked-worktree membership and each administrative root use
   non-recursive registrations, including directories whose `gitdir` file has
@@ -2313,8 +2323,9 @@ views.
   ignored build trees do not generate work.
   Unrepresentable directory or index paths fail the refresh before updating
   registrations or the saved index projection; partial directory sets are not used.
-- Changing worktree coverage replaces the monitor using a freshly opened,
-  non-isolated repository, copying its current options and changing only coverage.
+- Changing worktree coverage replaces the project monitor using a freshly opened,
+  non-isolated repository, copying its current snapshot and notification options
+  and changing only coverage.
   An unchanged selection neither reopens the repository nor resets the monitor;
   preview mode keeps its monitor slot empty. Reopening happens first, so an open
   failure preserves the existing monitor. Before constructing its replacement,
@@ -2323,6 +2334,9 @@ views.
   Construction failure leaves the monitor slot empty and propagates the error.
   On success, the next service establishes new baselines. The temporary repository
   is dropped before returning to the event loop.
+  Initialized, configured submodules are watched recursively, including their
+  metadata and nested worktrees; changes invalidate the enclosing top-level gitlink.
+  Initialization, deinitialization, and configuration changes reconcile coverage.
 - Read-access-only and incomplete metadata `.lock` activity are ignored; close-write
   notifications remain relevant. Completed atomic
   renames, index/HEAD updates, relevant worktree paths, and backend rescan requests
@@ -2331,8 +2345,40 @@ views.
   so collapsed directories appear and disappear consistently with a full status.
   Tracked file events retain their precise path scopes. Watcher event-kind and
   object-type hints are advisory; status refresh uses every reported path regardless
-  of its hints. Ignored directories stay excluded even when a negated pattern
-  matches a descendant, such as `!out/` beneath an ignored build tree.
+  of its hints. Ignored directories stay
+  excluded even when a negated pattern matches a descendant, such as `!out/`
+  beneath an ignored build tree.
+- Index changes refresh only affected worktree paths when possible, while staged
+  status is recomputed with configured rename detection. Ignore, attribute, and
+  other status dependencies widen coverage when needed for a correct snapshot.
+- Monitored status uses at most three tracked-file workers on macOS, matching
+  `gix status` to avoid excessive CPU spent in concurrent metadata checks.
+  Other platforms retain their available parallelism.
+- Staged status reuses one detached index expanded from the captured `HEAD` tree
+  while its tree ID and effective path-protection settings remain unchanged.
+  Full, configuration, layout, and status-target invalidations discard it.
+  Failed or cancelled refreshes never publish a replacement. The cache retains
+  no repository, object database, or open worktree index.
+- Status deltas replace only changed display rows. Snapshot coverage also invalidates
+  worktree line counts when the status classification stays unchanged. Staged rows
+  reuse counts when their blob IDs, modes, paths, indexed attributes, resolved
+  configuration (including source/trust), and external attribute contents are
+  unchanged. This detached key retains the configuration, attribute source paths
+  and contents, and indexed attribute mappings without retaining a repository.
+  Configuration, attribute, layout, and explicit full refreshes invalidate reuse;
+  external inputs are compared on every refresh even without their own notification.
+  Configuration changes and attribute notifications release line-diff workers so
+  the next batch opens current configuration. Unaffected rows retain their cached
+  counts, including when only index metadata changes. A full refresh
+  rebuilds display rows from the snapshot, even if its delta is empty after a
+  previous display failure. When a directory replaces a tracked file, the deleted
+  file and untracked directory remain separate rows; deletion line counts do not
+  attempt to read the replacement directory. Failed or cancelled
+  refreshes retain the previous displayed snapshot and retry after five seconds.
+  Hidden changes panes, loading history, and the ref-tree overview keep servicing
+  notifications without scheduling redraws for status they cannot display.
+  Returning to the combined view refreshes accumulated invalidations.
+  `Shift-R` clears retry delays for the visible worktree status immediately.
 - Worktree updates retain the history selection and restore changed-path
   selection by raw path and relative viewport position. They never select the
   newest commit merely because status changed.
@@ -2343,9 +2389,10 @@ views.
   five seconds while still needed. Updates follow native notifications and reported
   coverage loss. Initial registration and runtime monitoring failures remain
   visible in the worktree changes pane through successful status reloads and
-  navigation until the monitor reports successful recovery. Idle retry backoff
-  does not clear the warning, and degraded coverage cannot certify a clean
-  worktree for travel shortcuts. When information appears stale,
+  navigation. Warnings remain visible during retry backoff and while root and
+  child subscriptions await verification. They clear when coverage is verified
+  or monitoring is inactive. Degraded coverage prevents travel shortcuts from
+  treating the worktree as clean. When information appears stale,
   `Shift-R` rebuilds native subscriptions and refreshes all enabled cache domains,
   including the revision view and visible worktree status.
 - Configuration dependencies within those roots, including active includes and

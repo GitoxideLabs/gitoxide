@@ -34,6 +34,7 @@ pub fn options_emit_all() -> walk::Options<'static> {
         emit_ignored: Some(walk::EmissionMode::Matching),
         emit_tracked: true,
         emit_untracked: walk::EmissionMode::Matching,
+        allow_untyped_untracked: false,
         emit_empty_directories: true,
         emit_collapsed: None,
         symlinks_to_directories_are_ignored_like_directories: false,
@@ -284,6 +285,7 @@ pub fn try_collect_filtered_opts(
         fresh_index,
         git_dir,
         should_interrupt,
+        cached_listing,
     }: Options<'_>,
 ) -> Result<(walk::Outcome, PathBuf)> {
     let git_dir = worktree_root.join(git_dir.unwrap_or(".git"));
@@ -359,6 +361,7 @@ pub fn try_collect_filtered_opts(
             excludes: Some(&mut stack),
             objects: &gix_object::find::Never,
             explicit_traversal_root,
+            cached_listing,
             should_interrupt,
         },
     )
@@ -368,6 +371,7 @@ pub struct Options<'a> {
     pub fresh_index: bool,
     pub git_dir: Option<&'a str>,
     pub should_interrupt: Option<&'a AtomicBool>,
+    pub cached_listing: Option<&'a walk::CachedListing>,
 }
 
 impl<'a> Options<'a> {
@@ -385,6 +389,7 @@ impl Default for Options<'_> {
             fresh_index: true,
             git_dir: None,
             should_interrupt: None,
+            cached_listing: None,
         }
     }
 }

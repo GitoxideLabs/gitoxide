@@ -9,7 +9,7 @@ impl File {
         use gix_error::{ResultExt, message};
 
         let _span = gix_trace::coarse!("gix_index::File::verify_integrity()");
-        if let Some(checksum) = self.checksum {
+        if let Some(checksum) = self.checksum() {
             let num_bytes_to_hash = self
                 .path
                 .metadata()

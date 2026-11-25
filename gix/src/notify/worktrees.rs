@@ -22,7 +22,7 @@ impl RepositoryMonitor {
     }
 
     pub(super) fn all_worktrees_enabled(&self) -> bool {
-        self.options.all_worktrees && self.options.worktree_coverage.is_some()
+        self.options.all_worktrees
     }
 
     pub(super) fn metadata_is_shared(&self) -> bool {
@@ -123,6 +123,10 @@ impl RepositoryMonitor {
                 Ok(false) => {
                     if let Some(other) = self.other_worktrees.remove(&git_dir) {
                         statistics.removed += other.worktree.registered.len();
+                        #[cfg(target_os = "macos")]
+                        {
+                            statistics.removed += other.external_ignores.registered_len();
+                        }
                         self.retired_worktrees
                             .extend(other.worktree_change(WorktreeChange::Removed));
                     }
@@ -148,11 +152,48 @@ impl RepositoryMonitor {
         Ok(())
     }
 
-    fn includes_worktree(&self, git_dir: &Path) -> bool {
+    /// Whether checkout coverage is enabled for this subscribed administrative directory.
+    #[cfg(feature = "status-monitor")]
+    pub(crate) fn covers_worktree(&self, git_dir: &Path) -> bool {
+        self.options.worktree_coverage.is_some()
+            && (same_path(git_dir, &self.layout.git_dir, self.ignore_case)
+                || self.all_worktrees_enabled() && self.includes_worktree(git_dir))
+            && self
+                .options
+                .checkout_filter
+                .as_ref()
+                .is_none_or(|paths| paths.iter().any(|path| same_path(path, git_dir, self.ignore_case)))
+    }
+
+    pub(super) fn includes_worktree(&self, git_dir: &Path) -> bool {
         self.options
             .worktree_filter
             .as_ref()
             .is_none_or(|paths| paths.iter().any(|path| same_path(path, git_dir, self.ignore_case)))
+    }
+
+    pub(super) fn retire_unselected_worktrees(&mut self, statistics: &mut Statistics) {
+        let excluded: Vec<_> = self
+            .other_worktrees
+            .keys()
+            .filter(|git_dir| !self.includes_worktree(git_dir))
+            .cloned()
+            .collect();
+        for git_dir in excluded {
+            if let Some(other) = self.other_worktrees.remove(&git_dir) {
+                statistics.removed += other.worktree.registered.len();
+                #[cfg(target_os = "macos")]
+                {
+                    statistics.removed += other.external_ignores.registered_len();
+                }
+                self.retired_worktrees
+                    .extend(other.worktree_change(WorktreeChange::Removed));
+            }
+        }
+        let filter = self.options.worktree_filter.as_ref();
+        self.undiscovered_worktrees.retain(|git_dir, _| {
+            filter.is_none_or(|paths| paths.iter().any(|path| same_path(path, git_dir, self.ignore_case)))
+        });
     }
 
     fn other_needs_maintenance(&self, git_dir: &Path, now: Instant) -> bool {
@@ -206,6 +247,7 @@ impl RepositoryMonitor {
                         additional_paths: Vec::new(),
                         ..self.options.clone()
                     })?;
+                    other.loss_debounce = self.loss_debounce;
                     other.shared_metadata = true;
                     other.worktree_transition = Some(WorktreeChange::Added);
                     entry.insert(other)

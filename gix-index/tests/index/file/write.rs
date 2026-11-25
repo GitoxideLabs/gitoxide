@@ -5,6 +5,64 @@ use gix_testtools::TestResult;
 use crate::Fixture::*;
 
 #[test]
+fn conditional_writes_require_the_original_index_and_an_available_lock() -> TestResult {
+    let dir = gix_testtools::tempfile::TempDir::new()?;
+    let hash = gix_testtools::object_hash();
+    for skip_hash in [false, true] {
+        let path = dir.path().join(format!("index-{skip_hash}"));
+        let lock = path.with_extension("lock");
+        let options = Options {
+            skip_hash,
+            ..Default::default()
+        };
+        let permissions = gix_fs::SharedPermissions::Umask;
+        let mut index = gix_index::File::from_state(State::new(hash), &path);
+        index.set_fs_monitor_token(Some(extension::fs_monitor::Token::V2 { token: "old".into() }));
+        assert!(
+            !index.write_if_unchanged(options, permissions)?,
+            "a synthetic index has no snapshot"
+        );
+        index.write(options, permissions)?;
+        assert!(
+            index.write_if_unchanged(options, permissions)?,
+            "a successful write updates the snapshot"
+        );
+        let mut old = gix_index::File::at(&path, hash, false, Default::default())?;
+        std::fs::write(&lock, "another writer")?;
+        assert!(
+            !old.write_if_unchanged(options, permissions)?,
+            "an optional write skips a busy index"
+        );
+        assert_eq!(
+            std::fs::read(&lock)?,
+            b"another writer",
+            "another writer retains its lock"
+        );
+        std::fs::remove_file(lock)?;
+        let new_token = extension::fs_monitor::Token::V2 { token: "new".into() };
+        index.set_fs_monitor_token(Some(new_token.clone()));
+        index.write(options, permissions)?;
+        assert!(
+            !old.write_if_unchanged(options, permissions)?,
+            "a stale snapshot cannot replace the index"
+        );
+        assert_eq!(
+            gix_index::File::at(&path, hash, false, Default::default())?
+                .fs_monitor()
+                .map(extension::FsMonitor::token),
+            Some(&new_token),
+            "the newer writer's checkpoint survives"
+        );
+        std::fs::remove_file(&path)?;
+        assert!(
+            !index.write_if_unchanged(options, permissions)?,
+            "optional refresh does not recreate a deleted index"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 #[cfg(unix)]
 fn shared_permissions_apply_to_new_and_replaced_indexes() -> crate::Result {
     use std::{fs, os::unix::fs::PermissionsExt};
@@ -26,6 +84,19 @@ fn shared_permissions_apply_to_new_and_replaced_indexes() -> crate::Result {
             "permission handling retains a readable index"
         );
     }
+    Ok(())
+}
+
+#[test]
+fn fsmonitor_extension_survives_writing() -> TestResult {
+    let index = Loose("FSMN").open();
+    let mut bytes = Vec::new();
+    index.write_to(&mut bytes, Default::default())?;
+    let (written, _) = State::from_bytes(&bytes, FileTime::now(), gix_hash::Kind::Sha1, Default::default())?;
+    assert!(
+        written.fs_monitor().is_some(),
+        "writing the index must retain the filesystem monitor token"
+    );
     Ok(())
 }
 
@@ -185,8 +256,7 @@ fn untracked_caches_roundtrip_when_enabled() -> TestResult {
 #[test]
 fn default_write_invalidates_the_untracked_cache_after_an_index_edit() -> TestResult {
     let mut index = Generated("untracked_cache_nested").open();
-    assert!(index.untracked().is_some(), "the source has a populated cache");
-    let original_cache = format!("{:#?}", index.untracked());
+    let original_cache = index.set_untracked(None).expect("the source has a populated cache");
     let root = index
         .path()
         .parent()
@@ -194,6 +264,8 @@ fn default_write_invalidates_the_untracked_cache_after_an_index_edit() -> TestRe
         .expect("the generated index lives in .git")
         .to_owned();
     index.remove_entries(|_, path, _| path == "tracked-dir-with-ignore/tracked-file");
+    index.set_untracked(Some(original_cache));
+    let original_cache = format!("{:#?}", index.untracked());
     let temporary = gix_testtools::tempfile::TempDir::new()?;
     index.set_path(temporary.path().join("index"));
     index.write(Options::default(), Default::default())?;
@@ -251,6 +323,7 @@ fn default_write_invalidates_all_tree_nodes_after_index_edits() -> TestResult {
         .expect("the fixture tracks this deeply nested file")
         .flags
         .insert(entry::Flags::REMOVE);
+    index.set_tree(Some(original_tree.clone()));
 
     let temporary = gix_testtools::tempfile::TempDir::new()?;
     index.set_path(temporary.path().join("cached-index"));

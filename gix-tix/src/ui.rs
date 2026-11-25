@@ -7615,16 +7615,23 @@ mod tests {
         app.changes_focus = None;
         app.information_expanded = false;
         terminal.backend_mut().resize(120, 20);
-        app.update_monitor_error(&gix::notify::Outcome {
+        use gix::notify::{CoverageStatus, Outcome};
+
+        let recovering = CoverageStatus::Recovering { retry_at: None };
+        app.update_monitor_error(&Outcome {
             errors: vec![gix_error::message("failed").raise()],
-            recovery_pending: true,
+            coverage: recovering,
             ..Default::default()
         });
         let clean = Changes::default();
-        for recovery_pending in [true, false] {
+        for (coverage, warning_visible) in [
+            (recovering, true),
+            (CoverageStatus::Updating, true),
+            (CoverageStatus::Healthy, false),
+        ] {
             app.worktree_changes.error = None;
-            app.update_monitor_error(&gix::notify::Outcome {
-                recovery_pending,
+            app.update_monitor_error(&Outcome {
+                coverage,
                 ..Default::default()
             });
             terminal.draw(|frame| {
@@ -7641,8 +7648,8 @@ mod tests {
             })?;
             assert_eq!(
                 (0..20).any(|row| rendered_line(&terminal, row).contains("filesystem watch: failed")),
-                recovery_pending,
-                "the rendered pane keeps startup failures visible until registration recovers"
+                warning_visible,
+                "the rendered pane keeps startup failures visible until coverage is verified"
             );
         }
         Ok(())

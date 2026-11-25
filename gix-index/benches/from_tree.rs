@@ -27,6 +27,23 @@ fn from_tree(c: &mut Criterion) {
         });
     });
 
+    let mut cached_index = State::from_tree(&wide_deep_id, &wide_deep_objects, Default::default())
+        .expect("tree can be read to populate the cache");
+    cached_index.set_tree(Some(gix_index::extension::Tree {
+        name: Default::default(),
+        id: wide_deep_id,
+        num_entries: Some(u32::try_from(wide_deep_entries).expect("benchmark entries fit in u32")),
+        children: Vec::new(),
+    }));
+    group.bench_function("wide 100 x 100 files cached", |b| {
+        b.iter(|| {
+            let state =
+                State::from_tree_with_cache(&wide_deep_id, &wide_deep_objects, Default::default(), &cached_index)
+                    .expect("matching cached entries can be reused");
+            black_box(state);
+        });
+    });
+
     let (sparse_id, sparse_objects, sparse_entries) = sparse_tree();
     group.throughput(Throughput::Elements(sparse_entries));
     group.bench_function("sparse 10k directories", |b| {
