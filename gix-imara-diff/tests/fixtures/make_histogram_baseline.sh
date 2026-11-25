@@ -63,6 +63,44 @@ else
     printf '\n\n' >>"mixed-frequency-tail/$side"
   done
 
+  # Adding a final line shifts the pairs when viewed from the ends of the files.
+  mkdir shifted-paired-tail
+  cp paired-tail/old shifted-paired-tail/old
+  cp paired-tail/new shifted-paired-tail/new
+  printf 'extra final line\n' >>shifted-paired-tail/new
+
+  # The first match leaves a shared block of "x" lines before different final lines.
+  # The "Z" outside that block must still be able to match across its two ends.
+  mkdir terminal-anchor
+  printf '%s\n' Z keep L >terminal-anchor/old
+  printf '%s\n' Z keep Z >terminal-anchor/new
+  for i in {1..128}; do
+    printf 'x\n' >>terminal-anchor/old
+    printf 'x\n' >>terminal-anchor/new
+  done
+  printf 'Z\n' >>terminal-anchor/old
+  printf 'R\n' >>terminal-anchor/new
+
+  # After "A" anchors a match through 70 pairs, the shortened block has only
+  # 63 shared "y" lines. The extra pair keeps the count at most 64 in either direction.
+  mkdir clipped-block
+  printf '%s\n' A keep L A >clipped-block/old
+  printf '%s\n' A keep R A >clipped-block/new
+  for side in old new; do
+    {
+      for i in {1..70}; do
+        printf '%s\n' x y
+      done
+      if [[ $side == new ]]; then
+        printf '%s\n' x y
+      fi
+      for i in {1..63}; do
+        printf 'y\n'
+      done
+      printf '%s-end\n' "$side"
+    } >>"clipped-block/$side"
+  done
+
   # Git doesn't strip the common prefix and suffix before a histogram diff. Stripping the final "}"
   # makes the first "    }" the anchor, where Git anchors the second.
   mkdir common-ends
@@ -71,7 +109,8 @@ else
 
   cases=(
     skip-after-match occurrence-limit occurrence-seed-limit occurrence-overflow
-    repetitive-tail alternating-tail mixed-frequency-tail paired-tail common-ends
+    repetitive-tail alternating-tail mixed-frequency-tail paired-tail
+    shifted-paired-tail terminal-anchor clipped-block common-ends
   )
 fi
 

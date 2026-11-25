@@ -895,6 +895,13 @@ fn histogram_preserves_hunks_before_a_repetitive_tail() -> gix_testtools::TestRe
 }
 
 #[test]
+fn histogram_preserves_hunks_around_a_common_block_before_a_terminal_edit() -> gix_testtools::TestResult {
+    assert_histogram_matches_git("shifted-paired-tail")?;
+    assert_histogram_matches_git("terminal-anchor")?;
+    assert_histogram_matches_git("clipped-block")
+}
+
+#[test]
 fn histogram_does_not_strip_the_common_prefix_and_suffix() -> gix_testtools::TestResult {
     assert_histogram_matches_git("common-ends")
 }

@@ -206,10 +206,11 @@ impl ListHandle {
         }
     }
 
-    /// Get the available seed positions.
-    pub fn as_slice<'a>(&'a self, pool: &'a ListPool) -> &'a [u32] {
+    /// Get the available seed positions for a count already looked up in this generation.
+    pub fn as_slice<'a>(&'a self, count: u32, pool: &'a ListPool) -> &'a [u32] {
+        debug_assert_eq!(count, self.count(pool));
         let idx = self.index as usize;
-        match self.count(pool) {
+        match count {
             0 | OVERFLOW_COUNT => &[],
             1 => std::slice::from_ref(&self.index),
             len => &pool.data[idx..idx + len as usize],

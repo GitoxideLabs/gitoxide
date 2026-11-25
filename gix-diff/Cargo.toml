@@ -52,6 +52,12 @@ required-features = ["blob"]
 path = "./benches/blob.rs"
 
 [[bench]]
+name = "histogram"
+harness = false
+required-features = ["blob"]
+path = "./benches/histogram.rs"
+
+[[bench]]
 name = "rewrite-tracker"
 harness = false
 required-features = ["blob"]
