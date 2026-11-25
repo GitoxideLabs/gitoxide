@@ -52,6 +52,31 @@ impl<'repo> Reference<'repo> {
     pub fn remote_tracking_ref_name(&self, direction: remote::Direction) -> Option<Result<FullName>> {
         self.repo.branch_remote_tracking_ref_name(self.name(), direction)
     }
+
+    /// Count commits unique to this local branch (`ahead`) and to its upstream (`behind`).
+    ///
+    /// Return `None` for references other than local branches, or if the upstream is unconfigured, unmapped, or missing.
+    /// Invalid tracking configuration and failures reading refs or history are errors.
+    ///
+    /// This query uses local refs, objects, and [fetch tracking metadata](Self::remote_tracking_ref_name())
+    /// allowed by the repository's [configuration section filter](crate::open::Options::filter_config_section()).
+    /// If an upstream reference is found, this peels the branch in place as in [`peel_to_id()`](Self::peel_to_id()).
+    #[cfg(feature = "revision")]
+    pub fn ahead_behind_counts(&mut self) -> Result<Option<gix_revision::ahead_behind_counts::Outcome>> {
+        if self.name().category() != Some(Category::LocalBranch) {
+            return Ok(None);
+        }
+        let Some(upstream_name) = self.remote_tracking_ref_name(remote::Direction::Fetch).transpose()? else {
+            return Ok(None);
+        };
+        let Some(mut upstream) = self.repo.try_find_reference(upstream_name.as_ref())? else {
+            return Ok(None);
+        };
+        let tip_commit_id = self.peel_to_id()?;
+        self.repo
+            .ahead_behind_counts(tip_commit_id, upstream.peel_to_id()?)
+            .map(Some)
+    }
 }
 
 /// Infer the remote name from a remote-tracking branch name without its `refs/remotes/` prefix.

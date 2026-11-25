@@ -221,6 +221,19 @@ impl crate::Repository {
         self.ahead_behind_counts_with_graph(tip_commit_id, base_commit_id, &mut graph)
     }
 
+    /// Count commits unique to the checked-out branch and its upstream, as in
+    /// `git rev-list --left-right --count HEAD...@{upstream}`.
+    ///
+    /// Return `None` for a detached or unborn HEAD. Otherwise, see
+    /// [`Reference::ahead_behind_counts()`](crate::Reference::ahead_behind_counts()) for how the upstream is resolved.
+    #[cfg(feature = "revision")]
+    pub fn head_ahead_behind_counts(&self) -> Result<Option<gix_revision::ahead_behind_counts::Outcome>> {
+        match self.head_ref()? {
+            Some(mut branch) => branch.ahead_behind_counts(),
+            None => Ok(None),
+        }
+    }
+
     /// Like [`ahead_behind_counts()`](Self::ahead_behind_counts()), but reuses cached commits in `graph`.
     /// Its flags are automatically cleared. Traversal failures are returned as errors.
     ///

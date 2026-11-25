@@ -61,6 +61,72 @@ fn upstream_tracking_ref_names_match_git() -> TestResult {
 }
 
 #[test]
+fn head_ahead_behind_counts_match_git_when_tracking_config_is_trusted() -> TestResult {
+    use gix::{revision::plumbing::ahead_behind_counts::Outcome, sec::Trust};
+
+    let fixture = "make_head_upstream.sh";
+    for trust in [Trust::Full, Trust::Reduced] {
+        for case in ["local", "mapped", "local-mapped"] {
+            let repo =
+                crate::util::named_subrepo_opts(fixture, case, crate::util::restricted().with_enforced_trust(trust))?;
+            assert_eq!(repo.git_dir_trust(), trust, "test the intended trust level");
+            let baseline = std::fs::read_to_string(repo.git_dir().join("ahead-behind-baseline"))?;
+            let (ahead, behind) = baseline
+                .trim_end()
+                .split_once('\t')
+                .expect("Git emits tab-separated counts");
+            assert_eq!(
+                repo.head_ahead_behind_counts()?,
+                (trust == Trust::Full).then_some(Outcome {
+                    ahead: ahead.parse()?,
+                    behind: behind.parse()?
+                }),
+                "{case} with {trust:?} trust: counts match Git only when the tracking config is allowed"
+            );
+        }
+    }
+
+    for case in ["excluded", "gone", "unconfigured", "unborn"] {
+        let repo = crate::util::named_subrepo_opts(fixture, case, crate::util::restricted())?;
+        assert_eq!(repo.head_ahead_behind_counts()?, None, "{case}: no upstream to count");
+    }
+
+    let repo = crate::util::named_subrepo_opts(
+        fixture,
+        "detached",
+        crate::util::restricted().config_overrides(["branch.main.remote=.", "branch.main.merge=refs/heads/topic"]),
+    )?;
+    assert_eq!(repo.head_ahead_behind_counts()?, None, "HEAD is detached");
+    assert_eq!(
+        repo.find_reference("refs/heads/main")?.ahead_behind_counts()?,
+        Some(Outcome { ahead: 2, behind: 1 }),
+        "a local branch can be compared with its upstream without checking it out"
+    );
+
+    let repo = crate::util::named_subrepo_opts(
+        fixture,
+        "mapped",
+        crate::util::restricted().filter_config_section(|meta| meta.source != gix::config::Source::Local),
+    )?;
+    assert_eq!(
+        repo.head_ahead_behind_counts()?,
+        None,
+        "explicit section filters still apply"
+    );
+
+    let repo = crate::util::named_subrepo_opts(
+        fixture,
+        "mapped",
+        crate::util::restricted().config_overrides(["remote.origin.fetch=refs/heads/**:refs/tracking/*"]),
+    )?;
+    assert!(
+        repo.head_ahead_behind_counts().is_err(),
+        "a malformed fetch refspec is an error"
+    );
+    Ok(())
+}
+
+#[test]
 fn corrupt_commit_graph_parents_retry_the_current_commit() -> TestResult {
     use gix::revision::walk::Sorting;
     use gix::traverse::commit::simple::CommitTimeOrder;

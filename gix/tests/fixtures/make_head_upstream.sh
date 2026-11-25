@@ -16,9 +16,11 @@ git init -q unconfigured
   git update-ref refs/tracking/fallback main
 )
 
-for repo in local mapped local-mapped; do
+for repo in local mapped local-mapped detached; do
   cp -R unconfigured "$repo"
 done
+git init -q unborn
+git -C detached switch -q --detach HEAD
 
 git -C local config branch.main.remote .
 git -C local config --add branch.main.merge refs/heads/topic
@@ -45,4 +47,12 @@ git -C gone update-ref -d refs/tracking/topic
 
 for repo in local mapped local-mapped; do
   git -C "$repo" rev-parse --symbolic-full-name --verify '@{upstream}' >"$repo/.git/upstream-baseline"
+  git -C "$repo" rev-list --left-right --count 'HEAD...@{upstream}' -- >"$repo/.git/ahead-behind-baseline"
+done
+
+for repo in excluded gone unconfigured detached unborn; do
+  if git -C "$repo" rev-list --left-right --count 'HEAD...@{upstream}' -- 2>/dev/null; then
+    echo "Expected Git to have no upstream to count in $repo" >&2
+    exit 1
+  fi
 done
