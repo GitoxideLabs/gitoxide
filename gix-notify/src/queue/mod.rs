@@ -56,7 +56,6 @@ impl State {
         self.loss = Some((reason, self.published));
     }
 
-    #[cfg(feature = "async")]
     pub(crate) fn is_ready(&self) -> bool {
         !self.events.is_empty() || self.loss.is_some() || self.error.is_some()
     }

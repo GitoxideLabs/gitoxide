@@ -5,6 +5,122 @@ use crate::{Repository, Result, Tree};
 
 /// Diff-utilities
 impl Repository {
+    /// Prepare the configured terminal difftool to inspect the already-set resources in `diff`.
+    ///
+    /// Select the trusted `diff.tool`, falling back to `merge.tool`, ignoring GUI selections. Return `None` when neither
+    /// is configured. Git must be installed: its `difftool--helper` launches both built-in tools and custom
+    /// `difftool.<tool>.cmd` commands, with `mergetool.<tool>` fallbacks. Tool configuration comes from this repository's
+    /// trusted configuration snapshot, including in-memory overrides.
+    /// Paging is disabled unless trusted `pager.difftool` enables it or names a pager; when enabled, `core.pager` or
+    /// Git's usual `less` default supplies the pager.
+    ///
+    /// The returned command owns temporary input files with their original filenames. Keep it alive until the tool exits.
+    /// Standard streams are inherited, launch prompts are disabled, and the tool's exit status is retained for the caller.
+    /// `count` is zero-based and `total` is the number of paths being shown. Binary resources cannot be passed to a tool
+    /// unless the resource cache has converted them to text.
+    #[cfg(feature = "command")]
+    pub fn difftool_command(
+        &self,
+        diff: &gix_diff::blob::Platform,
+        count: usize,
+        total: usize,
+    ) -> Result<Option<gix_diff::blob::platform::prepare_diff_command::Command>> {
+        use std::{collections::BTreeSet, process::Stdio};
+
+        use gix_error::bail;
+        use gix_object::bstr::{BString, ByteSlice};
+
+        let config = self.config_snapshot();
+        let tool = ["diff.tool", "merge.tool"].into_iter().find_map(|key| {
+            config
+                .plumbing()
+                .string_filter(key, self.filter_config_section())
+                .filter(|tool| !tool.is_empty())
+        });
+        let Some(tool) = tool else {
+            return Ok(None);
+        };
+        let pager = match config
+            .plumbing()
+            .boolean_filter("pager.difftool", self.filter_config_section())
+        {
+            Ok(Some(true)) => Some(config.trusted_program("core.pager")?.unwrap_or_else(|| "less".into())),
+            Ok(Some(false) | None) => None,
+            Err(_) => config.trusted_program("pager.difftool")?,
+        };
+        if diff.resources().is_some_and(|(old, new)| {
+            old.data == gix_diff::blob::platform::resource::Data::Missing
+                && new.data == gix_diff::blob::platform::resource::Data::Missing
+        }) {
+            bail!(gix_error::message("Neither side of the diff exists"));
+        }
+        let context = self.command_context()?;
+        let mut command = diff.prepare_diff_command("git".into(), context.clone(), count, total)?;
+        let mut launcher: std::process::Command = gix_command::prepare("git")
+            .with_context(context)
+            .arg(if pager.is_some() { "--paginate" } else { "--no-pager" })
+            .arg("difftool--helper")
+            .args(command.get_args())
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .try_into()?;
+        launcher.envs(
+            command
+                .get_envs()
+                .filter_map(|(key, value)| value.map(|value| (key, value))),
+        );
+        *command = launcher;
+        command
+            .current_dir(self.current_dir().join(self.workdir().unwrap_or(self.git_dir())))
+            .env("GIT_DIFF_TOOL", gix_path::from_bstr(tool.as_bstr())?.as_ref())
+            .env("GIT_MERGETOOL_GUI", "false")
+            .env("GIT_DIFFTOOL_NO_PROMPT", "true")
+            .env("GIT_DIFFTOOL_TRUST_EXIT_CODE", "true")
+            .env("GIT_PAGER", pager.unwrap_or_else(|| "cat".into()))
+            .env_remove("GIT_DIFFTOOL_EXTCMD")
+            .env_remove("GIT_DIFFTOOL_DIRDIFF")
+            .env_remove("GIT_DIFFTOOL_PROMPT")
+            .env_remove("GIT_COMMON_DIR")
+            .env_remove("GIT_CONFIG")
+            .env("GIT_CONFIG_PARAMETERS", "")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" });
+
+        // Override every tool property, including rejected values, so Git cannot restore untrusted commands from disk.
+        let mut properties = BTreeSet::from(["cmd".to_owned(), "path".to_owned()]);
+        for section in ["difftool", "mergetool"] {
+            for section in config.plumbing().sections_by_name(section).into_iter().flatten() {
+                if section.header().subsection_name() == Some(tool.as_bstr()) {
+                    properties.extend(section.value_names());
+                }
+            }
+        }
+        let mut index = 0;
+        for property in properties {
+            let key = |section_name| gix_config::KeyRef {
+                section_name,
+                subsection_name: Some(tool.as_bstr()),
+                value_name: &property,
+            };
+            let merge_value = config.trusted_program(key("mergetool"))?;
+            let diff_value = config.trusted_program(key("difftool"))?.or_else(|| merge_value.clone());
+            for (section, value) in [("difftool", diff_value), ("mergetool", merge_value)] {
+                let mut key = BString::from(section);
+                key.push(b'.');
+                key.extend_from_slice(&tool);
+                key.push(b'.');
+                key.extend_from_slice(property.as_bytes());
+                command
+                    .env(format!("GIT_CONFIG_KEY_{index}"), gix_path::from_bstring(key)?)
+                    .env(format!("GIT_CONFIG_VALUE_{index}"), value.unwrap_or_default());
+                index += 1;
+            }
+        }
+        command.env("GIT_CONFIG_COUNT", index.to_string());
+        Ok(Some(command))
+    }
+
     /// Create a resource cache for diffable objects, and configured with everything it needs to know to perform diffs
     /// faithfully just like `git` would.
     /// `mode` controls what version of a resource should be diffed.

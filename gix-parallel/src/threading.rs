@@ -14,6 +14,8 @@ mod _impl {
     pub type OnceCell<T> = once_cell::sync::OnceCell<T>;
     /// A reference counted pointer type for shared ownership.
     pub type OwnShared<T> = Arc<T>;
+    /// A non-owning reference to an [`OwnShared`] value.
+    pub type WeakShared<T> = std::sync::Weak<T>;
     /// A synchronization primitive which can start read-only and transition to support mutation.
     pub type MutableOnDemand<T> = parking_lot::RwLock<T>;
     /// A synchronization primitive which provides read-write access right away.
@@ -72,6 +74,8 @@ mod _impl {
     pub type OnceCell<T> = once_cell::unsync::OnceCell<T>;
     /// A reference counted pointer type for shared ownership.
     pub type OwnShared<T> = Rc<T>;
+    /// A non-owning reference to an [`OwnShared`] value.
+    pub type WeakShared<T> = std::rc::Weak<T>;
     /// A synchronization primitive which can start read-only and transition to support mutation.
     pub type MutableOnDemand<T> = RefCell<T>;
     /// A synchronization primitive which provides read-write access right away.

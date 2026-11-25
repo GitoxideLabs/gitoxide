@@ -42,15 +42,74 @@ pub(crate) enum DecorationKind {
     Tag,
     AnnotatedTag,
     Special,
+    PullRequest,
 }
 
-pub(crate) type Decorations = HashMap<ObjectId, Vec<Decoration>>;
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Decorations {
+    commits: HashMap<ObjectId, Vec<Decoration>>,
+    pub(crate) stashes: HashSet<gix::hash::ChangeId>,
+    pub(crate) symbolic_pins: HashMap<ObjectId, Vec<(BString, Decoration)>>,
+}
+
+impl Decorations {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn has_stash(&self, commit_id: ObjectId, change_id: gix::hash::ChangeId) -> bool {
+        self.stashes.contains(&change_id)
+            || self
+                .commits
+                .get(&commit_id)
+                .is_some_and(|refs| refs.iter().any(|decoration| decoration.kind == DecorationKind::Stash))
+    }
+
+    pub(crate) fn pin_target(&self, commit_id: ObjectId, pin_name: &BStr) -> Option<&Decoration> {
+        self.symbolic_pins
+            .get(&commit_id)?
+            .iter()
+            .find_map(|(name, target)| (name == pin_name).then_some(target))
+    }
+
+    pub(crate) fn is_pinned(&self, commit_id: ObjectId, decoration: &Decoration) -> bool {
+        self.symbolic_pins
+            .get(&commit_id)
+            .is_some_and(|pins| pins.iter().any(|(_, target)| target == decoration))
+    }
+}
+
+impl std::ops::Deref for Decorations {
+    type Target = HashMap<ObjectId, Vec<Decoration>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.commits
+    }
+}
+
+impl std::ops::DerefMut for Decorations {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.commits
+    }
+}
+
+#[cfg(test)]
+impl<const N: usize> From<[(ObjectId, Vec<Decoration>); N]> for Decorations {
+    fn from(commits: [(ObjectId, Vec<Decoration>); N]) -> Self {
+        Self {
+            commits: commits.into(),
+            stashes: HashSet::new(),
+            symbolic_pins: HashMap::new(),
+        }
+    }
+}
 
 pub(crate) const PIN_PREFIX: &[u8] = b"refs/worktree/tix/pins/";
 pub(crate) const HEAD_PIN_NAME: &[u8] = b"refs/worktree/tix/pins/HEAD";
 pub(crate) const REVIEW_PIN_PREFIX: &[u8] = b"refs/worktree/tix/pins/review/";
 pub(crate) const STASH_PREFIX: &[u8] = b"refs/tix/stash/";
 pub(crate) const REVIEW_PREFIX: &[u8] = b"refs/worktree/tix/review/";
+pub(crate) const REVIEW_ROOT_PREFIX: &[u8] = b"refs/worktree/tix/review/roots/";
 pub(crate) const REVIEW_STASH_PREFIX: &[u8] = b"refs/worktree/tix/review/stashes/";
 
 pub(crate) fn nearest_review_root(
@@ -151,13 +210,12 @@ pub(crate) struct HistoryGraph {
     parents: Vec<CommitIndex>,
     by_id: HashMap<ObjectId, CommitIndex>,
     stored_order: Vec<CommitIndex>,
-    edit_scope: HashSet<ObjectId>,
+    unindexed_edit_scope: HashSet<ObjectId>,
     read_only: HashSet<ObjectId>,
     /// Active history bounded by hidden tips, retained separately when an edit expands its scope.
     pub(crate) bounded_history: Option<Vec<ObjectId>>,
     tracking: HashMap<CommitIndex, Vec<SelectionRef>>,
     relations: HashMap<(CommitIndex, CommitIndex), (usize, usize)>,
-    edit_metadata_checked: HashSet<ObjectId>,
     pub(crate) unavailable_patches: HashSet<ObjectId>,
     pub(crate) auto_merges: HashMap<ObjectId, crate::edit::auto_merge::Definition>,
 }
@@ -217,7 +275,7 @@ impl HistoryGraph {
         }
         let ids = commits.iter().map(|(id, _)| *id).collect::<Vec<_>>();
         graph.set_current_view(&ids);
-        graph.edit_scope.extend(ids);
+        graph.extend_edit_scope(ids);
         graph
     }
 
@@ -234,7 +292,7 @@ impl HistoryGraph {
             graph.ensure_commit(repo, commit_graph.as_ref(), &shallow, *id, &mut buf)?;
         }
         graph.set_current_view(ids);
-        graph.edit_scope.extend(ids.iter().copied());
+        graph.extend_edit_scope(ids.iter().copied());
         graph.inspect_edit_metadata(repo)?;
         Ok(graph)
     }
@@ -249,7 +307,11 @@ impl HistoryGraph {
             parents: 0..0,
             commit_time: 0,
             generation: 0,
-            state: 0,
+            state: if self.unindexed_edit_scope.remove(&id) {
+                NODE_EDIT_SCOPE
+            } else {
+                0
+            },
         });
         self.by_id.insert(id, index);
         Ok(index)
@@ -278,7 +340,10 @@ impl HistoryGraph {
     }
 
     pub(crate) fn is_in_edit_scope(&self, id: ObjectId) -> bool {
-        self.edit_scope.contains(&id)
+        self.index(id).map_or_else(
+            || self.unindexed_edit_scope.contains(&id),
+            |index| self.commits[index.as_usize()].state & NODE_EDIT_SCOPE != 0,
+        )
     }
 
     pub(crate) fn is_read_only(&self, commit_id: ObjectId) -> bool {
@@ -288,16 +353,21 @@ impl HistoryGraph {
     pub(crate) fn edit_commit_ids(&self) -> Vec<ObjectId> {
         self.commits
             .iter()
-            .filter(|commit| self.edit_scope.contains(&commit.id))
+            .filter(|commit| commit.state & NODE_EDIT_SCOPE != 0)
             .map(|commit| commit.id)
             .collect()
     }
 
     fn inspect_edit_metadata(&mut self, repo: &gix::Repository) -> Result<()> {
-        for commit_id in self.edit_commit_ids() {
-            if self.edit_metadata_checked.contains(&commit_id) {
+        for index in 0..self.commits.len() {
+            if self.commits[index].state & NODE_EDIT_SCOPE == 0 {
                 continue;
             }
+            gix::error::ensure!(!gix::interrupt::is_triggered(), "history loading was cancelled");
+            if self.commits[index].state & NODE_EDIT_METADATA_CHECKED != 0 {
+                continue;
+            }
+            let commit_id = self.commits[index].id;
             let commit = repo.find_commit(commit_id)?;
             let decoded = commit.decode()?;
             if decoded
@@ -315,7 +385,7 @@ impl HistoryGraph {
             )? {
                 self.auto_merges.insert(commit_id, definition);
             }
-            self.edit_metadata_checked.insert(commit_id);
+            self.commits[index].state |= NODE_EDIT_METADATA_CHECKED;
         }
         Ok(())
     }
@@ -338,7 +408,7 @@ impl HistoryGraph {
         false
     }
 
-    pub(crate) fn commits_with_descendants(&self) -> HashSet<ObjectId> {
+    pub(crate) fn commits_with_descendants(&self) -> impl Iterator<Item = ObjectId> + '_ {
         self.commits
             .iter()
             .filter(|commit| commit.state & NODE_IN_VIEW != 0)
@@ -348,7 +418,6 @@ impl HistoryGraph {
                     .copied()
             })
             .map(|parent| self.id(parent))
-            .collect()
     }
 
     /// `None` means unloaded or unknown; an empty list means a loaded root or shallow boundary.
@@ -370,7 +439,7 @@ impl HistoryGraph {
         }
     }
 
-    pub(crate) fn commits_with_merge_descendants(&self) -> HashSet<ObjectId> {
+    pub(crate) fn commits_with_merge_descendants(&self) -> impl Iterator<Item = ObjectId> + '_ {
         let mut pending: Vec<_> = self
             .commits
             .iter()
@@ -384,9 +453,11 @@ impl HistoryGraph {
                 self.parents[range.start as usize..range.end as usize].iter().copied()
             })
             .collect();
-        let mut ancestors = HashSet::new();
+        let mut ancestors = crate::index_set::IndexSet::default();
+        let mut included = Vec::new();
         while let Some(index) = pending.pop() {
-            if ancestors.insert(index) {
+            if ancestors.insert(index.as_usize()) {
+                included.push(index);
                 pending.extend(
                     self.known_parents(index)
                         .iter()
@@ -395,7 +466,7 @@ impl HistoryGraph {
                 );
             }
         }
-        ancestors.into_iter().map(|index| self.id(index)).collect()
+        included.into_iter().map(|index| self.id(index))
     }
 
     pub(crate) fn descendants_in_parent_order(&self, root: ObjectId) -> Option<Vec<ObjectId>> {
@@ -405,7 +476,7 @@ impl HistoryGraph {
         let root = self.index(root)?;
         let mut children = vec![Vec::new(); self.commits.len()];
         for (index, commit) in self.commits.iter().enumerate() {
-            if !self.is_in_edit_scope(commit.id) {
+            if commit.state & NODE_EDIT_SCOPE == 0 {
                 continue;
             }
             let index = CommitIndex::new(index).expect("an existing graph index fits into u32");
@@ -449,8 +520,12 @@ impl HistoryGraph {
     }
 
     pub(crate) fn set_current_view(&mut self, tips: &[ObjectId]) {
+        self.set_view_state(tips, NODE_IN_VIEW);
+    }
+
+    fn set_view_state(&mut self, tips: &[ObjectId], cleared: u8) {
         for commit in &mut self.commits {
-            commit.state &= !NODE_IN_VIEW;
+            commit.state &= !cleared;
         }
         let mut pending: Vec<_> = tips.iter().filter_map(|id| self.index(*id)).collect();
         while let Some(index) = pending.pop() {
@@ -463,11 +538,14 @@ impl HistoryGraph {
     }
 
     pub(crate) fn switch_view(&mut self, view_tips: &[ObjectId], hidden_tips: &[ObjectId]) {
-        self.set_current_view(if view_tips.is_empty() && !hidden_tips.is_empty() {
-            hidden_tips
-        } else {
-            view_tips
-        });
+        self.set_view_state(
+            if view_tips.is_empty() && !hidden_tips.is_empty() {
+                hidden_tips
+            } else {
+                view_tips
+            },
+            NODE_IN_VIEW | NODE_EDIT_SCOPE,
+        );
         self.set_edit_scope(view_tips, hidden_tips);
     }
 
@@ -477,10 +555,20 @@ impl HistoryGraph {
                 out.extend(self.known_parents(index).iter().map(|parent| self.id(*parent)));
             }
         });
-        self.edit_scope = visible;
-        self.edit_scope.extend(boundary.iter().copied());
+        self.unindexed_edit_scope.clear();
+        self.extend_edit_scope(visible.into_iter().chain(boundary.iter().copied()));
         self.read_only = boundary;
         self.bounded_history = (!hidden_tips.is_empty()).then(|| self.edit_commit_ids());
+    }
+
+    fn extend_edit_scope(&mut self, ids: impl IntoIterator<Item = ObjectId>) {
+        for id in ids {
+            if let Some(index) = self.index(id) {
+                self.commits[index.as_usize()].state |= NODE_EDIT_SCOPE;
+            } else {
+                self.unindexed_edit_scope.insert(id);
+            }
+        }
     }
 
     fn parent_ids(&self, index: CommitIndex) -> gix::traverse::commit::ParentIds {
@@ -498,6 +586,7 @@ impl HistoryGraph {
         id: ObjectId,
         buf: &mut Vec<u8>,
     ) -> Result<CommitIndex> {
+        gix::error::ensure!(!gix::interrupt::is_triggered(), "history loading was cancelled");
         let index = self.intern(id)?;
         if self.commits[index.as_usize()].state & NODE_LOADED != 0 {
             return Ok(index);
@@ -860,6 +949,7 @@ impl HistoryGraph {
         let mut attributions = Vec::new();
         let mut newly_stored = Vec::new();
         while let Some((_time, index)) = queue.pop() {
+            gix::error::ensure!(!gix::interrupt::is_triggered(), "history loading was cancelled");
             let state = &mut states[index.as_usize()];
             let delta = state.flags & !state.expanded;
             if delta == 0 {
@@ -910,8 +1000,14 @@ impl HistoryGraph {
                         None
                     } else {
                         let object = repo.find_commit(id)?;
+                        let is_empty = commit_is_empty(repo, &object)?;
                         let mut authors = gix::parallel::lock(authors);
-                        Some(decode_metadata(object.iter(), &mut authors, &mut attributions)?)
+                        Some(decode_metadata(
+                            object.iter(),
+                            is_empty,
+                            &mut authors,
+                            &mut attributions,
+                        )?)
                     };
                     let metadata_loaded = metadata.is_some();
                     let Metadata {
@@ -920,6 +1016,7 @@ impl HistoryGraph {
                         author,
                         attributions: row_attributions,
                         title,
+                        is_empty,
                         has_agent_marker,
                         is_review,
                         has_merge_replay,
@@ -930,6 +1027,7 @@ impl HistoryGraph {
                         author: &EMPTY_AUTHOR,
                         attributions: 0..0,
                         title: BString::default(),
+                        is_empty: false,
                         has_agent_marker: false,
                         is_review: false,
                         has_merge_replay: false,
@@ -944,6 +1042,7 @@ impl HistoryGraph {
                         attributions: row_attributions,
                         title,
                         metadata_loaded,
+                        is_empty,
                         has_agent_marker,
                         is_review,
                         has_merge_replay,
@@ -1016,6 +1115,9 @@ pub(crate) fn view_scope(
     }
 
     let reachable = reachable_from(view_tips, &mut extend_parents);
+    if hidden_tips.is_empty() {
+        return (reachable, HashSet::new());
+    }
     let hidden = reachable_from(hidden_tips, &mut extend_parents);
     let visible: HashSet<_> = reachable.difference(&hidden).copied().collect();
     let boundary = if visible.is_empty() {
@@ -1023,8 +1125,6 @@ pub(crate) fn view_scope(
             .iter()
             .copied()
             .collect()
-    } else if hidden_tips.is_empty() {
-        HashSet::new()
     } else {
         let mut boundary = Vec::new();
         for id in &visible {
@@ -1075,6 +1175,8 @@ const NODE_LOADED: u8 = 1 << 0;
 const NODE_COMPLETE: u8 = 1 << 1;
 const NODE_STORED: u8 = 1 << 2;
 const NODE_IN_VIEW: u8 = 1 << 3;
+const NODE_EDIT_SCOPE: u8 = 1 << 4;
+const NODE_EDIT_METADATA_CHECKED: u8 = 1 << 5;
 
 #[derive(Clone, Copy, Default)]
 struct WalkState {
@@ -1128,6 +1230,7 @@ fn hidden_frontier(
         }
     }
     while queue.iter_unordered().any(|index| flags[index.as_usize()] & STALE == 0) {
+        gix::error::ensure!(!gix::interrupt::is_triggered(), "history loading was cancelled");
         let Some((_priority, index)) = queue.pop() else { break };
         let mut propagated = flags[index.as_usize()];
         if propagated & (VISIBLE | HIDDEN) == VISIBLE | HIDDEN {
@@ -1230,6 +1333,10 @@ pub(crate) fn load(
     if !emit(Event::Decorations(decorations(repo, &refs.pins, &refs.worktrees)?)) {
         return Ok(());
     }
+    if cancelled.load(Ordering::Relaxed) || gix::interrupt::is_triggered() {
+        emit(Event::Cancelled);
+        return Ok(());
+    }
     if tips.is_empty() && hidden_tips.is_empty() {
         emit(Event::VisibleComplete);
         emit(Event::Complete(HistoryGraph::default()));
@@ -1248,7 +1355,7 @@ pub(crate) fn load(
         let mut authors = gix::parallel::lock(authors);
         let mut buf = Vec::new();
         for &id in &hidden_tips {
-            if cancelled.load(Ordering::Relaxed) {
+            if cancelled.load(Ordering::Relaxed) || gix::interrupt::is_triggered() {
                 emit(Event::Cancelled);
                 return Ok(());
             }
@@ -1309,7 +1416,7 @@ pub(crate) fn load(
     let mut connected = Vec::new();
     let mut connected_seen = HashSet::new();
     while let Some((_time, index)) = queue.pop() {
-        if cancelled.load(Ordering::Relaxed) {
+        if cancelled.load(Ordering::Relaxed) || gix::interrupt::is_triggered() {
             emit(Event::Cancelled);
             return Ok(());
         }
@@ -1365,8 +1472,14 @@ pub(crate) fn load(
             None
         } else {
             let object = repo.find_commit(id)?;
+            let is_empty = commit_is_empty(repo, &object)?;
             let mut authors = gix::parallel::lock(authors);
-            Some(decode_metadata(object.iter(), &mut authors, &mut attributions)?)
+            Some(decode_metadata(
+                object.iter(),
+                is_empty,
+                &mut authors,
+                &mut attributions,
+            )?)
         };
         if should_emit {
             let metadata_loaded = metadata.is_some();
@@ -1376,6 +1489,7 @@ pub(crate) fn load(
                 author,
                 attributions: row_attributions,
                 title,
+                is_empty,
                 has_agent_marker,
                 is_review,
                 has_merge_replay,
@@ -1386,6 +1500,7 @@ pub(crate) fn load(
                 author: &EMPTY_AUTHOR,
                 attributions: 0..0,
                 title: BString::default(),
+                is_empty: false,
                 has_agent_marker: false,
                 is_review: false,
                 has_merge_replay: false,
@@ -1403,6 +1518,7 @@ pub(crate) fn load(
                 attributions: row_attributions,
                 title,
                 metadata_loaded,
+                is_empty,
                 has_agent_marker,
                 is_review,
                 has_merge_replay,
@@ -1468,7 +1584,7 @@ pub(crate) fn load(
         let mut attributions = Vec::new();
         let mut authors = gix::parallel::lock(authors);
         for id in connected {
-            if cancelled.load(Ordering::Relaxed) {
+            if cancelled.load(Ordering::Relaxed) || gix::interrupt::is_triggered() {
                 emit(Event::Cancelled);
                 return Ok(());
             }
@@ -1514,6 +1630,7 @@ pub(crate) fn ref_tree_revisions(repo: &gix::Repository, include_tags: bool) -> 
             || matches!(kind, DecorationKind::Tag) && !include_tags
             || name.starts_with(STASH_PREFIX)
             || name.starts_with(REVIEW_STASH_PREFIX)
+            || name.starts_with(REVIEW_ROOT_PREFIX)
             || crate::edit::replay_refs::is_ref(name.as_bstr())
         {
             continue;
@@ -1570,6 +1687,7 @@ fn snapshot_inner(
     }
     let mut view_tips = resolve_tips(repo, revisions)?.unwrap_or_default();
     view_tips.extend(pins.iter().map(|pin| pin.id));
+    view_tips.extend(all_review_roots(repo)?.iter().map(|root| root.id));
     if include_worktrees {
         for worktree in &worktrees {
             view_tips.extend([worktree.id, worktree.label_id]);
@@ -1742,6 +1860,23 @@ pub(crate) fn all_reviews(repo: &gix::Repository) -> Result<Vec<Pin>> {
     refs_with_commit_targets(repo, REVIEW_PREFIX, "review")
 }
 
+pub(crate) fn all_review_roots(repo: &gix::Repository) -> Result<Vec<Pin>> {
+    refs_with_commit_targets(repo, REVIEW_ROOT_PREFIX, "review root")
+}
+
+pub(crate) fn removable_pins(repo: &gix::Repository) -> Result<Vec<Pin>> {
+    let reviews: HashSet<_> = all_reviews(repo)?
+        .into_iter()
+        .filter_map(|review| review_number(review.name.as_bstr()).map(BString::from))
+        .collect();
+    Ok(all_pins(repo)?
+        .into_iter()
+        .filter(|pin| {
+            !pin.is_head() && review_pin_number(pin.name.as_bstr()).is_none_or(|number| !reviews.contains(number))
+        })
+        .collect())
+}
+
 pub(crate) fn review_number(name: &BStr) -> Option<&BStr> {
     let suffix = name.strip_prefix(REVIEW_PREFIX)?;
     (suffix.first().is_some_and(|digit| matches!(digit, b'1'..=b'9')) && suffix.iter().all(u8::is_ascii_digit))
@@ -1764,8 +1899,8 @@ fn refs_with_commit_targets(repo: &gix::Repository, prefix: &[u8], label: &str) 
             Err(err) => return Err(message!("could not read tix {label}: {err}").raise()),
         };
         let suffix = reference.name().as_bstr().strip_prefix(prefix).unwrap_or_default();
-        let valid_suffix = if prefix == REVIEW_PREFIX {
-            review_number(reference.name().as_bstr()).is_some()
+        let valid_suffix = if prefix == REVIEW_PREFIX || prefix == REVIEW_ROOT_PREFIX {
+            suffix.first().is_some_and(|digit| matches!(digit, b'1'..=b'9')) && suffix.iter().all(u8::is_ascii_digit)
         } else {
             review_pin_number(reference.name().as_bstr()).is_some()
                 || suffix.len() >= 4 && suffix.iter().all(u8::is_ascii_alphanumeric)
@@ -1917,8 +2052,9 @@ pub(crate) fn load_metadata(
 ) -> Result<(Metadata<BString>, Vec<Attribution>)> {
     let object = repo.find_commit(id)?;
     let mut attributions = Vec::new();
+    let is_empty = commit_is_empty(repo, &object)?;
     let mut authors = gix::parallel::lock(authors);
-    let metadata = decode_metadata(object.iter(), &mut authors, &mut attributions)?;
+    let metadata = decode_metadata(object.iter(), is_empty, &mut authors, &mut attributions)?;
     Ok((metadata, attributions))
 }
 
@@ -1936,11 +2072,12 @@ fn decode_commit(
         author,
         attributions: row_attributions,
         title,
+        is_empty,
         has_agent_marker,
         is_review,
         has_merge_replay,
         signature,
-    } = decode_metadata(object.iter(), authors, attributions)?;
+    } = decode_metadata(object.iter(), commit_is_empty(repo, &object)?, authors, attributions)?;
     Ok(Commit {
         id,
         parent_ids,
@@ -1950,6 +2087,7 @@ fn decode_commit(
         attributions: row_attributions,
         title,
         metadata_loaded: true,
+        is_empty,
         has_agent_marker,
         is_review,
         has_merge_replay,
@@ -1957,8 +2095,22 @@ fn decode_commit(
     })
 }
 
+fn commit_is_empty(repo: &gix::Repository, object: &gix::Commit<'_>) -> Result<bool> {
+    let commit = object.decode()?;
+    let parent_commit_id = crate::edit::rebase::marked_parent_ref(&commit)?.unwrap_or_else(|| commit.parents().next());
+    let tree_id = commit.tree();
+    Ok(match parent_commit_id {
+        Some(parent_commit_id) => match repo.try_find_object(parent_commit_id)? {
+            Some(parent) => parent.try_into_commit()?.tree_id()?.as_ref() == tree_id.as_ref(),
+            None => false,
+        },
+        None => tree_id.is_empty_tree(),
+    })
+}
+
 fn decode_metadata<'a>(
     tokens: impl Iterator<Item = gix::Result<Token<'a>>>,
+    is_empty: bool,
     authors: &mut Authors,
     attributions: &mut Vec<Attribution>,
 ) -> Result<Metadata<BString>> {
@@ -2033,6 +2185,7 @@ fn decode_metadata<'a>(
         author: author.ok_or_raise(|| message("commit has no author"))?,
         attributions: attribution_start..attributions.len(),
         title: title.ok_or_raise(|| message("commit has no message"))?,
+        is_empty,
         has_agent_marker,
         is_review,
         has_merge_replay,
@@ -2212,12 +2365,15 @@ pub(crate) fn decorations_excluding(
     excluded: &HashSet<BString>,
 ) -> Result<Decorations> {
     let mut out = Decorations::new();
+    let pinned_refs: HashSet<_> = pins.iter().filter_map(|pin| pin.target.try_name()).collect();
+    let mut pin_labels = HashMap::new();
     let head_pin_branch = pins
         .iter()
         .find(|pin| pin.is_head())
         .and_then(|pin| pin.target.try_name())
         .map(ToOwned::to_owned);
-    let pins: HashSet<_> = pins.iter().map(|pin| pin.name.as_bstr()).collect();
+    let pin_names: HashSet<_> = pins.iter().map(|pin| pin.name.as_bstr()).collect();
+    let removable_pins: HashSet<_> = removable_pins(repo)?.into_iter().map(|pin| pin.name).collect();
     let review_count = all_reviews(repo)?.len();
     for reference in repo.references()?.all()? {
         let mut reference = match reference {
@@ -2235,7 +2391,10 @@ pub(crate) fn decorations_excluding(
         if full_name.as_bstr() == HEAD_PIN_NAME {
             continue;
         }
-        if full_name.as_bstr().starts_with(REVIEW_PIN_PREFIX) {
+        if full_name.as_bstr().starts_with(REVIEW_ROOT_PREFIX) {
+            continue;
+        }
+        if full_name.as_bstr().starts_with(REVIEW_PIN_PREFIX) && !removable_pins.contains(&full_name) {
             continue;
         }
         if full_name.as_bstr().starts_with(REVIEW_STASH_PREFIX) {
@@ -2259,7 +2418,7 @@ pub(crate) fn decorations_excluding(
             continue;
         }
         if full_name.as_bstr().starts_with(STASH_PREFIX) {
-            let id = match crate::edit::stash::associated_commit(full_name.as_bstr()) {
+            let change_id = match crate::edit::stash::associated_change(full_name.as_bstr()) {
                 Ok(Some(id)) => id,
                 Ok(None) => unreachable!("the stash prefix was checked"),
                 Err(err) => {
@@ -2267,15 +2426,12 @@ pub(crate) fn decorations_excluding(
                     continue;
                 }
             };
-            out.entry(id).or_default().push(Decoration {
-                name: "stash".into(),
-                kind: DecorationKind::Stash,
-            });
+            out.stashes.insert(change_id);
             continue;
         }
         let pin_suffix = full_name.as_bstr().strip_prefix(PIN_PREFIX).map(BString::from);
         let review_suffix = review_number(full_name.as_bstr()).map(BString::from);
-        if pin_suffix.is_some() && !pins.contains(full_name.as_bstr()) {
+        if pin_suffix.is_some() && !pin_names.contains(full_name.as_bstr()) {
             continue;
         }
         let mut kind = decoration_kind(full_name.as_bstr());
@@ -2326,7 +2482,11 @@ pub(crate) fn decorations_excluding(
         if matches!(kind, DecorationKind::Tag | DecorationKind::AnnotatedTag) {
             name.insert_str(0, "tag: ");
         }
-        out.entry(id).or_default().push(Decoration { name, kind });
+        let decoration = Decoration { name, kind };
+        if pinned_refs.contains(full_name.as_ref()) {
+            pin_labels.insert(full_name, (id, decoration.clone()));
+        }
+        out.entry(id).or_default().push(decoration);
     }
     for worktree in worktrees
         .iter()
@@ -2343,9 +2503,21 @@ pub(crate) fn decorations_excluding(
             .any(|decoration| decoration.kind == DecorationKind::WorktreeBranch && decoration.name == name)
         {
             decorations.push(Decoration {
-                name,
+                name: name.clone(),
                 kind: DecorationKind::WorktreeBranch,
             });
+        }
+        if pinned_refs.contains(worktree.head_reference.as_ref()) {
+            pin_labels.insert(
+                worktree.head_reference.clone(),
+                (
+                    worktree.id,
+                    Decoration {
+                        name,
+                        kind: DecorationKind::WorktreeBranch,
+                    },
+                ),
+            );
         }
     }
     for worktree in worktrees
@@ -2367,6 +2539,18 @@ pub(crate) fn decorations_excluding(
                 kind,
             });
         }
+        if pinned_refs.contains(worktree.head_reference.as_ref()) {
+            pin_labels.insert(
+                worktree.head_reference.clone(),
+                (
+                    worktree.id,
+                    Decoration {
+                        name: worktree.checkout_name.clone(),
+                        kind,
+                    },
+                ),
+            );
+        }
     }
     if !excluded.contains(b"HEAD".as_bstr())
         && let Some(id) = repo.head()?.try_peel_to_id()?
@@ -2375,6 +2559,24 @@ pub(crate) fn decorations_excluding(
             name: "HEAD".into(),
             kind: DecorationKind::Head,
         });
+    }
+    for pin in pins {
+        let Some((commit_id, target)) = pin.target.try_name().and_then(|name| pin_labels.get(name)) else {
+            continue;
+        };
+        let name: BString = format!("pin:{}", pin.name.as_bstr()[PIN_PREFIX.len()..].as_bstr()).into();
+        if *commit_id == pin.id
+            && out.get(&pin.id).is_some_and(|decorations| {
+                decorations
+                    .iter()
+                    .any(|decoration| decoration.kind == DecorationKind::Pin && decoration.name == name)
+            })
+        {
+            out.symbolic_pins
+                .entry(pin.id)
+                .or_default()
+                .push((name, target.clone()));
+        }
     }
     Ok(out)
 }
@@ -2538,6 +2740,78 @@ mod tests {
         assert!(
             !graph.is_in_edit_scope(id(1)),
             "only the hidden fallback tip is editable"
+        );
+    }
+
+    #[test]
+    fn edit_scope_preserves_unknown_tips_and_independent_view_changes() -> gix::error::TestResult {
+        let mut graph = HistoryGraph::from_test_commits(&[(id(2), vec![id(1)]), (id(1), Vec::new())]);
+        graph.set_current_view(&[id(1)]);
+        assert!(
+            graph.is_in_edit_scope(id(2)),
+            "changing displayed ancestry alone does not change the editable scope"
+        );
+
+        graph.switch_view(&[id(3)], &[]);
+        assert!(graph.is_in_edit_scope(id(3)), "an unknown selected tip stays editable");
+        assert!(
+            graph.index(id(3)).is_none(),
+            "scope queries do not load unknown commits"
+        );
+        assert!(
+            !graph.is_in_edit_scope(id(2)),
+            "switching scope removes the previous view"
+        );
+        let added = graph.intern(id(3))?;
+        assert!(
+            graph.is_in_edit_scope(id(3)),
+            "interning preserves the selected tip's scope"
+        );
+        assert!(
+            graph.unindexed_edit_scope.is_empty(),
+            "indexed membership no longer retains a duplicate ID"
+        );
+
+        graph.switch_view(&[], &[id(4)]);
+        assert!(
+            graph.is_in_edit_scope(id(4)) && graph.is_read_only(id(4)),
+            "an unknown hidden fallback remains an editable read-only boundary"
+        );
+        assert!(
+            graph.commits[added.as_usize()].state & NODE_EDIT_SCOPE == 0,
+            "switching scope clears a previously interned tip"
+        );
+        graph.switch_view(&[id(1)], &[]);
+        assert!(
+            !graph.is_in_edit_scope(id(4)),
+            "switching scope clears unknown tips as well as indexed commits"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn merge_descendant_membership_uses_visible_ordinary_merges() {
+        let mut graph = HistoryGraph::from_test_commits(&[
+            (id(5), vec![id(4)]),
+            (id(4), vec![id(2), id(3)]),
+            (id(3), vec![id(1)]),
+            (id(2), vec![id(1)]),
+            (id(1), Vec::new()),
+        ]);
+        assert_eq!(
+            graph.commits_with_descendants().collect::<HashSet<_>>(),
+            HashSet::from([id(4), id(3), id(2), id(1)]),
+            "shared ancestry and duplicate edges preserve exact descendant membership"
+        );
+        assert_eq!(
+            graph.commits_with_merge_descendants().collect::<HashSet<_>>(),
+            HashSet::from([id(3), id(2), id(1)]),
+            "ordinary merge ancestors are included once"
+        );
+        graph.set_current_view(&[id(2)]);
+        assert!(
+            graph.commits_with_merge_descendants().next().is_none(),
+            "cached merges outside the current view do not mark ancestors"
         );
     }
 
@@ -3094,6 +3368,54 @@ mod tests {
     }
 
     #[test]
+    fn loads_empty_diff_metadata_for_indexed_pending_and_shallow_commits() -> TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only("empty-commits.sh")?;
+        let repo = crate::test_repository::open(&fixture)?;
+        let empty_commit_id = repo.rev_parse_single("empty")?.detach();
+        let pending_commit_id = repo.rev_parse_single("pending-empty")?.detach();
+        let events = loaded(&fixture, &["main", "pending-empty"], &["empty-root"])?;
+        let rows: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Commits(batch) => Some(batch.rows.as_slice()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        let pending = rows
+            .iter()
+            .find(|row| row.id == pending_commit_id)
+            .expect("the pending commit is visible");
+        assert!(
+            pending.metadata_loaded && pending.is_empty,
+            "unindexed commits retain empty-diff metadata"
+        );
+        let deferred = rows
+            .iter()
+            .find(|row| row.id == empty_commit_id)
+            .expect("the indexed empty commit is visible");
+        assert!(!deferred.metadata_loaded, "indexed commits defer metadata");
+        let authors = gix::parallel::OwnShared::new(gix::parallel::Mutable::new(Authors::default()));
+        let (metadata, _) = load_metadata(&repo, empty_commit_id, &authors)?;
+        assert!(metadata.is_empty, "deferred metadata detects the empty diff");
+
+        let shallow = crate::test_repository::open(fixture.join("shallow"))?;
+        let commit_id = shallow.head_id()?.detach();
+        let parent_commit_id = shallow
+            .find_commit(commit_id)?
+            .parent_ids()
+            .next()
+            .expect("the shallow tip has a parent");
+        assert!(
+            shallow.try_find_object(parent_commit_id)?.is_none(),
+            "the shallow parent is unavailable"
+        );
+        let (metadata, _) = load_metadata(&shallow, commit_id, &authors)?;
+        assert!(!metadata.is_empty, "an unavailable parent does not imply an empty diff");
+        Ok(())
+    }
+
+    #[test]
     fn decodes_commits_missing_from_a_stale_graph_and_defers_graph_commits() -> TestResult {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let fixture_path = fixture.path();
@@ -3275,14 +3597,40 @@ mod tests {
     }
 
     #[test]
+    fn scope_without_hidden_tips_contains_all_reachable_commits() -> gix::error::TestResult {
+        let graph = HistoryGraph::from_test_commits(&[
+            (id(4), vec![id(2), id(3)]),
+            (id(3), vec![id(1)]),
+            (id(2), vec![id(1)]),
+            (id(1), vec![]),
+        ]);
+        let (visible, boundary) = view_scope(&[id(4)], &[], |commit_id, out| {
+            out.extend(
+                graph
+                    .parents_of(commit_id)
+                    .expect("the test graph contains every reachable commit"),
+            );
+        });
+        assert_eq!(visible, HashSet::from([id(1), id(2), id(3), id(4)]));
+        assert!(boundary.is_empty(), "a view without hidden ancestry has no boundary");
+
+        let (visible, boundary) = view_scope(&[], &[], |_, _| panic!("empty tips need no parent lookup"));
+        assert!(
+            visible.is_empty() && boundary.is_empty(),
+            "an empty view retains neither scope nor boundary"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn edit_scope_is_visible_history_plus_its_hidden_boundary() -> gix::error::TestResult {
-        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
-        let repo = crate::test_repository::open(fixture.path())?;
+        let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
+        let repo = crate::test_repository::open(&fixture)?;
         let topic = repo.rev_parse_single("topic")?.detach();
         let boundary = repo.rev_parse_single("topic^")?.detach();
         let root = repo.rev_parse_single("topic^^")?.detach();
         let hidden_tip = repo.rev_parse_single("main")?.detach();
-        let mut graph = loaded(fixture.path(), &["topic"], &["main"])?
+        let mut graph = loaded(&fixture, &["topic"], &["main"])?
             .into_iter()
             .find_map(|event| match event {
                 Event::Complete(graph) => Some(graph),
@@ -3308,6 +3656,11 @@ mod tests {
             !graph.is_in_edit_scope(hidden_tip),
             "hidden-only descendants are excluded"
         );
+        let inspected = graph.index(topic).expect("the visible tip is cached");
+        assert!(
+            graph.commits[inspected.as_usize()].state & NODE_EDIT_METADATA_CHECKED != 0,
+            "loaded editable commits have their edit headers inspected"
+        );
 
         let authors = gix::parallel::OwnShared::new(gix::parallel::Mutable::new(Authors::default()));
         graph.refresh(
@@ -3326,6 +3679,16 @@ mod tests {
         assert!(
             !graph.is_in_edit_scope(boundary),
             "refresh removes the previous boundary"
+        );
+        assert_eq!(graph.index(topic), Some(inspected), "refresh preserves cached indices");
+        assert!(
+            graph.commits[inspected.as_usize()].state & NODE_EDIT_METADATA_CHECKED != 0,
+            "changing scope retains completed edit-header inspection"
+        );
+        let newly_inspected = graph.index(hidden_tip).expect("refresh caches its new tip");
+        assert!(
+            graph.commits[newly_inspected.as_usize()].state & NODE_EDIT_METADATA_CHECKED != 0,
+            "refresh inspects newly editable cached commits"
         );
         Ok(())
     }
@@ -3371,6 +3734,11 @@ mod tests {
         assert!(
             !graph.is_in_edit_scope(parent),
             "an interned parent stays outside the explicit edit scope"
+        );
+        assert_eq!(
+            graph.commits_with_descendants().collect::<Vec<_>>(),
+            [parent],
+            "an unloaded parent still has a known descendant"
         );
         Ok(())
     }
@@ -3610,7 +3978,8 @@ mod tests {
                 }
             }
         }
-        graph.edit_scope.remove(&id(5));
+        let excluded = graph.index(id(5)).expect("the excluded commit is cached");
+        graph.commits[excluded.as_usize()].state &= !NODE_EDIT_SCOPE;
         let descendants = graph
             .descendants_in_parent_order(id(2))
             .expect("the editable subtree is acyclic");
@@ -3967,6 +4336,57 @@ mod tests {
     }
 
     #[test]
+    fn global_interrupt_cancels_history_and_cached_refreshes() -> TestResult {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let fixture = fixture()?;
+        let repo = crate::test_repository::open(&fixture)?;
+        let commit_id = repo.rev_parse_single("main")?.detach();
+        let mut graph = HistoryGraph::for_commits(&repo, &[commit_id])?;
+        let authors = gix::parallel::OwnShared::new(gix::parallel::Mutable::new(Authors::default()));
+        let local_cancel = AtomicBool::new(false);
+        let mut events = Vec::new();
+        load(
+            &repo,
+            &["main".into()],
+            &["topic".into()],
+            false,
+            &authors,
+            &local_cancel,
+            |event| {
+                if matches!(&event, Event::Decorations(_)) {
+                    gix::interrupt::trigger();
+                }
+                events.push(event);
+                true
+            },
+        )?;
+        assert!(
+            matches!(events.as_slice(), [Event::Decorations(_), Event::Cancelled]),
+            "a process interrupt stops history before walking its hidden frontier"
+        );
+        assert!(
+            !local_cancel.load(Ordering::Relaxed),
+            "process interruption does not alter the view's cancellation flag"
+        );
+        let err = HistoryGraph::for_commits(&repo, &[commit_id])
+            .expect_err("explicit graph construction observes process interruption");
+        assert!(
+            err.to_string().contains("cancelled"),
+            "graph construction reports cancellation"
+        );
+        let err = graph
+            .refresh_graph(&repo, &["main".into()], &[])
+            .expect_err("cached graph refreshes also observe process interruption");
+        assert!(
+            err.to_string().contains("cancelled"),
+            "cached refresh reports cancellation"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn classifies_reference_kinds() {
         assert_eq!(decoration_kind(b"refs/worktree/tix/pins/abcd"), DecorationKind::Pin);
         assert_eq!(
@@ -4124,6 +4544,99 @@ mod tests {
     }
 
     #[test]
+    fn orphaned_review_return_pins_are_decorated_and_removable() -> gix::error::TestResult {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let pinned_commit_id = repo.rev_parse_single("topic^")?.detach();
+        let pin_name = "refs/worktree/tix/pins/review/1";
+        repo.reference(
+            pin_name,
+            pinned_commit_id,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "test orphaned review return",
+        )?;
+
+        let events = loaded(fixture.path(), &["topic"], &["main"])?;
+        let decorations = events
+            .iter()
+            .find_map(|event| match event {
+                Event::Decorations(decorations) => Some(decorations),
+                _ => None,
+            })
+            .expect("loading emits decorations");
+        assert!(
+            decorations.get(&pinned_commit_id).is_some_and(|decorations| decorations
+                .iter()
+                .any(|decoration| decoration.kind == DecorationKind::Pin)),
+            "an orphaned return pin has the ordinary visible pin marker"
+        );
+        assert!(
+            events.iter().any(|event| matches!(event,
+            Event::HiddenCommits(commits) if commits.rows.iter().any(|row| row.id == pinned_commit_id))),
+            "the pinned commit remains displayed despite hidden ancestry"
+        );
+        assert_eq!(
+            removable_pins(&repo)?
+                .iter()
+                .map(|pin| pin.name.as_bstr())
+                .collect::<Vec<_>>(),
+            [pin_name.as_bytes().as_bstr()],
+            "the orphaned pin can be removed"
+        );
+
+        repo.reference(
+            "refs/worktree/tix/review/1",
+            repo.rev_parse_single("topic")?,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "test active review",
+        )?;
+        assert!(
+            removable_pins(&repo)?.is_empty(),
+            "an active review protects its return pin"
+        );
+        let refs = snapshot(&repo, &["topic".into()], &["main".into()], false)?;
+        let decorations = super::decorations(&repo, &refs.pins, &refs.worktrees)?;
+        assert!(
+            decorations.get(&pinned_commit_id).is_none_or(|decorations| decorations
+                .iter()
+                .all(|decoration| decoration.kind != DecorationKind::Pin)),
+            "an active review return does not offer the ordinary unpin action"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn symbolic_pins_match_exact_reference_labels() -> TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only("symbolic-pins.sh")?;
+        let repo = crate::test_repository::open(&fixture)?;
+        let refs = snapshot(&repo, &[], &[], false)?;
+        let commit_id = repo.head_id()?.detach();
+        let decorations = super::decorations(&repo, &refs.pins, &refs.worktrees)?;
+        let targets: Vec<_> = decorations[&commit_id]
+            .iter()
+            .filter(|decoration| decorations.is_pinned(commit_id, decoration))
+            .map(|decoration| decoration.name.to_str_lossy())
+            .collect();
+        assert_eq!(
+            targets,
+            ["main", "origin/HEAD", "tag: annotated"],
+            "duplicate pins collapse and symbolic aliases mark their own name, not their referent"
+        );
+        assert_eq!(
+            decorations.symbolic_pins[&commit_id].len(),
+            4,
+            "every ordinary symbolic pin is associated with its target label"
+        );
+        let excluded = HashSet::from(["refs/remotes/origin/HEAD".into()]);
+        let hidden = decorations_excluding(&repo, &refs.pins, &refs.worktrees, &excluded)?;
+        assert!(
+            hidden.pin_target(commit_id, b"pin:alias".as_bstr()).is_none(),
+            "a hidden target leaves its pin available for the history resource marker"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn attached_hidden_base_keeps_its_ordinary_pin_decoration() -> gix::error::TestResult {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repo = crate::test_repository::open(fixture.path())?;
@@ -4162,7 +4675,7 @@ mod tests {
     }
 
     #[test]
-    fn review_resources_are_not_history_tips_and_stashes_decorate_the_saved_leaf() -> gix_testtools::Result {
+    fn review_roots_retain_history_and_stashes_decorate_the_saved_leaf() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repo = crate::test_repository::open(fixture.path())?;
         let review = repo.rev_parse_single("topic")?.detach();
@@ -4188,7 +4701,35 @@ mod tests {
             !snapshot(&repo, &[], &[], false)?.view_tips.contains(&review),
             "review resources do not retain history"
         );
+        repo.reference(
+            "refs/worktree/tix/review/roots/1",
+            review,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "test protected review root",
+        )?;
+        assert!(
+            snapshot(&repo, &[], &[], false)?.view_tips.contains(&review),
+            "the protected review root retains history independently of pins"
+        );
+        assert_eq!(
+            all_reviews(&repo)?.len(),
+            1,
+            "root refs do not count as additional reviews"
+        );
+        assert!(
+            ref_tree_revisions(&repo, true)?
+                .iter()
+                .all(|name| !name.to_string_lossy().contains("review/roots/")),
+            "protected roots cannot be edited through the reference tree"
+        );
         let decorations = decorations(&repo, &[], &worktree_checkouts(&repo)?)?;
+        assert!(
+            decorations
+                .values()
+                .flatten()
+                .all(|decoration| !decoration.name.contains_str("roots/")),
+            "protected roots have no named or pin decoration"
+        );
         assert!(
             decorations.get(&review).is_some_and(|decorations| decorations
                 .iter()
@@ -4210,7 +4751,7 @@ mod tests {
         let repo = crate::test_repository::open(fixture.path())?;
         let head = repo.head_id()?.detach();
         let stash = repo.rev_parse_single("topic")?.detach();
-        let name = super::super::edit::stash::reference(head)?;
+        let name = super::super::edit::stash::reference(&repo, head)?;
         repo.reference(
             name,
             stash,
@@ -4221,10 +4762,8 @@ mod tests {
         assert!(!snapshot(&repo, &[], &[], false)?.view_tips.contains(&stash));
         let decorations = decorations(&repo, &[], &worktree_checkouts(&repo)?)?;
         assert!(
-            decorations.get(&head).is_some_and(|decorations| decorations
-                .iter()
-                .any(|decoration| decoration.kind == DecorationKind::Stash)),
-            "the ref-name suffix associates the stash with HEAD"
+            decorations.has_stash(head, crate::change_id::for_commit(&repo, head)?),
+            "the ref-name suffix associates the stash with HEAD's change identity"
         );
         assert!(
             decorations.get(&stash).is_none_or(|decorations| decorations

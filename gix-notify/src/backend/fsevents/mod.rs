@@ -2,12 +2,9 @@
 //! complete native callbacks; native flushes never run on that queue.
 use std::{
     collections::{BTreeMap, BTreeSet},
-    ffi::{CStr, CString, OsString, c_void},
-    os::unix::{
-        ffi::{OsStrExt, OsStringExt},
-        fs::MetadataExt,
-    },
-    path::{Path, PathBuf},
+    ffi::{CStr, CString, OsStr, c_void},
+    os::unix::{ffi::OsStrExt, fs::MetadataExt},
+    path::{Component, Path, PathBuf},
     ptr::NonNull,
     sync::mpsc::{self, SyncSender},
     thread::JoinHandle,
@@ -17,7 +14,7 @@ use std::{
 use dispatch2::{DispatchQueue, DispatchRetained};
 use fsevent_sys::{self as fs, core_foundation as cf};
 use gix_error::{ErrorExt, Result, ResultExt, conflict, message, validation};
-use gix_parallel::{Mutable, OwnShared, lock};
+use gix_parallel::{Mutable, MutableOnDemand, OwnShared, WeakShared, get_mut, get_ref, lock};
 use std::io::Write;
 
 use crate::{Event, EventKind, Fence, Loss, PathKind, SynchronizeError, Watch, queue};
@@ -33,7 +30,7 @@ unsafe extern "C" {
 }
 
 enum Command {
-    Replace(Vec<Watch>, SyncSender<Result>),
+    Replace(Vec<Watch>, SyncSender<Result<WeakShared<Context>>>),
     Synchronize {
         directory: PathBuf,
         generation: u64,
@@ -45,6 +42,7 @@ enum Command {
 pub(crate) struct Backend {
     commands: Option<SyncSender<Command>>,
     worker: Option<JoinHandle<()>>,
+    context: WeakShared<Context>,
 }
 
 impl Backend {
@@ -58,7 +56,7 @@ impl Backend {
                 let sender = OwnShared::new(sender);
                 let mut stream = Some(match Stream::new(&watches, sender.clone()) {
                     Ok(stream) => {
-                        let _ = ready.send(Ok(()));
+                        let _ = ready.send(Ok(OwnShared::downgrade(&stream.context)));
                         stream
                     }
                     Err(error) => {
@@ -88,8 +86,8 @@ impl Backend {
                             drop(stream.take());
                             match Stream::new(&watches, sender.clone()) {
                                 Ok(replacement) => {
+                                    let _ = reply.send(Ok(OwnShared::downgrade(&replacement.context)));
                                     stream = Some(replacement);
-                                    let _ = reply.send(Ok(()));
                                 }
                                 Err(error) => {
                                     let _ = reply.send(Err(error));
@@ -119,11 +117,12 @@ impl Backend {
                 }
             })
             .or_raise(|| message("could not start the FSEvents control worker"))?;
-        let out = Self {
+        let mut out = Self {
             commands: Some(commands),
             worker: Some(worker),
+            context: WeakShared::new(),
         };
-        initialized
+        out.context = initialized
             .recv()
             .or_raise(|| conflict("FSEvents stopped during initialization"))??;
         Ok(out)
@@ -137,9 +136,28 @@ impl Backend {
         commands
             .send(Command::Replace(watches.to_vec(), reply))
             .or_raise(|| conflict("FSEvents stopped before replacing its roots"))?;
-        receive
+        self.context = receive
             .recv()
-            .or_raise(|| conflict("FSEvents stopped while replacing its roots"))?
+            .or_raise(|| conflict("FSEvents stopped while replacing its roots"))??;
+        Ok(())
+    }
+
+    pub(crate) fn remove_subtree(&self, requested: &[Watch], path: &Path) -> bool {
+        let Some(context) = self.context.upgrade() else {
+            return false;
+        };
+        let mut watches = get_mut(&context.watches);
+        // Aliases can share a logical watch. Only edit canonical, one-to-one registrations in place.
+        if !watches.contains_key(path)
+            || !path.ancestors().skip(1).any(|parent| watches.contains_key(parent))
+            || !watches
+                .iter()
+                .eq(requested.iter().map(|watch| (&watch.path, &watch.recursive)))
+        {
+            return false;
+        }
+        watches.retain(|watch, _| !watch.starts_with(path));
+        true
     }
 
     pub(crate) fn synchronize_at(
@@ -204,18 +222,37 @@ struct PendingFence {
 struct Context {
     pending: Mutable<Option<PendingFence>>,
     sender: OwnShared<queue::Sender>,
-    watches: BTreeMap<PathBuf, bool>,
+    watches: MutableOnDemand<BTreeMap<PathBuf, bool>>,
 }
 
-impl Context {
-    fn accepts(&self, path: &Path) -> bool {
-        self.watches.contains_key(path)
-            || path.parent().is_some_and(|parent| self.watches.contains_key(parent))
-            || path
-                .ancestors()
-                .skip(2)
-                .any(|parent| self.watches.get(parent) == Some(&true))
+fn accepts(watches: &BTreeMap<PathBuf, bool>, path: &Path) -> bool {
+    watches.contains_key(path)
+        || path.parent().is_some_and(|parent| watches.contains_key(parent))
+        || path
+            .ancestors()
+            .skip(2)
+            .any(|parent| watches.get(parent) == Some(&true))
+}
+
+fn subtree_intersects(watches: &BTreeMap<PathBuf, bool>, path: &Path) -> bool {
+    if !path.is_absolute() || path.components().any(|part| part == Component::ParentDir) {
+        return true;
     }
+    watches.iter().any(|(watch, recursive)| {
+        let mut parts = path.components();
+        for part in watch.components() {
+            let Some(actual) = parts.next() else {
+                return true;
+            };
+            let expected = part.as_os_str().as_bytes();
+            let actual = actual.as_os_str().as_bytes();
+            // Native paths may use case or Unicode aliases. Require a provable mismatch.
+            if expected.is_ascii() && actual.is_ascii() && !expected.eq_ignore_ascii_case(actual) {
+                return false;
+            }
+        }
+        *recursive || parts.nth(1).is_none()
+    })
 }
 
 struct Root {
@@ -283,7 +320,7 @@ impl Stream {
         let context = OwnShared::new(Context {
             pending: Mutable::new(None),
             sender,
-            watches: logical,
+            watches: MutableOnDemand::new(logical),
         });
         let native_context = fs::FSEventStreamContext {
             version: 0,
@@ -336,7 +373,8 @@ impl Stream {
         deadline: Instant,
     ) -> std::result::Result<Fence, SynchronizeError> {
         if !self.local
-            || mounts::has_nonlocal_coverage(&self.context.watches).map_err(|error| self.marker_error(error))?
+            || mounts::has_nonlocal_coverage(&get_ref(&self.context.watches))
+                .map_err(|error| self.marker_error(error))?
         {
             return Err(SynchronizeError::Unsupported);
         }
@@ -533,42 +571,47 @@ extern "C" fn callback(
         let mut loss = None;
         let marker_path = lock(&context.pending).as_ref().map(|pending| pending.path.clone());
         let mut marker_seen = false;
+        let watches = get_ref(&context.watches);
         for index in 0..count {
             let (path, flags) = unsafe {
                 // SAFETY: FSEvents provides count C-string pointers and flags valid until callback return.
                 let path = *((paths as *const *const std::ffi::c_char).add(index));
                 (CStr::from_ptr(path).to_bytes(), *flags.add(index))
             };
-            if flags & !KNOWN_FLAGS != 0
-                || flags
-                    & (fs::kFSEventStreamEventFlagMustScanSubDirs
-                        | fs::kFSEventStreamEventFlagUserDropped
-                        | fs::kFSEventStreamEventFlagKernelDropped
-                        | fs::kFSEventStreamEventFlagRootChanged
-                        | fs::kFSEventStreamEventFlagEventIdsWrapped
-                        | fs::kFSEventStreamEventFlagMount
-                        | fs::kFSEventStreamEventFlagUnmount)
-                    != 0
+            let path = Path::new(OsStr::from_bytes(path));
+            let stream_loss = flags
+                & (!KNOWN_FLAGS
+                    | fs::kFSEventStreamEventFlagUserDropped
+                    | fs::kFSEventStreamEventFlagKernelDropped
+                    | fs::kFSEventStreamEventFlagRootChanged
+                    | fs::kFSEventStreamEventFlagEventIdsWrapped
+                    | fs::kFSEventStreamEventFlagMount
+                    | fs::kFSEventStreamEventFlagUnmount)
+                != 0;
+            if stream_loss
+                || loss.is_none()
+                    && flags & fs::kFSEventStreamEventFlagMustScanSubDirs != 0
+                    && (flags & fs::kFSEventStreamEventFlagHistoryDone != 0 || subtree_intersects(&watches, path))
             {
                 loss = Some(Loss::Rescan);
             }
             if flags & fs::kFSEventStreamEventFlagHistoryDone != 0 {
                 continue;
             }
-            let path = PathBuf::from(OsString::from_vec(path.to_vec()));
-            if marker_path.as_ref() == Some(&path) {
+            if marker_path.as_deref() == Some(path) {
                 marker_seen = true;
                 continue;
             }
-            if context.accepts(&path) {
+            if accepts(&watches, path) {
                 let (kind, path_kind) = translate(flags);
                 events.push(Event {
-                    paths: vec![path],
+                    paths: vec![path.to_owned()],
                     kind,
                     path_kind,
                 });
             }
         }
+        drop(watches);
         if !events.is_empty() || loss.is_some() {
             context.sender.publish(events, loss, None);
         }

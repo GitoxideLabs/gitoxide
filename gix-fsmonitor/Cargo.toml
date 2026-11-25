@@ -58,4 +58,13 @@ all-features = true
 
 [package.metadata.qa]
 checks = [{ args = [] }, { args = ["--features", "server"] }, { args = ["--features", "daemon"] }, { args = ["--all-features"] }]
-tests = [{ args = [] }, { args = ["--features", "server"] }, { args = ["--features", "daemon"] }, { args = ["--all-features"] }]
+tests = [
+    { args = [] },
+    { args = ["--features", "server"] },
+    { args = ["--features", "daemon"] },
+    { args = ["--all-features"] },
+    { platforms = ["windows-x86_64"], args = [
+        "--features", "server,async-tokio", "--lib", "-E",
+        "test(=server::transport::windows_security::tests::native_async_clients_need_gits_everyone_read_write_policy)",
+    ] },
+]

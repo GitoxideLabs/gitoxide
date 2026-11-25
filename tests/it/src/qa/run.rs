@@ -16,6 +16,7 @@ pub struct Command {
     pub args: Vec<String>,
     pub env: BTreeMap<String, String>,
     pub requires: Vec<String>,
+    pub platforms: Vec<String>,
 }
 
 impl Command {
@@ -25,6 +26,7 @@ impl Command {
             args: args.iter().map(|arg| (*arg).into()).collect(),
             env: BTreeMap::new(),
             requires: Vec::new(),
+            platforms: Vec::new(),
         }
     }
 
@@ -169,6 +171,9 @@ pub fn commands(metadata: &Value, selection: &Value, stages: &[String]) -> Resul
                             bail!("{name}: QA case packages must name existing workspace packages");
                         }
                         let command = case_command(args, &case_packages, &case)?;
+                        if isolated && !command.platforms.is_empty() {
+                            bail!("{name}: QA case platforms are not supported for isolated tests");
+                        }
                         if case_packages.iter().any(|name| selected.contains(name))
                             && (exhaustive || !super::scope::is_unaffected(selection, &command))
                         {
@@ -307,11 +312,26 @@ pub(super) fn has_target(package: &Value, role: &str) -> bool {
 pub(super) fn case_command(args: &[&str], packages: &[&str], case: &Value) -> Result<Command> {
     let fields = case.as_object().ok_or_raise(|| message("QA cases must be objects"))?;
     for key in fields.keys() {
-        if !["args", "env", "requires", "packages"].contains(&key.as_str()) {
+        if !["args", "env", "requires", "packages", "platforms"].contains(&key.as_str()) {
             bail!("Unknown QA case field: {key}");
         }
     }
     let mut command = cargo(args, packages, false);
+    if let Some(platforms) = case.get("platforms") {
+        if !args.starts_with(&["nextest", "run"]) {
+            bail!("QA case platforms are only supported for feature test variants");
+        }
+        let platforms = strings(platforms, "QA case platforms")?;
+        if platforms.is_empty() {
+            bail!("QA case platforms must not be empty");
+        }
+        for platform in platforms {
+            if platform == "freebsd-x86_64" || !super::catalog::PLATFORMS.contains(&platform) {
+                bail!("Unsupported QA feature test platform {platform}");
+            }
+            command.platforms.push(platform.into());
+        }
+    }
     if let Some(args) = case.get("args") {
         command
             .args
@@ -770,6 +790,19 @@ mod tests {
             "isolated packages need a test configuration"
         );
         assert!(case_command(&["test"], &["sample"], &json!({"require":["xz"]})).is_err());
+    }
+
+    #[test]
+    fn platform_restrictions_require_feature_test_variants_and_valid_labels() -> gix_error::TestResult {
+        let case = json!({"platforms": ["windows-x86_64"]});
+        assert!(case_command(&["check"], &["sample"], &case).is_err());
+        let command = case_command(&["nextest", "run"], &["sample"], &case)?;
+        assert_eq!(command.platforms, ["windows-x86_64"]);
+        for platforms in [json!([]), json!(["windows"]), json!(["freebsd-x86_64"])] {
+            let case = json!({"platforms": platforms});
+            assert!(case_command(&["nextest", "run"], &["sample"], &case).is_err());
+        }
+        Ok(())
     }
 
     #[test]

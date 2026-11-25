@@ -176,9 +176,10 @@ pub fn main() -> Result<()> {
             &should_interrupt,
         ),
         #[cfg(feature = "tix")]
-        Subcommands::Tix(command) => command.run_as(
-            repository(Mode::Lenient)?.into_sync(),
+        Subcommands::Tix(command) => command.run_with_repository_as_with_trace(
+            || repository(Mode::Lenient).map(gix::Repository::into_sync),
             gix_tix::command::Invocation::GixTix,
+            0,
         ),
         Subcommands::Env => prepare_and_run("env", verbose, None, move |_progress, out, _err| {
             let repo_trust = repository(Mode::LenientWithGitInstallConfig)
@@ -1505,6 +1506,7 @@ mod tests {
 
         for arguments in [
             vec!["gix", "notify"],
+            vec!["gix", "watch", "--worktree-coverage", "exclude-ignored-files"],
             vec![
                 "gix",
                 "notify",
@@ -1567,6 +1569,10 @@ mod tests {
             "repo/.git/worktrees/one",
             "--worktree-filter",
             "repo/.git/worktrees/two",
+            "--checkout-filter",
+            "repo/.git",
+            "--checkout-filter",
+            "repo/.git/worktrees/two",
             "--additional-path",
             "application/state",
             "--additional-path",
@@ -1579,7 +1585,12 @@ mod tests {
         assert_eq!(
             options.worktree_filter,
             Some(vec!["repo/.git/worktrees/one".into(), "repo/.git/worktrees/two".into()]),
-            "private Git directories filter native coverage"
+            "the worktree filter limits subscriptions to additional worktrees"
+        );
+        assert_eq!(
+            options.checkout_filter,
+            Some(vec!["repo/.git".into(), "repo/.git/worktrees/two".into()]),
+            "the checkout filter selects native file watches independently of subscriptions"
         );
         assert_eq!(
             options
@@ -1612,6 +1623,49 @@ mod tests {
         assert!(
             Args::try_parse_from(["gix", "watch", "--worktree-filter", "repo/.git/worktrees/one"]).is_err(),
             "worktree filtering requires linked-worktree coverage"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn watch_checkout_filter_works_without_all_worktrees_but_requires_coverage() -> gix::error::TestResult {
+        use clap::Parser;
+
+        for (arguments, expected) in [
+            (vec!["gix", "watch"], None),
+            (
+                vec!["gix", "watch", "--checkout-filter", ".git"],
+                Some(vec![".git".into()]),
+            ),
+        ] {
+            let Subcommands::Watch(platform) = Args::try_parse_from(arguments)?.cmd else {
+                panic!("watch arguments select the repository monitor")
+            };
+            let (options, _) = platform.into_options()?;
+            assert_eq!(
+                options.checkout_filter, expected,
+                "checkout filtering is opt-in and can select the primary checkout alone"
+            );
+        }
+
+        let Subcommands::Watch(platform) = Args::try_parse_from([
+            "gix",
+            "watch",
+            "--checkout-filter",
+            ".git",
+            "--worktree-coverage",
+            "none",
+        ])?
+        .cmd
+        else {
+            panic!("watch arguments select the repository monitor")
+        };
+        let err = platform
+            .into_options()
+            .expect_err("checkout filtering cannot be used when coverage is disabled");
+        assert!(
+            err.to_string().contains("--checkout-filter requires worktree coverage"),
+            "the error explains why the filter cannot be applied: {err}"
         );
         Ok(())
     }

@@ -3,7 +3,7 @@
 use gix::Result;
 
 fn main() -> Result<()> {
-    gix_tix::command::parse().run()
+    gix_tix::command::main()
 }
 
 #[test]

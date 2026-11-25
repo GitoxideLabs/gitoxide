@@ -335,6 +335,8 @@ pub mod watch {
         /// Watch tracked and unignored directories, stopping at nested repositories.
         #[default]
         IgnoreAware,
+        /// Also suppress individual ignored, untracked files in watched directories.
+        ExcludeIgnoredFiles,
         /// Include ignored paths and nested repositories.
         All,
         /// Disable automatic worktree coverage.
@@ -355,10 +357,16 @@ pub mod watch {
         /// Limit --all-worktrees to these private Git directories; repeatable.
         #[clap(long, value_name = "GIT_DIR", requires = "all_worktrees")]
         pub worktree_filter: Option<Vec<PathBuf>>,
+        /// Limit native file watches to these private Git directories (including the primary if listed);
+        ///
+        /// Pass a Git directory such as `.git` or `.git/worktrees/feature`, not the checkout root.
+        /// Does not limit metadata subscriptions. Requires `--worktree-coverage` other than `none`.
+        #[clap(long, value_name = "GIT_DIR")]
+        pub checkout_filter: Option<Vec<PathBuf>>,
         /// Request full invalidations when an application file or directory changes; repeatable.
         #[clap(long = "additional-path", value_name = "PATH")]
         pub additional_paths: Vec<PathBuf>,
-        /// Select directory coverage. File invalidations remain unfiltered.
+        /// Select worktree coverage and whether to filter individual ignored files.
         #[clap(long, value_enum, default_value_t = Coverage::default())]
         pub worktree_coverage: Coverage,
         /// Metadata quiet period in milliseconds; zero publishes immediately.
@@ -377,8 +385,13 @@ pub mod watch {
 
     impl Platform {
         pub fn into_options(self) -> gix::Result<(gix::notify::Options, Duration)> {
-            use gix::error::{bail, message};
+            use gix::error::{bail, message, validation};
 
+            if self.checkout_filter.is_some() && matches!(self.worktree_coverage, Coverage::None) {
+                bail!(validation(
+                    "--checkout-filter requires worktree coverage other than 'none'"
+                ));
+            }
             let now = Instant::now();
             for (milliseconds, flag) in [
                 (self.debounce_ms, "--debounce-ms"),
@@ -395,6 +408,7 @@ pub mod watch {
                     metadata: !self.no_metadata,
                     all_worktrees: self.all_worktrees,
                     worktree_filter: self.worktree_filter,
+                    checkout_filter: self.checkout_filter,
                     additional_paths: self
                         .additional_paths
                         .into_iter()
@@ -414,6 +428,7 @@ pub mod watch {
                         .collect(),
                     worktree_coverage: match self.worktree_coverage {
                         Coverage::IgnoreAware => Some(gix::notify::WorktreeCoverage::IgnoreAware),
+                        Coverage::ExcludeIgnoredFiles => Some(gix::notify::WorktreeCoverage::ExcludeIgnoredFiles),
                         Coverage::All => Some(gix::notify::WorktreeCoverage::All),
                         Coverage::None => None,
                     },

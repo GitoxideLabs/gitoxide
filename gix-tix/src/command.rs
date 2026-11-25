@@ -1,14 +1,14 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     ffi::{OsStr, OsString},
     io::Write,
     path::PathBuf,
-    sync::atomic::AtomicBool,
 };
 
 use clap::Parser;
 use gix::{
     Result,
+    bstr::ByteSlice,
     error::{OptionExt, ResultExt, bail, message},
 };
 use ratatui::text::Line;
@@ -18,6 +18,7 @@ mod new;
 mod op;
 mod rebase;
 mod reword;
+mod stash;
 mod travel;
 
 /// Arguments and commands shared by the standalone `tix` binary and `gix tix`.
@@ -68,8 +69,11 @@ enum Command {
     Spill(Spill),
     /// Split HEAD by amending worktree changes into it and committing staged index changes on top.
     Split(Split),
-    /// Save index and worktree changes in a gix stash associated with the HEAD commit.
-    Stash,
+    /// Save staged changes, or tracked and untracked changes with a clean index, in a stash associated with HEAD's change ID.
+    Stash {
+        #[command(subcommand)]
+        command: Option<stash::Command>,
+    },
     /// Pin one or more commits as persistent history tips.
     Pin(Pin),
     /// Copy or move a selected tree of commits to another position.
@@ -340,6 +344,16 @@ impl Platform {
         trace: u8,
     ) -> Result<()> {
         self.validate_command_options()?;
+        if matches!(&self.command, Some(Command::Worktrunk { .. }))
+            && let Some(cwd) = std::env::var_os(crate::worktrunk::shell::CWD_ENV)
+        {
+            std::env::set_current_dir(&cwd).or_raise(|| {
+                message!(
+                    "could not return to worktrunk launch directory {}",
+                    PathBuf::from(cwd).display()
+                )
+            })?;
+        }
         let _log_guard = crate::logging::init(trace)?;
         self.run_as_initialized(repository()?, invocation)
     }
@@ -413,6 +427,9 @@ impl Platform {
                 | Command::Op {
                     command: None | Some(op::Command::Log)
                 }
+                | Command::Stash {
+                    command: Some(stash::Command::List)
+                }
         ) {
             crate::edit::rebase::session::ensure_idle(&repository)?;
         }
@@ -456,13 +473,8 @@ impl Platform {
                 let graph = crate::edit::loaded_view_graph(&repository)?;
                 split(repository, &graph, args)?;
             }
-            Command::Stash => {
-                let id = repository
-                    .head_id()
-                    .or_raise(|| message("stashing changes requires a born HEAD"))?
-                    .detach();
-                let notice = crate::edit::stash::save_manual(repository.git_dir(), repository.is_bare(), id)?;
-                println!("{}", notice_with_change_id(&repository, &notice, id)?);
+            Command::Stash { command } => {
+                return stash::run(&repository, command, std::io::stdout().lock(), std::io::stderr().lock());
             }
             Command::Pin(args) => pin(&repository, args)?,
             Command::Transplant(args) => return transplant(repository, args),
@@ -504,6 +516,20 @@ impl Platform {
         }
         Ok(())
     }
+}
+
+/// Run the standalone binary, retaining fatal diagnostics after command teardown.
+pub fn main() -> Result<()> {
+    let diagnostics = crate::logging::FatalDiagnostics::new();
+    (|| {
+        let _interrupt = gix::interrupt::init_handler_default(1)?.auto_deregister();
+        parse().run()
+    })()
+    .inspect_err(|error| {
+        if let Some(diagnostics) = &diagnostics {
+            diagnostics.record_error(error);
+        }
+    })
 }
 
 impl Cli {
@@ -589,7 +615,7 @@ fn write_history(
         hide,
         false,
         &authors,
-        &AtomicBool::new(false),
+        &gix::interrupt::IS_INTERRUPTED,
         |event| {
             match event {
                 crate::history::Event::Decorations(value) => decorations = value,
@@ -601,6 +627,7 @@ fn write_history(
             true
         },
     )?;
+    crate::interrupt::check().or_error()?;
     let graph = history_graph.ok_or_raise(|| message("history traversal did not complete"))?;
     let rows = app
         .start_lane_computation()
@@ -650,16 +677,17 @@ fn write_history(
         }
     }
 
-    let mut checks_pass_ids = HashSet::new();
+    let mut checks_pass_messages = HashMap::new();
     let mut tree_enrichments = crate::enrich::open_tree(repository)?;
     for row in &app.rows {
         let loaded = crate::enrich::tree_id(repository, row.id)
             .and_then(|tree_id| crate::enrich::load_tree(&mut tree_enrichments, tree_id));
         match loaded {
-            Ok(enrichment) if enrichment.checks_pass => {
-                checks_pass_ids.insert(row.id);
+            Ok(enrichment) => {
+                if let Some(message) = enrichment.checks_pass {
+                    checks_pass_messages.insert(row.id, message);
+                }
             }
-            Ok(_) => {}
             Err(err) => tracing::warn!(commit_id = %row.id, error = %err, "ignored malformed tix tree enrichment"),
         }
     }
@@ -688,7 +716,7 @@ fn write_history(
             Line::raw(crate::enrich::marker(
                 todo_ids.contains(&row.id),
                 enrichment_note_ids.contains(&row.id),
-                checks_pass_ids.contains(&row.id),
+                checks_pass_messages.get(&row.id).map(|message| message.as_bstr()),
                 refackiewed_ids.contains(&row.id),
             ))
             .width()
@@ -709,7 +737,7 @@ fn write_history(
         let enrichment_marker = crate::enrich::marker(
             todo_ids.contains(&row.id),
             enrichment_note_ids.contains(&row.id),
-            checks_pass_ids.contains(&row.id),
+            checks_pass_messages.get(&row.id).map(|message| message.as_bstr()),
             refackiewed_ids.contains(&row.id),
         );
         let ambiguity_marker = if change_ids.ambiguous.contains(&row.id) {
@@ -719,8 +747,8 @@ fn write_history(
         };
         let mut gutter = String::new();
         if enrichment_gutter != 0 {
-            gutter.push_str(enrichment_marker);
-            gutter.push_str(&" ".repeat(enrichment_gutter.saturating_sub(Line::raw(enrichment_marker).width())));
+            gutter.push_str(&enrichment_marker);
+            gutter.push_str(&" ".repeat(enrichment_gutter.saturating_sub(Line::raw(&enrichment_marker).width())));
         }
         if let Some(width) = ambiguity_gutter {
             gutter.push_str(ambiguity_marker);
@@ -1338,6 +1366,44 @@ mod tests {
     }
 
     #[test]
+    fn worktrunk_restores_its_launch_directory_before_repository_discovery() -> gix_testtools::Result {
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let temp = gix_testtools::tempfile::TempDir::new()?;
+        let original = temp.path().canonicalize()?;
+        let root = original.ancestors().last().expect("an absolute path has a root");
+        let _env = gix_testtools::Env::new().set(
+            crate::worktrunk::shell::CWD_ENV,
+            original.to_str().expect("temporary paths are Unicode"),
+        );
+        for (args, expected) in [
+            (vec!["tix", "worktrunk", "show"], original.as_path()),
+            (vec!["tix", "show"], root),
+        ] {
+            let _cwd = gix_testtools::set_current_dir(root)?;
+            let err = Cli::try_parse_from(args)?
+                .platform
+                .run_with_repository_as_with_trace(
+                    || {
+                        assert_eq!(
+                            std::env::current_dir()
+                                .or_raise(|| message("could not read the test working directory"))?,
+                            *expected,
+                            "only worktrunk uses the shell launch directory"
+                        );
+                        bail!("stop before opening a repository")
+                    },
+                    Invocation::Tix,
+                    0,
+                )
+                .expect_err("the test stops at repository discovery");
+            assert!(err.to_string().contains("stop before opening a repository"));
+        }
+        Ok(())
+    }
+
+    #[test]
     fn parses_stashing_travel_with_explicit_and_relative_destinations() {
         for arguments in [
             vec!["tix", "travel", "--stash", "HEAD~1"],
@@ -1354,6 +1420,86 @@ mod tests {
                 "--stash opts into saving departure changes: {arguments:?}"
             );
         }
+    }
+
+    #[test]
+    fn stash_recovery_restores_state_after_an_external_rewrite() -> gix::error::TestResult {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let path = fixture.path();
+        let repo = crate::test_repository::open(path)?;
+        let head_commit_id = repo.head_id()?.detach();
+        let stash_name = crate::edit::stash::reference(&repo, head_commit_id)?;
+        std::fs::write(path.join("tip"), "staged\n")?;
+        assert!(
+            gix_testtools::git_command(path)
+                .args(["add", "tip"])
+                .status()?
+                .success(),
+            "the fixture stages its index state"
+        );
+        std::fs::write(path.join("base"), "unstaged\n")?;
+        std::fs::write(path.join("untracked"), "untracked\n")?;
+        Cli::try_parse_from(["tix", "stash"])?
+            .platform
+            .run(repo.clone().into_sync())?;
+        assert_eq!(
+            std::fs::read(path.join("tip"))?,
+            b"tip\n",
+            "the command removes the staged edit from the worktree"
+        );
+        assert_eq!(std::fs::read(path.join("base"))?, b"unstaged\n");
+        assert_eq!(std::fs::read(path.join("untracked"))?, b"untracked\n");
+        let stash_commit_id = repo.find_reference(stash_name.as_ref())?.id().detach();
+        assert!(
+            gix_testtools::git_command(path)
+                .args([
+                    "-c",
+                    "commit.gpgSign=false",
+                    "commit",
+                    "--amend",
+                    "-qm",
+                    "external rewrite"
+                ])
+                .status()?
+                .success(),
+            "Git rewrites the commit without updating its Tix stash association"
+        );
+        Cli::try_parse_from(["tix", "stash", "list"])?
+            .platform
+            .run(repo.clone().into_sync())?;
+        Cli::try_parse_from([
+            "tix",
+            "stash",
+            "restore",
+            &stash_commit_id.to_hex_with_len(8).to_string().to_ascii_uppercase(),
+        ])?
+        .platform
+        .run(repo.clone().into_sync())?;
+        assert_eq!(
+            gix_testtools::git_command(path).args(["show", ":tip"]).output()?.stdout,
+            b"staged\n",
+            "recovery restores the original index"
+        );
+        assert_eq!(
+            std::fs::read(path.join("tip"))?,
+            b"staged\n",
+            "recovery restores the staged worktree contents"
+        );
+        assert_eq!(
+            std::fs::read(path.join("base"))?,
+            b"unstaged\n",
+            "restoration preserves the unrelated worktree edit"
+        );
+        assert_eq!(
+            std::fs::read(path.join("untracked"))?,
+            b"untracked\n",
+            "restoration preserves the untracked file"
+        );
+        assert!(
+            repo.try_find_reference(stash_name.as_ref())?.is_none(),
+            "only successful recovery consumes the saved stash"
+        );
+        Ok(())
     }
 
     #[test]
@@ -1491,7 +1637,8 @@ mod tests {
             &["tix", "enrich", "commit", "note", "topic"][..],
             &["tix", "enrich", "commit", "git-note"][..],
             &["tix", "enrich", "tree", "checks-pass"][..],
-            &["tix", "enrich", "tree", "checks-pass", "--clear", "topic"][..],
+            &["tix", "enrich", "tree", "checks-pass", "--clear", "--revision", "topic"][..],
+            &["tix", "enrich", "tree", "checks-pass", "⚡ fast checks"][..],
         ] {
             assert!(
                 matches!(
@@ -1583,7 +1730,7 @@ mod tests {
                 .expect("stash parses")
                 .platform
                 .command,
-            Some(Command::Stash)
+            Some(Command::Stash { command: None })
         ));
         let pin = Cli::try_parse_from(["tix", "pin", "main", "HEAD~2"])
             .expect("one or more pin revisions parse")
@@ -1826,19 +1973,19 @@ mod tests {
             Some(std::path::Path::new("todo.md")),
             "bare opt-in never consumes the positional todo"
         );
+        let short_help = Cli::command().render_help().to_string();
         assert!(
-            Cli::command()
-                .render_help()
-                .to_string()
+            short_help
                 .contains("Split HEAD by amending worktree changes into it and committing staged index changes on top"),
             "short help explains how split distributes index and worktree changes"
         );
         assert!(
-            Cli::command()
-                .render_help()
-                .to_string()
-                .contains("gix stash associated with the HEAD commit"),
-            "short help distinguishes a commit-associated gix stash"
+            short_help.contains("tracked and untracked changes with a clean index"),
+            "short help explains the staged-first stash selection"
+        );
+        assert!(
+            short_help.contains("stash associated with HEAD's change ID"),
+            "short help explains the stable change association"
         );
         assert!(
             Cli::command().render_long_help().to_string().contains("GIT_EDITOR"),
@@ -2740,6 +2887,8 @@ mod tests {
             &["spill"],
             &["split"],
             &["stash"],
+            &["stash", "list"],
+            &["stash", "restore"],
             &["pin"],
             &["transplant"],
             &["travel"],
@@ -3037,6 +3186,63 @@ mod tests {
     }
 
     #[test]
+    fn show_highlights_commits_with_empty_tree_diffs() -> gix_testtools::TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only("empty-commits.sh")?;
+        let repository = crate::test_repository::open(&fixture)?;
+        let mut output = Vec::new();
+        write_history(
+            &repository,
+            &["main", "nonempty-root", "pending-empty", "pending-changed"].map(OsString::from),
+            &[OsString::from("empty-root")],
+            &mut output,
+        )?;
+        let output = String::from_utf8(output)?;
+        for (revision, expected_empty) in [
+            ("empty-root", true),
+            ("nonempty-root", false),
+            ("changed", false),
+            ("empty", true),
+            ("side", false),
+            ("empty-merge", true),
+            ("changed-merge", false),
+            ("mode-change", false),
+            ("pending-empty", true),
+            ("pending-changed", false),
+        ] {
+            let commit_id = repository.rev_parse_single(revision)?.detach();
+            let commit = repository.find_commit(commit_id)?;
+            let parent_commit_id = crate::edit::rebase::marked_parent_ref(&commit.decode()?)?
+                .unwrap_or_else(|| commit.parent_ids().next().map(gix::Id::detach));
+            let base_tree_id = match parent_commit_id {
+                Some(parent_commit_id) => repository.find_commit(parent_commit_id)?.tree_id()?.detach(),
+                None => repository.object_hash().empty_tree(),
+            };
+            let diff = gix_testtools::git_command(&fixture)
+                .args(["diff", "--no-ext-diff", "--name-only"])
+                .arg(base_tree_id.to_hex().to_string())
+                .arg(commit.tree_id()?.to_hex().to_string())
+                .output()?;
+            assert!(diff.status.success(), "Git compares the trees for {revision}");
+            assert_eq!(
+                diff.stdout.is_empty(),
+                expected_empty,
+                "Git's diff defines emptiness for {revision}"
+            );
+            let abbreviation = commit_id.to_hex_with_len(7).to_string();
+            let line = output
+                .lines()
+                .find(|line| line.contains(abbreviation.as_str()))
+                .expect("the requested commit appears in the history output");
+            assert_eq!(
+                line.contains("[empty]"),
+                expected_empty,
+                "history highlights the empty diff for {revision}: {line}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn show_prints_the_complete_plain_history_view() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repository = crate::test_repository::open(fixture.path())?;
@@ -3091,7 +3297,11 @@ mod tests {
         let head_change_id = crate::change_id::for_commit(&repository, head)?;
         assert!(crate::enrich::toggle(&repository, head)?.todo);
         crate::enrich::set_note(&repository, head, Some(b"follow up"))?;
-        assert!(crate::enrich::toggle_checks_pass(&repository, head)?.checks_pass);
+        assert!(
+            crate::enrich::toggle_checks_pass(&repository, head)?
+                .checks_pass
+                .is_some()
+        );
         assert!(crate::enrich::ensure_refackiewed(&repository, head, true)?.refackiewed);
 
         let mut output = Vec::new();
@@ -3167,13 +3377,38 @@ mod tests {
         );
         assert!(!output.contains('\u{1b}'), "plain output contains no terminal escapes");
 
-        for header_state in ["missing", "stale"] {
+        for marker in ["👩🏽‍💻", "©"] {
+            let message = format!("{marker} Fast QA result");
+            crate::enrich::set_checks_pass(&repository, head, Some(message.as_bytes()))?;
+            let mut output = Vec::new();
+            write_history(&repository, &[], &[OsString::from("v1")], &mut output)?;
+            let output = String::from_utf8(output)?;
+            assert!(
+                output
+                    .lines()
+                    .any(|line| line.starts_with(&format!("🚧📝{marker}✨💥├"))),
+                "plain history preserves the whole custom checks emoji in its gutter: {output:?}"
+            );
+            assert!(
+                !output.contains("Fast QA result"),
+                "plain history keeps message text out of commit titles"
+            );
+        }
+        crate::enrich::set_checks_pass(&repository, head, Some(b""))?;
+
+        for header_state in ["missing", "stale", "pending"] {
             let mut variant = repository.find_commit(head)?.decode()?.into_owned()?;
             if header_state == "missing" {
                 variant
                     .extra_headers
                     .retain(|(name, _)| name != crate::patch_id::HEADER);
             } else {
+                if header_state == "pending" {
+                    variant
+                        .extra_headers
+                        .push(("tix-rebase-parent".into(), variant.parents[0].to_string().into()));
+                    variant.extra_headers.push(("gpgsig".into(), "".into()));
+                }
                 variant.parents[0] = repository
                     .find_commit(parent)?
                     .parent_ids()
@@ -3197,10 +3432,39 @@ mod tests {
                 "{header_state} patch metadata preserves other enrichment markers: {line:?}"
             );
             assert!(
-                !output.contains('✨'),
-                "a {header_state} header cannot display the retained patch approval: {output:?}"
+                line.contains('✨') == (header_state == "pending"),
+                "only a validated pending source retains patch approval: {line:?}"
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn show_exposes_an_orphaned_review_return_pin_on_a_hidden_base() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let pinned_commit_id = repo.rev_parse_single("topic^")?.detach();
+        repo.reference(
+            "refs/worktree/tix/pins/review/1",
+            pinned_commit_id,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "test orphaned review return",
+        )?;
+        let mut output = Vec::new();
+        write_history(&repo, &["topic".into()], &["main".into()], &mut output)?;
+        let output = String::from_utf8(output)?;
+        let pinned_row = output
+            .lines()
+            .find(|line| line.contains(&pinned_commit_id.to_hex_with_len(7).to_string()))
+            .ok_or_raise(|| message("the pinned hidden base is displayed"))?;
+        assert!(
+            pinned_row.contains(" base ") && pinned_row.contains("📌"),
+            "the hidden base identifies its removable pin: {pinned_row}"
+        );
+        assert!(
+            !output.contains("pin:review/1"),
+            "internal pin names stay out of history metadata"
+        );
         Ok(())
     }
 

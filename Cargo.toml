@@ -14,6 +14,10 @@ default-run = "gix"
 include = ["/src/**/*", "/build.rs", "/LICENSE-*", "/README.md"]
 resolver = "2"
 
+[patch.crates-io]
+# Temporary until Crossterm releases its terminal-hangup fixes (#1067 and #1116).
+crossterm = { git = "https://github.com/Byron/crossterm", rev = "280515cf6552ab4350041578d7cd02464d9562fe" }
+
 [[bin]]
 name = "ein"
 path = "src/ein.rs"

@@ -6,9 +6,9 @@ use crate::{
     error::{ResultExt, message},
 };
 
-struct WorkerOwned<T: Send + 'static> {
-    value: Option<T>,
-    runtime: tokio::runtime::Handle,
+pub(crate) struct WorkerOwned<T: Send + 'static> {
+    pub(crate) value: Option<T>,
+    pub(crate) runtime: tokio::runtime::Handle,
 }
 
 impl<T: Send + 'static> Drop for WorkerOwned<T> {
@@ -30,15 +30,35 @@ impl RepositoryMonitor {
     /// The `opener` runs on the worker and need only produce repositories there; no repository
     /// handle is retained between calls. Blocking [`Self::service()`] remains available.
     pub fn service_async(
-        mut self,
+        self,
         now: Instant,
         opener: impl FnMut() -> Result<Repository> + Send + 'static,
     ) -> impl Future<Output = Result<(Self, Outcome)>> {
+        self.service_async_with(now, opener, |_, outcome| outcome)
+    }
+
+    /// Service this monitor and process its complete outcome on the same Tokio blocking worker.
+    ///
+    /// Like [`Self::service_async()`], cancellation leaves native work and teardown on workers.
+    /// `process` runs after servicing, with access to the monitor for subscription updates and to
+    /// the owned outcome for work such as servicing status handles. It must
+    /// handle all invalidations and errors in the outcome; its return value replaces the outcome
+    /// in the reply. Returning a [`Result`] from `process` retains the monitor even if processing
+    /// fails. A panic in either callback instead shuts down the monitor and returns a task error.
+    /// Outcome coverage describes the completed service pass; subscription updates in `process`
+    /// can change [`Self::coverage_status()`] before the reply is returned.
+    pub fn service_async_with<T: Send + 'static>(
+        mut self,
+        now: Instant,
+        opener: impl FnMut() -> Result<Repository> + Send + 'static,
+        process: impl FnOnce(&mut Self, Outcome) -> T + Send + 'static,
+    ) -> impl Future<Output = Result<(Self, T)>> {
         let runtime = tokio::runtime::Handle::current();
         let task = tokio::task::spawn_blocking(move || {
             let outcome = self.service(now, opener);
+            let processed = process(&mut self, outcome);
             WorkerOwned {
-                value: Some((self, outcome)),
+                value: Some((self, processed)),
                 runtime,
             }
         });
@@ -47,16 +67,22 @@ impl RepositoryMonitor {
             Ok(reply
                 .value
                 .take()
-                .expect("the service worker returns one complete outcome"))
+                .expect("the service worker returns one complete reply"))
         }
     }
 
     pub(super) fn install_async_wakers(&mut self) {
-        for domain in [&mut self.metadata, &mut self.worktree] {
-            if let Some(watcher) = &mut domain.watcher {
-                let wake = self.wake.clone();
-                watcher.set_waker(move || wake.notify_one());
-            }
+        for watcher in [
+            &mut self.metadata.watcher,
+            &mut self.worktree.watcher,
+            #[cfg(target_os = "macos")]
+            &mut self.external_ignores.native,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let wake = self.wake.clone();
+            watcher.set_waker(move || wake.notify_waiters());
         }
         for other in self.other_worktrees.values_mut() {
             other.wake = self.wake.clone();
@@ -64,36 +90,27 @@ impl RepositoryMonitor {
         }
     }
 
-    fn async_ready(&self, now: Instant) -> bool {
-        self.backlog
-            || [&self.metadata, &self.worktree]
-                .into_iter()
-                .any(|domain| domain.watcher.as_ref().is_some_and(gix_notify::Watcher::is_ready))
-            || self.async_deadline().is_some_and(|deadline| deadline <= now)
-            || self.other_worktrees.values().any(|other| other.async_ready(now))
-    }
-
-    fn async_deadline(&self) -> Option<Instant> {
-        [self.maintenance, self.pending_metadata.deadline]
-            .into_iter()
-            .flatten()
-            .chain(self.other_worktrees.values().filter_map(Self::async_deadline))
-            .min()
+    #[cfg(feature = "status-monitor")]
+    pub(crate) fn set_async_wake(&mut self, wake: gix_parallel::OwnShared<tokio::sync::Notify>) {
+        self.wake = wake;
     }
 
     /// Await native notifications or a publication/recovery deadline after servicing this monitor.
     /// This does not consume notifications, and cancellation leaves all queued data intact.
     /// Inactive monitors return immediately. No periodic event polling is performed.
     pub async fn ready_async(&self) {
+        self.ready_with_deadline(|_| None).await;
+    }
+
+    pub(super) async fn ready_with_deadline(&self, extra: impl Fn(Instant) -> Option<Instant>) {
         if !self.active() {
             return;
         }
         loop {
             let notified = self.wake.notified();
-            if self.async_ready(Instant::now()) {
-                return;
-            }
-            match self.async_deadline() {
+            let now = Instant::now();
+            match self.notification_deadline(now).into_iter().chain(extra(now)).min() {
+                Some(deadline) if deadline <= now => return,
                 Some(deadline) => tokio::select! {
                     _ = notified => {},
                     _ = tokio::time::sleep_until(deadline.into()) => return,
@@ -150,9 +167,8 @@ mod tests {
             ),
             "the completed task retains its value until the reply is claimed or abandoned"
         );
-        // Like service_async(), this future owns the join handle without claiming its result yet.
-        let reply = async move { task.await };
-        drop(reply);
+        // Like service_async(), abandoning this task leaves its completed reply unclaimed.
+        drop(task);
         assert_ne!(
             tokio::time::timeout(Duration::from_secs(2), dropped).await??,
             executor,

@@ -260,7 +260,7 @@ fn main() -> Result<()> {
             let mut coverage = if dry_run
                 || !tasks
                     .iter()
-                    .any(|task| matches!(task.id, "native-tests" | "feature-tests" | "isolated-tests"))
+                    .any(|task| task.id == "native-tests" || task.uses_test_variants())
             {
                 None
             } else {

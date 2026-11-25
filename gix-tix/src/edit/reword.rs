@@ -20,13 +20,13 @@ const DEFAULT_COMMENT_CHAR: &[u8] = b";";
 const ASSISTED_BY_KEY: &str = "tix.trailer.assistedBy";
 const CO_AUTHORED_BY_KEY: &str = "tix.trailer.coAuthoredBy";
 const AGENT_TRAILERS: [(&str, &[u8], &[u8]); 2] = [
-    (ASSISTED_BY_KEY, b"Assisted-by: ", b"GPT 5.6"),
-    (CO_AUTHORED_BY_KEY, b"Co-authored-by: ", b"GPT 5.6 <codex@openai.com>"),
+    (ASSISTED_BY_KEY, b"Assisted-by", b"GPT 5.6"),
+    (CO_AUTHORED_BY_KEY, b"Co-authored-by", b"GPT 5.6 <codex@openai.com>"),
 ];
 
 struct AgentTrailer {
     key: &'static str,
-    label: &'static [u8],
+    token: &'static [u8],
     value: BString,
     source: Option<gix::config::file::Metadata>,
 }
@@ -162,26 +162,23 @@ pub(super) fn write_diff_summary(out: &mut Vec<u8>, repo: &gix::Repository, mut 
     Ok(())
 }
 
-fn missing_agent_trailers(message: &[u8]) -> [bool; 2] {
-    let mut has_assisted_by = false;
-    let mut has_co_authored_by = false;
-    if let Some(body) = gix::objs::commit::MessageRef::from_bytes(message).body() {
-        for trailer in body.trailers() {
-            has_assisted_by |= trailer.is_assisted_by();
-            has_co_authored_by |= trailer.is_co_authored_by();
-        }
-    }
-    [!has_assisted_by, !has_co_authored_by]
-}
-
 pub(super) fn write_missing_agent_trailers(out: &mut Vec<u8>, repo: &gix::Repository, message: &[u8]) -> Result<()> {
-    let missing = missing_agent_trailers(message);
-    let trailers = AGENT_TRAILERS
+    let existing: Vec<_> = gix::objs::commit::MessageRef::from_bytes(message)
+        .body()
         .into_iter()
-        .zip(missing)
-        .filter(|(_, missing)| *missing)
-        .map(|((key, label, default), _)| agent_trailer(repo, key, label, default))
-        .collect::<Result<Vec<_>>>()?;
+        .flat_map(|body| body.message_blocks())
+        .flat_map(|block| block.trailers())
+        .collect();
+    let mut trailers = Vec::new();
+    for (key, token, default) in AGENT_TRAILERS {
+        trailers.extend(agent_trailers(repo, key, token, default)?);
+    }
+    trailers.retain(|suggestion| {
+        let value = suggestion.value.trim().as_bstr();
+        !existing
+            .iter()
+            .any(|trailer| trailer.token.eq_ignore_ascii_case(suggestion.token) && trailer.value.as_ref() == value)
+    });
     if trailers.is_empty() {
         return Ok(());
     }
@@ -191,7 +188,8 @@ pub(super) fn write_missing_agent_trailers(out: &mut Vec<u8>, repo: &gix::Reposi
     }
     for trailer in &trailers {
         out.extend_from_slice(DEFAULT_COMMENT_CHAR);
-        out.extend_from_slice(trailer.label);
+        out.extend_from_slice(trailer.token);
+        out.extend_from_slice(b": ");
         out.extend_from_slice(&trailer.value);
         out.push(b'\n');
     }
@@ -223,28 +221,34 @@ pub(super) fn write_config_source(
     Ok(())
 }
 
-fn agent_trailer(
+fn agent_trailers(
     repo: &gix::Repository,
     key: &'static str,
-    label: &'static [u8],
+    token: &'static [u8],
     default: &'static [u8],
-) -> Result<AgentTrailer> {
+) -> Result<Vec<AgentTrailer>> {
     let config = repo.config_snapshot();
-    let (value, source) = match config.raw_value_with_section(key) {
-        Ok((value, section)) => {
-            if value.trim().is_empty() || value.contains(&b'\n') || value.contains(&b'\r') {
-                gix::error::bail!("Git configuration `{key}` must be a non-empty single-line trailer value");
-            }
-            (value, Some(section.meta().clone()))
-        }
-        Err(_) => (default.into(), None),
+    let values = match config.raw_values_with_sections(key) {
+        Ok(values) => values
+            .into_iter()
+            .map(|(value, section)| (value, Some(section.meta().clone())))
+            .collect(),
+        Err(_) => vec![(default.into(), None)],
     };
-    Ok(AgentTrailer {
-        key,
-        label,
-        value,
-        source,
-    })
+    values
+        .into_iter()
+        .map(|(value, source)| {
+            if value.trim().is_empty() || value.contains(&b'\n') || value.contains(&b'\r') {
+                bail!("Git configuration `{key}` must be a non-empty single-line trailer value");
+            }
+            Ok(AgentTrailer {
+                key,
+                token,
+                value,
+                source,
+            })
+        })
+        .collect()
 }
 
 fn config_source_name(source: gix::config::Source) -> &'static [u8] {
@@ -796,13 +800,17 @@ mod tests {
     }
 
     #[test]
-    fn document_does_not_repeat_existing_agent_trailers() -> gix_testtools::Result {
+    fn document_offers_only_agent_trailers_with_distinct_values() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
         let repository = crate::test_repository::open_with(
             fixture,
             [
                 "committer.name=Current Committer",
                 "committer.email=current@example.com",
+                "tix.trailer.assistedBy=Opus 4.7",
+                "tix.trailer.assistedBy=opus 4.7",
+                "tix.trailer.coAuthoredBy=Claude <noreply@anthropic.com>",
+                "tix.trailer.coAuthoredBy=Sonnet <noreply@anthropic.com>",
             ],
         )?;
         let topic = repository.find_reference("refs/heads/topic")?.id().detach();
@@ -823,8 +831,13 @@ mod tests {
             "the template declares its comment prefix and inactive enrichments"
         );
         assert!(
-            !document.contains_str(b";Assisted-by:") && !document.contains_str(b";Co-authored-by:"),
-            "existing trailer keys suppress model-specific suggestions regardless of their values"
+            document.contains_str(b";Assisted-by: opus 4.7\n;Co-authored-by: Sonnet <noreply@anthropic.com>\n"),
+            "different values are offered even when they share a key, email address, or case-insensitive spelling"
+        );
+        assert!(
+            !document.contains_str(b";Assisted-by: Opus 4.7\n")
+                && !document.contains_str(b";Co-authored-by: Claude <noreply@anthropic.com>\n"),
+            "existing key and value pairs are not offered again"
         );
         Ok(())
     }
@@ -851,7 +864,7 @@ mod tests {
             document.as_bstr()
         );
         let mut configured = b"; tix.trailer.assistedBy is configured in ".to_vec();
-        configured.extend_from_slice(gix::path::into_bstr(fixture.path().join(".git").join("config"))?.as_ref());
+        configured.extend_from_slice(gix::path::into_bstr(repository.git_dir().join("config"))?.as_ref());
         configured.extend_from_slice(b".\n");
         assert!(
             document.windows(configured.len()).any(|window| window == configured),
@@ -893,19 +906,87 @@ mod tests {
     }
 
     #[test]
+    fn agent_trailers_offer_all_values_in_configuration_order() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        for (key, value) in [
+            (ASSISTED_BY_KEY, "Local Assistant"),
+            (ASSISTED_BY_KEY, "Other Assistant"),
+            (CO_AUTHORED_BY_KEY, "Local Agent <local@example.com>"),
+            (CO_AUTHORED_BY_KEY, "Other Agent <other@example.com>"),
+        ] {
+            assert!(
+                gix_testtools::git_command(fixture.path())
+                    .args(["config", "--local", "--add", key, value])
+                    .status()?
+                    .success(),
+                "each trailer value is appended to the disposable repository configuration"
+            );
+        }
+        let repository = crate::test_repository::open_with(
+            fixture.path(),
+            [
+                "tix.trailer.assistedBy=API Assistant",
+                "tix.trailer.assistedBy=Local Assistant",
+                "tix.trailer.coAuthoredBy=API Agent <api@example.com>",
+            ],
+        )?;
+        let main_commit_id = repository.find_reference("refs/heads/main")?.id().detach();
+        let (_, document) = document(&repository, main_commit_id)?;
+        let new_document = super::super::create::prepare_empty(repository.clone(), Some(main_commit_id))?.document;
+        let expected = b";Assisted-by: Local Assistant\n\
+                         ;Assisted-by: Other Assistant\n\
+                         ;Assisted-by: API Assistant\n\
+                         ;Assisted-by: Local Assistant\n\
+                         ;Co-authored-by: Local Agent <local@example.com>\n\
+                         ;Co-authored-by: Other Agent <other@example.com>\n\
+                         ;Co-authored-by: API Agent <api@example.com>\n";
+        let mut configured = b"; tix.trailer.assistedBy is configured in ".to_vec();
+        configured.extend_from_slice(gix::path::into_bstr(repository.git_dir().join("config"))?.as_ref());
+        configured.extend_from_slice(b".\n");
+        let mut expected_sources = configured.repeat(2);
+        expected_sources.extend_from_slice(
+            b"; tix.trailer.assistedBy is configured via an API override.\n\
+              ; tix.trailer.assistedBy is configured via an API override.\n",
+        );
+        let co_authored_source = configured.replacen(b"assistedBy", b"coAuthoredBy", 1);
+        expected_sources.extend_from_slice(&co_authored_source.repeat(2));
+        expected_sources.extend_from_slice(b"; tix.trailer.coAuthoredBy is configured via an API override.\n");
+        for document in [document, new_document] {
+            assert!(
+                document.windows(expected.len()).any(|window| window == expected),
+                "new and reword editors offer all values in configuration order, including repeated identities: {}",
+                document.as_bstr()
+            );
+            assert!(
+                document
+                    .windows(expected_sources.len())
+                    .any(|window| window == expected_sources),
+                "each offered value retains its own configuration source: {}",
+                document.as_bstr()
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn invalid_agent_trailer_configuration_is_rejected() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
-        for value in ["", "first\nsecond"] {
-            let repository = crate::test_repository::open_with(&fixture, [format!("tix.trailer.assistedBy={value}")])?;
-            let main = repository.find_reference("refs/heads/main")?.id().detach();
-            let err = match document(&repository, main) {
-                Ok(_) => panic!("invalid trailer values fail before opening the editor"),
-                Err(err) => err,
-            };
-            assert!(
-                format!("{err:#}").contains("tix.trailer.assistedBy"),
-                "the invalid configuration key is identified: {err:#}"
-            );
+        for (key, _, _) in AGENT_TRAILERS {
+            for value in ["", "first\nsecond", "first\rsecond"] {
+                let repository = crate::test_repository::open_with(
+                    &fixture,
+                    [format!("{key}={value}"), format!("{key}=Valid Assistant")],
+                )?;
+                let main = repository.find_reference("refs/heads/main")?.id().detach();
+                let err = match document(&repository, main) {
+                    Ok(_) => panic!("invalid trailer values fail before opening the editor"),
+                    Err(err) => err,
+                };
+                assert!(
+                    format!("{err:#}").contains(key),
+                    "the invalid configuration key is identified: {err:#}"
+                );
+            }
         }
         Ok(())
     }
@@ -1139,20 +1220,6 @@ mod tests {
         assert_eq!(std::fs::read(repository.index_path())?, index_before);
         assert_eq!(std::fs::read(path.join("tip"))?, worktree_before);
         Ok(())
-    }
-
-    #[test]
-    fn offers_only_missing_agent_trailer_keys() {
-        assert_eq!(
-            missing_agent_trailers(b"title\n\nASSISTED-BY: another agent\n"),
-            [false, true],
-            "trailer keys are matched case-insensitively and independently of their values"
-        );
-        assert_eq!(
-            missing_agent_trailers(b"title\n\nco-AUTHORED-by: Someone <someone@example.com>\n"),
-            [true, false],
-            "either missing trailer remains available for opt-in"
-        );
     }
 
     #[test]
