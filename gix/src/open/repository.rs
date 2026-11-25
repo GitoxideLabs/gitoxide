@@ -237,6 +237,7 @@ impl ThreadSafeRepository {
         let Options {
             ref mut git_dir_trust,
             configure_related_repository: _,
+            ref config_overrides_by_trust,
             object_store_slots,
             filter_config_section,
             lossy_config,
@@ -505,6 +506,21 @@ impl ThreadSafeRepository {
             resolved.is_bare = is_bare;
             break worktree_dir;
         };
+
+        let trust = git_dir_trust.level();
+        if let Some(configure) = config_overrides_by_trust {
+            let overrides = configure(trust, &resolved.file)
+                .or_raise(|| message("Could not compute repository trust configuration overrides"))?;
+            if !overrides.is_empty() {
+                config::overrides::append(&mut resolved.file, &overrides, gix_config::Source::Api, |_| {
+                    Some("Applied by the repository opening trust policy".into())
+                })
+                .or_raise(|| message("Could not apply repository trust configuration overrides"))?;
+            }
+        } else if trust == Trust::Reduced {
+            super::options::apply_reduced_trust_config(&mut resolved.file, filter_config_section, lenient_config)
+                .or_raise(|| message("Could not apply default repository trust configuration overrides"))?;
+        }
 
         let config = config::Cache::from_resolved(resolved, filter_config_section, *env, attributes, lenient_config)
             .or_raise(|| message("Repository configuration could not be loaded"))?;

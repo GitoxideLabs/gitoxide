@@ -4,25 +4,26 @@ mod modules_file {
 
     #[test]
     fn overrides_respect_section_trust_for_every_modules_source() -> TestResult {
-        use gix::submodule::config::{FetchRecurse, Update};
+        use gix::{
+            config::tree::{Fetch, Key},
+            submodule::config::{FetchRecurse, Update},
+        };
         use gix_sec::Trust;
 
         let dir = gix_testtools::scripted_fixture_read_only("make_submodule_config_overrides.sh")?;
+        // Exercise section filtering independently of the default fetch recursion override.
+        let options = || crate::restricted().config_overrides_by_trust(|_, _| Ok(Vec::new()));
         for source in ["worktree", "index", "tree"] {
             let repo_dir = dir.join(source);
             for (options, use_overrides) in [
-                (crate::restricted().with_trust(Trust::Reduced), false),
-                (crate::restricted().with_trust(Trust::Full), true),
+                (options().with_trust(Trust::Reduced), false),
+                (options().with_trust(Trust::Full), true),
                 (
-                    crate::restricted()
-                        .with_trust(Trust::Full)
-                        .filter_config_section(|_| false),
+                    options().with_trust(Trust::Full).filter_config_section(|_| false),
                     false,
                 ),
                 (
-                    crate::restricted()
-                        .with_trust(Trust::Reduced)
-                        .filter_config_section(|_| true),
+                    options().with_trust(Trust::Reduced).filter_config_section(|_| true),
                     true,
                 ),
             ] {
@@ -75,11 +76,11 @@ mod modules_file {
             }
             let repo = gix::open_opts(
                 &repo_dir,
-                crate::restricted().with_trust(Trust::Reduced).config_overrides([
-                    "submodule.s.update=!trusted",
-                    "submodule.s.url=https://safe.example/s",
-                    "submodule.active=pattern",
-                    "fetch.recurseSubmodules=false",
+                options().with_trust(Trust::Reduced).config_overrides([
+                    "submodule.s.update=!trusted".into(),
+                    "submodule.s.url=https://safe.example/s".into(),
+                    "submodule.active=pattern".into(),
+                    Fetch::RECURSE_SUBMODULES.validated_assignment("false".into())?,
                 ]),
             )?;
             assert_eq!(

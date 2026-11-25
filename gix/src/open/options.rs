@@ -2,8 +2,10 @@ use std::{
     borrow::Cow,
     ops::ControlFlow,
     path::{Path, PathBuf},
-    sync::Arc,
 };
+
+use gix_error::{ResultExt, message};
+use gix_parallel::OwnShared;
 
 use super::{Options, RelatedRepository, RelatedRepositoryKind, RepositoryTrust};
 use crate::{Repository, Result, bstr::BString, open::Permissions};
@@ -15,6 +17,7 @@ impl Default for Options {
             permissions: Default::default(),
             git_dir_trust: None,
             configure_related_repository: None,
+            config_overrides_by_trust: None,
             filter_config_section: None,
             lossy_config: false,
             lenient_config: true,
@@ -46,6 +49,7 @@ impl Options {
             permissions: self.permissions,
             git_dir_trust: self.git_dir_trust,
             configure_related_repository: self.configure_related_repository.clone(),
+            config_overrides_by_trust: self.config_overrides_by_trust.clone(),
             filter_config_section: self.filter_config_section,
             lossy_config: self.lossy_config,
             lenient_config: self.lenient_config,
@@ -100,7 +104,7 @@ impl Options {
         mut self,
         configure: impl Fn(RelatedRepository<'_>, Self) -> Result<ControlFlow<(), Self>> + Send + Sync + 'static,
     ) -> Self {
-        self.configure_related_repository = Some(Arc::new(configure));
+        self.configure_related_repository = Some(OwnShared::new(configure));
         self
     }
 
@@ -109,6 +113,30 @@ impl Options {
     /// The configuration is marked with [source API][gix_config::Source::Api].
     pub fn config_overrides(mut self, values: impl IntoIterator<Item = impl Into<BString>>) -> Self {
         self.api_config_overrides = values.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Replace the configuration policy based on the repository's final trust level.
+    ///
+    /// The callback receives the configuration resolved during opening, including ordinary overrides.
+    /// Return assignments like `index.threads=1`, or an empty vector to leave that configuration as is.
+    /// Assignments are appended as [API configuration][gix_config::Source::Api],
+    /// taking precedence over config files, CLI arguments, and environment overrides in ordinary lookups.
+    /// The usual section filters and key-specific rules still apply.
+    /// Any callback or assignment error fails the open.
+    ///
+    /// By default, [`Full`][gix_sec::Trust::Full] adds no overrides. [`Reduced`][gix_sec::Trust::Reduced]
+    /// caps pack processing, index decoding, and checkout at four workers (or fewer if selected automatically),
+    /// and caps each configured object or pack cache and the default pack cache at 16 MiB.
+    /// Lower explicit limits are preserved. The policy also selects `diff.algorithm=histogram` and restricts
+    /// selected transport and repository settings.
+    /// This policy runs after opening has selected the Git directory, object format, checkout, and trust level.
+    /// It is inherited by related repositories and run afresh for each open or reload.
+    pub fn config_overrides_by_trust(
+        mut self,
+        configure: impl Fn(gix_sec::Trust, &gix_config::File) -> Result<Vec<BString>> + Send + Sync + 'static,
+    ) -> Self {
+        self.config_overrides_by_trust = Some(OwnShared::new(configure));
         self
     }
 
@@ -303,6 +331,7 @@ impl Options {
         let trust = self.git_dir_trust.expect("initial trust has been determined");
         let current_dir = self.current_dir.take().expect("the opening CWD has been captured");
         let retain_inferred_worktree_when_bare = self.retain_inferred_worktree_when_bare;
+        let config_overrides_by_trust = self.config_overrides_by_trust.clone();
         let git_dir = anchored(git_dir, &current_dir);
         let inferred_worktree = inferred_worktree.map(|path| anchored(path, &current_dir));
         let ControlFlow::Continue(mut options) = configure(
@@ -320,6 +349,7 @@ impl Options {
         };
         // The callback can replace the entire options value.
         options.configure_related_repository.get_or_insert(configure);
+        options.config_overrides_by_trust = options.config_overrides_by_trust.or(config_overrides_by_trust);
         options.git_dir_trust.get_or_insert(trust);
         options.current_dir = Some(current_dir);
         options.use_repository_local_environment = false;
@@ -368,6 +398,7 @@ impl Options {
                 permissions: Permissions::default_for_level(level),
                 git_dir_trust: Some(RepositoryTrust::Precomputed(level)),
                 configure_related_repository: None,
+                config_overrides_by_trust: None,
                 retain_inferred_worktree_when_bare: false,
                 filter_config_section: None,
                 lossy_config: false,
@@ -386,6 +417,7 @@ impl Options {
                 permissions: Permissions::default_for_level(level),
                 git_dir_trust: Some(RepositoryTrust::Precomputed(level)),
                 configure_related_repository: None,
+                config_overrides_by_trust: None,
                 retain_inferred_worktree_when_bare: false,
                 filter_config_section: None,
                 bail_if_untrusted: false,
@@ -402,3 +434,114 @@ impl Options {
         }
     }
 }
+
+pub(super) fn apply_reduced_trust_config(
+    config: &mut gix_config::File,
+    filter_config_section: fn(&gix_config::file::Metadata) -> bool,
+    lenient: bool,
+) -> Result<()> {
+    use crate::config::{
+        self,
+        cache::util::{ApplyLeniency, parse_object_caches},
+        tree::{Checkout, Core, Index, Key, Pack, gitoxide},
+    };
+
+    const MAX_WORKERS: usize = 4;
+    const MAX_CACHE_BYTES: usize = 16 * 1024 * 1024;
+
+    let automatic_workers = gix_parallel::num_threads(None).min(MAX_WORKERS);
+    let mut overrides = Vec::<BString>::new();
+    let worker_counts: [(&dyn Key, Option<usize>); 3] = [
+        (
+            &Pack::THREADS,
+            Pack::THREADS
+                .try_into_usize(config.integer_filter(Pack::THREADS, filter_config_section))
+                .with_leniency(lenient)?,
+        ),
+        (
+            &Index::THREADS,
+            // Index decoding reads this key even from reduced-trust sections.
+            config
+                .string(Index::THREADS)
+                .map(|value| Index::THREADS.try_into_index_threads(value))
+                .transpose()
+                .with_leniency(lenient)?,
+        ),
+        (
+            &Checkout::WORKERS,
+            config
+                .integer_filter(&Checkout::WORKERS as &dyn Key, filter_config_section)
+                .or_raise(|| config::key::error(&Checkout::WORKERS, "Could not decode checkout workers"))
+                .with_leniency(lenient)?
+                // Checkout also treats negative counts as automatic. Oversized positive values must be capped
+                // before checkout converts them to usize, which can be narrower than i64.
+                .filter(|count| *count > 0)
+                .map(|count| usize::try_from(count).unwrap_or(usize::MAX)),
+        ),
+    ];
+    for (key, count) in worker_counts {
+        let capped = match count {
+            None | Some(0) => automatic_workers,
+            Some(count) => count.min(MAX_WORKERS),
+        };
+        if count != Some(capped) {
+            overrides.push(format!("{}={capped}", key.logical_name()).into());
+        }
+    }
+
+    let (default_pack_bytes, delta_bytes, object_bytes) = parse_object_caches(config, lenient, filter_config_section)?;
+    for (key, bytes) in [
+        // An unset default pack cache has a budget above the cap. Leave an absent delta budget unset
+        // so it still selects the default pack cache, and preserve zero as an explicit opt-out.
+        (
+            &gitoxide::Core::DEFAULT_PACK_CACHE_MEMORY_LIMIT,
+            default_pack_bytes.unwrap_or(usize::MAX),
+        ),
+        (&Core::DELTA_BASE_CACHE_LIMIT, delta_bytes.unwrap_or_default()),
+        (&gitoxide::Objects::CACHE_LIMIT, object_bytes),
+    ] {
+        if bytes > MAX_CACHE_BYTES {
+            overrides.push(format!("{}={MAX_CACHE_BYTES}", key.logical_name()).into());
+        }
+    }
+
+    let fixed = gix_config::File::try_from(REDUCED_TRUST_CONFIG)
+        .or_raise(|| message("Could not parse default repository trust configuration overrides"))?;
+    config.append(fixed)?;
+    if !overrides.is_empty() {
+        config::overrides::append(config, &overrides, gix_config::Source::Api, |_| {
+            Some("Capped by the default reduced-trust resource policy".into())
+        })?;
+    }
+    Ok(())
+}
+
+const REDUCED_TRUST_CONFIG: &str = r#"[core]
+	useReplaceRefs = false # Prevent repository refs from substituting objects during lookup.
+[index]
+	skipHash = false # Verify the index checksum when one is present.
+[diff]
+	algorithm = histogram # Bound the search on repeated lines and fall back to heuristic Myers.
+[gitoxide "allow"]
+	protocolFromUser = false # Require explicit permission for protocols with a user-only policy.
+[protocol "ext"]
+	allow = never # Block the transport that can run external commands.
+[http]
+	sslVerify = true # Authenticate HTTPS servers by verifying their certificates.
+	followRedirects = false # Prevent the server from redirecting requests to a different URL.
+[gitoxide "http"]
+	sslNoVerify = false # Prevent GIT_SSL_NO_VERIFY from bypassing TLS certificate checks.
+[gitoxide "credentials"]
+	terminalPrompt = false # Keep repository-triggered requests from prompting for credentials.
+[fetch]
+	recurseSubmodules = false # Avoid fetching submodule repositories automatically.
+	fsckObjects = true # Request validation of objects received by fetch.
+[submodule]
+	recurse = false # Keep ordinary commands from recursing into submodule repositories.
+[fsmonitor]
+	allowRemote = false # Avoid starting filesystem monitoring on network-mounted worktrees.
+[receive]
+	fsckObjects = true # Request validation of objects received by push.
+[transfer]
+	fsckObjects = true # Request object validation when the fetch or receive setting is unset.
+"#;
