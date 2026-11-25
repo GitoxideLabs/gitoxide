@@ -890,7 +890,8 @@ fn histogram_skips_seeds_with_more_than_65_occurrences() -> gix_testtools::TestR
 fn histogram_preserves_hunks_before_a_repetitive_tail() -> gix_testtools::TestResult {
     assert_histogram_matches_git("repetitive-tail")?;
     assert_histogram_matches_git("alternating-tail")?;
-    assert_histogram_matches_git("mixed-frequency-tail")
+    assert_histogram_matches_git("mixed-frequency-tail")?;
+    assert_histogram_matches_git("paired-tail")
 }
 
 #[test]

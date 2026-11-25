@@ -216,12 +216,6 @@ impl ListHandle {
         }
     }
 
-    /// Record that the token is too frequent to seed a match.
-    pub fn mark_overflow(&mut self, pool: &ListPool) {
-        self.generation = pool.generation;
-        self.count = OVERFLOW_COUNT;
-    }
-
     /// Records an occurrence and stores its position if the list has room.
     #[inline]
     pub fn push(&mut self, element: u32, pool: &mut ListPool) {

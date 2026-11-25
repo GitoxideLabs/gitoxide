@@ -33,9 +33,8 @@ struct Histogram {
 /// * `added` - Output array marking added tokens
 /// * `num_tokens` - The total number of distinct tokens
 pub fn diff(before: &[Token], after: &[Token], removed: &mut [bool], added: &mut [bool], num_tokens: u32) {
-    let tail = CommonTail::find(before, after, num_tokens);
     let mut histogram = Histogram::new(num_tokens);
-    histogram.run(before, after, removed, added, tail.as_ref());
+    histogram.run(before, after, removed, added, true);
 }
 
 impl Histogram {
@@ -70,8 +69,9 @@ impl Histogram {
         mut after: &[Token],
         mut removed: &mut [bool],
         mut added: &mut [bool],
-        tail: Option<&CommonTail>,
+        mut cache_tail_after_split: bool,
     ) {
+        let mut common_tail: Option<Box<CommonTail>> = None;
         loop {
             if before.is_empty() {
                 added.fill(true);
@@ -81,19 +81,12 @@ impl Histogram {
                 return;
             }
 
-            let (tail_len, tail_positions, frequent_tokens) = tail
-                .map(|tail| tail.for_len(before.len().min(after.len())))
-                .unwrap_or_default();
-            for &token in frequent_tokens {
-                self.token_occurrences[token.0 as usize].mark_overflow(&self.pool);
-            }
+            let tail = common_tail
+                .as_deref()
+                .map(|tail| tail.for_len(before.len().min(after.len())));
+            let tail_len = tail.map_or(0, |tail| tail.len as usize);
             self.populate(&before[..before.len() - tail_len]);
-            for &distance in tail_positions.iter().rev() {
-                let position = before.len() - 1 - distance as usize;
-                let token = before[position];
-                self.token_occurrences[token.0 as usize].push(position as u32, &mut self.pool);
-            }
-            match find_lcs(before, after, after.len() - tail_len, tail_positions, self) {
+            match find_lcs(before, after, tail, self) {
                 // no lcs was found, that means that file1 and file2 two have nothing in common
                 Some(lcs) if lcs.len == 0 => {
                     added.fill(true);
@@ -106,7 +99,7 @@ impl Histogram {
                         &after[..lcs.after_start as usize],
                         &mut removed[..lcs.before_start as usize],
                         &mut added[..lcs.after_start as usize],
-                        None, // The prefixes have different endpoints from the cached suffix.
+                        false, // The prefixes have different endpoints from the cached suffix.
                     );
 
                     // this is equivalent to (tail) recursion but implement as a loop for efficiency reasons
@@ -117,6 +110,11 @@ impl Histogram {
                     let after_end = lcs.after_start + lcs.len;
                     after = &after[after_end as usize..];
                     added = &mut added[after_end as usize..];
+
+                    // A match may consume the common suffix in the first search.
+                    if std::mem::take(&mut cache_tail_after_split) {
+                        common_tail = CommonTail::find(before, after, self.token_occurrences.len()).map(Box::new);
+                    }
                 }
                 None => {
                     // we are diffing two extremely large repetitive files
@@ -132,18 +130,17 @@ impl Histogram {
 
 /// The common suffix's occurrence data, indexed by distance from the end of either file.
 struct CommonTail {
-    len: usize,
-    /// The last 66 positions of each token suffice to count it even when the suffix shortens.
+    len: u32,
+    /// Offsets into `positions`, with one extra entry for the end of the last token's list.
+    offsets: Vec<u32>,
+    /// The last 66 positions of each token, sorted by distance from the end.
     positions: Vec<u32>,
-    /// Positions belonging to tokens that can still seed a match in the full suffix.
-    seed_positions: Vec<u32>,
-    frequent_tokens: Vec<Token>,
-    /// The minimum suffix length that still contains 66 occurrences of every frequent token.
-    min_overflow_len: usize,
+    /// The same distances grouped by each token's capped count in the full suffix.
+    seeds_by_count: Vec<Vec<u32>>,
 }
 
 impl CommonTail {
-    fn find(before: &[Token], after: &[Token], num_tokens: u32) -> Option<Self> {
+    fn find(before: &[Token], after: &[Token], num_tokens: usize) -> Option<Self> {
         let min_len = OVERFLOW_COUNT as usize;
         if before.len().min(after.len()) < min_len || before[before.len() - min_len..] != after[after.len() - min_len..]
         {
@@ -151,61 +148,123 @@ impl CommonTail {
         }
 
         let mut len = 0;
-        let mut counts = vec![0u8; num_tokens as usize];
-        let mut positions = Vec::new();
-        let mut frequent_tokens = Vec::new();
-        let mut min_overflow_len = 0;
-        let overflow_count = OVERFLOW_COUNT as u8;
+        let mut counts = vec![0u8; num_tokens];
         for (&token, &other) in before.iter().rev().zip(after.iter().rev()) {
             if token != other {
                 break;
             }
-            let distance = len;
             len += 1;
             let count = &mut counts[token.0 as usize];
-            if *count == overflow_count {
-                continue;
+            *count = (*count + 1).min(OVERFLOW_COUNT as u8);
+        }
+        let mut offsets = Vec::with_capacity(num_tokens + 1);
+        let mut bucket_sizes = vec![0usize; OVERFLOW_COUNT as usize];
+        let mut total = 0;
+        offsets.push(total);
+        for &count in &counts {
+            if count != 0 {
+                bucket_sizes[count as usize - 1] += count as usize;
             }
-            *count += 1;
-            if *count == overflow_count {
-                // Defer saving positions until there is a token we can skip.
-                if frequent_tokens.is_empty() {
-                    positions.extend(0..distance as u32);
+            total += u32::from(count);
+            offsets.push(total);
+        }
+        let mut positions = vec![0; total as usize];
+        let mut seeds_by_count: Vec<_> = bucket_sizes.into_iter().map(Vec::with_capacity).collect();
+        let suffix = &before[before.len() - len as usize..];
+        let mut unfilled = total;
+        for (distance, &token) in suffix.iter().rev().enumerate() {
+            let id = token.0 as usize;
+            let remaining = &mut counts[id];
+            if *remaining != 0 {
+                let end = offsets[id + 1];
+                let count = end - offsets[id];
+                positions[(end - u32::from(*remaining)) as usize] = distance as u32;
+                seeds_by_count[count as usize - 1].push(distance as u32);
+                *remaining -= 1;
+                unfilled -= 1;
+                if unfilled == 0 {
+                    break;
                 }
-                frequent_tokens.push(token);
-                min_overflow_len = distance + 1;
-            }
-            if min_overflow_len != 0 {
-                positions.push(distance as u32);
             }
         }
-        if frequent_tokens.is_empty() {
-            return None;
-        }
-        let seed_positions = positions
-            .iter()
-            .copied()
-            .filter(|&distance| counts[before[before.len() - 1 - distance as usize].0 as usize] < overflow_count)
-            .collect();
         Some(Self {
             len,
+            offsets,
             positions,
-            seed_positions,
-            frequent_tokens,
-            min_overflow_len,
+            seeds_by_count,
         })
     }
 
-    fn for_len(&self, available: usize) -> (usize, &[u32], &[Token]) {
-        let len = available.min(self.len);
-        let (positions, frequent_tokens) = if len >= self.min_overflow_len {
-            (self.seed_positions.as_slice(), self.frequent_tokens.as_slice())
-        } else {
-            // A shortened suffix can make a previously frequent token eligible again.
-            (self.positions.as_slice(), &[][..])
-        };
-        let end = positions.partition_point(|&distance| (distance as usize) < len);
-        (len, &positions[..end], frequent_tokens)
+    fn for_len(&self, available: usize) -> Tail<'_> {
+        Tail {
+            index: self,
+            len: self.len.min(available as u32),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Tail<'a> {
+    index: &'a CommonTail,
+    len: u32,
+}
+
+impl<'a> Tail<'a> {
+    fn positions(self, token: Token) -> &'a [u32] {
+        let id = token.0 as usize;
+        let (start, end) = (self.index.offsets[id] as usize, self.index.offsets[id + 1] as usize);
+        if start == end {
+            return &[];
+        }
+        let positions = &self.index.positions[start..end];
+        if self.len == self.index.len {
+            return positions;
+        }
+        &positions[..positions.partition_point(|&distance| distance < self.len)]
+    }
+
+    fn seeds(self) -> TailSeeds<'a> {
+        TailSeeds {
+            tail: self,
+            ends: [u32::MAX; OVERFLOW_COUNT as usize],
+        }
+    }
+}
+
+struct TailSeeds<'a> {
+    tail: Tail<'a>,
+    ends: [u32; OVERFLOW_COUNT as usize],
+}
+
+impl TailSeeds<'_> {
+    /// Seeds are requested in forward order, so each bucket can keep its place across calls.
+    fn next(&mut self, after_len: u32, pos: u32, cutoff: u32) -> Option<u32> {
+        let remaining = (after_len - pos).min(self.tail.len);
+        if remaining == 0 {
+            return None;
+        }
+        // Each removed line can lower a token's count by at most one.
+        let max_count = (cutoff + (self.tail.index.len - self.tail.len)).min(OVERFLOW_COUNT);
+        let mut earliest = None;
+        for (bucket, (positions, end)) in self.tail.index.seeds_by_count[..max_count as usize]
+            .iter()
+            .zip(&mut self.ends)
+            .enumerate()
+        {
+            let mut positions = &positions[..positions.len().min(*end as usize)];
+            if positions.last().is_some_and(|&distance| distance >= remaining) {
+                positions = &positions[..positions.partition_point(|&distance| distance < remaining)];
+            }
+            *end = positions.len() as u32;
+            if let Some(&distance) = positions.last()
+                && earliest.is_none_or(|(earliest, _)| distance > earliest)
+            {
+                earliest = Some((distance, bucket));
+            }
+        }
+        let (distance, bucket) = earliest?;
+        self.ends[bucket] -= 1;
+        Some(after_len - 1 - distance)
     }
 }
 
@@ -214,22 +273,56 @@ mod tests {
     use super::{CommonTail, OVERFLOW_COUNT, Token};
 
     #[test]
+    fn suffix_seeds_use_the_cutoff_in_input_order() -> gix_testtools::TestResult {
+        let mut tokens: Vec<_> = (0..40).flat_map(|id| [Token(id); 2]).collect();
+        let tail = CommonTail::find(&tokens, &tokens, 41).expect("long enough to cache");
+        assert_eq!(
+            tail.for_len(tokens.len()).seeds().next(tokens.len() as u32, 0, 1),
+            None,
+            "a unique prefix anchor makes every suffix pair ineligible"
+        );
+
+        tokens.push(Token(40));
+        let tail = CommonTail::find(&tokens, &tokens, 41).expect("long enough to cache");
+        let tail = tail.for_len(tokens.len());
+        let len = tokens.len() as u32;
+        assert_eq!(
+            tail.seeds().next(len, 0, 1),
+            Some(len - 1),
+            "retain the rarer seed at the end"
+        );
+        let mut seeds = tail.seeds();
+        assert_eq!(
+            seeds.next(len, 0, 2),
+            Some(0),
+            "an earlier seed at the cutoff precedes a rarer one"
+        );
+        assert_eq!(seeds.next(len, 1, 2), Some(1), "resume within the same bucket");
+        assert_eq!(
+            seeds.next(len, 20, 2),
+            Some(20),
+            "skip lines already covered by a match"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn shortened_suffix_restores_positions_for_formerly_frequent_tokens() -> gix_testtools::TestResult {
         let overflow = OVERFLOW_COUNT as usize;
         let mut tokens = vec![Token(0); 2 * overflow];
         tokens.extend([Token(1), Token(1)]);
         let tail = CommonTail::find(&tokens, &tokens, 2).expect("the repeated token reaches the overflow count");
-        assert_eq!(
-            tail.for_len(tokens.len()),
-            (tokens.len(), [0, 1].as_slice(), [Token(0)].as_slice()),
-            "only the rare positions are needed while token 0 exceeds the seed limit"
-        );
         let shortened_len = overflow + 1;
-        let expected: Vec<_> = (0..shortened_len as u32).collect();
+        let shortened = tail.for_len(shortened_len);
         assert_eq!(
-            tail.for_len(shortened_len),
-            (shortened_len, expected.as_slice(), &[][..]),
+            shortened.positions(Token(0)).len(),
+            overflow - 1,
             "the remaining 65 occurrences of token 0 can seed a match"
+        );
+        assert_eq!(
+            shortened.seeds().next(shortened_len as u32, 0, (overflow - 1) as u32),
+            Some(0),
+            "the earliest seed can belong to a token whose previous count overflowed"
         );
         Ok(())
     }

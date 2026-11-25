@@ -1,27 +1,56 @@
 // Modified for gitoxide from the upstream imara-diff crate.
 // Upstream source: git cat-file -p 32d1e45d3df061e6ccba6db7fdce92db29e345d8:src/histogram/lcs.rs
 
-use crate::histogram::{Histogram, MAX_CHAIN_LEN, MAX_SEED_OCCURRENCES};
+use crate::histogram::{Histogram, MAX_CHAIN_LEN, MAX_SEED_OCCURRENCES, OVERFLOW_COUNT, Tail};
 use crate::intern::Token;
 
 /// Finds the longest common subsequence (LCS) using a histogram-based approach.
 ///
-/// In the shared suffix at `seed_end`, consider seeds only at the given distances from the end.
 /// Returns `None` if the sequences are highly repetitive and should fall back to Myers.
 pub(super) fn find_lcs(
     before: &[Token],
     after: &[Token],
-    seed_end: usize,
-    tail_positions: &[u32],
+    tail: Option<Tail<'_>>,
     histogram: &mut Histogram,
 ) -> Option<Lcs> {
     let mut search = LcsSearch {
         lcs: Lcs::default(),
         min_occurrences: MAX_SEED_OCCURRENCES,
-        found_cs: seed_end < after.len(),
+        found_cs: tail.is_some(),
     };
-    search.run(before, after, seed_end, tail_positions, histogram);
+    let occurrences = Occurrences {
+        prefix: histogram,
+        tail,
+        before_len: before.len() as u32,
+    };
+    search.run(before, after, &occurrences);
+    histogram.clear();
     if search.success() { Some(search.lcs) } else { None }
+}
+
+/// Occurrence data for the active before range, in prefix and suffix order.
+struct Occurrences<'a> {
+    prefix: &'a Histogram,
+    tail: Option<Tail<'a>>,
+    before_len: u32,
+}
+
+impl Occurrences<'_> {
+    #[inline]
+    fn count(&self, token: Token) -> u32 {
+        let prefix = self.prefix.num_token_occurrences(token);
+        let tail = self.tail.map_or(0, |tail| tail.positions(token).len() as u32);
+        (prefix + tail).min(OVERFLOW_COUNT)
+    }
+
+    fn positions(&self, token: Token) -> impl Iterator<Item = u32> + '_ {
+        let tail = self.tail.map_or(&[][..], |tail| tail.positions(token));
+        self.prefix
+            .token_occurrences(token)
+            .iter()
+            .copied()
+            .chain(tail.iter().rev().map(|&distance| self.before_len - 1 - distance))
+    }
 }
 
 /// Represents a longest common subsequence found by the histogram algorithm.
@@ -46,38 +75,31 @@ pub struct LcsSearch {
 }
 
 impl LcsSearch {
-    fn run(
-        &mut self,
-        before: &[Token],
-        after: &[Token],
-        seed_end: usize,
-        tail_positions: &[u32],
-        histogram: &mut Histogram,
-    ) {
+    fn run(&mut self, before: &[Token], after: &[Token], occurrences: &Occurrences<'_>) {
+        let seed_end = after.len() - occurrences.tail.map_or(0, |tail| tail.len as usize);
         let seeds = &after[..seed_end];
         let mut pos = 0;
         while let Some(&token) = seeds.get(pos as usize) {
-            if self.can_seed(histogram.num_token_occurrences(token)) {
-                pos = self.update_lcs(pos, token, histogram, before, after);
+            let count = occurrences.count(token);
+            if self.can_seed(count) {
+                pos = self.update_lcs(pos, token, count, occurrences, before, after);
                 continue;
             }
             pos += 1;
         }
-        let after_len = after.len() as u32;
-        for &distance in tail_positions.iter().rev() {
-            if pos == after_len {
-                break;
-            }
-            let seed = after_len - 1 - distance;
-            if seed >= pos {
+        if let Some(tail) = occurrences.tail {
+            let mut seeds = tail.seeds();
+            let after_len = after.len() as u32;
+            while let Some(seed) = seeds.next(after_len, pos, self.min_occurrences) {
                 let token = after[seed as usize];
-                if self.can_seed(histogram.num_token_occurrences(token)) {
-                    pos = self.update_lcs(seed, token, histogram, before, after);
-                }
+                let count = occurrences.count(token);
+                pos = if self.can_seed(count) {
+                    self.update_lcs(seed, token, count, occurrences, before, after)
+                } else {
+                    seed + 1
+                };
             }
         }
-
-        histogram.clear();
     }
 
     fn can_seed(&mut self, occurrences: u32) -> bool {
@@ -94,16 +116,19 @@ impl LcsSearch {
         &mut self,
         after_pos: u32,
         token: Token,
-        histogram: &Histogram,
+        count: u32,
+        histogram: &Occurrences<'_>,
         before: &[Token],
         after: &[Token],
     ) -> u32 {
         let mut next_token_idx2 = after_pos + 1;
-        let mut occurrences_iter = histogram.token_occurrences(token).iter().copied();
-        let mut token_idx1 = occurrences_iter.next().unwrap();
+        let mut occurrences_iter = histogram.positions(token);
+        let mut token_idx1 = occurrences_iter
+            .next()
+            .expect("an eligible seed occurs in the before range");
 
         'occurrences_iter: loop {
-            let mut occurrences = histogram.num_token_occurrences(token);
+            let mut occurrences = count;
             let mut start1 = token_idx1;
             let mut start2 = after_pos;
             loop {
@@ -119,7 +144,7 @@ impl LcsSearch {
                     // every matched token occurs in `before` at least once. The matching region
                     // can still grow, though, so we can only skip count lookups.
                     if occurrences > 1 {
-                        let new_occurrences = histogram.num_token_occurrences(before[start1 as usize]);
+                        let new_occurrences = histogram.count(before[start1 as usize]);
                         occurrences = occurrences.min(new_occurrences);
                     }
                 } else {
@@ -135,7 +160,7 @@ impl LcsSearch {
                 if matches!((token1, token2), (Some(token1), Some(token2)) if token1 == token2) {
                     // See above. Once `occurrences` reaches 1, it cannot further decrease.
                     if occurrences > 1 {
-                        let new_occurrences = histogram.num_token_occurrences(before[end1 as usize]);
+                        let new_occurrences = histogram.count(before[end1 as usize]);
                         occurrences = occurrences.min(new_occurrences);
                     }
                     end1 += 1;

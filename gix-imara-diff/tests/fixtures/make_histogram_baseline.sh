@@ -41,9 +41,10 @@ else
   printf 'B\n' >>occurrence-overflow/old
   cp occurrence-seed-limit/new occurrence-overflow/new
 
-  # The unique unchanged lines split edits before a shared repetitive tail. Two final
+  # Unique unchanged lines split edits before shared tails. A line in the paired tail
+  # occurs twice and is skipped after a unique anchor sets the cutoff to one. Two final
   # blank lines in the mixed case can still seed a match after the prefix is gone.
-  mkdir repetitive-tail alternating-tail mixed-frequency-tail
+  mkdir repetitive-tail alternating-tail mixed-frequency-tail paired-tail
   for side in old new; do
     {
       for i in {1..8}; do
@@ -52,9 +53,11 @@ else
       printf '%s-last\n' "$side"
     } >"repetitive-tail/$side"
     cp "repetitive-tail/$side" "alternating-tail/$side"
+    cp "repetitive-tail/$side" "paired-tail/$side"
     for i in {1..128}; do
       printf 'x\n' >>"repetitive-tail/$side"
       printf '%s\n' x y >>"alternating-tail/$side"
+      printf '%s\n' "$i" "$i" >>"paired-tail/$side"
     done
     cp "repetitive-tail/$side" "mixed-frequency-tail/$side"
     printf '\n\n' >>"mixed-frequency-tail/$side"
@@ -68,7 +71,7 @@ else
 
   cases=(
     skip-after-match occurrence-limit occurrence-seed-limit occurrence-overflow
-    repetitive-tail alternating-tail mixed-frequency-tail common-ends
+    repetitive-tail alternating-tail mixed-frequency-tail paired-tail common-ends
   )
 fi
 
