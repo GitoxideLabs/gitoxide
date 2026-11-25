@@ -24,6 +24,8 @@ impl Diff {
             added: &mut self.removed,
             removed: &mut self.added,
             tokens: before,
+            other_tokens: after,
+            rediff_after_slide: self.rediff_after_slide,
             hunk: Hunk {
                 before: 0..0,
                 after: 0..0,
@@ -35,6 +37,8 @@ impl Diff {
             added: &mut self.added,
             removed: &mut self.removed,
             tokens: after,
+            other_tokens: before,
+            rediff_after_slide: self.rediff_after_slide,
             hunk: Hunk {
                 before: 0..0,
                 after: 0..0,
@@ -62,10 +66,14 @@ impl Diff {
 struct Postprocessor<'a, H> {
     /// The mutable array tracking which tokens were added.
     added: &'a mut [bool],
-    /// The immutable array tracking which tokens were removed.
-    removed: &'a [bool],
+    /// The mutable array tracking which tokens were removed, changed only to diff a group again.
+    removed: &'a mut [bool],
     /// The token sequence being processed.
     tokens: &'a [Token],
+    /// The token sequence of the other file, to diff a group again after it slid.
+    other_tokens: &'a [Token],
+    /// Whether to diff a group again after it slid, which Git only does for histogram diffs.
+    rediff_after_slide: bool,
     /// The current hunk being processed in the iteration.
     hunk: Hunk,
     /// The heuristic used to determine optimal hunk positions.
@@ -80,6 +88,7 @@ impl<H: SliderHeuristic> Postprocessor<'_, H> {
                 break;
             }
 
+            let range_before_sliding = self.hunk.after.clone();
             let mut earliest_end;
             let mut is_modification;
             loop {
@@ -103,6 +112,7 @@ impl<H: SliderHeuristic> Postprocessor<'_, H> {
             }
 
             if self.hunk.after.end == earliest_end {
+                self.rediff(&range_before_sliding);
                 continue;
             }
             if is_modification {
@@ -122,7 +132,30 @@ impl<H: SliderHeuristic> Postprocessor<'_, H> {
                     debug_assert!(success);
                 }
             }
+            self.rediff(&range_before_sliding);
         }
+    }
+
+    /// Diff the current group again if it changed while sliding, as sliding can merge groups
+    /// so that the merged group has lines in common with the group in the other file.
+    /// Like Git, only do this for histogram diffs and when the group in the other file isn't empty
+    /// (`xdl_change_compact()` in `xdiff/xdiffi.c`).
+    fn rediff(&mut self, range_before_sliding: &std::ops::Range<u32>) {
+        let a = self.hunk.after.clone();
+        let b = self.hunk.before.clone();
+        if !self.rediff_after_slide || b.is_empty() || a == *range_before_sliding {
+            return;
+        }
+        let (a0, a1, b0, b1) = (a.start as usize, a.end as usize, b.start as usize, b.end as usize);
+        self.added[a0..a1].fill(false);
+        self.removed[b0..b1].fill(false);
+        crate::myers::diff(
+            &self.tokens[a0..a1],
+            &self.other_tokens[b0..b1],
+            &mut self.added[a0..a1],
+            &mut self.removed[b0..b1],
+            false,
+        );
     }
 
     /// Slides a hunk down by one token/line, potentially merging it with a subsequent hunk.

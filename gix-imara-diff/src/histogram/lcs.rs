@@ -132,7 +132,7 @@ impl LcsSearch {
 
             loop {
                 if let Some(next_token_idx) = occurrences_iter.next() {
-                    if next_token_idx > end2 {
+                    if next_token_idx >= end1 {
                         token_idx1 = next_token_idx;
                         break;
                     }

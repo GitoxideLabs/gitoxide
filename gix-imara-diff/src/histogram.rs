@@ -11,7 +11,7 @@ mod list_pool;
 
 /// Maximum number of occurrences tracked for a single token.
 /// Tokens appearing more frequently fall back to Myers algorithm.
-const MAX_CHAIN_LEN: u32 = 63;
+const MAX_CHAIN_LEN: u32 = 64;
 
 /// State for computing histogram-based diffs.
 struct Histogram {

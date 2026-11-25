@@ -869,6 +869,67 @@ fn assert_myers_matches_git(case: &str, algorithm: Algorithm, expected: (u32, u3
     Ok(())
 }
 
+#[test]
+fn histogram_skips_occurrences_up_to_the_end_of_the_match_in_the_old_file() -> gix_testtools::TestResult {
+    assert_histogram_matches_git("skip-after-match")
+}
+
+#[test]
+fn histogram_anchors_on_lines_with_up_to_64_occurrences() -> gix_testtools::TestResult {
+    assert_histogram_matches_git("occurrence-limit")
+}
+
+#[test]
+fn histogram_does_not_strip_the_common_prefix_and_suffix() -> gix_testtools::TestResult {
+    assert_histogram_matches_git("common-ends")
+}
+
+#[test]
+fn histogram_diffs_a_shifted_change_group_again() -> gix_testtools::TestResult {
+    assert_histogram_matches_git("rediff-after-slide")
+}
+
+fn assert_histogram_matches_git(case: &str) -> gix_testtools::TestResult {
+    // Git 2.54 diffs shifted histogram change groups again.
+    let Some(root) =
+        gix_testtools::scripted_fixture_read_only_with_git_version("make_histogram_baseline.sh", |version| {
+            version >= (2, 54, 0)
+        })?
+    else {
+        return Ok(());
+    };
+    for case in [case.to_owned(), format!("{case}-reversed")] {
+        let case_root = root.join(&case);
+        let before = std::fs::read_to_string(case_root.join("old"))?;
+        let after = std::fs::read_to_string(case_root.join("new"))?;
+        let input = InternedInput::new(before.as_str(), after.as_str());
+        for (baseline, indent_heuristic) in [("NoHeuristic", false), ("IndentHeuristic", true)] {
+            let git_hunks = std::fs::read_to_string(case_root.join(format!("{baseline}.hunks")))?
+                .lines()
+                .map(|line| {
+                    let (before, after) = line.split_once(' ').expect("Git hunk header contains both ranges");
+                    Ok(gix_imara_diff::Hunk {
+                        before: git_hunk_range(before)?,
+                        after: git_hunk_range(after)?,
+                    })
+                })
+                .collect::<gix_testtools::TestResult<Vec<_>>>()?;
+            let mut diff = Diff::compute(Algorithm::Histogram, &input);
+            if indent_heuristic {
+                diff.postprocess_lines(&input);
+            } else {
+                diff.postprocess_no_heuristic(&input);
+            }
+            assert_eq!(
+                diff.hunks().collect::<Vec<_>>(),
+                git_hunks,
+                "{case}: histogram with {baseline} must match Git's exact hunk placement"
+            );
+        }
+    }
+    Ok(())
+}
+
 fn git_hunk_range(range: &str) -> gix_testtools::TestResult<std::ops::Range<u32>> {
     let range = &range[1..]; // Strip the '-' or '+' sign.
     let (start, len) = range.split_once(',').unwrap_or((range, "1"));
