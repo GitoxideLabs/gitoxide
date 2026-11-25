@@ -19,6 +19,7 @@ impl Diff {
     /// * `after` - The token sequence from the second file, after changes
     /// * `heuristic` - The slider heuristic to use for positioning hunks
     pub fn postprocess_with(&mut self, before: &[Token], after: &[Token], mut heuristic: impl SliderHeuristic) {
+        let mut rediff = RediffScratch::default();
         // Compact removals first so ambiguous additions align with them, as in Git.
         Postprocessor {
             added: &mut self.removed,
@@ -26,6 +27,7 @@ impl Diff {
             tokens: before,
             other_tokens: after,
             rediff_after_slide: self.rediff_after_slide,
+            rediff: &mut rediff,
             hunk: Hunk {
                 before: 0..0,
                 after: 0..0,
@@ -39,6 +41,7 @@ impl Diff {
             tokens: after,
             other_tokens: before,
             rediff_after_slide: self.rediff_after_slide,
+            rediff: &mut rediff,
             hunk: Hunk {
                 before: 0..0,
                 after: 0..0,
@@ -74,6 +77,8 @@ struct Postprocessor<'a, H> {
     other_tokens: &'a [Token],
     /// Whether to diff a group again after it slid, which Git only does for histogram diffs.
     rediff_after_slide: bool,
+    /// Buffers to diff a group again, shared by both passes.
+    rediff: &'a mut RediffScratch,
     /// The current hunk being processed in the iteration.
     hunk: Hunk,
     /// The heuristic used to determine optimal hunk positions.
@@ -149,9 +154,11 @@ impl<H: SliderHeuristic> Postprocessor<'_, H> {
         let (a0, a1, b0, b1) = (a.start as usize, a.end as usize, b.start as usize, b.end as usize);
         self.added[a0..a1].fill(false);
         self.removed[b0..b1].fill(false);
+        let scratch = &mut *self.rediff;
+        scratch.compact(&self.tokens[a0..a1], &self.other_tokens[b0..b1]);
         crate::myers::diff(
-            &self.tokens[a0..a1],
-            &self.other_tokens[b0..b1],
+            &scratch.tokens,
+            &scratch.other_tokens,
             &mut self.added[a0..a1],
             &mut self.removed[b0..b1],
             false,
@@ -192,5 +199,35 @@ impl<H: SliderHeuristic> Postprocessor<'_, H> {
         self.hunk.before.end = self.hunk.before.start - 1;
         self.hunk.before.start = find_hunk_start(self.removed, self.hunk.before.start - 1);
         true
+    }
+}
+
+/// Buffers to diff a group again with tokens numbered from zero.
+///
+/// Myers sizes its occurrence counts by the largest token. With the tokens of the whole input, each
+/// group would allocate and clear counts for the whole vocabulary. Like Git's `xdl_fall_back_diff()`,
+/// which prepares the two groups as separate files, the counts only cover the tokens of the groups.
+#[derive(Default)]
+struct RediffScratch {
+    /// The compact token of each input token in the current groups.
+    compact_token: hashbrown::HashMap<Token, Token>,
+    /// The group of this file, with compact tokens.
+    tokens: Vec<Token>,
+    /// The group of the other file, with compact tokens.
+    other_tokens: Vec<Token>,
+}
+
+impl RediffScratch {
+    /// Number the tokens of `tokens` and `other_tokens` from zero, in the order they first occur.
+    fn compact(&mut self, tokens: &[Token], other_tokens: &[Token]) {
+        self.compact_token.clear();
+        self.tokens.clear();
+        self.other_tokens.clear();
+        for (input, output) in [(tokens, &mut self.tokens), (other_tokens, &mut self.other_tokens)] {
+            for &token in input {
+                let next = Token(self.compact_token.len() as u32);
+                output.push(*self.compact_token.entry(token).or_insert(next));
+            }
+        }
     }
 }
