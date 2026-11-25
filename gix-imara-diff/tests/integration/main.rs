@@ -1,5 +1,6 @@
 use std::fmt::Write;
 use std::mem::swap;
+use std::path::Path;
 
 use expect_test::expect;
 // use git::bstr::BStr;
@@ -880,24 +881,43 @@ fn histogram_anchors_on_lines_with_up_to_64_occurrences() -> gix_testtools::Test
 }
 
 #[test]
+fn histogram_skips_seeds_with_more_than_65_occurrences() -> gix_testtools::TestResult {
+    assert_histogram_matches_git("occurrence-seed-limit")?;
+    assert_histogram_matches_git("occurrence-overflow")
+}
+
+#[test]
+fn histogram_preserves_hunks_before_a_repetitive_tail() -> gix_testtools::TestResult {
+    assert_histogram_matches_git("repetitive-tail")?;
+    assert_histogram_matches_git("alternating-tail")?;
+    assert_histogram_matches_git("mixed-frequency-tail")
+}
+
+#[test]
 fn histogram_does_not_strip_the_common_prefix_and_suffix() -> gix_testtools::TestResult {
     assert_histogram_matches_git("common-ends")
 }
 
 #[test]
 fn histogram_diffs_a_shifted_change_group_again() -> gix_testtools::TestResult {
-    assert_histogram_matches_git("rediff-after-slide")
-}
-
-fn assert_histogram_matches_git(case: &str) -> gix_testtools::TestResult {
-    // Git 2.54 diffs shifted histogram change groups again.
-    let Some(root) =
-        gix_testtools::scripted_fixture_read_only_with_git_version("make_histogram_baseline.sh", |version| {
-            version >= (2, 54, 0)
-        })?
+    let case = "rediff-after-slide";
+    let Some(root) = gix_testtools::scripted_fixture_read_only_with_args_with_git_version(
+        "make_histogram_baseline.sh",
+        [case],
+        |version| version >= (2, 54, 0),
+    )?
     else {
         return Ok(());
     };
+    assert_histogram_hunks_match_git(&root, case)
+}
+
+fn assert_histogram_matches_git(case: &str) -> gix_testtools::TestResult {
+    let root = gix_testtools::scripted_fixture_read_only("make_histogram_baseline.sh")?;
+    assert_histogram_hunks_match_git(&root, case)
+}
+
+fn assert_histogram_hunks_match_git(root: &Path, case: &str) -> gix_testtools::TestResult {
     for case in [case.to_owned(), format!("{case}-reversed")] {
         let case_root = root.join(&case);
         let before = std::fs::read_to_string(case_root.join("old"))?;

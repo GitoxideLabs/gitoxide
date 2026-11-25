@@ -146,6 +146,59 @@ fn changes_against_tree_modified() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn histogram_line_counts_match_git_numstat() -> TestResult {
+    let Some(fixture) =
+        gix_testtools::scripted_fixture_read_only_with_git_version("make_histogram_rediff_repo.sh", |version| {
+            version >= (2, 54, 0)
+        })?
+    else {
+        return Ok(());
+    };
+    let repo = gix::open_opts(fixture, gix::open::Options::isolated())?;
+    let from = repo.rev_parse_single("HEAD^")?.object()?.peel_to_tree()?;
+    let to = repo.head_tree()?;
+    let numstat = std::fs::read_to_string(repo.git_dir().join("histogram.numstat"))?;
+    let mut fields = numstat.split('\t');
+    let expected = (
+        fields.next().expect("Git numstat includes insertions").parse::<u32>()?,
+        fields.next().expect("Git numstat includes removals").parse::<u32>()?,
+    );
+    assert_eq!(expected, (2, 2), "Git re-diffs the shifted group in this fixture");
+
+    let mut cache = repo.diff_resource_cache(gix_diff::blob::pipeline::Mode::ToGit, Default::default())?;
+    let mut checked = false;
+    from.changes()?.for_each_to_obtain_tree(&to, |change| {
+        let mut diff = change.diff(&mut cache)?;
+        let mut emitted = (0, 0);
+        diff.lines(|hunk| {
+            match hunk {
+                lines::Change::Addition { lines } => emitted.0 += lines.len() as u32,
+                lines::Change::Deletion { lines } => emitted.1 += lines.len() as u32,
+                lines::Change::Modification {
+                    lines_before,
+                    lines_after,
+                } => {
+                    emitted.0 += lines_after.len() as u32;
+                    emitted.1 += lines_before.len() as u32;
+                }
+            }
+            Ok(())
+        })?;
+        assert_eq!(emitted, expected, "emitted histogram hunks match Git's numstat");
+        let counts = diff.line_counts()?.expect("the modified file is text");
+        assert_eq!(
+            (counts.insertions, counts.removals),
+            expected,
+            "histogram statistics count edits in the emitted hunks"
+        );
+        checked = true;
+        Ok(std::ops::ControlFlow::Continue(()))
+    })?;
+    assert!(checked, "the modified file produced a diff");
+    Ok(())
+}
+
 mod track_rewrites {
     use gix_testtools::TestResult;
     use std::collections::HashMap;

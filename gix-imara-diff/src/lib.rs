@@ -64,7 +64,7 @@
 //! After the initial computation, the diff can be *postprocessed*. If the diff is shown
 //! to a human in some way (even indirectly), you always want to use this.
 //!
-//! However, when only counting the number of changed tokens quickly, this can be skipped.
+//! For [`Algorithm::Histogram`], postprocessing can also change the edit counts by diffing shifted groups again.
 //! The postprocessing allows you to provide your own
 //! heuristic for selecting a slider position. An indentation-based heuristic is provided,
 //! which is a good fit for all text-based line diffs. The internals of the heuristic are

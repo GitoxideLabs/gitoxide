@@ -1,19 +1,26 @@
 // Modified for gitoxide from the upstream imara-diff crate.
 // Upstream source: git cat-file -p 32d1e45d3df061e6ccba6db7fdce92db29e345d8:src/histogram/lcs.rs
 
-use crate::histogram::{Histogram, MAX_CHAIN_LEN};
+use crate::histogram::{Histogram, MAX_CHAIN_LEN, MAX_SEED_OCCURRENCES};
 use crate::intern::Token;
 
 /// Finds the longest common subsequence (LCS) using a histogram-based approach.
 ///
+/// In the shared suffix at `seed_end`, consider seeds only at the given distances from the end.
 /// Returns `None` if the sequences are highly repetitive and should fall back to Myers.
-pub(super) fn find_lcs(before: &[Token], after: &[Token], histogram: &mut Histogram) -> Option<Lcs> {
+pub(super) fn find_lcs(
+    before: &[Token],
+    after: &[Token],
+    seed_end: usize,
+    tail_positions: &[u32],
+    histogram: &mut Histogram,
+) -> Option<Lcs> {
     let mut search = LcsSearch {
         lcs: Lcs::default(),
-        min_occurrences: MAX_CHAIN_LEN + 1,
-        found_cs: false,
+        min_occurrences: MAX_SEED_OCCURRENCES,
+        found_cs: seed_end < after.len(),
     };
-    search.run(before, after, histogram);
+    search.run(before, after, seed_end, tail_positions, histogram);
     if search.success() { Some(search.lcs) } else { None }
 }
 
@@ -39,27 +46,50 @@ pub struct LcsSearch {
 }
 
 impl LcsSearch {
-    fn run(&mut self, before: &[Token], after: &[Token], histogram: &mut Histogram) {
+    fn run(
+        &mut self,
+        before: &[Token],
+        after: &[Token],
+        seed_end: usize,
+        tail_positions: &[u32],
+        histogram: &mut Histogram,
+    ) {
+        let seeds = &after[..seed_end];
         let mut pos = 0;
-        while let Some(&token) = after.get(pos as usize) {
-            if histogram.num_token_occurrences(token) != 0 {
-                self.found_cs = true;
-                if histogram.num_token_occurrences(token) <= self.min_occurrences {
-                    pos = self.update_lcs(pos, token, histogram, before, after);
-                    continue;
+        while let Some(&token) = seeds.get(pos as usize) {
+            if self.can_seed(histogram.num_token_occurrences(token)) {
+                pos = self.update_lcs(pos, token, histogram, before, after);
+                continue;
+            }
+            pos += 1;
+        }
+        let after_len = after.len() as u32;
+        for &distance in tail_positions.iter().rev() {
+            if pos == after_len {
+                break;
+            }
+            let seed = after_len - 1 - distance;
+            if seed >= pos {
+                let token = after[seed as usize];
+                if self.can_seed(histogram.num_token_occurrences(token)) {
+                    pos = self.update_lcs(seed, token, histogram, before, after);
                 }
             }
-
-            pos += 1;
         }
 
         histogram.clear();
+    }
+
+    fn can_seed(&mut self, occurrences: u32) -> bool {
+        self.found_cs |= occurrences != 0;
+        occurrences != 0 && occurrences <= self.min_occurrences
     }
 
     fn success(&mut self) -> bool {
         !self.found_cs || self.min_occurrences <= MAX_CHAIN_LEN
     }
 
+    #[inline]
     fn update_lcs(
         &mut self,
         after_pos: u32,

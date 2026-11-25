@@ -309,6 +309,7 @@ mktest!(switched_lines, "switched-lines", 4);
 mktest!(added_line_before_changed_line, "added-line-before-changed-line", 3);
 mktest!(same_line_changed_twice, "same-line-changed-twice", 2);
 mktest!(coalesce_adjacent_hunks, "coalesce-adjacent-hunks", 1);
+mktest!(histogram_trims_common_tail, "histogram-common-tail", 3);
 
 mktest!(sub_directory, "sub-directory/sub-directory", 3);
 

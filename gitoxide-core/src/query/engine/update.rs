@@ -8,7 +8,7 @@ use std::{
 use gix::{
     Count, Progress, Result,
     bstr::{BStr, BString, ByteSlice},
-    diff::{blob::platform::prepare_diff::Operation, rewrites::CopySource},
+    diff::rewrites::CopySource,
     error::{ResultExt, bail},
     parallel::{InOrderIter, SequenceId},
     prelude::ObjectIdExt,
@@ -256,50 +256,25 @@ pub fn update(
                                                             add_lines(&mut out, location, &lines_counter, previous_id);
                                                         }
                                                         (true, true) => {
-                                                            if let Ok(cache) =
-                                                                change.diff(&mut diff_cache).map(|p| p.resource_cache)
+                                                            if let Ok(Some(counts)) = change
+                                                                .diff(&mut diff_cache)
+                                                                .and_then(|mut diff| diff.line_counts())
                                                             {
-                                                                cache
-                                                                    .options
-                                                                    .skip_internal_diff_if_external_is_configured =
-                                                                    false;
-                                                                if let Ok(prep) = cache.prepare_diff() {
-                                                                    let mut nl = 0;
-                                                                    match prep.operation {
-                                                                        Operation::InternalDiff {
-                                                                            algorithm,
-                                                                            change,
-                                                                        } => {
-                                                                            let tokens = change.patch_input();
-                                                                            let diff = gix::diff::blob::Diff::compute(
-                                                                                algorithm, &tokens,
-                                                                            );
-                                                                            let added = diff.count_additions() as usize;
-                                                                            let removed =
-                                                                                diff.count_removals() as usize;
-                                                                            nl += added + removed;
-                                                                            let lines = LineStats {
-                                                                                added,
-                                                                                removed,
-                                                                                before: tokens.before.len(),
-                                                                                after: tokens.after.len(),
-                                                                            };
-                                                                            lines_counter
-                                                                                .fetch_add(nl, Ordering::SeqCst);
-                                                                            out.push(FileChange {
-                                                                                relpath: location.to_owned(),
-                                                                                mode: FileMode::Modified,
-                                                                                source_relpath: None,
-                                                                                lines: Some(lines),
-                                                                            });
-                                                                        }
-                                                                        Operation::ExternalCommand { .. } => {
-                                                                            unreachable!("disabled above")
-                                                                        }
-                                                                        Operation::SourceOrDestinationIsBinary
-                                                                        | Operation::NeitherExists => {}
-                                                                    }
-                                                                }
+                                                                let added = counts.insertions as usize;
+                                                                let removed = counts.removals as usize;
+                                                                lines_counter
+                                                                    .fetch_add(added + removed, Ordering::SeqCst);
+                                                                out.push(FileChange {
+                                                                    relpath: location.to_owned(),
+                                                                    mode: FileMode::Modified,
+                                                                    source_relpath: None,
+                                                                    lines: Some(LineStats {
+                                                                        added,
+                                                                        removed,
+                                                                        before: counts.before,
+                                                                        after: counts.after,
+                                                                    }),
+                                                                });
                                                             }
                                                         }
                                                     },

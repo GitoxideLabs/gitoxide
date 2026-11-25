@@ -6,7 +6,7 @@ use gix_error::{ErrorExt, OptionExt, ResultExt, bail, message};
 use gix_hash::ObjectId;
 use gix_object::{
     FindExt,
-    bstr::{BStr, BString},
+    bstr::{BStr, BString, ByteSlice},
 };
 use gix_traverse::commit::find as find_commit;
 use smallvec::SmallVec;
@@ -839,9 +839,15 @@ fn blob_changes_from_data(
     diff_algorithm: gix_diff::blob::Algorithm,
     stats: &mut Statistics,
 ) -> Vec<Change> {
-    use gix_diff::blob::Hunk;
+    use gix_diff::blob::{Algorithm, Hunk};
 
-    let input = gix_diff::blob::InternedInput::new(old_data, new_data);
+    let trimmed_bytes = if diff_algorithm == Algorithm::Histogram {
+        common_tail_bytes_to_trim(old_data, new_data)
+    } else {
+        0
+    };
+    let (new_data, unchanged_tail) = new_data.split_at(new_data.len() - trimmed_bytes);
+    let input = gix_diff::blob::InternedInput::new(&old_data[..old_data.len() - trimmed_bytes], new_data);
 
     let mut diff = gix_diff::blob::Diff::compute(diff_algorithm, &input);
     diff.postprocess_lines(&input);
@@ -873,13 +879,29 @@ fn blob_changes_from_data(
         hunks
     });
 
-    let total_number_of_lines = input.after.len() as u32;
-    if input.after.len() > last_seen_after_end as usize {
-        changes.push(Change::Unchanged(last_seen_after_end..total_number_of_lines));
+    let total_number_of_lines = input.after.len() + tokens_for_diffing(unchanged_tail).tokenize().count();
+    if total_number_of_lines > last_seen_after_end as usize {
+        changes.push(Change::Unchanged(last_seen_after_end..total_number_of_lines as u32));
     }
 
     stats.blobs_diffed += 1;
     changes
+}
+
+/// Match Git's zero-context `xdi_diff()`, which trims whole common 1 KiB blocks from the end
+/// and keeps bytes through the first newline of those blocks to leave a complete line.
+fn common_tail_bytes_to_trim(before: &[u8], after: &[u8]) -> usize {
+    const BLOCK_SIZE: usize = 1024;
+    let common_len = before
+        .rchunks_exact(BLOCK_SIZE)
+        .zip(after.rchunks_exact(BLOCK_SIZE))
+        .take_while(|(before, after)| before == after)
+        .count()
+        * BLOCK_SIZE;
+    let common_tail = &after[after.len() - common_len..];
+    common_tail
+        .find_byte(b'\n')
+        .map_or(0, |newline| common_len - newline - 1)
 }
 
 fn find_path_entry_in_commit(

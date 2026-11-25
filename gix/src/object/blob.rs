@@ -108,6 +108,7 @@ pub mod diff {
         }
 
         /// Count the amount of removed and inserted lines efficiently.
+        /// Histogram counts use the same slider postprocessing as [`Self::lines`].
         /// If one of the inputs is binary or both are missing, `None` will be returned.
         pub fn line_counts(&mut self) -> Result<Option<gix_diff::blob::DiffLineStats>> {
             self.resource_cache.options.skip_internal_diff_if_external_is_configured = false;
@@ -116,7 +117,11 @@ pub mod diff {
             match prep.operation {
                 Operation::InternalDiff { algorithm, change } => {
                     let input = change.patch_input();
-                    let diff = gix_diff::blob::Diff::compute(algorithm, &input);
+                    let diff = if algorithm == gix_diff::blob::Algorithm::Histogram {
+                        gix_diff::blob::diff_with_slider_heuristics(algorithm, &input)
+                    } else {
+                        gix_diff::blob::Diff::compute(algorithm, &input)
+                    };
                     Ok(Some(gix_diff::blob::DiffLineStats {
                         removals: diff.count_removals(),
                         insertions: diff.count_additions(),

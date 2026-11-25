@@ -220,7 +220,13 @@ struct RediffScratch {
 impl RediffScratch {
     /// Number the tokens of `tokens` and `other_tokens` from zero, in the order they first occur.
     fn compact(&mut self, tokens: &[Token], other_tokens: &[Token]) {
-        self.compact_token.clear();
+        // Clearing touches every bucket, so bound the retained capacity by the current groups.
+        let group_size = tokens.len() + other_tokens.len();
+        if self.compact_token.capacity() > group_size.saturating_mul(4) {
+            self.compact_token = hashbrown::HashMap::new();
+        } else {
+            self.compact_token.clear();
+        }
         self.tokens.clear();
         self.other_tokens.clear();
         for (input, output) in [(tokens, &mut self.tokens), (other_tokens, &mut self.other_tokens)] {
@@ -229,5 +235,31 @@ impl RediffScratch {
                 output.push(*self.compact_token.entry(token).or_insert(next));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RediffScratch, Token};
+
+    #[test]
+    fn compact_releases_the_map_after_a_large_group() -> gix_testtools::TestResult {
+        let mut scratch = RediffScratch::default();
+        let large: Vec<_> = (0..128).map(Token).collect();
+        scratch.compact(&large[..64], &large[64..]);
+        let large_capacity = scratch.compact_token.capacity();
+
+        scratch.compact(&[Token(96), Token(64)], &[Token(64), Token(128)]);
+        assert!(
+            scratch.compact_token.capacity() < large_capacity,
+            "the small group pair should release the large pair's map allocation"
+        );
+        assert_eq!(scratch.tokens, [Token(0), Token(1)], "number tokens from zero again");
+        assert_eq!(
+            scratch.other_tokens,
+            [Token(1), Token(2)],
+            "reuse the same number for tokens appearing on both sides"
+        );
+        Ok(())
     }
 }

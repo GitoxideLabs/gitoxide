@@ -128,7 +128,15 @@ git commit -q -m c4.4
 
 echo -e "  line 1\n\n  line 2\n\n  line 3" > empty-lines-histogram.txt
 cp empty-lines-histogram.txt empty-lines-myers.txt
-git add empty-lines-histogram.txt empty-lines-myers.txt
+# Inserting a second "b" leaves 512 "a" lines at the end, exactly one common block
+# for Git's zero-context diff to trim before matching lines for blame.
+{
+  printf 'b\n'
+  for i in {1..513}; do
+    printf 'a\n'
+  done
+} >histogram-common-tail.txt
+git add empty-lines-histogram.txt empty-lines-myers.txt histogram-common-tail.txt
 git commit -q -m c4.5
 
 echo -e "line 0\nline 2\nline 3" > sub-directory/sub-directory.txt
@@ -155,7 +163,9 @@ git commit -q -m c5.3
 
 echo -e "  line 1\n\n  line in between\n\n  line 2\n\n  line in between\n\n  line 3" > empty-lines-histogram.txt
 cp empty-lines-histogram.txt empty-lines-myers.txt
-git add empty-lines-histogram.txt empty-lines-myers.txt
+awk '{ print } NR == 2 { print "b" }' histogram-common-tail.txt >histogram-common-tail.tmp
+mv histogram-common-tail.tmp histogram-common-tail.txt
+git add empty-lines-histogram.txt empty-lines-myers.txt histogram-common-tail.txt
 git commit -q -m c5.4
 
 mv before-second-rename.txt after-second-rename.txt
@@ -303,6 +313,7 @@ git blame --porcelain file-changed-in-two-branches.txt > .git/file-changed-in-tw
 git blame --porcelain file-topo-order-different-than-date-order.txt > .git/file-topo-order-different-than-date-order.baseline
 
 git blame --porcelain empty-lines-histogram.txt > .git/empty-lines-histogram.baseline
+git blame --porcelain histogram-common-tail.txt > .git/histogram-common-tail.baseline
 
 git config --local diff.algorithm myers
 

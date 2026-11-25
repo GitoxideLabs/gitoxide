@@ -1,7 +1,7 @@
 // Modified for gitoxide from the upstream imara-diff crate.
 // Upstream source: git cat-file -p 32d1e45d3df061e6ccba6db7fdce92db29e345d8:src/histogram/list_pool.rs
 
-use crate::histogram::MAX_CHAIN_LEN;
+use crate::histogram::{MAX_SEED_OCCURRENCES, OVERFLOW_COUNT};
 
 /// A small list of entity references allocated from a pool.
 ///
@@ -61,7 +61,7 @@ use crate::histogram::MAX_CHAIN_LEN;
 pub struct ListHandle {
     index: u32,
     generation: u32,
-    len: u32,
+    count: u32,
 }
 
 /// Create an empty list.
@@ -70,12 +70,12 @@ impl Default for ListHandle {
         Self {
             index: 0,
             generation: 0,
-            len: 0,
+            count: 0,
         }
     }
 }
 
-const MAX_SIZE_CLASS: SizeClass = sclass_for_length(super::MAX_CHAIN_LEN);
+const MAX_SIZE_CLASS: SizeClass = sclass_for_length(MAX_SEED_OCCURRENCES - 1);
 const NUM_SIZE_CLASS: usize = MAX_SIZE_CLASS as usize + 1;
 
 /// A memory pool for storing lists of `T`.
@@ -197,34 +197,39 @@ impl ListPool {
 }
 
 impl ListHandle {
-    /// Get the number of elements in the list.
-    pub fn len(&self, pool: &ListPool) -> u32 {
+    /// Get the occurrence count, capped at one past the maximum number of stored positions.
+    pub fn count(&self, pool: &ListPool) -> u32 {
         if self.generation == pool.generation {
-            self.len
+            self.count
         } else {
             0
         }
     }
 
-    /// Get the list as a slice.
+    /// Get the available seed positions.
     pub fn as_slice<'a>(&'a self, pool: &'a ListPool) -> &'a [u32] {
         let idx = self.index as usize;
-        match self.len(pool) {
-            0 => &[],
+        match self.count(pool) {
+            0 | OVERFLOW_COUNT => &[],
             1 => std::slice::from_ref(&self.index),
             len => &pool.data[idx..idx + len as usize],
         }
     }
 
-    /// Appends an element to the back of the list.
-    /// Returns the index where the element was inserted.
+    /// Record that the token is too frequent to seed a match.
+    pub fn mark_overflow(&mut self, pool: &ListPool) {
+        self.generation = pool.generation;
+        self.count = OVERFLOW_COUNT;
+    }
+
+    /// Records an occurrence and stores its position if the list has room.
+    #[inline]
     pub fn push(&mut self, element: u32, pool: &mut ListPool) {
-        let len = self.len(pool);
-        match len {
+        match self.count(pool) {
             0 => {
                 self.generation = pool.generation;
                 self.index = element;
-                self.len = 1;
+                self.count = 1;
             }
             1 => {
                 // This is an empty list. Allocate a block and set length=1.
@@ -232,9 +237,9 @@ impl ListHandle {
                 pool.data[block] = self.index;
                 pool.data[block + 1] = element;
                 self.index = block as u32;
-                self.len = 2;
+                self.count = 2;
             }
-            2..=MAX_CHAIN_LEN => {
+            len @ 2..MAX_SEED_OCCURRENCES => {
                 // Do we need to reallocate?
                 let block;
                 let idx = self.index as usize;
@@ -247,11 +252,10 @@ impl ListHandle {
                     block = idx;
                 }
                 pool.data[block + len as usize] = element;
-                self.len += 1;
+                self.count += 1;
             }
-
-            // ignore elements longer then MAX_CHAIN_LEN
-            // these are rarely relevant and if they are we fall back to myers
+            // One extra count marks a token that is too frequent to seed a match.
+            MAX_SEED_OCCURRENCES => self.count += 1,
             _ => (),
         }
     }
