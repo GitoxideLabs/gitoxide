@@ -84,48 +84,6 @@ mod method {
     }
 
     #[test]
-    fn decode_entry_respects_alloc_limit_bytes() {
-        let entry_offset = 1968;
-        let mut buf = Vec::new();
-        let mut inflate = Default::default();
-
-        let pack = pack_at(SMALL_PACK);
-        let entry = pack.entry(entry_offset).expect("valid object type");
-        assert!(
-            pack.decode_entry(
-                entry.clone(),
-                &mut buf,
-                &mut inflate,
-                &|_, _| Ok(None),
-                &mut gix_odb::pack::cache::Never
-            )
-            .is_ok(),
-            "without an explicit allocation limit decoding succeeds"
-        );
-
-        buf.clear();
-        let pack = pack_at(SMALL_PACK).with_alloc_limit_bytes(Some(0));
-        let entry = pack.entry(entry_offset).expect("valid object type");
-        let err = pack
-            .decode_entry(
-                entry,
-                &mut buf,
-                &mut inflate,
-                &|_, _| Ok(None),
-                &mut gix_odb::pack::cache::Never,
-            )
-            .expect_err("pack-controlled allocations larger than the configured limit are rejected");
-        insta::assert_debug_snapshot!(err, "decode entry respects alloc limit bytes", @"Entry too large to fit in memory");
-        assert_eq!(
-            err.classify().find_map(|classification| match classification.class() {
-                gix_error::Class::ResourceExhaustion(kind) => Some(kind),
-                _ => None,
-            }),
-            Some(gix_error::ResourceExhaustionKind::AllocationLimit)
-        );
-    }
-
-    #[test]
     fn iter() -> gix_testtools::TestResult {
         let pack = pack_at(SMALL_PACK);
         let it = pack.streaming_iter()?;
@@ -353,13 +311,13 @@ mod decompress_entry {
     }
 
     #[test]
-    fn caller_provided_buffer_ignores_alloc_limit() {
-        let p = pack_at(SMALL_PACK).with_alloc_limit_bytes(Some(0));
+    fn decompress_into_caller_provided_buffer() {
+        let p = pack_at(SMALL_PACK);
         let entry = p.entry(1968).expect("valid object type");
         let mut buf = vec![0; entry.decompressed_size as usize];
 
         p.decompress_entry(&entry, &mut Default::default(), &mut buf)
-            .expect("caller-provided buffers should not be rejected by allocation limits");
+            .expect("the caller provided enough space for the decompressed object");
 
         assert_eq!(
             buf.len(),

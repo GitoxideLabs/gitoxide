@@ -59,12 +59,7 @@ fn run() -> TestResult {
             for use_commit_graph in [false, true] {
                 let commit_graph = use_commit_graph
                     .then(|| {
-                        gix_commitgraph::at(
-                            store.store_ref().path().join("info"),
-                            store.store_ref().object_hash(),
-                            None,
-                        )
-                        .ok()
+                        gix_commitgraph::at(store.store_ref().path().join("info"), store.store_ref().object_hash()).ok()
                     })
                     .flatten();
                 let mut graph = gix_revwalk::Graph::new(&store, commit_graph.as_ref());

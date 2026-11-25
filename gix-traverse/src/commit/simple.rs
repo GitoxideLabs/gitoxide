@@ -1078,7 +1078,7 @@ mod tests {
         };
         let objects_dir = repo_dir.join(".git").join("objects");
         let odb = gix_odb::at(&objects_dir, gix_testtools::object_hash())?;
-        let graph = gix_commitgraph::at(objects_dir.join("info"), gix_testtools::object_hash(), None)?;
+        let graph = gix_commitgraph::at(objects_dir.join("info"), gix_testtools::object_hash())?;
 
         let paint = |visible_commit_ids: &mut [gix_hash::ObjectId], hidden_commit_ids: &[gix_hash::ObjectId]| {
             visible_commit_ids.sort();

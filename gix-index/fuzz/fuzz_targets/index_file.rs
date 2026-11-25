@@ -6,10 +6,7 @@ use libfuzzer_sys::fuzz_target;
 use std::{hint::black_box, path::PathBuf};
 
 fn fuzz(input: &[u8]) {
-    let options = decode::Options {
-        alloc_limit_bytes: Some(8 * 1024 * 1024),
-        ..Default::default()
-    };
+    let options = decode::Options::default();
 
     let Ok((state, checksum)) = State::from_bytes(
         input,
@@ -57,7 +54,6 @@ fn fuzz(input: &[u8]) {
                 FileTime::from_unix_time(0, 0),
                 gix_index::hash::Kind::Sha1,
                 decode::Options {
-                    alloc_limit_bytes: Some(8 * 1024 * 1024),
                     expected_checksum: Some(digest),
                     ..Default::default()
                 },

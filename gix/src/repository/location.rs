@@ -76,7 +76,6 @@ impl crate::Repository {
                 gix_odb::store::init::Options {
                     slots: self.options.object_store_slots,
                     use_multi_pack_index: store.use_multi_pack_index(),
-                    alloc_limit_bytes: self.config.alloc_limit_bytes,
                     current_dir: Some(current_dir.to_owned()),
                     loose_compression: self.objects.loose_compression,
                     shared_repository_permissions: self.objects.shared_repository_permissions,

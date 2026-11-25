@@ -100,9 +100,9 @@ pub(crate) fn reflog_or_default(
     })
 }
 
-pub(crate) type ObjectCaches = (Option<usize>, Option<usize>, usize, Option<usize>);
+pub(crate) type ObjectCaches = (Option<usize>, Option<usize>, usize);
 
-/// Return `(static_pack_cache_limit, pack_cache_bytes, object_cache_bytes, alloc_limit_bytes)` as parsed from gix-config.
+/// Return `(static_pack_cache_limit, pack_cache_bytes, object_cache_bytes)` as parsed from gix-config.
 pub(crate) fn parse_object_caches(
     config: &gix_config::File,
     lenient: bool,
@@ -118,15 +118,7 @@ pub(crate) fn parse_object_caches(
         .try_into_usize(config.integer_filter("gitoxide.objects.cacheLimit", &mut filter_config_section))
         .with_leniency(lenient)?
         .unwrap_or_default();
-    let alloc_limit_bytes = gitoxide::Objects::ALLOC_LIMIT
-        .try_into_usize(config.integer_filter("gitoxide.objects.allocLimit", &mut filter_config_section))
-        .with_leniency(lenient)?;
-    Ok((
-        static_pack_cache_limit,
-        pack_cache_bytes,
-        object_cache_bytes,
-        alloc_limit_bytes,
-    ))
+    Ok((static_pack_cache_limit, pack_cache_bytes, object_cache_bytes))
 }
 
 pub(crate) fn parse_core_abbrev(config: &gix_config::File, object_hash: gix_hash::Kind) -> Result<Option<usize>> {

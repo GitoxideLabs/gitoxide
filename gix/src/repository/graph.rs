@@ -46,14 +46,8 @@ impl crate::Repository {
     }
 
     /// Open the commit-graph managed by `git commit-graph` to accelerate low-level commit walks.
-    ///
-    /// Parent-buffer allocations respect `gitoxide.objects.allocLimit`.
     pub fn commit_graph(&self) -> Result<gix_commitgraph::Graph> {
-        gix_commitgraph::Graph::at(
-            &self.objects.store_ref().path().join("info"),
-            self.object_hash(),
-            self.config.alloc_limit_bytes,
-        )
+        gix_commitgraph::Graph::at(&self.objects.store_ref().path().join("info"), self.object_hash())
     }
 
     /// Return a newly opened commit-graph if it is available, enabled in the Git configuration, and compatible

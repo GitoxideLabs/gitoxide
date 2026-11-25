@@ -162,7 +162,7 @@ where
         }
         "" => match path.file_name() {
             Some(file_name) if file_name == "multi-pack-index" => {
-                let multi_index = gix::odb::pack::multi_index::File::at(path, None)?;
+                let multi_index = gix::odb::pack::multi_index::File::at(path)?;
                 let res = multi_index.verify_integrity(
                     &mut progress,
                     should_interrupt,

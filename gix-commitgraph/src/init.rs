@@ -1,8 +1,6 @@
-use crate::{File, Graph, MAX_COMMITS, Parent};
+use crate::{File, Graph, MAX_COMMITS};
 use gix_error::Result;
-use gix_error::{
-    OptionExt, ResourceExhaustionKind, ResultExt, bail, corruption, message, resource_exhaustion, validation,
-};
+use gix_error::{OptionExt, ResultExt, bail, corruption, message, validation};
 use std::{
     io::{BufRead, BufReader, Read},
     path::Path,
@@ -15,12 +13,8 @@ impl Graph {
     /// Chain entries and graph files must use `object_hash`, typically the repository's hash kind.
     /// Mismatches are reported as corruption.
     ///
-    /// `alloc_limit_bytes` bounds a conservative capacity estimate for parent buffers derived from
-    /// each file's EDGE chunk, including geometric buffer growth. `None` disables the limit.
-    /// The mapped graph data itself is not allocated on the heap.
-    ///
     /// Filesystem errors retain their [`std::io::Error`] source, including when `path` does not exist.
-    pub fn at(path: &Path, object_hash: gix_hash::Kind, alloc_limit_bytes: Option<usize>) -> Result<Self> {
+    pub fn at(path: &Path, object_hash: gix_hash::Kind) -> Result<Self> {
         let metadata = path
             .metadata()
             .or_raise(|| message!("Could not access commit-graph path at \"{}\"", path.display()))?;
@@ -39,21 +33,6 @@ impl Graph {
             )
             .validation_error())
         }?;
-        if let Some(limit) = alloc_limit_bytes {
-            for file in &graph.files {
-                if let Some(edges) = file.extra_edges_data() {
-                    // shortcut: estimate from the whole EDGE chunk, scan individual lists if valid graphs hit the limit.
-                    // Include the inline parent and spare capacity for traversal buffers that double when growing.
-                    let parent_bytes = (edges.len() / 4 + 1).checked_mul(2 * std::mem::size_of::<Result<Parent>>());
-                    if parent_bytes.is_none_or(|bytes| bytes > limit) {
-                        bail!(resource_exhaustion(
-                            ResourceExhaustionKind::AllocationLimit,
-                            "Commit-graph parents require more memory than allowed",
-                        ));
-                    }
-                }
-            }
-        }
         Ok(graph)
     }
 

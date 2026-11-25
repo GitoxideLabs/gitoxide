@@ -84,7 +84,6 @@ pub fn from_pack(
         thread_limit: ctx.thread_limit,
         iteration_mode: ctx.iteration_mode.into(),
         index_version: pack::index::Version::default(),
-        alloc_limit_bytes: None,
         compression: gix::zlib::Compression::BEST_SPEED,
         shared_repository_permissions: gix::fs::SharedPermissions::Umask,
     };

@@ -65,8 +65,6 @@ pub struct Graph {
 }
 
 /// Owned parent commit information collected during traversal.
-///
-/// Shared with traversal buffers so allocation-limit estimates use the same record layout.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Parent {
     /// The object ID of the parent commit.
@@ -80,10 +78,8 @@ pub struct Parent {
 /// Instantiate a commit graph from an `.git/objects/info` directory, or one of the various commit-graph files.
 ///
 /// Chain entries and graph files must use `object_hash`, typically the repository's hash kind.
-/// `alloc_limit_bytes` limits parent-buffer capacity estimates as described in [`Graph::at()`].
-/// `None` disables the limit.
-pub fn at(path: impl AsRef<Path>, object_hash: gix_hash::Kind, alloc_limit_bytes: Option<usize>) -> Result<Graph> {
-    Graph::at(path.as_ref(), object_hash, alloc_limit_bytes)
+pub fn at(path: impl AsRef<Path>, object_hash: gix_hash::Kind) -> Result<Graph> {
+    Graph::at(path.as_ref(), object_hash)
 }
 
 mod access;

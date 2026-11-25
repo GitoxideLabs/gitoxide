@@ -12,7 +12,7 @@ use crate::{
     },
     data,
     data::EntryRange,
-    data::decode::resize_with_limit,
+    data::decode::try_resize,
 };
 
 mod node {
@@ -142,7 +142,6 @@ pub(super) unsafe fn all<T, F, MBFN, R>(
     modify_base: MBFN,
     ref_delta_children: Option<super::SharedRefDeltaChildren>,
     object_hash: gix_hash::Kind,
-    alloc_limit_bytes: Option<usize>,
     should_interrupt: &AtomicBool,
 ) -> Result
 where
@@ -178,7 +177,6 @@ where
             modify_base,
             ref_delta_children,
             object_hash,
-            alloc_limit_bytes,
             should_interrupt,
         )
     }
@@ -196,7 +194,6 @@ where
             modify_base,
             ref_delta_children,
             object_hash,
-            alloc_limit_bytes,
             should_interrupt,
         )
     }
@@ -220,7 +217,6 @@ fn resolve_serial<T, F, MBFN, R>(
     mut modify_base: MBFN,
     ref_delta_children: Option<super::SharedRefDeltaChildren>,
     object_hash: gix_hash::Kind,
-    alloc_limit_bytes: Option<usize>,
     should_interrupt: &AtomicBool,
 ) -> Result
 where
@@ -247,7 +243,6 @@ where
             &mut modify_base,
             ref_delta_children.as_ref(),
             object_hash,
-            alloc_limit_bytes,
             &objects,
             &size,
             |child| work.push(child),
@@ -277,7 +272,6 @@ fn resolve_parallel<T, F, MBFN, R>(
     modify_base: MBFN,
     ref_delta_children: Option<super::SharedRefDeltaChildren>,
     object_hash: gix_hash::Kind,
-    alloc_limit_bytes: Option<usize>,
     should_interrupt: &AtomicBool,
 ) -> Result
 where
@@ -351,7 +345,6 @@ where
                                         &mut modify_base,
                                         ref_delta_children.as_ref(),
                                         object_hash,
-                                        alloc_limit_bytes,
                                         objects,
                                         size,
                                         |child| {
@@ -460,7 +453,6 @@ fn resolve_task<'a, T, F, MBFN, R>(
     modify_base: &mut MBFN,
     ref_delta_children: Option<&super::SharedRefDeltaChildren>,
     object_hash: gix_hash::Kind,
-    alloc_limit_bytes: Option<usize>,
     objects: &gix_utils::progress::StepShared,
     size: &gix_utils::progress::StepShared,
     mut push: impl FnMut(WorkItem<'a, T>),
@@ -483,18 +475,17 @@ where
             resolve,
             resolve_data,
             object_hash,
-            alloc_limit_bytes,
         )?;
         let (base_size, consumed) = data::delta::decode_header_size(delta_bytes)?;
-        let base_size = decoded_size_limited(base_size, alloc_limit_bytes)?;
+        let base_size = decoded_size(base_size)?;
         if parent.bytes.len() != base_size {
             bail!(gix_error::corruption(
                 "Corrupt delta data: delta base size does not match base object size"
             ));
         }
         let (result_size, result_header_size) = data::delta::decode_header_size(&delta_bytes[consumed..])?;
-        let result_size = decoded_size_limited(result_size, alloc_limit_bytes)?;
-        resize_with_limit(fully_resolved_delta_bytes, result_size, alloc_limit_bytes)?;
+        let result_size = decoded_size(result_size)?;
+        try_resize(fully_resolved_delta_bytes, result_size)?;
         data::delta::apply(
             &parent.bytes,
             fully_resolved_delta_bytes,
@@ -510,7 +501,6 @@ where
             resolve,
             resolve_data,
             object_hash,
-            alloc_limit_bytes,
         )?
     };
 
@@ -610,7 +600,6 @@ fn decompress_from_resolver<F, R>(
     resolve: &F,
     resolve_data: &R,
     object_hash: gix_hash::Kind,
-    alloc_limit_bytes: Option<usize>,
 ) -> Result<(data::Entry, u64)>
 where
     F: for<'r> Fn(EntryRange, &'r R) -> Option<&'r [u8]> + Send,
@@ -623,8 +612,8 @@ where
     })?;
     let entry = data::Entry::from_bytes(bytes, slice.start, object_hash)?;
     let compressed = &bytes[entry.header_size()..];
-    let decompressed_len = decoded_size_limited(entry.decompressed_size, alloc_limit_bytes)?;
-    decompress_all_at_once_with(inflate, compressed, decompressed_len, out, alloc_limit_bytes)?;
+    let decompressed_len = decoded_size(entry.decompressed_size)?;
+    decompress_all_at_once_with(inflate, compressed, decompressed_len, out)?;
     Ok((entry, slice.end))
 }
 
@@ -633,9 +622,8 @@ fn decompress_all_at_once_with(
     b: &[u8],
     decompressed_len: usize,
     out: &mut Vec<u8>,
-    alloc_limit_bytes: Option<usize>,
 ) -> Result {
-    resize_with_limit(out, decompressed_len, alloc_limit_bytes)?;
+    try_resize(out, decompressed_len)?;
     inflate.reset();
     inflate
         .once(b, out)
@@ -643,11 +631,8 @@ fn decompress_all_at_once_with(
     Ok(())
 }
 
-fn decoded_size_limited(size: u64, alloc_limit_bytes: Option<usize>) -> Result<usize> {
+fn decoded_size(size: u64) -> Result<usize> {
     let size = usize::try_from(size).or_raise(|| allocation_error(ResourceExhaustionKind::AllocationFailure))?;
-    if alloc_limit_bytes.is_some_and(|limit| size > limit) {
-        bail!(allocation_error(ResourceExhaustionKind::AllocationLimit));
-    }
     Ok(size)
 }
 
@@ -669,19 +654,15 @@ mod tests {
     };
 
     #[test]
-    fn traversal_buffer_growth_respects_alloc_limit() -> gix_testtools::TestResult {
+    fn traversal_buffer_can_be_reused() -> gix_testtools::TestResult {
         let mut out = Vec::new();
         let mut inflate = gix_zlib::Inflate::default();
         for size in [64, 65] {
             let payload = vec![b'A'; size];
-            super::decompress_all_at_once_with(&mut inflate, &deflate(&payload), size, &mut out, Some(65))?;
+            super::decompress_all_at_once_with(&mut inflate, &deflate(&payload), size, &mut out)?;
             assert_eq!(
                 out, payload,
                 "each entry must decompress correctly into the reused buffer"
-            );
-            assert!(
-                out.capacity() <= 65,
-                "traversal buffer growth must not allocate beyond the cap"
             );
         }
         Ok(())
@@ -692,7 +673,7 @@ mod tests {
         for has_root in [false, true] {
             for cycle_len in [1, 2, 3] {
                 let mut pack = Vec::new();
-                let mut tree = Tree::with_capacity(cycle_len + usize::from(has_root), None)?;
+                let mut tree = Tree::with_capacity(cycle_len + usize::from(has_root))?;
                 if has_root {
                     let root = append_entry(&mut pack, data::entry::Header::Blob, 0, b"");
                     tree.add_root(root, ())?;
@@ -716,7 +697,6 @@ mod tests {
                     tree,
                     &pack,
                     Some(2),
-                    None,
                     |slice, pack| pack.get(slice.start as usize..slice.end as usize),
                     |(), _, _| Ok(()),
                 )
@@ -739,14 +719,13 @@ mod tests {
             &[0, 0],
         );
         let root = append_entry(&mut pack, data::entry::Header::Blob, 0, b"");
-        let mut tree = Tree::with_capacity(2, None)?;
+        let mut tree = Tree::with_capacity(2)?;
         tree.add_child(root, child, ())?;
         tree.add_root(root, ())?;
         traverse(
             tree,
             &pack,
             Some(1),
-            None,
             |slice, pack| pack.get(slice.start as usize..slice.end as usize),
             |(), _, _| Ok(()),
         )?;
@@ -759,7 +738,7 @@ mod tests {
 
         let mut pack = Vec::new();
         let root = append_entry(&mut pack, data::entry::Header::Blob, 0, b"");
-        let mut tree = Tree::with_capacity(1, None)?;
+        let mut tree = Tree::with_capacity(1)?;
         tree.add_root(root, ())?;
         let object_progress = prodash::progress::Log::new("reused", Some(0));
         object_progress.set(3); // A previous indexing or traversal operation already counted objects.
@@ -775,7 +754,6 @@ mod tests {
                 thread_limit: Some(1),
                 should_interrupt: &AtomicBool::new(false),
                 object_hash: gix_hash::Kind::Sha1,
-                alloc_limit_bytes: None,
             },
         )?;
         assert_eq!(
@@ -795,7 +773,7 @@ mod tests {
         let first_leaf = append_delta(&mut pack, first_child, b'D');
         let second_leaf = append_delta(&mut pack, second_child, b'E');
 
-        let mut tree = Tree::with_capacity(5, None)?;
+        let mut tree = Tree::with_capacity(5)?;
         tree.add_root(root_offset, ())?;
         tree.add_child(root_offset, first_child, ())?;
         tree.add_child(root_offset, second_child, ())?;
@@ -808,7 +786,6 @@ mod tests {
             tree,
             &pack,
             Some(1),
-            None,
             |slice, pack| {
                 resolve_calls.fetch_add(1, Ordering::Relaxed);
                 pack.get(slice.start as usize..slice.end as usize)
@@ -837,7 +814,7 @@ mod tests {
             .map(|byte| append_delta(&mut pack, root_offset, byte))
             .collect();
 
-        let mut tree = Tree::with_capacity(1 + child_offsets.len(), None)?;
+        let mut tree = Tree::with_capacity(1 + child_offsets.len())?;
         tree.add_root(root_offset, ())?;
         for child_offset in child_offsets {
             tree.add_child(root_offset, child_offset, ())?;
@@ -849,7 +826,6 @@ mod tests {
             tree,
             &pack,
             Some(2),
-            None,
             |slice, pack| pack.get(slice.start as usize..slice.end as usize),
             |(), _progress, context| {
                 if context.level > 0 {
@@ -870,87 +846,10 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn traversal_rejects_declared_decompressed_size_over_alloc_limit() -> gix_testtools::TestResult {
-        let mut pack = Vec::new();
-        let root_offset = append_entry(&mut pack, data::entry::Header::Blob, 1, b"");
-        let mut tree = Tree::with_capacity(1, None)?;
-        tree.add_root(root_offset, ())?;
-
-        let err = traverse_with_limit(tree, &pack).expect_err("entry size exceeds the allocation cap");
-
-        insta::assert_debug_snapshot!(err, "declared decompressed sizes above the cap must be rejected before allocation", @"Entry too large to fit in memory");
-        Ok(())
-    }
-
-    #[test]
-    fn traversal_rejects_delta_base_size_over_alloc_limit() -> gix_testtools::TestResult {
-        let mut pack = Vec::new();
-        let root_offset = append_entry(&mut pack, data::entry::Header::Blob, 0, b"");
-
-        let delta = [1, 0];
-        let child_offset = pack.len() as u64;
-        append_entry(
-            &mut pack,
-            data::entry::Header::OfsDelta {
-                base_distance: child_offset - root_offset,
-            },
-            delta.len() as u64,
-            &delta,
-        );
-
-        let mut tree = Tree::with_capacity(2, None)?;
-        tree.add_root(root_offset, ())?;
-        tree.add_child(root_offset, child_offset, ())?;
-
-        let err = traverse_with_limit(tree, &pack).expect_err("delta base size exceeds the allocation cap");
-
-        insta::assert_debug_snapshot!(err, "delta base sizes above the cap must be rejected before comparing them with the decoded base", @"Entry too large to fit in memory");
-        Ok(())
-    }
-
-    #[test]
-    fn traversal_rejects_delta_result_size_over_alloc_limit() -> gix_testtools::TestResult {
-        let mut pack = Vec::new();
-        let root_offset = append_entry(&mut pack, data::entry::Header::Blob, 0, b"");
-
-        let delta = [0, 1, 1, b'A'];
-        let child_offset = pack.len() as u64;
-        append_entry(
-            &mut pack,
-            data::entry::Header::OfsDelta {
-                base_distance: child_offset - root_offset,
-            },
-            delta.len() as u64,
-            &delta,
-        );
-
-        let mut tree = Tree::with_capacity(2, None)?;
-        tree.add_root(root_offset, ())?;
-        tree.add_child(root_offset, child_offset, ())?;
-
-        let err = traverse_with_limit(tree, &pack).expect_err("delta result size exceeds the allocation cap");
-
-        insta::assert_debug_snapshot!(err, "delta result sizes above the cap must be rejected before resizing the output buffer", @"Entry too large to fit in memory");
-        Ok(())
-    }
-
-    fn traverse_with_limit(tree: Tree<()>, pack: &Vec<u8>) -> Result {
-        traverse(
-            tree,
-            pack,
-            Some(1),
-            Some(0),
-            |slice, pack| pack.get(slice.start as usize..slice.end as usize),
-            |(), _progress, _context| Ok(()),
-        )
-    }
-
     fn traverse<F, MBFN>(
         tree: Tree<()>,
         pack: &Vec<u8>,
         thread_limit: Option<usize>,
-        alloc_limit_bytes: Option<usize>,
         resolve: F,
         inspect: MBFN,
     ) -> Result
@@ -971,7 +870,6 @@ mod tests {
                 thread_limit,
                 should_interrupt: &should_interrupt,
                 object_hash: gix_hash::Kind::Sha1,
-                alloc_limit_bytes,
             },
         )
         .map(|_| ())

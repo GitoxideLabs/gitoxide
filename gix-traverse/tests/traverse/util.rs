@@ -350,7 +350,7 @@ pub fn unseen_generation_fixture(repo_name: &str) -> gix_testtools::TestResult<(
 
 /// Load a commit graph if available for the given object store.
 pub fn commit_graph(store: &gix_odb::Store) -> Option<gix_commitgraph::Graph> {
-    gix_commitgraph::at(store.path().join("info"), store.object_hash(), None).ok()
+    gix_commitgraph::at(store.path().join("info"), store.object_hash()).ok()
 }
 
 /// Execute `git log --oneline --graph --decorate --all` in the given repository

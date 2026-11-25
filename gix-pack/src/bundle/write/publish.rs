@@ -19,7 +19,6 @@ use super::Outcome;
 pub struct Prepared {
     index: crate::index::write::Outcome,
     files: StagedFiles,
-    alloc_limit_bytes: Option<usize>,
 }
 
 impl Prepared {
@@ -35,10 +34,7 @@ impl Prepared {
         let pack = self
             .files
             .data_file
-            .with_mut(|file| {
-                crate::data::File::at(file.path(), object_hash)
-                    .map(|pack| pack.with_alloc_limit_bytes(self.alloc_limit_bytes))
-            })
+            .with_mut(|file| crate::data::File::at(file.path(), object_hash))
             .or_error()??;
         let index = self
             .files
@@ -90,7 +86,7 @@ pub(super) struct WriteOutcome {
 }
 
 impl WriteOutcome {
-    pub(super) fn into_prepared(self, alloc_limit_bytes: Option<usize>) -> Result<Option<Prepared>> {
+    pub(super) fn into_prepared(self) -> Result<Option<Prepared>> {
         let Some(mut files) = self.files else {
             return Ok(None);
         };
@@ -116,7 +112,6 @@ impl WriteOutcome {
         Ok(Some(Prepared {
             index: self.index,
             files,
-            alloc_limit_bytes,
         }))
     }
 

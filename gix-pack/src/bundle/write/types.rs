@@ -13,11 +13,6 @@ pub struct Options {
     pub iteration_mode: crate::data::input::Mode,
     /// The version of pack index to write, should be [`crate::index::Version::default()`]
     pub index_version: crate::index::Version,
-    /// Limit decoded-object and delta buffers to this many bytes. Delta-tree item buffers may grow up to 64 times this
-    /// limit, while speculative preallocation stays within it, to accommodate packs with many small objects.
-    /// This is a defensive per-buffer heuristic, not a total memory budget; callers should tune it for their input.
-    /// `None` disables the limit; `Some(0)` rejects all non-empty allocations covered by it.
-    pub alloc_limit_bytes: Option<usize>,
     /// The compression level to use when deflating base objects that are added to the pack to complete a thin pack.
     ///
     /// Defaults to [`Compression::BEST_SPEED`](gix_zlib::Compression::BEST_SPEED) - `git` compresses
@@ -38,7 +33,6 @@ impl Default for Options {
             thread_limit: None,
             iteration_mode: crate::data::input::Mode::Verify,
             index_version: Default::default(),
-            alloc_limit_bytes: None,
             compression: gix_zlib::Compression::BEST_SPEED,
             shared_repository_permissions: gix_fs::SharedPermissions::Umask,
         }

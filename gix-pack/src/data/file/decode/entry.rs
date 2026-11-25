@@ -8,7 +8,7 @@ use crate::{
     cache, data,
     data::{
         File, delta,
-        file::decode::{DeltaBaseUnresolved, allocation_error, resize_with_limit},
+        file::decode::{DeltaBaseUnresolved, allocation_error, try_resize},
     },
 };
 
@@ -82,7 +82,7 @@ where
     T: crate::FileData,
 {
     fn decoded_object_size(&self, size: u64) -> Result<usize> {
-        decoded_object_size(size, self.alloc_limit_bytes)
+        decoded_object_size(size)
     }
 
     /// Decompress the given `entry` into `out` and return the amount of bytes read from the pack data.
@@ -214,7 +214,7 @@ where
         match entry.header {
             Tree | Blob | Commit | Tag => {
                 let size = self.decoded_object_size(entry.decompressed_size)?;
-                resize_with_limit(out, size, self.alloc_limit_bytes)?;
+                try_resize(out, size)?;
                 self.decompress_entry(&entry, inflate, out.as_mut_slice())
                     .map(|consumed_input| {
                         Outcome::from_object_entry(
@@ -280,16 +280,6 @@ where
             } else {
                 0
             };
-            let chain_bytes = chain_capacity
-                .checked_mul(std::mem::size_of::<Delta>())
-                .ok_or_raise(|| allocation_error(ResourceExhaustionKind::AllocationFailure))?;
-            let allocation_size = total_delta_data_size.max(chain_bytes as u64);
-            if self
-                .alloc_limit_bytes
-                .is_some_and(|limit| allocation_size > limit as u64)
-            {
-                bail!(allocation_error(ResourceExhaustionKind::AllocationLimit));
-            }
             let decompressed_size = self.decoded_object_size(cursor.decompressed_size)?;
             if chain_capacity > chain.capacity() {
                 chain
@@ -362,7 +352,7 @@ where
                     .checked_add(total_delta_data_size)
                     .ok_or_raise(|| allocation_error(ResourceExhaustionKind::AllocationFailure))?,
             };
-            resize_with_limit(out, delta_range.end, self.alloc_limit_bytes)?;
+            try_resize(out, delta_range.end)?;
 
             let mut instructions = &mut out[delta_range.clone()];
             let mut relative_delta_start = 0;
@@ -417,7 +407,7 @@ where
                 .checked_add(second_buffer_size)
                 .and_then(|size| size.checked_add(total_delta_data_size))
                 .ok_or_raise(|| allocation_error(ResourceExhaustionKind::AllocationFailure))?;
-            resize_with_limit(out, out_size, self.alloc_limit_bytes)?;
+            try_resize(out, out_size)?;
 
             // Now 'rescue' the deltas, because in the next step we possibly overwrite that portion
             // of memory with the base object (in the majority of cases)
@@ -513,12 +503,9 @@ where
     }
 }
 
-/// Convert user-controlled sizes from pack data into allocation sizes while enforcing the configured allocation cap.
-fn decoded_object_size(size: u64, alloc_limit_bytes: Option<usize>) -> Result<usize> {
+/// Convert user-controlled sizes from pack data into allocation sizes without truncating.
+fn decoded_object_size(size: u64) -> Result<usize> {
     let size = usize::try_from(size).or_raise(|| allocation_error(ResourceExhaustionKind::AllocationFailure))?;
-    if alloc_limit_bytes.is_some_and(|limit| size > limit) {
-        bail!(allocation_error(ResourceExhaustionKind::AllocationLimit));
-    }
     Ok(size)
 }
 

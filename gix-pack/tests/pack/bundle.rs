@@ -493,7 +493,6 @@ mod write_to_directory {
                             thread_limit: None,
                             iteration_mode: pack::data::input::Mode::Verify,
                             index_version: pack::index::Version::V2,
-                            alloc_limit_bytes: None,
                             compression: gix_zlib::Compression::BEST_SPEED,
                             shared_repository_permissions: gix_fs::SharedPermissions::Umask,
                         },
@@ -580,7 +579,6 @@ mod write_to_directory {
                 thread_limit: None,
                 iteration_mode: pack::data::input::Mode::Verify,
                 index_version: pack::index::Version::V2,
-                alloc_limit_bytes: None,
                 compression: gix_zlib::Compression::BEST_SPEED,
                 shared_repository_permissions: gix_fs::SharedPermissions::Umask,
             },
@@ -592,10 +590,9 @@ mod write_to_directory {
     }
 
     #[test]
-    fn many_small_objects_fit_under_the_object_allocation_limit() -> gix_testtools::TestResult {
+    fn many_small_objects_can_be_indexed_and_traversed() -> gix_testtools::TestResult {
         let object_hash = gix_hash::Kind::Sha1;
         let num_objects = 5102u32;
-        let limit = 16 * 1024;
         let mut pack_data = pack::data::header::encode(pack::data::Version::V2, num_objects).to_vec();
         for index in 0..num_objects {
             let blob = index.to_le_bytes();
@@ -614,14 +611,10 @@ mod write_to_directory {
             &AtomicBool::new(false),
             None::<gix_object::find::Never>,
             object_hash,
-            pack::bundle::write::Options {
-                alloc_limit_bytes: Some(limit),
-                ..Default::default()
-            },
+            pack::bundle::write::Options { ..Default::default() },
         )?;
         assert_eq!(outcome.index.num_objects, num_objects, "all small blobs are indexed");
-        let mut bundle = outcome.to_bundle().expect("the index was written to the directory")?;
-        bundle.pack.alloc_limit_bytes = Some(limit);
+        let bundle = outcome.to_bundle().expect("the index was written to the directory")?;
         for traversal in [
             pack::index::traverse::Algorithm::Lookup,
             pack::index::traverse::Algorithm::DeltaTreeLookup,
@@ -631,12 +624,11 @@ mod write_to_directory {
                 &mut progress::Discard,
                 &AtomicBool::new(false),
                 |_, bytes, _, _| {
-                    assert_eq!(bytes.len(), 4, "every decoded blob fits the original limit");
+                    assert_eq!(bytes.len(), 4, "every decoded blob retains its contents");
                     Ok(())
                 },
                 pack::index::traverse::Options {
                     traversal,
-                    alloc_limit_bytes: Some(limit),
                     ..Default::default()
                 },
             )?;
@@ -645,96 +637,6 @@ mod write_to_directory {
                 "both algorithms visit all blobs"
             );
         }
-        Ok(())
-    }
-
-    #[test]
-    fn metadata_headroom_does_not_raise_the_object_buffer_limit() -> gix_testtools::TestResult {
-        let limit = 1024;
-        let object_hash = gix_hash::Kind::Sha1;
-        let pack_data = ref_delta_pack(object_hash, &[&[0; 1025]], pack::data::Version::V2)?;
-        let directory = TempDir::new()?;
-        let mut bundle = None;
-        for alloc_limit_bytes in [Some(limit), None] {
-            let result = pack::Bundle::write_to_directory(
-                &mut Cursor::new(&pack_data),
-                Some(directory.path()),
-                &mut progress::Discard,
-                &AtomicBool::new(false),
-                None::<gix_object::find::Never>,
-                object_hash,
-                pack::bundle::write::Options {
-                    alloc_limit_bytes,
-                    ..Default::default()
-                },
-            );
-            if alloc_limit_bytes.is_some() {
-                let err = result.expect_err("indexing rejects a blob one byte over the original limit");
-                assert!(
-                    err.classify().any(|classification| classification.class()
-                        == gix_error::Class::ResourceExhaustion(gix_error::ResourceExhaustionKind::AllocationLimit)),
-                    "metadata headroom does not relax object inflation limits"
-                );
-            } else {
-                bundle = result?.to_bundle().transpose()?;
-            }
-        }
-        let mut bundle = bundle.expect("unlimited indexing wrote the bundle");
-        bundle.pack.alloc_limit_bytes = Some(limit);
-        for traversal in [
-            pack::index::traverse::Algorithm::Lookup,
-            pack::index::traverse::Algorithm::DeltaTreeLookup,
-        ] {
-            let err = bundle
-                .index
-                .traverse(
-                    &bundle.pack,
-                    &mut progress::Discard,
-                    &AtomicBool::new(false),
-                    |_, _, _, _| Ok(()),
-                    pack::index::traverse::Options {
-                        traversal,
-                        alloc_limit_bytes: Some(limit),
-                        ..Default::default()
-                    },
-                )
-                .err()
-                .expect("both traversal algorithms reject the oversized blob");
-            assert!(
-                err.classify().any(|classification| classification.class()
-                    == gix_error::Class::ResourceExhaustion(gix_error::ResourceExhaustionKind::AllocationLimit)),
-                "traversal retains the original object buffer limit"
-            );
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn respects_alloc_limit_bytes() -> gix_testtools::TestResult {
-        let pack_file = fs::File::open(fixture_path(SMALL_PACK))?;
-        static SHOULD_INTERRUPT: AtomicBool = AtomicBool::new(false);
-
-        let prevent_allocation = Some(0);
-        let err = pack::Bundle::write_to_directory_eagerly(
-            Box::new(pack_file),
-            None,
-            None::<&Path>,
-            &mut progress::Discard,
-            &SHOULD_INTERRUPT,
-            None::<gix_object::find::Never>,
-            gix_hash::Kind::Sha1,
-            pack::bundle::write::Options {
-                thread_limit: None,
-                iteration_mode: pack::data::input::Mode::Verify,
-                index_version: pack::index::Version::V2,
-                alloc_limit_bytes: prevent_allocation,
-                compression: gix_zlib::Compression::BEST_SPEED,
-                shared_repository_permissions: gix_fs::SharedPermissions::Umask,
-            },
-        )
-        .expect_err("a zero allocation limit rejects non-empty delta-tree storage");
-
-        insta::assert_debug_snapshot!(err, "bundle writing must forward its allocation limit to index writing", @"The pack delta tree is too large to fit in memory");
         Ok(())
     }
 
@@ -757,7 +659,6 @@ mod write_to_directory {
                 thread_limit: None,
                 iteration_mode: pack::data::input::Mode::Verify,
                 index_version: pack::index::Version::V2,
-                alloc_limit_bytes: None,
                 compression: gix_zlib::Compression::BEST_SPEED,
                 shared_repository_permissions: gix_fs::SharedPermissions::Umask,
             },

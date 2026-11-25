@@ -178,8 +178,6 @@ pub struct Store {
     use_multi_pack_index: bool,
     /// The hash kind to use for some operations
     object_hash: gix_hash::Kind,
-    /// The maximum size of a single allocation caused by user-controlled on-disk pack data.
-    alloc_limit_bytes: Option<usize>,
     /// The compression level to use when writing loose objects.
     loose_compression: gix_zlib::Compression,
     /// The initial sharing policy for newly created handles.

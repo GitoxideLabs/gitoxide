@@ -303,7 +303,6 @@ fn receive_pack_blocking(
         shared_repository_permissions: gix::fs::SharedPermissions::Umask,
         index_version: pack::index::Version::V2,
         iteration_mode: pack::data::input::Mode::Verify,
-        alloc_limit_bytes: None,
         compression: gix::zlib::Compression::BEST_SPEED,
     };
     let outcome = pack::Bundle::write_to_directory(

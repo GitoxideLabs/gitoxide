@@ -506,9 +506,8 @@ impl ThreadSafeRepository {
             break worktree_dir;
         };
 
-        let mut config =
-            config::Cache::from_resolved(resolved, filter_config_section, *env, attributes, lenient_config)
-                .or_raise(|| message("Repository configuration could not be loaded"))?;
+        let config = config::Cache::from_resolved(resolved, filter_config_section, *env, attributes, lenient_config)
+            .or_raise(|| message("Repository configuration could not be loaded"))?;
         let use_on_windows = cfg!(windows);
         refs.prohibit_windows_device_names = gitoxide::Core::PROTECT_WINDOWS
             .enrich_error(
@@ -544,31 +543,6 @@ impl ThreadSafeRepository {
         refs.namespace.clone_from(&config.refs_namespace);
         let prefix = replacement_objects_refs_prefix(&config.resolved, lenient_config, filter_config_section)?;
 
-        if git_dir_trust.level() == Trust::Reduced && config.alloc_limit_bytes.is_none() {
-            let alloc_limit_if_reduced_trust =
-                match gitoxide::Objects::ALLOC_LIMIT_IF_REDUCED_TRUST.try_into_usize(config.resolved.integer_filter(
-                    gitoxide::Objects::ALLOC_LIMIT_IF_REDUCED_TRUST,
-                    &mut filter_config_section,
-                )) {
-                    Ok(Some(value)) => value,
-                    Ok(None) => gitoxide::Objects::ALLOC_LIMIT_IF_REDUCED_TRUST_DEFAULT,
-                    Err(_) if config.lenient_config => gitoxide::Objects::ALLOC_LIMIT_IF_REDUCED_TRUST_DEFAULT,
-                    Err(err) => return Err(err),
-                };
-            if alloc_limit_if_reduced_trust != 0 {
-                config.alloc_limit_bytes = Some(alloc_limit_if_reduced_trust);
-                gix_trace::info!(
-                    concat!(
-                        "Applied a default allocation limit of {alloc_limit_bytes} ",
-                        "bytes while opening reduced-trust repository \"{git_dir}\". ",
-                        "Set `gitoxide.objects.allocLimitIfReducedTrust=0` to disable this fallback",
-                    ),
-                    alloc_limit_bytes = alloc_limit_if_reduced_trust,
-                    git_dir = git_dir.display(),
-                );
-            }
-        }
-
         let replacements = match prefix {
             Some(prefix) => {
                 let prefix: &RelativePath = prefix.as_bstr().try_into()?;
@@ -602,7 +576,6 @@ impl ThreadSafeRepository {
                     gix_odb::store::init::Options {
                         slots: object_store_slots,
                         use_multi_pack_index: config.use_multi_pack_index,
-                        alloc_limit_bytes: config.alloc_limit_bytes,
                         loose_compression: config.loose_compression,
                         shared_repository_permissions: config.shared_repository_permissions,
                         current_dir: current_dir.to_owned().into(),

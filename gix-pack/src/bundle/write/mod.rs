@@ -109,7 +109,6 @@ impl crate::Bundle {
             bail!(message("Preparing a pack for publication requires verifying the input stream").validation());
         }
         let directory = std::path::absolute(directory).or_raise(|| message("Could not resolve pack destination"))?;
-        let alloc_limit_bytes = options.alloc_limit_bytes;
         Self::prepare_write(
             pack,
             Some(&directory),
@@ -119,7 +118,7 @@ impl crate::Bundle {
             object_hash,
             options,
         )?
-        .into_prepared(alloc_limit_bytes)
+        .into_prepared()
     }
 
     fn prepare_write(
@@ -313,7 +312,6 @@ impl crate::Bundle {
             thread_limit,
             iteration_mode: _,
             index_version: index_kind,
-            alloc_limit_bytes,
             compression: _,
             shared_repository_permissions,
         }: Options,
@@ -344,7 +342,6 @@ impl crate::Bundle {
             index_writer,
             should_interrupt,
             object_hash,
-            alloc_limit_bytes,
             pack_version,
         )?;
         drop(pack_entries_iter);

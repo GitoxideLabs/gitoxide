@@ -6,10 +6,6 @@ use std::path::{Path, PathBuf};
 /// Options for use in [`Store::at_opts()`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Options {
-    /// The maximum size of a single allocation caused by user-controlled loose object data.
-    ///
-    /// If `None`, no additional limit is enforced.
-    pub alloc_limit_bytes: Option<usize>,
     /// The compression level to use when writing loose objects.
     ///
     /// Git uses [`Compression::BEST_SPEED`](gix_zlib::Compression::BEST_SPEED) unless configured otherwise with
@@ -24,7 +20,6 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Options {
-            alloc_limit_bytes: None,
             compression: gix_zlib::Compression::BEST_SPEED,
             shared_repository_permissions: gix_fs::SharedPermissions::Umask,
         }
@@ -38,8 +33,6 @@ pub struct Store {
     pub(crate) path: PathBuf,
     /// The kind of hash we should assume during iteration and when writing new objects.
     pub(crate) object_hash: gix_hash::Kind,
-    /// The maximum size of a single allocation caused by user-controlled loose object data.
-    pub(crate) alloc_limit_bytes: Option<usize>,
     /// The compression level to use when writing loose objects.
     pub(crate) compression: gix_zlib::Compression,
     pub(crate) shared_repository_permissions: gix_fs::SharedPermissions,
@@ -62,18 +55,15 @@ impl Store {
     ///
     /// In a git repository, this would be `.git/objects`.
     ///
-    /// Use `object_hash` to specify the db’s hash and `options` to configure allocation limits and
-    /// compression level.
+    /// Use `object_hash` to specify the db’s hash and `options` to configure compression and permissions.
     pub fn at_opts(objects_directory: impl Into<PathBuf>, object_hash: gix_hash::Kind, options: Options) -> Store {
         let Options {
-            alloc_limit_bytes,
             compression,
             shared_repository_permissions,
         } = options;
         Store {
             path: objects_directory.into(),
             object_hash,
-            alloc_limit_bytes,
             compression,
             shared_repository_permissions,
         }

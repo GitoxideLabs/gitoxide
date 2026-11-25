@@ -5,18 +5,11 @@ pub mod entry;
 ///
 pub mod header;
 
-/// Check the whole buffer size before growing it, avoiding amortized growth beyond a configured cap.
-pub(crate) fn resize_with_limit(out: &mut Vec<u8>, len: usize, alloc_limit_bytes: Option<usize>) -> Result {
-    if alloc_limit_bytes.is_some_and(|limit| len > limit) {
-        bail!(allocation_error(ResourceExhaustionKind::AllocationLimit));
-    }
+/// Reserve fallibly before growing the output buffer.
+pub(crate) fn try_resize(out: &mut Vec<u8>, len: usize) -> Result {
     let additional = len.saturating_sub(out.len());
-    if alloc_limit_bytes.is_some() {
-        out.try_reserve_exact(additional)
-    } else {
-        out.try_reserve(additional)
-    }
-    .or_raise(|| allocation_error(ResourceExhaustionKind::AllocationFailure))?;
+    out.try_reserve(additional)
+        .or_raise(|| allocation_error(ResourceExhaustionKind::AllocationFailure))?;
     out.resize(len, 0);
     Ok(())
 }

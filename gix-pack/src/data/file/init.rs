@@ -11,9 +11,8 @@ impl data::File<crate::MMap> {
     /// The `object_hash` is a way to read (and write) the same file format with different hashes, as the hash kind
     /// isn't stored within the file format itself.
     ///
-    /// This constructor leaves allocation limiting disabled, allowing allocations of any size dictated by pack data.
-    /// Use [`Self::from_data()`] together with [`File::with_alloc_limit_bytes()`][crate::data::File::with_alloc_limit_bytes()]
-    /// when working with untrusted input.
+    /// Untrusted input may require substantial memory; use a separate process with OS resource limits
+    /// when memory exhaustion must not terminate the application.
     pub fn at(path: impl AsRef<Path>, object_hash: gix_hash::Kind) -> Result<Self> {
         Self::at_inner(path.as_ref(), object_hash)
     }
@@ -31,8 +30,8 @@ where
 {
     /// Instantiate a data file from `data` as assumed to be read or memory-mapped from `path`.
     ///
-    /// This constructor leaves allocation limiting disabled, allowing allocations of any size dictated by pack data.
-    /// Call [`File::with_alloc_limit_bytes()`][crate::data::File::with_alloc_limit_bytes()] before decoding entries from untrusted input.
+    /// Untrusted input may require substantial memory; use a separate process with OS resource limits
+    /// when memory exhaustion must not terminate the application.
     pub fn from_data(data: T, path: PathBuf, object_hash: gix_hash::Kind) -> Result<Self> {
         let hash_len = object_hash.len_in_bytes();
         let pack_len = data.len();
@@ -45,6 +44,9 @@ where
                 .try_into()
                 .expect("enough data after previous check"),
         )?;
+        if num_objects as u64 > (pack_len - data::header::SIZE - hash_len) as u64 {
+            bail!("Declared object count exceeds possible entries for pack size".corrupted());
+        }
         Ok(Self {
             data,
             path,
@@ -53,21 +55,6 @@ where
             version: kind,
             num_objects,
             object_hash,
-            alloc_limit_bytes: None,
         })
-    }
-
-    /// Configure the maximum size of a single allocation caused by user-controlled on-disk pack data.
-    ///
-    /// Use `None` to disable the limit, which is also the default.
-    ///
-    /// This is currently enforced when decoding pack entries, resolving delta chains and collecting index metadata for lookup traversal.
-    /// The limit applies to the combined size of buffers that hold both work data and delta instructions.
-    /// Buffer growth uses exact reservations when a limit is set, and retains existing capacity.
-    /// Callers that allocate from pack metadata directly should consult [`File::alloc_limit_bytes()`][crate::data::File::alloc_limit_bytes]
-    /// and apply the same limit themselves.
-    pub fn with_alloc_limit_bytes(mut self, alloc_limit_bytes: Option<usize>) -> Self {
-        self.alloc_limit_bytes = alloc_limit_bytes;
-        self
     }
 }

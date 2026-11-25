@@ -462,26 +462,6 @@ fn reload_rebuilds_includes_even_when_the_file_was_empty_or_missing() -> TestRes
 }
 
 #[test]
-#[cfg(feature = "index")]
-fn reload_preserves_the_reduced_trust_allocation_limit() -> TestResult {
-    let fixture = gix_testtools::scripted_fixture_writable("make_config_repo.sh")?;
-    let mut repo = gix::open_opts(
-        fixture.path(),
-        crate::util::restricted()
-            .with_trust(gix_sec::Trust::Reduced)
-            .config_overrides(["gitoxide.objects.allocLimitIfReducedTrust=1"]),
-    )?;
-    assert!(repo.open_index().is_err(), "the opening fallback limits allocations");
-
-    repo.reload()?;
-    assert!(
-        repo.open_index().is_err(),
-        "reopening reapplies the reduced-trust allocation limit"
-    );
-    Ok(())
-}
-
-#[test]
 #[serial_test::serial]
 fn reload_reapplies_per_file_safe_directory_trust() -> TestResult {
     let _environment = gix_testtools::isolate_git_environment()?;

@@ -24,7 +24,7 @@ echo missing >missing-common.git/commondir
 
 git config --file promoted/.git/config.worktree core.worktree ../../checkout
 git config --file demoted/.git/config.worktree core.worktree ../../missing
-git config --file demoted/.git/config.worktree gitoxide.objects.allocLimit invalid
+git config --file demoted/.git/config.worktree gitoxide.objects.cacheLimit invalid
 
 cat >fallback.config <<EOF
 [core]

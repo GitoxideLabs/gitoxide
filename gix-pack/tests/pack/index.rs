@@ -174,7 +174,7 @@ mod version {
         use gix_pack::{data::input, index};
         use gix_utils::progress;
 
-        use crate::{INDEX_V2, SMALL_PACK, V2_PACKS_AND_INDICES, fixture_path};
+        use crate::{INDEX_V2, V2_PACKS_AND_INDICES, fixture_path};
 
         fn slice_map(entry: gix_pack::data::EntryRange, map: &memmap2::Mmap) -> Option<&[u8]> {
             map.get(entry.start as usize..entry.end as usize)
@@ -212,7 +212,6 @@ mod version {
                     &mut actual,
                     &AtomicBool::new(false),
                     gix_hash::Kind::Sha1,
-                    None,
                     pack_version,
                 )?;
 
@@ -286,40 +285,6 @@ mod version {
         }
 
         #[test]
-        fn write_to_stream_respects_alloc_limit_bytes() -> gix_testtools::TestResult {
-            let data_path = SMALL_PACK;
-            let mut pack_iter = pack::data::input::BytesToEntriesIter::new_from_header(
-                io::BufReader::new(fs::File::open(fixture_path(data_path))?),
-                input::Mode::Verify,
-                input::EntryDataMode::Crc32,
-                gix_hash::Kind::Sha1,
-            )?;
-            let pack_version = pack_iter.version();
-
-            let prevent_allocation = Some(0);
-            let err = pack::index::write_data_iter_to_stream(
-                pack::index::Version::default(),
-                || {
-                    let file = std::fs::File::open(fixture_path(data_path))?;
-                    let map = unsafe { memmap2::MmapOptions::new().map_copy_read_only(&file)? };
-                    Ok((slice_map, map))
-                },
-                &mut pack_iter,
-                Some(1),
-                &mut progress::Discard,
-                &mut Vec::new(),
-                &AtomicBool::new(false),
-                gix_hash::Kind::Sha1,
-                prevent_allocation,
-                pack_version,
-            )
-            .expect_err("a zero allocation limit rejects non-empty delta-tree storage");
-
-            insta::assert_debug_snapshot!(err, "index writing must apply the allocation limit to delta-tree storage", @"The pack delta tree is too large to fit in memory");
-            Ok(())
-        }
-
-        #[test]
         fn lookup_missing() {
             let file = index::File::at(fixture_path(INDEX_V2), gix_hash::Kind::Sha1).unwrap();
             let prefix = gix_hash::Prefix::new(&gix_hash::Kind::Sha1.null(), 7).unwrap();
@@ -357,51 +322,24 @@ fn traverse_with_index_and_forward_ref_deltas() {
 }
 
 #[test]
-fn tree_from_offsets_respects_alloc_limit() -> gix_testtools::TestResult {
-    for (index_path, pack_path) in crate::PACKS_AND_INDICES {
-        let index = index::File::at(fixture_path(index_path), gix_hash::Kind::Sha1)?;
-        let offsets = index.sorted_offsets()?;
-        let item_bytes = std::mem::size_of::<gix_pack::cache::delta::tree::Item<u64>>();
-        let allocation_bytes = offsets.len() * item_bytes;
-        for limit in [Some(0), Some(allocation_bytes.div_ceil(64)), None] {
-            let result = gix_pack::cache::delta::Tree::from_offsets_in_pack(
-                &fixture_path(pack_path),
-                offsets.iter().copied(),
-                &|offset| *offset,
-                &|object_id| {
-                    index
-                        .lookup(object_id)
-                        .map(|entry_index| index.pack_offset_at_index(entry_index))
-                        .transpose()
-                },
-                &mut progress::Discard,
-                &AtomicBool::new(false),
-                gix_hash::Kind::Sha1,
-                limit,
-            );
-            if limit == Some(0) {
-                let err = result.err().expect("tree storage exceeds the configured limit");
-                assert!(
-                    err.classify().any(|classification| {
-                        classification.class()
-                            == gix_error::Class::ResourceExhaustion(gix_error::ResourceExhaustionKind::AllocationLimit)
-                    }),
-                    "both index versions enforce finite and zero allocation limits"
-                );
-            } else {
-                result?;
-            }
+fn tree_from_filtered_offsets_caps_speculative_allocation() -> gix_testtools::TestResult {
+    struct LargeUpperBound(std::ops::Range<usize>);
+
+    impl Iterator for LargeUpperBound {
+        type Item = usize;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            self.0.next()
+        }
+
+        fn size_hint(&self) -> (usize, Option<usize>) {
+            (0, Some(usize::MAX))
         }
     }
-    Ok(())
-}
 
-#[test]
-fn tree_from_filtered_offsets_caps_speculative_allocation() -> gix_testtools::TestResult {
     let first_offset = pack::data::header::SIZE as u64;
-    let limit = std::mem::size_of::<gix_pack::cache::delta::tree::Item<u64>>();
     for count in [0, 1] {
-        let offsets = (0..100).filter(|index| *index < count).map(|_| first_offset);
+        let offsets = LargeUpperBound(0..count).map(|_| first_offset);
         let mut visited = 0;
         let offsets = offsets.inspect(|_| visited += 1);
         gix_pack::cache::delta::Tree::from_offsets_in_pack(
@@ -412,45 +350,12 @@ fn tree_from_filtered_offsets_caps_speculative_allocation() -> gix_testtools::Te
             &mut progress::Discard,
             &AtomicBool::new(false),
             gix_hash::Kind::Sha1,
-            Some(if count == 0 { 0 } else { limit }),
         )?;
         assert_eq!(
             visited, count,
             "the upper size hint must not reject entries before iteration"
         );
     }
-    Ok(())
-}
-
-#[test]
-fn traverse_with_index_respects_alloc_limit_bytes() -> gix_testtools::TestResult {
-    let index = index::File::at(fixture_path(SMALL_PACK_INDEX), gix_hash::Kind::Sha1)?;
-    let data = pack::data::File::at(fixture_path(SMALL_PACK), gix_hash::Kind::Sha1)?;
-
-    let prevent_allocation = Some(0);
-    let err = match index.traverse_with_index(
-        &data,
-        |_, _, _, _| Ok(()),
-        &mut progress::Discard,
-        &AtomicBool::new(false),
-        index::traverse::with_index::Options {
-            alloc_limit_bytes: prevent_allocation,
-            thread_limit: Some(1),
-            ..Default::default()
-        },
-    ) {
-        Ok(_) => panic!("a zero allocation limit rejects index metadata before decoding objects"),
-        Err(err) => err,
-    };
-
-    insta::assert_debug_snapshot!(err, "traverse_with_index bounds index metadata before decoding objects", @"Pack traversal metadata is too large to fit in memory");
-    assert!(
-        err.classify().any(|classification| {
-            classification.class()
-                == gix_error::Class::ResourceExhaustion(gix_error::ResourceExhaustionKind::AllocationLimit)
-        }),
-        "the configured limit is reported as resource exhaustion"
-    );
     Ok(())
 }
 
@@ -671,51 +576,6 @@ fn pack_lookup() -> gix_testtools::TestResult {
             );
         }
     }
-    Ok(())
-}
-
-#[test]
-fn verify_integrity_respects_pack_alloc_limit_bytes() -> gix_testtools::TestResult {
-    let mut errors = Vec::new();
-    let prevent_allocation = Some(0);
-    let idx = index::File::at(fixture_path(SMALL_PACK_INDEX), gix_hash::Kind::Sha1)?;
-    let pack = pack::data::File::at(fixture_path(SMALL_PACK), gix_hash::Kind::Sha1)?
-        .with_alloc_limit_bytes(prevent_allocation);
-
-    for traversal in [
-        gix_pack::index::traverse::Algorithm::Lookup,
-        gix_pack::index::traverse::Algorithm::DeltaTreeLookup,
-    ] {
-        let err = match idx.verify_integrity(
-            Some(gix_pack::index::verify::PackContext {
-                data: &pack,
-                options: gix_pack::index::verify::integrity::Options {
-                    traversal,
-                    thread_limit: Some(1),
-                    ..Default::default()
-                },
-            }),
-            &mut progress::Discard,
-            &AtomicBool::new(false),
-        ) {
-            Ok(_) => panic!("{traversal:?}: a zero allocation limit rejects index metadata before decoding objects"),
-            Err(err) => err,
-        };
-
-        errors.push((traversal, err));
-    }
-    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(errors), &[]), "both traversal algorithms bound index metadata before decoding objects", @"
-    [
-        (
-            Lookup,
-            Pack traversal metadata is too large to fit in memory,
-        ),
-        (
-            DeltaTreeLookup,
-            Pack traversal metadata is too large to fit in memory,
-        ),
-    ]
-    ");
     Ok(())
 }
 

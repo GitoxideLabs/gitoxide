@@ -132,7 +132,7 @@ where
 
         let operation_start = Instant::now();
         let mut total_objects_checked = 0;
-        let mut pack_ids_and_offsets = try_exact_vec(self.num_objects as usize, self.alloc_limit_bytes)?;
+        let mut pack_ids_and_offsets = try_exact_vec(self.num_objects as usize)?;
         {
             let order_start = Instant::now();
             let mut progress = progress.add_child_with_id("checking oid order".into(), gix_utils::progress::UNKNOWN);
@@ -171,8 +171,7 @@ where
             let index_file;
             let index_path = parent.join(index_file_name);
             let index = if deep_check {
-                let mut opened_bundle = crate::Bundle::at(index_path, self.object_hash)?;
-                opened_bundle.pack.alloc_limit_bytes = self.alloc_limit_bytes;
+                let opened_bundle = crate::Bundle::at(index_path, self.object_hash)?;
                 bundle = Some(opened_bundle);
                 bundle.as_ref().map(|b| &b.index).expect("just set")
             } else {
