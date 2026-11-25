@@ -19,11 +19,15 @@ impl Diff {
     /// * `after` - The token sequence from the second file, after changes
     /// * `heuristic` - The slider heuristic to use for positioning hunks
     pub fn postprocess_with(&mut self, before: &[Token], after: &[Token], mut heuristic: impl SliderHeuristic) {
+        let mut rediff = RediffScratch::default();
         // Compact removals first so ambiguous additions align with them, as in Git.
         Postprocessor {
             added: &mut self.removed,
             removed: &mut self.added,
             tokens: before,
+            other_tokens: after,
+            rediff_after_slide: self.rediff_after_slide,
+            rediff: &mut rediff,
             hunk: Hunk {
                 before: 0..0,
                 after: 0..0,
@@ -35,6 +39,9 @@ impl Diff {
             added: &mut self.added,
             removed: &mut self.removed,
             tokens: after,
+            other_tokens: before,
+            rediff_after_slide: self.rediff_after_slide,
+            rediff: &mut rediff,
             hunk: Hunk {
                 before: 0..0,
                 after: 0..0,
@@ -62,10 +69,16 @@ impl Diff {
 struct Postprocessor<'a, H> {
     /// The mutable array tracking which tokens were added.
     added: &'a mut [bool],
-    /// The immutable array tracking which tokens were removed.
-    removed: &'a [bool],
+    /// The mutable array tracking which tokens were removed, changed only to diff a group again.
+    removed: &'a mut [bool],
     /// The token sequence being processed.
     tokens: &'a [Token],
+    /// The token sequence of the other file, to diff a group again after it slid.
+    other_tokens: &'a [Token],
+    /// Whether to diff a group again after it slid, which Git only does for histogram diffs.
+    rediff_after_slide: bool,
+    /// Buffers to diff a group again, shared by both passes.
+    rediff: &'a mut RediffScratch,
     /// The current hunk being processed in the iteration.
     hunk: Hunk,
     /// The heuristic used to determine optimal hunk positions.
@@ -80,6 +93,7 @@ impl<H: SliderHeuristic> Postprocessor<'_, H> {
                 break;
             }
 
+            let range_before_sliding = self.hunk.after.clone();
             let mut earliest_end;
             let mut is_modification;
             loop {
@@ -103,6 +117,7 @@ impl<H: SliderHeuristic> Postprocessor<'_, H> {
             }
 
             if self.hunk.after.end == earliest_end {
+                self.rediff(&range_before_sliding);
                 continue;
             }
             if is_modification {
@@ -122,7 +137,32 @@ impl<H: SliderHeuristic> Postprocessor<'_, H> {
                     debug_assert!(success);
                 }
             }
+            self.rediff(&range_before_sliding);
         }
+    }
+
+    /// Diff the current group again if it changed while sliding, as sliding can merge groups
+    /// so that the merged group has lines in common with the group in the other file.
+    /// Like Git, only do this for histogram diffs and when the group in the other file isn't empty
+    /// (`xdl_change_compact()` in `xdiff/xdiffi.c`).
+    fn rediff(&mut self, range_before_sliding: &std::ops::Range<u32>) {
+        let a = self.hunk.after.clone();
+        let b = self.hunk.before.clone();
+        if !self.rediff_after_slide || b.is_empty() || a == *range_before_sliding {
+            return;
+        }
+        let (a0, a1, b0, b1) = (a.start as usize, a.end as usize, b.start as usize, b.end as usize);
+        self.added[a0..a1].fill(false);
+        self.removed[b0..b1].fill(false);
+        let scratch = &mut *self.rediff;
+        scratch.compact(&self.tokens[a0..a1], &self.other_tokens[b0..b1]);
+        crate::myers::diff(
+            &scratch.tokens,
+            &scratch.other_tokens,
+            &mut self.added[a0..a1],
+            &mut self.removed[b0..b1],
+            false,
+        );
     }
 
     /// Slides a hunk down by one token/line, potentially merging it with a subsequent hunk.
@@ -159,5 +199,67 @@ impl<H: SliderHeuristic> Postprocessor<'_, H> {
         self.hunk.before.end = self.hunk.before.start - 1;
         self.hunk.before.start = find_hunk_start(self.removed, self.hunk.before.start - 1);
         true
+    }
+}
+
+/// Buffers to diff a group again with tokens numbered from zero.
+///
+/// Myers sizes its occurrence counts by the largest token. With the tokens of the whole input, each
+/// group would allocate and clear counts for the whole vocabulary. Like Git's `xdl_fall_back_diff()`,
+/// which prepares the two groups as separate files, the counts only cover the tokens of the groups.
+#[derive(Default)]
+struct RediffScratch {
+    /// The compact token of each input token in the current groups.
+    compact_token: hashbrown::HashMap<Token, Token>,
+    /// The group of this file, with compact tokens.
+    tokens: Vec<Token>,
+    /// The group of the other file, with compact tokens.
+    other_tokens: Vec<Token>,
+}
+
+impl RediffScratch {
+    /// Number the tokens of `tokens` and `other_tokens` from zero, in the order they first occur.
+    fn compact(&mut self, tokens: &[Token], other_tokens: &[Token]) {
+        // Clearing touches every bucket, so bound the retained capacity by the current groups.
+        let group_size = tokens.len() + other_tokens.len();
+        if self.compact_token.capacity() > group_size.saturating_mul(4) {
+            self.compact_token = hashbrown::HashMap::new();
+        } else {
+            self.compact_token.clear();
+        }
+        self.tokens.clear();
+        self.other_tokens.clear();
+        for (input, output) in [(tokens, &mut self.tokens), (other_tokens, &mut self.other_tokens)] {
+            for &token in input {
+                let next = Token(self.compact_token.len() as u32);
+                output.push(*self.compact_token.entry(token).or_insert(next));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RediffScratch, Token};
+
+    #[test]
+    fn compact_releases_the_map_after_a_large_group() -> gix_testtools::TestResult {
+        let mut scratch = RediffScratch::default();
+        let large: Vec<_> = (0..128).map(Token).collect();
+        scratch.compact(&large[..64], &large[64..]);
+        let large_capacity = scratch.compact_token.capacity();
+
+        scratch.compact(&[Token(96), Token(64)], &[Token(64), Token(128)]);
+        assert!(
+            scratch.compact_token.capacity() < large_capacity,
+            "the small group pair should release the large pair's map allocation"
+        );
+        assert_eq!(scratch.tokens, [Token(0), Token(1)], "number tokens from zero again");
+        assert_eq!(
+            scratch.other_tokens,
+            [Token(1), Token(2)],
+            "reuse the same number for tokens appearing on both sides"
+        );
+        Ok(())
     }
 }

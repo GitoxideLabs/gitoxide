@@ -1,5 +1,6 @@
 use std::fmt::Write;
 use std::mem::swap;
+use std::path::Path;
 
 use expect_test::expect;
 // use git::bstr::BStr;
@@ -865,6 +866,94 @@ fn assert_myers_matches_git(case: &str, algorithm: Algorithm, expected: (u32, u3
             git_hunks,
             "{case}: {algorithm:?} with {storage} storage must match Git's exact hunk placement"
         );
+    }
+    Ok(())
+}
+
+#[test]
+fn histogram_skips_occurrences_up_to_the_end_of_the_match_in_the_old_file() -> gix_testtools::TestResult {
+    assert_histogram_matches_git("skip-after-match")
+}
+
+#[test]
+fn histogram_anchors_on_lines_with_up_to_64_occurrences() -> gix_testtools::TestResult {
+    assert_histogram_matches_git("occurrence-limit")
+}
+
+#[test]
+fn histogram_skips_seeds_with_more_than_65_occurrences() -> gix_testtools::TestResult {
+    assert_histogram_matches_git("occurrence-seed-limit")?;
+    assert_histogram_matches_git("occurrence-overflow")
+}
+
+#[test]
+fn histogram_preserves_hunks_before_a_repetitive_tail() -> gix_testtools::TestResult {
+    assert_histogram_matches_git("repetitive-tail")?;
+    assert_histogram_matches_git("alternating-tail")?;
+    assert_histogram_matches_git("mixed-frequency-tail")?;
+    assert_histogram_matches_git("paired-tail")
+}
+
+#[test]
+fn histogram_preserves_hunks_around_a_common_block_before_a_terminal_edit() -> gix_testtools::TestResult {
+    assert_histogram_matches_git("shifted-paired-tail")?;
+    assert_histogram_matches_git("terminal-anchor")?;
+    assert_histogram_matches_git("clipped-block")
+}
+
+#[test]
+fn histogram_does_not_strip_the_common_prefix_and_suffix() -> gix_testtools::TestResult {
+    assert_histogram_matches_git("common-ends")
+}
+
+#[test]
+fn histogram_diffs_a_shifted_change_group_again() -> gix_testtools::TestResult {
+    let case = "rediff-after-slide";
+    let Some(root) = gix_testtools::scripted_fixture_read_only_with_args_with_git_version(
+        "make_histogram_baseline.sh",
+        [case],
+        |version| version >= (2, 54, 0),
+    )?
+    else {
+        return Ok(());
+    };
+    assert_histogram_hunks_match_git(&root, case)
+}
+
+fn assert_histogram_matches_git(case: &str) -> gix_testtools::TestResult {
+    let root = gix_testtools::scripted_fixture_read_only("make_histogram_baseline.sh")?;
+    assert_histogram_hunks_match_git(&root, case)
+}
+
+fn assert_histogram_hunks_match_git(root: &Path, case: &str) -> gix_testtools::TestResult {
+    for case in [case.to_owned(), format!("{case}-reversed")] {
+        let case_root = root.join(&case);
+        let before = std::fs::read_to_string(case_root.join("old"))?;
+        let after = std::fs::read_to_string(case_root.join("new"))?;
+        let input = InternedInput::new(before.as_str(), after.as_str());
+        for (baseline, indent_heuristic) in [("NoHeuristic", false), ("IndentHeuristic", true)] {
+            let git_hunks = std::fs::read_to_string(case_root.join(format!("{baseline}.hunks")))?
+                .lines()
+                .map(|line| {
+                    let (before, after) = line.split_once(' ').expect("Git hunk header contains both ranges");
+                    Ok(gix_imara_diff::Hunk {
+                        before: git_hunk_range(before)?,
+                        after: git_hunk_range(after)?,
+                    })
+                })
+                .collect::<gix_testtools::TestResult<Vec<_>>>()?;
+            let mut diff = Diff::compute(Algorithm::Histogram, &input);
+            if indent_heuristic {
+                diff.postprocess_lines(&input);
+            } else {
+                diff.postprocess_no_heuristic(&input);
+            }
+            assert_eq!(
+                diff.hunks().collect::<Vec<_>>(),
+                git_hunks,
+                "{case}: histogram with {baseline} must match Git's exact hunk placement"
+            );
+        }
     }
     Ok(())
 }

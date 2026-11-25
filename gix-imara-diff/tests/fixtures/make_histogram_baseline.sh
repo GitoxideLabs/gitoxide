@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+set -eu -o pipefail
+
+# Each case is one step of Git's histogram diff in `xdiff/` that gix-imara-diff once did differently.
+# The inputs stay below 1024 bytes on at least one side, so `--unified=0` doesn't trim a common tail.
+
+if [[ ${1:-} == rediff-after-slide ]]; then
+  # Git 2.54 diffs shifted histogram groups again (e417277ae9). This finds the empty line
+  # shared by the merged groups, so "L" becomes "R" and "Q", and "P" is removed.
+  mkdir rediff-after-slide
+  printf 'L\n\nP\nQ\n\n' >rediff-after-slide/old
+  printf 'R\nQ\n\nQ\n\n' >rediff-after-slide/new
+  cases=(rediff-after-slide)
+else
+  # After a match, Git skips the later occurrences of its first line in the old file up to the end
+  # of the match in the old file (`xdiff/xhistogram.c`). Git matches the second "B" of the old file.
+  # Comparing with the end of the match in the new file matches the first "B" instead.
+  mkdir skip-after-match
+  printf '\nA\nB\n\nB\n\n' >skip-after-match/old
+  printf 'C\nD\n\nB\n' >skip-after-match/new
+
+  # Git anchors on a line with up to 64 occurrences in the old file and keeps one "x". With a limit
+  # of 63, "x" can't be an anchor and the diff keeps no line.
+  mkdir occurrence-limit
+  for i in {1..64}; do
+    printf 'x\n'
+  done >occurrence-limit/old
+  printf 'a\nb\nc\n\nd\ne\nx\nf\n' >occurrence-limit/new
+
+  # At 65 occurrences, "B" can seed a match and extend it through "A".
+  # At 66, Git seeds from "A" and keeps all four lines of the new file.
+  mkdir occurrence-seed-limit occurrence-overflow
+  {
+    printf '%s\n' B B B B A A B A
+    for i in {1..60}; do
+      printf 'B\n'
+    done
+  } >occurrence-seed-limit/old
+  printf '%s\n' B A B A >occurrence-seed-limit/new
+  cp occurrence-seed-limit/old occurrence-overflow/old
+  printf 'B\n' >>occurrence-overflow/old
+  cp occurrence-seed-limit/new occurrence-overflow/new
+
+  # Unique unchanged lines split edits before shared tails. A line in the paired tail
+  # occurs twice and is skipped after a unique anchor sets the cutoff to one. Two final
+  # blank lines in the mixed case can still seed a match after the prefix is gone.
+  mkdir repetitive-tail alternating-tail mixed-frequency-tail paired-tail
+  for side in old new; do
+    {
+      for i in {1..8}; do
+        printf '%s-%s\nkeep-%s\n' "$side" "$i" "$i"
+      done
+      printf '%s-last\n' "$side"
+    } >"repetitive-tail/$side"
+    cp "repetitive-tail/$side" "alternating-tail/$side"
+    cp "repetitive-tail/$side" "paired-tail/$side"
+    for i in {1..128}; do
+      printf 'x\n' >>"repetitive-tail/$side"
+      printf '%s\n' x y >>"alternating-tail/$side"
+      printf '%s\n' "$i" "$i" >>"paired-tail/$side"
+    done
+    cp "repetitive-tail/$side" "mixed-frequency-tail/$side"
+    printf '\n\n' >>"mixed-frequency-tail/$side"
+  done
+
+  # Adding a final line shifts the pairs when viewed from the ends of the files.
+  mkdir shifted-paired-tail
+  cp paired-tail/old shifted-paired-tail/old
+  cp paired-tail/new shifted-paired-tail/new
+  printf 'extra final line\n' >>shifted-paired-tail/new
+
+  # The first match leaves a shared block of "x" lines before different final lines.
+  # The "Z" outside that block must still be able to match across its two ends.
+  mkdir terminal-anchor
+  printf '%s\n' Z keep L >terminal-anchor/old
+  printf '%s\n' Z keep Z >terminal-anchor/new
+  for i in {1..128}; do
+    printf 'x\n' >>terminal-anchor/old
+    printf 'x\n' >>terminal-anchor/new
+  done
+  printf 'Z\n' >>terminal-anchor/old
+  printf 'R\n' >>terminal-anchor/new
+
+  # After "A" anchors a match through 70 pairs, the shortened block has only
+  # 63 shared "y" lines. The extra pair keeps the count at most 64 in either direction.
+  mkdir clipped-block
+  printf '%s\n' A keep L A >clipped-block/old
+  printf '%s\n' A keep R A >clipped-block/new
+  for side in old new; do
+    {
+      for i in {1..70}; do
+        printf '%s\n' x y
+      done
+      if [[ $side == new ]]; then
+        printf '%s\n' x y
+      fi
+      for i in {1..63}; do
+        printf 'y\n'
+      done
+      printf '%s-end\n' "$side"
+    } >>"clipped-block/$side"
+  done
+
+  # Git doesn't strip the common prefix and suffix before a histogram diff. Stripping the final "}"
+  # makes the first "    }" the anchor, where Git anchors the second.
+  mkdir common-ends
+  printf '    }\n    }\n}\n' >common-ends/old
+  printf '        }\n    }\n}\n}\n' >common-ends/new
+
+  cases=(
+    skip-after-match occurrence-limit occurrence-seed-limit occurrence-overflow
+    repetitive-tail alternating-tail mixed-frequency-tail paired-tail
+    shifted-paired-tail terminal-anchor clipped-block common-ends
+  )
+fi
+
+for case in "${cases[@]}"; do
+  mkdir "$case-reversed"
+  cp "$case/new" "$case-reversed/old"
+  cp "$case/old" "$case-reversed/new"
+done
+
+baseline() {
+  local name=$1
+  shift
+  # --no-index returns 1 for differences. Do not hide actual Git failures.
+  # Zero context exposes each compacted hunk's ranges; ignore file headers and function context.
+  git diff --no-index --no-ext-diff --no-textconv --no-color --diff-algorithm=histogram \
+    --unified=0 "$@" -- old new >"$name.patch" || test "$?" -eq 1
+  awk '/^@@ / {print $2, $3}' "$name.patch" >"$name.hunks"
+}
+
+for case in */; do
+  (
+    cd "$case"
+    baseline NoHeuristic --no-indent-heuristic
+    baseline IndentHeuristic --indent-heuristic
+  )
+done

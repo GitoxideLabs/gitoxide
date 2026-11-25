@@ -64,7 +64,7 @@
 //! After the initial computation, the diff can be *postprocessed*. If the diff is shown
 //! to a human in some way (even indirectly), you always want to use this.
 //!
-//! However, when only counting the number of changed tokens quickly, this can be skipped.
+//! For [`Algorithm::Histogram`], postprocessing can also change the edit counts by diffing shifted groups again.
 //! The postprocessing allows you to provide your own
 //! heuristic for selecting a slider position. An indentation-based heuristic is provided,
 //! which is a good fit for all text-based line diffs. The internals of the heuristic are
@@ -147,10 +147,7 @@
 use std::ops::Range;
 use std::slice;
 
-use crate::{
-    sources::words,
-    util::{strip_common_postfix, strip_common_prefix},
-};
+use crate::sources::words;
 
 pub use crate::slider_heuristic::{IndentHeuristic, IndentLevel, NoSliderHeuristic, SliderHeuristic};
 pub use intern::{InternedInput, Interner, Token, TokenSource};
@@ -237,6 +234,8 @@ pub struct Diff {
     /// Tracks which tokens were added to the second sequence (`after`), with
     /// one entry for each one in the `after` sequence.
     added: Vec<bool>,
+    /// Whether postprocessing diffs a group again after it slid, as Git does for histogram diffs only.
+    rediff_after_slide: bool,
 }
 
 impl std::fmt::Debug for Diff {
@@ -256,7 +255,7 @@ impl Diff {
 
     /// Computes an edit-script that transforms `before` into `after` using
     /// the specified `algorithm`.
-    pub fn compute_with(&mut self, algorithm: Algorithm, mut before: &[Token], mut after: &[Token], num_tokens: u32) {
+    pub fn compute_with(&mut self, algorithm: Algorithm, before: &[Token], after: &[Token], num_tokens: u32) {
         assert!(
             before.len() < i32::MAX as usize,
             "imara-diff only supports up to {} tokens",
@@ -271,16 +270,10 @@ impl Diff {
         self.added.clear();
         self.removed.resize(before.len(), false);
         self.added.resize(after.len(), false);
+        self.rediff_after_slide = algorithm == Algorithm::Histogram;
         match algorithm {
-            Algorithm::Histogram => {
-                let common_prefix = strip_common_prefix(&mut before, &mut after) as usize;
-                let common_postfix = strip_common_postfix(&mut before, &mut after);
-                let range = common_prefix..self.removed.len() - common_postfix as usize;
-                let removed = &mut self.removed[range];
-                let range = common_prefix..self.added.len() - common_postfix as usize;
-                let added = &mut self.added[range];
-                histogram::diff(before, after, removed, added, num_tokens);
-            }
+            // Like Git, don't strip the common prefix and suffix, as it changes which lines histogram anchors.
+            Algorithm::Histogram => histogram::diff(before, after, &mut self.removed, &mut self.added, num_tokens),
             // Myers trims the common ends itself, as it needs to count the tokens of the whole input first.
             Algorithm::Myers => myers::diff(before, after, &mut self.removed, &mut self.added, false),
             Algorithm::MyersMinimal => myers::diff(before, after, &mut self.removed, &mut self.added, true),
