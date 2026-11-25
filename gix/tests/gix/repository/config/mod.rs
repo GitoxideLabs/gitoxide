@@ -8,6 +8,80 @@ mod path_protection;
 mod remote;
 
 #[test]
+fn config_section_filter_override_is_local_to_clone() -> TestResult {
+    use gix::{Result, remote::Direction::Fetch};
+
+    let fixture = gix_testtools::scripted_fixture_read_only("make_basic_repo.sh")?;
+    let mut repo = gix::open_opts(
+        fixture,
+        gix::open::Options::isolated()
+            .with_enforced_trust(gix::sec::Trust::Reduced)
+            .config_overrides([
+                "remote.origin.url=https://original.example/project",
+                "remote.origin.fetch=+refs/heads/*:refs/remotes/origin/*",
+            ]),
+    )?;
+    let mut worktree = gix_config::File::new(
+        gix_config::file::Metadata::from(gix_config::Source::Worktree).with(gix::sec::Trust::Reduced),
+    );
+    worktree.set_raw_value("branch.main.remote", "origin")?;
+    worktree.set_raw_value("branch.main.merge", "refs/heads/topic")?;
+    worktree.set_raw_value("url.https://rewritten.example/.insteadOf", "https://original.example/")?;
+    let mut config = repo.config_snapshot_mut();
+    config.append(worktree)?;
+    config.commit()?;
+
+    let branch = "refs/heads/main".try_into()?;
+    let fetch_url = |repo: &gix::Repository| -> Result<_> {
+        Ok(repo
+            .find_remote("origin")?
+            .url(Fetch)
+            .expect("configured URL")
+            .to_bstring())
+    };
+    assert_eq!(
+        fetch_url(&repo)?,
+        "https://original.example/project",
+        "prime the original URL cache"
+    );
+    assert!(repo.branch_remote_tracking_ref_name(branch, Fetch).is_none());
+
+    {
+        let filtered = repo.clone().with_config_section_filter(|meta| {
+            meta.source == gix::config::Source::Worktree || gix::config::section::is_trusted(meta)
+        })?;
+        assert_eq!(
+            filtered.git_dir_trust(),
+            gix::sec::Trust::Reduced,
+            "the filter does not change repository trust"
+        );
+        assert_eq!(
+            filtered
+                .branch_remote_tracking_ref_name(branch, Fetch)
+                .expect("worktree tracking config is accepted")?,
+            "refs/remotes/origin/topic"
+        );
+        assert_eq!(
+            fetch_url(&filtered)?,
+            "https://rewritten.example/project",
+            "the clone's URL cache uses the new filter"
+        );
+        assert_eq!(
+            fetch_url(&repo)?,
+            "https://original.example/project",
+            "the original cache is unaffected"
+        );
+    }
+    assert!(repo.branch_remote_tracking_ref_name(branch, Fetch).is_none());
+    assert_eq!(
+        fetch_url(&repo)?,
+        "https://original.example/project",
+        "dropping the clone leaves the original filter in effect"
+    );
+    Ok(())
+}
+
+#[test]
 fn reference_namespace_uses_only_trusted_configuration() -> TestResult {
     let fixture = gix_testtools::scripted_fixture_read_only("make_basic_repo.sh")?;
     let repo = gix::open_opts(

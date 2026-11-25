@@ -240,7 +240,7 @@ pub(crate) struct Cache {
     /// The amount of bytes we can hold in our static LRU cache. Otherwise, go with the defaults.
     pub(crate) static_pack_cache_limit_bytes: Option<usize>,
     /// The config section filter from the options used to initialize this instance. Keep these in sync!
-    filter_config_section: fn(&gix_config::file::Metadata) -> bool,
+    pub(crate) filter_config_section: fn(&gix_config::file::Metadata) -> bool,
     /// The object kind to pick if a prefix is ambiguous.
     #[cfg(feature = "revision")]
     pub object_kind_hint: Option<crate::revision::spec::parse::ObjectKindHint>,

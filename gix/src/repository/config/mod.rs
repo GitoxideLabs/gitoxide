@@ -332,6 +332,26 @@ mod remote;
 mod transport;
 
 impl crate::Repository {
+    /// Replace the configuration section filter and return the updated repository handle.
+    ///
+    /// Configuration caches are refreshed without reopening the repository, loading additional config files or
+    /// includes, or changing the repository's trust level.
+    ///
+    /// The filter replaces, rather than augments, the existing one.
+    ///
+    /// # Security
+    ///
+    /// Before admitting sections that the default filter would reject, see the security warning in
+    /// [`Options::with_enforced_trust()`](crate::open::Options::with_enforced_trust()).
+    #[doc(alias = "trust override")]
+    pub fn with_config_section_filter(mut self, filter: fn(&gix_config::file::Metadata) -> bool) -> Result<Self> {
+        self.options.filter_config_section = Some(filter);
+        self.config.filter_config_section = filter;
+        let config = self.config.resolved.clone();
+        self.reread_values_and_clear_caches_replacing_config(config)?;
+        Ok(self)
+    }
+
     pub(crate) fn filter_config_section(&self) -> fn(&gix_config::file::Metadata) -> bool {
         self.options
             .filter_config_section

@@ -240,6 +240,11 @@ impl Options {
     ///
     /// The default filter selects sections whose trust level is [`full`][gix_sec::Trust::Full] or
     /// whose source is not [`repository-local`][gix_config::source::Kind::Repository].
+    ///
+    /// # Security
+    ///
+    /// A custom filter replaces the default and can admit untrusted configuration without changing the repository's
+    /// trust level. See the security warning in [`with_enforced_trust()`][Self::with_enforced_trust()].
     pub fn filter_config_section(mut self, filter: fn(&gix_config::file::Metadata) -> bool) -> Self {
         self.filter_config_section = Some(filter);
         self
