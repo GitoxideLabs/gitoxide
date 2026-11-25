@@ -169,8 +169,7 @@ pub(crate) fn save_manual(repository_path: &Path, bare: bool, id: ObjectId) -> R
         &workdir,
         name,
         format!("tix {}", id.to_hex_with_len(7)),
-        "tix commit stash",
-        "commit state",
+        SaveKind::Manual,
     )?;
     let mut notice = format!("stashed changes at {}", id.to_hex_with_len(7));
     if let Some(warning) = saved.warning {
@@ -277,16 +276,7 @@ pub(super) fn save_if_dirty(
         return Ok(None);
     }
     let message = format!("tix travel {}", name.shorten());
-    save(
-        repository_path,
-        bare,
-        workdir,
-        name,
-        message,
-        "tix travel auto-stash",
-        "departure state",
-    )
-    .map(Some)
+    save(repository_path, bare, workdir, name, message, SaveKind::Departure).map(Some)
 }
 
 pub(super) fn remap(
@@ -349,16 +339,45 @@ pub(super) fn restore_after_failure(
     }
 }
 
+enum SaveKind {
+    Manual,
+    Departure,
+}
+
+fn has_staged_changes(workdir: &Path) -> Result<bool> {
+    let mut command = crate::git_command(workdir);
+    command.args([
+        "diff",
+        "--cached",
+        "--quiet",
+        "--no-ext-diff",
+        "--ignore-submodules=none",
+        "HEAD",
+        "--",
+    ]);
+    let output = command
+        .output()
+        .or_raise(|| message("could not inspect staged changes").with_program(command.get_program()))?;
+    match output.status.code() {
+        Some(0) => Ok(false),
+        Some(1) => Ok(true),
+        _ => bail!(message("could not compare the index with HEAD").with_command_output(&command, output)),
+    }
+}
+
 #[tracing::instrument(skip_all, fields(stash = %name))]
-pub(super) fn save(
+fn save(
     repository_path: &Path,
     bare: bool,
     workdir: &Path,
     name: gix::refs::FullName,
     message: String,
-    reflog_message: &'static str,
-    state_label: &'static str,
+    kind: SaveKind,
 ) -> Result<SavedStash> {
+    let (reflog_message, state_label) = match kind {
+        SaveKind::Manual => ("tix commit stash", "commit state"),
+        SaveKind::Departure => ("tix travel auto-stash", "departure state"),
+    };
     let repo = open_repository(repository_path, bare, false)
         .or_raise(|| message!("could not open repository to save {state_label}"))?;
     let _guard = super::mutation_lock(&repo)?;
@@ -370,13 +389,22 @@ pub(super) fn save(
         .and_then(|mut reference| reference.peel_to_id().ok().map(gix::Id::detach));
     drop(repo);
 
+    let staged = matches!(kind, SaveKind::Manual) && has_staged_changes(workdir)?;
+    let source = if staged { "--staged" } else { "--include-untracked" };
     let output = crate::git_command(workdir)
-        .args(["stash", "push", "--include-untracked", "--quiet", "--message"])
+        .args(["stash", "push", source, "--quiet", "--message"])
         .arg(message)
         .output()
         .or_raise(|| gix::error::message("could not launch git stash push"))?;
     if !output.status.success() {
-        bail!("git stash push failed: {}", output.stderr.trim().to_str_lossy());
+        let stderr = output.stderr.trim().to_str_lossy();
+        if staged
+            && let Ok(Some(stash_commit_id)) = current(repository_path, bare)
+            && previous != Some(stash_commit_id)
+        {
+            bail!("git stash push failed: {stderr}\nGit's stash stack now starts at {stash_commit_id}");
+        }
+        bail!("git stash push failed: {stderr}");
     }
 
     let repo = open_repository(repository_path, bare, false)
@@ -750,7 +778,7 @@ mod tests {
     }
 
     #[test]
-    fn manual_stashes_preserve_git_stashes_and_restore_index_and_worktree_state() -> gix_testtools::Result {
+    fn manual_stashes_prefer_the_index_and_preserve_existing_git_stashes() -> gix::error::TestResult {
         let fixture = gix_testtools::tempfile::tempdir()?;
         git(fixture.path(), &["init", "-q", "-b", "main"])?;
         crate::test_repository::disable_autocrlf(fixture.path())?;
@@ -786,9 +814,12 @@ mod tests {
         let name = reference(&repo, head)?;
         assert!(repo.try_find_reference(name.as_ref())?.is_some());
         assert!(
-            git(fixture.path(), &["status", "--porcelain=v1", "--untracked-files=all"])?.is_empty(),
-            "the tracked and untracked changes were stashed"
+            git(fixture.path(), &["diff", "--cached", "--name-only"])?.is_empty(),
+            "saving clears the staged changes"
         );
+        assert!(!fixture.path().join("staged").exists(), "the staged addition is saved");
+        assert_eq!(std::fs::read(fixture.path().join("tracked"))?, b"unstaged\n");
+        assert_eq!(std::fs::read(fixture.path().join("untracked"))?, b"untracked\n");
         assert_eq!(std::fs::read(fixture.path().join("ignored"))?, b"ignored\n");
         drop(repo);
 
@@ -812,7 +843,54 @@ mod tests {
     }
 
     #[test]
-    fn manual_stash_survives_an_index_conflict_and_can_restore_all_saved_files() -> gix_testtools::Result {
+    fn manual_stashes_save_tracked_and_untracked_changes_with_a_clean_index() -> gix::error::TestResult {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let path = fixture.path();
+        let repo = crate::test_repository::open(path)?;
+        let commit_id = repo.head_id()?.detach();
+        std::fs::write(path.join("tip"), "unstaged\n")?;
+        std::fs::write(path.join("untracked"), "untracked\n")?;
+
+        save_manual(repo.git_dir(), false, commit_id)?;
+        assert!(
+            git(path, &["status", "--porcelain"])?.is_empty(),
+            "both changes are saved"
+        );
+        restore_manual(repo.git_dir(), false, commit_id)?;
+        assert_eq!(std::fs::read(path.join("tip"))?, b"unstaged\n");
+        assert_eq!(std::fs::read(path.join("untracked"))?, b"untracked\n");
+        assert!(
+            git(path, &["diff", "--cached", "--name-only"])?.is_empty(),
+            "the index stays clean"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn manual_stash_reports_a_git_recovery_entry_when_staged_removal_fails() -> gix::error::TestResult {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let path = fixture.path();
+        let repo = crate::test_repository::open(path)?;
+        let commit_id = repo.head_id()?.detach();
+        std::fs::write(path.join("tip"), "staged\n")?;
+        git(path, &["add", "tip"])?;
+        std::fs::write(path.join("tip"), "overlapping worktree edit\n")?;
+
+        let err = save_manual(repo.git_dir(), false, commit_id)
+            .expect_err("Git cannot remove the staged edit from the overlapping worktree edit");
+        assert_eq!(git(path, &["show", ":tip"])?, b"staged\n", "the staged edit remains");
+        assert_eq!(std::fs::read(path.join("tip"))?, b"overlapping worktree edit\n");
+        assert!(all(&repo)?.is_empty(), "failed removal does not publish a Tix stash");
+        let recovery_commit_id = repo.find_reference("refs/stash")?.id();
+        assert!(
+            err.to_string().contains(&recovery_commit_id.to_string()),
+            "the error names the Git stash: {err}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn manual_stash_survives_an_index_conflict_and_can_restore_all_saved_files() -> gix::error::TestResult {
         let fixture = gix_testtools::tempfile::tempdir()?;
         git(fixture.path(), &["init", "-q", "-b", "main"])?;
         crate::test_repository::disable_autocrlf(fixture.path())?;
@@ -829,8 +907,8 @@ mod tests {
         drop(repo);
 
         std::fs::write(fixture.path().join("Cargo.lock"), "staged\n")?;
-        git(fixture.path(), &["add", "Cargo.lock"])?;
-        std::fs::write(fixture.path().join("tracked"), "unstaged\n")?;
+        std::fs::write(fixture.path().join("tracked"), "also staged\n")?;
+        git(fixture.path(), &["add", "Cargo.lock", "tracked"])?;
         std::fs::write(fixture.path().join("untracked"), "untracked\n")?;
         save_manual(&repository_path, false, head_commit_id)?;
         let stash_commit_id = crate::test_repository::open(fixture.path())?
@@ -854,11 +932,12 @@ mod tests {
         assert_eq!(
             std::fs::read(fixture.path().join("tracked"))?,
             b"base\n",
-            "the early index failure prevents restoring unstaged changes"
+            "the early index failure prevents restoring other staged changes"
         );
-        assert!(
-            !fixture.path().join("untracked").exists(),
-            "the early index failure also prevents restoring untracked files"
+        assert_eq!(
+            std::fs::read(fixture.path().join("untracked"))?,
+            b"untracked\n",
+            "untracked work remains in place during both operations"
         );
         assert_eq!(
             crate::test_repository::open(fixture.path())?
@@ -889,23 +968,23 @@ mod tests {
         );
         assert_eq!(
             std::fs::read(fixture.path().join("tracked"))?,
-            b"unstaged\n",
-            "retry restores the previously skipped tracked change"
+            b"also staged\n",
+            "retry restores the other staged change"
         );
         assert_eq!(
             std::fs::read(fixture.path().join("untracked"))?,
             b"untracked\n",
-            "retry restores the previously skipped untracked file"
+            "retry preserves the untracked file"
         );
         assert_eq!(
             git(fixture.path(), &["diff", "--cached", "--name-only"])?.trim(),
-            b"Cargo.lock",
-            "only the original staged path is staged"
+            b"Cargo.lock\ntracked",
+            "both saved changes are staged"
         );
         assert_eq!(
             git(fixture.path(), &["diff", "--name-only"])?.trim(),
-            b"tracked",
-            "the original unstaged change stays unstaged"
+            b"",
+            "the restored worktree matches the index"
         );
         assert!(
             crate::test_repository::open(fixture.path())?

@@ -181,8 +181,8 @@ without trading responsiveness for metadata that is not visible.
   materialized; earlier completed replay steps retain their updates.
   An accepted conflict writes the checkout and provisional index,
   then exits with an error so resolution cannot be mistaken for completion.
-- `tix stash` saves the index and worktree state in a gix stash associated with
-  the `HEAD` commit through the same commit-stash operation as the TUI.
+- `tix stash` uses the TUI's staged-first save and associates the stash with
+  the `HEAD` commit.
 - `tix transplant ROOT [--leaf TIP ... | --subtree] (--copy | --move)
   (--fork | --insert) (--above DEST | --below DEST)
   [--materialize-conflicts[=CONTINUE]]` applies the same tree selection and
@@ -1496,9 +1496,14 @@ selection, and submission behavior.
 - When loaded worktree status shows staged, unstaged, or untracked changes without
   conflicts, the actions menu offers `sTash` (`a Shift-T`) at the selected `@`
   entry. Missing or stale worktree status hides the action instead of performing
-  another status query. Saving uses Git with `--include-untracked`, leaves ignored files alone,
-  preserves the ordinary stash stack, and records the stash commit at
+  another status query. When the index has staged changes, Git saves just those
+  changes with `--staged` and leaves unstaged and untracked changes in place.
+  With an unchanged index, Git saves tracked and untracked changes with
+  `--include-untracked`, leaving ignored files alone. A successful save preserves
+  the ordinary stash stack and records the stash commit at
   `refs/tix/stash/<full-change-id>`, using the canonical reverse-hex change ID.
+  If Git fails while removing a staged edit and leaves an entry on its ordinary
+  stash stack, Tix reports the error and the new tip of that stack.
   A change can retain only one such stash across the repository's worktrees.
   `tix stash` performs this operation directly at `HEAD` with the same checks.
 - `tix stash list` prints all repository-wide commit stashes and the current

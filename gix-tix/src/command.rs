@@ -69,7 +69,7 @@ enum Command {
     Spill(Spill),
     /// Split HEAD by amending worktree changes into it and committing staged index changes on top.
     Split(Split),
-    /// Save index and worktree changes in a stash associated with HEAD's change ID.
+    /// Save staged changes, or tracked and untracked changes with a clean index, in a stash associated with HEAD's change ID.
     Stash {
         #[command(subcommand)]
         command: Option<stash::Command>,
@@ -1423,7 +1423,7 @@ mod tests {
     }
 
     #[test]
-    fn stash_recovery_restores_state_after_an_external_rewrite() -> gix_testtools::Result {
+    fn stash_recovery_restores_state_after_an_external_rewrite() -> gix::error::TestResult {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let path = fixture.path();
         let repo = crate::test_repository::open(path)?;
@@ -1437,11 +1437,18 @@ mod tests {
                 .success(),
             "the fixture stages its index state"
         );
-        std::fs::write(path.join("tip"), "unstaged\n")?;
+        std::fs::write(path.join("base"), "unstaged\n")?;
         std::fs::write(path.join("untracked"), "untracked\n")?;
         Cli::try_parse_from(["tix", "stash"])?
             .platform
             .run(repo.clone().into_sync())?;
+        assert_eq!(
+            std::fs::read(path.join("tip"))?,
+            b"tip\n",
+            "the command removes the staged edit from the worktree"
+        );
+        assert_eq!(std::fs::read(path.join("base"))?, b"unstaged\n");
+        assert_eq!(std::fs::read(path.join("untracked"))?, b"untracked\n");
         let stash_commit_id = repo.find_reference(stash_name.as_ref())?.id().detach();
         assert!(
             gix_testtools::git_command(path)
@@ -1475,13 +1482,18 @@ mod tests {
         );
         assert_eq!(
             std::fs::read(path.join("tip"))?,
+            b"staged\n",
+            "recovery restores the staged worktree contents"
+        );
+        assert_eq!(
+            std::fs::read(path.join("base"))?,
             b"unstaged\n",
-            "recovery restores the worktree"
+            "restoration preserves the unrelated worktree edit"
         );
         assert_eq!(
             std::fs::read(path.join("untracked"))?,
             b"untracked\n",
-            "recovery restores untracked files"
+            "restoration preserves the untracked file"
         );
         assert!(
             repo.try_find_reference(stash_name.as_ref())?.is_none(),
@@ -1961,18 +1973,18 @@ mod tests {
             Some(std::path::Path::new("todo.md")),
             "bare opt-in never consumes the positional todo"
         );
+        let short_help = Cli::command().render_help().to_string();
         assert!(
-            Cli::command()
-                .render_help()
-                .to_string()
+            short_help
                 .contains("Split HEAD by amending worktree changes into it and committing staged index changes on top"),
             "short help explains how split distributes index and worktree changes"
         );
         assert!(
-            Cli::command()
-                .render_help()
-                .to_string()
-                .contains("stash associated with HEAD's change ID"),
+            short_help.contains("tracked and untracked changes with a clean index"),
+            "short help explains the staged-first stash selection"
+        );
+        assert!(
+            short_help.contains("stash associated with HEAD's change ID"),
             "short help explains the stable change association"
         );
         assert!(

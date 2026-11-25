@@ -274,7 +274,7 @@ impl Command {
             CommandId::RefTreeTop => "Select the top node in the reference tree.",
             CommandId::RefTreeRoot => "Select the root of the current reference-tree component.",
             CommandId::History => "Return to the history view.",
-            CommandId::Stash => "Save local changes at HEAD and clear them from the worktree.",
+            CommandId::Stash => "Stash staged changes if present, otherwise stash tracked and untracked changes.",
             CommandId::Unstash => "Restore the local changes saved at HEAD.",
             CommandId::Rebase => "Edit the commit order and actions above the selected base.",
             CommandId::RebaseUpdate => "Rebase onto the newer tip of the selected hidden branch.",
