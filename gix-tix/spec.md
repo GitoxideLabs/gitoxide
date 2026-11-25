@@ -2333,6 +2333,8 @@ views.
   object-type hints are advisory; status refresh uses every reported path regardless
   of its hints. Ignored directories stay excluded even when a negated pattern
   matches a descendant, such as `!out/` beneath an ignored build tree.
+- The changes pane reads `core.ignoreCase` directly when matching refreshed
+  paths against cached rows, keeping symlink probes out of the worktree event stream.
 - Worktree updates retain the history selection and restore changed-path
   selection by raw path and relative viewport position. They never select the
   newest commit merely because status changed.
