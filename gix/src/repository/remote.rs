@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::{Remote, Result, bstr::BStr, config, remote};
 use gix_error::{ErrorExt, ResultExt};
 
@@ -61,7 +63,7 @@ impl crate::Repository {
     /// # let repo = doctest::open_repo(doctest::remote_repo_dir("clone")?)?;
     /// let remote = repo.find_remote("origin")?;
     ///
-    /// assert_eq!(remote.name().expect("configured").as_bstr(), "origin");
+    /// assert_eq!(remote.name().expect("configured"), "origin");
     /// assert_eq!(remote.refspecs(gix::remote::Direction::Fetch).len(), 1);
     /// # Ok(()) }
     /// ```
@@ -85,7 +87,7 @@ impl crate::Repository {
     ///     .find_default_remote(gix::remote::Direction::Fetch)
     ///     .expect("configured")?;
     ///
-    /// assert_eq!(remote.name().expect("named").as_bstr(), "origin");
+    /// assert_eq!(remote.name().expect("named"), "origin");
     /// # Ok(()) }
     /// ```
     pub fn find_default_remote(&self, direction: remote::Direction) -> Option<Result<Remote<'_>>> {
@@ -93,15 +95,18 @@ impl crate::Repository {
     }
 
     /// Find the configured remote with the given `name_or_url` or return `None` if it doesn't exist,
-    /// for the purpose of fetching or pushing data.
+    /// for the purpose of fetching or pushing data. Lookup uses the exact `[remote "…"]` subsection bytes, even when
+    /// `name_or_url` looks like a URL or is `.`.
+    /// Use [`Self::find_fetch_remote()`] with `Some(name_or_url)` to fall back to an anonymous remote at that URL or path
+    /// when no subsection matches, or [`Self::remote_at()`] to create one without looking up a subsection.
     ///
     /// There are various error kinds related to partial information or incorrectly formatted URLs or ref-specs.
     /// Invalid configured URLs or refspecs include `name_or_url` bytes as `input`
     /// [metadata](gix_error::Error::metadata()).
     /// Also note that the created `Remote` may have neither fetch nor push ref-specs set at all.
-    /// Unlike Git, a configured remote with a symbolic name and no effective fetch URL remains without a fetch URL. If the
-    /// requested remote name is itself a URL, it is used as the fetch URL instead. This applies equally to remotes whose URL
-    /// list was cleared by an empty value and remotes configured only with a push URL.
+    /// Unlike Git, a configured remote with no effective fetch URL remains without a fetch URL unless its name can also be
+    /// interpreted as a URL or path. For `.` the fallback is this repository's Git directory. This applies equally to remotes
+    /// whose URL list was cleared by an empty value and remotes configured only with a push URL.
     ///
     /// URL rewrite rules are applied while constructing the remote. A malformed `pushInsteadOf` result is ignored when a fetch
     /// URL is used as the push fallback, keeping the original URL usable. Malformed `insteadOf` results for fetch URLs or explicit
@@ -139,7 +144,7 @@ impl crate::Repository {
     /// assert_eq!(remote_names, vec!["myself".to_owned(), "origin".to_owned()]);
     ///
     /// let remote = repo.find_fetch_remote(None)?;
-    /// assert_eq!(remote.name().expect("configured").as_bstr(), "origin");
+    /// assert_eq!(remote.name().expect("configured"), "origin");
     /// # Ok(()) }
     /// ```
     pub fn find_fetch_remote(&self, name_or_url: Option<&BStr>) -> Result<Remote<'_>> {
@@ -173,11 +178,29 @@ impl crate::Repository {
         self.try_find_remote_inner(name_or_url.into(), false)
     }
 
-    fn try_find_remote_inner<'a>(
-        &self,
-        name_or_url: impl Into<&'a BStr>,
-        rewrite_urls: bool,
-    ) -> Option<Result<Remote<'_>>> {
+    pub(super) fn self_remote_url(&self) -> Result<gix_url::Url> {
+        let mut url = gix_url::parse(".")?;
+        // The Git directory is already a filesystem path, not URL syntax (e.g. a verbatim Windows path).
+        url.path = gix_path::into_bstr(self.current_dir().join(self.git_dir()))?.into_owned();
+        Ok(url)
+    }
+
+    /// Check whether an exact `[remote "…"]` subsection matches `subsection` and passes the repository's config filter.
+    ///
+    /// Like Git, count a remote as configured even if its subsection only sets options such as `prune`, with no URL
+    /// or refspecs. This also lets callers tell whether a value like `team/origin` names a configured remote rather
+    /// than a possible direct path, without parsing the remote's settings.
+    pub(crate) fn has_trusted_remote_subsection(&self, subsection: &BStr) -> bool {
+        let filter = self.filter_config_section();
+        self.config
+            .resolved
+            .sections_by_name("remote")
+            .is_some_and(|mut sections| {
+                sections.any(|section| section.header().subsection_name() == Some(subsection) && filter(section.meta()))
+            })
+    }
+
+    fn try_find_remote_inner(&self, subsection: &BStr, rewrite_urls: bool) -> Option<Result<Remote<'_>>> {
         fn config_spec<T: config::tree::keys::Validate>(
             specs: Vec<crate::bstr::BString>,
             name_or_url: &BStr,
@@ -200,21 +223,12 @@ impl crate::Repository {
             Ok(unique)
         }
 
-        let mut filter = self.filter_config_section();
-        let name_or_url = name_or_url.into();
-        // Git considers any matching remote section configured, even if it only contains unrelated keys like `prune`.
-        let remote_is_configured = self
-            .config
-            .resolved
-            .sections_by_name("remote")
-            .is_some_and(|mut sections| {
-                sections
-                    .any(|section| section.header().subsection_name() == Some(name_or_url) && filter(section.meta()))
-            });
-        let mut config_urls = |key: &'static config::tree::keys::Url, kind: &'static str| {
-            self.config
-                .resolved
-                .strings_filter(&format!("remote.{}.{}", name_or_url, key.name), &mut filter)
+        let filter = self.filter_config_section();
+
+        let config = &self.config.resolved;
+        let config_urls = |key: &'static config::tree::keys::Url, kind: &'static str| {
+            config
+                .strings_filter_by("remote", subsection, key.name, filter)
                 .map(|urls| {
                     let mut effective_urls = Vec::new();
                     for url in urls {
@@ -231,9 +245,9 @@ impl crate::Repository {
                         .into_iter()
                         .map(|url| {
                             key.try_into_url(url).or_raise(|| {
-                                gix_error::message!("The {kind} url under `remote.{name_or_url}` was invalid")
+                                gix_error::message!("The {kind} url under `remote.{subsection}` was invalid")
                                     .validation()
-                                    .with_input(name_or_url.to_owned())
+                                    .with_input(subsection.to_owned())
                             })
                         })
                         .collect()
@@ -241,31 +255,30 @@ impl crate::Repository {
         };
         let urls = config_urls(&config::tree::Remote::URL, "fetch");
         let push_urls = config_urls(&config::tree::Remote::PUSH_URL, "push");
-        let config = &self.config.resolved;
 
         let fetch_specs = config
-            .strings_filter(&format!("remote.{}.{}", name_or_url, "fetch"), &mut filter)
+            .strings_filter_by("remote", subsection, config::tree::Remote::FETCH.name, filter)
             .map(|specs| {
                 config_spec(
                     specs,
-                    name_or_url,
+                    subsection,
                     &config::tree::Remote::FETCH,
                     gix_refspec::parse::Operation::Fetch,
                 )
             });
         let push_specs = config
-            .strings_filter(&format!("remote.{}.{}", name_or_url, "push"), &mut filter)
+            .strings_filter_by("remote", subsection, config::tree::Remote::PUSH.name, filter)
             .map(|specs| {
                 config_spec(
                     specs,
-                    name_or_url,
+                    subsection,
                     &config::tree::Remote::PUSH,
                     gix_refspec::parse::Operation::Push,
                 )
             });
         let fetch_tags =
             config
-                .string_filter(&format!("remote.{}.{}", name_or_url, "tagOpt"), &mut filter)
+                .string_filter_by("remote", subsection, config::tree::Remote::TAG_OPT.name, filter)
                 .map(|value| {
                     config::tree::Remote::TAG_OPT.try_into_tag_opt(value).or_raise(|| gix_error::message(
                         "The value for 'remote.<name>.tagOpt` is invalid and must either be '--tags' or '--no-tags'",
@@ -278,7 +291,7 @@ impl crate::Repository {
         };
 
         match (urls, fetch_specs, push_urls, push_specs) {
-            (None, None, None, None) if !remote_is_configured => None,
+            (None, None, None, None) if !self.has_trusted_remote_subsection(subsection) => None,
             (urls, fetch_specs, push_urls, push_specs) => {
                 let mut urls = match urls {
                     Some(Ok(v)) => v,
@@ -300,30 +313,24 @@ impl crate::Repository {
                     Some(Err(err)) => return Some(Err(err)),
                     None => Vec::new(),
                 };
-                if urls.is_empty() {
-                    let name_is_url = matches!(
-                        remote::Name::try_from(std::borrow::Cow::Borrowed(name_or_url)),
-                        Ok(remote::Name::Url(_))
-                    ) || match gix_path::from_bstr(name_or_url) {
-                        Ok(path) => gix_path::is_absolute(path),
-                        Err(err) => return Some(Err(err)),
-                    };
-                    match config::tree::Remote::URL.try_into_url(std::borrow::Cow::Borrowed(name_or_url)) {
-                        Ok(url) if name_is_url || url.scheme != gix_url::Scheme::File => urls.push(url),
-                        Ok(_) => {}
-                        Err(source) if name_is_url => {
-                            return Some(Err(source.and_raise(
-                                gix_error::message!("The fetch url under `remote.{name_or_url}` was invalid")
-                                    .validation(),
-                            )));
+                let configured_name = remote::ConfiguredName::from_config(subsection);
+                let fetch_url_from_subsection = if urls.is_empty() {
+                    match self.configured_remote_url_fallback(&configured_name) {
+                        Ok(Some(url)) => {
+                            urls.push(url);
+                            true
                         }
-                        Err(_) => {}
+                        Ok(None) => false,
+                        Err(err) => return Some(Err(err)),
                     }
-                }
+                } else {
+                    false
+                };
 
                 Some(Remote::from_preparsed_config(
-                    Some(name_or_url.to_owned()),
+                    configured_name,
                     urls,
+                    fetch_url_from_subsection,
                     push_urls,
                     fetch_specs,
                     push_specs,
@@ -332,6 +339,26 @@ impl crate::Repository {
                     self,
                 ))
             }
+        }
+    }
+
+    /// Derive a fetch URL from the configured remote's subsection name when no fetch URL is available.
+    ///
+    /// `.` points to this repository's Git directory. Names containing `/` or recognized as absolute paths
+    /// must parse as URLs, and parsing errors are reported. Other names only qualify if they parse as non-file
+    /// URLs, so a plain symbolic name doesn't silently become a relative filesystem path.
+    fn configured_remote_url_fallback(&self, name: &remote::ConfiguredName) -> Result<Option<gix_url::Url>> {
+        if matches!(name, remote::ConfiguredName::Dot) {
+            return self.self_remote_url().map(Some);
+        }
+        let value = name.as_config_key();
+        let is_path_or_url = value.contains(&b'/') || gix_path::is_absolute(gix_path::from_bstr(value)?);
+        match config::tree::Remote::URL.try_into_url(Cow::Borrowed(value)) {
+            Ok(url) if is_path_or_url || url.scheme != gix_url::Scheme::File => Ok(Some(url)),
+            Err(err) if is_path_or_url => {
+                Err(err.and_raise(gix_error::message!("The fetch url under `remote.{value}` was invalid").validation()))
+            }
+            Ok(_) | Err(_) => Ok(None),
         }
     }
 }

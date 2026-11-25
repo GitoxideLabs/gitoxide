@@ -136,19 +136,19 @@ impl crate::Repository {
 
     fn push_tracking_ref_name(&self, name: &FullNameRef) -> Result<Option<FullName>> {
         let Some(remote) = self
-            .branch_remote_name_raw(name.shorten(), remote::Direction::Push)
+            .branch_remote_name(name.shorten(), remote::Direction::Push)
             .or_else(|| self.remote_default_name(remote::Direction::Fetch))
         else {
             return Ok(None);
         };
         let config = &self.config.resolved;
         let filter = self.filter_config_section();
-        let remote = remote.as_bstr();
+        let subsection = remote.as_bstr();
         let push_specs = config
-            .strings_filter_by("remote", remote, Remote::PUSH.name, filter)
+            .strings_filter_by("remote", subsection, Remote::PUSH.name, filter)
             .unwrap_or_default();
         let Some((remote_ref, push_default)) = self
-            .push_remote_ref_name(name, parse_tracking_refspecs(&push_specs, remote, Operation::Push)?)
+            .push_remote_ref_name(name, parse_tracking_refspecs(&push_specs, subsection, Operation::Push)?)
             .or_raise(|| message("Could not get the remote reference to translate into the local tracking branch"))?
         else {
             return Ok(None);
@@ -157,11 +157,11 @@ impl crate::Repository {
             return self.upstream_tracking_ref_name(name);
         }
         let fetch_specs = config
-            .strings_filter_by("remote", remote, Remote::FETCH.name, filter)
+            .strings_filter_by("remote", subsection, Remote::FETCH.name, filter)
             .unwrap_or_default();
         let Some(tracking) = matching_remote(
             remote_ref.as_ref(),
-            parse_tracking_refspecs(&fetch_specs, remote, Operation::Fetch)?,
+            parse_tracking_refspecs(&fetch_specs, subsection, Operation::Fetch)?,
         )
         .transpose()
         .or_raise(|| message("The name of the tracking reference was invalid"))?
@@ -180,7 +180,7 @@ impl crate::Repository {
         let config = &self.config.resolved;
         let filter = self.filter_config_section();
         let branch = branch.shorten();
-        let Some(remote) = config.string_filter_by("branch", branch, Branch::REMOTE.name, filter) else {
+        let Some(subsection) = config.string_filter_by("branch", branch, Branch::REMOTE.name, filter) else {
             return Ok(None);
         };
         let Some(merge) = config
@@ -191,15 +191,15 @@ impl crate::Repository {
         };
         let merge = merge_ref_name(merge)?;
         let specs = config
-            .strings_filter_by("remote", remote.as_bstr(), Remote::FETCH.name, filter)
+            .strings_filter_by("remote", subsection.as_bstr(), Remote::FETCH.name, filter)
             .unwrap_or_default();
         let tracking = matching_remote(
             merge.as_ref(),
-            parse_tracking_refspecs(&specs, remote.as_bstr(), Operation::Fetch)?,
+            parse_tracking_refspecs(&specs, subsection.as_bstr(), Operation::Fetch)?,
         )
         .transpose()
         .or_raise(|| message("The name of the tracking reference was invalid"))?;
-        Ok(tracking.or_else(|| (remote == ".").then_some(merge)))
+        Ok(tracking.or_else(|| (subsection == ".").then_some(merge)))
     }
 
     /// Given a local `tracking_branch` name, find the remote that maps to it along with the name of the branch on
@@ -244,7 +244,7 @@ impl crate::Repository {
                 .map(|r| r.name)
                 .chain(candidates.into_iter().map(|(r, _)| r.name))
                 .flatten()
-                .map(|name| name.as_bstr().to_string())
+                .map(|name| name.as_config_key().to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
             bail!("Found ambiguous remotes without 1:1 mapping or more than one match: {remotes}".validation());
@@ -252,31 +252,22 @@ impl crate::Repository {
         Ok(None)
     }
 
-    /// Returns the unvalidated name of the remote associated with the given `short_branch_name`,
-    /// typically `main` instead of `refs/heads/main`.
-    /// In some cases, the returned name will be an URL.
-    /// Returns `None` if the remote was not found or if the name contained illformed UTF-8.
+    /// Return the configured remote selector for `short_branch_name` and `direction` as bytes.
+    /// It can be a remote name, a direct URL or path, or `.` for the repository itself.
+    /// This method does not validate the value as a remote name, parse it as a URL or path, or look for a matching
+    /// `[remote "…"]` subsection. Use [`Reference::remote_name()`](crate::Reference::remote_name()) for a validated name
+    /// or [`branch_remote()`](Self::branch_remote) to obtain the remote.
+    ///
+    /// Pass a short local branch name such as `main`. For fetch, this reads `branch.<name>.remote`. For push,
+    /// it checks `branch.<name>.pushRemote`, then `remote.pushDefault`, then `branch.<name>.remote`.
     /// Only [trusted configuration sections](crate::open::Options::filter_config_section()) are considered.
-    ///
-    /// * if `direction` is [remote::Direction::Fetch], we will query the `branch.<short_name>.remote` configuration.
-    /// * if `direction` is [remote::Direction::Push], the push remote will be queried by means of `branch.<short_name>.pushRemote`
-    ///   or `remote.pushDefault` as fallback.
-    ///
-    /// See also [`Reference::remote_name()`](crate::Reference::remote_name()) for a more typesafe version
-    /// to be used when a `Reference` is available.
-    ///
-    /// `short_branch_name` can typically be obtained by [shortening a full branch name](FullNameRef::shorten()).
     #[doc(alias = "branch_upstream_remote", alias = "git2")]
     pub fn branch_remote_name<'a>(
         &self,
         short_branch_name: impl Into<&'a BStr>,
         direction: remote::Direction,
-    ) -> Option<remote::Name<'_>> {
-        self.branch_remote_name_raw(short_branch_name.into(), direction)
-            .map(Into::into)
-    }
-
-    fn branch_remote_name_raw(&self, name: &BStr, direction: remote::Direction) -> Option<BString> {
+    ) -> Option<BString> {
+        let name = short_branch_name.into();
         let config = &self.config.resolved;
         let filter = self.filter_config_section();
         (direction == remote::Direction::Push)
@@ -289,10 +280,28 @@ impl crate::Repository {
             .or_else(|| config.string_filter_by("branch", Some(name), Branch::REMOTE.name, filter))
     }
 
-    /// Like [`branch_remote_name(…)`](Self::branch_remote_name()), but returns a [Remote](crate::Remote).
-    /// `short_branch_name` is the name to use for looking up `branch.<short_branch_name>.*` values in the
-    /// configuration.
+    /// Obtain the remote for a short local branch name such as `main`, using [`Self::branch_remote_name()`].
     ///
+    /// A trusted `[remote "…"]` subsection with the exact configured name takes precedence, even when that name
+    /// looks like a URL or path. For example, the fetch remote for `main` below points to `mirror.example.com`,
+    /// not `example.com`:
+    ///
+    /// ```gitconfig
+    /// [branch "main"]
+    ///     remote = https://example.com/project.git
+    /// [remote "https://example.com/project.git"]
+    ///     url = https://mirror.example.com/project.git
+    /// ```
+    ///
+    /// With no *matching subsection*, a value containing `/`, such as the URL above or `../mirror.git`, is parsed
+    /// as a URL or path and used as an anonymous remote. A plain name such as `origin` without a matching
+    /// subsection returns `None`, as does an unset remote value.
+    ///
+    /// The value `.` without a matching subsection yields an anonymous remote pointing to this repository's
+    /// Git directory, not the current working directory. A `[remote "."]` subsection can supply refspecs and
+    /// override that destination with an explicit URL.
+    ///
+    /// Errors in the matching subsection or while parsing a direct URL or path are returned as `Some(Err(_))`.
     /// See also [`Reference::remote()`](crate::Reference::remote()).
     pub fn branch_remote<'a>(
         &self,
@@ -300,9 +309,14 @@ impl crate::Repository {
         direction: remote::Direction,
     ) -> Option<Result<crate::Remote<'_>>> {
         let name = self.branch_remote_name(short_branch_name, direction)?;
-        self.try_find_remote(name.as_bstr()).or_else(|| match name {
-            remote::Name::Url(url) => gix_url::parse(&url).and_then(|url| self.remote_at(url)).into(),
-            remote::Name::Symbol(_) => None,
+        self.try_find_remote(name.as_bstr()).or_else(|| {
+            if name == "." {
+                Some(self.self_remote_url().and_then(|url| self.remote_at(url)))
+            } else if name.contains(&b'/') {
+                Some(gix_url::parse(&name).and_then(|url| self.remote_at(url)))
+            } else {
+                None
+            }
         })
     }
 

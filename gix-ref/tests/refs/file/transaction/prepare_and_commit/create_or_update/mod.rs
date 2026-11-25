@@ -758,6 +758,31 @@ fn cancellation_after_preparation_leaves_no_change() -> TestResult {
 }
 
 #[test]
+fn symbolic_reference_preserves_target_bytes() -> TestResult {
+    let (_keep, store) = empty_store()?;
+    let referent = b"refs/remotes/team/\xff/main".as_bstr();
+    store
+        .transaction()
+        .prepare(
+            [RefEdit::update(
+                "HEAD".try_into()?,
+                Target::Symbolic(referent.try_into()?),
+                PreviousValue::MustNotExist,
+                "",
+            )],
+            Fail::Immediately,
+            Fail::Immediately,
+        )?
+        .commit(committer().to_ref(&mut TimeBuf::default()))?;
+    assert_eq!(
+        std::fs::read(store.git_dir().join("HEAD"))?,
+        b"ref: refs/remotes/team/\xff/main\n",
+        "the loose symbolic reference stores the exact target bytes"
+    );
+    Ok(())
+}
+
+#[test]
 fn symbolic_reference_writes_reflog_if_previous_value_is_set() -> TestResult {
     let (_keep, store) = empty_store()?;
     let referent = "refs/heads/alt-main";

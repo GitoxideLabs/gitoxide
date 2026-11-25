@@ -117,8 +117,7 @@ mod branch_remote {
 
                 assert_eq!(
                     repo.branch_remote_name("main", direction)
-                        .expect("the trusted URL is configured")
-                        .as_bstr(),
+                        .expect("the trusted URL is configured"),
                     expected,
                     "{key}: only eligible configuration can select the destination"
                 );
@@ -188,8 +187,7 @@ mod branch_remote {
 
                 assert_eq!(
                     repo.branch_remote_name("main", remote::Direction::Push)
-                        .expect("Remote name exists")
-                        .as_ref(),
+                        .expect("push selector is configured"),
                     "push-origin",
                     "branch.main.pushRemote is set"
                 );
@@ -199,8 +197,7 @@ mod branch_remote {
 
             assert_eq!(
                 repo.branch_remote_name("main", remote::Direction::Push)
-                    .expect("Remote name exists")
-                    .as_ref(),
+                    .expect("push selector is configured"),
                 "push-origin",
                 "remote.pushDefault is set"
             );
@@ -236,16 +233,14 @@ mod branch_remote {
             "It's OK to find nothing"
         );
 
-        for direction in [remote::Direction::Fetch, remote::Direction::Push] {
-            assert_eq!(
-                repo.branch_remote_name("main", direction).expect("Remote name exists"),
-                "remote_repo"
-            );
-            assert_eq!(
-                repo.branch_remote_name("broken", direction)
-                    .expect("Remote name exists"),
-                "remote_repo"
-            );
+        for branch in ["refs/heads/main", "refs/heads/broken"] {
+            let branch = repo.find_reference(branch)?;
+            for direction in [remote::Direction::Fetch, remote::Direction::Push] {
+                assert_eq!(
+                    branch.remote_name(direction).expect("Remote name exists"),
+                    "remote_repo"
+                );
+            }
         }
 
         assert_eq!(
@@ -261,7 +256,8 @@ mod branch_remote {
         for direction in [remote::Direction::Fetch, remote::Direction::Push] {
             assert_eq!(
                 repo.branch_remote_name("broken", direction).expect("is set"),
-                "remote_repo"
+                "remote_repo",
+                "the raw selector is unaffected by the broken merge ref"
             );
         }
         assert_eq!(

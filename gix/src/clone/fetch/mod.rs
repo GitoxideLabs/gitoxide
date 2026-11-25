@@ -45,27 +45,21 @@ impl PrepareFetch {
             snapshot.append_config(&self.config_overrides, gix_config::Source::Api)?;
         }
 
-        let remote_name = match self.remote_name.as_ref() {
-            Some(name) => name.to_owned(),
-            None => repo
-                .config
-                .resolved
-                .string(crate::config::tree::Clone::DEFAULT_REMOTE_NAME)
-                .map(|n| crate::config::tree::Clone::DEFAULT_REMOTE_NAME.try_into_symbolic_name(n))
-                .transpose()?
-                .unwrap_or_else(|| {
-                    crate::config::tree::Clone::DEFAULT_REMOTE_NAME
-                        .default_value_or_panic()
-                        .into()
-                }),
+        let remote_name = match &self.remote_name {
+            Some(name) => name.clone(),
+            None => {
+                let key = &crate::config::tree::Clone::DEFAULT_REMOTE_NAME;
+                let name = repo
+                    .config
+                    .resolved
+                    .string(key)
+                    .unwrap_or_else(|| key.default_value_or_panic().into());
+                key.try_into_symbolic_name(name)?
+            }
         };
+        let remote_name_bytes = remote_name.as_bstr();
 
         let mut remote = repo.remote_at(self.url.clone())?;
-        let branch_prefix = if repo.is_bare() {
-            "refs/heads/".to_owned()
-        } else {
-            format!("refs/remotes/{remote_name}/")
-        };
 
         // For shallow clones without custom configuration, we'll use a single-branch refspec
         // to match git's behavior (matching git's single-branch behavior for shallow clones).
@@ -146,28 +140,30 @@ impl PrepareFetch {
         // Set up refspec based on whether we're doing a single-branch shallow clone,
         // which requires a single ref to match Git unless it's overridden.
         if remote.fetch_specs.is_empty() && self.revision.is_none() {
+            let branch_prefix = if repo.is_bare() {
+                Category::LocalBranch.prefix().to_owned()
+            } else {
+                remote::remote_tracking_ref(remote_name_bytes, b"")
+            };
             if let Some(target_ref) = &target_ref {
                 // Single-branch refspec for shallow clones
-                let destination = match target_ref.category_and_short_name() {
+                let mut spec = crate::bstr::BString::from("+");
+                spec.push_str(target_ref.as_bstr());
+                spec.push(b':');
+                match target_ref.category_and_short_name() {
                     Some((Category::LocalBranch, short_name)) => {
-                        format!("{branch_prefix}{short_name}")
+                        spec.push_str(&branch_prefix);
+                        spec.push_str(short_name);
                     }
-                    _ => target_ref.to_string(),
-                };
-                remote = remote
-                    .with_refspecs(
-                        Some(format!("+{target_ref}:{destination}").as_str()),
-                        remote::Direction::Fetch,
-                    )
-                    .expect("valid refspec");
+                    _ => spec.push_str(target_ref.as_bstr()),
+                }
+                remote = remote.with_refspecs(Some(spec), remote::Direction::Fetch)?;
             } else if !use_single_branch_for_shallow {
                 // Wildcard refspec for non-shallow clones or when target couldn't be determined
-                remote = remote
-                    .with_refspecs(
-                        Some(format!("+refs/heads/*:{branch_prefix}*").as_str()),
-                        remote::Direction::Fetch,
-                    )
-                    .expect("valid static spec");
+                let mut spec = crate::bstr::BString::from("+refs/heads/*:");
+                spec.push_str(&branch_prefix);
+                spec.push(b'*');
+                remote = remote.with_refspecs(Some(spec), remote::Direction::Fetch)?;
             }
         }
 
@@ -323,12 +319,12 @@ impl PrepareFetch {
         if let Some(config) = config {
             util::append_config_to_repo_config(&mut repo, config)?;
         }
-        util::update_remote_head(&repo, &outcome.ref_map, reflog_message.as_ref(), remote_name.as_ref())?;
+        util::update_remote_head(&repo, &outcome.ref_map, reflog_message.as_ref(), remote_name_bytes)?;
         util::update_head(
             &mut repo,
             &outcome.ref_map,
             reflog_message.as_ref(),
-            remote_name.as_ref(),
+            remote_name_bytes,
             self.ref_name.as_ref(),
             self.revision.as_ref(),
         )?;

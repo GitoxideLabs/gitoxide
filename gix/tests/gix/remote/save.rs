@@ -121,6 +121,74 @@ mod save_as_to {
     }
 
     #[test]
+    fn saved_names_are_exact_symbolic_names() -> TestResult {
+        use gix::{
+            bstr::ByteSlice,
+            remote::{ConfiguredName, Name},
+        };
+
+        let repo = basic_repo()?;
+        let mut remote = repo.remote_at("https://example.com/path")?;
+        let mut config = gix::config::File::default();
+        for name in [b"team/origin".as_bstr(), b"team/\xff".as_bstr(), b"\xff".as_bstr()] {
+            remote.save_as_to(name, &mut config)?;
+            assert_eq!(
+                remote.name().map(Name::as_bstr),
+                Some(name),
+                "saved symbolic names retain their bytes, even when not valid UTF-8"
+            );
+            assert_eq!(remote.configured_name().map(ConfiguredName::as_config_key), Some(name));
+            assert_eq!(
+                config
+                    .string_filter_by("remote", name, "url", |_| true)
+                    .as_ref()
+                    .map(|url| url.as_bstr()),
+                Some(b"https://example.com/path".as_bstr()),
+                "the original subsection bytes are used for the saved URL"
+            );
+        }
+
+        let before = config.to_bstring();
+        for invalid in [".", "team//origin", "https://Legacy.example/repo"] {
+            let err = remote
+                .save_as_to(invalid, &mut config)
+                .expect_err("only valid symbolic names can be saved");
+            assert!(err.is_validation(), "{invalid:?}: {err}");
+            assert_eq!(config.to_bstring(), before, "{invalid:?} must not change the config");
+            assert_eq!(
+                remote.name().map(Name::as_bstr),
+                Some(b"\xff".as_bstr()),
+                "a rejected name leaves the old name in place"
+            );
+            assert_eq!(
+                remote.configured_name().map(ConfiguredName::as_config_key),
+                Some(b"\xff".as_bstr())
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn renaming_preserves_a_destination_inferred_from_the_old_subsection() -> TestResult {
+        let repo = remote::repo("missing-urls");
+        let old_name = "https://fallback.example/repo";
+        let mut remote = repo.find_remote(old_name)?;
+        let mut config = gix::config::File::default();
+        remote.save_to(&mut config)?;
+        assert!(
+            config.string_by("remote", old_name, "url").is_none(),
+            "saving under the original name keeps the URL implicit"
+        );
+        remote.save_as_to("origin", &mut config)?;
+        assert_eq!(
+            config.string("remote.origin.url").expect("explicit URL after renaming"),
+            old_name,
+            "the new name does not imply the old destination, so saving must make it explicit"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn new_anonymous_remote_with_name() -> TestResult {
         let repo = basic_repo()?;
         let mut remote = repo

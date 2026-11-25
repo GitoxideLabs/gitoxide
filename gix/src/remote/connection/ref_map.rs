@@ -7,7 +7,7 @@ use gix_utils::progress::Progress;
 
 use crate::{
     Result,
-    remote::{Connection, connection::ConnectionDetached, fetch},
+    remote::{ConfiguredName, Connection, connection::ConnectionDetached, fetch},
 };
 
 /// For use in [`Connection::ref_map()`].
@@ -114,7 +114,10 @@ where
 
         if self.transport_options.is_none() {
             self.transport_options = repo
-                .transport_options(url.as_ref(), self.remote.name().map(crate::remote::Name::as_bstr))
+                .transport_options(
+                    url.as_ref(),
+                    self.remote.configured_name().map(ConfiguredName::as_config_key),
+                )
                 .or_raise(|| message!("Failed to configure the transport before connecting to {url:?}"))?;
         }
         if let Some(config) = self.transport_options.as_ref() {

@@ -1553,7 +1553,6 @@ fn snapshot_inner(
     let fetch_remote = active_branch
         .as_ref()
         .and_then(|branch| repo.branch_remote_name(branch.shorten(), gix::remote::Direction::Fetch))
-        .map(|name| name.as_bstr().to_owned())
         .or_else(|| repo.remote_default_name(gix::remote::Direction::Fetch));
     let pins = pins
         .into_iter()

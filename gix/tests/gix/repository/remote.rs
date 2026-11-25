@@ -261,6 +261,158 @@ mod find_remote {
     }
 
     #[test]
+    fn lookup_preserves_the_bytes_of_slash_separated_names() -> TestResult {
+        use gix::bstr::ByteSlice;
+
+        let repo = gix::open_opts(
+            remote::repo_path("base"),
+            gix::open::Options::isolated().config_overrides([
+                BString::from(b"remote.team/\xff.url=https://example.com/exact".as_slice()),
+                BString::from(b"branch.main.remote=team/\xff".as_slice()),
+                BString::from(b"remote.team/\xff.fetch=refs/heads/main:refs/tracking/exact".as_slice()),
+                BString::from(b"remote.team/\xff.tagOpt=--no-tags".as_slice()),
+                BString::from("remote.team/\u{fffd}.url=https://example.com/lookalike"),
+            ]),
+        )?;
+        let subsection = b"team/\xff".as_bstr();
+        let branch = repo.head_ref()?.expect("the repository has a branch");
+        let name = branch.remote_name(Direction::Fetch).expect("configured");
+
+        assert_eq!(
+            name.as_bstr(),
+            subsection,
+            "an exact remote subsection identifies a symbolic name even when it contains a slash"
+        );
+        let remote = repo.find_remote(subsection)?;
+        assert_eq!(remote.name().map(gix::remote::Name::as_bstr), Some(subsection));
+        assert_eq!(
+            remote.configured_name().map(gix::remote::ConfiguredName::as_config_key),
+            Some(subsection)
+        );
+        assert_eq!(
+            repo.branch_remote("main", Direction::Fetch).expect("configured")?,
+            remote,
+            "the branch selects the same configured remote as direct lookup"
+        );
+        assert_eq!(
+            remote.url(Direction::Fetch).expect("configured URL").to_bstring(),
+            "https://example.com/exact",
+            "the exact subsection takes precedence over both the lookalike and the path"
+        );
+        assert_eq!(
+            remote.refspecs(Direction::Fetch),
+            &[fetchspec("refs/heads/main:refs/tracking/exact")]
+        );
+        assert_eq!(remote.fetch_tags(), gix::remote::fetch::Tags::None);
+        Ok(())
+    }
+
+    #[test]
+    fn url_shaped_subsection_supports_lookup_tracking_and_round_trip() -> TestResult {
+        use gix::remote::Direction::{Fetch, Push};
+
+        let subsection = "https://Legacy.example/repo";
+        let repo = gix::open_opts(
+            remote::repo_path("base"),
+            gix::open::Options::isolated().config_overrides([
+                "remote.https://LEGACY.example/repo.url=https://example.com/lookalike".to_owned(),
+                format!("remote.{subsection}.url=https://example.com/exact"),
+                format!("remote.{subsection}.pushurl=ssh://example.com/exact"),
+                format!("remote.{subsection}.fetch=refs/heads/main:refs/tracking/exact"),
+                format!("remote.{subsection}.push=refs/heads/main:refs/heads/published"),
+                format!("branch.main.remote={subsection}"),
+                "branch.main.merge=refs/heads/main".to_owned(),
+            ]),
+        )?;
+        let remote = repo.find_remote(subsection)?;
+        assert_eq!(remote.name(), None, "a URL cannot be used in a tracking-ref name");
+        let configured_name = gix::remote::ConfiguredName::NonSymbolic(subsection.into());
+        assert_eq!(
+            remote.configured_name(),
+            Some(&configured_name),
+            "the exact subsection name remains available for config lookup"
+        );
+        assert_eq!(
+            remote.url(Fetch).expect("configured URL").to_bstring(),
+            "https://example.com/exact",
+            "the exact subsection takes precedence over a case variant or interpreting the selector as a URL"
+        );
+        assert_eq!(
+            remote.refspecs(Fetch),
+            &[fetchspec("refs/heads/main:refs/tracking/exact")]
+        );
+        assert_eq!(
+            remote.url(Push).expect("configured push URL").to_bstring(),
+            "ssh://example.com/exact"
+        );
+        assert_eq!(
+            remote.refspecs(Push),
+            &[pushspec("refs/heads/main:refs/heads/published")]
+        );
+        assert_eq!(repo.find_fetch_remote(Some(subsection.into()))?, remote);
+
+        assert_eq!(
+            repo.branch_remote_name("main", Fetch).expect("configured selector"),
+            subsection
+        );
+        let branch = repo.head_ref()?.expect("the repository has a branch");
+        assert_eq!(branch.remote_name(Fetch), None);
+        assert_eq!(
+            branch
+                .remote(Fetch)
+                .transpose()?
+                .expect("the configured remote resolves"),
+            remote,
+            "resolution does not require a validated name"
+        );
+        assert_eq!(
+            branch
+                .remote_tracking_ref_name(Fetch)
+                .transpose()?
+                .expect("the upstream is mapped by the fetch refspec")
+                .as_bstr(),
+            "refs/tracking/exact",
+            "the tracking ref comes from the refspec, not the remote subsection name"
+        );
+
+        let mut config = gix::config::File::default();
+        remote.save_to(&mut config)?;
+        let saved = gix_config::File::from_bytes_no_includes(
+            &config.to_bstring(),
+            gix_config::file::Metadata::from(gix_config::Source::Api),
+            Default::default(),
+        )?;
+        assert_eq!(
+            saved.section("remote", subsection)?.header().to_bstring(),
+            format!(r#"[remote "{subsection}"]"#).as_str(),
+            "saving preserves the original spelling of the subsection"
+        );
+
+        let mut reopened = gix::open_opts(remote::repo_path("base"), gix::open::Options::isolated())?;
+        let mut config = reopened.config_snapshot_mut();
+        config.append(saved)?;
+        let reloaded = config.commit()?.find_remote(subsection)?;
+        assert_eq!(
+            reloaded.configured_name(),
+            Some(&configured_name),
+            "the subsection is still not usable for constructing tracking refs after round-tripping"
+        );
+        for direction in [Fetch, Push] {
+            assert_eq!(
+                reloaded.urls(direction).collect::<Vec<_>>(),
+                remote.urls(direction).collect::<Vec<_>>(),
+                "the configured {direction:?} URL survives saving"
+            );
+            assert_eq!(
+                reloaded.refspecs(direction),
+                remote.refspecs(direction),
+                "the configured {direction:?} refspec survives saving"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn missing_fetch_urls_only_fall_back_to_url_shaped_remote_names() -> TestResult {
         let repo = remote::repo("missing-urls");
         for name in ["no-url", "reset-url"] {
@@ -641,10 +793,7 @@ mod find_fetch_remote {
     fn symbol_name() -> TestResult {
         let repo = remote::repo("clone-no-tags");
         assert_eq!(
-            repo.find_fetch_remote(Some("origin".into()))?
-                .name()
-                .expect("set")
-                .as_bstr(),
+            repo.find_fetch_remote(Some("origin".into()))?.name().expect("set"),
             "origin"
         );
         Ok(())
@@ -687,8 +836,7 @@ mod find_default_remote {
                 .transpose()?
                 .expect("present")
                 .name()
-                .expect("always named")
-                .as_bstr(),
+                .expect("always named"),
             "origin"
         );
         Ok(())

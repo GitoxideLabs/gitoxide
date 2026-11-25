@@ -3,28 +3,33 @@ use gix_utils::AsBStr;
 
 /// Serialize into git-config.
 impl Remote<'_> {
-    /// Save ourselves to the given `config` if we are a named remote or fail otherwise.
+    /// Save this remote to `config` under its [configured subsection name](Self::configured_name).
+    ///
+    /// The name is preserved as configured, including `.` or names like `backup mirror`.
+    /// A fetch URL inferred from the subsection name is not written as an explicit `url`.
+    /// An anonymous remote cannot be saved; use [`Self::save_as_to()`] to give it a name.
     ///
     /// Note that all sections named `remote "<name>"` will be cleared of all values we are about to write,
     /// and the last `remote "<name>"` section will be containing all relevant values so that reloading the remote
     /// from `config` would yield the same in-memory state.
     pub fn save_to(&self, config: &mut gix_config::File) -> Result<()> {
-        let name = self.name().ok_or_else(|| {
+        let Some(name) = self.configured_name().map(remote::ConfiguredName::as_config_key) else {
             let url = self
                 .urls
                 .first()
                 .or_else(|| self.push_urls.first())
-                .expect("one url is always set")
+                .expect("anonymous remotes always have a URL")
                 .to_bstring();
-            Error::from_error(gix_error::message!(
+            return Err(Error::from_error(gix_error::message!(
                 "The remote pointing to {url} is anonymous and can't be saved."
-            ))
-        })?;
+            )));
+        };
+
         let target_meta = config.meta().clone();
         let mut needs_url_reset = false;
         let mut needs_push_url_reset = false;
         if let Some(section_ids) = config.sections_and_ids_by_name("remote").map(|it| {
-            it.filter_map(|(s, id)| (s.header().subsection_name() == Some(name.as_bstr())).then_some(id))
+            it.filter_map(|(s, id)| (s.header().subsection_name() == Some(name)).then_some(id))
                 .collect::<Vec<_>>()
         }) {
             let mut sections_to_remove = Vec::new();
@@ -70,19 +75,17 @@ impl Remote<'_> {
             // A foreign section may occur after the last local one, notably when an include follows
             // it. The reset must follow all such values or reopening the written file would append
             // the foreign values once more.
-            config
-                .new_section("remote", name.as_bstr())
-                .expect("section name is validated and 'remote' is acceptable")
+            config.new_section("remote", name)?
         } else {
-            config
-                .section_mut_or_create_new_filter("remote", name.as_bstr(), |meta| *meta == target_meta)
-                .expect("section name is validated and 'remote' is acceptable")
+            config.section_mut_or_create_new_filter("remote", name, |meta| *meta == target_meta)?
         };
         if needs_url_reset {
             section.push(config::tree::Remote::URL.name, "")?;
         }
-        for url in &self.urls {
-            section.push("url", url.to_bstring())?;
+        if !self.fetch_url_from_subsection {
+            for url in &self.urls {
+                section.push("url", url.to_bstring())?;
+            }
         }
         if needs_push_url_reset {
             section.push(config::tree::Remote::PUSH_URL.name, "")?;
@@ -113,17 +116,25 @@ impl Remote<'_> {
         Ok(())
     }
 
-    /// Forcefully set our name to `name` and write our state to `config` similar to [`save_to()`][Self::save_to()].
+    /// Assign `name` to this remote and save it to `config` as in [`Self::save_to()`].
     ///
-    /// Note that this sets a name for anonymous remotes, but overwrites the name for those who were named before.
-    /// If this name is different from the current one, the git configuration will still contain the previous name,
-    /// and the caller should account for that.
+    /// `name` must be a [valid symbolic name](remote::Name::symbol); `.` is not accepted.
+    /// This can give an anonymous remote a name. When replacing an existing name, the old subsection remains
+    /// in `config`; remove it separately if needed.
     pub fn save_as_to(&mut self, name: impl AsBStr, config: &mut gix_config::File) -> Result<()> {
-        let name = crate::remote::name::validated(name.as_bstr().to_owned())?;
-        let prev_name = self.name.take();
-        self.name = Some(name.into());
+        self.save_as_validated(remote::Name::symbol(name.as_bstr().to_owned())?, config)
+    }
+
+    pub(crate) fn save_as_validated(&mut self, name: remote::Name, config: &mut gix_config::File) -> Result<()> {
+        let prev_fetch_url_from_subsection = self.fetch_url_from_subsection;
+        if self.configured_name().map(remote::ConfiguredName::as_config_key) != Some(name.as_bstr()) {
+            // A different subsection might not imply the same URL, so save the old destination explicitly.
+            self.fetch_url_from_subsection = false;
+        }
+        let prev_name = self.name.replace(remote::ConfiguredName::Symbolic(name));
         self.save_to(config).inspect_err(|_| {
             self.name = prev_name;
+            self.fetch_url_from_subsection = prev_fetch_url_from_subsection;
         })
     }
 }

@@ -4,8 +4,6 @@ use gix_refspec::RefSpec;
 
 use crate::{Error, Remote, Repository, Result, config, remote};
 
-use crate::bstr::BString;
-
 type UrlAliases = Vec<Option<gix_url::Url>>;
 type UrlRewriteAliases = (UrlAliases, UrlAliases, UrlAliases);
 
@@ -13,8 +11,9 @@ type UrlRewriteAliases = (UrlAliases, UrlAliases, UrlAliases);
 impl<'repo> Remote<'repo> {
     #[expect(clippy::too_many_arguments)]
     pub(crate) fn from_preparsed_config(
-        name_or_url: Option<BString>,
+        name: remote::ConfiguredName,
         urls: Vec<gix_url::Url>,
+        fetch_url_from_subsection: bool,
         push_urls: Vec<gix_url::Url>,
         fetch_specs: Vec<RefSpec>,
         push_specs: Vec<RefSpec>,
@@ -32,8 +31,9 @@ impl<'repo> Remote<'repo> {
             ))
         }?;
         Ok(Remote {
-            name: name_or_url.map(Into::into),
+            name: Some(name),
             urls,
+            fetch_url_from_subsection,
             url_aliases,
             url_push_aliases,
             push_urls,
@@ -63,6 +63,7 @@ impl<'repo> Remote<'repo> {
         Ok(Remote {
             name: None,
             urls,
+            fetch_url_from_subsection: false,
             url_aliases,
             url_push_aliases,
             push_urls: Vec::new(),

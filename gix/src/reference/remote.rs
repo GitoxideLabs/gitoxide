@@ -8,11 +8,15 @@ use crate::{
 
 /// Remotes
 impl<'repo> Reference<'repo> {
-    /// Find the name of our remote for `direction` as configured in `branch.<name>.remote|pushRemote` respectively.
-    /// Return `None` if no remote is configured.
+    /// Find the symbolic name of the remote associated with this reference.
     ///
-    /// See also [`Repository::branch_remote_name()`](crate::Repository::branch_remote_name()) for more details.
-    pub fn remote_name(&self, direction: remote::Direction) -> Option<remote::Name<'_>> {
+    /// For a local branch, this uses the configured [remote selector](crate::Repository::branch_remote_name())
+    /// for `direction`. It returns `None` for direct URLs or paths, `.`, and subsections that fail
+    /// [symbolic name validation](remote::Name::symbol). Use [`Self::remote()`] to look up the remote itself.
+    ///
+    /// For a remote-tracking branch, this takes the remote prefix from the ref, consulting configured remote names
+    /// if the prefix is ambiguous. `direction` is ignored in this case.
+    pub fn remote_name(&self, direction: remote::Direction) -> Option<remote::Name> {
         let (category, shortname) = self.name().category_and_short_name()?;
         match category {
             Category::RemoteBranch => {
@@ -22,10 +26,15 @@ impl<'repo> Reference<'repo> {
                         .get_or_insert_with(|| self.repo.remote_names())
                         .contains(candidate)
                 })
-                .and_then(|name| name.to_str().ok())
-                .map(|name| remote::Name::Symbol(name.into()))
+                .and_then(|name| remote::Name::symbol(name).ok())
             }
-            Category::LocalBranch => self.repo.branch_remote_name(shortname, direction),
+            Category::LocalBranch => {
+                let name = self.repo.branch_remote_name(shortname, direction)?;
+                if name.contains(&b'/') && !self.repo.has_trusted_remote_subsection(name.as_bstr()) {
+                    return None;
+                }
+                remote::Name::try_from(name).ok()
+            }
             _ => None,
         }
     }

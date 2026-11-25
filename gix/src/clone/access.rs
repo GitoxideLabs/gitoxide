@@ -26,9 +26,11 @@ impl PrepareFetch {
     /// Set the remote's name to the given value after it was configured using the function provided via
     /// [`configure_remote()`](Self::configure_remote()).
     ///
+    /// The name is written to config and, in a non-bare clone, used under `refs/remotes/`.
+    /// It must be valid in that ref namespace; `.` and URLs are not accepted as names.
     /// If not set here, it defaults to `origin` or the value of `clone.defaultRemoteName`.
     pub fn with_remote_name(mut self, name: impl Into<BString>) -> Result<Self> {
-        self.remote_name = Some(crate::remote::name::validated(name)?);
+        self.remote_name = Some(crate::remote::Name::symbol(name)?);
         Ok(self)
     }
 

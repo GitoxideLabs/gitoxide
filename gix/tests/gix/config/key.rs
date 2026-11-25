@@ -143,9 +143,24 @@ fn intrinsic_utf8_validators_classify_invalid_bytes_and_preserve_sources() {
 fn built_in_validators_preserve_intrinsic_parser_classification() {
     use gix::config::tree::keys::Validate;
 
-    let remote_err = keys::validate::RemoteName
-        .validate(b"\xff".as_bstr())
-        .expect_err("symbolic remote names require valid UTF-8");
+    let remote_name = &gix::config::tree::Clone::DEFAULT_REMOTE_NAME;
+    let non_utf8 = b"\xff".as_bstr();
+    let symbolic_name: gix::remote::Name = remote_name
+        .try_into_symbolic_name(non_utf8)
+        .expect("a symbolic remote name does not have to be UTF-8");
+    assert_eq!(
+        symbolic_name.as_bstr(),
+        non_utf8,
+        "validation preserves the exact bytes"
+    );
+
+    let invalid = b"\xff name".as_bstr();
+    keys::validate::RemoteName
+        .validate(invalid)
+        .expect("raw remote selectors are not validated as symbolic names");
+    let remote_err = remote_name
+        .try_into_symbolic_name(invalid)
+        .expect_err("spaces are not allowed in tracking refs");
     assert!(
         remote_err.is_validation(),
         "invalid remote names retain their intrinsic class"

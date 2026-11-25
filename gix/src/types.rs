@@ -247,10 +247,12 @@ pub struct ThreadSafeRepository {
 /// A remote which represents a way to interact with hosts for remote clones of the parent repository.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Remote<'repo> {
-    /// The remotes symbolic name, only present if persisted in git configuration files.
-    pub(crate) name: Option<remote::Name<'static>>,
+    /// The exact remote configuration subsection, if this remote is named.
+    pub(crate) name: Option<remote::ConfiguredName>,
     /// The urls of the hosts to talk to for fetching, in configuration order.
     pub(crate) urls: Vec<gix_url::Url>,
+    /// Whether `urls` holds a fallback derived from the subsection rather than an explicit fetch URL.
+    pub(crate) fetch_url_from_subsection: bool,
     /// Rewrite aliases corresponding one-for-one to `urls` when fetching, produced by `insteadOf` rules.
     pub(crate) url_aliases: Vec<Option<gix_url::Url>>,
     /// Rewrite aliases corresponding one-for-one to `urls` when they are push fallbacks because there are no explicit
@@ -283,8 +285,8 @@ pub struct Remote<'repo> {
 #[derive(Debug, Clone, PartialEq)]
 #[cfg(any(feature = "blocking-network-client", feature = "async-network-client"))]
 pub(crate) struct RemoteDetached {
-    /// The remotes symbolic name, only present if persisted in git configuration files.
-    pub(crate) name: Option<remote::Name<'static>>,
+    /// The exact remote configuration subsection, if this remote is named.
+    pub(crate) name: Option<remote::ConfiguredName>,
     /// The urls of the hosts to talk to for fetching, in configuration order.
     pub(crate) urls: Vec<gix_url::Url>,
     /// The rewritten `urls` when used for fetching.

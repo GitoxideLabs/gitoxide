@@ -72,7 +72,11 @@ mod save;
 mod name {
     use std::borrow::Cow;
 
-    use gix::bstr::{BStr, BString, ByteSlice};
+    use gix::{
+        bstr::{BStr, BString, ByteSlice},
+        remote::Name,
+    };
+    use gix_testtools::TestResult;
 
     macro_rules! assert_natural_equality {
         ($value:ident, $matching:literal, $different:literal) => {{
@@ -107,33 +111,63 @@ mod name {
     }
 
     #[test]
-    fn compares_with_text_and_byte_strings() {
-        let symbol = gix::remote::Name::Symbol("origin".into());
+    fn compares_with_text_and_byte_strings() -> TestResult {
+        let symbol = Name::symbol("origin")?;
         assert_natural_equality!(symbol, "origin", "upstream");
         let symbol_ref = &symbol;
         assert_natural_equality!(symbol_ref, "origin", "upstream");
-
-        let url = gix::remote::Name::Url(Cow::Borrowed(b"https://example.com/repo.git".as_bstr()));
-        assert_natural_equality!(url, "https://example.com/repo.git", "https://example.com/other.git");
-
-        let raw_url = b"https://example.com/\xff".as_bstr();
-        let raw_url_name = gix::remote::Name::Url(Cow::Borrowed(raw_url));
-        assert_eq!(raw_url_name, raw_url, "URLs compare as exact bytes");
-        assert_eq!(raw_url, raw_url_name, "byte comparison is symmetric");
+        Ok(())
     }
 
     #[test]
-    fn origin_is_valid() {
-        assert!(gix::remote::name::validated("origin").is_ok());
+    fn constructors_preserve_slashes_and_non_utf8_bytes() -> TestResult {
+        for bytes in [b"team/nested/origin".as_bstr(), b"team/\xff".as_bstr()] {
+            let name = Name::symbol(bytes)?;
+            assert_eq!(name.as_bstr(), bytes, "validation must not rewrite the name");
+            assert_eq!(Name::try_from(bytes.to_owned())?, name);
+            assert_eq!(Name::try_from(Cow::Borrowed(bytes))?, name);
+            assert_eq!(Name::try_from(Cow::Owned(bytes.to_owned()))?, name);
+            assert_eq!(
+                BString::from(name).as_bstr(),
+                bytes,
+                "conversion preserves the original bytes"
+            );
+        }
+        Ok(())
     }
 
     #[test]
-    fn multiple_slashes_are_valid() {
-        assert!(gix::remote::name::validated("origin/another").is_ok());
+    fn constructors_reject_invalid_tracking_names() {
+        for bytes in [
+            "",
+            ".",
+            "/origin",
+            "team//origin",
+            "bad name",
+            "https://example.com/repo",
+        ] {
+            let bytes = bytes.as_bytes().as_bstr();
+            let err = Name::symbol(bytes).expect_err("invalid tracking-ref components must be rejected");
+            assert!(err.is_validation(), "{bytes:?}: {err}");
+            assert!(Name::try_from(bytes.to_owned()).is_err(), "{bytes:?}");
+            assert!(Name::try_from(Cow::Borrowed(bytes)).is_err(), "{bytes:?}");
+            assert!(Name::try_from(Cow::Owned(bytes.to_owned())).is_err(), "{bytes:?}");
+        }
     }
 
+    #[cfg(feature = "serde")]
     #[test]
-    fn empty_is_invalid() {
-        assert!(gix::remote::name::validated("").is_err());
+    fn deserialization_validates_names() -> TestResult {
+        use serde::{
+            Deserialize,
+            de::value::{BytesDeserializer, Error},
+        };
+
+        let deserialize = |bytes| Name::deserialize(BytesDeserializer::<Error>::new(bytes));
+        assert_eq!(deserialize(b"team/\xff")?.as_bstr(), b"team/\xff".as_bstr());
+        for bytes in [b"".as_slice(), b".", b"team//origin", b"https://example.com/\xff"] {
+            assert!(deserialize(bytes).is_err(), "{bytes:?} must not deserialize as a Name");
+        }
+        Ok(())
     }
 }

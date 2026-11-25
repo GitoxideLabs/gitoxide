@@ -5831,7 +5831,6 @@ fn active_branch_name(refs: &history::RefSnapshot) -> Option<BString> {
 fn push_remote_name(repository: &gix::Repository, branch: &BStr) -> BString {
     repository
         .branch_remote_name(branch, gix::remote::Direction::Push)
-        .map(|name| name.as_bstr().to_owned())
         .or_else(|| repository.remote_default_name(gix::remote::Direction::Push))
         .unwrap_or_else(|| "origin".into())
 }
@@ -10444,6 +10443,20 @@ mod tests {
                 .as_ref()
                 .map(|name| name.as_bstr()),
             Some(b"upstream".as_bstr())
+        );
+        drop(repository);
+
+        assert!(git(&["config", "branch.main.remote", "./direct.git"])?.success());
+        let repository = test_repository::open(fixture.path())?;
+        assert_eq!(
+            history::snapshot(&repository, &[], &[], false)?.fetch_remote,
+            Some(BString::from("./direct.git")),
+            "a direct destination takes precedence over the default named remote for fetch"
+        );
+        assert_eq!(
+            push_remote_name(&repository, b"main".as_bstr()),
+            "./direct.git",
+            "a direct destination takes precedence over the default named remote for push"
         );
         drop(repository);
 
