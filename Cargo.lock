@@ -1729,6 +1729,7 @@ dependencies = [
  "gix-date",
  "gix-error",
  "gix-hash",
+ "gix-parallel",
  "gix-testtools",
  "insta",
  "memmap2",

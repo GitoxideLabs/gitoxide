@@ -318,7 +318,7 @@ impl<'repo> Platform<'repo> {
                     gix_traverse::commit::Simple::filtered(tips, objects, filter)
                         .sorting(simple_sorting)?
                         .parents(parents)
-                        .commit_graph(commit_graph)
+                        .with_commit_graph(commit_graph)
                         .hide(hidden)?,
                 )
             } else {

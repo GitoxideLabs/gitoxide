@@ -22,7 +22,7 @@ fn traverse(
     Ok(Simple::new(tips, odb)
         .sorting(sorting)?
         .parents(parents)
-        .commit_graph(graph)
+        .with_commit_graph(graph)
         .hide(hidden)?
         .map(|res| res.map(|info| info.id))
         .collect::<std::result::Result<Vec<_>, _>>()?)
@@ -40,7 +40,6 @@ fn traverse_both(
     let without_graph: Vec<_> = Simple::new(tips.clone(), odb)
         .sorting(sorting)?
         .parents(parents)
-        .commit_graph(None)
         .hide(hidden.clone())?
         .map(|res| res.map(|info| info.id))
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -50,7 +49,7 @@ fn traverse_both(
     let with_graph: Vec<_> = Simple::new(tips, odb)
         .sorting(sorting)?
         .parents(parents)
-        .commit_graph(graph)
+        .with_commit_graph(graph)
         .hide(hidden)?
         .map(|res| res.map(|info| info.id))
         .collect::<std::result::Result<Vec<_>, _>>()?;

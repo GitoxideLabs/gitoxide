@@ -170,7 +170,7 @@ fn date_order_with_cutoff_is_applied_to_starting_position() -> gix_testtools::Te
                 order,
                 seconds: 978393600, // =2001-01-02 00:00:00 +0000
             })?
-            .commit_graph(graph)
+            .with_commit_graph(graph)
             .count();
         assert_eq!(
             count, 0,

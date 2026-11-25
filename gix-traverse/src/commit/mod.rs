@@ -8,9 +8,9 @@ use gix_revwalk::{PriorityQueue, graph::IdMap};
 use smallvec::SmallVec;
 
 /// A fast iterator over the ancestors of one or more starting commits.
-pub struct Simple<Find, Predicate> {
+pub struct Simple<Find, Predicate, CommitGraph = gix_commitgraph::Graph> {
     objects: Find,
-    cache: Option<gix_commitgraph::Graph>,
+    cache: Option<CommitGraph>,
     predicate: Predicate,
     state: simple::State,
     parents: Parents,
