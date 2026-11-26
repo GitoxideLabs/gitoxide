@@ -92,6 +92,51 @@ mod peel {
     }
 
     #[test]
+    fn packed_refs_whose_header_promises_peeled_objects_need_no_object_lookup() -> gix_testtools::TestResult {
+        let unannotated = ["refs/heads/main", "refs/remotes/origin/main", "refs/tags/light"];
+        for (repo, known_peeled) in [
+            ("fully-peeled", &unannotated[..]),
+            ("peeled", &["refs/tags/light"][..]),
+            ("no-header", &[][..]),
+        ] {
+            let store = file::named_store_at("make_packed_refs_with_peel_traits.sh", repo)?;
+            let commit_id = store.find("refs/heads/main")?.target.into_id();
+            let mut tag = store.find("refs/tags/annotated")?;
+            assert_eq!(
+                tag.peel_to_id(&store, &gix_object::find::Never)?,
+                commit_id,
+                "{repo}: an annotated tag peels by the object recorded below it, whatever the header"
+            );
+            for name in unannotated {
+                let mut r = store.find(name)?;
+                let peeled = r.peel_to_id(&store, &gix_object::find::Never);
+                if known_peeled.contains(&name) {
+                    assert_eq!(
+                        peeled?, commit_id,
+                        "{repo}: the header promises {name} isn't an annotated tag, so it peels to its target without a lookup"
+                    );
+                } else {
+                    assert!(
+                        peeled.is_err(),
+                        "{repo}: {name} could be an annotated tag, so peeling looks up its object, which isn't there"
+                    );
+                }
+            }
+            for r in store.iter()?.all()? {
+                let r = r?;
+                if let Some(name) = unannotated.iter().find(|n| r.name.as_bstr() == **n) {
+                    assert_eq!(
+                        r.peeled.is_some(),
+                        known_peeled.contains(name),
+                        "{repo}: iterated, {name} is known to be peeled as when found"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn peel_one_level_with_pack() -> gix_testtools::TestResult {
         let store = store_with_packed_refs()?;
 
