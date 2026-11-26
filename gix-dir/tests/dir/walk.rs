@@ -656,6 +656,53 @@ fn complex_empty() -> TestResult {
 }
 
 #[test]
+fn ignored_entries_dont_make_a_collapsed_directory_of_empty_ones_untracked() -> TestResult {
+    let root = fixture("ignored-and-empty");
+    let (_, entries) = collect(&root, None, |keep, ctx| {
+        walk(
+            &root,
+            ctx,
+            walk::Options {
+                emit_empty_directories: false,
+                emit_untracked: CollapseDirectory,
+                ..options()
+            },
+            keep,
+        )
+    });
+    assert_eq!(
+        entries,
+        &[entry("with-file", Untracked, Directory)],
+        "directories holding only ignored entries and empty directories have no untracked file, \
+         and are skipped like a tree of only empty directories, as Git does"
+    );
+
+    let (_, entries) = collect(&root, None, |keep, ctx| {
+        walk(
+            &root,
+            ctx,
+            walk::Options {
+                emit_empty_directories: true,
+                emit_untracked: CollapseDirectory,
+                ..options()
+            },
+            keep,
+        )
+    });
+    assert_eq!(
+        entries,
+        &[
+            entry("dir-and-empty", Untracked, Directory).with_property(EmptyDirectory),
+            entry("file-and-empty", Untracked, Directory).with_property(EmptyDirectory),
+            entry("nested", Untracked, Directory).with_property(EmptyDirectory),
+            entry("with-file", Untracked, Directory),
+        ],
+        "they collapse as empty directories, and the one with an untracked file as before"
+    );
+    Ok(())
+}
+
+#[test]
 fn ignored_with_prefix_pathspec_collapses_just_like_untracked() -> TestResult {
     let root = fixture("untracked-and-ignored-for-collapse");
     let ((out, _root), entries) = collect_filtered(
