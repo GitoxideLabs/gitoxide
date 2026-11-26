@@ -30,11 +30,10 @@ impl<'a> Iterator for Lines<'a> {
                 Some(b) if *b == b'#' => continue,
                 Some(_) => {}
             }
-            let line = line.trim();
-            if line.is_empty() {
+            if line.trim().is_empty() {
                 continue;
             }
-            return Some(parse_line(line.into(), self.line_no));
+            return Some(parse_line(trim_git_whitespace(line), self.line_no));
         }
         None
     }
@@ -81,14 +80,21 @@ fn parse_name_and_email(
             let closing_bracket = email.find_byte(b'>').ok_or_raise(|| {
                 validation(format!("{line_number}: Missing closing bracket '>' in email")).with_input(line)
             })?;
-            let email = email[..closing_bracket].trim().as_bstr();
+            let email = trim_git_whitespace(&email[..closing_bracket]);
             if email.is_empty() && !allow_empty_email {
                 bail!(validation(format!("{line_number}: Email must not be empty")).with_input(line));
             }
-            let name = line[..start_bracket].trim().as_bstr();
+            let name = trim_git_whitespace(&line[..start_bracket]);
             let rest = line[start_bracket + closing_bracket + 2..].as_bstr();
             Ok(((!name.is_empty()).then_some(name), Some(email), rest))
         }
         None => Ok((None, None, line)),
     }
+}
+
+/// Remove the whitespace that Git removes at the edges of a name: space, tab, newline and carriage
+/// return, the characters its `isspace()` accepts. Any other whitespace, such as a no-break space,
+/// a vertical tab or a form feed, is part of the name or the email.
+fn trim_git_whitespace(value: &[u8]) -> &BStr {
+    value.trim_with(|c| matches!(c, ' ' | '\t' | '\n' | '\r')).as_bstr()
 }

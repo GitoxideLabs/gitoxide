@@ -83,6 +83,47 @@ fn valid_entries() {
 }
 
 #[test]
+fn names_lose_only_the_whitespace_git_trims_at_their_edges() {
+    // Git removes space, tab and carriage return from the beginning and end of a name. Any other
+    // whitespace, like a no-break space (U+00A0) or an em space (U+2003), stays part of the name.
+    assert_eq!(
+        line("New Name\u{a0} <commit@example.com>"),
+        Entry::change_name_by_email("New Name\u{a0}", "commit@example.com"),
+        "a no-break space at the end of the new name is kept"
+    );
+    assert_eq!(
+        line("\u{2003}New Name <commit@example.com>"),
+        Entry::change_name_by_email("\u{2003}New Name", "commit@example.com"),
+        "an em space at the beginning of the new name is kept"
+    );
+    assert_eq!(
+        line("Canonical Name <canonical@example.com> Old Name\u{a0} <old@example.com>"),
+        Entry::change_name_and_email_by_name_and_email(
+            "Canonical Name",
+            "canonical@example.com",
+            "Old Name\u{a0}",
+            "old@example.com"
+        ),
+        "a no-break space at the end of the old name is kept, which makes it a key of its own"
+    );
+    assert_eq!(
+        line(" \t\u{b}\u{c}New Name \r\u{b}<commit@example.com>"),
+        Entry::change_name_by_email("\u{b}\u{c}New Name \r\u{b}", "commit@example.com"),
+        "a vertical tab and a form feed are kept, so only the leading space and tab are removed"
+    );
+    assert_eq!(
+        line(" \t\rNew Name \t\r <commit@example.com>"),
+        Entry::change_name_by_email("New Name", "commit@example.com"),
+        "space, tab and carriage return are still removed"
+    );
+    assert_eq!(
+        line("New Name <\u{b}commit@example.com\t>"),
+        Entry::change_name_by_email("New Name", "\u{b}commit@example.com"),
+        "Git keeps an email verbatim; the tab is removed from this one, the vertical tab is not"
+    );
+}
+
+#[test]
 fn trailing_content_after_a_complete_mapping_is_ignored() {
     assert_eq!(
         line("Canonical Name <canonical@example.com> <mapped@example.com> # secondary <ignored@example.com>"),
