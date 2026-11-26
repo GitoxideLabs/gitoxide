@@ -176,6 +176,7 @@ async fn async_responses_use_the_shared_loss_generation_and_deadline_rules() -> 
             }),
         ),
         (None, Err(SynchronizeError::TimedOut)),
+        (None, Err(SynchronizeError::Busy)),
         (None, Err(SynchronizeError::CoverageLost)),
     ] {
         let directory = gix_testtools::tempfile::tempdir()?;
@@ -233,7 +234,29 @@ async fn async_responses_use_the_shared_loss_generation_and_deadline_rules() -> 
                 "loss, generation conflicts and incomplete fences require a full baseline"
             );
         }
-        if fence.is_err() {
+        if matches!(fence, Err(SynchronizeError::TimedOut | SynchronizeError::Busy)) {
+            assert!(
+                monitor.healthy && monitor.retry.is_none(),
+                "a transient fence failure leaves coverage eligible for the next query"
+            );
+            let full_scan_token = response
+                .split(|byte| *byte == 0)
+                .next()
+                .expect("the full response begins with a token");
+            assert_ne!(
+                full_scan_token, previous,
+                "the full response invalidates earlier tokens"
+            );
+            monitor.watcher.fence = Ok(Fence {
+                generation: 7,
+                sequence: 42,
+            });
+            let next = monitor.response(full_scan_token, now).await;
+            assert!(
+                !next.ends_with(b"\0/\0"),
+                "the next query can certify incremental delivery within the recovery interval"
+            );
+        } else if fence.is_err() {
             assert!(
                 !monitor.healthy && monitor.retry.is_some(),
                 "failed synchronization schedules recovery"
