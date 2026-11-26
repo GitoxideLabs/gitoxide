@@ -9,6 +9,51 @@ pub fn repo(name: &str) -> Result<gix::Repository> {
 }
 
 #[test]
+fn resolved_branch_matches_git_submodule_update_remote() -> gix_testtools::TestResult {
+    use gix::submodule::config::Branch;
+
+    let fixture = gix_testtools::scripted_fixture_read_only("make_submodule_branches.sh")?;
+    for (scenario, expected) in [
+        ("inherited", Some("refs/heads/topic/feature")),
+        ("override-dot", Some("refs/heads/topic/feature")),
+        ("unborn", Some("refs/heads/topic/unborn")),
+        ("override-name", Some("refs/heads/explicit")),
+        ("unset", Some("HEAD")),
+        ("detached", None),
+    ] {
+        let repo = gix::open_opts(fixture.join(scenario), gix::open::Options::isolated())?;
+        let module = repo
+            .submodules()?
+            .expect("fixture has submodules")
+            .next()
+            .expect("one submodule");
+        let resolved = module.resolved_branch();
+        if scenario == "inherited" {
+            assert_eq!(
+                module.branch()?,
+                Some(Branch::CurrentInSuperproject),
+                "the configured selector still expresses inheritance"
+            );
+        }
+        let Some(expected) = expected else {
+            let err = resolved.expect_err("Git rejects inheritance from a detached superproject");
+            assert!(err.to_string().contains("detached HEAD"), "{err}");
+            continue;
+        };
+        let branch = resolved?;
+        assert_eq!(branch.as_bstr(), expected, "{scenario}: the effective branch name");
+        let checkout = module.open()?.expect("Git initialized the submodule");
+        let mut tracking_ref = checkout.find_reference(format!("refs/remotes/origin/{}", branch.shorten()).as_str())?;
+        assert_eq!(
+            tracking_ref.follow_to_object()?,
+            checkout.head_id()?,
+            "{scenario}: the resolved branch points to the same commit Git checked out"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn nul_in_submodule_name_fails_at_git_dir_lookup() -> gix_testtools::TestResult {
     use gix::bstr::ByteSlice;
     use gix_validate::submodule::name::Error;
