@@ -204,7 +204,7 @@ impl Repository {
         let mut diff_cache = self.diff_resource_cache_for_tree_diff()?;
         let mut blob_merge = self.merge_resource_cache(Default::default())?;
         let commit_graph = self.commit_graph_if_enabled()?;
-        let mut graph = self.revision_graph(commit_graph.as_ref());
+        let mut graph = self.revision_graph(commit_graph.as_ref())?;
         let mut submodule = submodule::query(self);
         let context = gix_merge::tree::Context {
             submodule: Some(&mut submodule),
@@ -267,7 +267,7 @@ impl Repository {
         options: crate::merge::tree::Options,
     ) -> Result<crate::merge::virtual_merge_base::Outcome<'_>> {
         let commit_graph = self.commit_graph_if_enabled()?;
-        let mut graph = self.revision_graph(commit_graph.as_ref());
+        let mut graph = self.revision_graph(commit_graph.as_ref())?;
         self.virtual_merge_base_with_graph(merge_bases, &mut graph, options)
     }
 
@@ -359,13 +359,7 @@ mod submodule {
                 }
                 gix_merge::submodule::Query::IsAncestor { ancestor, descendant } => {
                     let cache = repo.commit_graph_if_enabled()?;
-                    let mut graph = gix_revwalk::Graph::new(
-                        crate::revision::walk::Objects {
-                            repo,
-                            shallow: repo.shallow_commits()?,
-                        },
-                        cache.as_ref(),
-                    );
+                    let mut graph = repo.revision_graph(cache.as_ref())?;
                     gix_revision::merge_base::is_ancestor(ancestor.to_owned(), descendant.to_owned(), &mut graph)?
                 }
             }))

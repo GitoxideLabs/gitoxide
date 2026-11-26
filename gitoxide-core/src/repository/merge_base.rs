@@ -22,7 +22,7 @@ pub fn merge_base(
         .collect::<std::result::Result<_, _>>()?;
 
     let cache = repo.commit_graph_if_enabled()?;
-    let mut graph = repo.revision_graph(cache.as_ref());
+    let mut graph = repo.revision_graph(cache.as_ref())?;
     let bases = repo.merge_bases_many_with_graph(first_id, &other_ids, &mut graph)?;
     if bases.is_empty() {
         bail!(

@@ -3,11 +3,12 @@ impl crate::Repository {
     /// Create a graph data-structure capable of accelerating graph traversals and storing state of type `T` with each commit
     /// it encountered.
     ///
-    /// Note that the `cache` will be used if present and no object replacements are active, and it's best obtained with
-    /// [`commit_graph_if_enabled()`](crate::Repository::commit_graph_if_enabled()).
+    /// Shallow commits are treated as roots when reading from the object database. Reading the repository's
+    /// shallow boundaries can fail.
     ///
-    /// Note that a commitgraph is only allowed to be used if `core.commitGraph` is true (the default), and that configuration errors are
-    /// ignored as well.
+    /// A supplied `cache` takes precedence for the commits it contains. The caller is responsible for its
+    /// parent links and generation numbers matching the intended history. Use [`Self::commit_graph_if_enabled()`]
+    /// to select a cache according to repository configuration and compatibility.
     ///
     /// ### Performance
     ///
@@ -16,8 +17,17 @@ impl crate::Repository {
     pub fn revision_graph<'cache, T>(
         &self,
         cache: Option<&'cache gix_commitgraph::Graph>,
-    ) -> gix_revwalk::Graph<'_, 'cache, T> {
-        gix_revwalk::Graph::new(&self.objects, cache.filter(|_| !self.has_object_replacements()))
+    ) -> Result<gix_revwalk::Graph<'_, 'cache, T>> {
+        Ok(match self.shallow_commits()? {
+            Some(shallow) => gix_revwalk::Graph::new(
+                crate::revision::walk::Objects {
+                    repo: self,
+                    shallow: Some(shallow),
+                },
+                cache,
+            ),
+            None => gix_revwalk::Graph::new(&self.objects, cache),
+        })
     }
 
     /// Return a cache for commits and their graph structure, as managed by `git commit-graph`, for accelerating commit walks on

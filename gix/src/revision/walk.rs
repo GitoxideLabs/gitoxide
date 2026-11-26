@@ -298,8 +298,8 @@ impl<'repo> Platform<'repo, '_> {
     /// control over this to the configuration of `core.commitGraph` (the default).
     ///
     /// Errors when loading the graph lead to falling back to the object database, it's treated as optional cache.
-    /// Active object replacements and shallow boundaries always disable the commit-graph,
-    /// which may contain different parents.
+    /// Active object replacements and shallow boundaries prevent automatic loading because the graph may contain
+    /// different parents. An enabled graph supplied with [`Self::with_commit_graph()`] is still used.
     pub fn use_commit_graph(mut self, toggle: impl Into<Option<bool>>) -> Self {
         self.use_commit_graph = toggle.into();
         self
@@ -307,9 +307,10 @@ impl<'repo> Platform<'repo, '_> {
 
     /// Set or unset the commit-graph to use when [`Self::use_commit_graph()`] or `core.commitGraph` enables it.
     ///
-    /// If `graph` is `None`, an enabled graph is still loaded from the repository.
+    /// If `graph` is `None`, the walk uses automatic graph selection as described by [`Self::use_commit_graph()`].
     /// [`use_commit_graph(false)`][Self::use_commit_graph()] disables even an explicitly supplied graph.
-    /// Active object replacements and shallow boundaries disable even an explicitly supplied graph.
+    /// A supplied graph takes precedence over object replacements and shallow boundaries for commits it covers.
+    /// Lookups that fall back to the object database still honor replacements and shallow boundaries.
     pub fn with_commit_graph(mut self, graph: Option<gix_commitgraph::Graph>) -> Self {
         self.commit_graph = graph;
         self
@@ -441,8 +442,10 @@ impl<'repo: 'cache, 'cache> Platform<'repo, 'cache> {
             shallow: repo.shallow_commits()?,
         };
         let unmodified = objects.shallow.is_none() && !repo.has_object_replacements();
-        let use_disk_graph = unmodified && use_commit_graph.map_or_else(|| repo.config.may_use_commit_graph(), Ok)?;
-        let supplied_graph = commit_graph.filter(|_| use_disk_graph);
+        let graph_enabled = (unmodified || commit_graph.is_some())
+            && use_commit_graph.map_or_else(|| repo.config.may_use_commit_graph(), Ok)?;
+        let use_disk_graph = unmodified && graph_enabled;
+        let supplied_graph = commit_graph.filter(|_| graph_enabled);
         let has_boundary = !boundary.is_empty();
         let filter = move |id: &gix_hash::oid| filter(id) && boundary.binary_search(&id.to_owned()).is_err();
         if let Some(cache) = hidden_cache

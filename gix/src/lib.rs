@@ -551,6 +551,9 @@ pub mod worktree;
 
 pub mod revision;
 
+#[cfg(feature = "revision")]
+pub mod contains;
+
 #[cfg(feature = "attributes")]
 pub mod filter;
 

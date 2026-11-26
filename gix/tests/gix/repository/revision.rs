@@ -245,7 +245,7 @@ fn merge_base_variants_find_common_ancestors() -> TestResult {
     let repo = crate::util::basic_repo()?;
     let head_commit_id = repo.head_id()?;
     let parent_commit_id = repo.rev_parse_single("HEAD^")?;
-    let mut graph = repo.revision_graph(None);
+    let mut graph = repo.revision_graph(None)?;
     assert_eq!(
         repo.merge_base_with_graph(head_commit_id, parent_commit_id, &mut graph)?,
         Some(parent_commit_id),
@@ -293,7 +293,7 @@ fn unrelated_histories_have_no_merge_base() -> TestResult {
     let repo = revision_query_repo("without-commit-graph")?;
     let head_commit_id = repo.head_id()?;
     let unrelated_commit_id = repo.rev_parse_single("unrelated")?;
-    let mut graph = repo.revision_graph(None);
+    let mut graph = repo.revision_graph(None)?;
 
     for base in [
         repo.merge_base(head_commit_id, unrelated_commit_id)?,
@@ -321,7 +321,7 @@ fn is_ancestor_follows_parents_like_git() -> TestResult {
     let head_commit_id = repo.head_id()?;
     let parent_commit_id = repo.rev_parse_single("HEAD^")?;
     let unrelated_commit_id = repo.rev_parse_single("unrelated")?;
-    let mut graph = repo.revision_graph(None);
+    let mut graph = repo.revision_graph(None)?;
 
     for (ancestor_commit_id, descendant_commit_id, expected, description) in [
         (
@@ -370,6 +370,44 @@ fn is_ancestor_follows_parents_like_git() -> TestResult {
 }
 
 #[test]
+fn contains_matches_git_for_each_ref() -> TestResult {
+    for view in [".", "without-commit-graph", "shallow", "replacements"] {
+        let repo = crate::util::named_subrepo_opts(
+            "make_revision_queries.sh",
+            view,
+            crate::util::restricted().config_overrides(["core.useReplaceRefs=true"]),
+        )?;
+        let cache = repo.commit_graph_if_enabled()?;
+        assert_eq!(
+            cache.is_some(),
+            view == ".",
+            "only full history uses the cache automatically"
+        );
+        let mut graph = repo.revision_graph(cache.as_ref())?;
+        for target_spec in ["HEAD", "parent", "root", "unrelated", "HEAD"] {
+            let mut target = repo.contains_target(repo.rev_parse_single(target_spec)?, &mut graph)?;
+            let expected = std::fs::read_to_string(repo.git_dir().join(format!("contains-{target_spec}.baseline")))?;
+            let references = repo.references()?;
+            let mut matching = Vec::new();
+            for reference in references.prefixed("refs/remotes/replacement/")? {
+                let mut reference = reference?;
+                let name = reference.name().to_string();
+                if target.is_reachable_from(reference.peel_to_id()?)? {
+                    matching.push(name);
+                }
+            }
+            matching.sort();
+            assert_eq!(
+                matching,
+                expected.lines().collect::<Vec<_>>(),
+                "{view}: refs containing {target_spec} match Git when reusing the graph"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn ahead_behind_counts_match_git() -> TestResult {
     for (name, use_commitgraph) in [("without-commit-graph", false), (".", true)] {
         let repo = revision_query_repo(name)?;
@@ -387,7 +425,7 @@ fn ahead_behind_counts_match_git() -> TestResult {
                 );
             }
         }
-        let mut graph = repo.revision_graph(cache.as_ref());
+        let mut graph = repo.revision_graph(cache.as_ref())?;
         assert_history_queries_match_git(&repo, &mut graph, "history.baseline")?;
     }
     Ok(())
@@ -395,15 +433,8 @@ fn ahead_behind_counts_match_git() -> TestResult {
 
 #[test]
 fn shallow_boundaries_stop_ancestry_and_counting_like_git() -> TestResult {
-    let full_repo = revision_query_repo(".")?;
     let repo = revision_query_repo("shallow")?;
     let tip_commit_id = repo.head_id()?;
-    let root_commit_id = repo.rev_parse_single("root")?;
-    let cache = full_repo.commit_graph()?;
-    let mut graph = full_repo.revision_graph(Some(&cache));
-    // The full and shallow fixtures share objects, but only the latter has a boundary.
-    // Populate the graph from full history before querying the shallow view.
-    full_repo.ahead_behind_counts_with_graph(tip_commit_id, root_commit_id, &mut graph)?;
     assert!(
         repo.commit_graph_if_enabled()?.is_none(),
         "shallow history must not use the pre-shallow commit-graph automatically"
@@ -414,32 +445,25 @@ fn shallow_boundaries_stop_ancestry_and_counting_like_git() -> TestResult {
         "rev-walk stops at the boundary"
     );
     assert_eq!(
-        repo.ahead_behind_counts_with_graph(tip_commit_id, root_commit_id, &mut graph)?,
-        gix::revision::plumbing::ahead_behind_counts::Outcome { ahead: 2, behind: 1 },
-        "counting independently applies the boundary to an already populated graph"
+        repo.merge_base(tip_commit_id, repo.rev_parse_single("root")?)?,
+        None,
+        "merge-base must not reach the older root that is still present on disk"
     );
+    let mut graph = repo.revision_graph(None)?;
     assert_history_queries_match_git(&repo, &mut graph, "history.baseline")?;
-    let mut uncached_graph = repo.revision_graph(None);
-    assert_history_queries_match_git(&repo, &mut uncached_graph, "history.baseline")?;
-    assert_history_queries_match_git(&full_repo, &mut uncached_graph, "history.baseline")?;
-    assert_history_queries_match_git(&full_repo, &mut graph, "history.baseline")?;
     Ok(())
 }
 
 #[test]
 fn unrelated_shallow_boundaries_are_not_decoded() -> TestResult {
     let repo = crate::named_repo("make_unrelated_shallow_boundary.sh")?;
-    let cache = repo.commit_graph()?;
-    for cache in [None, Some(&cache)] {
-        let mut graph = repo.revision_graph(cache);
-        assert_history_queries_match_git(&repo, &mut graph, "history.baseline")?;
-    }
+    let mut graph = repo.revision_graph(None)?;
+    assert_history_queries_match_git(&repo, &mut graph, "history.baseline")?;
     Ok(())
 }
 
 #[test]
-fn replacements_disable_stale_commit_graphs_like_git() -> TestResult {
-    let full_repo = revision_query_repo(".")?;
+fn replacements_disable_automatic_commit_graphs_like_git() -> TestResult {
     let repo = crate::util::named_subrepo_opts(
         "make_revision_queries.sh",
         "replacements",
@@ -456,22 +480,7 @@ fn replacements_disable_stale_commit_graphs_like_git() -> TestResult {
         repo.commit_graph_if_enabled()?.is_none(),
         "replacement topology is incompatible with the cache"
     );
-    for count_first in [false, true] {
-        // Construct through the original view, as the replacement view already filters out the cache.
-        let mut graph = full_repo.revision_graph(Some(&cache));
-        assert!(
-            full_repo.is_ancestor_with_graph(root_commit_id, tip_commit_id, &mut graph)?,
-            "populate the reusable graph with the original ancestry"
-        );
-        if count_first {
-            assert_eq!(
-                repo.ahead_behind_counts_with_graph(tip_commit_id, root_commit_id, &mut graph)?,
-                gix::revision::plumbing::ahead_behind_counts::Outcome { ahead: 1, behind: 1 },
-                "counting independently discards stale cached topology"
-            );
-        }
-        assert_history_queries_match_git(&repo, &mut graph, "history.baseline")?;
-    }
+    assert_history_queries_match_git(&repo, &mut repo.revision_graph(None)?, "history.baseline")?;
     let mut repo = repo;
     repo.objects.ignore_replacements = true;
     assert!(
@@ -487,7 +496,7 @@ fn replacements_disable_stale_commit_graphs_like_git() -> TestResult {
         gix::revision::plumbing::ahead_behind_counts::Outcome { ahead: 2, behind: 0 },
         "ignored replacements retain original counts"
     );
-    let mut graph = repo.revision_graph(Some(&cache));
+    let mut graph = repo.revision_graph(Some(&cache))?;
     assert_history_queries_match_git(&repo, &mut graph, "unmodified-history.baseline")?;
     Ok(())
 }

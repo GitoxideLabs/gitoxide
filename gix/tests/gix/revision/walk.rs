@@ -439,14 +439,17 @@ fn graph_controls_are_shared_with_simple_walks() -> TestResult {
 }
 
 #[test]
-fn shallow_commits_are_roots_even_with_hidden_history_and_a_stale_graph() -> TestResult {
+fn shallow_walks_skip_automatic_graphs_but_use_supplied_ones() -> TestResult {
     let full = crate::named_repo(FIXTURE)?;
+    let mut shallow_history = baseline(&full, "shallow-hidden.baseline")?;
+    let mut full_history = baseline(&full, "topo-order-all-hidden.baseline")?;
+    shallow_history.sort();
+    full_history.sort();
     for sorting in [Sorting::BreadthFirst, Sorting::TopoOrder, Sorting::DateOrder] {
         let repo = crate::util::named_subrepo_opts(FIXTURE, "shallow", crate::util::restricted())?;
         let infos = repo
             .rev_walk([repo.head_id()?])
             .sorting(sorting)
-            .with_commit_graph(Some(full.commit_graph()?))
             .all()?
             .collect::<gix::Result<Vec<_>>>()?;
         assert_eq!(infos.len(), 1, "the depth-one walk does not read its missing parent");
@@ -456,7 +459,7 @@ fn shallow_commits_are_roots_even_with_hidden_history_and_a_stale_graph() -> Tes
         );
         assert!(
             infos[0].generation.is_none(),
-            "a supplied graph cannot bypass shallow boundaries"
+            "the depth-one walk does not use a commit-graph"
         );
         assert_eq!(
             infos[0].object()?.parent_ids().count(),
@@ -468,13 +471,17 @@ fn shallow_commits_are_roots_even_with_hidden_history_and_a_stale_graph() -> Tes
         let tip = repo.head_id()?;
         let hidden = repo.rev_parse_single("main")?;
         let walk = || repo.rev_walk([tip]).sorting(sorting).with_hidden([hidden]);
-        let mut actual = ids(walk().with_commit_graph(Some(repo.commit_graph()?)).all()?)?;
-        let mut expected = baseline(&full, "shallow-hidden.baseline")?;
+        let mut actual = ids(walk().use_commit_graph(true).all()?)?;
         actual.sort();
-        expected.sort();
         assert_eq!(
-            actual, expected,
-            "hidden painting stops at shallow main, preserving root reached through side"
+            actual, shallow_history,
+            "the graph is not opened automatically, so hidden painting stops at shallow main"
+        );
+        let mut actual = ids(walk().with_commit_graph(Some(repo.commit_graph()?)).all()?)?;
+        actual.sort();
+        assert_eq!(
+            actual, full_history,
+            "a supplied graph paints through shallow main, hiding root as in the full repository"
         );
         let mut cache = repo.rev_walk_cache();
         assert_eq!(
