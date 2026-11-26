@@ -93,6 +93,8 @@ impl crate::Repository {
     ///   `refs/heads/*:refs/remotes/origin/*` fetch refspec, hence `refs/remotes/origin/main` is returned.
     ///   Note that `push` refspecs can be used to map `main` to `other` (using a push refspec `refs/heads/main:refs/heads/other`),
     ///   which would then lead to `refs/remotes/origin/other` to be returned instead.
+    ///   With no configured push refspecs, `remote.<name>.mirror=true` uses the branch's full name as the push
+    ///   destination before consulting `push.default`.
     ///
     /// The repository's [configuration section filter](crate::open::Options::filter_config_section()) applies, which removes
     /// remotes in untrusted repositories.
@@ -147,10 +149,21 @@ impl crate::Repository {
         let push_specs = config
             .strings_filter_by("remote", subsection, Remote::PUSH.name, filter)
             .unwrap_or_default();
-        let Some((remote_ref, push_default)) = self
-            .push_remote_ref_name(name, parse_tracking_refspecs(&push_specs, subsection, Operation::Push)?)
-            .or_raise(|| message("Could not get the remote reference to translate into the local tracking branch"))?
-        else {
+        let destination = if push_specs.is_empty()
+            && config
+                .boolean_filter_by("remote", subsection, Remote::MIRROR.name, filter)
+                .with_lenient_default(self.config.lenient_config)
+                .or_raise(|| validation(format!("Invalid mirror setting for remote '{subsection}'")))?
+                .unwrap_or_default()
+        {
+            Some((name.to_owned(), None))
+        } else {
+            self.push_remote_ref_name(name, parse_tracking_refspecs(&push_specs, subsection, Operation::Push)?)
+                .or_raise(|| {
+                    message("Could not get the remote reference to translate into the local tracking branch")
+                })?
+        };
+        let Some((remote_ref, push_default)) = destination else {
             return Ok(None);
         };
         if push_default == Some(push::Default::Upstream) {

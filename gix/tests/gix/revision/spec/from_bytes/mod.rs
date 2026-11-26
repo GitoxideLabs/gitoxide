@@ -115,19 +115,26 @@ mod sibling_branch {
 
     #[test]
     fn push_without_branch_remote_matches_git() -> TestResult {
-        push_tracking_matches_git("unconfigured")
+        push_tracking_matches_git("unconfigured", PUSH_MODES)
     }
 
     #[test]
     fn push_with_separate_upstream_remote_matches_git() -> TestResult {
-        push_tracking_matches_git("triangular")
+        push_tracking_matches_git("triangular", PUSH_MODES)
     }
 
-    fn push_tracking_matches_git(setup: &str) -> TestResult {
+    #[test]
+    fn push_to_mirror_matches_git() -> TestResult {
+        push_tracking_matches_git("mirror", &["upstream", "nothing", "refspec", "no-fetch"])
+    }
+
+    const PUSH_MODES: &[&str] = &["upstream", "current", "matching", "simple", "refspec"];
+
+    fn push_tracking_matches_git(setup: &str, modes: &[&str]) -> TestResult {
         use gix::{bstr::BStr, sec::Trust};
 
         let fixture = gix_testtools::scripted_fixture_read_only("make_push_tracking_revspecs.sh")?;
-        for mode in ["upstream", "current", "matching", "simple", "refspec"] {
+        for mode in modes {
             let case = format!("{setup}-{mode}");
             let path = fixture.join(&case);
             let expected = std::fs::read_to_string(path.join("tracking-ref"))?;
@@ -162,16 +169,16 @@ mod sibling_branch {
                         expected,
                         "{case} ({trust:?}): {spec} matches Git's symbolic result"
                     );
-                    for op in ["p", "P"] {
+                    for op in ["p", "P", "PuSh"] {
                         let spec = format!("{branch}@{{{op}}}");
-                        let short = repo.rev_parse(spec.as_str());
+                        let variant = repo.rev_parse(spec.as_str());
                         assert_eq!(
-                            short.as_deref().ok(),
+                            variant.as_deref().ok(),
                             parsed.as_deref().ok(),
                             "{case} ({trust:?}): {spec} resolves the same commit as @{{push}}"
                         );
                         assert_eq!(
-                            short
+                            variant
                                 .as_ref()
                                 .ok()
                                 .and_then(|spec| spec.first_reference())
