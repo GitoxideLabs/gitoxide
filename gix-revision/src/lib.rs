@@ -19,6 +19,9 @@ pub use describe::function::describe;
 pub mod ahead_behind_counts;
 #[cfg(feature = "merge_base")]
 pub use ahead_behind_counts::function::ahead_behind_counts;
+/// Test many tips for reachability to a fixed commit, as in `git for-each-ref --contains`.
+#[cfg(feature = "merge_base")]
+pub mod contains;
 /// Find common ancestors of commits, or check if a commit is an ancestor of another one.
 #[cfg(feature = "merge_base")]
 pub mod merge_base;

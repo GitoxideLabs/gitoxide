@@ -5,6 +5,7 @@ use crate::odb_at;
 
 mod ahead_behind_counts;
 mod baseline;
+mod contains;
 mod is_ancestor;
 mod octopus;
 
