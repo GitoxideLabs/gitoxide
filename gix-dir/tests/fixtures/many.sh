@@ -300,6 +300,17 @@ mkdir empty-and-untracked-dir
 )
 
 
+git init ignored-and-empty
+(cd ignored-and-empty
+  echo "*.o" >> .gitignore
+  echo "userdata/" >> .gitignore
+  git add .gitignore && git commit -m "init"
+
+  mkdir -p file-and-empty/empty dir-and-empty/userdata nested/ws/userdata nested/ws/shared/empty with-file/empty
+  touch file-and-empty/a.o dir-and-empty/userdata/state nested/ws/userdata/state with-file/a.o with-file/b
+  mkdir dir-and-empty/empty
+)
+
 mkdir complex-empty
 (cd complex-empty
   mkdir empty-toplevel
