@@ -373,15 +373,19 @@ fn assert_unseen_generation_matches_git(
         !graph.generation_numbers_available(),
         "the unseen middle layer prevents generation-ordered stopping"
     );
-    let a_time = graph
-        .commit_by_id(commits["A"])
-        .expect("A is in the graph")
-        .committer_timestamp();
+    let a = graph.commit_by_id(commits["A"]).expect("A is in the graph");
+    let a_time = a.committer_timestamp();
+    let root_generation = a.generation();
+    assert_eq!(root_generation.get(), 1, "A retains its computed generation");
     for (name, commit_id) in &commits {
         let commit = graph.commit_by_id(*commit_id).expect("every commit is in the graph");
         assert_eq!(
             commit.generation(),
-            if name.starts_with('Z') { 0 } else { 1 },
+            if name.starts_with('Z') {
+                gix_commitgraph::Generation::UNCOMPUTED
+            } else {
+                root_generation
+            },
             "{name}: only the unseen middle layer has uncomputed generations"
         );
         assert!(

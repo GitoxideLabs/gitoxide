@@ -10,6 +10,7 @@ use gix_error::{ErrorExt, Message, Result, ResultExt, TestResult};
 use gix_testtools::scripted_fixture_read_only;
 
 mod access;
+mod generation;
 
 #[test]
 fn missing_path_is_not_found() -> gix_testtools::TestResult {
@@ -658,6 +659,16 @@ fn empty_graph_inputs_differ_from_empty_stored_chains() -> TestResult {
         "Commit-graph must contain at least one file",
         "the constructor diagnostic remains the cause"
     );
+    Ok(())
+}
+
+#[test]
+fn file_verification_reports_generation_bounds() -> TestResult {
+    let data = fixture_commit_graph_bytes("single_parent.sh")?;
+    let file = mapped_file(&data, "commit-graph")?;
+    let stats = file.traverse(|_| Ok(()))?;
+    assert_eq!(stats.min_generation.get(), 1, "the root has generation 1");
+    assert_eq!(stats.max_generation.get(), 2, "the tip has generation 2");
     Ok(())
 }
 

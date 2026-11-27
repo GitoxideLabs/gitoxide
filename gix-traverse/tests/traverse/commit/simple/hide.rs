@@ -531,7 +531,11 @@ fn uncomputed_generations_in_the_commit_graph_match_git() -> gix_testtools::Test
         .commit_by_id(commits["hidden"])
         .expect("the commit-graph contains the hidden tip")
         .generation();
-    assert_eq!(hidden_generation, 0, "the hidden tip has a legacy generation");
+    assert_eq!(
+        hidden_generation,
+        gix_commitgraph::Generation::UNCOMPUTED,
+        "the hidden tip has a legacy generation"
+    );
 
     // The legacy generation is seen on the hidden tip itself, or on the parent of one.
     for hidden in ["hidden", "hidden-child"] {
@@ -573,12 +577,21 @@ fn unseen_uncomputed_generation_in_a_split_graph_matches_git() -> gix_testtools:
         !graph.generation_numbers_available(),
         "an uncomputed intermediate layer prevents generation-ordered stopping"
     );
+    let root_generation = graph
+        .commit_by_id(commits["A"])
+        .expect("A is in the graph")
+        .generation();
+    assert_eq!(root_generation.get(), 1, "A retains its computed generation");
     assert_eq!(
         graph
             .iter_commits()
             .map(|commit| (commit.id().to_owned(), commit.generation()))
             .collect::<Vec<_>>(),
-        [(commits["A"], 1), (commits["Z"], 0), (commits["H"], 1)],
+        [
+            (commits["A"], root_generation),
+            (commits["Z"], gix_commitgraph::Generation::UNCOMPUTED),
+            (commits["H"], root_generation),
+        ],
         "only the unseen middle layer has uncomputed generations"
     );
     assert!(

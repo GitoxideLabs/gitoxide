@@ -33,7 +33,7 @@ impl<'graph, 'cache> LazyCommit<'graph, 'cache> {
     pub fn generation(&self) -> Option<Generation> {
         match &self.backing {
             Either::Left(_) => None,
-            Either::Right((cache, pos)) => cache.commit_at(*pos).generation().into(),
+            Either::Right((cache, pos)) => Some(cache.commit_at(*pos).generation()),
         }
     }
 
@@ -61,7 +61,7 @@ impl<'graph, 'cache> LazyCommit<'graph, 'cache> {
             Either::Right((cache, pos)) => {
                 let commit = cache.commit_at(*pos);
                 (
-                    commit.generation().into(),
+                    Some(commit.generation()),
                     // a cast as we cannot represent the error and trying seems overkill
                     cache.commit_at(*pos).committer_timestamp() as SecondsSinceUnixEpoch,
                 )

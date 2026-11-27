@@ -71,8 +71,8 @@ pub struct Graph {
 pub struct Parent {
     /// The object ID of the parent commit.
     pub commit_id: gix_hash::ObjectId,
-    /// The parent's generation number, or [`GENERATION_NUMBER_INFINITY`] if unavailable.
-    pub generation: u32,
+    /// The parent's generation number, or [`Generation::INFINITY`] if unavailable.
+    pub generation: Generation,
     /// The parent's committer timestamp, in seconds since the Unix epoch.
     pub commit_time: i64,
 }
@@ -92,14 +92,66 @@ pub mod file;
 pub mod init;
 pub mod verify;
 
-/// The number of generations that are considered 'infinite' commit history.
-pub const GENERATION_NUMBER_INFINITY: u32 = 0xffff_ffff;
-/// The largest valid generation number.
+/// A topological (version 1) generation number from a commit-graph.
 ///
-/// If a commit's real generation number is larger than this, the commit graph will cap the value to
-/// this number.
-/// The largest distinct generation number is `GENERATION_NUMBER_MAX - 1`.
-pub const GENERATION_NUMBER_MAX: u32 = 0x3fff_ffff;
+/// A root has generation 1. Other commits have one more than their highest parent generation,
+/// capped at [`Self::MAX`]. Raw values are retained even when they cannot be used
+/// for ancestry cutoffs; use [`Self::is_reliable`] to filter them.
+///
+/// [`Display`](std::fmt::Display) shows the number, or `uncomputed`, `capped`, or `unavailable`
+/// for the special values. Use [`Self::get`] when the raw number is needed.
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize), serde(transparent))]
+pub struct Generation(u32);
+
+impl Generation {
+    /// A commit-graph entry whose generation was not computed.
+    pub const UNCOMPUTED: Self = Self(0);
+    /// The largest generation that can be stored in a commit-graph. Higher generations are capped at this value.
+    pub const MAX: Self = Self(0x3fff_ffff);
+    /// A traversal sentinel for commits outside the commit-graph. It is never stored on disk.
+    pub const INFINITY: Self = Self(u32::MAX);
+
+    /// Wrap a raw generation number without checking whether it can be used for ancestry cutoffs.
+    const fn new(value: u32) -> Self {
+        Self(value)
+    }
+
+    /// Return the raw generation number, including the numeric encoding of special values.
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+
+    /// Return whether this is a computed, unsaturated generation. In a valid commit-graph,
+    /// the parents of such a commit have strictly lower generations.
+    #[inline]
+    pub const fn is_reliable(&self) -> bool {
+        self.0 > Self::UNCOMPUTED.0 && self.0 < Self::MAX.0
+    }
+}
+
+impl std::fmt::Display for Generation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            Self::UNCOMPUTED => f.pad("uncomputed"),
+            Self::MAX => f.pad("capped"),
+            Self::INFINITY => f.pad("unavailable"),
+            Self(raw) => raw.fmt(f),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Generation;
+
+    #[test]
+    fn generation_just_above_the_on_disk_limit_is_unreliable() {
+        let generation = Generation::new(Generation::MAX.0 + 1);
+        assert!(!generation.is_reliable(), "only generations below the cap are reliable");
+    }
+}
 
 /// The maximum number of commits that can be stored in a commit graph.
 pub const MAX_COMMITS: u32 = (1 << 30) + (1 << 29) + (1 << 28) - 1;

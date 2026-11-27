@@ -3,6 +3,7 @@ use std::{
     collections::VecDeque,
 };
 
+use gix_commitgraph::Generation;
 use gix_date::SecondsSinceUnixEpoch;
 use gix_error::Result;
 use gix_hash::{ObjectId, oid};
@@ -89,14 +90,14 @@ bitflags::bitflags! {
 /// when available and falling back to commit time as a tie-breaker.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 struct GenThenTime {
-    generation: gix_revwalk::graph::Generation,
+    generation: Generation,
     time: SecondsSinceUnixEpoch,
 }
 
 impl<T> From<&gix_revwalk::graph::Commit<T>> for GenThenTime {
     fn from(commit: &gix_revwalk::graph::Commit<T>) -> Self {
         GenThenTime {
-            generation: commit.generation.unwrap_or(gix_commitgraph::GENERATION_NUMBER_INFINITY),
+            generation: commit.generation.unwrap_or(Generation::INFINITY),
             time: commit.commit_time,
         }
     }
@@ -338,7 +339,7 @@ fn paint_frontier(
     for &visible in visible_tips {
         graph.update(visible, |priority, flags| {
             *flags |= PaintFlags::VISIBLE;
-            saw_uncomputed_generation |= priority.generation == 0;
+            saw_uncomputed_generation |= priority.generation == Generation::UNCOMPUTED;
             visible_only_commit_ids.insert(visible);
             queue.insert(priority, visible);
         })?;
@@ -349,7 +350,7 @@ fn paint_frontier(
                 unhidden_tips -= 1;
                 visible_only_commit_ids.remove(&hidden);
             }
-            saw_uncomputed_generation |= priority.generation == 0;
+            saw_uncomputed_generation |= priority.generation == Generation::UNCOMPUTED;
             *flags |= PaintFlags::HIDDEN;
             queue.insert(priority, hidden);
         })?;
@@ -359,17 +360,12 @@ fn paint_frontier(
         // A queued visible-only commit already proves there is non-stale work.
         if visible_only_commit_ids.is_empty() {
             // With zero-generation layers ruled out, a usable queue head means all queued commits have one.
-            if !saw_uncomputed_generation
-                && queue
-                    .peek()
-                    .is_some_and(|(key, _)| (1..gix_commitgraph::GENERATION_NUMBER_MAX).contains(&key.generation))
-            {
+            if !saw_uncomputed_generation && queue.peek().is_some_and(|(key, _)| key.generation.is_reliable()) {
                 break;
             }
             if queue.iter_unordered().all(|id| {
                 graph.get(id).is_none_or(|commit| {
-                    commit.flags.contains(PaintFlags::STALE)
-                        && (1..gix_commitgraph::GENERATION_NUMBER_MAX).contains(&commit.priority.generation)
+                    commit.flags.contains(PaintFlags::STALE) && commit.priority.generation.is_reliable()
                 })
             }) {
                 break;
@@ -382,7 +378,7 @@ fn paint_frontier(
         let commit = graph.get(&commit_id).expect("queued commits are in the graph");
         let mut flags = commit.flags;
         let parent_ids = commit.parents.clone();
-        let use_date_cutoff = !(1..gix_commitgraph::GENERATION_NUMBER_MAX).contains(&commit.priority.generation);
+        let use_date_cutoff = !commit.priority.generation.is_reliable();
         if !flags.contains(PaintFlags::HIDDEN) {
             last_visible_time = commit.priority.time;
             visible_only_commit_ids.remove(&commit_id);
@@ -401,7 +397,7 @@ fn paint_frontier(
                 }
             }
             graph.update(parent_id, |priority, paint| {
-                saw_uncomputed_generation |= priority.generation == 0;
+                saw_uncomputed_generation |= priority.generation == Generation::UNCOMPUTED;
                 if (*paint & flags) != flags {
                     if flags.contains(PaintFlags::HIDDEN) && *paint == PaintFlags::VISIBLE {
                         visible_only_commit_ids.remove(&parent_id);

@@ -1,6 +1,7 @@
 //! Provide multiple traversal implementations with different performance envelopes.
 //!
 //! Use [`Simple`] for fast walks that maintain minimal state, or [`Topo`] for a more elaborate traversal.
+use gix_commitgraph::Generation;
 use gix_error::Result;
 use gix_hash::ObjectId;
 use gix_object::FindExt;
@@ -34,7 +35,7 @@ pub struct Topo<Find, Predicate> {
     indegree_queue: PriorityQueue<topo::iter::GenAndCommitTime, ObjectId>,
     topo_queue: topo::iter::Queue,
     parents: Parents,
-    min_gen: u32,
+    min_gen: Generation,
     buf: Vec<u8>,
 }
 
@@ -63,7 +64,7 @@ pub struct Info {
     /// All parent ids we have encountered. Note that these will be at most one if [`Parents::First`] is enabled.
     pub parent_ids: ParentIds,
     /// The generation number if this commit was read from a commit-graph.
-    pub generation: Option<gix_revwalk::graph::Generation>,
+    pub generation: Option<Generation>,
     /// The time at which the commit was created. It will only be `Some(_)` if the chosen traversal was
     /// taking dates into consideration.
     pub commit_time: Option<gix_date::SecondsSinceUnixEpoch>,

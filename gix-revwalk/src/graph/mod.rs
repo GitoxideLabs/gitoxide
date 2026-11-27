@@ -14,11 +14,7 @@ pub mod commit;
 
 use gix_date::SecondsSinceUnixEpoch;
 
-/// The generation away from the HEAD of graph, useful to limit algorithms by topological depth as well.
-///
-/// 0 would mean the starting point of the hierarchy, and 1 their parents.
-/// This number is only available natively if there is a commit-graph.
-pub type Generation = u32;
+pub use gix_commitgraph::Generation;
 
 impl<T: std::fmt::Debug> std::fmt::Debug for Graph<'_, '_, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -387,8 +383,8 @@ pub struct Commit<T> {
     pub parents: SmallVec<[gix_hash::ObjectId; 1]>,
     /// The time at which the commit was created.
     pub commit_time: SecondsSinceUnixEpoch,
-    /// The generation of the commit, if available.
-    pub generation: Option<u32>,
+    /// The generation of the commit, if read from a commit-graph, including uncomputed or capped values.
+    pub generation: Option<Generation>,
     /// The corrected commit date (generation version 2), if every commit-graph layer provides it.
     ///
     /// Unlike the timestamp, this value is strictly greater than the value of each parent.

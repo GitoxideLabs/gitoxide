@@ -1,14 +1,11 @@
 //! Auxiliary types used by graph verification methods.
 use gix_error::Result;
-use std::{
-    cmp::{max, min},
-    collections::BTreeMap,
-};
+use std::{cmp::max, collections::BTreeMap};
 
 use gix_error::{ResultExt, bail};
 
 use crate::{
-    GENERATION_NUMBER_MAX, Graph,
+    Generation, Graph,
     file::{self},
 };
 
@@ -20,7 +17,7 @@ pub struct Outcome {
     ///
     /// For example, this will be `Some(9)` for a commit graph containing 10 linear commits.
     /// This will be `Some(0)` for a commit graph containing 0 or 1 commits.
-    /// If the longest path length is too large to fit in a [u32], then this will be [None].
+    /// If the maximum generation is capped, the exact path length is unknown and this is [None].
     pub longest_path_length: Option<u32>,
     /// The total number of commits traversed.
     pub num_commits: u32,
@@ -44,7 +41,7 @@ impl Graph {
             num_commits: 0,
             parent_counts: BTreeMap::new(),
         };
-        let mut max_generation = 0u32;
+        let mut max_generation = Generation::UNCOMPUTED;
 
         // TODO: Detect duplicate commit IDs across different files. Not sure how to do this without
         //   a separate loop, e.g. self.iter_sorted_ids().
@@ -79,31 +76,29 @@ impl Graph {
             }
 
             let file_stats = file.traverse(|commit| {
-                let mut max_parent_generation = 0u32;
+                let mut max_parent_generation = Generation::UNCOMPUTED;
                 let mut has_uncomputed_parent_generation = false;
                 for parent_pos in commit.iter_parents() {
                     let parent_pos = parent_pos?;
-                    let parent = self.commit_at(parent_pos);
-                    max_parent_generation = max(max_parent_generation, parent.generation());
-                    has_uncomputed_parent_generation |= parent.generation() == 0;
+                    let generation = self.commit_at(parent_pos).generation();
+                    max_parent_generation = max(max_parent_generation, generation);
+                    has_uncomputed_parent_generation |= generation == Generation::UNCOMPUTED;
                 }
 
                 // Zero denotes legacy, uncomputed generations, not corrupt data.
-                if commit.generation() == 0 || has_uncomputed_parent_generation {
+                let generation = commit.generation();
+                if generation == Generation::UNCOMPUTED || has_uncomputed_parent_generation {
                     bail!(
                         "Cannot verify generation numbers for commit {} because it or a parent has an uncomputed generation".unsupported(),
                         commit.id()
                     );
                 }
 
-                // If the max parent generation is GENERATION_NUMBER_MAX, then this commit's
-                // generation should be GENERATION_NUMBER_MAX too.
-                let expected_generation = min(max_parent_generation + 1, GENERATION_NUMBER_MAX);
-                if commit.generation() != expected_generation {
+                let expected_generation = max_parent_generation.child_generation();
+                if generation != expected_generation {
                     bail!(
-                        "Commit {}'s generation should be {expected_generation} but is {}".corrupted(),
-                        commit.id(),
-                        commit.generation()
+                        "Commit {}'s generation should be {expected_generation} but is {generation}".corrupted(),
+                        commit.id()
                     );
                 }
 
@@ -119,11 +114,19 @@ impl Graph {
             }
         }
 
-        stats.longest_path_length = if max_generation < GENERATION_NUMBER_MAX {
-            Some(max_generation.saturating_sub(1))
-        } else {
-            None
-        };
+        stats.longest_path_length = max_generation.path_length();
         Ok(stats)
+    }
+}
+
+impl Generation {
+    /// The child's generation given its highest parent generation (zero if it has no parents).
+    fn child_generation(self) -> Self {
+        Self::new(self.0.saturating_add(1)).min(Self::MAX)
+    }
+
+    /// Convert the maximum generation to an edge count. Zero also represents an empty graph here.
+    fn path_length(self) -> Option<u32> {
+        (self < Self::MAX).then_some(self.0.saturating_sub(1))
     }
 }

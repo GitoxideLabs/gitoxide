@@ -1,5 +1,5 @@
 use gix_error::TestResult;
-use gix_revision::merge_base::is_ancestor;
+use gix_revision::{graph::Generation, merge_base::is_ancestor};
 
 use super::{baseline, tag_commit_id};
 use crate::odb_at;
@@ -146,7 +146,7 @@ fn unreliable_generations_are_ignored() -> TestResult {
     let odb = odb_at(root.join(".git/objects"))?;
     // Missing, zero or saturated generations can neither answer without traversal nor end it early.
     // The commit times of this graph can't be trusted either, as the root E is newer than some of its descendants.
-    for generation in [None, Some(0), Some(gix_commitgraph::GENERATION_NUMBER_MAX)] {
+    for generation in [None, Some(Generation::UNCOMPUTED), Some(Generation::MAX)] {
         let mut graph = gix_revision::Graph::new(&odb, None);
         for name in ["A", "B", "C", "D", "E", "F", "G", "H"] {
             graph.get_or_insert_full_commit(tag_commit_id(&root, name)?, |commit| {

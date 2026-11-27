@@ -1,5 +1,5 @@
 use gix_error::TestResult;
-use gix_revision::{ahead_behind_counts, ahead_behind_counts::Outcome};
+use gix_revision::{ahead_behind_counts, ahead_behind_counts::Outcome, graph::Generation};
 
 use super::{baseline, tag_commit_id};
 use crate::odb_at;
@@ -122,7 +122,7 @@ fn unreliable_generations_do_not_double_count() -> TestResult {
     let odb = odb_at(root.join(".git/objects"))?;
     let cache =
         gix_commitgraph::Graph::from_info_dir(&odb.store_ref().path().join("info"), odb.store_ref().object_hash())?;
-    for generation in [None, Some(0), Some(gix_commitgraph::GENERATION_NUMBER_MAX)] {
+    for generation in [None, Some(Generation::UNCOMPUTED), Some(Generation::MAX)] {
         for use_commitgraph in [false, true] {
             let mut graph = gix_revision::Graph::new(&odb, use_commitgraph.then_some(&cache));
             for name in ["A", "B", "C", "D", "E", "F", "G", "H", "PL"] {

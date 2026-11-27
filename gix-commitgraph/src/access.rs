@@ -1,4 +1,4 @@
-use crate::{File, Graph, Position, file, file::Commit};
+use crate::{File, Generation, Graph, Position, file, file::Commit};
 
 /// Access
 impl Graph {
@@ -37,11 +37,13 @@ impl Graph {
     ///
     /// This checks the first commit in each nonempty file, relying on Git's invariant that a file
     /// contains either all zero (uncomputed) or all nonzero generations. It does not validate that
-    /// invariant or rule out capped generations at [`crate::GENERATION_NUMBER_MAX`].
+    /// invariant or rule out capped generations at [`Generation::MAX`].
     pub fn generation_numbers_available(&self) -> bool {
-        self.files
-            .iter()
-            .all(|file| file.iter_commits().next().is_none_or(|commit| commit.generation() != 0))
+        self.files.iter().all(|file| {
+            file.iter_commits()
+                .next()
+                .is_none_or(|commit| commit.generation() != Generation::UNCOMPUTED)
+        })
     }
 
     /// Return whether every layer contains corrected commit dates (generation numbers version 2).

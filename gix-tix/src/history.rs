@@ -8,6 +8,7 @@ use std::{
 use gix::{
     Error, ObjectId, Result,
     bstr::{BStr, BString, ByteSlice, ByteVec},
+    commitgraph::Generation,
     error::{ErrorExt, OptionExt, ResultExt, message},
     objs::commit::ref_iter::Token,
 };
@@ -128,13 +129,13 @@ struct GraphCommit {
     id: ObjectId,
     parents: std::ops::Range<u32>,
     commit_time: gix::date::SecondsSinceUnixEpoch,
-    generation: u32,
+    generation: Generation,
     state: u8,
 }
 
 impl GraphCommit {
-    fn generation(&self) -> Option<gix::revwalk::graph::Generation> {
-        (self.generation != 0).then_some(self.generation)
+    fn generation(&self) -> Option<Generation> {
+        (self.generation != Generation::UNCOMPUTED).then_some(self.generation)
     }
 }
 
@@ -164,16 +165,14 @@ pub(crate) struct HistoryGraph {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct GenThenTime {
-    generation: gix::revwalk::graph::Generation,
+    generation: Generation,
     time: gix::date::SecondsSinceUnixEpoch,
 }
 
 impl From<&GraphCommit> for GenThenTime {
     fn from(commit: &GraphCommit) -> Self {
         GenThenTime {
-            generation: commit
-                .generation()
-                .unwrap_or(gix::commitgraph::GENERATION_NUMBER_INFINITY),
+            generation: commit.generation().unwrap_or(Generation::INFINITY),
             time: commit.commit_time,
         }
     }
@@ -211,7 +210,8 @@ impl HistoryGraph {
                 id: *id,
                 parents: start..end,
                 commit_time: index.as_usize() as i64,
-                generation: index.as_usize() as u32 + 1,
+                // These synthetic commits use their timestamps for queue ordering.
+                generation: Generation::UNCOMPUTED,
                 state: NODE_LOADED,
             };
         }
@@ -248,7 +248,7 @@ impl HistoryGraph {
             id,
             parents: 0..0,
             commit_time: 0,
-            generation: 0,
+            generation: Generation::UNCOMPUTED,
             state: 0,
         });
         self.by_id.insert(id, index);
@@ -549,7 +549,7 @@ impl HistoryGraph {
         let node = &mut self.commits[index.as_usize()];
         node.parents = start..end;
         node.commit_time = commit_time;
-        node.generation = generation.unwrap_or_default();
+        node.generation = generation.unwrap_or(Generation::UNCOMPUTED);
         node.state |= NODE_LOADED;
         Ok(index)
     }
@@ -2419,7 +2419,7 @@ mod tests {
         ObjectId::Sha1(bytes)
     }
 
-    fn insert_commit(graph: &mut HistoryGraph, n: u8, parents: &[u8], generation: u32) {
+    fn insert_commit(graph: &mut HistoryGraph, n: u8, parents: &[u8], commit_time: gix::date::SecondsSinceUnixEpoch) {
         let index = graph.intern(id(n)).expect("the small test graph fits in u32");
         let parents: Vec<_> = parents
             .iter()
@@ -2431,8 +2431,9 @@ mod tests {
         graph.commits[index.as_usize()] = GraphCommit {
             id: id(n),
             parents: start..end,
-            commit_time: generation.into(),
-            generation,
+            // Tests set newer timestamps on children to preserve the painting order without a commit-graph.
+            commit_time,
+            generation: Generation::UNCOMPUTED,
             state: NODE_LOADED,
         };
     }
@@ -2479,7 +2480,7 @@ mod tests {
     #[test]
     fn paints_criss_cross_relations_from_cached_parents() {
         let mut graph = HistoryGraph::default();
-        for (n, parents, generation) in [
+        for (n, parents, commit_time) in [
             (1, vec![], 1),
             (2, vec![1], 2),
             (3, vec![1], 2),
@@ -2488,7 +2489,7 @@ mod tests {
             (6, vec![4], 4),
             (7, vec![5], 4),
         ] {
-            insert_commit(&mut graph, n, &parents, generation);
+            insert_commit(&mut graph, n, &parents, commit_time);
         }
 
         assert_eq!(
@@ -2501,8 +2502,8 @@ mod tests {
     #[test]
     fn switches_cached_rev_sets_without_leaking_the_previous_view() {
         let mut graph = HistoryGraph::default();
-        for (n, parents, generation) in [(1, vec![], 1), (2, vec![1], 2), (3, vec![1], 2), (4, vec![2], 3)] {
-            insert_commit(&mut graph, n, &parents, generation);
+        for (n, parents, commit_time) in [(1, vec![], 1), (2, vec![1], 2), (3, vec![1], 2), (4, vec![2], 3)] {
+            insert_commit(&mut graph, n, &parents, commit_time);
         }
 
         graph.switch_view(&[id(4)], &[id(3)]);
@@ -2543,14 +2544,14 @@ mod tests {
     #[test]
     fn marks_visible_views_behind_hidden_branches_at_their_base() {
         let mut graph = HistoryGraph::default();
-        for (n, parents, generation) in [
+        for (n, parents, commit_time) in [
             (1, vec![], 1),
             (2, vec![1], 2),
             (3, vec![1], 2),
             (4, vec![3], 3),
             (5, vec![], 1),
         ] {
-            insert_commit(&mut graph, n, &parents, generation);
+            insert_commit(&mut graph, n, &parents, commit_time);
         }
 
         assert_eq!(

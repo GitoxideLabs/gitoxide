@@ -1,5 +1,5 @@
 use gix_error::TestResult;
-use gix_revision::merge_base;
+use gix_revision::{graph::Generation, merge_base};
 
 use crate::odb_at;
 
@@ -149,7 +149,7 @@ fn unreliable_generations_do_not_allow_side_exhaustion() -> TestResult {
     let first_commit_id = tag_commit_id(&root, "G")?;
     let other_commit_id = tag_commit_id(&root, "H")?;
     let base_commit_id = tag_commit_id(&root, "B")?;
-    for generation in [None, Some(0), Some(gix_commitgraph::GENERATION_NUMBER_MAX)] {
+    for generation in [None, Some(Generation::UNCOMPUTED), Some(Generation::MAX)] {
         let mut graph = gix_revision::Graph::new(&odb, None);
         for name in ["A", "B", "C", "D", "E", "F", "G", "H"] {
             graph.get_or_insert_full_commit(tag_commit_id(&root, name)?, |commit| {

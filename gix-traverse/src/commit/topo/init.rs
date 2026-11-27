@@ -1,6 +1,7 @@
 use gix_error::Result;
 use std::collections::HashSet;
 
+use gix_commitgraph::Generation;
 use gix_error::OptionExt;
 use gix_hash::{ObjectId, oid};
 use gix_revwalk::{PriorityQueue, graph::IdMap};
@@ -138,7 +139,7 @@ where
             indegree_queue: PriorityQueue::new(),
             topo_queue: super::iter::Queue::new(self.sorting),
             parents: self.parents,
-            min_gen: gix_commitgraph::GENERATION_NUMBER_INFINITY,
+            min_gen: Generation::INFINITY,
             buf: vec![],
         };
         let mut tips = self.tips;
@@ -206,8 +207,8 @@ where
         {
             // An unseen zero-generation layer can lead back to higher generations. Settle all
             // hidden marks before counting indegrees, and disable depth limits for the whole walk.
-            w.min_gen = 0;
-            w.explore_to_depth(0)?;
+            w.min_gen = Generation::UNCOMPUTED;
+            w.explore_to_depth(w.min_gen)?;
         }
         w.compute_indegrees_to_depth(w.min_gen)?;
 
@@ -237,7 +238,7 @@ where
                 Info {
                     id: *id,
                     parent_ids,
-                    generation: (generation != gix_commitgraph::GENERATION_NUMBER_INFINITY).then_some(generation),
+                    generation: (generation != Generation::INFINITY).then_some(generation),
                     commit_time: Some(time),
                 },
             );
