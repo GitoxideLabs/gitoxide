@@ -3,17 +3,21 @@ use gix_object::bstr::{BStr, ByteSlice};
 
 use crate::{parse, store_impl::packed};
 
-#[derive(Debug, PartialEq, Eq)]
-enum Peeled {
+/// Which refs the `packed-refs` file records the peeled object of, if they have one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Peeled {
+    /// No promise: a ref without a peeled object may still be an annotated tag.
     Unspecified,
+    /// `peeled`: every ref under `refs/tags/` that is an annotated tag has its peeled object recorded.
     Partial,
+    /// `fully-peeled`: every ref that is an annotated tag has its peeled object recorded.
     Fully,
 }
 
 /// Information parsed from the header of a packed ref file
 #[derive(Debug, PartialEq, Eq)]
 pub struct Header {
-    peeled: Peeled,
+    pub(crate) peeled: Peeled,
     pub sorted: bool,
 }
 

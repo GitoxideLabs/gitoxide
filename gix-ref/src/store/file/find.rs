@@ -264,6 +264,7 @@ impl file::Store {
                     };
                     if let Some(packed_ref) = packed.try_find_full_name(full_name)? {
                         let mut res: Reference = packed_ref.into();
+                        packed.set_known_peeled(&mut res);
                         if let Some(namespace) = &self.namespace {
                             res.strip_namespace(namespace);
                         }

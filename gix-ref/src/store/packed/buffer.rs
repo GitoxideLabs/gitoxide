@@ -22,6 +22,7 @@ impl AsRef<[u8]> for packed::Backing {
 /// Initialization
 impl packed::Buffer {
     fn open_with_backing(backing: packed::Backing, path: PathBuf, object_hash: gix_hash::Kind) -> Result<Self> {
+        let mut peeled = packed::decode::Peeled::Unspecified;
         let (backing, offset) = {
             let (offset, sorted) = {
                 let mut input = backing.as_ref();
@@ -29,6 +30,7 @@ impl packed::Buffer {
                     let header = packed::decode::header(&mut input).map_err(|()| {
                         corruption("The header could not be parsed, even though first line started with '#'").raise()
                     })?;
+                    peeled = header.peeled;
                     let offset = backing.as_ref().len() - input.len();
                     (offset, header.sorted)
                 } else {
@@ -64,7 +66,24 @@ impl packed::Buffer {
             data: backing,
             path,
             object_hash,
+            peeled,
         })
+    }
+
+    /// Set the peeled object of `r`, a reference converted from this buffer, where the header says it's known.
+    ///
+    /// Where the header promises that annotated tags have their peeled object recorded, a reference without one
+    /// isn't an annotated tag, so its target is its peeled object and peeling it needs no object lookup. This is
+    /// what `git` does as well: all references with `fully-peeled`, and those in `refs/tags/` with `peeled`.
+    pub(crate) fn set_known_peeled(&self, r: &mut crate::Reference) {
+        let knows_peeled = match self.peeled {
+            packed::decode::Peeled::Fully => true,
+            packed::decode::Peeled::Partial => r.name.as_bstr().starts_with(b"refs/tags/"),
+            packed::decode::Peeled::Unspecified => false,
+        };
+        if knows_peeled && r.peeled.is_none() {
+            r.peeled = r.target.try_id().map(ToOwned::to_owned);
+        }
     }
 
     /// Open the file at `path`, parsing object ids as `object_hash`, and map it into memory if the file size is larger

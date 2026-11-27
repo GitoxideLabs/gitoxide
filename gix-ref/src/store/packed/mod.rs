@@ -24,6 +24,8 @@ pub struct Buffer {
     object_hash: gix_hash::Kind,
     /// The offset to the first record, how many bytes to skip past the header
     offset: usize,
+    /// Which refs the header says have their peeled object recorded if they have one.
+    peeled: decode::Peeled,
     /// The path from which we were loaded
     path: PathBuf,
 }

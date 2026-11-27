@@ -25,6 +25,8 @@ pub struct LooseThenPacked<'p, 's> {
     common_dir: Option<&'s Path>,
     object_hash: gix_hash::Kind,
     namespace: Option<&'s Namespace>,
+    /// The buffer `iter_packed` steps through.
+    packed: Option<&'p packed::Buffer>,
     iter_packed: Option<Peekable<packed::Iter<'p>>>,
     iter_git_dir: SortedLoosePaths,
     iter_common_dir: Option<SortedLoosePaths>,
@@ -53,7 +55,12 @@ impl<'p> LooseThenPacked<'p, '_> {
     }
 
     fn convert_packed(&self, packed: Result<packed::Reference<'p>>, name_buf: &mut Vec<u8>) -> Result<Reference> {
-        packed.map(|r| self.strip_namespace(r.into_reference(name_buf)))
+        let buffer = self.packed.expect("packed refs come from a buffer");
+        packed.map(|r| {
+            let mut r = r.into_reference(name_buf);
+            buffer.set_known_peeled(&mut r);
+            self.strip_namespace(r)
+        })
     }
 
     /// Read failures include [metadata](gix_error::Error::metadata()) `path` (native path), the loose reference being
@@ -422,6 +429,7 @@ impl file::Store {
             git_dir: self.git_dir(),
             common_dir: self.common_dir(),
             object_hash: self.object_hash,
+            packed,
             iter_packed: match packed {
                 Some(packed) => Some(
                     match git_dir_info
