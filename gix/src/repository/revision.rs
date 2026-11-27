@@ -59,8 +59,7 @@ impl crate::Repository {
         one: impl Into<gix_hash::ObjectId>,
         two: impl Into<gix_hash::ObjectId>,
     ) -> Result<Option<Id<'_>>> {
-        let cache = self.commit_graph_if_enabled()?;
-        let mut graph = self.revision_graph(cache.as_ref())?;
+        let mut graph = self.revision_graph_with_cache()?;
         self.merge_base_with_graph(one, two, &mut graph)
     }
 
@@ -119,8 +118,7 @@ impl crate::Repository {
         one: impl Into<gix_hash::ObjectId>,
         others: &[gix_hash::ObjectId],
     ) -> Result<Vec<Id<'_>>> {
-        let cache = self.commit_graph_if_enabled()?;
-        let mut graph = self.revision_graph(cache.as_ref())?;
+        let mut graph = self.revision_graph_with_cache()?;
         self.merge_bases_many_with_graph(one, others, &mut graph)
     }
 
@@ -151,8 +149,7 @@ impl crate::Repository {
         &self,
         commits: impl IntoIterator<Item = impl Into<gix_hash::ObjectId>>,
     ) -> Result<Option<Id<'_>>> {
-        let cache = self.commit_graph_if_enabled()?;
-        let mut graph = self.revision_graph(cache.as_ref())?;
+        let mut graph = self.revision_graph_with_cache()?;
         self.merge_base_octopus_with_graph(commits, &mut graph)
     }
 
@@ -173,15 +170,14 @@ impl crate::Repository {
         ancestor_commit_id: impl Into<gix_hash::ObjectId>,
         descendant_commit_id: impl Into<gix_hash::ObjectId>,
     ) -> Result<bool> {
-        let cache = self.commit_graph_if_enabled()?;
-        let mut graph = self.revision_graph(cache.as_ref())?;
+        let mut graph = self.revision_graph_with_cache()?;
         self.is_ancestor_with_graph(ancestor_commit_id, descendant_commit_id, &mut graph)
     }
 
     /// Like [`is_ancestor()`](Self::is_ancestor()), but with a commit-graph `graph` to potentially greatly accelerate
     /// the operation by reusing graphs from previous runs. Traversal failures are returned as errors.
     /// The supplied graph is used as-is. To traverse the repository's visible history, build it with
-    /// [`Self::revision_graph()`] and obtain its cache with [`Self::commit_graph_if_enabled()`].
+    /// [`Self::revision_graph_with_cache()`].
     ///
     /// # Performance
     /// Be sure to [set an object cache](crate::Repository::object_cache_size_if_unset) to accelerate repeated commit lookups.
@@ -195,8 +191,7 @@ impl crate::Repository {
     /// repo.object_cache_size_if_unset(1024 * 1024);
     /// let head_commit_id = repo.head_id()?;
     /// let parent_commit_id = repo.rev_parse_single("HEAD^")?;
-    /// let cache = repo.commit_graph_if_enabled()?;
-    /// let mut graph = repo.revision_graph(cache.as_ref())?;
+    /// let mut graph = repo.revision_graph_with_cache()?;
     ///
     /// assert!(repo.is_ancestor_with_graph(parent_commit_id, head_commit_id, &mut graph)?);
     /// assert!(!repo.is_ancestor_with_graph(head_commit_id, parent_commit_id, &mut graph)?);
@@ -227,8 +222,7 @@ impl crate::Repository {
         tip_commit_id: impl Into<gix_hash::ObjectId>,
         base_commit_id: impl Into<gix_hash::ObjectId>,
     ) -> Result<gix_revision::ahead_behind_counts::Outcome> {
-        let cache = self.commit_graph_if_enabled()?;
-        let mut graph = self.revision_graph(cache.as_ref())?;
+        let mut graph = self.revision_graph_with_cache()?;
         self.ahead_behind_counts_with_graph(tip_commit_id, base_commit_id, &mut graph)
     }
 
@@ -248,7 +242,7 @@ impl crate::Repository {
     /// Like [`ahead_behind_counts()`](Self::ahead_behind_counts()), but reuses cached commits in `graph`.
     /// Its flags are automatically cleared. Traversal failures are returned as errors.
     /// The supplied graph is used as-is. To traverse the repository's visible history, build it with
-    /// [`Self::revision_graph()`] and obtain its cache with [`Self::commit_graph_if_enabled()`].
+    /// [`Self::revision_graph_with_cache()`].
     ///
     /// # Performance
     /// With nonzero, unsaturated commit-graph generations, traversal stops once only shared history remains.
@@ -264,8 +258,7 @@ impl crate::Repository {
     }
 
     /// Start a containment query for an existing `target_commit_id`, using the supplied `graph` as-is.
-    /// To query the repository's visible history, build the graph with [`Self::revision_graph()`]
-    /// and select its cache with [`Self::commit_graph_if_enabled()`].
+    /// To query the repository's visible history, build the graph with [`Self::revision_graph_with_cache()`].
     #[cfg(feature = "revision")]
     pub fn contains_target<'query, 'repo, 'cache>(
         &self,

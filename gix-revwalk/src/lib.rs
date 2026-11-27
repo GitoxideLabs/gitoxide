@@ -29,13 +29,28 @@ pub struct Graph<'find, 'cache, T> {
     /// A way to resolve a commit from the object database.
     find: Box<dyn gix_object::Find + 'find>,
     /// A way to speedup commit access, essentially a multi-file commit database.
-    cache: Option<&'cache gix_commitgraph::Graph>,
+    cache: Option<Cache<'cache>>,
     /// The set of cached commits that we have seen once, along with data associated with them.
     map: graph::IdMap<T>,
     /// A buffer for writing commit data into.
     buf: Vec<u8>,
     /// Another buffer we typically use to store parents.
     parent_buf: Vec<u8>,
+}
+
+#[expect(clippy::large_enum_variant, reason = "avoid a separate allocation for owned caches")]
+enum Cache<'cache> {
+    Borrowed(&'cache gix_commitgraph::Graph),
+    Owned(gix_commitgraph::Graph),
+}
+
+impl Cache<'_> {
+    fn as_ref(&self) -> &gix_commitgraph::Graph {
+        match self {
+            Self::Borrowed(graph) => graph,
+            Self::Owned(graph) => graph,
+        }
+    }
 }
 
 ///

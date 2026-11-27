@@ -7,8 +7,8 @@ impl crate::Repository {
     /// shallow boundaries can fail.
     ///
     /// A supplied `cache` takes precedence for the commits it contains. The caller is responsible for its
-    /// parent links and generation numbers matching the intended history. Use [`Self::commit_graph_if_enabled()`]
-    /// to select a cache according to repository configuration and compatibility.
+    /// parent links and generation numbers matching the intended history. Use [`Self::revision_graph_with_cache()`]
+    /// to select and own a cache according to repository configuration and compatibility.
     ///
     /// ### Performance
     ///
@@ -30,11 +30,17 @@ impl crate::Repository {
         })
     }
 
+    /// Create a [`Self::revision_graph()`] that owns the cache selected by [`Self::commit_graph_if_enabled()`].
+    /// Recover the cache for reuse with [`gix_revwalk::Graph::into_cache()`] and transfer it to another graph with
+    /// [`gix_revwalk::Graph::with_owned_cache()`].
+    pub fn revision_graph_with_cache<T>(&self) -> Result<gix_revwalk::Graph<'_, 'static, T>> {
+        let cache = self.commit_graph_if_enabled()?;
+        Ok(self.revision_graph(None)?.with_owned_cache(cache))
+    }
+
     /// Return a cache for commits and their graph structure, as managed by `git commit-graph`, for accelerating commit walks on
     /// a low level.
     ///
-    /// Note that [`revision_graph()`][crate::Repository::revision_graph()] should be preferred for general purpose walks that don't
-    /// rely on the actual commit cache to be present, while leveraging the commit-graph if possible.
     /// Parent-buffer allocations respect `gitoxide.objects.allocLimit`.
     pub fn commit_graph(&self) -> Result<gix_commitgraph::Graph> {
         gix_commitgraph::Graph::at(

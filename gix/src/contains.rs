@@ -5,8 +5,7 @@
 //! # mod doctest { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doctest.rs")); }
 //! # let repo = doctest::open_repo(doctest::basic_repo_dir()?)?;
 
-//! let cache = repo.commit_graph_if_enabled()?;
-//! let mut graph = repo.revision_graph(cache.as_ref())?;
+//! let mut graph = repo.revision_graph_with_cache()?;
 //! let mut target = repo.contains_target(repo.head_id()?, &mut graph)?;
 //! let references = repo.references()?;
 //! let mut matching = Vec::new();

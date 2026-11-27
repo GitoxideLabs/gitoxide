@@ -62,8 +62,7 @@ fn replacements_match_git_with_default_opening_and_raw_commit_graphs() -> TestRe
                     );
                 }
             }
-            let cache = repo.commit_graph()?;
-            let mut graph = repo.revision_graph(Some(&cache))?;
+            let mut graph = repo.revision_graph(None)?.with_owned_cache(Some(repo.commit_graph()?));
             let archive_id = repo.rev_parse_single("archive")?;
             assert_eq!(
                 repo.merge_base_with_graph(tip_commit_id, archive_id, &mut graph)?,

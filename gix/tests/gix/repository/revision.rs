@@ -377,13 +377,12 @@ fn contains_matches_git_for_each_ref() -> TestResult {
             view,
             crate::util::restricted().config_overrides(["core.useReplaceRefs=true"]),
         )?;
-        let cache = repo.commit_graph_if_enabled()?;
+        let mut graph = repo.revision_graph_with_cache()?;
         assert_eq!(
-            cache.is_some(),
+            graph.commit_graph().is_some(),
             view == ".",
             "only full history uses the cache automatically"
         );
-        let mut graph = repo.revision_graph(cache.as_ref())?;
         for target_spec in ["HEAD", "parent", "root", "unrelated", "HEAD"] {
             let mut target = repo.contains_target(repo.rev_parse_single(target_spec)?, &mut graph)?;
             let expected = std::fs::read_to_string(repo.git_dir().join(format!("contains-{target_spec}.baseline")))?;
@@ -411,13 +410,13 @@ fn contains_matches_git_for_each_ref() -> TestResult {
 fn ahead_behind_counts_match_git() -> TestResult {
     for (name, use_commitgraph) in [("without-commit-graph", false), (".", true)] {
         let repo = revision_query_repo(name)?;
-        let cache = repo.commit_graph_if_enabled()?;
+        let mut graph = repo.revision_graph_with_cache()?;
         assert_eq!(
-            cache.is_some(),
+            graph.commit_graph().is_some(),
             use_commitgraph,
             "the optional commit-graph is exercised"
         );
-        if let Some(cache) = &cache {
+        if let Some(cache) = graph.commit_graph() {
             for name in ["divergent", "unrelated"] {
                 assert!(
                     cache.lookup(repo.rev_parse_single(name)?).is_none(),
@@ -425,7 +424,6 @@ fn ahead_behind_counts_match_git() -> TestResult {
                 );
             }
         }
-        let mut graph = repo.revision_graph(cache.as_ref())?;
         assert_history_queries_match_git(&repo, &mut graph, "history.baseline")?;
     }
     Ok(())
@@ -471,7 +469,6 @@ fn replacements_disable_automatic_commit_graphs_like_git() -> TestResult {
     )?;
     let tip_commit_id: gix::ObjectId = repo.head_id()?.into();
     let root_commit_id: gix::ObjectId = repo.rev_parse_single("root")?.into();
-    let cache = repo.commit_graph()?;
     assert!(
         repo.objects.store_ref().replacements().next().is_some(),
         "the repository object store has active replacements"
@@ -496,7 +493,7 @@ fn replacements_disable_automatic_commit_graphs_like_git() -> TestResult {
         gix::revision::plumbing::ahead_behind_counts::Outcome { ahead: 2, behind: 0 },
         "ignored replacements retain original counts"
     );
-    let mut graph = repo.revision_graph(Some(&cache))?;
+    let mut graph = repo.revision_graph_with_cache()?;
     assert_history_queries_match_git(&repo, &mut graph, "unmodified-history.baseline")?;
     Ok(())
 }

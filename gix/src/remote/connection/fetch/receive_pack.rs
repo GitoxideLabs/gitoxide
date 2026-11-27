@@ -177,7 +177,7 @@ where
             r
         };
         let cache = graph_repo.commit_graph_if_enabled().ok().flatten();
-        let mut graph = graph_repo.revision_graph(cache.as_ref())?;
+        let mut graph = graph_repo.revision_graph(None)?.with_owned_cache(cache);
         let alternates = repo.objects.store_ref().alternate_db_paths()?;
         let mut negotiate = Negotiate {
             repo: &graph_repo,

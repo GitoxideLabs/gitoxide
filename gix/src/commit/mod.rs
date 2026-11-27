@@ -234,10 +234,16 @@ pub mod describe {
             &self,
             cache: Option<&'_ gix_commitgraph::Graph>,
         ) -> Result<Option<Resolution<'repo>>> {
-            let mut graph = self.repo.revision_graph(cache)?;
+            self.try_resolve_with_graph(&mut self.repo.revision_graph(cache)?)
+        }
+
+        fn try_resolve_with_graph(
+            &self,
+            graph: &mut gix_revwalk::Graph<'_, '_, gix_revision::describe::Flags>,
+        ) -> Result<Option<Resolution<'repo>>> {
             let outcome = gix_revision::describe(
                 &self.id,
-                &mut graph,
+                graph,
                 gix_revision::describe::Options {
                     name_by_oid: self.select.names(self.repo)?,
                     fallback_to_oid: self.id_as_fallback,
@@ -258,8 +264,7 @@ pub mod describe {
         ///
         /// Prefer to use the [`Self::try_resolve_with_cache()`] method when processing more than one commit at a time.
         pub fn try_resolve(&self) -> Result<Option<Resolution<'repo>>> {
-            let cache = self.repo.commit_graph_if_enabled()?;
-            self.try_resolve_with_cache(cache.as_ref())
+            self.try_resolve_with_graph(&mut self.repo.revision_graph_with_cache()?)
         }
 
         /// Like [`try_format()`](Self::try_format()), but turns `id_as_fallback()` on to always produce a format.
