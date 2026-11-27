@@ -382,7 +382,7 @@ impl Options {
                 current_dir: None,
             },
             gix_sec::Trust::Reduced => Options {
-                object_store_slots: gix_odb::store::init::Slots::Given(32), // limit resource usage
+                object_store_slots: gix_odb::store::init::Slots::Limit(32), // limit resource usage
                 permissions: Permissions::default_for_level(level),
                 git_dir_trust: Some(RepositoryTrust::Precomputed(level)),
                 configure_related_repository: None,

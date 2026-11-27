@@ -32,7 +32,7 @@ impl super::Find for PanicAlways {
 }
 
 impl super::Exists for PanicAlways {
-    fn exists(&self, _id: &gix_hash::oid) -> bool {
+    fn exists(&self, _id: &gix_hash::oid) -> Result<bool> {
         panic!("object existence checks are forbidden");
     }
 }
@@ -84,8 +84,8 @@ impl super::Find for Never {
 }
 
 impl super::Exists for Never {
-    fn exists(&self, _id: &gix_hash::oid) -> bool {
-        false
+    fn exists(&self, _id: &gix_hash::oid) -> Result<bool> {
+        Ok(false)
     }
 }
 

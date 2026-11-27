@@ -1,8 +1,8 @@
 use gix_error::Result;
 /// Check if an object is present in an object store.
 pub trait Exists {
-    /// Returns `true` if the object exists in the database.
-    fn exists(&self, id: &gix_hash::oid) -> bool;
+    /// Returns `Ok(true)` if the object exists in the database, or an error if the lookup fails.
+    fn exists(&self, id: &gix_hash::oid) -> Result<bool>;
 }
 
 /// Find an object in the object store.
@@ -44,7 +44,7 @@ mod _impls {
     where
         T: crate::Exists,
     {
-        fn exists(&self, id: &oid) -> bool {
+        fn exists(&self, id: &oid) -> Result<bool> {
             (*self).exists(id)
         }
     }
@@ -73,7 +73,7 @@ mod _impls {
     where
         T: crate::Exists,
     {
-        fn exists(&self, id: &oid) -> bool {
+        fn exists(&self, id: &oid) -> Result<bool> {
             self.deref().exists(id)
         }
     }
@@ -82,7 +82,7 @@ mod _impls {
     where
         T: crate::Exists,
     {
-        fn exists(&self, id: &oid) -> bool {
+        fn exists(&self, id: &oid) -> Result<bool> {
             self.deref().exists(id)
         }
     }
@@ -127,7 +127,7 @@ mod _impls {
     where
         T: crate::Exists,
     {
-        fn exists(&self, id: &oid) -> bool {
+        fn exists(&self, id: &oid) -> Result<bool> {
             self.deref().exists(id)
         }
     }

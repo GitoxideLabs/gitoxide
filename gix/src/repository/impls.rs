@@ -1,8 +1,11 @@
-use gix_error::Result;
 use std::ops::DerefMut;
 
-use gix_error::{ResultExt, bail};
 use gix_hash::ObjectId;
+
+use crate::{
+    Result,
+    error::{ResultExt, bail},
+};
 
 impl Clone for crate::ThreadSafeRepository {
     fn clone(&self) -> Self {
@@ -39,6 +42,7 @@ impl Clone for crate::Repository {
             #[cfg(feature = "attributes")]
             self.modules.clone(),
         );
+        new.objects.refresh = self.objects.refresh;
 
         if self.bufs.is_none() {
             new.bufs.take();
@@ -135,7 +139,7 @@ impl gix_object::Write for crate::Repository {
 
     fn write_buf(&self, object: gix_object::Kind, from: &[u8]) -> Result<gix_hash::ObjectId> {
         let oid = gix_object::compute_hash(self.object_hash(), object, from)?;
-        if self.objects.exists_without_refresh(&oid) {
+        if self.objects.exists_without_refresh(&oid)? {
             return Ok(oid);
         }
         self.objects.write_buf_with_known_id(object, from, oid)
@@ -161,7 +165,7 @@ impl gix_object::Write for crate::Repository {
         from: &[u8],
         id: gix_hash::ObjectId,
     ) -> Result<gix_hash::ObjectId> {
-        if self.objects.exists_without_refresh(&id) {
+        if self.objects.exists_without_refresh(&id)? {
             return Ok(id);
         }
         self.objects.write_buf_with_known_id(object, from, id)
@@ -210,9 +214,9 @@ impl gix_object::Find for crate::Repository {
 }
 
 impl gix_object::Exists for crate::Repository {
-    fn exists(&self, id: &gix_hash::oid) -> bool {
+    fn exists(&self, id: &gix_hash::oid) -> Result<bool> {
         if id == ObjectId::empty_tree(self.object_hash()) {
-            return true;
+            return Ok(true);
         }
         self.objects.exists(id)
     }
