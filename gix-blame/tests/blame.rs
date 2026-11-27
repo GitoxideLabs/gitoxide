@@ -226,7 +226,7 @@ impl Fixture {
         gix_blame::file(
             &self.odb,
             gix_blame::Start::Commit(self.suspect),
-            None,
+            &mut gix_revision::Graph::new(&self.odb, None),
             &mut self.resource_cache,
             source_file_name,
             options,
@@ -245,7 +245,7 @@ impl Fixture {
                 first_suspect: self.suspect,
                 contents: contents.into(),
             },
-            None,
+            &mut gix_revision::Graph::new(&self.odb, None),
             &mut self.resource_cache,
             source_file_name,
             options,
@@ -268,7 +268,7 @@ macro_rules! mktest {
             let lines_blamed = gix_blame::file(
                 &odb,
                 gix_blame::Start::Commit(suspect),
-                None,
+                &mut gix_revision::Graph::new(&odb, None),
                 &mut resource_cache,
                 source_file_name.as_ref(),
                 gix_blame::Options {
@@ -358,7 +358,7 @@ fn diff_algorithm_parity() {
         let lines_blamed = gix_blame::file(
             &odb,
             gix_blame::Start::Commit(suspect),
-            None,
+            &mut gix_revision::Graph::new(&odb, None),
             &mut resource_cache,
             source_file_name.as_ref(),
             gix_blame::Options {
@@ -395,7 +395,7 @@ fn file_that_was_added_in_two_branches() -> gix_testtools::TestResult {
     let lines_blamed = gix_blame::file(
         &odb,
         gix_blame::Start::Commit(suspect),
-        None,
+        &mut gix_revision::Graph::new(&odb, None),
         &mut resource_cache,
         source_file_name.into(),
         gix_blame::Options::default(),
@@ -425,7 +425,7 @@ fn since() -> gix_testtools::TestResult {
     let lines_blamed = gix_blame::file(
         &odb,
         gix_blame::Start::Commit(suspect),
-        None,
+        &mut gix_revision::Graph::new(&odb, None),
         &mut resource_cache,
         source_file_name.as_ref(),
         gix_blame::Options {
@@ -465,7 +465,7 @@ mod blame_ranges {
         let lines_blamed = gix_blame::file(
             &odb,
             gix_blame::Start::Commit(suspect),
-            None,
+            &mut gix_revision::Graph::new(&odb, None),
             &mut resource_cache,
             source_file_name.as_ref(),
             gix_blame::Options {
@@ -508,7 +508,7 @@ mod blame_ranges {
         let lines_blamed = gix_blame::file(
             &odb,
             gix_blame::Start::Commit(suspect),
-            None,
+            &mut gix_revision::Graph::new(&odb, None),
             &mut resource_cache,
             source_file_name.as_ref(),
             gix_blame::Options {
@@ -549,7 +549,7 @@ mod blame_ranges {
         let lines_blamed = gix_blame::file(
             &odb,
             gix_blame::Start::Commit(suspect),
-            None,
+            &mut gix_revision::Graph::new(&odb, None),
             &mut resource_cache,
             source_file_name.as_ref(),
             gix_blame::Options {
@@ -595,7 +595,7 @@ mod rename_tracking {
         let lines_blamed = gix_blame::file(
             &odb,
             gix_blame::Start::Commit(suspect),
-            None,
+            &mut gix_revision::Graph::new(&odb, None),
             &mut resource_cache,
             source_file_name.into(),
             gix_blame::Options {

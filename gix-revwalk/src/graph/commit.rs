@@ -7,6 +7,14 @@ use super::LazyCommit;
 use crate::graph::{Commit, Either, Generation};
 
 impl<'graph, 'commit_graph> LazyCommit<'graph, 'commit_graph> {
+    /// Return the ID of this commit's root tree.
+    pub fn tree_id(&self) -> Result<gix_hash::ObjectId> {
+        match &self.backing {
+            Either::Left(buf) => gix_object::CommitRefIter::from_bytes(buf, self.object_hash).tree_id(),
+            Either::Right((commit_graph, pos)) => Ok(commit_graph.commit_at(*pos).root_tree_id().into()),
+        }
+    }
+
     /// Return an iterator over the parents of this commit.
     pub fn iter_parents(&self) -> Parents<'graph, 'commit_graph> {
         let backing = match &self.backing {
