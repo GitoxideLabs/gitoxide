@@ -509,6 +509,13 @@ A utility crate with types and functionality related to shallow-file handling.
 * [x] API documentation
     * [x] Some examples
 
+### gix-reqwest
+
+A maintained fork of [reqwest](https://github.com/seanmonstar/reqwest) carrying
+HTTP fixes needed by Gitoxide until upstream includes them. The fork preserves
+upstream authorship and licensing and uses the distinct `gix_reqwest` crate name.
+See its [README](gix-reqwest/README.md) for attribution and integration provenance.
+
 ### gix-transport
 * No matter what we do here, timeouts must be supported to prevent hanging forever and to make interrupts destructor-safe.
 * **client**
@@ -520,7 +527,7 @@ A utility crate with types and functionality related to shallow-file handling.
         * [x] _git://_ establishes a tcp connection to a git daemon
         * [x] _http(s)://_ establishes connections to web server
             * [x] via `curl` (blocking only)
-            * [x] via `reqwest` (blocking only)
+            * [x] via `gix-reqwest` (blocking only, using the `http-client-reqwest` feature)
         * [ ] pass context for scheme specific configuration, like timeouts
     * [x] git://<service>
         * [x] V1 handshake

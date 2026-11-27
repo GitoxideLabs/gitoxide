@@ -1,4 +1,4 @@
-//! Regression tests specific to the blocking `reqwest` HTTP backend.
+//! Regression tests specific to the blocking `gix-reqwest` HTTP backend.
 
 pub mod bisync {
     pub use gix_macros::{discard as only_async, keep as only_sync, sync as bisync};
@@ -16,10 +16,291 @@ use gix_transport::{
         TransportWithoutIO,
         blocking_io::{Transport, http},
     },
+    gix_reqwest as reqwest,
 };
 
 mod http_helpers;
 use http_helpers::{observe_connection_within_deadline, read_request_lines, response_with_connection_close};
+
+fn serve_redirect(
+    listener: std::net::TcpListener,
+    delay: std::time::Duration,
+) -> std::thread::JoinHandle<std::io::Result<Vec<Vec<String>>>> {
+    std::thread::spawn(move || {
+        listener.set_nonblocking(true)?;
+        let mut requests = Vec::new();
+        for response in [
+            "HTTP/1.1 302 Found\r\nLocation: /redirected/repo\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        ] {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            let stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(err)
+                        if err.kind() == std::io::ErrorKind::WouldBlock && std::time::Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => return Ok(requests),
+                    Err(err) => return Err(err),
+                }
+            };
+            stream.set_read_timeout(Some(std::time::Duration::from_secs(3)))?;
+            let mut reader = std::io::BufReader::new(stream);
+            requests.push(read_request_lines(&mut reader));
+            std::thread::sleep(delay);
+            // A timeout can close the socket before the delayed response is sent.
+            reader.get_mut().write_all(response.as_bytes()).ok();
+        }
+        Ok(requests)
+    })
+}
+
+#[test]
+fn redirects_honor_the_client_referer_setting() -> gix_testtools::TestResult {
+    use gix_transport::client::blocking_io::http::Http;
+
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _env = gix_testtools::Env::new().set("no_proxy", "*");
+    for enabled in [true, false] {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let url = format!("http://{}/private/repo?secret=query", listener.local_addr()?);
+        let server = serve_redirect(listener, std::time::Duration::ZERO);
+        let mut remote = http::reqwest::Remote::default();
+        remote.configure(&http::Options {
+            backend: Some(Arc::new(Mutex::new(http::reqwest::Options {
+                configure_client: Some(Box::new(move |builder| Ok(builder.referer(enabled)))),
+                ..Default::default()
+            }))),
+            ..Default::default()
+        })?;
+        let mut response = remote.get(&url, &url, std::iter::empty::<&str>())?;
+        std::io::copy(&mut response.headers, &mut std::io::sink())?;
+        let requests = server.join().expect("HTTP server does not panic")?;
+        assert_eq!(
+            requests.len(),
+            2,
+            "the redirect is followed with either Referer setting"
+        );
+        let referer = requests[1].iter().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("referer").then(|| value.trim())
+        });
+        assert_eq!(
+            referer,
+            enabled.then_some(url.as_str()),
+            "redirects honor the configured Referer preference"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn redirects_share_the_client_timeout_budget() -> gix_testtools::TestResult {
+    use gix_transport::client::blocking_io::http::Http;
+
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _env = gix_testtools::Env::new().set("no_proxy", "*");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let url = format!("http://{}/repo", listener.local_addr()?);
+    // Each response arrives within the limit, but the complete redirect chain exceeds it.
+    let server = serve_redirect(listener, std::time::Duration::from_millis(300));
+    let mut remote = http::reqwest::Remote::default();
+    let mut builds = 0;
+    remote.configure(&http::Options {
+        backend: Some(Arc::new(Mutex::new(http::reqwest::Options {
+            configure_client: Some(Box::new(move |builder| {
+                builds += 1;
+                Ok(builder
+                    .timeout(std::time::Duration::from_millis(500))
+                    .user_agent(format!("client-{builds}")))
+            })),
+            ..Default::default()
+        }))),
+        follow_redirects: http::options::FollowRedirects::All,
+        ..Default::default()
+    })?;
+    let mut response = remote.get(&url, &url, std::iter::empty::<&str>())?;
+    let result = std::io::copy(&mut response.headers, &mut std::io::sink());
+    server.join().expect("HTTP server does not panic")?;
+    let error = result.expect_err("redirect hops must share the client's total timeout");
+    let error = error
+        .get_ref()
+        .and_then(|error| error.downcast_ref::<gix_error::Error>())
+        .expect("reqwest errors retain their typed source");
+    assert!(
+        error
+            .downcast_any_ref::<reqwest::Error>()
+            .is_some_and(reqwest::Error::is_timeout),
+        "the configured total timeout terminates the request"
+    );
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let url = format!("http://{}/repo", listener.local_addr()?);
+    let server = serve_redirect(listener, std::time::Duration::ZERO);
+    let mut response = remote.get(&url, &url, std::iter::empty::<&str>())?;
+    std::io::copy(&mut response.headers, &mut std::io::sink())?;
+    let requests = server.join().expect("HTTP server does not panic")?;
+    assert_eq!(requests.len(), 2, "a request after a timeout can follow redirects");
+    assert!(
+        requests.iter().all(|request| request
+            .iter()
+            .any(|line| line.eq_ignore_ascii_case("user-agent: client-2"))),
+        "requests after a timeout use a fresh client so canceled callbacks cannot share their state"
+    );
+    Ok(())
+}
+
+#[test]
+fn url_credentials_are_sensitive_in_request_hooks() -> gix_testtools::TestResult {
+    use gix_transport::client::blocking_io::http::Http;
+
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _env = gix_testtools::Env::new().set("no_proxy", "*");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let url = format!("http://user:password@{}/repo", listener.local_addr()?);
+    let server = std::thread::spawn(move || -> std::io::Result<()> {
+        let (stream, _) = listener.accept()?;
+        let mut reader = std::io::BufReader::new(stream);
+        read_request_lines(&mut reader);
+        reader
+            .get_mut()
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+    });
+    let authorization = Arc::new(Mutex::new(None));
+    let mut remote = http::reqwest::Remote::default();
+    remote.configure(&http::Options {
+        backend: Some(Arc::new(Mutex::new(http::reqwest::Options {
+            configure_request: Some(Box::new({
+                let authorization = authorization.clone();
+                move |request| {
+                    *authorization.lock().expect("request hook does not panic") =
+                        request.headers().get(reqwest::header::AUTHORIZATION).cloned();
+                    Ok(())
+                }
+            })),
+            ..Default::default()
+        }))),
+        ..Default::default()
+    })?;
+    let mut response = remote.get(&url, &url, std::iter::empty::<&str>())?;
+    std::io::copy(&mut response.headers, &mut std::io::sink())?;
+    server.join().expect("HTTP server does not panic")?;
+    let authorization = authorization.lock().expect("request hook does not panic");
+    let authorization = authorization.as_ref().expect("URL credentials produce Authorization");
+    assert_eq!(
+        authorization, "Basic dXNlcjpwYXNzd29yZA==",
+        "URL credentials retain their encoding"
+    );
+    assert!(
+        authorization.is_sensitive(),
+        "request hooks and Debug must redact URL credentials"
+    );
+    Ok(())
+}
+
+#[test]
+fn cross_authority_redirects_do_not_reapply_client_default_credentials() -> gix_testtools::TestResult {
+    use gix_transport::client::blocking_io::http::Http;
+
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _env = gix_testtools::Env::new().set("no_proxy", "*");
+    let original = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let target = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let original_url = format!("http://{}/repo", original.local_addr()?);
+    let target_url = format!("http://{}/repo", target.local_addr()?);
+    let server = std::thread::spawn(move || -> std::io::Result<Vec<Vec<String>>> {
+        let mut requests = Vec::new();
+        for (listener, location) in [
+            (original, Some(target_url.clone())),
+            (target.try_clone()?, Some(target_url)),
+            (target.try_clone()?, None),
+            (target.try_clone()?, None),
+            (target, None),
+        ] {
+            let (stream, _) = listener.accept()?;
+            stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+            let mut reader = std::io::BufReader::new(stream);
+            requests.push(read_request_lines(&mut reader));
+            match location {
+                Some(location) => write!(
+                    reader.get_mut(),
+                    "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )?,
+                None => reader
+                    .get_mut()
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")?,
+            }
+        }
+        Ok(requests)
+    });
+    let mut remote = http::reqwest::Remote::default();
+    remote.configure(&http::Options {
+        backend: Some(Arc::new(Mutex::new(http::reqwest::Options {
+            configure_client: Some(Box::new(|builder| {
+                let mut headers = reqwest::header::HeaderMap::new();
+                for name in [
+                    "authorization",
+                    "cookie",
+                    "cookie2",
+                    "www-authenticate",
+                    "proxy-authorization",
+                ] {
+                    headers.insert(
+                        reqwest::header::HeaderName::from_static(name),
+                        reqwest::header::HeaderValue::from_static("client-secret"),
+                    );
+                }
+                Ok(builder.default_headers(headers).user_agent("custom-client"))
+            })),
+            ..Default::default()
+        }))),
+        ..Default::default()
+    })?;
+    let mut response = remote.get(&original_url, &original_url, std::iter::empty::<&str>())?;
+    std::io::copy(&mut response.headers, &mut std::io::sink())?;
+    std::io::copy(&mut response.body, &mut std::io::sink())?;
+    // Git performs another logical request using the cached redirected base URL.
+    let mut response = remote.get(&original_url, &original_url, std::iter::empty::<&str>())?;
+    std::io::copy(&mut response.headers, &mut std::io::sink())?;
+    std::io::copy(&mut response.body, &mut std::io::sink())?;
+    let mut response = remote.get(&original_url, &original_url, ["Authorization: explicit-target"])?;
+    std::io::copy(&mut response.headers, &mut std::io::sink())?;
+    let requests = server.join().expect("HTTP server does not panic")?;
+    assert!(
+        requests[0].iter().any(|line| line.contains("client-secret")),
+        "defaults reach the original authority"
+    );
+    for request in &requests[1..] {
+        assert!(
+            !request.iter().any(|line| line.contains("client-secret")),
+            "redirects cannot reapply default secrets: {request:?}"
+        );
+        assert!(
+            request
+                .iter()
+                .any(|line| line.eq_ignore_ascii_case("user-agent: custom-client")),
+            "redirects retain ordinary client defaults"
+        );
+    }
+    assert!(
+        requests
+            .last()
+            .expect("the cached target receives subsequent requests")
+            .iter()
+            .any(|line| line.eq_ignore_ascii_case("authorization: explicit-target")),
+        "explicit target authentication survives suppression of client defaults"
+    );
+    Ok(())
+}
 
 /// Regression for <https://github.com/GitoxideLabs/gitoxide/issues/2140>: when a request fails
 /// without an HTTP status (for example a connection or TLS failure), the underlying error must be
@@ -268,11 +549,16 @@ fn client_configuration_is_lazy_retained_on_restart_and_cached() -> gix_testtool
 
     use gix_transport::client::blocking_io::http::Http;
 
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _env = gix_testtools::Env::new().set("no_proxy", "*");
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-    let url = format!("http://{}/repo", listener.local_addr()?);
+    let addr = listener.local_addr()?;
+    let url = format!("http://{addr}/repo");
     let server = std::thread::spawn(move || -> std::io::Result<Vec<Vec<String>>> {
         let mut requests = Vec::new();
-        for _ in 0..2 {
+        for _ in 0..3 {
             let (stream, _) = listener.accept()?;
             stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
             let mut reader = std::io::BufReader::new(stream);
@@ -296,7 +582,7 @@ fn client_configuration_is_lazy_retained_on_restart_and_cached() -> gix_testtool
         })),
         ..Default::default()
     }));
-    let options = http::Options {
+    let mut options = http::Options {
         backend: Some(backend),
         extra_headers: vec!["configured-header: retained".into()],
         ..Default::default()
@@ -317,8 +603,17 @@ fn client_configuration_is_lazy_retained_on_restart_and_cached() -> gix_testtool
         format!("{err:?}").contains("client configuration failed once"),
         "client setup preserves the callback error: {err:?}"
     );
-    for _ in 0..2 {
-        let mut response = client.get(&url, &url, std::iter::empty::<&str>())?;
+    for index in 0..3 {
+        let url = if index == 2 {
+            assert_eq!(calls.load(Ordering::SeqCst), 2, "unchanged proxies reuse the client");
+            options.proxy = Some(format!("http://{addr}"));
+            options.no_proxy = Some(String::new());
+            client.configure(&options)?;
+            "http://git.invalid/repo"
+        } else {
+            &url
+        };
+        let mut response = client.get(url, url, std::iter::empty::<&str>())?;
         std::io::copy(&mut response.headers, &mut std::io::sink())?;
         let mut body = Vec::new();
         std::io::copy(&mut response.body, &mut body)?;
@@ -326,8 +621,8 @@ fn client_configuration_is_lazy_retained_on_restart_and_cached() -> gix_testtool
     }
     assert_eq!(
         calls.load(Ordering::SeqCst),
-        2,
-        "one failed setup and one shared successful client"
+        3,
+        "one failed setup, one shared client, and one rebuild for the configured proxy"
     );
     for request in server.join().expect("HTTP server thread completed")? {
         assert!(

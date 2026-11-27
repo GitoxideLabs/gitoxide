@@ -43,6 +43,11 @@ allow = [
 # [possible values: any between 0.0 and 1.0].
 confidence-threshold = 0.8
 
+# This release correctly declares the existing legacy zstd decoder license.
+exceptions = [
+    { name = "zstd-sys", version = "=2.1.3", allow = ["BSD-2-Clause"] },
+]
+
 # This section is considered when running `cargo deny check bans`.
 # More documentation about the 'bans' section can be found here:
 # https://embarkstudios.github.io/cargo-deny/checks/bans/cfg.html

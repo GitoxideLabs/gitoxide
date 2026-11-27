@@ -294,8 +294,9 @@ blocking-http-transport-curl-openssl = [
     "blocking-http-transport-curl",
     "gix-transport/http-client-curl-openssl",
 ]
-## Stacks with `blocking-network-client` to provide support for HTTP/S using **reqwest**, and implies blocking networking as a whole, making the `https://` transport available.
-## Note that `reqwest`'s default features are not enabled, allowing custom configuration of e.g. the TLS backend by adding it as explicit dependency.
+## Stacks with `blocking-network-client` to provide HTTP/S using **gix-reqwest**, Gitoxide's patched reqwest fork, and implies blocking networking as a whole.
+## Default features of `gix-reqwest` are disabled. Use its types through `gix::protocol::transport::gix_reqwest` for configuration hooks;
+## add `gix-reqwest` as an explicit dependency to enable additional client features, such as a TLS backend.
 blocking-http-transport-reqwest = [
     "blocking-network-client",
     "gix-transport/http-client-reqwest",
