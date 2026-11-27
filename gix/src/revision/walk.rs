@@ -297,7 +297,7 @@ impl<'repo> Platform<'repo, '_> {
     /// Allow using the commitgraph, if present, if `toggle` is `true`, or disallow it with `false`. Set it to `None` to leave
     /// control over this to the configuration of `core.commitGraph` (the default).
     ///
-    /// Errors when loading the graph lead to falling back to the object database, it's treated as optional cache.
+    /// Errors when loading the graph lead to falling back to the object database, the commit-graph is optional.
     /// Active object replacements and shallow boundaries prevent automatic loading because the graph may contain
     /// different parents. An enabled graph supplied with [`Self::with_commit_graph()`] is still used.
     pub fn use_commit_graph(mut self, toggle: impl Into<Option<bool>>) -> Self {

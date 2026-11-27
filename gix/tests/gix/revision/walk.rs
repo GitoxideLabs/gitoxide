@@ -25,7 +25,7 @@ fn named_ids(repo: &gix::Repository, names: &[&str]) -> gix::Result<Vec<String>>
 
 fn assert_graph_use(walk: Platform<'_, '_>, expected: bool) -> gix::Result<()> {
     let commits = walk.all()?.collect::<gix::Result<Vec<_>>>()?;
-    assert!(!commits.is_empty(), "the cache check traverses existing commits");
+    assert!(!commits.is_empty(), "the commit-graph check traverses existing commits");
     assert!(
         commits.iter().all(|commit| commit.generation.is_some() == expected),
         "generation numbers reveal whether the optional graph was used"

@@ -10,7 +10,7 @@
 //! Append `--no-compression` after the notes ref to disable pack compression (zlib level 0 instead of 6).
 //!
 //! Replace `all` with a positive limit for a smaller run. Traverse `HEAD` and its ancestors, stopping
-//! when the limit is reached. A commit-graph file is optional and used as a traversal cache if available.
+//! when the limit is reached. An optional commit-graph file can accelerate traversal.
 //! Each note contains the annotated commit's hexadecimal ID followed by a newline.
 //! One retained notes state stages all edits before serializing
 //! the final trees and a single notes commit into memory. Packing includes compression, index creation,

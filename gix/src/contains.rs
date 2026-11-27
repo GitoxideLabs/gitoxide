@@ -5,7 +5,7 @@
 //! # mod doctest { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doctest.rs")); }
 //! # let repo = doctest::open_repo(doctest::basic_repo_dir()?)?;
 
-//! let mut graph = repo.revision_graph_with_cache()?;
+//! let mut graph = repo.revision_graph()?;
 //! let mut target = repo.contains_target(repo.head_id()?, &mut graph)?;
 //! let references = repo.references()?;
 //! let mut matching = Vec::new();
@@ -26,14 +26,14 @@ use crate::Result;
 
 /// A containment query for one target commit, with answers shared across tips.
 /// Create one with [`crate::Repository::contains_target()`].
-pub struct TargetQuery<'query, 'repo, 'cache> {
-    inner: gix_revision::contains::Query<'query, 'repo, 'cache>,
+pub struct TargetQuery<'query, 'repo, 'commit_graph> {
+    inner: gix_revision::contains::Query<'query, 'repo, 'commit_graph>,
 }
 
-impl<'query, 'repo, 'cache> TargetQuery<'query, 'repo, 'cache> {
+impl<'query, 'repo, 'commit_graph> TargetQuery<'query, 'repo, 'commit_graph> {
     pub(crate) fn new(
         target_commit_id: impl Into<ObjectId>,
-        graph: &'query mut Graph<'repo, 'cache, Commit<()>>,
+        graph: &'query mut Graph<'repo, 'commit_graph, Commit<()>>,
     ) -> Result<Self> {
         Ok(Self {
             inner: gix_revision::contains::Query::new(target_commit_id, graph)?,

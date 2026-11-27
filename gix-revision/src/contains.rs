@@ -10,9 +10,9 @@ use crate::{
 ///
 /// Completed answers are shared across tips, so their common history is traversed only once.
 /// The graph can retain decoded commits across queries with different targets.
-pub struct Query<'query, 'find, 'cache, T = ()> {
+pub struct Query<'query, 'find, 'commit_graph, T = ()> {
     /// Caches decoded commits for reuse across queries with different targets.
-    graph: &'query mut Graph<'find, 'cache, Commit<T>>,
+    graph: &'query mut Graph<'find, 'commit_graph, Commit<T>>,
     target_generation: Option<Generation>,
     target_outside_graph: bool,
     /// Traversal state for this target, keyed by commits already in `graph`.
@@ -42,14 +42,14 @@ struct Frame {
     next_parent: usize,
 }
 
-impl<'query, 'find, 'cache, T: Default> Query<'query, 'find, 'cache, T> {
+impl<'query, 'find, 'commit_graph, T: Default> Query<'query, 'find, 'commit_graph, T> {
     /// Start a query for an existing `target_commit_id`. A supplied commit-graph can prune paths using generations.
     ///
     /// All parent links in `graph` must describe the intended history. Represent shallow boundaries by omitting
     /// those commits' parents and use a commit-graph only if it represents the same history.
     pub fn new(
         target_commit_id: impl Into<ObjectId>,
-        graph: &'query mut Graph<'find, 'cache, Commit<T>>,
+        graph: &'query mut Graph<'find, 'commit_graph, Commit<T>>,
     ) -> Result<Self> {
         let target_commit_id = target_commit_id.into();
         let generation = load_generation(graph, target_commit_id)?;

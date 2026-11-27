@@ -21,7 +21,7 @@ pub fn merge_base(
         .map(|other| commit_id(&repo, other.as_str()))
         .collect::<std::result::Result<_, _>>()?;
 
-    let mut graph = repo.revision_graph_with_cache()?;
+    let mut graph = repo.revision_graph()?;
     let bases = repo.merge_bases_many_with_graph(first_id, &other_ids, &mut graph)?;
     if bases.is_empty() {
         bail!(

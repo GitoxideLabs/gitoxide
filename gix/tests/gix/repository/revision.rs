@@ -204,7 +204,7 @@ fn corrupt_commit_graph_parents_retry_the_current_commit() -> TestResult {
             assert_eq!(expected.len(), 2, "the fixture contains the tip and its parent");
             assert_eq!(
                 actual, expected,
-                "cache fallback retains the popped commit and its ancestry"
+                "falling back from the commit-graph retains the popped commit and its ancestry"
             );
         }
     }
@@ -245,7 +245,7 @@ fn merge_base_variants_find_common_ancestors() -> TestResult {
     let repo = crate::util::basic_repo()?;
     let head_commit_id = repo.head_id()?;
     let parent_commit_id = repo.rev_parse_single("HEAD^")?;
-    let mut graph = repo.revision_graph(None)?;
+    let mut graph = repo.revision_graph_with_commit_graph(None)?;
     assert_eq!(
         repo.merge_base_with_graph(head_commit_id, parent_commit_id, &mut graph)?,
         Some(parent_commit_id),
@@ -293,7 +293,7 @@ fn unrelated_histories_have_no_merge_base() -> TestResult {
     let repo = revision_query_repo("without-commit-graph")?;
     let head_commit_id = repo.head_id()?;
     let unrelated_commit_id = repo.rev_parse_single("unrelated")?;
-    let mut graph = repo.revision_graph(None)?;
+    let mut graph = repo.revision_graph_with_commit_graph(None)?;
 
     for base in [
         repo.merge_base(head_commit_id, unrelated_commit_id)?,
@@ -321,7 +321,7 @@ fn is_ancestor_follows_parents_like_git() -> TestResult {
     let head_commit_id = repo.head_id()?;
     let parent_commit_id = repo.rev_parse_single("HEAD^")?;
     let unrelated_commit_id = repo.rev_parse_single("unrelated")?;
-    let mut graph = repo.revision_graph(None)?;
+    let mut graph = repo.revision_graph_with_commit_graph(None)?;
 
     for (ancestor_commit_id, descendant_commit_id, expected, description) in [
         (
@@ -377,11 +377,11 @@ fn contains_matches_git_for_each_ref() -> TestResult {
             view,
             crate::util::restricted().config_overrides(["core.useReplaceRefs=true"]),
         )?;
-        let mut graph = repo.revision_graph_with_cache()?;
+        let mut graph = repo.revision_graph()?;
         assert_eq!(
             graph.commit_graph().is_some(),
             view == ".",
-            "only full history uses the cache automatically"
+            "only full history uses the commit-graph automatically"
         );
         for target_spec in ["HEAD", "parent", "root", "unrelated", "HEAD"] {
             let mut target = repo.contains_target(repo.rev_parse_single(target_spec)?, &mut graph)?;
@@ -408,22 +408,39 @@ fn contains_matches_git_for_each_ref() -> TestResult {
 
 #[test]
 fn ahead_behind_counts_match_git() -> TestResult {
-    for (name, use_commitgraph) in [("without-commit-graph", false), (".", true)] {
+    for (name, use_commit_graph) in [("without-commit-graph", false), (".", true)] {
         let repo = revision_query_repo(name)?;
-        let mut graph = repo.revision_graph_with_cache()?;
+        let commit_graph = repo.revision_graph::<()>()?.into_commit_graph();
         assert_eq!(
-            graph.commit_graph().is_some(),
-            use_commitgraph,
-            "the optional commit-graph is exercised"
+            commit_graph.is_some(),
+            use_commit_graph,
+            "the optional commit-graph can be recovered from the revision graph"
         );
-        if let Some(cache) = graph.commit_graph() {
+        if let Some(commit_graph) = commit_graph.as_ref() {
+            let borrowed = repo.revision_graph_with_commit_graph::<()>(Some(commit_graph))?;
+            assert!(
+                borrowed
+                    .commit_graph()
+                    .is_some_and(|graph| std::ptr::eq(graph, commit_graph)),
+                "the explicit constructor uses the caller's commit-graph"
+            );
+            assert!(
+                borrowed.into_commit_graph().is_none(),
+                "a borrowed commit-graph cannot be taken out of the revision graph"
+            );
             for name in ["divergent", "unrelated"] {
                 assert!(
-                    cache.lookup(repo.rev_parse_single(name)?).is_none(),
+                    commit_graph.lookup(repo.rev_parse_single(name)?).is_none(),
                     "the fixture also exercises tips outside the commit-graph"
                 );
             }
         }
+        let graph = repo.revision_graph_with_commit_graph(None)?;
+        assert!(
+            graph.commit_graph().is_none(),
+            "passing None skips commit-graph selection"
+        );
+        let mut graph = graph.with_owned_commit_graph(commit_graph);
         assert_history_queries_match_git(&repo, &mut graph, "history.baseline")?;
     }
     Ok(())
@@ -447,7 +464,7 @@ fn shallow_boundaries_stop_ancestry_and_counting_like_git() -> TestResult {
         None,
         "merge-base must not reach the older root that is still present on disk"
     );
-    let mut graph = repo.revision_graph(None)?;
+    let mut graph = repo.revision_graph()?;
     assert_history_queries_match_git(&repo, &mut graph, "history.baseline")?;
     Ok(())
 }
@@ -455,7 +472,7 @@ fn shallow_boundaries_stop_ancestry_and_counting_like_git() -> TestResult {
 #[test]
 fn unrelated_shallow_boundaries_are_not_decoded() -> TestResult {
     let repo = crate::named_repo("make_unrelated_shallow_boundary.sh")?;
-    let mut graph = repo.revision_graph(None)?;
+    let mut graph = repo.revision_graph_with_commit_graph(None)?;
     assert_history_queries_match_git(&repo, &mut graph, "history.baseline")?;
     Ok(())
 }
@@ -475,14 +492,14 @@ fn replacements_disable_automatic_commit_graphs_like_git() -> TestResult {
     );
     assert!(
         repo.commit_graph_if_enabled()?.is_none(),
-        "replacement topology is incompatible with the cache"
+        "replacement topology is incompatible with the commit-graph"
     );
-    assert_history_queries_match_git(&repo, &mut repo.revision_graph(None)?, "history.baseline")?;
+    assert_history_queries_match_git(&repo, &mut repo.revision_graph()?, "history.baseline")?;
     let mut repo = repo;
     repo.objects.ignore_replacements = true;
     assert!(
         repo.commit_graph_if_enabled()?.is_some(),
-        "ignored replacements allow the original cache"
+        "ignored replacements allow the original commit-graph"
     );
     assert!(
         repo.is_ancestor(root_commit_id, tip_commit_id)?,
@@ -493,7 +510,7 @@ fn replacements_disable_automatic_commit_graphs_like_git() -> TestResult {
         gix::revision::plumbing::ahead_behind_counts::Outcome { ahead: 2, behind: 0 },
         "ignored replacements retain original counts"
     );
-    let mut graph = repo.revision_graph_with_cache()?;
+    let mut graph = repo.revision_graph()?;
     assert_history_queries_match_git(&repo, &mut graph, "unmodified-history.baseline")?;
     Ok(())
 }

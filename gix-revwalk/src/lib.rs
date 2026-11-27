@@ -12,7 +12,7 @@
 /// ### About replacements
 ///
 /// Object replacements is an object database feature to substitute one object with another. We assume that this is transparently
-/// implemented by the `find` function that returns objects. Also we assume that the commitgraph as been written with replacements
+/// implemented by the `find` function that returns objects. We also assume that the commit-graph was written with replacements
 /// active to provide a consistent view.
 ///
 /// ### Odb or `find` configuration
@@ -25,11 +25,11 @@
 ///
 /// Additionally, and only if `T` is [`Commit<T>`][graph::Commit], there is *no need for an object cache* as we keep track of
 /// everything related to commit traversal in our own hashmap.
-pub struct Graph<'find, 'cache, T> {
+pub struct Graph<'find, 'commit_graph, T> {
     /// A way to resolve a commit from the object database.
     find: Box<dyn gix_object::Find + 'find>,
-    /// A way to speedup commit access, essentially a multi-file commit database.
-    cache: Option<Cache<'cache>>,
+    /// The on-disk commit-graph used to accelerate commit access.
+    commit_graph: Option<CommitGraph<'commit_graph>>,
     /// The set of cached commits that we have seen once, along with data associated with them.
     map: graph::IdMap<T>,
     /// A buffer for writing commit data into.
@@ -38,13 +38,16 @@ pub struct Graph<'find, 'cache, T> {
     parent_buf: Vec<u8>,
 }
 
-#[expect(clippy::large_enum_variant, reason = "avoid a separate allocation for owned caches")]
-enum Cache<'cache> {
-    Borrowed(&'cache gix_commitgraph::Graph),
+#[expect(
+    clippy::large_enum_variant,
+    reason = "avoid a separate allocation for owned commit-graphs"
+)]
+enum CommitGraph<'commit_graph> {
+    Borrowed(&'commit_graph gix_commitgraph::Graph),
     Owned(gix_commitgraph::Graph),
 }
 
-impl Cache<'_> {
+impl CommitGraph<'_> {
     fn as_ref(&self) -> &gix_commitgraph::Graph {
         match self {
             Self::Borrowed(graph) => graph,

@@ -31,7 +31,7 @@ pub(super) mod function {
         let repo = gix::open(worktree_dir)?;
 
         let suspect: gix::ObjectId = repo.head()?.into_peeled_id()?.into();
-        let cache: Option<gix::commitgraph::Graph> = repo.commit_graph_if_enabled()?;
+        let commit_graph: Option<gix::commitgraph::Graph> = repo.commit_graph_if_enabled()?;
         let mut resource_cache = repo.diff_resource_cache_for_tree_diff()?;
         let diff_algorithm = repo.diff_algorithm()?;
 
@@ -67,7 +67,7 @@ pub(super) mod function {
         let outcome = gix::blame::file(
             &repo.objects,
             gix::blame::Start::Commit(suspect),
-            cache,
+            commit_graph,
             &mut resource_cache,
             file.as_bstr(),
             options,

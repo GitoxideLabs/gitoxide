@@ -203,7 +203,7 @@ impl Repository {
     ) -> Result<crate::merge::commit::Outcome<'_>> {
         let mut diff_cache = self.diff_resource_cache_for_tree_diff()?;
         let mut blob_merge = self.merge_resource_cache(Default::default())?;
-        let mut graph = self.revision_graph_with_cache()?;
+        let mut graph = self.revision_graph()?;
         let mut submodule = submodule::query(self);
         let context = gix_merge::tree::Context {
             submodule: Some(&mut submodule),
@@ -265,7 +265,7 @@ impl Repository {
         merge_bases: impl IntoIterator<Item = impl Into<gix_hash::ObjectId>>,
         options: crate::merge::tree::Options,
     ) -> Result<crate::merge::virtual_merge_base::Outcome<'_>> {
-        let mut graph = self.revision_graph_with_cache()?;
+        let mut graph = self.revision_graph()?;
         self.virtual_merge_base_with_graph(merge_bases, &mut graph, options)
     }
 
@@ -356,7 +356,7 @@ mod submodule {
                     true
                 }
                 gix_merge::submodule::Query::IsAncestor { ancestor, descendant } => {
-                    let mut graph = repo.revision_graph_with_cache()?;
+                    let mut graph = repo.revision_graph()?;
                     gix_revision::merge_base::is_ancestor(ancestor.to_owned(), descendant.to_owned(), &mut graph)?
                 }
             }))

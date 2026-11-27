@@ -24,8 +24,8 @@ fn many_tips_match_git_across_queries_on_one_graph() -> TestResult {
         queries.values().any(|tips| tips.len() > 1),
         "Git's baseline has multi-tip queries"
     );
-    for cache in [None, Some(&disk)] {
-        let mut graph = Graph::<Commit<Flags>>::new(&odb, cache);
+    for commit_graph in [None, Some(&disk)] {
+        let mut graph = Graph::<Commit<Flags>>::new(&odb, commit_graph);
         for (&target, tips) in &queries {
             let mut query = Query::new(target, &mut graph)?;
             assert!(query.contains(target)?, "each commit contains itself");
@@ -46,8 +46,8 @@ fn generations_prune_history_below_the_target() -> TestResult {
     let left_tip = tag_commit_id(&root, "PL")?;
     let right_tip = tag_commit_id(&root, "PR")?;
     let shared_root = tag_commit_id(&root, "S")?;
-    for cache in [None, Some(&disk)] {
-        let mut graph = Graph::<Commit<()>>::new(&odb, cache);
+    for commit_graph in [None, Some(&disk)] {
+        let mut graph = Graph::<Commit<()>>::new(&odb, commit_graph);
         {
             let mut query = Query::new(target, &mut graph)?;
             assert!(!query.contains(left_tip)?, "R2 is only on the right side of the graph");
@@ -58,7 +58,7 @@ fn generations_prune_history_below_the_target() -> TestResult {
         }
         assert_eq!(
             graph.contains(&shared_root),
-            cache.is_none(),
+            commit_graph.is_none(),
             "only a usable commit-graph stops the walk before the shared root"
         );
     }

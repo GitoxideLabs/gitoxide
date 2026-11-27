@@ -59,7 +59,7 @@ pub struct Metadata {
 }
 
 /// The graph our callers use to store traversal information, for (re-)use in the negotiation implementation.
-pub type Graph<'find, 'cache> = gix_revwalk::Graph<'find, 'cache, gix_revwalk::graph::Commit<Metadata>>;
+pub type Graph<'find, 'commit_graph> = gix_revwalk::Graph<'find, 'commit_graph, gix_revwalk::graph::Commit<Metadata>>;
 
 /// A map associating an object id with its commit-metadata.
 pub type IdMap = gix_revwalk::graph::IdMap<gix_revwalk::graph::Commit<Metadata>>;

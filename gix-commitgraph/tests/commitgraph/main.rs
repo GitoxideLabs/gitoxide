@@ -18,7 +18,7 @@ fn missing_path_is_not_found() -> gix_testtools::TestResult {
     let err = gix_commitgraph::at(dir.path().join("missing"), gix_testtools::object_hash(), None)
         .err()
         .expect("a missing path cannot contain a commit-graph");
-    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(dir.path()).to_string_lossy(), "<tmp>")]), "callers can distinguish a missing optional cache from other failures", @"
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(dir.path()).to_string_lossy(), "<tmp>")]), "callers can distinguish a missing optional commit-graph from other failures", @"
     Could not access commit-graph path at \"<tmp>/missing\"
 
     Caused by:
@@ -26,7 +26,7 @@ fn missing_path_is_not_found() -> gix_testtools::TestResult {
     ");
     assert!(
         err.is_not_found(),
-        "callers can distinguish a missing optional cache from other failures"
+        "callers can distinguish a missing optional commit-graph from other failures"
     );
     Ok(())
 }

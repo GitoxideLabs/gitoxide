@@ -1,45 +1,51 @@
 use crate::Result;
 impl crate::Repository {
-    /// Create a graph data-structure capable of accelerating graph traversals and storing state of type `T` with each commit
-    /// it encountered.
+    /// Create a revision graph for the repository's visible history, storing state of type `T` for each commit it encounters.
     ///
-    /// Shallow commits are treated as roots when reading from the object database. Reading the repository's
-    /// shallow boundaries can fail.
+    /// The graph owns the optional commit-graph selected by [`Self::commit_graph_if_enabled()`]. Shallow commits
+    /// are treated as roots. Reading the shallow boundaries or loading the commit-graph can fail.
     ///
-    /// A supplied `cache` takes precedence for the commits it contains. The caller is responsible for its
-    /// parent links and generation numbers matching the intended history. Use [`Self::revision_graph_with_cache()`]
-    /// to select and own a cache according to repository configuration and compatibility.
+    /// Recover the owned commit-graph with [`gix_revwalk::Graph::into_commit_graph()`] and transfer it to another graph with
+    /// [`gix_revwalk::Graph::with_owned_commit_graph()`].
     ///
     /// ### Performance
     ///
-    /// Note that the [Graph][gix_revwalk::Graph] can be sensitive to various object database settings that may affect the performance
-    /// of the commit walk.
-    pub fn revision_graph<'cache, T>(
+    /// If a walk repeatedly looks up commits not covered by the commit-graph, set an
+    /// [object cache](Self::object_cache_size_if_unset) before creating the revision graph to avoid
+    /// rereading and decoding those objects.
+    pub fn revision_graph<T>(&self) -> Result<gix_revwalk::Graph<'_, 'static, T>> {
+        let commit_graph = self.commit_graph_if_enabled()?;
+        Ok(self
+            .revision_graph_with_commit_graph(None)?
+            .with_owned_commit_graph(commit_graph))
+    }
+
+    /// Like [`Self::revision_graph()`], but borrows the supplied `commit_graph` instead of selecting one automatically.
+    /// Pass `None` to read commits only from the object database, treating shallow commits as roots.
+    ///
+    /// A supplied commit-graph takes precedence for the commits it contains, even when shallow boundaries or
+    /// object replacements would change their ancestry. The caller is responsible for its parent links and
+    /// generation numbers matching the intended history.
+    ///
+    /// Use [`Self::commit_graph_if_enabled()`] to respect repository configuration and history compatibility,
+    /// or [`Self::commit_graph()`] to open the on-disk commit-graph without those checks.
+    pub fn revision_graph_with_commit_graph<'commit_graph, T>(
         &self,
-        cache: Option<&'cache gix_commitgraph::Graph>,
-    ) -> Result<gix_revwalk::Graph<'_, 'cache, T>> {
+        commit_graph: Option<&'commit_graph gix_commitgraph::Graph>,
+    ) -> Result<gix_revwalk::Graph<'_, 'commit_graph, T>> {
         Ok(match self.shallow_commits()? {
             Some(shallow) => gix_revwalk::Graph::new(
                 crate::revision::walk::Objects {
                     repo: self,
                     shallow: Some(shallow),
                 },
-                cache,
+                commit_graph,
             ),
-            None => gix_revwalk::Graph::new(&self.objects, cache),
+            None => gix_revwalk::Graph::new(&self.objects, commit_graph),
         })
     }
 
-    /// Create a [`Self::revision_graph()`] that owns the cache selected by [`Self::commit_graph_if_enabled()`].
-    /// Recover the cache for reuse with [`gix_revwalk::Graph::into_cache()`] and transfer it to another graph with
-    /// [`gix_revwalk::Graph::with_owned_cache()`].
-    pub fn revision_graph_with_cache<T>(&self) -> Result<gix_revwalk::Graph<'_, 'static, T>> {
-        let cache = self.commit_graph_if_enabled()?;
-        Ok(self.revision_graph(None)?.with_owned_cache(cache))
-    }
-
-    /// Return a cache for commits and their graph structure, as managed by `git commit-graph`, for accelerating commit walks on
-    /// a low level.
+    /// Open the commit-graph managed by `git commit-graph` to accelerate low-level commit walks.
     ///
     /// Parent-buffer allocations respect `gitoxide.objects.allocLimit`.
     pub fn commit_graph(&self) -> Result<gix_commitgraph::Graph> {

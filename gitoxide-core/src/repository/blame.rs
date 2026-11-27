@@ -28,7 +28,7 @@ pub fn blame_file(
     let file = gix::path::os_str_into_bstr(file)?;
     let file = repo.normalize_path(file)?;
 
-    let cache: Option<gix::commitgraph::Graph> = repo.commit_graph_if_enabled()?;
+    let commit_graph: Option<gix::commitgraph::Graph> = repo.commit_graph_if_enabled()?;
     let mut resource_cache = repo.diff_resource_cache(
         // TODO(blame): Git uses something akin to `ToGitUnlessBinaryToTextIsPresent` here, but with a specialty: textconv output is converted
         //              to Git, which isn't happening for normal diffing. In theory, this shouldn't be a problem as it's always apples to apples,
@@ -44,7 +44,14 @@ pub fn blame_file(
     // object ID, and we make sure that worktree contents can't possibly be used.
     resource_cache.filter.roots = Default::default();
     resource_cache.clear_resource_cache_keep_allocation();
-    let outcome = gix::blame::file(&repo.objects, start, cache, &mut resource_cache, file.as_ref(), options)?;
+    let outcome = gix::blame::file(
+        &repo.objects,
+        start,
+        commit_graph,
+        &mut resource_cache,
+        file.as_ref(),
+        options,
+    )?;
     let statistics = outcome.statistics;
     show_blame_entries(out, outcome, file.as_ref()).or_error()?;
 

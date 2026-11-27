@@ -56,8 +56,8 @@ fn run() -> TestResult {
             };
 
             let debug = false;
-            for use_cache in [false, true] {
-                let cache = use_cache
+            for use_commit_graph in [false, true] {
+                let commit_graph = use_commit_graph
                     .then(|| {
                         gix_commitgraph::at(
                             store.store_ref().path().join("info"),
@@ -67,7 +67,7 @@ fn run() -> TestResult {
                         .ok()
                     })
                     .flatten();
-                let mut graph = gix_revwalk::Graph::new(&store, cache.as_ref());
+                let mut graph = gix_revwalk::Graph::new(&store, commit_graph.as_ref());
                 let mut negotiator = algo.into_negotiator();
                 if debug {
                     eprintln!("ALGO {algo_name} CASE {case}");
@@ -127,12 +127,12 @@ fn run() -> TestResult {
                     }
                     for have in haves {
                         let actual = negotiator.next_have(&mut graph).unwrap_or_else(|| {
-                            panic!("{algo_name}:cache={use_cache}: one have per baseline: {have} missing or in wrong order", have = message(have))
+                            panic!("{algo_name}:commit_graph={use_commit_graph}: one have per baseline: {have} missing or in wrong order", have = message(have))
                         })?;
                         assert_eq!(
                             actual,
                             have,
-                            "{algo_name}:cache={use_cache}: order and commit matches exactly, wanted {expected}, got {actual}, commits left: {:?}",
+                            "{algo_name}:commit_graph={use_commit_graph}: order and commit matches exactly, wanted {expected}, got {actual}, commits left: {:?}",
                             std::iter::from_fn(|| negotiator.next_have(&mut graph))
                                 .map(|id| message(id.unwrap()))
                                 .collect::<Vec<_>>(),
@@ -152,7 +152,7 @@ fn run() -> TestResult {
                 }
                 assert!(
                     negotiator.next_have(&mut graph).is_none(),
-                    "{algo_name}:cache={use_cache}: negotiator should be depleted after all recorded baseline rounds"
+                    "{algo_name}:commit_graph={use_commit_graph}: negotiator should be depleted after all recorded baseline rounds"
                 );
             }
         }

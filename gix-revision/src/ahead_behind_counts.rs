@@ -47,23 +47,23 @@ pub(crate) mod function {
         let both = Flags::COMMIT1 | Flags::COMMIT2;
         let mut queue = PriorityQueue::new();
         let mut pending_exclusive = 2;
-        let mut pending_uncached = 0;
+        let mut pending_outside_commit_graph = 0;
         let mut unreliable_generations = false;
         for (commit_id, color) in [(tip_commit_id, Flags::COMMIT1), (base_commit_id, Flags::COMMIT2)] {
             let commit = graph.get_mut(&commit_id).expect("input commits were inserted");
             let info = GenThenTime::from(&*commit);
-            pending_uncached += usize::from(info.is_outside_commit_graph());
+            pending_outside_commit_graph += usize::from(info.is_outside_commit_graph());
             unreliable_generations |= !info.has_reliable_generation() && !info.is_outside_commit_graph();
             commit.data = color | Flags::ENQUEUED;
             queue.insert(info, commit_id);
         }
 
-        // Uncached commits sort before cached ones; zero or saturated generations can violate parent ordering.
-        while pending_exclusive != 0 || pending_uncached != 0 || unreliable_generations {
+        // Commits outside the commit-graph sort first; zero or saturated generations can violate parent ordering.
+        while pending_exclusive != 0 || pending_outside_commit_graph != 0 || unreliable_generations {
             let Some((info, commit_id)) = queue.pop() else {
                 break;
             };
-            pending_uncached -= usize::from(info.is_outside_commit_graph());
+            pending_outside_commit_graph -= usize::from(info.is_outside_commit_graph());
             let commit = graph.get_mut(&commit_id).expect("everything queued is in graph");
             let colors = commit.data & both;
             pending_exclusive -= usize::from(colors != both);
@@ -79,7 +79,7 @@ pub(crate) mod function {
                         if parent.data.contains(Flags::ENQUEUED) {
                             pending_exclusive -= usize::from((parent.data & both) != both);
                         } else {
-                            pending_uncached += usize::from(info.is_outside_commit_graph());
+                            pending_outside_commit_graph += usize::from(info.is_outside_commit_graph());
                             queue.insert(info, parent_commit_id);
                             parent.data |= Flags::ENQUEUED;
                         }

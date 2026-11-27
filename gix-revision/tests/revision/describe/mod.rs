@@ -14,8 +14,8 @@ fn run_test(
     let store = branches_odb_at(".");
     let store = transform_odb(store);
     let commit_id = hex_to_id("01ec18a3ebf2855708ad3c9d244306bc1fae3e9b");
-    for use_commitgraph in [false, true] {
-        let cache = use_commitgraph
+    for use_commit_graph in [false, true] {
+        let commit_graph = use_commit_graph
             .then(|| {
                 gix_commitgraph::Graph::from_info_dir(
                     &store.store_ref().path().join("info"),
@@ -24,7 +24,7 @@ fn run_test(
                 .ok()
             })
             .flatten();
-        let mut graph = gix_revision::Graph::new(&store, cache.as_ref());
+        let mut graph = gix_revision::Graph::new(&store, commit_graph.as_ref());
         run_assertions(
             gix_revision::describe(&commit_id, &mut graph, options(commit_id)),
             commit_id,

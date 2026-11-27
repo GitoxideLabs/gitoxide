@@ -144,7 +144,7 @@ pub(super) struct State {
     hidden_tips: Vec<ObjectId>,
     /// Scratch buffer for parent commit lookups when commit times are loaded from the object database.
     parents_buf: Vec<u8>,
-    /// Reusable parent id/time storage populated from the commit-graph cache.
+    /// Reusable parent id/time storage populated from the commit-graph.
     parent_ids: SmallVec<[(ObjectId, SecondsSinceUnixEpoch); 2]>,
 }
 
@@ -306,15 +306,15 @@ pub(super) fn compute_hidden_frontier(
     visible_tips: &[ObjectId],
     hidden_tips: &[ObjectId],
     objects: &impl gix_object::Find,
-    cache: Option<&gix_commitgraph::Graph>,
+    commit_graph: Option<&gix_commitgraph::Graph>,
     parents: Parents,
     predicate: impl FnMut(&oid) -> bool,
 ) -> Result<gix_revwalk::graph::IdMap<()>> {
     paint_frontier(
         visible_tips,
         hidden_tips,
-        gix_revwalk::Graph::new(objects, cache),
-        cache.is_some_and(|cache| !cache.generation_numbers_available()),
+        gix_revwalk::Graph::new(objects, commit_graph),
+        commit_graph.is_some_and(|commit_graph| !commit_graph.generation_numbers_available()),
         parents,
         predicate,
     )
@@ -556,16 +556,19 @@ mod init {
             Ok(self)
         }
 
-        /// Set the commit-graph cache to speed up traversal. The cache can be owned, borrowed, or shared.
+        /// Set the commit-graph to speed up traversal. The graph can be owned, borrowed, or shared.
         ///
-        /// Commit lookups fall back to the object database if the cache is unavailable or corrupt.
-        pub fn with_commit_graph<Cache>(self, cache: Option<Cache>) -> Simple<Find, Predicate, Cache>
+        /// Commit lookups fall back to the object database if the commit-graph is unavailable or corrupt.
+        pub fn with_commit_graph<NewCommitGraph>(
+            self,
+            commit_graph: Option<NewCommitGraph>,
+        ) -> Simple<Find, Predicate, NewCommitGraph>
         where
-            Cache: Borrow<gix_commitgraph::Graph>,
+            NewCommitGraph: Borrow<gix_commitgraph::Graph>,
         {
             Simple {
                 objects: self.objects,
-                cache,
+                commit_graph,
                 predicate: self.predicate,
                 state: self.state,
                 parents: self.parents,
@@ -620,13 +623,14 @@ mod init {
                     self.state.hidden.clear();
                     let visible_tips = self.visible_inputs_sorted();
                     if !hidden_tips.is_empty() && !visible_tips.is_empty() {
-                        let paint_graph = self.cache.as_ref().map(Borrow::borrow);
+                        let paint_graph = self.commit_graph.as_ref().map(Borrow::borrow);
                         let graph = SharedPaint {
                             metadata,
                             lookup: gix_revwalk::Graph::new(&self.objects, paint_graph),
                             flags: Default::default(),
                         };
-                        let uncomputed = paint_graph.is_some_and(|cache| !cache.generation_numbers_available());
+                        let uncomputed =
+                            paint_graph.is_some_and(|commit_graph| !commit_graph.generation_numbers_available());
                         match paint_frontier(&visible_tips, &hidden_tips, graph, uncomputed, Parents::All, |_| true) {
                             Ok(hidden) => {
                                 self.state.hidden = hidden;
@@ -656,7 +660,7 @@ mod init {
                 &visible_tips,
                 &hidden_tips,
                 &self.objects,
-                self.cache.as_ref().map(Borrow::borrow),
+                self.commit_graph.as_ref().map(Borrow::borrow),
                 Parents::All,
                 |_| true,
             )?;
@@ -746,7 +750,7 @@ mod init {
             }
             Self {
                 objects: find,
-                cache: None,
+                commit_graph: None,
                 predicate,
                 state,
                 parents: Default::default(),
@@ -823,13 +827,13 @@ mod init {
                 let mut parents: ParentIds = Default::default();
                 let generation;
 
-                let commit_graph = self.cache.as_ref().map(Borrow::borrow);
+                let commit_graph = self.commit_graph.as_ref().map(Borrow::borrow);
                 match super::super::find(commit_graph, &self.objects, &oid, &mut state.buf) {
-                    Ok(Either::CachedCommit(commit)) => {
+                    Ok(Either::CommitGraph(commit)) => {
                         generation = Some(commit.generation());
                         if !collect_parents(&mut state.parent_ids, commit_graph, commit.iter_parents()) {
-                            // drop corrupt caches and try again with ODB
-                            self.cache = None;
+                            // discard the corrupt commit-graph and retry with the object database
+                            self.commit_graph = None;
                             next.insert(to_queue_key(commit_time, order), oid);
                             continue;
                         }
@@ -914,7 +918,7 @@ mod init {
                 let mut parents: ParentIds = Default::default();
                 let generation;
 
-                let commit_graph = self.cache.as_ref().map(Borrow::borrow);
+                let commit_graph = self.commit_graph.as_ref().map(Borrow::borrow);
                 if let Some(commit) =
                     metadata(&oid).filter(|commit| commit.generation.is_none() || commit_graph.is_some())
                 {
@@ -934,11 +938,11 @@ mod init {
                 }
 
                 match super::super::find(commit_graph, &self.objects, &oid, &mut state.buf) {
-                    Ok(Either::CachedCommit(commit)) => {
+                    Ok(Either::CommitGraph(commit)) => {
                         generation = Some(commit.generation());
                         if !collect_parents(&mut state.parent_ids, commit_graph, commit.iter_parents()) {
-                            // drop corrupt caches and try again with ODB
-                            self.cache = None;
+                            // discard the corrupt commit-graph and retry with the object database
+                            self.commit_graph = None;
                             next.push_front(oid);
                             continue;
                         }
@@ -1033,15 +1037,17 @@ mod init {
 
 fn collect_parents(
     dest: &mut SmallVec<[(gix_hash::ObjectId, gix_date::SecondsSinceUnixEpoch); 2]>,
-    cache: Option<&gix_commitgraph::Graph>,
+    commit_graph: Option<&gix_commitgraph::Graph>,
     parents: gix_commitgraph::file::commit::Parents<'_>,
 ) -> bool {
     dest.clear();
-    let cache = cache.as_ref().expect("parents iter is available, backed by `cache`");
+    let commit_graph = commit_graph
+        .as_ref()
+        .expect("the parent iterator came from the commit-graph");
     for parent_id in parents {
         match parent_id {
             Ok(pos) => dest.push({
-                let parent = cache.commit_at(pos);
+                let parent = commit_graph.commit_at(pos);
                 (
                     parent.id().to_owned(),
                     parent.committer_timestamp() as gix_date::SecondsSinceUnixEpoch,

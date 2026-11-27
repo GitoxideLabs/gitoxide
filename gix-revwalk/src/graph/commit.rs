@@ -6,12 +6,14 @@ use smallvec::SmallVec;
 use super::LazyCommit;
 use crate::graph::{Commit, Either, Generation};
 
-impl<'graph, 'cache> LazyCommit<'graph, 'cache> {
+impl<'graph, 'commit_graph> LazyCommit<'graph, 'commit_graph> {
     /// Return an iterator over the parents of this commit.
-    pub fn iter_parents(&self) -> Parents<'graph, 'cache> {
+    pub fn iter_parents(&self) -> Parents<'graph, 'commit_graph> {
         let backing = match &self.backing {
             Either::Left(buf) => Either::Left(gix_object::CommitRefIter::from_bytes(buf, self.object_hash)),
-            Either::Right((cache, pos)) => Either::Right((*cache, cache.commit_at(*pos).iter_parents())),
+            Either::Right((commit_graph, pos)) => {
+                Either::Right((*commit_graph, commit_graph.commit_at(*pos).iter_parents()))
+            }
         };
         Parents { backing }
     }
@@ -25,7 +27,9 @@ impl<'graph, 'cache> LazyCommit<'graph, 'cache> {
             Either::Left(buf) => gix_object::CommitRefIter::from_bytes(buf, self.object_hash)
                 .committer()?
                 .seconds(),
-            Either::Right((cache, pos)) => cache.commit_at(*pos).committer_timestamp() as SecondsSinceUnixEpoch, // a cast as we cannot represent the error and trying seems overkill
+            Either::Right((commit_graph, pos)) => {
+                commit_graph.commit_at(*pos).committer_timestamp() as SecondsSinceUnixEpoch
+            } // a cast as we cannot represent the error and trying seems overkill
         })
     }
 
@@ -33,7 +37,7 @@ impl<'graph, 'cache> LazyCommit<'graph, 'cache> {
     pub fn generation(&self) -> Option<Generation> {
         match &self.backing {
             Either::Left(_) => None,
-            Either::Right((cache, pos)) => Some(cache.commit_at(*pos).generation()),
+            Either::Right((commit_graph, pos)) => Some(commit_graph.commit_at(*pos).generation()),
         }
     }
 
@@ -42,14 +46,14 @@ impl<'graph, 'cache> LazyCommit<'graph, 'cache> {
     /// This can fail if an overflow offset in the commit graph is malformed.
     pub fn corrected_commit_date(&self) -> Result<Option<u64>> {
         match &self.backing {
-            Either::Right((cache, pos)) if cache.corrected_commit_dates_available() => {
-                cache.commit_at(*pos).corrected_commit_date()
+            Either::Right((commit_graph, pos)) if commit_graph.corrected_commit_dates_available() => {
+                commit_graph.commit_at(*pos).corrected_commit_date()
             }
             _ => Ok(None),
         }
     }
 
-    /// Returns the generation of the commit and its commit-time, either from cache if available, or parsed from the object buffer.
+    /// Returns the generation of the commit and its commit-time, either from the commit-graph if available, or parsed from the object buffer.
     pub fn generation_and_timestamp(&self) -> Result<(Option<Generation>, SecondsSinceUnixEpoch)> {
         Ok(match &self.backing {
             Either::Left(buf) => (
@@ -58,12 +62,12 @@ impl<'graph, 'cache> LazyCommit<'graph, 'cache> {
                     .committer()?
                     .seconds(),
             ),
-            Either::Right((cache, pos)) => {
-                let commit = cache.commit_at(*pos);
+            Either::Right((commit_graph, pos)) => {
+                let commit = commit_graph.commit_at(*pos);
                 (
                     Some(commit.generation()),
                     // a cast as we cannot represent the error and trying seems overkill
-                    cache.commit_at(*pos).committer_timestamp() as SecondsSinceUnixEpoch,
+                    commit_graph.commit_at(*pos).committer_timestamp() as SecondsSinceUnixEpoch,
                 )
             }
         })
@@ -103,13 +107,13 @@ impl<'graph, 'cache> LazyCommit<'graph, 'cache> {
                     data,
                 }
             }
-            Either::Right((cache, pos)) => {
+            Either::Right((commit_graph, pos)) => {
                 let mut parents = SmallVec::default();
-                let commit = cache.commit_at(*pos);
+                let commit = commit_graph.commit_at(*pos);
                 for pos in commit.iter_parents() {
                     let pos =
                         pos.or_raise(|| corruption("Could not find commit position in graph when traversing parents"))?;
-                    parents.push(cache.commit_at(pos).id().to_owned());
+                    parents.push(commit_graph.commit_at(pos).id().to_owned());
                 }
                 let actual = commit.committer_timestamp();
                 Commit {
@@ -127,12 +131,12 @@ impl<'graph, 'cache> LazyCommit<'graph, 'cache> {
 }
 
 /// An iterator over the parents of a commit.
-pub struct Parents<'graph, 'cache> {
+pub struct Parents<'graph, 'commit_graph> {
     backing: Either<
         gix_object::CommitRefIter<'graph>,
         (
-            &'cache gix_commitgraph::Graph,
-            gix_commitgraph::file::commit::Parents<'cache>,
+            &'commit_graph gix_commitgraph::Graph,
+            gix_commitgraph::file::commit::Parents<'commit_graph>,
         ),
     >,
 }
@@ -157,8 +161,8 @@ impl Iterator for Parents<'_, '_> {
                 }
                 None
             }
-            Either::Right((cache, it)) => it.next().map(|r| {
-                r.map(|pos| cache.id_at(pos).to_owned())
+            Either::Right((commit_graph, it)) => it.next().map(|r| {
+                r.map(|pos| commit_graph.id_at(pos).to_owned())
                     .or_raise(|| corruption("An error occurred when parsing parents from the commit graph"))
             }),
         }
