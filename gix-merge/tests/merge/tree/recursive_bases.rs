@@ -31,25 +31,26 @@ fn recursive_bases_match_git_with_and_without_commit_graph() -> TestResult {
         for (direction, our_commit_id, their_commit_id) in
             [("A-B", commits[0], commits[1]), ("B-A", commits[1], commits[0])]
         {
-            for cache_name in ["uncached", "v1", "v2", "partial-v2", "mixed"] {
-                let cache = (cache_name != "uncached")
-                    .then(|| gix_commitgraph::Graph::from_info_dir(&root.join(cache_name), hash))
+            for commit_graph_mode in ["uncached", "v1", "v2", "partial-v2", "mixed"] {
+                let commit_graph = (commit_graph_mode != "uncached")
+                    .then(|| gix_commitgraph::Graph::from_info_dir(&root.join(commit_graph_mode), hash))
                     .transpose()?;
-                let graph_cache = cache.as_ref();
-                if let Some(cache) = graph_cache {
+                let commit_graph = commit_graph.as_ref();
+                if let Some(commit_graph) = commit_graph {
                     assert_eq!(
-                        cache.corrected_commit_dates_available(),
-                        matches!(cache_name, "v2" | "partial-v2"),
+                        commit_graph.corrected_commit_dates_available(),
+                        matches!(commit_graph_mode, "v2" | "partial-v2"),
                         "only graphs with corrected dates in every layer use generation version 2"
                     );
                 }
                 let expected = baseline::parse_merge_info(std::fs::read_to_string(
-                    root.join(format!("{direction}-{cache_name}.merge-info")),
+                    root.join(format!("{direction}-{commit_graph_mode}.merge-info")),
                 )?);
-                let expected_bases = std::fs::read_to_string(root.join(format!("{direction}-{cache_name}.bases")))?
-                    .lines()
-                    .map(|line| gix_hash::ObjectId::from_hex(line.as_bytes()))
-                    .collect::<Result<Vec<_>, _>>()?;
+                let expected_bases =
+                    std::fs::read_to_string(root.join(format!("{direction}-{commit_graph_mode}.bases")))?
+                        .lines()
+                        .map(|line| gix_hash::ObjectId::from_hex(line.as_bytes()))
+                        .collect::<Result<Vec<_>, _>>()?;
                 let mut options = basic_merge_options();
                 options.tree_merge.blob_merge.text.conflict = text::Conflict::Keep {
                     style: text::ConflictStyle::Diff3,
@@ -63,7 +64,7 @@ fn recursive_bases_match_git_with_and_without_commit_graph() -> TestResult {
                         current: Some(direction[..1].into()),
                         other: Some(direction[2..].into()),
                     },
-                    &mut gix_revwalk::Graph::new(&objects, graph_cache),
+                    &mut gix_revwalk::Graph::new(&objects, commit_graph),
                     &mut new_diff_resource_cache(&root),
                     &mut new_blob_merge_platform(&root, 0),
                     &objects,
@@ -74,14 +75,14 @@ fn recursive_bases_match_git_with_and_without_commit_graph() -> TestResult {
                 assert_eq!(
                     Vec::from(outcome.merge_bases.clone().expect("the tips share three bases")),
                     expected_bases,
-                    "{layout}/{direction}, {cache_name}: source merge-base order matches Git"
+                    "{layout}/{direction}, {commit_graph_mode}: source merge-base order matches Git"
                 );
                 let tree_id = outcome.tree_merge.tree.write(|tree| objects.write(tree))?;
                 pretty_assertions::assert_eq!(
                     baseline::visualize_tree(&tree_id, &objects, None).to_string(),
                     baseline::visualize_tree(&expected.merged_tree, &objects, None).to_string(),
                     "{layout}/{direction}, graph={}: virtual-base ordering and recursion depth match Git",
-                    graph_cache.is_some()
+                    commit_graph.is_some()
                 );
                 let index =
                     outcome

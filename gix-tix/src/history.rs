@@ -8,6 +8,7 @@ use std::{
 use gix::{
     Error, ObjectId, Result,
     bstr::{BStr, BString, ByteSlice, ByteVec},
+    commitgraph::Generation,
     error::{ErrorExt, OptionExt, ResultExt, message},
     objs::commit::ref_iter::Token,
 };
@@ -128,13 +129,13 @@ struct GraphCommit {
     id: ObjectId,
     parents: std::ops::Range<u32>,
     commit_time: gix::date::SecondsSinceUnixEpoch,
-    generation: u32,
+    generation: Generation,
     state: u8,
 }
 
 impl GraphCommit {
-    fn generation(&self) -> Option<gix::revwalk::graph::Generation> {
-        (self.generation != 0).then_some(self.generation)
+    fn generation(&self) -> Option<Generation> {
+        (self.generation != Generation::UNCOMPUTED).then_some(self.generation)
     }
 }
 
@@ -164,16 +165,14 @@ pub(crate) struct HistoryGraph {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct GenThenTime {
-    generation: gix::revwalk::graph::Generation,
+    generation: Generation,
     time: gix::date::SecondsSinceUnixEpoch,
 }
 
 impl From<&GraphCommit> for GenThenTime {
     fn from(commit: &GraphCommit) -> Self {
         GenThenTime {
-            generation: commit
-                .generation()
-                .unwrap_or(gix::commitgraph::GENERATION_NUMBER_INFINITY),
+            generation: commit.generation().unwrap_or(Generation::INFINITY),
             time: commit.commit_time,
         }
     }
@@ -211,7 +210,8 @@ impl HistoryGraph {
                 id: *id,
                 parents: start..end,
                 commit_time: index.as_usize() as i64,
-                generation: index.as_usize() as u32 + 1,
+                // These synthetic commits use their timestamps for queue ordering.
+                generation: Generation::UNCOMPUTED,
                 state: NODE_LOADED,
             };
         }
@@ -248,7 +248,7 @@ impl HistoryGraph {
             id,
             parents: 0..0,
             commit_time: 0,
-            generation: 0,
+            generation: Generation::UNCOMPUTED,
             state: 0,
         });
         self.by_id.insert(id, index);
@@ -493,7 +493,7 @@ impl HistoryGraph {
     fn ensure_commit(
         &mut self,
         repo: &gix::Repository,
-        cache: Option<&gix::commitgraph::Graph>,
+        commit_graph: Option<&gix::commitgraph::Graph>,
         shallow: &HashSet<ObjectId>,
         id: ObjectId,
         buf: &mut Vec<u8>,
@@ -502,7 +502,7 @@ impl HistoryGraph {
         if self.commits[index.as_usize()].state & NODE_LOADED != 0 {
             return Ok(index);
         }
-        let commit = gix::traverse::commit::find(cache, &repo.objects, &id, buf)?;
+        let commit = gix::traverse::commit::find(commit_graph, &repo.objects, &id, buf)?;
         let (mut parents, commit_time, generation) = match commit {
             gix::traverse::commit::Either::CommitRefIter(iter) => {
                 let mut parents = gix::traverse::commit::ParentIds::new();
@@ -520,12 +520,12 @@ impl HistoryGraph {
                 }
                 (parents, commit_time, None)
             }
-            gix::traverse::commit::Either::CachedCommit(commit) => {
-                let cache = cache.expect("cached commits originate from the provided commit-graph");
+            gix::traverse::commit::Either::CommitGraph(commit) => {
+                let commit_graph = commit_graph.expect("the commit came from the commit-graph");
                 let mut parents = gix::traverse::commit::ParentIds::new();
                 for parent in commit.iter_parents() {
                     let parent = parent.or_raise(|| message("could not decode commit-graph parent"))?;
-                    parents.push(cache.id_at(parent).to_owned());
+                    parents.push(commit_graph.id_at(parent).to_owned());
                 }
                 (
                     parents,
@@ -549,7 +549,7 @@ impl HistoryGraph {
         let node = &mut self.commits[index.as_usize()];
         node.parents = start..end;
         node.commit_time = commit_time;
-        node.generation = generation.unwrap_or_default();
+        node.generation = generation.unwrap_or(Generation::UNCOMPUTED);
         node.state |= NODE_LOADED;
         Ok(index)
     }
@@ -558,7 +558,7 @@ impl HistoryGraph {
     fn schedule_cached(
         &mut self,
         repo: &gix::Repository,
-        cache: Option<&gix::commitgraph::Graph>,
+        commit_graph: Option<&gix::commitgraph::Graph>,
         shallow: &HashSet<ObjectId>,
         states: &mut Vec<WalkState>,
         queue: &mut gix::revwalk::PriorityQueue<gix::date::SecondsSinceUnixEpoch, CommitIndex>,
@@ -566,7 +566,7 @@ impl HistoryGraph {
         id: ObjectId,
         flags: u8,
     ) -> Result<()> {
-        let index = self.ensure_commit(repo, cache, shallow, id, buf)?;
+        let index = self.ensure_commit(repo, commit_graph, shallow, id, buf)?;
         states.resize(self.commits.len(), WalkState::default());
         let state = &mut states[index.as_usize()];
         if state.flags & flags != flags {
@@ -793,7 +793,7 @@ impl HistoryGraph {
             .into_iter()
             .flat_map(|commits| commits.iter().copied().collect::<Vec<_>>())
             .collect();
-        let cache = repo.commit_graph_if_enabled()?;
+        let commit_graph = repo.commit_graph_if_enabled()?;
         let local_refs = local_refs_by_target(repo)?;
         let mut tracking = HashMap::new();
         let mut states = vec![WalkState::default(); self.commits.len()];
@@ -802,7 +802,7 @@ impl HistoryGraph {
         for id in refs.view_tips.iter().chain(&refs.hidden_tips).copied() {
             self.schedule_cached(
                 repo,
-                cache.as_ref(),
+                commit_graph.as_ref(),
                 &shallow,
                 &mut states,
                 &mut queue,
@@ -814,7 +814,7 @@ impl HistoryGraph {
         for &id in expand {
             self.schedule_cached(
                 repo,
-                cache.as_ref(),
+                commit_graph.as_ref(),
                 &shallow,
                 &mut states,
                 &mut queue,
@@ -832,7 +832,7 @@ impl HistoryGraph {
             if tracked.iter().any(|reference| reference.upstream.flatten().is_some()) {
                 self.schedule_cached(
                     repo,
-                    cache.as_ref(),
+                    commit_graph.as_ref(),
                     &shallow,
                     &mut states,
                     &mut queue,
@@ -844,7 +844,7 @@ impl HistoryGraph {
             for upstream in tracked.iter().filter_map(|reference| reference.upstream.flatten()) {
                 self.schedule_cached(
                     repo,
-                    cache.as_ref(),
+                    commit_graph.as_ref(),
                     &shallow,
                     &mut states,
                     &mut queue,
@@ -882,7 +882,7 @@ impl HistoryGraph {
                     if tracked.iter().any(|reference| reference.upstream.flatten().is_some()) {
                         self.schedule_cached(
                             repo,
-                            cache.as_ref(),
+                            commit_graph.as_ref(),
                             &shallow,
                             &mut states,
                             &mut queue,
@@ -894,7 +894,7 @@ impl HistoryGraph {
                     for upstream in tracked.iter().filter_map(|reference| reference.upstream.flatten()) {
                         self.schedule_cached(
                             repo,
-                            cache.as_ref(),
+                            commit_graph.as_ref(),
                             &shallow,
                             &mut states,
                             &mut queue,
@@ -961,7 +961,7 @@ impl HistoryGraph {
             for parent in parent_indices {
                 self.schedule_cached(
                     repo,
-                    cache.as_ref(),
+                    commit_graph.as_ref(),
                     &shallow,
                     &mut states,
                     &mut queue,
@@ -1087,7 +1087,7 @@ struct WalkState {
 fn schedule(
     graph: &mut HistoryGraph,
     repo: &gix::Repository,
-    cache: Option<&gix::commitgraph::Graph>,
+    commit_graph: Option<&gix::commitgraph::Graph>,
     states: &mut Vec<Node>,
     queue: &mut gix::revwalk::PriorityQueue<gix::date::SecondsSinceUnixEpoch, CommitIndex>,
     shallow: &HashSet<ObjectId>,
@@ -1095,7 +1095,7 @@ fn schedule(
     id: ObjectId,
     flags: u8,
 ) -> Result<()> {
-    let index = graph.ensure_commit(repo, cache, shallow, id, buf)?;
+    let index = graph.ensure_commit(repo, commit_graph, shallow, id, buf)?;
     states.resize(graph.commits.len(), Node::default());
     let state = &mut states[index.as_usize()];
     if state.flags & flags != flags {
@@ -1108,7 +1108,7 @@ fn schedule(
 fn hidden_frontier(
     graph: &mut HistoryGraph,
     repo: &gix::Repository,
-    cache: Option<&gix::commitgraph::Graph>,
+    commit_graph: Option<&gix::commitgraph::Graph>,
     visible_tips: &[ObjectId],
     hidden_tips: &[ObjectId],
     shallow: &HashSet<ObjectId>,
@@ -1121,7 +1121,7 @@ fn hidden_frontier(
     let mut buf = Vec::new();
     for (tips, flag) in [(visible_tips, VISIBLE), (hidden_tips, HIDDEN)] {
         for &id in tips {
-            let index = graph.ensure_commit(repo, cache, shallow, id, &mut buf)?;
+            let index = graph.ensure_commit(repo, commit_graph, shallow, id, &mut buf)?;
             flags.resize(graph.commits.len(), 0);
             flags[index.as_usize()] |= flag;
             queue.insert(GenThenTime::from(&graph.commits[index.as_usize()]), index);
@@ -1137,7 +1137,7 @@ fn hidden_frontier(
         let parents = graph.known_parents(index).to_vec();
         for parent in parents {
             let parent_id = graph.id(parent);
-            let parent = graph.ensure_commit(repo, cache, shallow, parent_id, &mut buf)?;
+            let parent = graph.ensure_commit(repo, commit_graph, shallow, parent_id, &mut buf)?;
             flags.resize(graph.commits.len(), 0);
             let parent_flags = &mut flags[parent.as_usize()];
             if *parent_flags & propagated != propagated {
@@ -1553,7 +1553,6 @@ fn snapshot_inner(
     let fetch_remote = active_branch
         .as_ref()
         .and_then(|branch| repo.branch_remote_name(branch.shorten(), gix::remote::Direction::Fetch))
-        .map(|name| name.as_bstr().to_owned())
         .or_else(|| repo.remote_default_name(gix::remote::Direction::Fetch));
     let pins = pins
         .into_iter()
@@ -2420,7 +2419,7 @@ mod tests {
         ObjectId::Sha1(bytes)
     }
 
-    fn insert_commit(graph: &mut HistoryGraph, n: u8, parents: &[u8], generation: u32) {
+    fn insert_commit(graph: &mut HistoryGraph, n: u8, parents: &[u8], commit_time: gix::date::SecondsSinceUnixEpoch) {
         let index = graph.intern(id(n)).expect("the small test graph fits in u32");
         let parents: Vec<_> = parents
             .iter()
@@ -2432,8 +2431,9 @@ mod tests {
         graph.commits[index.as_usize()] = GraphCommit {
             id: id(n),
             parents: start..end,
-            commit_time: generation.into(),
-            generation,
+            // Tests set newer timestamps on children to preserve the painting order without a commit-graph.
+            commit_time,
+            generation: Generation::UNCOMPUTED,
             state: NODE_LOADED,
         };
     }
@@ -2480,7 +2480,7 @@ mod tests {
     #[test]
     fn paints_criss_cross_relations_from_cached_parents() {
         let mut graph = HistoryGraph::default();
-        for (n, parents, generation) in [
+        for (n, parents, commit_time) in [
             (1, vec![], 1),
             (2, vec![1], 2),
             (3, vec![1], 2),
@@ -2489,7 +2489,7 @@ mod tests {
             (6, vec![4], 4),
             (7, vec![5], 4),
         ] {
-            insert_commit(&mut graph, n, &parents, generation);
+            insert_commit(&mut graph, n, &parents, commit_time);
         }
 
         assert_eq!(
@@ -2502,8 +2502,8 @@ mod tests {
     #[test]
     fn switches_cached_rev_sets_without_leaking_the_previous_view() {
         let mut graph = HistoryGraph::default();
-        for (n, parents, generation) in [(1, vec![], 1), (2, vec![1], 2), (3, vec![1], 2), (4, vec![2], 3)] {
-            insert_commit(&mut graph, n, &parents, generation);
+        for (n, parents, commit_time) in [(1, vec![], 1), (2, vec![1], 2), (3, vec![1], 2), (4, vec![2], 3)] {
+            insert_commit(&mut graph, n, &parents, commit_time);
         }
 
         graph.switch_view(&[id(4)], &[id(3)]);
@@ -2544,14 +2544,14 @@ mod tests {
     #[test]
     fn marks_visible_views_behind_hidden_branches_at_their_base() {
         let mut graph = HistoryGraph::default();
-        for (n, parents, generation) in [
+        for (n, parents, commit_time) in [
             (1, vec![], 1),
             (2, vec![1], 2),
             (3, vec![1], 2),
             (4, vec![3], 3),
             (5, vec![], 1),
         ] {
-            insert_commit(&mut graph, n, &parents, generation);
+            insert_commit(&mut graph, n, &parents, commit_time);
         }
 
         assert_eq!(

@@ -6,12 +6,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use gix_error::{ResultExt, bail};
+use gix_error::{OptionExt, ResultExt, bail, message};
+use gix_ref::{Category, FullName};
 pub use gix_submodule::*;
 
 use crate::{
     Repository, Result, Submodule,
-    bstr::{BStr, BString},
+    bstr::{BStr, BString, ByteVec},
     is_dir_to_mode,
     open::RelatedRepositoryKind,
     worktree::IndexPersistedOrInMemory,
@@ -142,9 +143,45 @@ impl Submodule<'_> {
 
     /// Return the `branch` field from this submodule's configuration, if present, or `None`.
     ///
-    /// This method takes into consideration submodule configuration overrides.
+    /// This method takes into consideration submodule configuration overrides. Use
+    /// [`resolved_branch()`](Self::resolved_branch) to resolve a configured `.` and apply the default.
     pub fn branch(&self) -> Result<Option<config::Branch>> {
         self.state.modules.branch(self.name())
+    }
+
+    /// Return the resolved branch name on the submodule's remote, honoring configuration overrides.
+    ///
+    /// For example, `main` becomes `refs/heads/main`, and an unset branch returns `HEAD` for the remote's default branch.
+    /// A configured `.` inherits the superproject's current branch, including an unborn branch, and requires a symbolic
+    /// `HEAD` pointing under `refs/heads/`.
+    ///
+    /// Use [`FullName::shorten()`] for the short name (for example, to build the remote-tracking ref for
+    /// `git submodule update --remote`).
+    pub fn resolved_branch(&self) -> Result<FullName> {
+        match self.branch()?.unwrap_or_default() {
+            config::Branch::Name(mut name) => {
+                if name != "HEAD" {
+                    name.insert_str(0, Category::LocalBranch.prefix());
+                }
+                FullName::try_from(name).or_raise(|| message!("Invalid branch name for submodule '{}'", self.name()))
+            }
+            config::Branch::CurrentInSuperproject => {
+                let head = self.state.repo().head()?;
+                let reference = head.referent_name().ok_or_raise(|| {
+                    message!(
+                        "Cannot inherit the branch for submodule '{}' from a detached HEAD in the superproject",
+                        self.name()
+                    )
+                })?;
+                if reference.category() != Some(Category::LocalBranch) {
+                    bail!(message!(
+                        "Cannot inherit the branch for submodule '{}' from superproject HEAD '{reference}' outside refs/heads/",
+                        self.name()
+                    ));
+                }
+                Ok(reference.to_owned())
+            }
+        }
     }
 
     /// Return the `fetchRecurseSubmodules` field from this submodule's configuration, or retrieve the value from `fetch.recurseSubmodules` if unset.

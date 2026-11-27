@@ -1,4 +1,4 @@
-use gix_commitgraph::Parent;
+use gix_commitgraph::{Generation, Parent};
 use gix_error::{Error, ErrorExt, Result, corruption, message};
 use gix_hash::oid;
 use gix_revwalk::{PriorityQueue, graph::IdMap};
@@ -9,7 +9,7 @@ use crate::commit::{
     topo::{Sorting, WalkFlags},
 };
 
-pub(in crate::commit) type GenAndCommitTime = (u32, i64);
+pub(in crate::commit) type GenAndCommitTime = (Generation, i64);
 
 fn missing_indegree() -> Error {
     message("Indegree information is missing").corrupted_error()
@@ -63,7 +63,7 @@ where
     Find: gix_object::Find,
     Predicate: FnMut(&oid) -> bool,
 {
-    pub(super) fn compute_indegrees_to_depth(&mut self, gen_cutoff: u32) -> Result {
+    pub(super) fn compute_indegrees_to_depth(&mut self, gen_cutoff: Generation) -> Result {
         while let Some(((generation, _), _)) = self.indegree_queue.peek() {
             if *generation >= gen_cutoff {
                 self.indegree_walk_step()?;
@@ -97,7 +97,7 @@ where
         Ok(())
     }
 
-    pub(super) fn explore_to_depth(&mut self, gen_cutoff: u32) -> Result {
+    pub(super) fn explore_to_depth(&mut self, gen_cutoff: Generation) -> Result {
         while let Some(((generation, _), _)) = self.explore_queue.peek() {
             if *generation >= gen_cutoff {
                 self.explore_walk_step()?;
@@ -158,7 +158,7 @@ where
                 Info {
                     id: pid,
                     parent_ids,
-                    generation: (parent_gen != gix_commitgraph::GENERATION_NUMBER_INFINITY).then_some(parent_gen),
+                    generation: (parent_gen != Generation::INFINITY).then_some(parent_gen),
                     commit_time: Some(parent_commit_time),
                 },
             );
@@ -289,7 +289,7 @@ pub(super) fn is_selected(states: &mut IdMap<WalkFlags>, predicate: &mut impl Fn
 }
 
 fn collect_parents<Find>(
-    cache: &mut Option<gix_commitgraph::Graph>,
+    commit_graph: &mut Option<gix_commitgraph::Graph>,
     f: Find,
     id: &oid,
     first_only: bool,
@@ -300,7 +300,7 @@ where
     Find: gix_object::Find,
 {
     let mut parents = SmallVec::<[Parent; 1]>::new();
-    match find(cache.as_ref(), &f, id, buf)? {
+    match find(commit_graph.as_ref(), &f, id, buf)? {
         Either::CommitRefIter(c) => {
             for token in c {
                 use gix_object::commit::ref_iter::Token as T;
@@ -310,7 +310,7 @@ where
                         parents.push(Parent {
                             commit_id: id,
                             // Dummy numbers to be filled in after parsing the parent IDs.
-                            generation: 0,
+                            generation: Generation::UNCOMPUTED,
                             commit_time: 0,
                         });
                         if first_only {
@@ -324,23 +324,22 @@ where
                 }
             }
             parents.retain(|parent| predicate(&parent.commit_id));
-            // Need to check the cache again. That a commit is not in the cache
-            // doesn't mean a parent is not.
+            // Even if this commit is missing from the commit-graph, its parents may be present.
             for parent in parents.iter_mut() {
-                let commit = find(cache.as_ref(), &f, &parent.commit_id, buf)?;
+                let commit = find(commit_graph.as_ref(), &f, &parent.commit_id, buf)?;
                 (parent.generation, parent.commit_time) = gen_and_commit_time(commit)?;
             }
         }
-        Either::CachedCommit(c) => {
+        Either::CommitGraph(c) => {
             for pos in c.iter_parents() {
                 let Ok(pos) = pos else {
-                    // drop corrupt cache and use ODB from now on.
-                    *cache = None;
-                    return collect_parents(cache, f, id, first_only, buf, predicate);
+                    // discard the corrupt commit-graph and use the object database from now on.
+                    *commit_graph = None;
+                    return collect_parents(commit_graph, f, id, first_only, buf, predicate);
                 };
-                let parent_commit = cache
+                let parent_commit = commit_graph
                     .as_ref()
-                    .expect("cache exists if CachedCommit was returned")
+                    .expect("the parent iterator came from the commit-graph")
                     .commit_at(pos);
                 if predicate(parent_commit.id()) {
                     parents.push(Parent {
@@ -359,14 +358,14 @@ where
 }
 
 fn collect_parent_ids(
-    cache: &mut Option<gix_commitgraph::Graph>,
+    commit_graph: &mut Option<gix_commitgraph::Graph>,
     find_object: impl gix_object::Find,
     id: &oid,
     first_only: bool,
     buf: &mut Vec<u8>,
 ) -> Result<ParentIds> {
     let mut parents = ParentIds::new();
-    match find(cache.as_ref(), &find_object, id, buf)? {
+    match find(commit_graph.as_ref(), &find_object, id, buf)? {
         Either::CommitRefIter(commit) => {
             for token in commit {
                 match token {
@@ -380,16 +379,16 @@ fn collect_parent_ids(
                 }
             }
         }
-        Either::CachedCommit(commit) => {
+        Either::CommitGraph(commit) => {
             for pos in commit.iter_parents() {
                 let Ok(pos) = pos else {
-                    *cache = None;
-                    return collect_parent_ids(cache, find_object, id, first_only, buf);
+                    *commit_graph = None;
+                    return collect_parent_ids(commit_graph, find_object, id, first_only, buf);
                 };
                 parents.push(
-                    cache
+                    commit_graph
                         .as_ref()
-                        .expect("cache exists for a cached commit")
+                        .expect("the parent iterator came from the commit-graph")
                         .commit_at(pos)
                         .id()
                         .into(),
@@ -423,8 +422,8 @@ pub(super) fn gen_and_commit_time(c: Either<'_, '_>) -> Result<GenAndCommitTime>
                     }
                 }
             }
-            Ok((gix_commitgraph::GENERATION_NUMBER_INFINITY, commit_time))
+            Ok((Generation::INFINITY, commit_time))
         }
-        Either::CachedCommit(c) => Ok((c.generation(), c.committer_timestamp() as i64)),
+        Either::CommitGraph(c) => Ok((c.generation(), c.committer_timestamp() as i64)),
     }
 }

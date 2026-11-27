@@ -2,7 +2,7 @@
 set -eu -o pipefail
 export GIT_AUTHOR_DATE='1112911993 -0700' GIT_COMMITTER_DATE='1112911993 -0700'
 
-# A cached commit-graph must not restore parents hidden by a shallow boundary
+# The on-disk commit-graph must not restore parents hidden by a shallow boundary
 # or replacement. Linked repositories exercise the existing discovery helpers
 # both at a checkout's .git file and at a superproject's private modules path.
 git init history

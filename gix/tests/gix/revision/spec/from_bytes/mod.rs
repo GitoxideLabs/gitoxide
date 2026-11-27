@@ -115,35 +115,88 @@ mod sibling_branch {
 
     #[test]
     fn push_without_branch_remote_matches_git() -> TestResult {
-        push_tracking_matches_git("unconfigured")
+        push_tracking_matches_git("unconfigured", PUSH_MODES)
     }
 
     #[test]
     fn push_with_separate_upstream_remote_matches_git() -> TestResult {
-        push_tracking_matches_git("triangular")
+        push_tracking_matches_git("triangular", PUSH_MODES)
     }
 
-    fn push_tracking_matches_git(setup: &str) -> TestResult {
+    #[test]
+    fn push_to_mirror_matches_git() -> TestResult {
+        push_tracking_matches_git("mirror", &["upstream", "nothing", "refspec", "no-fetch"])
+    }
+
+    const PUSH_MODES: &[&str] = &["upstream", "current", "matching", "simple", "refspec"];
+
+    fn push_tracking_matches_git(setup: &str, modes: &[&str]) -> TestResult {
+        use gix::{bstr::BStr, sec::Trust};
+
         let fixture = gix_testtools::scripted_fixture_read_only("make_push_tracking_revspecs.sh")?;
-        for mode in ["upstream", "current", "matching", "simple", "refspec"] {
-            let repo = gix::open_opts(fixture.join(format!("{setup}-{mode}")), crate::restricted())?;
-            let expected = std::fs::read_to_string(repo.workdir().expect("non-bare fixture").join("tracking-ref"))?;
+        for mode in modes {
+            let case = format!("{setup}-{mode}");
+            let path = fixture.join(&case);
+            let expected = std::fs::read_to_string(path.join("tracking-ref"))?;
             let expected = expected.trim_end();
-            for branch in ["", "HEAD", "main"] {
-                let parsed = parse_spec(format!("{branch}@{{push}}"), &repo);
+            let expected = (!expected.is_empty()).then(|| BStr::new(expected));
+            let branch = "refs/heads/main".try_into()?;
+            let reduced = gix::open_opts(&path, crate::restricted().with_enforced_trust(Trust::Reduced))?;
+            assert_eq!(
+                reduced
+                    .branch_remote_tracking_ref_name(branch, gix::remote::Direction::Push)
+                    .transpose()?,
+                None,
+                "{case}: the default filter rejects reduced-trust push tracking configuration"
+            );
+            for trust in [Trust::Full, Trust::Reduced] {
+                let mut options = crate::restricted().with_enforced_trust(trust);
+                if trust == Trust::Reduced {
+                    options = options.filter_config_section(|meta| {
+                        meta.source == gix::config::Source::Local || gix::config::section::is_trusted(meta)
+                    });
+                }
+                let repo = gix::open_opts(&path, options)?;
+                for branch in ["", "HEAD", "main"] {
+                    let spec = format!("{branch}@{{push}}");
+                    let parsed = parse_spec(&spec, &repo);
+                    assert_eq!(
+                        parsed.as_ref().ok().map(|spec| spec
+                            .first_reference()
+                            .expect("a successful push selector resolves a tracking reference")
+                            .name()
+                            .as_bstr()),
+                        expected,
+                        "{case} ({trust:?}): {spec} matches Git's symbolic result"
+                    );
+                    for op in ["p", "P", "PuSh"] {
+                        let spec = format!("{branch}@{{{op}}}");
+                        let variant = repo.rev_parse(spec.as_str());
+                        assert_eq!(
+                            variant.as_deref().ok(),
+                            parsed.as_deref().ok(),
+                            "{case} ({trust:?}): {spec} resolves the same commit as @{{push}}"
+                        );
+                        assert_eq!(
+                            variant
+                                .as_ref()
+                                .ok()
+                                .and_then(|spec| spec.first_reference())
+                                .map(|reference| reference.name().as_bstr()),
+                            expected,
+                            "{case} ({trust:?}): {spec} resolves the same tracking reference as @{{push}}"
+                        );
+                    }
+                }
                 assert_eq!(
-                    parsed.is_ok(),
-                    !expected.is_empty(),
-                    "{setup}-{mode}: tracking availability"
+                    repo.branch_remote_tracking_ref_name(branch, gix::remote::Direction::Push)
+                        .transpose()?
+                        .as_ref()
+                        .map(gix::refs::FullName::as_bstr),
+                    expected,
+                    "{case} ({trust:?}): the public tracking API matches Git's symbolic result"
                 );
             }
-            assert_eq!(
-                repo.branch_remote_tracking_ref_name("refs/heads/main".try_into()?, gix::remote::Direction::Push)
-                    .transpose()?
-                    .map(|name| name.to_string()),
-                (!expected.is_empty()).then(|| expected.to_owned()),
-                "{setup}-{mode}: the public tracking API matches Git's symbolic result"
-            );
         }
         Ok(())
     }

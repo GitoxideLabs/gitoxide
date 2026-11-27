@@ -18,4 +18,4 @@ mod types;
 pub use types::{BlameEntry, BlamePathEntry, BlameRanges, Options, Outcome, Start, Statistics};
 
 mod file;
-pub use file::function::file;
+pub use file::function::{CommitMetadata, file};

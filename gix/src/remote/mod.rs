@@ -1,6 +1,6 @@
-use std::{borrow::Cow, collections::BTreeSet};
+use std::collections::BTreeSet;
 
-use crate::bstr::{BStr, BString};
+use crate::bstr::BString;
 
 /// The direction of an operation carried out (or to be carried out) through a remote.
 #[derive(Debug, Eq, PartialEq, Copy, Clone, Hash)]
@@ -21,22 +21,13 @@ impl Direction {
     }
 }
 
-/// The name of a remote, either interpreted as symbol like `origin` or as url as returned by [`Remote::name()`][crate::Remote::name()].
-#[derive(Debug, PartialEq, Eq, Clone, Ord, PartialOrd, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum Name<'repo> {
-    /// A symbolic name, like `origin`.
-    /// Note that it has not necessarily been validated yet.
-    Symbol(Cow<'repo, str>),
-    /// A url pointing to the remote host directly.
-    Url(Cow<'repo, BStr>),
-}
+pub(crate) use name::remote_tracking_ref;
+pub use name::{ConfiguredName, Name};
 
 /// A type-definition for a sorted list of unvalidated remote names - they have been read straight from the configuration.
 pub type Names = BTreeSet<BString>;
 
-///
-pub mod name;
+mod name;
 
 mod build;
 

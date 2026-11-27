@@ -174,7 +174,11 @@ impl Transaction<'_, '_> {
                 if (is_effective && !direct_to_packed_refs) || is_symbolic {
                     lock.with_mut(|file| match new {
                         Target::Object(oid) => writeln!(file, "{oid}"),
-                        Target::Symbolic(name) => writeln!(file, "ref: {}", name.0),
+                        Target::Symbolic(name) => {
+                            file.write_all(b"ref: ")?;
+                            file.write_all(name.as_bstr())?;
+                            file.write_all(b"\n")
+                        }
                     })
                     .or_raise(|| message("Could not write loose reference"))?;
                     Some(lock.close().or_raise(|| message("Could not close reference lock"))?)

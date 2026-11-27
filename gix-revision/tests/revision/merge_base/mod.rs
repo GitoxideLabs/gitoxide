@@ -1,10 +1,11 @@
 use gix_error::TestResult;
-use gix_revision::merge_base;
+use gix_revision::{graph::Generation, merge_base};
 
 use crate::odb_at;
 
 mod ahead_behind_counts;
 mod baseline;
+mod contains;
 mod is_ancestor;
 mod octopus;
 
@@ -60,8 +61,8 @@ fn validate() -> TestResult {
     let odb = odb_at(root.join(".git/objects"))?;
     for baseline_path in baseline::expectation_paths(&root)? {
         count += 1;
-        for use_commitgraph in [false, true] {
-            let cache = use_commitgraph
+        for use_commit_graph in [false, true] {
+            let commit_graph = use_commit_graph
                 .then(|| {
                     gix_commitgraph::Graph::from_info_dir(
                         &odb.store_ref().path().join("info"),
@@ -70,7 +71,7 @@ fn validate() -> TestResult {
                 })
                 .transpose()?;
             for expected in baseline::parse_expectations(&baseline_path)? {
-                let mut graph = gix_revision::Graph::new(&odb, cache.as_ref());
+                let mut graph = gix_revision::Graph::new(&odb, commit_graph.as_ref());
                 let actual = merge_base(expected.first, &expected.others, &mut graph)?;
                 assert_eq!(
                     actual,
@@ -80,7 +81,7 @@ fn validate() -> TestResult {
                     input = expected.plain_input
                 );
             }
-            let mut graph = gix_revision::Graph::new(&odb, cache.as_ref());
+            let mut graph = gix_revision::Graph::new(&odb, commit_graph.as_ref());
             for expected in baseline::parse_expectations(&baseline_path)? {
                 let actual = merge_base(expected.first, &expected.others, &mut graph)?;
                 assert_eq!(
@@ -107,8 +108,8 @@ fn exhausted_side_skips_unrelated_history() -> TestResult {
 
     // PL merges the C and L chains. Once C2 is found, the rest of L cannot
     // provide another merge base, even though its queued commits are not stale.
-    for use_commitgraph in [false, true] {
-        let cache = use_commitgraph
+    for use_commit_graph in [false, true] {
+        let commit_graph = use_commit_graph
             .then(|| {
                 gix_commitgraph::Graph::from_info_dir(
                     &odb.store_ref().path().join("info"),
@@ -117,7 +118,7 @@ fn exhausted_side_skips_unrelated_history() -> TestResult {
             })
             .transpose()?;
         for (first_commit_id, other_commit_id) in [(tip_commit_id, base_commit_id), (base_commit_id, tip_commit_id)] {
-            let mut graph = gix_revision::Graph::new(&odb, cache.as_ref());
+            let mut graph = gix_revision::Graph::new(&odb, commit_graph.as_ref());
             for others in [
                 &[other_commit_id][..],
                 &[other_commit_id, other_commit_id][..],
@@ -130,7 +131,7 @@ fn exhausted_side_skips_unrelated_history() -> TestResult {
                 );
                 assert_eq!(
                     graph.contains(&unrelated_commit_id),
-                    !use_commitgraph,
+                    !use_commit_graph,
                     "only reliable generation ordering lets the walk skip the unrelated L0 ancestor"
                 );
             }
@@ -149,7 +150,7 @@ fn unreliable_generations_do_not_allow_side_exhaustion() -> TestResult {
     let first_commit_id = tag_commit_id(&root, "G")?;
     let other_commit_id = tag_commit_id(&root, "H")?;
     let base_commit_id = tag_commit_id(&root, "B")?;
-    for generation in [None, Some(0), Some(gix_commitgraph::GENERATION_NUMBER_MAX)] {
+    for generation in [None, Some(Generation::UNCOMPUTED), Some(Generation::MAX)] {
         let mut graph = gix_revision::Graph::new(&odb, None);
         for name in ["A", "B", "C", "D", "E", "F", "G", "H"] {
             graph.get_or_insert_full_commit(tag_commit_id(&root, name)?, |commit| {

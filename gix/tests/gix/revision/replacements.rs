@@ -41,39 +41,42 @@ fn replacements_match_git_with_default_opening_and_raw_commit_graphs() -> TestRe
             assert_eq!(history(&repo)?, connected, "default opening agrees with Git");
             assert!(
                 repo.commit_graph_if_enabled()?.is_none(),
-                "raw graphs cannot override replacements"
+                "raw graphs are not opened automatically with replacements"
             );
-            for use_graph in [false, true] {
-                for sorting in [Sorting::BreadthFirst, Sorting::TopoOrder] {
+            let tip_commit_id = repo.head_id()?;
+            for sorting in [Sorting::BreadthFirst, Sorting::TopoOrder, Sorting::DateOrder] {
+                let walk = || repo.rev_walk([tip_commit_id]).sorting(sorting);
+                assert_eq!(
+                    ids(walk().use_commit_graph(true).all()?)?,
+                    connected,
+                    "enabling graph use never opens a raw graph automatically with replacements"
+                );
+                for (override_graph, expected) in [(None, &original), (Some(false), &connected)] {
                     assert_eq!(
-                        ids(repo
-                            .rev_walk([repo.head_id()?])
-                            .sorting(sorting)
-                            .use_commit_graph(use_graph)
+                        ids(walk()
+                            .with_commit_graph(Some(repo.commit_graph()?))
+                            .use_commit_graph(override_graph)
                             .all()?)?,
-                        connected,
-                        "forcing graph use never reads stale parents in either sorting mode"
+                        *expected,
+                        "a supplied graph takes precedence over replacements unless disabled ({override_graph:?})"
                     );
                 }
             }
-            for sorting in [Sorting::BreadthFirst, Sorting::TopoOrder] {
-                assert_eq!(
-                    ids(repo
-                        .rev_walk([repo.head_id()?])
-                        .sorting(sorting)
-                        .with_commit_graph(Some(repo.commit_graph()?))
-                        .all()?)?,
-                    connected,
-                    "an explicitly supplied raw graph cannot override replacements in either sorting mode"
-                );
-            }
-            let cache = repo.commit_graph()?;
-            let mut graph = repo.revision_graph(Some(&cache));
+            let mut graph = repo
+                .revision_graph_with_commit_graph(None)?
+                .with_owned_commit_graph(Some(repo.commit_graph()?));
             let archive_id = repo.rev_parse_single("archive")?;
             assert_eq!(
-                repo.merge_base_with_graph(repo.head_id()?, archive_id, &mut graph)?,
-                Some(archive_id),
-                "lower-level repository graphs also follow replacements"
+                repo.merge_base_with_graph(tip_commit_id, archive_id, &mut graph)?,
+                None,
+                "lower-level repository graphs also trust a supplied graph over replacements"
+            );
+            let walk = || repo.rev_walk([tip_commit_id]).with_hidden([archive_id]);
+            let mut cache = repo.rev_walk_cache();
+            assert_eq!(
+                ids(walk().with_cache(&mut cache).all()?)?,
+                ids(walk().all()?)?,
+                "hidden walks with a cache follow replacement ancestry"
             );
         }
 
@@ -101,7 +104,7 @@ fn replacements_match_git_with_default_opening_and_raw_commit_graphs() -> TestRe
         );
         assert!(
             raw.commit_graph_if_enabled()?.is_some(),
-            "raw handles can use the cache"
+            "raw handles can use the commit-graph"
         );
         for value in ["1", "0", "", "false"] {
             let _environment = gix_testtools::Env::new().set("GIT_NO_REPLACE_OBJECTS", value);

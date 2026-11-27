@@ -51,6 +51,37 @@ fn yes() -> TestResult {
     Ok(())
 }
 
+#[test]
+#[parallel]
+fn shallow_records_match_git() -> TestResult {
+    for name in ["trailing-space", "trailing-hex", "trailing-data"] {
+        let repo = named_subrepo_opts("make_shallow_repo.sh", name, crate::restricted())?;
+        let expected = std::fs::read_to_string(repo.git_dir().join("rev-list.baseline"))?
+            .lines()
+            .map(str::parse::<gix::ObjectId>)
+            .collect::<gix::Result<Vec<_>>>()?;
+        assert_eq!(expected.len(), 2, "{name}: Git stops at the shallow parent");
+        let actual = repo
+            .rev_walk([repo.head_id()?])
+            .all()?
+            .map(|info| info.map(|info| info.id))
+            .collect::<gix::Result<Vec<_>>>()?;
+        assert_eq!(
+            actual, expected,
+            "{name}: the revision walk stops at the same boundary as Git"
+        );
+    }
+
+    for name in ["short-id", "leading-space", "oversized-record"] {
+        let repo = named_subrepo_opts("make_shallow_repo.sh", name, crate::restricted())?;
+        assert!(
+            repo.shallow_commits().is_err(),
+            "{name}: Git also rejects the shallow record"
+        );
+    }
+    Ok(())
+}
+
 mod traverse {
     use gix_testtools::TestResult;
     use gix_traverse::commit::simple::CommitTimeOrder;

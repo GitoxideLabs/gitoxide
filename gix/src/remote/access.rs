@@ -12,8 +12,14 @@ use crate::{
 
 /// Access
 impl<'repo> Remote<'repo> {
-    /// Return the name of this remote or `None` if it wasn't persisted to disk yet.
-    pub fn name(&self) -> Option<&remote::Name<'static>> {
+    /// Return the [symbolic name](remote::Name), or `None` if this remote is anonymous or its
+    /// [configured name](Self::configured_name) is not symbolic.
+    pub fn name(&self) -> Option<&remote::Name> {
+        self.configured_name().and_then(remote::ConfiguredName::as_name)
+    }
+
+    /// Return the exact `[remote "…"]` subsection name, or `None` for anonymous remotes.
+    pub fn configured_name(&self) -> Option<&remote::ConfiguredName> {
         self.name.as_ref()
     }
 
@@ -44,7 +50,7 @@ impl<'repo> Remote<'repo> {
     /// map this remote-tracking branch back to the branch on the remote, and it's an error if they map
     /// more than one remote reference to it.
     ///
-    /// `None` is returned if this remote has no name, if `refs/remotes/<name>/HEAD` doesn't exist or isn't symbolic,
+    /// `None` is returned if this remote has no symbolic name, if `refs/remotes/<name>/HEAD` doesn't exist or isn't symbolic,
     /// or if no fetch refspec maps a remote reference to its target. The source must identify a branch in `refs/heads/`
     /// (also accepting exact names like `heads/main`); sources like `HEAD`, object IDs, tags, or unqualified names like
     /// `main` return `None` as their branch cannot be determined offline.
@@ -54,16 +60,10 @@ impl<'repo> Remote<'repo> {
     /// for its current `HEAD`.
     #[doc(alias = "git2")]
     pub fn default_branch(&self) -> Result<Option<FullName>> {
-        let Some(name) = self.name() else {
+        let Some(name) = self.name().map(remote::Name::as_bstr) else {
             return Ok(None);
         };
-        let mut head_name = BString::from("refs/remotes/");
-        head_name.push_str(name.as_bstr());
-        head_name.push_str("/HEAD");
-        // Names that can't be part of a reference name can't have remote-tracking branches either.
-        let Ok(head_name) = FullName::try_from(head_name) else {
-            return Ok(None);
-        };
+        let head_name = FullName::try_from(remote::remote_tracking_ref(name, b"HEAD")).or_error()?;
         let Some(head) = self.repo.try_find_reference(head_name.as_bstr())? else {
             return Ok(None);
         };
@@ -172,8 +172,7 @@ impl<'repo> Remote<'repo> {
 /// Access
 #[cfg(any(feature = "blocking-network-client", feature = "async-network-client"))]
 impl RemoteDetached {
-    /// Return the name of this remote or `None` if it wasn't persisted to disk yet.
-    pub(crate) fn name(&self) -> Option<&remote::Name<'static>> {
+    pub(crate) fn configured_name(&self) -> Option<&remote::ConfiguredName> {
         self.name.as_ref()
     }
 
@@ -262,6 +261,7 @@ impl From<Remote<'_>> for RemoteDetached {
         Remote {
             name,
             urls,
+            fetch_url_from_subsection: _,
             url_aliases,
             url_push_aliases: _,
             fetch_specs,

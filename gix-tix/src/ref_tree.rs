@@ -1508,7 +1508,9 @@ pub(crate) fn resolve_remote_deletions(
     for tracking in tracking_references {
         match repository.upstream_branch_and_remote_for_tracking_branch(tracking.as_ref()) {
             Ok(Some((upstream, remote))) => {
-                let Some(name) = remote.name() else { continue };
+                let Some(name) = remote.name() else {
+                    continue;
+                };
                 groups.entry(name.as_bstr().to_owned()).or_default().push(upstream);
             }
             Ok(None) => {}

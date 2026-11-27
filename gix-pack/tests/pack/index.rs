@@ -216,6 +216,11 @@ mod version {
                     pack_version,
                 )?;
 
+                assert_eq!(
+                    outcome.pack_size,
+                    fs::metadata(fixture_path(data_path))?.len(),
+                    "the pack size includes the header and trailer"
+                );
                 let expected = fs::read(fixture_path(index_path))?;
                 let end_of_header = 4 * 2;
                 assert_eq!(&actual[..end_of_header], &expected[..end_of_header], "header");

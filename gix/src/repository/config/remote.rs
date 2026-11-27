@@ -6,8 +6,9 @@ use crate::{
 
 /// Query configuration related to remotes.
 impl crate::Repository {
-    /// Returns the unique symbolic names of remotes that we deem
-    /// [trustworthy][crate::open::Options::filter_config_section()], in ascending bytewise lexicographic order.
+    /// Return the unique subsection names of [trusted](crate::open::Options::filter_config_section())
+    /// `[remote "…"]` sections, in ascending bytewise lexicographic order.
+    /// These are config keys, not necessarily [symbolic names](remote::Name).
     ///
     /// # Examples
     ///
@@ -21,12 +22,12 @@ impl crate::Repository {
     /// # Ok(()) }
     /// ```
     pub fn remote_names(&self) -> remote::Names {
+        let filter = self.filter_config_section();
         self.config
             .resolved
             .sections_by_name(Remote.name())
             .map(|it| {
-                let filter = self.filter_config_section();
-                it.filter(move |s| filter(s.meta()))
+                it.filter(|s| filter(s.meta()))
                     .filter_map(|section| section.header().subsection_name().map(ToOwned::to_owned))
                     .collect()
             })
@@ -66,7 +67,7 @@ impl crate::Repository {
             .then(|| {
                 self.config
                     .resolved
-                    .string_filter(Remote::PUSH_DEFAULT, &mut self.filter_config_section())
+                    .string_filter(Remote::PUSH_DEFAULT, self.filter_config_section())
             })
             .flatten();
         name.or_else(|| {

@@ -96,6 +96,7 @@ impl Remote<'_> {
 
     fn url_inner(mut self, url: gix_url::Url, should_rewrite_urls: bool) -> Result<Self> {
         self.urls = vec![url];
+        self.fetch_url_from_subsection = false;
 
         self.url_aliases = if should_rewrite_urls {
             remote::init::rewrite_url_aliases(&self.repo.config, &self.urls, remote::Direction::Fetch)

@@ -115,7 +115,7 @@ mod into_remote {
             None
         );
         assert_eq!(
-            repo.find_fetch_remote(None)?.name().expect("present").as_ref(),
+            repo.find_fetch_remote(None)?.name().expect("present"),
             "origin",
             "we can fallback to the only available remote"
         );
@@ -130,7 +130,7 @@ mod into_remote {
             None
         );
         assert_eq!(
-            repo.find_fetch_remote(None)?.name().expect("present").as_ref(),
+            repo.find_fetch_remote(None)?.name().expect("present"),
             "origin",
             "we can fallback to the only available remote"
         );

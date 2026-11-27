@@ -176,7 +176,7 @@ fn filtered_commit_does_not_block_ancestors_reachable_from_another_commit() -> g
         .sorting(Sorting::BreadthFirst)?
         .parents(Parents::All)
         .hide([])?
-        .commit_graph(graph)
+        .with_commit_graph(graph)
         .map(|res| res.map(|info| info.id))
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
@@ -214,7 +214,7 @@ fn predicate_only_called_once_even_if_fork_point() -> gix_testtools::TestResult 
     .sorting(Sorting::BreadthFirst)?
     .parents(Parents::All)
     .hide([])?
-    .commit_graph(graph)
+    .with_commit_graph(graph)
     .map(|res| res.map(|info| info.id))
     .collect::<std::result::Result<Vec<_>, _>>()?;
 

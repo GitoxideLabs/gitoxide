@@ -259,7 +259,6 @@ fn without_commit_graph_still_hides_single_visible_tip_correctly() -> gix_testto
     let result: Vec<_> = Simple::new([tip_c2], &odb)
         .sorting(Sorting::BreadthFirst)?
         .parents(Parents::All)
-        .commit_graph(None)
         .hide([hidden_c5])?
         .map(|res| res.map(|info| info.id))
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -289,7 +288,6 @@ fn commit_graph_reduces_odb_lookups_when_hidden_tips_cover_visible_tips() -> gix
     )
     .sorting(Sorting::BreadthFirst)?
     .parents(Parents::All)
-    .commit_graph(None)
     .hide([hidden_c5])?
     .map(|res| res.map(|info| info.id))
     .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -303,7 +301,7 @@ fn commit_graph_reduces_odb_lookups_when_hidden_tips_cover_visible_tips() -> gix
     )
     .sorting(Sorting::BreadthFirst)?
     .parents(Parents::All)
-    .commit_graph(commit_graph(odb.store_ref()))
+    .with_commit_graph(commit_graph(odb.store_ref()))
     .hide([hidden_c5])?
     .map(|res| res.map(|info| info.id))
     .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -332,19 +330,20 @@ fn hide_and_commit_graph_call_order_do_not_matter() -> gix_testtools::TestResult
         hex_to_id("48e8dac19508f4238f06c8de2b10301ce64a641c"),
         hex_to_id("66a309480201c4157b0eae86da69f2d606aadbe7"),
     ];
+    let graph = commit_graph(odb.store_ref());
 
     let hide_then_graph: Vec<_> = Simple::new([tip_merge], &odb)
         .sorting(Sorting::BreadthFirst)?
         .parents(Parents::All)
         .hide(hidden_branches)?
-        .commit_graph(commit_graph(odb.store_ref()))
+        .with_commit_graph(graph.as_ref())
         .map(|res| res.map(|info| info.id))
         .collect::<std::result::Result<Vec<_>, _>>()?;
 
     let graph_then_hide: Vec<_> = Simple::new([tip_merge], &odb)
         .sorting(Sorting::BreadthFirst)?
         .parents(Parents::All)
-        .commit_graph(commit_graph(odb.store_ref()))
+        .with_commit_graph(graph)
         .hide(hidden_branches)?
         .map(|res| res.map(|info| info.id))
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -366,7 +365,6 @@ fn short_visible_range_does_not_walk_shared_history_without_commit_graph() -> gi
             lookups: Rc::clone(&lookups),
         },
     )
-    .commit_graph(None)
     .hide([commits["shared-63"]])?
     .map(|item| item.map(|info| info.id))
     .collect::<gix_error::Result<Vec<_>>>()?;
@@ -400,7 +398,7 @@ fn merged_visible_range_stops_near_hidden_boundaries() -> gix_testtools::TestRes
                     )
                     .sorting(sorting)?
                     .parents(parents)
-                    .commit_graph(graph)
+                    .with_commit_graph(graph)
                     .hide([commits["hidden"]])?
                     .map(|item| item.map(|info| info.id))
                     .collect::<gix_error::Result<Vec<_>>>()?;
@@ -533,7 +531,11 @@ fn uncomputed_generations_in_the_commit_graph_match_git() -> gix_testtools::Test
         .commit_by_id(commits["hidden"])
         .expect("the commit-graph contains the hidden tip")
         .generation();
-    assert_eq!(hidden_generation, 0, "the hidden tip has a legacy generation");
+    assert_eq!(
+        hidden_generation,
+        gix_commitgraph::Generation::UNCOMPUTED,
+        "the hidden tip has a legacy generation"
+    );
 
     // The legacy generation is seen on the hidden tip itself, or on the parent of one.
     for hidden in ["hidden", "hidden-child"] {
@@ -543,7 +545,7 @@ fn uncomputed_generations_in_the_commit_graph_match_git() -> gix_testtools::Test
                 let with_graph = graph.is_some();
                 let actual = Simple::new([commits["visible"]], &odb)
                     .sorting(sorting)?
-                    .commit_graph(graph)
+                    .with_commit_graph(graph)
                     .hide([commits[hidden], commits["other"]])?
                     .map(|item| item.map(|info| info.id))
                     .collect::<gix_error::Result<Vec<_>>>()?;
@@ -575,12 +577,21 @@ fn unseen_uncomputed_generation_in_a_split_graph_matches_git() -> gix_testtools:
         !graph.generation_numbers_available(),
         "an uncomputed intermediate layer prevents generation-ordered stopping"
     );
+    let root_generation = graph
+        .commit_by_id(commits["A"])
+        .expect("A is in the graph")
+        .generation();
+    assert_eq!(root_generation.get(), 1, "A retains its computed generation");
     assert_eq!(
         graph
             .iter_commits()
             .map(|commit| (commit.id().to_owned(), commit.generation()))
             .collect::<Vec<_>>(),
-        [(commits["A"], 1), (commits["Z"], 0), (commits["H"], 1)],
+        [
+            (commits["A"], root_generation),
+            (commits["Z"], gix_commitgraph::Generation::UNCOMPUTED),
+            (commits["H"], root_generation),
+        ],
         "only the unseen middle layer has uncomputed generations"
     );
     assert!(
@@ -601,7 +612,7 @@ fn unseen_uncomputed_generation_in_a_split_graph_matches_git() -> gix_testtools:
                 let actual = Simple::new([commits["A"]], &odb)
                     .sorting(sorting)?
                     .parents(parents)
-                    .commit_graph(if with_graph { Some(load_graph()?) } else { None })
+                    .with_commit_graph(if with_graph { Some(load_graph()?) } else { None })
                     .hide([commits["H"]])?
                     .map(|item| item.map(|info| info.id))
                     .collect::<gix_error::Result<Vec<_>>>()?;

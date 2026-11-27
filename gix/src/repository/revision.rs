@@ -59,13 +59,12 @@ impl crate::Repository {
         one: impl Into<gix_hash::ObjectId>,
         two: impl Into<gix_hash::ObjectId>,
     ) -> Result<Option<Id<'_>>> {
-        let cache = self.commit_graph_if_enabled()?;
-        let mut graph = self.revision_graph(cache.as_ref());
+        let mut graph = self.revision_graph()?;
         self.merge_base_with_graph(one, two, &mut graph)
     }
 
     /// Obtain the best merge-base between commit `one` and `two`, or `None` if there is none, providing a
-    /// commit-graph `graph` to potentially greatly accelerate the operation by reusing graphs from previous runs.
+    /// revision graph `graph` to potentially greatly accelerate the operation by reusing graphs from previous runs.
     /// Traversal failures are returned as errors.
     ///
     /// # Performance
@@ -85,7 +84,7 @@ impl crate::Repository {
     }
 
     /// Get all merge-bases between commit `one` and `others`, or an empty list if there is none, providing a
-    /// commit-graph `graph` to potentially greatly speed up the operation.
+    /// revision graph `graph` to potentially greatly speed up the operation.
     /// Traversal failures are returned as errors.
     ///
     /// # Performance
@@ -119,8 +118,7 @@ impl crate::Repository {
         one: impl Into<gix_hash::ObjectId>,
         others: &[gix_hash::ObjectId],
     ) -> Result<Vec<Id<'_>>> {
-        let cache = self.commit_graph_if_enabled()?;
-        let mut graph = self.revision_graph(cache.as_ref());
+        let mut graph = self.revision_graph()?;
         self.merge_bases_many_with_graph(one, others, &mut graph)
     }
 
@@ -151,8 +149,7 @@ impl crate::Repository {
         &self,
         commits: impl IntoIterator<Item = impl Into<gix_hash::ObjectId>>,
     ) -> Result<Option<Id<'_>>> {
-        let cache = self.commit_graph_if_enabled()?;
-        let mut graph = self.revision_graph(cache.as_ref());
+        let mut graph = self.revision_graph()?;
         self.merge_base_octopus_with_graph(commits, &mut graph)
     }
 
@@ -173,17 +170,33 @@ impl crate::Repository {
         ancestor_commit_id: impl Into<gix_hash::ObjectId>,
         descendant_commit_id: impl Into<gix_hash::ObjectId>,
     ) -> Result<bool> {
-        let cache = self.commit_graph_if_enabled()?;
-        let mut graph = self.revision_graph(cache.as_ref());
+        let mut graph = self.revision_graph()?;
         self.is_ancestor_with_graph(ancestor_commit_id, descendant_commit_id, &mut graph)
     }
 
-    /// Like [`is_ancestor()`](Self::is_ancestor()), but with a commit-graph `graph` to potentially greatly accelerate
+    /// Like [`is_ancestor()`](Self::is_ancestor()), but with a revision graph `graph` to potentially greatly accelerate
     /// the operation by reusing graphs from previous runs. Traversal failures are returned as errors.
-    /// Shallow boundaries or active replacements require a temporary graph instead.
+    /// The supplied graph is used as-is. To traverse the repository's visible history, build it with
+    /// [`Self::revision_graph()`].
     ///
     /// # Performance
     /// Be sure to [set an object cache](crate::Repository::object_cache_size_if_unset) to accelerate repeated commit lookups.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    /// # mod doctest { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doctest.rs")); }
+    /// # let mut repo = doctest::open_repo(doctest::basic_repo_dir()?)?;
+    /// repo.object_cache_size_if_unset(1024 * 1024);
+    /// let head_commit_id = repo.head_id()?;
+    /// let parent_commit_id = repo.rev_parse_single("HEAD^")?;
+    /// let mut graph = repo.revision_graph()?;
+    ///
+    /// assert!(repo.is_ancestor_with_graph(parent_commit_id, head_commit_id, &mut graph)?);
+    /// assert!(!repo.is_ancestor_with_graph(head_commit_id, parent_commit_id, &mut graph)?);
+    /// # Ok(()) }
+    /// ```
     #[cfg(feature = "revision")]
     pub fn is_ancestor_with_graph(
         &self,
@@ -191,14 +204,7 @@ impl crate::Repository {
         descendant_commit_id: impl Into<gix_hash::ObjectId>,
         graph: &mut gix_revwalk::Graph<'_, '_, gix_revwalk::graph::Commit<gix_revision::merge_base::Flags>>,
     ) -> Result<bool> {
-        let ancestor_commit_id = ancestor_commit_id.into();
-        let descendant_commit_id = descendant_commit_id.into();
-        match self.revision_graph_for_modified_history()? {
-            Some(mut graph) => {
-                gix_revision::merge_base::is_ancestor(ancestor_commit_id, descendant_commit_id, &mut graph)
-            }
-            None => gix_revision::merge_base::is_ancestor(ancestor_commit_id, descendant_commit_id, graph),
-        }
+        gix_revision::merge_base::is_ancestor(ancestor_commit_id.into(), descendant_commit_id.into(), graph)
     }
 
     /// Count commits reachable exclusively from `tip_commit_id` or `base_commit_id`, matching
@@ -216,13 +222,27 @@ impl crate::Repository {
         tip_commit_id: impl Into<gix_hash::ObjectId>,
         base_commit_id: impl Into<gix_hash::ObjectId>,
     ) -> Result<gix_revision::ahead_behind_counts::Outcome> {
-        let cache = self.commit_graph_if_enabled()?;
-        let mut graph = self.revision_graph(cache.as_ref());
+        let mut graph = self.revision_graph()?;
         self.ahead_behind_counts_with_graph(tip_commit_id, base_commit_id, &mut graph)
+    }
+
+    /// Count commits unique to the checked-out branch and its upstream, as in
+    /// `git rev-list --left-right --count HEAD...@{upstream}`.
+    ///
+    /// Return `None` for a detached or unborn HEAD. Otherwise, see
+    /// [`Reference::ahead_behind_counts()`](crate::Reference::ahead_behind_counts()) for how the upstream is resolved.
+    #[cfg(feature = "revision")]
+    pub fn head_ahead_behind_counts(&self) -> Result<Option<gix_revision::ahead_behind_counts::Outcome>> {
+        match self.head_ref()? {
+            Some(mut branch) => branch.ahead_behind_counts(),
+            None => Ok(None),
+        }
     }
 
     /// Like [`ahead_behind_counts()`](Self::ahead_behind_counts()), but reuses cached commits in `graph`.
     /// Its flags are automatically cleared. Traversal failures are returned as errors.
+    /// The supplied graph is used as-is. To traverse the repository's visible history, build it with
+    /// [`Self::revision_graph()`].
     ///
     /// # Performance
     /// With nonzero, unsaturated commit-graph generations, traversal stops once only shared history remains.
@@ -234,35 +254,18 @@ impl crate::Repository {
         base_commit_id: impl Into<gix_hash::ObjectId>,
         graph: &mut gix_revwalk::Graph<'_, '_, gix_revwalk::graph::Commit<gix_revision::merge_base::Flags>>,
     ) -> Result<gix_revision::ahead_behind_counts::Outcome> {
-        let tip_commit_id = tip_commit_id.into();
-        let base_commit_id = base_commit_id.into();
-        match self.revision_graph_for_modified_history()? {
-            Some(mut graph) => gix_revision::ahead_behind_counts(tip_commit_id, base_commit_id, &mut graph),
-            None => gix_revision::ahead_behind_counts(tip_commit_id, base_commit_id, graph),
-        }
+        gix_revision::ahead_behind_counts(tip_commit_id.into(), base_commit_id.into(), graph)
     }
 
-    /// Return a fresh graph if shallow boundaries or active object replacements modify the visible history,
-    /// or `None` if the caller can reuse its existing graph.
-    ///
-    /// The graph treats shallow commits as roots and resolves objects through the repository's replacement-aware
-    /// object database. It omits the commit-graph cache, whose parent links and generation numbers may not match
-    /// the modified history.
+    /// Start a containment query for an existing `target_commit_id`, using the supplied `graph` as-is.
+    /// To query the repository's visible history, build the graph with [`Self::revision_graph()`].
     #[cfg(feature = "revision")]
-    fn revision_graph_for_modified_history(
+    pub fn contains_target<'query, 'repo, 'commit_graph>(
         &self,
-    ) -> Result<Option<gix_revwalk::Graph<'_, '_, gix_revwalk::graph::Commit<gix_revision::merge_base::Flags>>>> {
-        let shallow_commits = self.shallow_commits()?;
-        if shallow_commits.is_none() && !self.has_object_replacements() {
-            return Ok(None);
-        }
-        Ok(Some(gix_revwalk::Graph::new(
-            revision::walk::Objects {
-                repo: self,
-                shallow: shallow_commits,
-            },
-            None,
-        )))
+        target_commit_id: impl Into<gix_hash::ObjectId>,
+        graph: &'query mut gix_revwalk::Graph<'repo, 'commit_graph, gix_revwalk::graph::Commit<()>>,
+    ) -> Result<crate::contains::TargetQuery<'query, 'repo, 'commit_graph>> {
+        crate::contains::TargetQuery::new(target_commit_id, graph)
     }
 
     /// Create the baseline for a revision walk by initializing it with the `tips` to start iterating on.
@@ -273,11 +276,20 @@ impl crate::Repository {
     /// to visit children before parents and keep branches together, like `git log --topo-order`, or
     /// [`DateOrder`](revision::walk::Sorting::DateOrder) to prioritize newer commits while still visiting children before parents.
     /// Without a commit-graph, these topological modes must explore the visible history before yielding the first commit.
+    ///
+    /// Use [`Self::rev_walk_cache()`] to reuse commit metadata across compatible walks.
     #[doc(alias = "revwalk", alias = "git2")]
     pub fn rev_walk(
         &self,
         tips: impl IntoIterator<Item = impl Into<gix_hash::ObjectId>>,
-    ) -> revision::walk::Platform<'_> {
+    ) -> revision::walk::Platform<'_, '_> {
         revision::walk::Platform::new(tips, self)
+    }
+
+    /// Create a [cache](revision::walk::Cache) for repeated revision walks on this repository handle.
+    ///
+    /// Attach it to a walk with [`revision::walk::Platform::with_cache()`].
+    pub fn rev_walk_cache(&self) -> revision::walk::Cache<'_> {
+        revision::walk::Cache::new(self)
     }
 }

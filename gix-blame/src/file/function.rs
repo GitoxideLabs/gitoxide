@@ -8,7 +8,7 @@ use gix_object::{
     FindExt,
     bstr::{BStr, BString, ByteSlice},
 };
-use gix_traverse::commit::find as find_commit;
+use gix_revision::{Graph, PriorityQueue, graph::LazyCommit};
 use smallvec::SmallVec;
 
 use super::{Change, UnblamedHunk, process_changes};
@@ -16,6 +16,14 @@ use crate::{
     BlameEntry, Options, Outcome, Statistics,
     types::{BlamePathEntry, Start},
 };
+
+/// Commit metadata retained in the revision graph by [`file()`].
+#[derive(Default)]
+pub struct CommitMetadata {
+    root_tree_id: Option<ObjectId>,
+    commit_time: Option<gix_date::SecondsSinceUnixEpoch>,
+    parents: Option<SmallVec<[ObjectId; 1]>>,
+}
 
 /// Produce a list of consecutive [`BlameEntry`] instances to indicate in which commits the ranges of the file
 /// at `suspect:<file_path>` originated in.
@@ -28,8 +36,9 @@ use crate::{
 /// * `start`
 ///    - Where to start the blame. Can be either a commit or contents of a worktree file that contains
 ///      untracked changes.
-/// * `cache`
-///    - Optionally, the commitgraph cache.
+/// * `graph`
+///    - Looks up commits, using its optional on-disk commit-graph when available. Reuse it across calls
+///      to retain decoded commit metadata. It must describe the same history as `odb`.
 /// * `resource_cache`
 ///    - Used for diffing trees.
 /// * `file_path`
@@ -76,7 +85,7 @@ use crate::{
 pub fn file(
     odb: impl gix_object::Find + gix_object::FindHeader,
     start: Start,
-    cache: Option<gix_commitgraph::Graph>,
+    graph: &mut Graph<'_, '_, CommitMetadata>,
     resource_cache: &mut gix_diff::blob::Platform,
     file_path: &BStr,
     options: Options,
@@ -91,16 +100,7 @@ pub fn file(
         mut hunks_to_blame,
         mut out,
         first_suspect,
-    } = initial_state(
-        &odb,
-        start,
-        cache.as_ref(),
-        file_path,
-        &options,
-        &mut buf,
-        &mut buf2,
-        &mut stats,
-    )?;
+    } = initial_state(&odb, start, graph, file_path, &options, &mut buf, &mut buf2, &mut stats)?;
 
     if hunks_to_blame.is_empty() {
         out.sort_by_key(|entry| entry.start_in_blamed_file);
@@ -112,12 +112,10 @@ pub fn file(
         });
     }
 
-    let mut queue: gix_revwalk::PriorityQueue<gix_date::SecondsSinceUnixEpoch, ObjectId> =
-        gix_revwalk::PriorityQueue::new();
+    let mut queue = PriorityQueue::new();
 
     if let Some(first_suspect) = first_suspect {
-        let commit = find_commit(cache.as_ref(), &odb, &first_suspect, &mut buf)?;
-        queue.insert(commit.commit_time()?, first_suspect);
+        queue.insert(commit_time(graph, &first_suspect)?, first_suspect);
     }
 
     let mut diff_state = gix_diff::tree::State::default();
@@ -146,8 +144,7 @@ pub fn file(
             .clone()
             .unwrap_or_else(|| file_path.to_owned());
 
-        let commit = find_commit(cache.as_ref(), &odb, &suspect, &mut buf)?;
-        let commit_time = commit.commit_time()?;
+        let commit_time = commit_time(graph, &suspect)?;
 
         if let Some(since) = options.since
             && commit_time < since.seconds
@@ -159,7 +156,7 @@ pub fn file(
             continue;
         }
 
-        let parent_ids: ParentIds = collect_parents(commit, &odb, cache.as_ref(), &mut buf2)?;
+        let parent_ids = collect_parents(graph, &suspect)?;
 
         if parent_ids.is_empty() {
             if queue.is_empty() {
@@ -202,7 +199,7 @@ pub fn file(
                 &odb,
                 &suspect,
                 current_file_path.as_ref(),
-                cache.as_ref(),
+                graph,
                 &mut buf,
                 &mut buf2,
                 &mut stats,
@@ -253,7 +250,7 @@ pub fn file(
                 &odb,
                 parent_id,
                 current_file_path.as_ref(),
-                cache.as_ref(),
+                graph,
                 &mut buf,
                 &mut buf2,
                 &mut stats,
@@ -278,11 +275,10 @@ pub fn file(
                 current_file_path.as_ref(),
                 suspect,
                 *parent_id,
-                cache.as_ref(),
+                graph,
                 &mut stats,
                 &mut diff_state,
                 resource_cache,
-                &mut buf,
                 &mut buf2,
                 &mut buf3,
                 options.rewrites,
@@ -567,29 +563,22 @@ fn tree_diff_at_file_path(
     file_path: &BStr,
     id: ObjectId,
     parent_id: ObjectId,
-    cache: Option<&gix_commitgraph::Graph>,
+    graph: &mut Graph<'_, '_, CommitMetadata>,
     stats: &mut Statistics,
     state: &mut gix_diff::tree::State,
     resource_cache: &mut gix_diff::blob::Platform,
-    commit_buf: &mut Vec<u8>,
     lhs_tree_buf: &mut Vec<u8>,
     rhs_tree_buf: &mut Vec<u8>,
     rewrites: Option<gix_diff::Rewrites>,
 ) -> Result<Option<TreeDiffChange>> {
-    let parent_tree_id = find_commit(cache, &odb, &parent_id, commit_buf)
-        .or_raise(|| message("Could not find existing iterator over a tree"))?
-        .tree_id()
-        .or_raise(|| message("Failure to decode commit during traversal"))?;
+    let parent_tree_id = root_tree_id(graph, &parent_id)?;
 
     let parent_tree_iter = odb
         .find_tree_iter(&parent_tree_id, lhs_tree_buf)
         .or_raise(|| message("Could not find existing iterator over a tree"))?;
     stats.trees_decoded += 1;
 
-    let tree_id = find_commit(cache, &odb, &id, commit_buf)
-        .or_raise(|| message("Could not find existing iterator over a tree"))?
-        .tree_id()
-        .or_raise(|| message("Failure to decode commit during traversal"))?;
+    let tree_id = root_tree_id(graph, &id)?;
 
     let tree_iter = odb
         .find_tree_iter(&tree_id, rhs_tree_buf)
@@ -908,15 +897,12 @@ fn find_path_entry_in_commit(
     odb: &impl gix_object::Find,
     commit: &gix_hash::oid,
     file_path: &BStr,
-    cache: Option<&gix_commitgraph::Graph>,
+    graph: &mut Graph<'_, '_, CommitMetadata>,
     buf: &mut Vec<u8>,
     buf2: &mut Vec<u8>,
     stats: &mut Statistics,
 ) -> Result<Option<ObjectId>> {
-    let tree_id = find_commit(cache, odb, commit, buf)
-        .or_raise(|| message("Could not find existing iterator over a tree"))?
-        .tree_id()
-        .or_raise(|| message("Failure to decode commit during traversal"))?;
+    let tree_id = root_tree_id(graph, commit)?;
     let tree_iter = odb
         .find_tree_iter(&tree_id, buf)
         .or_raise(|| message("Could not find existing iterator over a tree"))?;
@@ -935,36 +921,65 @@ fn find_path_entry_in_commit(
 
 type ParentIds = SmallVec<[(gix_hash::ObjectId, i64); 2]>;
 
-fn collect_parents(
-    commit: gix_traverse::commit::Either<'_, '_>,
-    odb: &impl gix_object::Find,
-    cache: Option<&gix_commitgraph::Graph>,
-    buf: &mut Vec<u8>,
-) -> Result<ParentIds> {
-    let mut parent_ids: ParentIds = Default::default();
-    match commit {
-        gix_traverse::commit::Either::CachedCommit(commit) => {
-            let cache = cache
-                .as_ref()
-                .expect("find returned a cached commit, so we expect cache to be present");
-            for parent_pos in commit.iter_parents() {
-                let parent = cache.commit_at(
-                    parent_pos.or_raise(|| message("Failed to get parent from commitgraph during traversal"))?,
-                );
-                parent_ids.push((parent.id().to_owned(), parent.committer_timestamp() as i64));
-            }
-        }
-        gix_traverse::commit::Either::CommitRefIter(commit_ref_iter) => {
-            for id in commit_ref_iter.parent_ids() {
-                let parent = odb.find_commit_iter(id.as_ref(), buf).ok();
-                let parent_commit_time = parent
-                    .and_then(|parent| parent.committer().ok().map(|committer| committer.seconds()))
-                    .unwrap_or_default();
-                parent_ids.push((id, parent_commit_time));
-            }
+fn root_tree_id(graph: &mut Graph<'_, '_, CommitMetadata>, commit_id: &gix_hash::oid) -> Result<ObjectId> {
+    commit_field(
+        graph,
+        commit_id,
+        |metadata| &mut metadata.root_tree_id,
+        |commit| {
+            commit
+                .tree_id()
+                .or_raise(|| message!("Could not decode the root tree of commit {commit_id}"))
+        },
+    )
+}
+
+#[allow(
+    clippy::redundant_closure_for_method_calls,
+    reason = "the method item cannot satisfy the callback's higher-ranked lifetimes"
+)]
+fn commit_time(graph: &mut Graph<'_, '_, CommitMetadata>, commit_id: &gix_hash::oid) -> Result<i64> {
+    commit_field(
+        graph,
+        commit_id,
+        |metadata| &mut metadata.commit_time,
+        |commit| commit.committer_timestamp(),
+    )
+}
+
+fn collect_parents(graph: &mut Graph<'_, '_, CommitMetadata>, commit_id: &gix_hash::oid) -> Result<ParentIds> {
+    let parent_commit_ids = commit_field(
+        graph,
+        commit_id,
+        |metadata| &mut metadata.parents,
+        |commit| commit.iter_parents().collect::<Result<_>>(),
+    )?;
+    Ok(parent_commit_ids
+        .into_iter()
+        // A parent that cannot be read gets the lowest priority, but its fallback time is not cached.
+        .map(|parent_id| (parent_id, commit_time(graph, &parent_id).unwrap_or_default()))
+        .collect())
+}
+
+fn commit_field<T: Clone>(
+    graph: &mut Graph<'_, '_, CommitMetadata>,
+    commit_id: &gix_hash::oid,
+    field: fn(&mut CommitMetadata) -> &mut Option<T>,
+    decode: impl FnOnce(&LazyCommit<'_, '_>) -> Result<T>,
+) -> Result<T> {
+    if let Some(value) = graph.get_mut(commit_id).and_then(|metadata| field(metadata).clone()) {
+        return Ok(value);
+    }
+    let value = decode(&graph.lookup(commit_id)?)?;
+    match graph.get_mut(commit_id) {
+        Some(metadata) => *field(metadata) = Some(value.clone()),
+        None => {
+            let mut metadata = CommitMetadata::default();
+            *field(&mut metadata) = Some(value.clone());
+            graph.insert(commit_id.to_owned(), metadata);
         }
     }
-    Ok(parent_ids)
+    Ok(value)
 }
 
 /// Return an iterator over tokens for use in diffing. These are usually lines, but it's important
@@ -989,7 +1004,7 @@ struct InitialState {
 fn initial_state(
     odb: &impl gix_object::Find,
     start: Start<'_>,
-    cache: Option<&gix_commitgraph::Graph>,
+    graph: &mut Graph<'_, '_, CommitMetadata>,
     file_path: &BStr,
     options: &Options,
     buf: &mut Vec<u8>,
@@ -998,7 +1013,7 @@ fn initial_state(
 ) -> Result<InitialState> {
     match start {
         Start::Commit(suspect) => {
-            let blamed_file_entry_id = find_path_entry_in_commit(&odb, &suspect, file_path, cache, buf, buf2, stats)?
+            let blamed_file_entry_id = find_path_entry_in_commit(&odb, &suspect, file_path, graph, buf, buf2, stats)?
                 .ok_or_raise(|| {
                 message!("The file to blame at \"{file_path}\" wasn't found in the first commit at {suspect}")
                     .not_found()
@@ -1059,7 +1074,7 @@ fn initial_state(
             let mut out = Vec::new();
 
             let Some(first_suspect_entry_id) =
-                find_path_entry_in_commit(odb, &first_suspect, file_path, cache, buf, buf2, stats)?
+                find_path_entry_in_commit(odb, &first_suspect, file_path, graph, buf, buf2, stats)?
             else {
                 // File does not exist in the starting commit. Treat the requested
                 // ranges as entirely "not committed yet".

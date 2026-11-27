@@ -94,6 +94,9 @@ impl crate::Repository {
     /// Cone patterns are supported, but a sparse index is not produced yet, left as an optimisation.
     /// The new `HEAD` reflog records its initial commit when `core.logAllRefUpdates` permits it.
     ///
+    /// Before checking out files, this may create and remove a temporary symlink in the new worktree to probe
+    /// symlink support; see [`Self::filesystem_options()`] for when this happens.
+    ///
     /// `core.sharedRepository` applies to repository metadata, including `HEAD`, its reflog, and the index.
     /// Like Git when preparing `<destination>/.git`, this also applies shared permissions to newly created
     /// destination and parent directories, as well as the common `worktrees` directory. Existing directories
@@ -356,6 +359,9 @@ impl PrepareCheckout {
     }
 
     /// Consume this preparation, check out its selected tree, and complete registration.
+    ///
+    /// Before checking out files, this may create and remove a temporary symlink in the new worktree to probe
+    /// symlink support; see [`crate::Repository::filesystem_options()`] for when this happens.
     ///
     /// `progress` reports files checked out and bytes written through the `checkout` and `writing`
     /// child progress items, respectively. Set `should_interrupt` to `true` to request cancellation;

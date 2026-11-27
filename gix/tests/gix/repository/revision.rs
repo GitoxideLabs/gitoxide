@@ -1,6 +1,132 @@
 use gix_testtools::TestResult;
 
 #[test]
+fn upstream_tracking_ref_names_match_git() -> TestResult {
+    use gix::sec::Trust;
+
+    let fixture = "make_head_upstream.sh";
+    let direction = gix::remote::Direction::Fetch;
+    for trust in [Trust::Full, Trust::Reduced] {
+        for case in ["local", "mapped", "local-mapped"] {
+            let repo =
+                crate::util::named_subrepo_opts(fixture, case, crate::util::restricted().with_enforced_trust(trust))?;
+            let head = repo.head_ref()?.expect("checked out branch");
+            let tracking = head.remote_tracking_ref_name(direction).transpose()?;
+            if trust == Trust::Reduced {
+                assert_eq!(
+                    tracking, None,
+                    "the default filter rejects local tracking configuration"
+                );
+                assert!(
+                    repo.rev_parse_single("@{upstream}").is_err(),
+                    "the same filter applies to revspecs"
+                );
+                continue;
+            }
+            let expected = std::fs::read_to_string(repo.git_dir().join("upstream-baseline"))?;
+            let name = tracking.expect("Git resolves an upstream");
+            assert_eq!(
+                name,
+                expected.trim_end(),
+                "{case} with {trust:?} trust: upstream matches Git"
+            );
+            assert_eq!(
+                repo.rev_parse_single("@{upstream}")?,
+                repo.find_reference(name.as_ref())?.peel_to_id()?,
+                "{case} with {trust:?} trust: the revision selector resolves through the same lookup"
+            );
+            if case == "mapped" {
+                assert!(
+                    repo.find_remote("origin").is_err(),
+                    "the fixture's malformed push URL prevents constructing the remote"
+                );
+            }
+        }
+    }
+
+    let repo = crate::util::named_subrepo_opts(fixture, "excluded", crate::util::restricted())?;
+    assert!(
+        repo.branch_remote_tracking_ref_name("refs/heads/main".try_into()?, direction)
+            .is_none(),
+        "a negative fetch refspec can exclude a configured upstream"
+    );
+    let repo = crate::util::named_subrepo_opts(fixture, "gone", crate::util::restricted())?;
+    assert_eq!(
+        repo.branch_remote_tracking_ref_name("refs/heads/main".try_into()?, direction)
+            .expect("the upstream is configured")?,
+        "refs/tracking/topic",
+        "the resolver returns the configured name even when the ref is missing"
+    );
+    Ok(())
+}
+
+#[test]
+fn head_ahead_behind_counts_match_git_when_tracking_config_is_trusted() -> TestResult {
+    use gix::{revision::plumbing::ahead_behind_counts::Outcome, sec::Trust};
+
+    let fixture = "make_head_upstream.sh";
+    for trust in [Trust::Full, Trust::Reduced] {
+        for case in ["local", "mapped", "local-mapped"] {
+            let repo =
+                crate::util::named_subrepo_opts(fixture, case, crate::util::restricted().with_enforced_trust(trust))?;
+            assert_eq!(repo.git_dir_trust(), trust, "test the intended trust level");
+            let baseline = std::fs::read_to_string(repo.git_dir().join("ahead-behind-baseline"))?;
+            let (ahead, behind) = baseline
+                .trim_end()
+                .split_once('\t')
+                .expect("Git emits tab-separated counts");
+            assert_eq!(
+                repo.head_ahead_behind_counts()?,
+                (trust == Trust::Full).then_some(Outcome {
+                    ahead: ahead.parse()?,
+                    behind: behind.parse()?
+                }),
+                "{case} with {trust:?} trust: counts match Git only when the tracking config is allowed"
+            );
+        }
+    }
+
+    for case in ["excluded", "gone", "unconfigured", "unborn"] {
+        let repo = crate::util::named_subrepo_opts(fixture, case, crate::util::restricted())?;
+        assert_eq!(repo.head_ahead_behind_counts()?, None, "{case}: no upstream to count");
+    }
+
+    let repo = crate::util::named_subrepo_opts(
+        fixture,
+        "detached",
+        crate::util::restricted().config_overrides(["branch.main.remote=.", "branch.main.merge=refs/heads/topic"]),
+    )?;
+    assert_eq!(repo.head_ahead_behind_counts()?, None, "HEAD is detached");
+    assert_eq!(
+        repo.find_reference("refs/heads/main")?.ahead_behind_counts()?,
+        Some(Outcome { ahead: 2, behind: 1 }),
+        "a local branch can be compared with its upstream without checking it out"
+    );
+
+    let repo = crate::util::named_subrepo_opts(
+        fixture,
+        "mapped",
+        crate::util::restricted().filter_config_section(|meta| meta.source != gix::config::Source::Local),
+    )?;
+    assert_eq!(
+        repo.head_ahead_behind_counts()?,
+        None,
+        "explicit section filters still apply"
+    );
+
+    let repo = crate::util::named_subrepo_opts(
+        fixture,
+        "mapped",
+        crate::util::restricted().config_overrides(["remote.origin.fetch=refs/heads/**:refs/tracking/*"]),
+    )?;
+    assert!(
+        repo.head_ahead_behind_counts().is_err(),
+        "a malformed fetch refspec is an error"
+    );
+    Ok(())
+}
+
+#[test]
 fn corrupt_commit_graph_parents_retry_the_current_commit() -> TestResult {
     use gix::revision::walk::Sorting;
     use gix::traverse::commit::simple::CommitTimeOrder;
@@ -78,7 +204,7 @@ fn corrupt_commit_graph_parents_retry_the_current_commit() -> TestResult {
             assert_eq!(expected.len(), 2, "the fixture contains the tip and its parent");
             assert_eq!(
                 actual, expected,
-                "cache fallback retains the popped commit and its ancestry"
+                "falling back from the commit-graph retains the popped commit and its ancestry"
             );
         }
     }
@@ -119,7 +245,7 @@ fn merge_base_variants_find_common_ancestors() -> TestResult {
     let repo = crate::util::basic_repo()?;
     let head_commit_id = repo.head_id()?;
     let parent_commit_id = repo.rev_parse_single("HEAD^")?;
-    let mut graph = repo.revision_graph(None);
+    let mut graph = repo.revision_graph_with_commit_graph(None)?;
     assert_eq!(
         repo.merge_base_with_graph(head_commit_id, parent_commit_id, &mut graph)?,
         Some(parent_commit_id),
@@ -167,7 +293,7 @@ fn unrelated_histories_have_no_merge_base() -> TestResult {
     let repo = revision_query_repo("without-commit-graph")?;
     let head_commit_id = repo.head_id()?;
     let unrelated_commit_id = repo.rev_parse_single("unrelated")?;
-    let mut graph = repo.revision_graph(None);
+    let mut graph = repo.revision_graph_with_commit_graph(None)?;
 
     for base in [
         repo.merge_base(head_commit_id, unrelated_commit_id)?,
@@ -195,7 +321,7 @@ fn is_ancestor_follows_parents_like_git() -> TestResult {
     let head_commit_id = repo.head_id()?;
     let parent_commit_id = repo.rev_parse_single("HEAD^")?;
     let unrelated_commit_id = repo.rev_parse_single("unrelated")?;
-    let mut graph = repo.revision_graph(None);
+    let mut graph = repo.revision_graph_with_commit_graph(None)?;
 
     for (ancestor_commit_id, descendant_commit_id, expected, description) in [
         (
@@ -244,24 +370,77 @@ fn is_ancestor_follows_parents_like_git() -> TestResult {
 }
 
 #[test]
-fn ahead_behind_counts_match_git() -> TestResult {
-    for (name, use_commitgraph) in [("without-commit-graph", false), (".", true)] {
-        let repo = revision_query_repo(name)?;
-        let cache = repo.commit_graph_if_enabled()?;
+fn contains_matches_git_for_each_ref() -> TestResult {
+    for view in [".", "without-commit-graph", "shallow", "replacements"] {
+        let repo = crate::util::named_subrepo_opts(
+            "make_revision_queries.sh",
+            view,
+            crate::util::restricted().config_overrides(["core.useReplaceRefs=true"]),
+        )?;
+        let mut graph = repo.revision_graph()?;
         assert_eq!(
-            cache.is_some(),
-            use_commitgraph,
-            "the optional commit-graph is exercised"
+            graph.commit_graph().is_some(),
+            view == ".",
+            "only full history uses the commit-graph automatically"
         );
-        if let Some(cache) = &cache {
+        for target_spec in ["HEAD", "parent", "root", "unrelated", "HEAD"] {
+            let mut target = repo.contains_target(repo.rev_parse_single(target_spec)?, &mut graph)?;
+            let expected = std::fs::read_to_string(repo.git_dir().join(format!("contains-{target_spec}.baseline")))?;
+            let references = repo.references()?;
+            let mut matching = Vec::new();
+            for reference in references.prefixed("refs/remotes/replacement/")? {
+                let mut reference = reference?;
+                let name = reference.name().to_string();
+                if target.is_reachable_from(reference.peel_to_id()?)? {
+                    matching.push(name);
+                }
+            }
+            matching.sort();
+            assert_eq!(
+                matching,
+                expected.lines().collect::<Vec<_>>(),
+                "{view}: refs containing {target_spec} match Git when reusing the graph"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn ahead_behind_counts_match_git() -> TestResult {
+    for (name, use_commit_graph) in [("without-commit-graph", false), (".", true)] {
+        let repo = revision_query_repo(name)?;
+        let commit_graph = repo.revision_graph::<()>()?.into_commit_graph();
+        assert_eq!(
+            commit_graph.is_some(),
+            use_commit_graph,
+            "the optional commit-graph can be recovered from the revision graph"
+        );
+        if let Some(commit_graph) = commit_graph.as_ref() {
+            let borrowed = repo.revision_graph_with_commit_graph::<()>(Some(commit_graph))?;
+            assert!(
+                borrowed
+                    .commit_graph()
+                    .is_some_and(|graph| std::ptr::eq(graph, commit_graph)),
+                "the explicit constructor uses the caller's commit-graph"
+            );
+            assert!(
+                borrowed.into_commit_graph().is_none(),
+                "a borrowed commit-graph cannot be taken out of the revision graph"
+            );
             for name in ["divergent", "unrelated"] {
                 assert!(
-                    cache.lookup(repo.rev_parse_single(name)?).is_none(),
+                    commit_graph.lookup(repo.rev_parse_single(name)?).is_none(),
                     "the fixture also exercises tips outside the commit-graph"
                 );
             }
         }
-        let mut graph = repo.revision_graph(cache.as_ref());
+        let graph = repo.revision_graph_with_commit_graph(None)?;
+        assert!(
+            graph.commit_graph().is_none(),
+            "passing None skips commit-graph selection"
+        );
+        let mut graph = graph.with_owned_commit_graph(commit_graph);
         assert_history_queries_match_git(&repo, &mut graph, "history.baseline")?;
     }
     Ok(())
@@ -269,15 +448,8 @@ fn ahead_behind_counts_match_git() -> TestResult {
 
 #[test]
 fn shallow_boundaries_stop_ancestry_and_counting_like_git() -> TestResult {
-    let full_repo = revision_query_repo(".")?;
     let repo = revision_query_repo("shallow")?;
     let tip_commit_id = repo.head_id()?;
-    let root_commit_id = repo.rev_parse_single("root")?;
-    let cache = full_repo.commit_graph()?;
-    let mut graph = full_repo.revision_graph(Some(&cache));
-    // The full and shallow fixtures share objects, but only the latter has a boundary.
-    // Populate the graph from full history before querying the shallow view.
-    full_repo.ahead_behind_counts_with_graph(tip_commit_id, root_commit_id, &mut graph)?;
     assert!(
         repo.commit_graph_if_enabled()?.is_none(),
         "shallow history must not use the pre-shallow commit-graph automatically"
@@ -288,32 +460,25 @@ fn shallow_boundaries_stop_ancestry_and_counting_like_git() -> TestResult {
         "rev-walk stops at the boundary"
     );
     assert_eq!(
-        repo.ahead_behind_counts_with_graph(tip_commit_id, root_commit_id, &mut graph)?,
-        gix::revision::plumbing::ahead_behind_counts::Outcome { ahead: 2, behind: 1 },
-        "counting independently applies the boundary to an already populated graph"
+        repo.merge_base(tip_commit_id, repo.rev_parse_single("root")?)?,
+        None,
+        "merge-base must not reach the older root that is still present on disk"
     );
+    let mut graph = repo.revision_graph()?;
     assert_history_queries_match_git(&repo, &mut graph, "history.baseline")?;
-    let mut uncached_graph = repo.revision_graph(None);
-    assert_history_queries_match_git(&repo, &mut uncached_graph, "history.baseline")?;
-    assert_history_queries_match_git(&full_repo, &mut uncached_graph, "history.baseline")?;
-    assert_history_queries_match_git(&full_repo, &mut graph, "history.baseline")?;
     Ok(())
 }
 
 #[test]
 fn unrelated_shallow_boundaries_are_not_decoded() -> TestResult {
     let repo = crate::named_repo("make_unrelated_shallow_boundary.sh")?;
-    let cache = repo.commit_graph()?;
-    for cache in [None, Some(&cache)] {
-        let mut graph = repo.revision_graph(cache);
-        assert_history_queries_match_git(&repo, &mut graph, "history.baseline")?;
-    }
+    let mut graph = repo.revision_graph_with_commit_graph(None)?;
+    assert_history_queries_match_git(&repo, &mut graph, "history.baseline")?;
     Ok(())
 }
 
 #[test]
-fn replacements_disable_stale_commit_graphs_like_git() -> TestResult {
-    let full_repo = revision_query_repo(".")?;
+fn replacements_disable_automatic_commit_graphs_like_git() -> TestResult {
     let repo = crate::util::named_subrepo_opts(
         "make_revision_queries.sh",
         "replacements",
@@ -321,36 +486,20 @@ fn replacements_disable_stale_commit_graphs_like_git() -> TestResult {
     )?;
     let tip_commit_id: gix::ObjectId = repo.head_id()?.into();
     let root_commit_id: gix::ObjectId = repo.rev_parse_single("root")?.into();
-    let cache = repo.commit_graph()?;
     assert!(
         repo.objects.store_ref().replacements().next().is_some(),
         "the repository object store has active replacements"
     );
     assert!(
         repo.commit_graph_if_enabled()?.is_none(),
-        "replacement topology is incompatible with the cache"
+        "replacement topology is incompatible with the commit-graph"
     );
-    for count_first in [false, true] {
-        // Construct through the original view, as the replacement view already filters out the cache.
-        let mut graph = full_repo.revision_graph(Some(&cache));
-        assert!(
-            full_repo.is_ancestor_with_graph(root_commit_id, tip_commit_id, &mut graph)?,
-            "populate the reusable graph with the original ancestry"
-        );
-        if count_first {
-            assert_eq!(
-                repo.ahead_behind_counts_with_graph(tip_commit_id, root_commit_id, &mut graph)?,
-                gix::revision::plumbing::ahead_behind_counts::Outcome { ahead: 1, behind: 1 },
-                "counting independently discards stale cached topology"
-            );
-        }
-        assert_history_queries_match_git(&repo, &mut graph, "history.baseline")?;
-    }
+    assert_history_queries_match_git(&repo, &mut repo.revision_graph()?, "history.baseline")?;
     let mut repo = repo;
     repo.objects.ignore_replacements = true;
     assert!(
         repo.commit_graph_if_enabled()?.is_some(),
-        "ignored replacements allow the original cache"
+        "ignored replacements allow the original commit-graph"
     );
     assert!(
         repo.is_ancestor(root_commit_id, tip_commit_id)?,
@@ -361,7 +510,7 @@ fn replacements_disable_stale_commit_graphs_like_git() -> TestResult {
         gix::revision::plumbing::ahead_behind_counts::Outcome { ahead: 2, behind: 0 },
         "ignored replacements retain original counts"
     );
-    let mut graph = repo.revision_graph(Some(&cache));
+    let mut graph = repo.revision_graph()?;
     assert_history_queries_match_git(&repo, &mut graph, "unmodified-history.baseline")?;
     Ok(())
 }

@@ -1,6 +1,7 @@
 //! Provide multiple traversal implementations with different performance envelopes.
 //!
 //! Use [`Simple`] for fast walks that maintain minimal state, or [`Topo`] for a more elaborate traversal.
+use gix_commitgraph::Generation;
 use gix_error::Result;
 use gix_hash::ObjectId;
 use gix_object::FindExt;
@@ -8,9 +9,9 @@ use gix_revwalk::{PriorityQueue, graph::IdMap};
 use smallvec::SmallVec;
 
 /// A fast iterator over the ancestors of one or more starting commits.
-pub struct Simple<Find, Predicate> {
+pub struct Simple<Find, Predicate, CommitGraph = gix_commitgraph::Graph> {
     objects: Find,
-    cache: Option<gix_commitgraph::Graph>,
+    commit_graph: Option<CommitGraph>,
     predicate: Predicate,
     state: simple::State,
     parents: Parents,
@@ -34,7 +35,7 @@ pub struct Topo<Find, Predicate> {
     indegree_queue: PriorityQueue<topo::iter::GenAndCommitTime, ObjectId>,
     topo_queue: topo::iter::Queue,
     parents: Parents,
-    min_gen: u32,
+    min_gen: Generation,
     buf: Vec<u8>,
 }
 
@@ -63,7 +64,7 @@ pub struct Info {
     /// All parent ids we have encountered. Note that these will be at most one if [`Parents::First`] is enabled.
     pub parent_ids: ParentIds,
     /// The generation number if this commit was read from a commit-graph.
-    pub generation: Option<gix_revwalk::graph::Generation>,
+    pub generation: Option<Generation>,
     /// The time at which the commit was created. It will only be `Some(_)` if the chosen traversal was
     /// taking dates into consideration.
     pub commit_time: Option<gix_date::SecondsSinceUnixEpoch>,
@@ -72,11 +73,11 @@ pub struct Info {
 /// Information about a commit that can be obtained either from a [`gix_object::CommitRefIter`] or
 /// a [`gix_commitgraph::file::Commit`].
 #[derive(Clone, Copy)]
-pub enum Either<'buf, 'cache> {
+pub enum Either<'buf, 'commit_graph> {
     /// See [`gix_object::CommitRefIter`].
     CommitRefIter(gix_object::CommitRefIter<'buf>),
     /// See [`gix_commitgraph::file::Commit`].
-    CachedCommit(gix_commitgraph::file::Commit<'cache>),
+    CommitGraph(gix_commitgraph::file::Commit<'commit_graph>),
 }
 
 impl Either<'_, '_> {
@@ -85,7 +86,7 @@ impl Either<'_, '_> {
     pub fn tree_id(self) -> Result<ObjectId> {
         match self {
             Self::CommitRefIter(mut commit_ref_iter) => commit_ref_iter.tree_id(),
-            Self::CachedCommit(commit) => Ok(commit.root_tree_id().into()),
+            Self::CommitGraph(commit) => Ok(commit.root_tree_id().into()),
         }
     }
 
@@ -94,23 +95,23 @@ impl Either<'_, '_> {
     pub fn commit_time(self) -> Result<gix_date::SecondsSinceUnixEpoch> {
         match self {
             Self::CommitRefIter(commit_ref_iter) => commit_ref_iter.committer().map(|c| c.seconds()),
-            Self::CachedCommit(commit) => Ok(commit.committer_timestamp() as gix_date::SecondsSinceUnixEpoch),
+            Self::CommitGraph(commit) => Ok(commit.committer_timestamp() as gix_date::SecondsSinceUnixEpoch),
         }
     }
 }
 
 /// Find information about a commit by either getting it from a [`gix_commitgraph::Graph`], if
 /// present, or a [`gix_object::CommitRefIter`] otherwise.
-pub fn find<'cache, 'buf, Find>(
-    cache: Option<&'cache gix_commitgraph::Graph>,
+pub fn find<'commit_graph, 'buf, Find>(
+    commit_graph: Option<&'commit_graph gix_commitgraph::Graph>,
     objects: Find,
     id: &gix_hash::oid,
     buf: &'buf mut Vec<u8>,
-) -> Result<Either<'buf, 'cache>>
+) -> Result<Either<'buf, 'commit_graph>>
 where
     Find: gix_object::Find,
 {
-    match cache.and_then(|cache| cache.commit_by_id(id).map(Either::CachedCommit)) {
+    match commit_graph.and_then(|commit_graph| commit_graph.commit_by_id(id).map(Either::CommitGraph)) {
         Some(c) => Ok(c),
         None => objects.find_commit_iter(id, buf).map(Either::CommitRefIter),
     }

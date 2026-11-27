@@ -8,16 +8,16 @@ use std::{
 
 use gix_error::{ErrorExt, ResultExt, bail, message};
 
-use crate::{File, GENERATION_NUMBER_INFINITY, GENERATION_NUMBER_MAX, file};
+use crate::{File, Generation, file};
 
 /// The positive result of [`File::traverse()`] providing some statistical information.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct Outcome {
-    /// The largest encountered [`file::Commit`] generation number.
-    pub max_generation: u32,
-    /// The smallest encountered [`file::Commit`] generation number.
-    pub min_generation: u32,
+    /// The largest encountered [`file::Commit`] generation, or [`Generation::UNCOMPUTED`] if the file is empty.
+    pub max_generation: Generation,
+    /// The smallest encountered [`file::Commit`] generation, or [`Generation::UNCOMPUTED`] if the file is empty.
+    pub min_generation: Generation,
     /// The largest number of parents in a single [`file::Commit`].
     pub max_parents: u32,
     /// The total number of [`commits`][file::Commit]s seen in the iteration.
@@ -46,9 +46,9 @@ impl File {
         let null_id = self.object_hash().null_ref();
 
         let mut stats = Outcome {
-            max_generation: 0,
+            max_generation: Generation::UNCOMPUTED,
             max_parents: 0,
-            min_generation: GENERATION_NUMBER_INFINITY,
+            min_generation: Generation::INFINITY,
             num_commits: self.num_commits(),
             parent_counts: HashMap::new(),
         };
@@ -77,25 +77,22 @@ impl File {
                     commit.root_tree_id()
                 );
             }
-            if commit.generation() > GENERATION_NUMBER_MAX {
-                bail!(
-                    "commit {} has invalid generation {}".corrupted(),
-                    commit.id(),
-                    commit.generation()
-                );
+            let generation = commit.generation();
+            if generation > Generation::MAX {
+                bail!("commit {} has invalid generation {generation}".corrupted(), commit.id());
             }
 
             processor(&commit).or_raise(|| message!("processor failed on commit {}", commit.id()))?;
 
-            stats.max_generation = max(stats.max_generation, commit.generation());
-            stats.min_generation = min(stats.min_generation, commit.generation());
+            stats.max_generation = max(stats.max_generation, generation);
+            stats.min_generation = min(stats.min_generation, generation);
             let parent_count = commit.iter_parents().try_fold(0u32, |acc, pos| pos.map(|_| acc + 1))?;
             *stats.parent_counts.entry(parent_count).or_insert(0) += 1;
             prev_id = commit.id();
         }
 
-        if stats.min_generation == GENERATION_NUMBER_INFINITY {
-            stats.min_generation = 0;
+        if stats.min_generation == Generation::INFINITY {
+            stats.min_generation = Generation::UNCOMPUTED;
         }
 
         Ok(stats)

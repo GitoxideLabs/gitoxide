@@ -117,8 +117,7 @@ mod branch_remote {
 
                 assert_eq!(
                     repo.branch_remote_name("main", direction)
-                        .expect("the trusted URL is configured")
-                        .as_bstr(),
+                        .expect("the trusted URL is configured"),
                     expected,
                     "{key}: only eligible configuration can select the destination"
                 );
@@ -188,8 +187,7 @@ mod branch_remote {
 
                 assert_eq!(
                     repo.branch_remote_name("main", remote::Direction::Push)
-                        .expect("Remote name exists")
-                        .as_ref(),
+                        .expect("push selector is configured"),
                     "push-origin",
                     "branch.main.pushRemote is set"
                 );
@@ -199,8 +197,7 @@ mod branch_remote {
 
             assert_eq!(
                 repo.branch_remote_name("main", remote::Direction::Push)
-                    .expect("Remote name exists")
-                    .as_ref(),
+                    .expect("push selector is configured"),
                 "push-origin",
                 "remote.pushDefault is set"
             );
@@ -236,16 +233,14 @@ mod branch_remote {
             "It's OK to find nothing"
         );
 
-        for direction in [remote::Direction::Fetch, remote::Direction::Push] {
-            assert_eq!(
-                repo.branch_remote_name("main", direction).expect("Remote name exists"),
-                "remote_repo"
-            );
-            assert_eq!(
-                repo.branch_remote_name("broken", direction)
-                    .expect("Remote name exists"),
-                "remote_repo"
-            );
+        for branch in ["refs/heads/main", "refs/heads/broken"] {
+            let branch = repo.find_reference(branch)?;
+            for direction in [remote::Direction::Fetch, remote::Direction::Push] {
+                assert_eq!(
+                    branch.remote_name(direction).expect("Remote name exists"),
+                    "remote_repo"
+                );
+            }
         }
 
         assert_eq!(
@@ -261,7 +256,8 @@ mod branch_remote {
         for direction in [remote::Direction::Fetch, remote::Direction::Push] {
             assert_eq!(
                 repo.branch_remote_name("broken", direction).expect("is set"),
-                "remote_repo"
+                "remote_repo",
+                "the raw selector is unaffected by the broken merge ref"
             );
         }
         assert_eq!(
@@ -409,6 +405,26 @@ mod branch_remote {
             "push.default = simple, hence we need to verify the merge-branch is the same as us, and retrieving it succeeds due to auto-fullnamification but then it doesn't match",
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn push_tracking_does_not_require_a_usable_remote_url() -> TestResult {
+        let repo = named_subrepo_opts(
+            "make_remote_config_repos.sh",
+            "fetch",
+            gix::open::Options::isolated().config_overrides([
+                "remote.remote_repo.pushurl=ssh://host",
+                "remote.remote_repo.push=refs/heads/main:refs/heads/publish",
+            ]),
+        )?;
+        assert!(repo.find_remote("remote_repo").is_err(), "the push URL is malformed");
+        assert_eq!(
+            repo.branch_remote_tracking_ref_name("refs/heads/main".try_into()?, remote::Direction::Push)
+                .expect("the push destination has a local tracking ref")?,
+            "refs/remotes/remote_repo/publish",
+            "mapping the push destination does not need the remote URL"
+        );
         Ok(())
     }
 

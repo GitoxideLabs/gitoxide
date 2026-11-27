@@ -1,4 +1,4 @@
-use gix::revision::walk::{Platform, Sorting};
+use gix::revision::walk::{Platform, SharedCommitGraph, Sorting};
 use gix_testtools::TestResult;
 
 const FIXTURE: &str = "make_revision_walk.sh";
@@ -23,14 +23,241 @@ fn named_ids(repo: &gix::Repository, names: &[&str]) -> gix::Result<Vec<String>>
         .collect()
 }
 
-fn assert_graph_use(walk: Platform<'_>, expected: bool) -> gix::Result<()> {
+fn assert_graph_use(walk: Platform<'_, '_>, expected: bool) -> gix::Result<()> {
     let commits = walk.all()?.collect::<gix::Result<Vec<_>>>()?;
-    assert!(!commits.is_empty(), "the cache check traverses existing commits");
+    assert!(!commits.is_empty(), "the commit-graph check traverses existing commits");
     assert!(
         commits.iter().all(|commit| commit.generation.is_some() == expected),
         "generation numbers reveal whether the optional graph was used"
     );
     Ok(())
+}
+
+#[test]
+fn hidden_walk_cache_matches_stock_across_tips_and_bases() -> TestResult {
+    for use_graph in [false, true] {
+        let repo = crate::util::named_subrepo_opts(
+            FIXTURE,
+            ".",
+            crate::util::restricted().config_overrides([format!("core.commitGraph={use_graph}")]),
+        )?;
+        let tip = repo.head_id()?;
+        let mut cache = repo.rev_walk_cache();
+        for (tip, hidden) in [
+            ("tip", "main"),
+            ("side", "tip"),
+            ("merge", "side"),
+            ("main", "side"),
+            ("tip", "root"),
+            ("tip", "main"),
+        ] {
+            let tip = repo.rev_parse_single(tip)?;
+            let hidden = repo.rev_parse_single(hidden)?;
+            for first_parent in [false, true] {
+                let walk = || {
+                    let walk = repo.rev_walk([tip]).with_hidden([hidden]);
+                    if first_parent { walk.first_parent_only() } else { walk }
+                };
+                assert_eq!(
+                    detached(walk().with_cache(&mut cache).all()?)?,
+                    detached(walk().all()?)?,
+                    "tip {tip}, hidden {hidden}, commit-graph {use_graph}, first parent {first_parent}"
+                );
+            }
+        }
+        let base = repo.rev_parse_single("main")?;
+        let with_override = || repo.rev_walk([tip]).with_hidden([base]).use_commit_graph(false);
+        assert_eq!(
+            detached(with_override().with_cache(&mut cache).all()?)?,
+            detached(with_override().all()?)?,
+            "explicit graph policy applies even with a populated cache"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn hidden_walk_cache_respects_commit_graph_overrides() -> TestResult {
+    let repo = crate::util::named_subrepo_opts(
+        FIXTURE,
+        ".",
+        crate::util::restricted().config_overrides(["core.commitGraph=false"]),
+    )?;
+    let partial_repo = crate::util::named_subrepo_opts(FIXTURE, "partial-graph", crate::util::restricted())?;
+    let tip_commit_id = repo.head_id()?;
+    let main_commit_id = repo.rev_parse_single("main")?;
+    let root_commit_id = repo.rev_parse_single("root")?;
+    let mut cache = repo.rev_walk_cache();
+    for (graph_policy, supplied_repo, expected_generations) in [
+        (None, None, (false, false)),
+        (Some(true), None, (true, true)),
+        (Some(true), Some(&partial_repo), (false, true)),
+        (Some(true), Some(&repo), (true, true)),
+        (Some(false), Some(&repo), (false, false)),
+        (Some(true), None, (true, true)),
+        (None, Some(&repo), (false, false)),
+    ] {
+        let walk = || -> gix::Result<_> {
+            Ok(repo
+                .rev_walk([tip_commit_id])
+                .with_hidden([root_commit_id])
+                .use_commit_graph(graph_policy)
+                .with_commit_graph(supplied_repo.map(gix::Repository::commit_graph).transpose()?))
+        };
+        let actual = detached(walk()?.with_cache(&mut cache).all()?)?;
+        assert_eq!(
+            actual,
+            detached(walk()?.all()?)?,
+            "warming with another graph does not change results"
+        );
+        let has_generation = |commit_id: gix::Id<'_>| {
+            actual
+                .iter()
+                .find(|info| info.id == commit_id)
+                .expect("the walk yields both tip and main")
+                .generation
+                .is_some()
+        };
+        assert_eq!(
+            (has_generation(tip_commit_id), has_generation(main_commit_id)),
+            expected_generations,
+            "the walk only uses generations from the graph selected for it"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn shared_commit_graph_keeps_the_snapshot_alive_for_a_walk() -> TestResult {
+    let repo = crate::named_repo(FIXTURE)?;
+    let tip_commit_id = repo.head_id()?;
+    let graph = SharedCommitGraph::new(repo.commit_graph()?);
+    let pos = graph.lookup(tip_commit_id).expect("the fixture graph contains the tip");
+    let shared = graph.clone();
+    assert!(
+        std::ptr::eq(graph.id_at(pos), shared.id_at(pos)),
+        "cloning the handle shares the mapped commit data"
+    );
+    drop(graph);
+
+    let tip = gix::traverse::commit::Simple::new([tip_commit_id], &repo.objects)
+        .with_commit_graph(Some(shared))
+        .next()
+        .transpose()?
+        .expect("the walk yields the tip");
+    assert_eq!(tip.id, tip_commit_id, "the shared snapshot yields the original tip");
+    assert!(
+        tip.generation.is_some(),
+        "the walk still reads the graph after its original handle drops"
+    );
+    Ok(())
+}
+
+#[test]
+fn hidden_walk_cache_is_bound_to_its_creating_handle() -> TestResult {
+    let repo = crate::named_repo(FIXTURE)?;
+    let other_repo = repo.clone();
+    let tip_commit = repo.head_commit()?;
+    let root_commit_id = repo.rev_parse_single("root")?;
+    let walk = || tip_commit.ancestors().with_hidden([root_commit_id]);
+    let other_walk = || other_repo.rev_walk([tip_commit.id()]).with_hidden([root_commit_id]);
+    let mut cache = repo.rev_walk_cache();
+
+    assert!(
+        other_walk().with_cache(&mut cache).all().is_err(),
+        "even an unused cache rejects a cloned repository handle"
+    );
+    let expected = detached(walk().all()?)?;
+    assert_eq!(
+        detached(walk().with_cache(&mut cache).all()?)?,
+        expected,
+        "Commit::ancestors can use a cache created on its repository handle"
+    );
+    assert!(
+        other_walk().with_cache(&mut cache).selected(|_| true).is_err(),
+        "warming the cache does not permit switching handles"
+    );
+    assert_eq!(
+        detached(walk().with_cache(&mut cache).all()?)?,
+        expected,
+        "rejecting another handle does not affect reuse on the creating handle"
+    );
+    Ok(())
+}
+
+#[test]
+fn hidden_walk_cache_preserves_date_cutoff_with_preloaded_ancestry() -> TestResult {
+    let repo = crate::util::named_subrepo_opts(FIXTURE, "skewed", crate::util::restricted())?;
+    let base = repo.rev_parse_single("base")?;
+    let root = repo.rev_parse_single("root")?;
+    let tip = repo.head_id()?;
+    let mut cache = repo.rev_walk_cache();
+    let preload = repo
+        .rev_walk([base])
+        .with_hidden([root])
+        .with_cache(&mut cache)
+        .all()?
+        .collect::<gix::Result<Vec<_>>>()?;
+    assert_eq!(preload.len(), 7, "preload the whole hidden chain");
+    drop(preload);
+
+    let walk = || repo.rev_walk([tip]).with_hidden([base]);
+    let stock = detached(walk().all()?)?;
+    assert!(
+        stock.iter().any(|info| info.id == root.detach()),
+        "the stock date cutoff leaves the skewed root visible"
+    );
+    assert_eq!(
+        detached(walk().with_cache(&mut cache).all()?)?,
+        stock,
+        "the cutoff only marks metadata loaded during the current paint"
+    );
+    Ok(())
+}
+
+#[test]
+fn hidden_walk_cache_preserves_selection_and_can_be_cleared() -> TestResult {
+    let repo = crate::named_repo(FIXTURE)?;
+    let tip_commit_id = repo.head_id()?;
+    let root_commit_id = repo.rev_parse_single("root")?;
+    let walk = || repo.rev_walk([tip_commit_id]).with_hidden([root_commit_id]);
+    let mut cache = repo.rev_walk_cache();
+    detached(walk().with_cache(&mut cache).all()?)?;
+
+    for rejected_commit_id in [repo.rev_parse_single("main")?, repo.rev_parse_single("side")?] {
+        let mut uncached_calls = Vec::new();
+        let uncached = walk().with_cache(&mut cache).with_cache(None).selected(|commit_id| {
+            uncached_calls.push(commit_id.to_owned());
+            commit_id != rejected_commit_id.as_ref()
+        })?;
+        let mut cached_calls = Vec::new();
+        let cached = walk().with_cache(Some(&mut cache)).selected(|commit_id| {
+            cached_calls.push(commit_id.to_owned());
+            commit_id != rejected_commit_id.as_ref()
+        })?;
+        let (cached, uncached) = (detached(cached)?, detached(uncached)?);
+        assert_eq!(
+            cached, uncached,
+            "a warm cache preserves the selected walk's ordered results"
+        );
+        assert_eq!(
+            cached_calls, uncached_calls,
+            "metadata hits do not skip or reorder predicate calls"
+        );
+        assert!(
+            cached_calls.contains(&rejected_commit_id.detach()),
+            "the predicate must see the rejected commit"
+        );
+        assert!(
+            cached.iter().all(|info| info.id != rejected_commit_id),
+            "the predicate prunes the rejected commit"
+        );
+    }
+    Ok(())
+}
+
+fn detached(walk: gix::revision::Walk<'_>) -> gix::Result<Vec<gix::traverse::commit::Info>> {
+    walk.map(|info| info.map(gix::revision::walk::Info::detach)).collect()
 }
 
 #[test]
@@ -212,14 +439,17 @@ fn graph_controls_are_shared_with_simple_walks() -> TestResult {
 }
 
 #[test]
-fn shallow_commits_are_roots_even_with_hidden_history_and_a_stale_graph() -> TestResult {
+fn shallow_walks_skip_automatic_graphs_but_use_supplied_ones() -> TestResult {
     let full = crate::named_repo(FIXTURE)?;
+    let mut shallow_history = baseline(&full, "shallow-hidden.baseline")?;
+    let mut full_history = baseline(&full, "topo-order-all-hidden.baseline")?;
+    shallow_history.sort();
+    full_history.sort();
     for sorting in [Sorting::BreadthFirst, Sorting::TopoOrder, Sorting::DateOrder] {
         let repo = crate::util::named_subrepo_opts(FIXTURE, "shallow", crate::util::restricted())?;
         let infos = repo
             .rev_walk([repo.head_id()?])
             .sorting(sorting)
-            .with_commit_graph(Some(full.commit_graph()?))
             .all()?
             .collect::<gix::Result<Vec<_>>>()?;
         assert_eq!(infos.len(), 1, "the depth-one walk does not read its missing parent");
@@ -229,7 +459,7 @@ fn shallow_commits_are_roots_even_with_hidden_history_and_a_stale_graph() -> Tes
         );
         assert!(
             infos[0].generation.is_none(),
-            "a supplied graph cannot bypass shallow boundaries"
+            "the depth-one walk does not use a commit-graph"
         );
         assert_eq!(
             infos[0].object()?.parent_ids().count(),
@@ -238,18 +468,26 @@ fn shallow_commits_are_roots_even_with_hidden_history_and_a_stale_graph() -> Tes
         );
 
         let repo = crate::util::named_subrepo_opts(FIXTURE, "shallow-with-objects", crate::util::restricted())?;
-        let mut actual = ids(repo
-            .rev_walk([repo.head_id()?])
-            .sorting(sorting)
-            .with_hidden([repo.rev_parse_single("main")?])
-            .with_commit_graph(Some(repo.commit_graph()?))
-            .all()?)?;
-        let mut expected = baseline(&full, "shallow-hidden.baseline")?;
+        let tip = repo.head_id()?;
+        let hidden = repo.rev_parse_single("main")?;
+        let walk = || repo.rev_walk([tip]).sorting(sorting).with_hidden([hidden]);
+        let mut actual = ids(walk().use_commit_graph(true).all()?)?;
         actual.sort();
-        expected.sort();
         assert_eq!(
-            actual, expected,
-            "hidden painting stops at shallow main, preserving root reached through side"
+            actual, shallow_history,
+            "the graph is not opened automatically, so hidden painting stops at shallow main"
+        );
+        let mut actual = ids(walk().with_commit_graph(Some(repo.commit_graph()?)).all()?)?;
+        actual.sort();
+        assert_eq!(
+            actual, full_history,
+            "a supplied graph paints through shallow main, hiding root as in the full repository"
+        );
+        let mut cache = repo.rev_walk_cache();
+        assert_eq!(
+            detached(walk().with_cache(&mut cache).all()?)?,
+            detached(walk().all()?)?,
+            "the cache path respects shallow boundaries and preserves order"
         );
     }
     Ok(())

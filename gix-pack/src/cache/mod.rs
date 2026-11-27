@@ -1,18 +1,39 @@
-use std::ops::DerefMut;
+use std::{
+    ops::DerefMut,
+    sync::atomic::{AtomicU32, Ordering},
+};
 
 use gix_object::Kind;
 
+/// An opaque, process-local key for an open pack in a [`DecodeEntry`] cache.
+///
+/// Reopening a pack assigns a fresh key even if its [location ID](crate::data::File::id) stays the same.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Id(u32);
+
+impl Id {
+    pub(crate) fn allocate() -> Option<Self> {
+        static NEXT_ID: AtomicU32 = AtomicU32::new(0);
+        NEXT_ID
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .ok()
+            .map(Self)
+    }
+}
+
 /// A trait to model putting objects at a given pack `offset` into a cache, and fetching them.
+///
+/// If [`Id`] keys are exhausted, pack decoding bypasses the cache.
 ///
 /// It is used to speed up [pack traversals][crate::index::File::traverse()].
 pub trait DecodeEntry {
     /// Store a fully decoded object at `offset` of `kind` with `compressed_size` and `data` in the cache.
     ///
     /// It is up to the cache implementation whether that actually happens or not.
-    fn put(&mut self, pack_id: u32, offset: u64, data: &[u8], kind: gix_object::Kind, compressed_size: usize);
+    fn put(&mut self, pack_id: Id, offset: u64, data: &[u8], kind: gix_object::Kind, compressed_size: usize);
     /// Attempt to fetch the object at `offset` and store its decoded bytes in `out`, as previously stored with [`DecodeEntry::put()`], and return
     /// its (object `kind`, `decompressed_size`)
-    fn get(&mut self, pack_id: u32, offset: u64, out: &mut Vec<u8>) -> Option<(gix_object::Kind, usize)>;
+    fn get(&mut self, pack_id: Id, offset: u64, out: &mut Vec<u8>) -> Option<(gix_object::Kind, usize)>;
 }
 
 /// A cache that stores nothing and retrieves nothing, thus it _never_ caches.
@@ -20,18 +41,18 @@ pub trait DecodeEntry {
 pub struct Never;
 
 impl DecodeEntry for Never {
-    fn put(&mut self, _pack_id: u32, _offset: u64, _data: &[u8], _kind: gix_object::Kind, _compressed_size: usize) {}
-    fn get(&mut self, _pack_id: u32, _offset: u64, _out: &mut Vec<u8>) -> Option<(gix_object::Kind, usize)> {
+    fn put(&mut self, _pack_id: Id, _offset: u64, _data: &[u8], _kind: gix_object::Kind, _compressed_size: usize) {}
+    fn get(&mut self, _pack_id: Id, _offset: u64, _out: &mut Vec<u8>) -> Option<(gix_object::Kind, usize)> {
         None
     }
 }
 
 impl<T: DecodeEntry + ?Sized> DecodeEntry for Box<T> {
-    fn put(&mut self, pack_id: u32, offset: u64, data: &[u8], kind: Kind, compressed_size: usize) {
+    fn put(&mut self, pack_id: Id, offset: u64, data: &[u8], kind: Kind, compressed_size: usize) {
         self.deref_mut().put(pack_id, offset, data, kind, compressed_size);
     }
 
-    fn get(&mut self, pack_id: u32, offset: u64, out: &mut Vec<u8>) -> Option<(Kind, usize)> {
+    fn get(&mut self, pack_id: Id, offset: u64, out: &mut Vec<u8>) -> Option<(Kind, usize)> {
         self.deref_mut().get(pack_id, offset, out)
     }
 }

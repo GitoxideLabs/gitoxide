@@ -27,7 +27,7 @@ impl Repository {
         let shallow_file = self.shallow_file()?;
         self.shallow_commits.recent_snapshot(
             || shallow_file.metadata().ok().and_then(|m| m.modified().ok()),
-            || gix_shallow::read(&shallow_file),
+            || gix_shallow::read(&shallow_file, self.object_hash()),
         )
     }
 

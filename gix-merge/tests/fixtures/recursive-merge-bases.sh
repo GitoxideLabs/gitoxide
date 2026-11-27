@@ -50,9 +50,9 @@ for layout in sibling-depth skewed-order equal-times skewed-equal-times correcte
     git update-ref refs/heads/A "$(commit "$(tree ours)" 1300000100 -p "$x_commit_id" -p "$y_commit_id" -p "$z_commit_id")"
     git update-ref refs/heads/B "$(commit "$(tree theirs)" 1300000120 -p "$z_commit_id" -p "$y_commit_id" -p "$x_commit_id")"
     git rev-parse A B >commits
-    for cache in uncached v1 v2 partial-v2 mixed; do
+    for commit_graph_mode in uncached v1 v2 partial-v2 mixed; do
       rm -rf .git/objects/info/commit-graph .git/objects/info/commit-graphs
-      case "$cache" in
+      case "$commit_graph_mode" in
         v1) git -c commitGraph.generationVersion=1 commit-graph write --reachable ;;
         v2) git -c commitGraph.generationVersion=2 commit-graph write --reachable ;;
         partial-v2)
@@ -65,14 +65,14 @@ for layout in sibling-depth skewed-order equal-times skewed-equal-times correcte
           git -c commitGraph.generationVersion=2 commit-graph write --reachable --split=no-merge
           ;;
       esac
-      if test "$cache" != uncached; then cp -R .git/objects/info "$cache"; fi
+      if test "$commit_graph_mode" != uncached; then cp -R .git/objects/info "$commit_graph_mode"; fi
       for direction in A-B B-A; do
         ours=${direction%-*}
         theirs=${direction#*-}
         status=0
-        git -c merge.conflictStyle=diff3 merge-tree -z --write-tree "$ours" "$theirs" >"$direction-$cache.merge-info" || status=$?
+        git -c merge.conflictStyle=diff3 merge-tree -z --write-tree "$ours" "$theirs" >"$direction-$commit_graph_mode.merge-info" || status=$?
         test "$status" -eq 1
-        git merge-base --all "$ours" "$theirs" >"$direction-$cache.bases"
+        git merge-base --all "$ours" "$theirs" >"$direction-$commit_graph_mode.bases"
       done
     done
   )

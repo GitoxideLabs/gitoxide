@@ -224,20 +224,26 @@ pub mod describe {
         /// Try to find a name for the configured commit id using all prior configuration, returning `Some(Outcome)`
         /// if one was found.
         ///
-        /// The outcome provides additional information, but leaves the caller with the burden
+        /// Supply a `commit_graph` to accelerate the traversal, or pass `None` to read commits from the object database.
         ///
         /// # Performance
         ///
         /// It is greatly recommended to [assure an object cache is set](crate::Repository::object_cache_size_if_unset())
         /// to save ~40% of time.
-        pub fn try_resolve_with_cache(
+        pub fn try_resolve_with_commit_graph(
             &self,
-            cache: Option<&'_ gix_commitgraph::Graph>,
+            commit_graph: Option<&gix_commitgraph::Graph>,
         ) -> Result<Option<Resolution<'repo>>> {
-            let mut graph = self.repo.revision_graph(cache);
+            self.try_resolve_with_graph(&mut self.repo.revision_graph_with_commit_graph(commit_graph)?)
+        }
+
+        fn try_resolve_with_graph(
+            &self,
+            graph: &mut gix_revwalk::Graph<'_, '_, gix_revision::describe::Flags>,
+        ) -> Result<Option<Resolution<'repo>>> {
             let outcome = gix_revision::describe(
                 &self.id,
-                &mut graph,
+                graph,
                 gix_revision::describe::Options {
                     name_by_oid: self.select.names(self.repo)?,
                     fallback_to_oid: self.id_as_fallback,
@@ -252,14 +258,13 @@ pub mod describe {
             }))
         }
 
-        /// Like [`Self::try_resolve_with_cache()`], but obtains the commitgraph-cache internally for a single use.
+        /// Like [`Self::try_resolve_with_commit_graph()`], but obtains the commit-graph internally for a single use.
         ///
         /// # Performance
         ///
-        /// Prefer to use the [`Self::try_resolve_with_cache()`] method when processing more than one commit at a time.
+        /// Prefer [`Self::try_resolve_with_commit_graph()`] to reuse the same commit-graph across calls.
         pub fn try_resolve(&self) -> Result<Option<Resolution<'repo>>> {
-            let cache = self.repo.commit_graph_if_enabled()?;
-            self.try_resolve_with_cache(cache.as_ref())
+            self.try_resolve_with_graph(&mut self.repo.revision_graph()?)
         }
 
         /// Like [`try_format()`](Self::try_format()), but turns `id_as_fallback()` on to always produce a format.

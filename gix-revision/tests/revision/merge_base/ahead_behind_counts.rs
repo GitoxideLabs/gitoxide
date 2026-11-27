@@ -1,5 +1,5 @@
 use gix_error::TestResult;
-use gix_revision::{ahead_behind_counts, ahead_behind_counts::Outcome};
+use gix_revision::{ahead_behind_counts, ahead_behind_counts::Outcome, graph::Generation};
 
 use super::{baseline, tag_commit_id};
 use crate::odb_at;
@@ -19,8 +19,8 @@ fn counts_match_git() -> TestResult {
         }
     }
     assert!(!samples.is_empty(), "the fixture must provide pairs of commits");
-    for use_commitgraph in [false, true] {
-        let cache = use_commitgraph
+    for use_commit_graph in [false, true] {
+        let commit_graph = use_commit_graph
             .then(|| {
                 gix_commitgraph::Graph::from_info_dir(
                     &odb.store_ref().path().join("info"),
@@ -28,14 +28,14 @@ fn counts_match_git() -> TestResult {
                 )
             })
             .transpose()?;
-        let mut reused_graph = gix_revision::Graph::new(&odb, cache.as_ref());
+        let mut reused_graph = gix_revision::Graph::new(&odb, commit_graph.as_ref());
         for (tip_commit_id, base_commit_id, expected, input) in &samples {
-            let mut new_graph = gix_revision::Graph::new(&odb, cache.as_ref());
+            let mut new_graph = gix_revision::Graph::new(&odb, commit_graph.as_ref());
             for (graph, graph_kind) in [(&mut new_graph, "new"), (&mut reused_graph, "reused")] {
                 assert_eq!(
                     ahead_behind_counts(*tip_commit_id, *base_commit_id, graph)?,
                     *expected,
-                    "{input} with a {graph_kind} graph, commit-graph: {use_commitgraph}"
+                    "{input} with a {graph_kind} graph, commit-graph: {use_commit_graph}"
                 );
             }
         }
@@ -47,12 +47,12 @@ fn counts_match_git() -> TestResult {
 fn counts_both_sides_after_one_side_is_exhausted() -> TestResult {
     let root = gix_testtools::scripted_fixture_read_only("make_merge_base_repos.sh")?;
     let odb = odb_at(root.join(".git/objects"))?;
-    let cache =
+    let commit_graph =
         gix_commitgraph::Graph::from_info_dir(&odb.store_ref().path().join("info"), odb.store_ref().object_hash())?;
     let pl_commit_id = tag_commit_id(&root, "PL")?;
     let c2_commit_id = tag_commit_id(&root, "C2")?;
     let l0_commit_id = tag_commit_id(&root, "L0")?;
-    let mut graph = gix_revision::Graph::new(&odb, Some(&cache));
+    let mut graph = gix_revision::Graph::new(&odb, Some(&commit_graph));
     assert_eq!(
         ahead_behind_counts(pl_commit_id, c2_commit_id, &mut graph)?,
         Outcome { ahead: 4, behind: 0 },
@@ -68,7 +68,7 @@ fn counts_both_sides_after_one_side_is_exhausted() -> TestResult {
         gix_revision::merge_base::is_ancestor(c2_commit_id, pl_commit_id, &mut graph)?,
         "the graph can also be reused for an ancestor check"
     );
-    let mut graph = gix_revision::Graph::new(&odb, Some(&cache));
+    let mut graph = gix_revision::Graph::new(&odb, Some(&commit_graph));
     assert_eq!(
         ahead_behind_counts(tag_commit_id(&root, "A")?, tag_commit_id(&root, "B")?, &mut graph)?,
         Outcome { ahead: 1, behind: 0 },
@@ -82,22 +82,22 @@ fn counts_both_sides_after_one_side_is_exhausted() -> TestResult {
 }
 
 #[test]
-fn uncached_tips_restore_pruning_at_cached_parents() -> TestResult {
+fn tips_outside_the_commit_graph_restore_pruning_at_parents_in_it() -> TestResult {
     let root = gix_testtools::scripted_fixture_read_only("make_merge_base_repos.sh")?;
     let odb = odb_at(root.join(".git/objects"))?;
-    let cache =
+    let commit_graph =
         gix_commitgraph::Graph::from_info_dir(&odb.store_ref().path().join("info"), odb.store_ref().object_hash())?;
     let base_commit_id = tag_commit_id(&root, "A")?;
     let tip_commit_id = tag_commit_id(&root, "UNCACHED_A")?;
     assert!(
-        cache.lookup(base_commit_id).is_some(),
+        commit_graph.lookup(base_commit_id).is_some(),
         "the parent is inside the commit-graph"
     );
     assert!(
-        cache.lookup(tip_commit_id).is_none(),
+        commit_graph.lookup(tip_commit_id).is_none(),
         "the new tip is outside the commit-graph"
     );
-    let mut graph = gix_revision::Graph::new(&odb, Some(&cache));
+    let mut graph = gix_revision::Graph::new(&odb, Some(&commit_graph));
     for (tip, base, expected) in [
         (tip_commit_id, base_commit_id, Outcome { ahead: 1, behind: 0 }),
         (base_commit_id, tip_commit_id, Outcome { ahead: 0, behind: 1 }),
@@ -105,12 +105,12 @@ fn uncached_tips_restore_pruning_at_cached_parents() -> TestResult {
         assert_eq!(
             ahead_behind_counts(tip, base, &mut graph)?,
             expected,
-            "only the uncached child is exclusive"
+            "only the child outside the commit-graph is exclusive"
         );
         assert_eq!(
             graph.len(),
             2,
-            "traversal stops at the shared cached parent, including with a reused graph"
+            "traversal stops at the shared parent in the commit-graph, including with a reused graph"
         );
     }
     Ok(())
@@ -120,11 +120,11 @@ fn uncached_tips_restore_pruning_at_cached_parents() -> TestResult {
 fn unreliable_generations_do_not_double_count() -> TestResult {
     let root = gix_testtools::scripted_fixture_read_only("make_merge_base_repos.sh")?;
     let odb = odb_at(root.join(".git/objects"))?;
-    let cache =
+    let commit_graph =
         gix_commitgraph::Graph::from_info_dir(&odb.store_ref().path().join("info"), odb.store_ref().object_hash())?;
-    for generation in [None, Some(0), Some(gix_commitgraph::GENERATION_NUMBER_MAX)] {
-        for use_commitgraph in [false, true] {
-            let mut graph = gix_revision::Graph::new(&odb, use_commitgraph.then_some(&cache));
+    for generation in [None, Some(Generation::UNCOMPUTED), Some(Generation::MAX)] {
+        for use_commit_graph in [false, true] {
+            let mut graph = gix_revision::Graph::new(&odb, use_commit_graph.then_some(&commit_graph));
             for name in ["A", "B", "C", "D", "E", "F", "G", "H", "PL"] {
                 graph.get_or_insert_full_commit(tag_commit_id(&root, name)?, |commit| {
                     commit.generation = generation;
@@ -138,7 +138,7 @@ fn unreliable_generations_do_not_double_count() -> TestResult {
                 assert_eq!(
                     ahead_behind_counts(tag_commit_id(&root, tip)?, tag_commit_id(&root, base)?, &mut graph)?,
                     expected,
-                    "{tip}...{base} with generation {generation:?}, commit-graph: {use_commitgraph}"
+                    "{tip}...{base} with generation {generation:?}, commit-graph: {use_commit_graph}"
                 );
             }
         }

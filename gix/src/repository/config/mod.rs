@@ -203,12 +203,14 @@ impl crate::Repository {
         }
     }
 
-    /// Return filesystem options as retrieved from the repository configuration.
+    /// Return filesystem options from the repository configuration, with defaults for unset values.
     ///
-    /// When `core.symlinks` has no usable value, try a temporary link in the worktree if
-    /// repository trust is reduced or a custom section filter is in use. If the probe is skipped
-    /// or cannot inspect or remove the link, use the platform default. If it cannot create
-    /// the link, report that symlinks are not supported.
+    /// If the repository has a worktree but no usable `core.symlinks` value, this method probes symlink support
+    /// when the Git directory isn't fully trusted or a custom configuration section filter is in use.
+    /// The probe attempts to create and remove a temporary symlink at the worktree root.
+    ///
+    /// If the probe is skipped or cannot inspect or remove the symlink, use the platform default for symlink
+    /// support. If it cannot create the symlink, report that symlinks are not supported.
     pub fn filesystem_options(&self) -> Result<gix_fs::Capabilities> {
         self.config.fs_capabilities(Some(self))
     }
@@ -332,6 +334,26 @@ mod remote;
 mod transport;
 
 impl crate::Repository {
+    /// Replace the configuration section filter and return the updated repository handle.
+    ///
+    /// Configuration caches are refreshed without reopening the repository, loading additional config files or
+    /// includes, or changing the repository's trust level.
+    ///
+    /// The filter replaces, rather than augments, the existing one.
+    ///
+    /// # Security
+    ///
+    /// Before admitting sections that the default filter would reject, see the security warning in
+    /// [`Options::with_enforced_trust()`](crate::open::Options::with_enforced_trust()).
+    #[doc(alias = "trust override")]
+    pub fn with_config_section_filter(mut self, filter: fn(&gix_config::file::Metadata) -> bool) -> Result<Self> {
+        self.options.filter_config_section = Some(filter);
+        self.config.filter_config_section = filter;
+        let config = self.config.resolved.clone();
+        self.reread_values_and_clear_caches_replacing_config(config)?;
+        Ok(self)
+    }
+
     pub(crate) fn filter_config_section(&self) -> fn(&gix_config::file::Metadata) -> bool {
         self.options
             .filter_config_section

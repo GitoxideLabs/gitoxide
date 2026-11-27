@@ -80,15 +80,14 @@ fn bench_blame(c: &mut Criterion) {
 
     for file in FILES_TO_BLAME {
         c.bench_function(file, |b| {
-            // This benchmark measures `gix_blame::file` alone. Construction and destruction of
-            // `resource_cache` is outside the timed section.
+            // Keep the graph and resource cache cold for each iteration without timing their setup or teardown.
             b.iter_batched_ref(
-                create_resource_cache,
-                |resource_cache| {
+                || (gix_revision::Graph::new(&odb, None), create_resource_cache()),
+                |(graph, resource_cache)| {
                     let start = gix_blame::Start::Commit(head_id);
 
                     std::hint::black_box(
-                        gix_blame::file(&odb, start, None, resource_cache, file.as_ref(), Default::default())
+                        gix_blame::file(&odb, start, graph, resource_cache, file.as_ref(), Default::default())
                             .expect("blame to not fail"),
                     )
                 },

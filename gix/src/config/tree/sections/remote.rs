@@ -23,6 +23,9 @@ impl Remote {
     /// The `remote.<name>.push` key
     pub const PUSH: keys::PushRefSpec =
         keys::PushRefSpec::new_push_refspec("push", &config::Tree::REMOTE).with_subsection_requirement(NAME_PARAMETER);
+    /// The `remote.<name>.mirror` key for selecting same-name push destinations in mirror mode.
+    pub const MIRROR: keys::Boolean =
+        keys::Boolean::new_boolean("mirror", &config::Tree::REMOTE).with_subsection_requirement(NAME_PARAMETER);
     /// The `remote.<name>.proxy` key
     pub const PROXY: keys::String =
         keys::String::new_string("proxy", &config::Tree::REMOTE).with_subsection_requirement(NAME_PARAMETER);
@@ -46,6 +49,7 @@ impl Section for Remote {
             &Self::PUSH_URL,
             &Self::FETCH,
             &Self::PUSH,
+            &Self::MIRROR,
             &Self::PROXY,
             &Self::PROXY_AUTH_METHOD,
         ]

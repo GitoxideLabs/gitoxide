@@ -3,6 +3,7 @@
     feature = "blocking-http-transport-curl"
 ))]
 mod http {
+    use gix::bstr::{BStr, BString, ByteSlice};
     use gix_transport::client::blocking_io::http::options::{
         FollowRedirects, HttpVersion, ProxyAuthMethod, SslVersion, SslVersionRangeInclusive,
     };
@@ -11,11 +12,11 @@ mod http {
 
     fn http_options(
         repo: &gix::Repository,
-        remote_name: Option<&str>,
+        remote_name: Option<&BStr>,
         url: &str,
     ) -> gix_transport::client::blocking_io::http::Options {
         let opts = repo
-            .transport_options(url, remote_name.map(Into::into))
+            .transport_options(url, remote_name)
             .expect("valid configuration")
             .expect("configuration available for http");
         opts.downcast_ref::<gix_transport::client::blocking_io::http::Options>()
@@ -31,11 +32,47 @@ mod http {
             proxy_auth_method,
             follow_redirects,
             ..
-        } = http_options(&repo, Some("origin"), "https://example.com/does/not/matter");
+        } = http_options(&repo, Some("origin".into()), "https://example.com/does/not/matter");
 
         assert_eq!(proxy_auth_method, ProxyAuthMethod::Negotiate);
         assert_eq!(proxy.as_deref(), Some("http://overridden"));
         assert_eq!(follow_redirects, FollowRedirects::Initial);
+    }
+
+    #[test]
+    fn remote_overrides_match_exact_subsection_bytes() {
+        let repo = repo_opts("http-remote-override", |opts| {
+            opts.config_overrides([
+                BString::from(b"remote.team/\xff.proxy=byte-exact".as_slice()),
+                BString::from(b"remote.team/\xff.proxyAuthMethod=negotiate".as_slice()),
+                BString::from("remote.team/\u{fffd}.proxy=lossy"),
+                BString::from("remote.team/\u{fffd}.proxyAuthMethod=digest"),
+            ])
+        });
+        let url = "https://example.com/does/not/matter";
+        let opts = http_options(&repo, Some(b"team/\xff".as_bstr()), url);
+        assert_eq!(
+            opts.proxy.as_deref(),
+            Some("http://byte-exact"),
+            "proxy lookup must not replace invalid UTF-8 in the subsection"
+        );
+        assert_eq!(
+            opts.proxy_auth_method,
+            ProxyAuthMethod::Negotiate,
+            "proxy authentication lookup must also use the exact bytes"
+        );
+
+        let opts = http_options(&repo, None, url);
+        assert_eq!(
+            opts.proxy.as_deref(),
+            Some("http://localhost:9090"),
+            "no subsection uses the HTTP proxy"
+        );
+        assert_eq!(
+            opts.proxy_auth_method,
+            ProxyAuthMethod::Basic,
+            "no subsection uses the HTTP auth method"
+        );
     }
 
     #[test]

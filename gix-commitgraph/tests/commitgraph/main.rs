@@ -10,6 +10,7 @@ use gix_error::{ErrorExt, Message, Result, ResultExt, TestResult};
 use gix_testtools::scripted_fixture_read_only;
 
 mod access;
+mod generation;
 
 #[test]
 fn missing_path_is_not_found() -> gix_testtools::TestResult {
@@ -17,7 +18,7 @@ fn missing_path_is_not_found() -> gix_testtools::TestResult {
     let err = gix_commitgraph::at(dir.path().join("missing"), gix_testtools::object_hash(), None)
         .err()
         .expect("a missing path cannot contain a commit-graph");
-    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(dir.path()).to_string_lossy(), "<tmp>")]), "callers can distinguish a missing optional cache from other failures", @"
+    insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(dir.path()).to_string_lossy(), "<tmp>")]), "callers can distinguish a missing optional commit-graph from other failures", @"
     Could not access commit-graph path at \"<tmp>/missing\"
 
     Caused by:
@@ -25,7 +26,7 @@ fn missing_path_is_not_found() -> gix_testtools::TestResult {
     ");
     assert!(
         err.is_not_found(),
-        "callers can distinguish a missing optional cache from other failures"
+        "callers can distinguish a missing optional commit-graph from other failures"
     );
     Ok(())
 }
@@ -658,6 +659,16 @@ fn empty_graph_inputs_differ_from_empty_stored_chains() -> TestResult {
         "Commit-graph must contain at least one file",
         "the constructor diagnostic remains the cause"
     );
+    Ok(())
+}
+
+#[test]
+fn file_verification_reports_generation_bounds() -> TestResult {
+    let data = fixture_commit_graph_bytes("single_parent.sh")?;
+    let file = mapped_file(&data, "commit-graph")?;
+    let stats = file.traverse(|_| Ok(()))?;
+    assert_eq!(stats.min_generation.get(), 1, "the root has generation 1");
+    assert_eq!(stats.max_generation.get(), 2, "the tip has generation 2");
     Ok(())
 }
 

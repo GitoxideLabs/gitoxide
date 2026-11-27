@@ -39,17 +39,21 @@ pub fn merge_base(
     graph.clear_commit_data(|f| *f = Flags::empty());
     let bases = paint_down_to_common(first, others, None, false, graph)?;
 
-    let mut bases = remove_redundant(&bases, graph)?;
+    let mut bases = match bases.as_slice() {
+        [] => return Ok(None),
+        [(base_commit_id, _)] => return Ok(Some(nonempty::NonEmpty::new(*base_commit_id))),
+        _ => remove_redundant(&bases, graph)?,
+    };
     bases.sort_by_key(|commit_id| Reverse(graph.get(commit_id).expect("merge bases were traversed").commit_time));
     Ok(nonempty::NonEmpty::from_vec(bases))
 }
 
 /// Return `true` if `ancestor_commit_id` can be reached from `descendant_commit_id` by following parents, similar to
-/// `git merge-base --is-ancestor`. A commit is its own ancestor, and commits of unrelated histories aren't ancestors
-/// of each other.
+/// `git merge-base --is-ancestor`. Equal IDs return `true` without consulting the graph.
+/// Queries across unrelated histories return `false`.
 ///
-/// All input commits and traversed parents must exist. Callers representing intentional shallow boundaries must
-/// remove those roots' parents from the graph instead of relying on missing objects to end traversal.
+/// For distinct IDs, both input commits and all traversed parents must exist. Represent intentional shallow
+/// boundaries by clearing those roots' parents in the graph.
 ///
 /// # Performance
 ///
@@ -68,10 +72,10 @@ pub fn is_ancestor(
         ?ancestor_commit_id,
         ?descendant_commit_id
     );
-    insert_input_commits(ancestor_commit_id, &[descendant_commit_id], graph)?;
     if ancestor_commit_id == descendant_commit_id {
         return Ok(true);
     }
+    insert_input_commits(ancestor_commit_id, &[descendant_commit_id], graph)?;
 
     let ancestor = GenThenTime::from(graph.get(&ancestor_commit_id).expect("input commits were inserted"));
     let descendant = GenThenTime::from(graph.get(&descendant_commit_id).expect("input commits were inserted"));
@@ -111,13 +115,11 @@ pub(crate) fn insert_input_commits(
 
 /// Remove all those commits from `commits` if they are in the history of another commit in `commits`.
 /// That way, we return only the topologically most recent commits in `commits`.
+/// Called with multiple candidate commits.
 fn remove_redundant(
     commits: &[(ObjectId, GenThenTime)],
     graph: &mut Graph<'_, '_, graph::Commit<Flags>>,
 ) -> Result<Vec<ObjectId>> {
-    if commits.is_empty() {
-        return Ok(Vec::new());
-    }
     graph.clear_commit_data(|f| *f = Flags::empty());
     let _span = gix_trace::detail!("gix_revision::remove_redundant()", num_commits = %commits.len());
     let sorted_commits = {
@@ -219,13 +221,20 @@ fn remove_redundant(
 }
 
 struct PaintQueue {
-    queue: PriorityQueue<(u64, gix_date::SecondsSinceUnixEpoch, Reverse<usize>), ObjectId>,
+    queue: PriorityQueue<(PaintPriority, gix_date::SecondsSinceUnixEpoch, Reverse<usize>), ObjectId>,
     order: PaintOrder,
     /// Git visits equal-priority commits in insertion order.
     next_sequence: usize,
     /// Non-stale queued commits carrying each color. Candidates count toward both sides, keeping the walk alive
     /// until they have been recorded, even if no exclusively colored commits remain on one side.
     non_stale: [usize; 2],
+}
+
+/// Each queue uses one variant, chosen by its `PaintOrder`, so only priorities of the same kind are compared.
+#[derive(Eq, Ord, PartialEq, PartialOrd)]
+enum PaintPriority {
+    CorrectedCommitDate(u64),
+    TopologicalGeneration(graph::Generation),
 }
 
 enum PaintOrder {
@@ -254,16 +263,16 @@ impl PaintQueue {
         if commit.data.contains(Flags::ENQUEUED) {
             self.update_counts(commit.data, false);
         } else {
-            let generation = match self.order {
-                PaintOrder::CorrectedCommitDate => {
-                    commit.corrected_commit_date.map_or(u64::MAX, std::num::NonZeroU64::get)
-                }
+            let priority = match self.order {
+                PaintOrder::CorrectedCommitDate => PaintPriority::CorrectedCommitDate(
+                    commit.corrected_commit_date.map_or(u64::MAX, std::num::NonZeroU64::get),
+                ),
                 PaintOrder::TopologicalGeneration => {
-                    u64::from(commit.generation.unwrap_or(gix_commitgraph::GENERATION_NUMBER_INFINITY))
+                    PaintPriority::TopologicalGeneration(commit.generation.unwrap_or(graph::Generation::INFINITY))
                 }
             };
             self.queue
-                .insert((generation, commit.commit_time, Reverse(self.next_sequence)), commit_id);
+                .insert((priority, commit.commit_time, Reverse(self.next_sequence)), commit_id);
             self.next_sequence += 1;
             commit.data |= Flags::ENQUEUED;
         }
@@ -368,16 +377,15 @@ fn paint_down_to_common(
 // TODO(ST): Should this type be used for `describe` as well?
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct GenThenTime {
-    /// Note that the special [`GENERATION_NUMBER_INFINITY`](gix_commitgraph::GENERATION_NUMBER_INFINITY) is used to indicate
-    /// that no commitgraph is available.
-    generation: gix_revwalk::graph::Generation,
+    /// Uses [`graph::Generation::INFINITY`] for commits outside the commit-graph.
+    generation: graph::Generation,
     time: gix_date::SecondsSinceUnixEpoch,
 }
 
 impl From<&graph::Commit<Flags>> for GenThenTime {
     fn from(commit: &graph::Commit<Flags>) -> Self {
         GenThenTime {
-            generation: commit.generation.unwrap_or(gix_commitgraph::GENERATION_NUMBER_INFINITY),
+            generation: commit.generation.unwrap_or(graph::Generation::INFINITY),
             time: commit.commit_time,
         }
     }
@@ -386,13 +394,13 @@ impl From<&graph::Commit<Flags>> for GenThenTime {
 impl GenThenTime {
     /// Return `true` if the commit has no generation as it isn't in a commit-graph.
     pub(crate) fn is_outside_commit_graph(&self) -> bool {
-        self.generation == gix_commitgraph::GENERATION_NUMBER_INFINITY
+        self.generation == graph::Generation::INFINITY
     }
 
     /// Return `true` if the generation is from a commit-graph and neither zero nor saturated, as only then all parents
     /// of the commit are known to have a lower generation.
     pub(crate) fn has_reliable_generation(&self) -> bool {
-        self.generation > 0 && self.generation < gix_commitgraph::GENERATION_NUMBER_MAX
+        self.generation.is_reliable()
     }
 }
 

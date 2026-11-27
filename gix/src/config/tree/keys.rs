@@ -545,10 +545,9 @@ mod remote_name {
     use gix_error::ResultExt;
 
     use crate::{
-        Result,
-        bstr::BString,
-        config,
+        Result, config,
         config::tree::{Section, keys::RemoteName},
+        remote,
     };
 
     impl RemoteName {
@@ -557,10 +556,9 @@ mod remote_name {
             Self::new_with_validate(name, section, super::validate::RemoteName)
         }
 
-        /// Try to validate `name` as symbolic remote name and return it.
-        pub fn try_into_symbolic_name(&'static self, name: impl gix_utils::AsBStr) -> Result<BString> {
-            let name = name.as_bstr();
-            crate::remote::name::validated(name.to_owned()).or_raise(|| config::key::error(self, "Invalid remote name"))
+        /// Interpret `name` as a [symbolic remote name](remote::Name), adding config-key context on error.
+        pub fn try_into_symbolic_name(&'static self, name: impl gix_utils::AsBStr) -> Result<remote::Name> {
+            remote::Name::symbol(name.as_bstr().to_owned()).or_raise(|| config::key::error(self, "Invalid remote name"))
         }
     }
 }
@@ -574,15 +572,12 @@ pub trait Validate {
 
 /// various implementations of the `Validate` trait.
 pub mod validate {
-    use std::borrow::Cow;
-
     use crate::error::{ResultExt, validation};
 
     use crate::{
         Result,
         bstr::{BStr, ByteSlice},
         config::tree::keys::Validate,
-        remote,
     };
 
     /// Everything is valid.
@@ -656,12 +651,11 @@ pub mod validate {
         }
     }
 
-    /// Values that are git remotes, symbolic or urls
+    /// Accept raw remote selectors; a consuming operation interprets them in context.
     #[derive(Default, Clone, Copy)]
     pub struct RemoteName;
     impl Validate for RemoteName {
-        fn validate(&self, value: &BStr) -> Result {
-            remote::Name::try_from(Cow::Borrowed(value))?;
+        fn validate(&self, _value: &BStr) -> Result {
             Ok(())
         }
     }

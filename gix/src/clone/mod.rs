@@ -17,8 +17,9 @@ type ConfigureConnectionFn = Box<dyn FnMut(&mut remote::Connection<'_, '_, '_, B
 pub struct PrepareFetch {
     /// A freshly initialized repository which is owned by us, or `None` if it was handed to the user
     repo: Option<crate::Repository>,
-    /// The name of the remote, which defaults to `origin` if not overridden.
-    remote_name: Option<BString>,
+    /// The explicit remote name for the clone. If `None`, use `clone.defaultRemoteName`, or `origin` if that key is unset.
+    /// The value read from `clone.defaultRemoteName` must be a valid symbolic remote name; otherwise the fetch fails.
+    remote_name: Option<remote::Name>,
     /// Additional config `values` that are applied in-memory before starting the fetch process.
     config_overrides: Vec<BString>,
     /// A function to configure a remote prior to fetching a pack.

@@ -3,6 +3,7 @@ use std::{
     collections::VecDeque,
 };
 
+use gix_commitgraph::Generation;
 use gix_date::SecondsSinceUnixEpoch;
 use gix_error::Result;
 use gix_hash::{ObjectId, oid};
@@ -89,14 +90,14 @@ bitflags::bitflags! {
 /// when available and falling back to commit time as a tie-breaker.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 struct GenThenTime {
-    generation: gix_revwalk::graph::Generation,
+    generation: Generation,
     time: SecondsSinceUnixEpoch,
 }
 
-impl From<&gix_revwalk::graph::Commit<PaintFlags>> for GenThenTime {
-    fn from(commit: &gix_revwalk::graph::Commit<PaintFlags>) -> Self {
+impl<T> From<&gix_revwalk::graph::Commit<T>> for GenThenTime {
+    fn from(commit: &gix_revwalk::graph::Commit<T>) -> Self {
         GenThenTime {
-            generation: commit.generation.unwrap_or(gix_commitgraph::GENERATION_NUMBER_INFINITY),
+            generation: commit.generation.unwrap_or(Generation::INFINITY),
             time: commit.commit_time,
         }
     }
@@ -143,7 +144,7 @@ pub(super) struct State {
     hidden_tips: Vec<ObjectId>,
     /// Scratch buffer for parent commit lookups when commit times are loaded from the object database.
     parents_buf: Vec<u8>,
-    /// Reusable parent id/time storage populated from the commit-graph cache.
+    /// Reusable parent id/time storage populated from the commit-graph.
     parent_ids: SmallVec<[(ObjectId, SecondsSinceUnixEpoch); 2]>,
 }
 
@@ -154,10 +155,135 @@ fn to_queue_key(i: i64, order: CommitTimeOrder) -> QueueKey<i64> {
     }
 }
 
+/// Commits marked both visible and hidden during painting. The visible walk neither yields these
+/// commits nor follows their parents, so the frontier need not contain the full hidden ancestry.
+///
+/// For example, with parents to the left:
+///
+/// ```text
+///              A --- V (visible tip)
+///             /
+/// R --- P --- X
+///             \
+///              B --- H (hidden tip)
+/// ```
+///
+/// Both paths reach `X`. With usable generation numbers, painting can stop there: the frontier
+/// contains just `X`, and the visible walk yields `V` and `A` without visiting `P` or `R`.
+type Frontier = gix_revwalk::graph::IdMap<()>;
+type CommitMetadata = gix_revwalk::graph::Commit<()>;
+
+struct PaintedCommit<'a> {
+    parents: &'a crate::commit::ParentIds,
+    priority: GenThenTime,
+    flags: PaintFlags,
+}
+
+impl<'a> PaintedCommit<'a> {
+    fn new<T>(commit: &'a gix_revwalk::graph::Commit<T>, flags: PaintFlags) -> Self {
+        PaintedCommit {
+            parents: &commit.parents,
+            priority: GenThenTime::from(commit),
+            flags,
+        }
+    }
+}
+
+trait Paint {
+    fn get(&self, id: &oid) -> Option<PaintedCommit<'_>>;
+    fn update(&mut self, id: ObjectId, update: impl FnOnce(GenThenTime, &mut PaintFlags)) -> Result<()>;
+    fn mark_hidden(&mut self, id: &oid) -> Option<&crate::commit::ParentIds>;
+    fn into_frontier(self) -> Frontier;
+}
+
+/// Paint a single walk without a shared cache. The temporary graph keeps metadata and flags together;
+/// only the frontier IDs survive after painting.
+impl Paint for gix_revwalk::Graph<'_, '_, gix_revwalk::graph::Commit<PaintFlags>> {
+    fn get(&self, id: &oid) -> Option<PaintedCommit<'_>> {
+        self.get(id).map(|commit| PaintedCommit::new(commit, commit.data))
+    }
+
+    fn update(&mut self, id: ObjectId, update: impl FnOnce(GenThenTime, &mut PaintFlags)) -> Result<()> {
+        self.get_or_insert_full_commit(id, |commit| update(GenThenTime::from(&*commit), &mut commit.data))?;
+        Ok(())
+    }
+
+    fn mark_hidden(&mut self, id: &oid) -> Option<&crate::commit::ParentIds> {
+        let commit = self.get_mut(id)?;
+        commit.data |= PaintFlags::HIDDEN;
+        Some(&commit.parents)
+    }
+
+    fn into_frontier(self) -> Frontier {
+        self.detach()
+            .into_iter()
+            .filter_map(|(id, commit)| {
+                commit
+                    .data
+                    .contains(PaintFlags::VISIBLE | PaintFlags::HIDDEN)
+                    .then_some((id, ()))
+            })
+            .collect()
+    }
+}
+
+/// Paint a single walk using metadata that can be reused across walks with the same object lookup
+/// and commit-graph snapshot.
+///
+/// Only commits in `flags` count as visited by this walk. Metadata cached by earlier walks must not
+/// change which commits the date cutoff can mark as hidden.
+struct SharedPaint<'a> {
+    metadata: &'a mut gix_revwalk::graph::IdMap<CommitMetadata>,
+    lookup: gix_revwalk::Graph<'a, 'a, ()>,
+    flags: gix_revwalk::graph::IdMap<PaintFlags>,
+}
+
+impl Paint for SharedPaint<'_> {
+    fn get(&self, id: &oid) -> Option<PaintedCommit<'_>> {
+        let flags = *self.flags.get(id)?;
+        Some(PaintedCommit::new(
+            self.metadata.get(id).expect("painted commits have metadata"),
+            flags,
+        ))
+    }
+
+    fn update(&mut self, id: ObjectId, update: impl FnOnce(GenThenTime, &mut PaintFlags)) -> Result<()> {
+        use gix_hashtable::hash_map::Entry;
+        let commit = match self.metadata.entry(id) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                let Some(commit) = self.lookup.try_lookup(&id)? else {
+                    return Ok(());
+                };
+                entry.insert(commit.to_owned(|| ())?)
+            }
+        };
+        update(GenThenTime::from(&*commit), self.flags.entry(id).or_default());
+        Ok(())
+    }
+
+    fn mark_hidden(&mut self, id: &oid) -> Option<&crate::commit::ParentIds> {
+        // The date cutoff only paints commits loaded by this walk, even if other metadata is cached.
+        *self.flags.get_mut(id)? |= PaintFlags::HIDDEN;
+        Some(&self.metadata.get(id).expect("painted commits have metadata").parents)
+    }
+
+    fn into_frontier(self) -> Frontier {
+        self.flags
+            .into_iter()
+            .filter_map(|(id, flags)| {
+                flags
+                    .contains(PaintFlags::VISIBLE | PaintFlags::HIDDEN)
+                    .then_some((id, ()))
+            })
+            .collect()
+    }
+}
+
 /// Compute the boundary at which the visible walk must stop because commits become reachable from
 /// both the visible tips and the hidden tips.
 ///
-/// The algorithm performs a merge-base-style paint in a temporary `gix_revwalk::Graph`:
+/// The algorithm performs a merge-base-style paint:
 /// visible tips are marked with `VISIBLE`, hidden tips with `HIDDEN`, and these flags are
 /// propagated to parents in generation/time order. Once a commit carries both flags, it is part
 /// of the overlap between the two histories and is marked `STALE`. With generation numbers,
@@ -180,11 +306,28 @@ pub(super) fn compute_hidden_frontier(
     visible_tips: &[ObjectId],
     hidden_tips: &[ObjectId],
     objects: &impl gix_object::Find,
-    cache: Option<&gix_commitgraph::Graph>,
+    commit_graph: Option<&gix_commitgraph::Graph>,
+    parents: Parents,
+    predicate: impl FnMut(&oid) -> bool,
+) -> Result<gix_revwalk::graph::IdMap<()>> {
+    paint_frontier(
+        visible_tips,
+        hidden_tips,
+        gix_revwalk::Graph::new(objects, commit_graph),
+        commit_graph.is_some_and(|commit_graph| !commit_graph.generation_numbers_available()),
+        parents,
+        predicate,
+    )
+}
+
+fn paint_frontier(
+    visible_tips: &[ObjectId],
+    hidden_tips: &[ObjectId],
+    mut graph: impl Paint,
+    mut saw_uncomputed_generation: bool,
     parents: Parents,
     mut predicate: impl FnMut(&oid) -> bool,
-) -> Result<gix_revwalk::graph::IdMap<()>> {
-    let mut graph = gix_revwalk::Graph::<gix_revwalk::graph::Commit<PaintFlags>>::new(objects, cache);
+) -> Result<Frontier> {
     let mut queue = gix_revwalk::PriorityQueue::<GenThenTime, ObjectId>::new();
     let mut unhidden_tips = visible_tips.len();
     let mut last_visible_time = SecondsSinceUnixEpoch::MAX;
@@ -192,61 +335,52 @@ pub(super) fn compute_hidden_frontier(
     let mut stopped_on_date = false;
     // Queued commits painted only `VISIBLE`. They were queued once, when they gained that flag.
     let mut visible_only_commit_ids = gix_hashtable::HashSet::default();
-    // Check every layer up front: an unseen legacy layer can hide ancestors that sort above it.
-    let mut saw_uncomputed_generation = cache.is_some_and(|cache| !cache.generation_numbers_available());
 
     for &visible in visible_tips {
-        graph.get_or_insert_full_commit(visible, |commit| {
-            commit.data |= PaintFlags::VISIBLE;
-            saw_uncomputed_generation |= commit.generation == Some(0);
+        graph.update(visible, |priority, flags| {
+            *flags |= PaintFlags::VISIBLE;
+            saw_uncomputed_generation |= priority.generation == Generation::UNCOMPUTED;
             visible_only_commit_ids.insert(visible);
-            queue.insert(GenThenTime::from(&*commit), visible);
+            queue.insert(priority, visible);
         })?;
     }
     for &hidden in hidden_tips {
-        graph.get_or_insert_full_commit(hidden, |commit| {
-            if commit.data == PaintFlags::VISIBLE {
+        graph.update(hidden, |priority, flags| {
+            if *flags == PaintFlags::VISIBLE {
                 unhidden_tips -= 1;
                 visible_only_commit_ids.remove(&hidden);
             }
-            saw_uncomputed_generation |= commit.generation == Some(0);
-            commit.data |= PaintFlags::HIDDEN;
-            queue.insert(GenThenTime::from(&*commit), hidden);
+            saw_uncomputed_generation |= priority.generation == Generation::UNCOMPUTED;
+            *flags |= PaintFlags::HIDDEN;
+            queue.insert(priority, hidden);
         })?;
     }
 
-    while queue.iter_unordered().any(|id| {
-        graph.get(id).is_some_and(|commit| {
-            !commit.data.contains(PaintFlags::STALE)
-                || commit
-                    .generation
-                    .is_none_or(|generation| !(1..gix_commitgraph::GENERATION_NUMBER_MAX).contains(&generation))
-        })
-    }) {
-        if unhidden_tips == 0 {
-            break;
-        }
-        // With zero-generation layers ruled out, a usable queue head means all queued commits have one.
-        if visible_only_commit_ids.is_empty()
-            && !saw_uncomputed_generation
-            && queue
-                .peek()
-                .is_some_and(|(key, _)| (1..gix_commitgraph::GENERATION_NUMBER_MAX).contains(&key.generation))
-        {
-            break;
+    while unhidden_tips != 0 {
+        // A queued visible-only commit already proves there is non-stale work.
+        if visible_only_commit_ids.is_empty() {
+            // With zero-generation layers ruled out, a usable queue head means all queued commits have one.
+            if !saw_uncomputed_generation && queue.peek().is_some_and(|(key, _)| key.generation.is_reliable()) {
+                break;
+            }
+            if queue.iter_unordered().all(|id| {
+                graph.get(id).is_none_or(|commit| {
+                    commit.flags.contains(PaintFlags::STALE) && commit.priority.generation.is_reliable()
+                })
+            }) {
+                break;
+            }
         }
         let (_info, commit_id) = match queue.pop() {
             Some(v) => v,
             None => break,
         };
         let commit = graph.get(&commit_id).expect("queued commits are in the graph");
-        let mut flags = commit.data;
+        let mut flags = commit.flags;
         let parent_ids = commit.parents.clone();
-        let use_date_cutoff = commit
-            .generation
-            .is_none_or(|generation| !(1..gix_commitgraph::GENERATION_NUMBER_MAX).contains(&generation));
+        let use_date_cutoff = !commit.priority.generation.is_reliable();
         if !flags.contains(PaintFlags::HIDDEN) {
-            last_visible_time = commit.commit_time;
+            last_visible_time = commit.priority.time;
             visible_only_commit_ids.remove(&commit_id);
         }
         if flags == (PaintFlags::VISIBLE | PaintFlags::HIDDEN) {
@@ -262,20 +396,20 @@ pub(super) fn compute_hidden_frontier(
                     continue;
                 }
             }
-            graph.get_or_insert_full_commit(parent_id, |parent| {
-                saw_uncomputed_generation |= parent.generation == Some(0);
-                if (parent.data & flags) != flags {
-                    if flags.contains(PaintFlags::HIDDEN) && parent.data == PaintFlags::VISIBLE {
+            graph.update(parent_id, |priority, paint| {
+                saw_uncomputed_generation |= priority.generation == Generation::UNCOMPUTED;
+                if (*paint & flags) != flags {
+                    if flags.contains(PaintFlags::HIDDEN) && *paint == PaintFlags::VISIBLE {
                         visible_only_commit_ids.remove(&parent_id);
                         if visible_tips.binary_search(&parent_id).is_ok() {
                             unhidden_tips -= 1;
                         }
                     }
-                    parent.data |= flags;
-                    if parent.data == PaintFlags::VISIBLE {
+                    *paint |= flags;
+                    if *paint == PaintFlags::VISIBLE {
                         visible_only_commit_ids.insert(parent_id);
                     }
-                    queue.insert(GenThenTime::from(&*parent), parent_id);
+                    queue.insert(priority, parent_id);
                 }
             })?;
         }
@@ -284,7 +418,7 @@ pub(super) fn compute_hidden_frontier(
             // Git's limit_list() allows five older hidden commits before stopping without generations.
             if queue.iter_unordered().any(|id| {
                 let commit = graph.get(id).expect("queued commits are in the graph");
-                !commit.data.contains(PaintFlags::HIDDEN) || commit.commit_time >= last_visible_time
+                !commit.flags.contains(PaintFlags::HIDDEN) || commit.priority.time >= last_visible_time
             }) {
                 slop = 5;
             } else {
@@ -302,37 +436,29 @@ pub(super) fn compute_hidden_frontier(
         let mut pending = hidden_tips.to_vec();
         let mut seen = gix_hashtable::HashSet::default();
         while let Some(commit_id) = pending.pop() {
-            let Some(commit) = graph.get_mut(&commit_id).filter(|_| seen.insert(commit_id)) else {
-                continue;
-            };
-            commit.data |= PaintFlags::HIDDEN;
-            pending.extend(&commit.parents);
+            if seen.insert(commit_id)
+                && let Some(parents) = graph.mark_hidden(&commit_id)
+            {
+                pending.extend(parents);
+            }
         }
     }
 
-    Ok(graph
-        .detach()
-        .into_iter()
-        .filter_map(|(id, commit)| {
-            commit
-                .data
-                .contains(PaintFlags::VISIBLE | PaintFlags::HIDDEN)
-                .then_some((id, ()))
-        })
-        .collect())
+    Ok(graph.into_frontier())
 }
 
 ///
 mod init {
     use super::{
-        CommitDateQueue, CommitTimeOrder, Sorting, State, collect_parents, compute_hidden_frontier, to_queue_key,
+        CommitDateQueue, CommitTimeOrder, SharedPaint, Sorting, State, collect_parents, compute_hidden_frontier,
+        paint_frontier, to_queue_key,
     };
     use crate::commit::{Either, Info, ParentIds, Parents, Simple};
     use gix_date::SecondsSinceUnixEpoch;
-    use gix_error::{ErrorExt, Result, ResultExt, corruption};
+    use gix_error::{ErrorExt, Result, ResultExt, bail, corruption, message};
     use gix_hash::{ObjectId, oid};
     use gix_object::{CommitRefIter, FindExt};
-    use std::{cmp::Reverse, collections::VecDeque};
+    use std::{borrow::Borrow, cmp::Reverse, collections::VecDeque};
 
     impl Default for State {
         fn default() -> Self {
@@ -384,9 +510,10 @@ mod init {
     }
 
     /// Builder methods
-    impl<Find, Predicate> Simple<Find, Predicate>
+    impl<Find, Predicate, CommitGraph> Simple<Find, Predicate, CommitGraph>
     where
         Find: gix_object::Find,
+        CommitGraph: Borrow<gix_commitgraph::Graph>,
     {
         /// Set the `sorting` method.
         pub fn sorting(mut self, sorting: Sorting) -> Result<Self> {
@@ -429,13 +556,24 @@ mod init {
             Ok(self)
         }
 
-        /// Set the commitgraph as `cache` to greatly accelerate any traversal.
+        /// Set the commit-graph to speed up traversal. The graph can be owned, borrowed, or shared.
         ///
-        /// The cache will be used if possible, but we will fall back without error to using the object
-        /// database for commit lookup. If the cache is corrupt, we will fall back to the object database as well.
-        pub fn commit_graph(mut self, cache: Option<gix_commitgraph::Graph>) -> Self {
-            self.cache = cache;
-            self
+        /// Commit lookups fall back to the object database if the commit-graph is unavailable or corrupt.
+        pub fn with_commit_graph<NewCommitGraph>(
+            self,
+            commit_graph: Option<NewCommitGraph>,
+        ) -> Simple<Find, Predicate, NewCommitGraph>
+        where
+            NewCommitGraph: Borrow<gix_commitgraph::Graph>,
+        {
+            Simple {
+                objects: self.objects,
+                commit_graph,
+                predicate: self.predicate,
+                state: self.state,
+                parents: self.parents,
+                sorting: self.sorting,
+            }
         }
 
         fn queue_to_vecdeque(&mut self) {
@@ -460,6 +598,55 @@ mod init {
             out
         }
 
+        /// Hide `hidden_tips` during a breadth-first walk, reusing `metadata` while painting the frontier
+        /// and walking the visible commits. Both passes use the graph set by [`Self::with_commit_graph()`], if any.
+        ///
+        /// Start with an empty metadata map and reuse it only with the same object lookup and commit-graph
+        /// snapshot. Each walk computes its own frontier, including the date cutoff when generations are
+        /// unavailable. Errors while painting are yielded by the iterator.
+        pub fn hide_with_cache<'a>(
+            mut self,
+            hidden_tips: Vec<ObjectId>,
+            metadata: &'a mut gix_revwalk::graph::IdMap<gix_revwalk::graph::Commit<()>>,
+        ) -> Result<impl Iterator<Item = Result<Info>> + 'a>
+        where
+            Find: 'a,
+            Predicate: FnMut(&oid) -> bool + 'a,
+            CommitGraph: 'a,
+        {
+            if !matches!(self.sorting, Sorting::BreadthFirst) {
+                bail!(message("The hidden walk cache requires breadth-first sorting").validation());
+            }
+            let mut hidden_tips = Some(hidden_tips);
+            Ok(std::iter::from_fn(move || {
+                if let Some(hidden_tips) = hidden_tips.take() {
+                    self.state.hidden.clear();
+                    let visible_tips = self.visible_inputs_sorted();
+                    if !hidden_tips.is_empty() && !visible_tips.is_empty() {
+                        let paint_graph = self.commit_graph.as_ref().map(Borrow::borrow);
+                        let graph = SharedPaint {
+                            metadata,
+                            lookup: gix_revwalk::Graph::new(&self.objects, paint_graph),
+                            flags: Default::default(),
+                        };
+                        let uncomputed =
+                            paint_graph.is_some_and(|commit_graph| !commit_graph.generation_numbers_available());
+                        match paint_frontier(&visible_tips, &hidden_tips, graph, uncomputed, Parents::All, |_| true) {
+                            Ok(hidden) => {
+                                self.state.hidden = hidden;
+                                self.exclude_hidden_tips();
+                            }
+                            Err(err) => {
+                                self.state.next.clear();
+                                return Some(Err(err));
+                            }
+                        }
+                    }
+                }
+                self.next_by_topology_with_metadata(|id| metadata.get(id))
+            }))
+        }
+
         fn compute_hidden_frontier(&mut self, hidden_tips: Vec<ObjectId>) -> Result {
             self.state.hidden.clear();
             if hidden_tips.is_empty() {
@@ -473,16 +660,20 @@ mod init {
                 &visible_tips,
                 &hidden_tips,
                 &self.objects,
-                self.cache.as_ref(),
+                self.commit_graph.as_ref().map(Borrow::borrow),
                 Parents::All,
                 |_| true,
             )?;
+            self.exclude_hidden_tips();
+            Ok(())
+        }
+
+        fn exclude_hidden_tips(&mut self) {
             self.state.next.retain(|id| !self.state.hidden.contains_key(id));
             self.state.queue = std::mem::replace(&mut self.state.queue, gix_revwalk::PriorityQueue::new())
                 .into_iter_unordered()
                 .filter(|(_, id)| !self.state.hidden.contains_key(id))
                 .collect();
-            Ok(())
         }
     }
 
@@ -559,7 +750,7 @@ mod init {
             }
             Self {
                 objects: find,
-                cache: None,
+                commit_graph: None,
                 predicate,
                 state,
                 parents: Default::default(),
@@ -569,7 +760,7 @@ mod init {
     }
 
     /// Access
-    impl<Find, Predicate> Simple<Find, Predicate> {
+    impl<Find, Predicate, CommitGraph> Simple<Find, Predicate, CommitGraph> {
         /// Return an iterator for accessing data of the current commit, parsed lazily.
         pub fn commit_iter(&self) -> CommitRefIter<'_> {
             CommitRefIter::from_bytes(self.commit_data(), self.state.object_hash)
@@ -581,10 +772,11 @@ mod init {
         }
     }
 
-    impl<Find, Predicate> Iterator for Simple<Find, Predicate>
+    impl<Find, Predicate, CommitGraph> Iterator for Simple<Find, Predicate, CommitGraph>
     where
         Find: gix_object::Find,
         Predicate: FnMut(&oid) -> bool,
+        CommitGraph: Borrow<gix_commitgraph::Graph>,
     {
         type Item = Result<Info>;
 
@@ -610,10 +802,11 @@ mod init {
     }
 
     /// Utilities
-    impl<Find, Predicate> Simple<Find, Predicate>
+    impl<Find, Predicate, CommitGraph> Simple<Find, Predicate, CommitGraph>
     where
         Find: gix_object::Find,
         Predicate: FnMut(&oid) -> bool,
+        CommitGraph: Borrow<gix_commitgraph::Graph>,
     {
         fn next_by_commit_date(
             &mut self,
@@ -634,12 +827,13 @@ mod init {
                 let mut parents: ParentIds = Default::default();
                 let generation;
 
-                match super::super::find(self.cache.as_ref(), &self.objects, &oid, &mut state.buf) {
-                    Ok(Either::CachedCommit(commit)) => {
+                let commit_graph = self.commit_graph.as_ref().map(Borrow::borrow);
+                match super::super::find(commit_graph, &self.objects, &oid, &mut state.buf) {
+                    Ok(Either::CommitGraph(commit)) => {
                         generation = Some(commit.generation());
-                        if !collect_parents(&mut state.parent_ids, self.cache.as_ref(), commit.iter_parents()) {
-                            // drop corrupt caches and try again with ODB
-                            self.cache = None;
+                        if !collect_parents(&mut state.parent_ids, commit_graph, commit.iter_parents()) {
+                            // discard the corrupt commit-graph and retry with the object database
+                            self.commit_graph = None;
                             next.insert(to_queue_key(commit_time, order), oid);
                             continue;
                         }
@@ -705,6 +899,13 @@ mod init {
         }
 
         fn next_by_topology(&mut self) -> Option<Result<Info>> {
+            self.next_by_topology_with_metadata(|_| None)
+        }
+
+        pub(super) fn next_by_topology_with_metadata<'a>(
+            &mut self,
+            mut metadata: impl FnMut(&oid) -> Option<&'a gix_revwalk::graph::Commit<()>>,
+        ) -> Option<Result<Info>> {
             let state = &mut self.state;
             let next = &mut state.next;
 
@@ -717,12 +918,31 @@ mod init {
                 let mut parents: ParentIds = Default::default();
                 let generation;
 
-                match super::super::find(self.cache.as_ref(), &self.objects, &oid, &mut state.buf) {
-                    Ok(Either::CachedCommit(commit)) => {
+                let commit_graph = self.commit_graph.as_ref().map(Borrow::borrow);
+                if let Some(commit) =
+                    metadata(&oid).filter(|commit| commit.generation.is_none() || commit_graph.is_some())
+                {
+                    for &pid in &commit.parents {
+                        parents.push(pid);
+                        insert_into_seen_and_next(&mut state.seen, &state.hidden, pid, &mut self.predicate, next);
+                        if matches!(self.parents, Parents::First) {
+                            break;
+                        }
+                    }
+                    return Some(Ok(Info {
+                        id: oid,
+                        parent_ids: parents,
+                        generation: commit.generation,
+                        commit_time: None,
+                    }));
+                }
+
+                match super::super::find(commit_graph, &self.objects, &oid, &mut state.buf) {
+                    Ok(Either::CommitGraph(commit)) => {
                         generation = Some(commit.generation());
-                        if !collect_parents(&mut state.parent_ids, self.cache.as_ref(), commit.iter_parents()) {
-                            // drop corrupt caches and try again with ODB
-                            self.cache = None;
+                        if !collect_parents(&mut state.parent_ids, commit_graph, commit.iter_parents()) {
+                            // discard the corrupt commit-graph and retry with the object database
+                            self.commit_graph = None;
                             next.push_front(oid);
                             continue;
                         }
@@ -817,15 +1037,17 @@ mod init {
 
 fn collect_parents(
     dest: &mut SmallVec<[(gix_hash::ObjectId, gix_date::SecondsSinceUnixEpoch); 2]>,
-    cache: Option<&gix_commitgraph::Graph>,
+    commit_graph: Option<&gix_commitgraph::Graph>,
     parents: gix_commitgraph::file::commit::Parents<'_>,
 ) -> bool {
     dest.clear();
-    let cache = cache.as_ref().expect("parents iter is available, backed by `cache`");
+    let commit_graph = commit_graph
+        .as_ref()
+        .expect("the parent iterator came from the commit-graph");
     for parent_id in parents {
         match parent_id {
             Ok(pos) => dest.push({
-                let parent = cache.commit_at(pos);
+                let parent = commit_graph.commit_at(pos);
                 (
                     parent.id().to_owned(),
                     parent.committer_timestamp() as gix_date::SecondsSinceUnixEpoch,

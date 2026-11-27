@@ -24,6 +24,15 @@ baseline() {
   done
 }
 
+# Record names as well as reachability, including the symbolic HEAD alias.
+contains_baseline() {
+  local target
+  for target in HEAD parent root unrelated; do
+    git for-each-ref --format='%(refname)' --contains="$target" refs/remotes/replacement/ \
+      >".git/contains-$target.baseline"
+  done
+}
+
 git init -q
 git checkout -q -b main
 git commit -q --allow-empty -m root
@@ -38,7 +47,13 @@ divergent=$(git commit-tree HEAD^{tree} -p parent -m divergent)
 unrelated=$(git commit-tree HEAD^{tree} -m unrelated)
 git update-ref refs/tags/divergent "$divergent"
 git update-ref refs/tags/unrelated "$unrelated"
+git update-ref refs/remotes/replacement/main HEAD
+git update-ref refs/remotes/replacement/divergent "$divergent"
+git update-ref refs/remotes/replacement/old root
+git symbolic-ref refs/remotes/replacement/HEAD refs/remotes/replacement/main
+git update-ref refs/remotes/replacement-other/unrelated "$unrelated"
 baseline
+contains_baseline
 
 # All variants retain identical object IDs. Tests can reuse populated graphs
 # across full and shallow views without modifying a shared read-only fixture.
@@ -51,7 +66,7 @@ rm -r missing-info/.git/objects/info
 
 # Retain older objects and the pre-shallow cache behind the boundary.
 git rev-parse parent >shallow/.git/shallow
-(cd shallow; baseline)
+(cd shallow; baseline; contains_baseline)
 
 # A parentless replacement changes topology without updating the stale cache.
 (cd replacements
@@ -59,4 +74,5 @@ git rev-parse parent >shallow/.git/shallow
   replacement=$(git commit-tree HEAD^{tree} -m replacement)
   git replace HEAD "$replacement"
   baseline
+  contains_baseline
 )

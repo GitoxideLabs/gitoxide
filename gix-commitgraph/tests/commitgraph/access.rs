@@ -10,6 +10,11 @@ fn legacy_graph_has_no_generation_numbers() -> gix_testtools::TestResult {
     data[generation_offset..][..4].copy_from_slice(&timestamp_bits.to_be_bytes());
     crate::update_checksum(&mut data)?;
     let graph = gix_commitgraph::Graph::new(vec![crate::mapped_file(&data, "commit-graph")?])?;
+    assert_eq!(
+        graph.commit_at(gix_commitgraph::Position(0)).generation(),
+        gix_commitgraph::Generation::UNCOMPUTED,
+        "the stored zero is decoded as uncomputed without normalization"
+    );
     assert!(
         !graph.generation_numbers_available(),
         "a legacy graph stores zero instead of computed generation numbers"
@@ -22,8 +27,8 @@ fn single_parent() {
     let (cg, refs) = graph_and_expected("single_parent.sh", &["parent", "child"]);
     check_common(&cg, &refs);
 
-    assert_eq!(cg.commit_at(refs["parent"].pos()).generation(), 1);
-    assert_eq!(cg.commit_at(refs["child"].pos()).generation(), 2);
+    assert_eq!(cg.commit_at(refs["parent"].pos()).generation().get(), 1);
+    assert_eq!(cg.commit_at(refs["child"].pos()).generation().get(), 2);
 }
 
 #[test]
@@ -40,7 +45,7 @@ fn single_commit_huge_dates_generation_v2_also_do_not_allow_huge_dates() {
         info.time.seconds, 68719476737,
         "this is the value we would want to see, but it's not possible in V2 either, as that is just about generations"
     );
-    assert_eq!(actual.generation(), 1, "generations are fine though");
+    assert_eq!(actual.generation().get(), 1, "generations are fine though");
 }
 
 #[test]
@@ -53,7 +58,7 @@ fn single_commit_huge_dates_overflow_v1() {
         info.time.seconds, 68719476737,
         "this is the value we would want to see, but it's not possible in V1"
     );
-    assert_eq!(actual.generation(), 1, "generations are fine though");
+    assert_eq!(actual.generation().get(), 1, "generations are fine though");
 }
 
 #[test]
@@ -66,7 +71,7 @@ fn single_commit_future_64bit_dates_work() {
         info.time.seconds.try_into().expect("timestamps in bound"),
         "this is close the highest representable value in the graph, like year 2500, so we are good for longer than I should care about"
     );
-    assert_eq!(actual.generation(), 1);
+    assert_eq!(actual.generation().get(), 1);
 }
 
 #[test]
@@ -79,7 +84,7 @@ fn generation_numbers_overflow_is_handled_in_chained_graph() {
         .zip((1..=5).rev())
     {
         assert_eq!(
-            cg.commit_by_id(r.id).expect("present").generation(),
+            cg.commit_by_id(r.id).expect("present").generation().get(),
             expected,
             "actually, this test seems to have valid generation numbers from the get-go. How to repro the actual issue?"
         );
@@ -219,13 +224,17 @@ fn octopus_merges() {
     );
     check_common(&cg, &refs);
 
-    assert_eq!(cg.commit_at(refs["root"].pos()).generation(), 1);
-    assert_eq!(cg.commit_at(refs["parent1"].pos()).generation(), 2);
-    assert_eq!(cg.commit_at(refs["parent2"].pos()).generation(), 2);
-    assert_eq!(cg.commit_at(refs["parent3"].pos()).generation(), 2);
-    assert_eq!(cg.commit_at(refs["parent4"].pos()).generation(), 2);
-    assert_eq!(cg.commit_at(refs["three_parents"].pos()).generation(), 3);
-    assert_eq!(cg.commit_at(refs["four_parents"].pos()).generation(), 3);
+    for (name, expected) in [
+        ("root", 1),
+        ("parent1", 2),
+        ("parent2", 2),
+        ("parent3", 2),
+        ("parent4", 2),
+        ("three_parents", 3),
+        ("four_parents", 3),
+    ] {
+        assert_eq!(cg.commit_at(refs[name].pos()).generation().get(), expected, "{name}");
+    }
 }
 
 #[test]
@@ -233,7 +242,7 @@ fn single_commit() {
     let (cg, refs) = graph_and_expected("single_commit.sh", &["commit"]);
     check_common(&cg, &refs);
 
-    assert_eq!(cg.commit_at(refs["commit"].pos()).generation(), 1);
+    assert_eq!(cg.commit_at(refs["commit"].pos()).generation().get(), 1);
 }
 
 #[test]
@@ -241,7 +250,7 @@ fn two_parents() {
     let (cg, refs) = graph_and_expected("two_parents.sh", &["parent1", "parent2", "child"]);
     check_common(&cg, &refs);
 
-    assert_eq!(cg.commit_at(refs["parent1"].pos()).generation(), 1);
-    assert_eq!(cg.commit_at(refs["parent2"].pos()).generation(), 1);
-    assert_eq!(cg.commit_at(refs["child"].pos()).generation(), 2);
+    assert_eq!(cg.commit_at(refs["parent1"].pos()).generation().get(), 1);
+    assert_eq!(cg.commit_at(refs["parent2"].pos()).generation().get(), 1);
+    assert_eq!(cg.commit_at(refs["child"].pos()).generation().get(), 2);
 }

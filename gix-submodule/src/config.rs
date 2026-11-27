@@ -82,7 +82,8 @@ impl FetchRecurse {
 pub enum Branch {
     /// The name of the remote branch should be the same as the one currently checked out in the superproject.
     CurrentInSuperproject,
-    /// The validated remote-only branch that could be used for fetching.
+    /// A name to use on the submodule's remote, such as `main` or `feature/a`.
+    /// The default is `HEAD`, which refers to the remote's default branch.
     Name(BString),
 }
 

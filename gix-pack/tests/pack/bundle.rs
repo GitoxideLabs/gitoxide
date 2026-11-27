@@ -108,6 +108,7 @@ mod write_to_directory {
                 index_version: pack::index::Version::V2,
                 index_hash: gix_hash::ObjectId::from_hex(b"544a7204a55f6e9cacccf8f6e191ea8f83575de3")?,
                 data_hash: gix_hash::ObjectId::from_hex(b"0f3ea84cd1bba10c2a03d736a460635082833e59")?,
+                pack_size: fs::metadata(fixture_path(SMALL_PACK))?.len(),
                 num_objects: 42,
             },
             pack_version: pack::data::Version::V2,
@@ -258,6 +259,210 @@ mod write_to_directory {
             "receiving the pack still succeeds"
         );
         Ok(())
+    }
+
+    #[test]
+    fn a_prepared_pack_stays_protected_until_the_publication_guard_is_dropped() -> gix_testtools::TestResult {
+        let dir = TempDir::new()?;
+        let mut prepared = prepare_pack(dir.path())?;
+        let expected = expected_outcome()?.index;
+        assert_eq!(
+            prepared.index(),
+            &expected,
+            "preparation indexes the same pack as direct writing"
+        );
+        prepared.with_bundle(|bundle| {
+            assert_eq!(bundle.index.num_objects(), 42, "the staged index is readable");
+            assert_eq!(
+                bundle.pack.checksum(),
+                expected.data_hash,
+                "the staged pack is readable"
+            );
+            let entry = bundle.index.iter().next().expect("the staged index contains objects")?;
+            let mut buffer = Vec::new();
+            let (object, _) = bundle
+                .find(
+                    &entry.oid,
+                    &mut buffer,
+                    &mut gix_zlib::Inflate::default(),
+                    &mut pack::cache::Never,
+                )?
+                .expect("the bundle can look up the object before publication");
+            object.verify_checksum(&entry.oid)?;
+            Ok(())
+        })?;
+
+        let pack_path = dir.path().join(format!("pack-{}.pack", expected.data_hash.to_hex()));
+        let index_path = pack_path.with_extension("idx");
+        let keep_path = pack_path.with_extension("keep");
+        assert!(
+            !pack_path.exists() && !index_path.exists() && !keep_path.exists(),
+            "preparation stays outside the published pack namespace"
+        );
+
+        let published = prepared.publish()?;
+        assert_eq!(
+            published.data_path(),
+            pack_path,
+            "publication installs the pack under its content hash"
+        );
+        let bundle = pack::Bundle::at(&index_path, gix_hash::Kind::Sha1)?;
+        assert_eq!(
+            bundle.index.index_checksum(),
+            expected.index_hash,
+            "publication installs the prepared index"
+        );
+        drop(bundle);
+        assert!(keep_path.is_file(), "the guard keeps the pack protected");
+        drop(published);
+        assert!(!keep_path.exists(), "dropping the guard releases the marker");
+        assert!(
+            pack_path.is_file() && index_path.is_file(),
+            "releasing the marker leaves the published bundle in place"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_prepared_pack_aborts_on_keep_contention() -> gix_testtools::TestResult {
+        let dir = TempDir::new()?;
+        let prepared = prepare_pack(dir.path())?;
+        let data_path = dir
+            .path()
+            .join(format!("pack-{}.pack", prepared.index().data_hash.to_hex()));
+        let keep_path = data_path.with_extension("keep");
+        fs::write(&keep_path, b"another operation")?;
+
+        let err = prepared
+            .publish()
+            .expect_err("publication requires its own keep marker");
+        assert_eq!(
+            err.downcast_any_ref::<std::io::Error>().map(std::io::Error::kind),
+            Some(std::io::ErrorKind::AlreadyExists),
+            "callers can detect contention"
+        );
+        assert_eq!(
+            fs::read(&keep_path)?,
+            b"another operation",
+            "the other operation keeps its marker"
+        );
+        assert_eq!(
+            fs::read_dir(dir.path())?.count(),
+            1,
+            "contention leaves only the original marker"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn dropping_a_prepared_pack_discards_its_files() -> gix_testtools::TestResult {
+        let dir = TempDir::new()?;
+        let prepared = prepare_pack(dir.path())?;
+        drop(prepared);
+        assert_eq!(
+            fs::read_dir(dir.path())?.count(),
+            0,
+            "cancellation discards the staged pack and index"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_prepared_pack_can_be_retried_after_index_installation_fails() -> gix_testtools::TestResult {
+        let dir = TempDir::new()?;
+        let prepared = prepare_pack(dir.path())?;
+        let data_path = dir
+            .path()
+            .join(format!("pack-{}.pack", prepared.index().data_hash.to_hex()));
+        let index_path = data_path.with_extension("idx");
+        let keep_path = data_path.with_extension("keep");
+        fs::create_dir(&index_path)?;
+
+        prepared
+            .publish()
+            .expect_err("a directory prevents installing the index");
+        assert!(
+            data_path.is_file(),
+            "a pack installed before the failure remains available for retry"
+        );
+        assert!(
+            !keep_path.exists(),
+            "failure releases the marker acquired for publication"
+        );
+        assert_eq!(
+            fs::read_dir(dir.path())?.count(),
+            2,
+            "failure discards the temporary files"
+        );
+
+        fs::remove_dir(&index_path)?;
+        let published = prepare_pack(dir.path())?.publish()?;
+        assert!(
+            index_path.is_file() && keep_path.is_file(),
+            "retry installs the missing index under a new marker"
+        );
+        drop(published);
+        Ok(())
+    }
+
+    #[test]
+    fn preparation_keeps_only_the_verified_pack_bytes() -> gix_testtools::TestResult {
+        let bytes = fs::read(fixture_path(SMALL_PACK))?;
+        let mut input = bytes.clone();
+        input.extend_from_slice(b"read-ahead bytes");
+        let dir = TempDir::new()?;
+        let prepared = prepare_input(dir.path(), &mut Cursor::new(input))?.expect("the fixture pack contains objects");
+        let published = prepared.publish()?;
+        assert_eq!(
+            fs::read(published.data_path())?,
+            bytes,
+            "publication ends at the verified trailer"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn preparation_verifies_empty_packs() -> gix_testtools::TestResult {
+        let dir = TempDir::new()?;
+        let header = pack::data::header::encode(pack::data::Version::V2, 0);
+        let mut hasher = gix_hash::hasher(gix_hash::Kind::Sha1);
+        hasher.update(&header);
+        let mut input = header.to_vec();
+        input.extend_from_slice(hasher.try_finalize()?.as_slice());
+        assert!(
+            prepare_input(dir.path(), &mut Cursor::new(&input))?.is_none(),
+            "a valid empty pack has nothing to publish"
+        );
+        assert!(
+            prepare_input(dir.path(), &mut Cursor::new(header)).is_err(),
+            "even an empty pack requires a checksum trailer"
+        );
+        assert_eq!(
+            fs::read_dir(dir.path())?.count(),
+            0,
+            "empty and invalid packs leave no files"
+        );
+        Ok(())
+    }
+
+    fn prepare_pack(directory: &Path) -> gix_testtools::TestResult<pack::bundle::write::Prepared> {
+        let mut input = std::io::BufReader::new(fs::File::open(fixture_path(SMALL_PACK))?);
+        Ok(prepare_input(directory, &mut input)?.expect("the fixture pack contains objects"))
+    }
+
+    fn prepare_input(
+        directory: &Path,
+        input: &mut dyn std::io::BufRead,
+    ) -> gix_error::Result<Option<pack::bundle::write::Prepared>> {
+        pack::Bundle::prepare_to_directory(
+            input,
+            directory,
+            &mut progress::Discard,
+            &AtomicBool::new(false),
+            None::<gix_object::find::Never>,
+            gix_hash::Kind::Sha1,
+            Default::default(),
+        )
     }
 
     /// A forward reference is a `REF_DELTA` stored before the object named as its base.

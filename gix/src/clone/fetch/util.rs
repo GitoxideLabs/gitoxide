@@ -8,7 +8,7 @@ use gix_ref::{
 
 use crate::{
     Error, Repository, Result,
-    bstr::{BStr, BString, ByteSlice},
+    bstr::{BStr, ByteSlice},
 };
 
 enum WriteMode {
@@ -17,11 +17,11 @@ enum WriteMode {
 }
 pub fn append_remote_to_local_config_file(
     remote: &mut crate::Remote<'_>,
-    remote_name: BString,
+    remote_name: crate::remote::Name,
 ) -> Result<gix_config::File> {
     let mut config = gix_config::File::new(local_config_meta(remote.repo));
     remote
-        .save_as_to(remote_name, &mut config)
+        .save_as_validated(remote_name, &mut config)
         .or_raise(|| message("Failed to store configured remote in memory"))?;
 
     write_to_local_config(&config, WriteMode::Append)
@@ -189,8 +189,7 @@ pub(super) fn update_remote_head(
     let Some(tracking_branch) = mapping.local.as_ref() else {
         return Ok(());
     };
-    let head_name =
-        gix_ref::FullName::try_from(BString::from(format!("refs/remotes/{remote_name}/HEAD"))).or_error()?;
+    let head_name = gix_ref::FullName::try_from(crate::remote::remote_tracking_ref(remote_name, b"HEAD")).or_error()?;
     repo.edit_reference(gix_ref::transaction::RefEdit::update_with_log(
         head_name.clone(),
         gix_ref::FullName::try_from(tracking_branch.clone()).or_error()?,

@@ -1677,7 +1677,6 @@ name = "gix-blame"
 version = "0.21.0"
 dependencies = [
  "criterion",
- "gix-commitgraph",
  "gix-date",
  "gix-diff",
  "gix-discover",
@@ -1689,10 +1688,9 @@ dependencies = [
  "gix-object",
  "gix-odb",
  "gix-ref",
- "gix-revwalk",
+ "gix-revision",
  "gix-testtools",
  "gix-trace",
- "gix-traverse",
  "gix-worktree",
  "insta",
  "pretty_assertions",
@@ -2572,7 +2570,6 @@ version = "0.0.0"
 name = "gix-shallow"
 version = "0.16.0"
 dependencies = [
- "bstr",
  "gix-error",
  "gix-hash",
  "gix-lock",

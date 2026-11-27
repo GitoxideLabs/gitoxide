@@ -4,7 +4,7 @@ use gix_error::{Error, OptionExt, Result};
 use gix_hash::oid;
 use smallvec::SmallVec;
 
-use crate::Graph;
+use crate::{CommitGraph, Graph};
 
 /// A mapping between an object id and arbitrary data, and produced when calling [`Graph::detach()`].
 pub type IdMap<T> = gix_hashtable::HashMap<gix_hash::ObjectId, T>;
@@ -14,11 +14,7 @@ pub mod commit;
 
 use gix_date::SecondsSinceUnixEpoch;
 
-/// The generation away from the HEAD of graph, useful to limit algorithms by topological depth as well.
-///
-/// 0 would mean the starting point of the hierarchy, and 1 their parents.
-/// This number is only available natively if there is a commit-graph.
-pub type Generation = u32;
+pub use gix_commitgraph::Generation;
 
 impl<T: std::fmt::Debug> std::fmt::Debug for Graph<'_, '_, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -26,7 +22,7 @@ impl<T: std::fmt::Debug> std::fmt::Debug for Graph<'_, '_, T> {
     }
 }
 
-impl<'cache, T: Default> Graph<'_, 'cache, T> {
+impl<T: Default> Graph<'_, '_, T> {
     /// Lookup `id` without failing if the object doesn't exist or isn't a commit, and assure that `id` is inserted into our set.
     /// If it wasn't, associate it with the default value. Assure `update_data(data)` gets run.
     ///
@@ -37,16 +33,25 @@ impl<'cache, T: Default> Graph<'_, 'cache, T> {
         &mut self,
         id: gix_hash::ObjectId,
         update_data: impl FnOnce(&mut T),
-    ) -> Result<Option<LazyCommit<'_, 'cache>>> {
+    ) -> Result<Option<LazyCommit<'_, '_>>> {
         self.try_lookup_or_insert_default(id, T::default, update_data)
     }
 }
 
 /// Access and mutation
-impl<'cache, T> Graph<'_, 'cache, T> {
-    /// Return the optional commit graph used to accelerate object access and provide generation data.
-    pub fn commit_graph(&self) -> Option<&'cache gix_commitgraph::Graph> {
-        self.cache
+impl<T> Graph<'_, '_, T> {
+    /// Return the optional commit-graph used to accelerate object access and provide generation data.
+    pub fn commit_graph(&self) -> Option<&gix_commitgraph::Graph> {
+        self.commit_graph.as_ref().map(CommitGraph::as_ref)
+    }
+
+    /// Consume this graph and recover its owned commit-graph, if any.
+    /// Returns `None` for a borrowed commit-graph, which stays with its original owner.
+    pub fn into_commit_graph(self) -> Option<gix_commitgraph::Graph> {
+        match self.commit_graph {
+            Some(CommitGraph::Owned(commit_graph)) => Some(commit_graph),
+            Some(CommitGraph::Borrowed(_)) | None => None,
+        }
     }
 
     /// Returns the amount of entries in the graph.
@@ -87,7 +92,7 @@ impl<'cache, T> Graph<'_, 'cache, T> {
     pub fn insert_data<E>(
         &mut self,
         id: gix_hash::ObjectId,
-        mut make_data: impl FnMut(LazyCommit<'_, 'cache>) -> std::result::Result<T, E>,
+        mut make_data: impl FnMut(LazyCommit<'_, '_>) -> std::result::Result<T, E>,
     ) -> std::result::Result<Option<T>, E>
     where
         E: From<Error>,
@@ -117,11 +122,12 @@ impl<'cache, T> Graph<'_, 'cache, T> {
     ) -> Result {
         let commit = self.lookup(id)?;
         let parents: SmallVec<[_; 2]> = commit.iter_parents().collect();
+        let commit_graph = self.commit_graph.as_ref().map(CommitGraph::as_ref);
         for parent_id in parents {
             let parent_id = parent_id?;
             match self.map.entry(parent_id) {
                 gix_hashtable::hash_map::Entry::Vacant(entry) => {
-                    let parent = match try_lookup(&parent_id, &*self.find, self.cache, &mut self.parent_buf)? {
+                    let parent = match try_lookup(&parent_id, &*self.find, commit_graph, &mut self.parent_buf)? {
                         Some(p) => p,
                         None => continue, // skip missing objects, this is due to shallow clones for instance.
                     };
@@ -155,7 +161,7 @@ impl<'cache, T> Graph<'_, 'cache, T> {
         id: &gix_hash::oid,
         parent_data: &mut dyn FnMut(
             gix_hash::ObjectId,
-            LazyCommit<'_, 'cache>,
+            LazyCommit<'_, '_>,
             Option<&mut T>,
         ) -> std::result::Result<T, E>,
     ) -> std::result::Result<(), E>
@@ -164,12 +170,14 @@ impl<'cache, T> Graph<'_, 'cache, T> {
     {
         let commit = self.lookup(id).map_err(E::from)?;
         let parents: SmallVec<[_; 2]> = commit.iter_parents().collect();
+        let commit_graph = self.commit_graph.as_ref().map(CommitGraph::as_ref);
         for parent_id in parents {
             let parent_id = parent_id.map_err(E::from)?;
-            let parent = match try_lookup(&parent_id, &*self.find, self.cache, &mut self.parent_buf).map_err(E::from)? {
-                Some(p) => p,
-                None => continue, // skip missing objects, this is due to shallow clones for instance.
-            };
+            let parent =
+                match try_lookup(&parent_id, &*self.find, commit_graph, &mut self.parent_buf).map_err(E::from)? {
+                    Some(p) => p,
+                    None => continue, // skip missing objects, this is due to shallow clones for instance.
+                };
 
             match self.map.entry(parent_id) {
                 gix_hashtable::hash_map::Entry::Vacant(entry) => {
@@ -190,8 +198,8 @@ impl<'cache, T> Graph<'_, 'cache, T> {
 }
 
 /// Initialization
-impl<'find, 'cache, T> Graph<'find, 'cache, T> {
-    /// Create a new instance with `objects` to retrieve commits and optionally `cache` to accelerate commit access.
+impl<'find, 'commit_graph, T> Graph<'find, 'commit_graph, T> {
+    /// Create a new instance with `objects` to retrieve commits and optionally `commit_graph` to accelerate commit access.
     ///
     /// ### Performance
     ///
@@ -199,13 +207,36 @@ impl<'find, 'cache, T> Graph<'find, 'cache, T> {
     /// most recently used commits.
     /// Furthermore, **none-existing commits should not trigger the pack-db to be refreshed.** Otherwise, performance may be sub-optimal
     /// in shallow repositories as running into non-existing commits will trigger a refresh of the `packs` directory.
-    pub fn new(objects: impl gix_object::Find + 'find, cache: Option<&'cache gix_commitgraph::Graph>) -> Self {
+    pub fn new(
+        objects: impl gix_object::Find + 'find,
+        commit_graph: Option<&'commit_graph gix_commitgraph::Graph>,
+    ) -> Self {
         Graph {
             find: Box::new(objects),
-            cache,
+            commit_graph: commit_graph.map(CommitGraph::Borrowed),
             map: gix_hashtable::HashMap::default(),
             buf: Vec::new(),
             parent_buf: Vec::new(),
+        }
+    }
+
+    /// Use an owned commit-graph instead of borrowing one. Pass `None` to remove the commit-graph.
+    /// Discards previously stored commit data, which may describe a different graph.
+    pub fn with_owned_commit_graph(self, commit_graph: Option<gix_commitgraph::Graph>) -> Graph<'find, 'static, T> {
+        let Graph {
+            find,
+            mut map,
+            buf,
+            parent_buf,
+            ..
+        } = self;
+        map.clear();
+        Graph {
+            find,
+            commit_graph: commit_graph.map(CommitGraph::Owned),
+            map,
+            buf,
+            parent_buf,
         }
     }
 }
@@ -228,7 +259,12 @@ impl<T> Graph<'_, '_, Commit<T>> {
     ) -> Result<Option<&mut Commit<T>>> {
         match self.map.entry(id) {
             gix_hashtable::hash_map::Entry::Vacant(entry) => {
-                let res = try_lookup(&id, &*self.find, self.cache, &mut self.buf)?;
+                let res = try_lookup(
+                    &id,
+                    &*self.find,
+                    self.commit_graph.as_ref().map(CommitGraph::as_ref),
+                    &mut self.buf,
+                )?;
                 let commit = match res {
                     None => return Ok(None),
                     Some(commit) => commit,
@@ -285,7 +321,12 @@ impl<T: Default> Graph<'_, '_, Commit<T>> {
     ) -> Result<Option<&mut Commit<T>>> {
         match self.map.entry(id) {
             gix_hashtable::hash_map::Entry::Vacant(entry) => {
-                let res = try_lookup(&id, &*self.find, self.cache, &mut self.buf)?;
+                let res = try_lookup(
+                    &id,
+                    &*self.find,
+                    self.commit_graph.as_ref().map(CommitGraph::as_ref),
+                    &mut self.buf,
+                )?;
                 let commit = match res {
                     None => return Ok(None),
                     Some(commit) => commit,
@@ -303,7 +344,7 @@ impl<T: Default> Graph<'_, '_, Commit<T>> {
 }
 
 /// Lazy commit access
-impl<'cache, T> Graph<'_, 'cache, T> {
+impl<T> Graph<'_, '_, T> {
     /// Lookup `id` without failing if the commit doesn't exist or `id` isn't a commit,
     /// and assure that `id` is inserted into our set
     /// with a `default` value assigned to it.
@@ -320,8 +361,13 @@ impl<'cache, T> Graph<'_, 'cache, T> {
         id: gix_hash::ObjectId,
         default: impl FnOnce() -> T,
         update_data: impl FnOnce(&mut T),
-    ) -> Result<Option<LazyCommit<'_, 'cache>>> {
-        let res = try_lookup(&id, &*self.find, self.cache, &mut self.buf)?;
+    ) -> Result<Option<LazyCommit<'_, '_>>> {
+        let res = try_lookup(
+            &id,
+            &*self.find,
+            self.commit_graph.as_ref().map(CommitGraph::as_ref),
+            &mut self.buf,
+        )?;
         Ok(res.inspect(|_commit| match self.map.entry(id) {
             gix_hashtable::hash_map::Entry::Vacant(entry) => {
                 let mut data = default();
@@ -338,30 +384,35 @@ impl<'cache, T> Graph<'_, 'cache, T> {
     /// or `Ok(None)` if the object doesn't exist or isn't a commit. Return an error if object lookup fails.
     ///
     /// It's possible that commits don't exist if the repository is shallow.
-    pub fn try_lookup(&mut self, id: &gix_hash::oid) -> Result<Option<LazyCommit<'_, 'cache>>> {
-        try_lookup(id, &*self.find, self.cache, &mut self.buf)
+    pub fn try_lookup(&mut self, id: &gix_hash::oid) -> Result<Option<LazyCommit<'_, '_>>> {
+        try_lookup(
+            id,
+            &*self.find,
+            self.commit_graph.as_ref().map(CommitGraph::as_ref),
+            &mut self.buf,
+        )
     }
 
     /// Lookup `id` and return `Ok(commit)` with a lazy commit handle.
     /// Return an error if the object doesn't exist or isn't a commit, or if object lookup fails.
-    pub fn lookup(&mut self, id: &gix_hash::oid) -> Result<LazyCommit<'_, 'cache>> {
+    pub fn lookup(&mut self, id: &gix_hash::oid) -> Result<LazyCommit<'_, '_>> {
         self.try_lookup(id)?
             .ok_or_raise(|| gix_error::message!("An object with id {id} could not be found").not_found())
     }
 }
 
-fn try_lookup<'graph, 'cache>(
+fn try_lookup<'graph, 'commit_graph>(
     id: &gix_hash::oid,
     objects: &dyn gix_object::Find,
-    cache: Option<&'cache gix_commitgraph::Graph>,
+    commit_graph: Option<&'commit_graph gix_commitgraph::Graph>,
     buf: &'graph mut Vec<u8>,
-) -> Result<Option<LazyCommit<'graph, 'cache>>> {
-    if let Some(cache) = cache
-        && let Some(pos) = cache.lookup(id)
+) -> Result<Option<LazyCommit<'graph, 'commit_graph>>> {
+    if let Some(commit_graph) = commit_graph
+        && let Some(pos) = commit_graph.lookup(id)
     {
         return Ok(Some(LazyCommit {
             object_hash: id.kind(),
-            backing: Either::Right((cache, pos)),
+            backing: Either::Right((commit_graph, pos)),
         }));
     }
     Ok(match objects.try_find(id, buf)? {
@@ -387,8 +438,8 @@ pub struct Commit<T> {
     pub parents: SmallVec<[gix_hash::ObjectId; 1]>,
     /// The time at which the commit was created.
     pub commit_time: SecondsSinceUnixEpoch,
-    /// The generation of the commit, if available.
-    pub generation: Option<u32>,
+    /// The generation of the commit, if read from a commit-graph, including uncomputed or capped values.
+    pub generation: Option<Generation>,
     /// The corrected commit date (generation version 2), if every commit-graph layer provides it.
     ///
     /// Unlike the timestamp, this value is strictly greater than the value of each parent.
@@ -431,9 +482,9 @@ where
 /// A commit that provides access to graph-related information, on demand.
 ///
 /// The owned version of this type is called [`Commit`] and can be obtained by calling [`LazyCommit::to_owned()`].
-pub struct LazyCommit<'graph, 'cache> {
+pub struct LazyCommit<'graph, 'commit_graph> {
     object_hash: gix_hash::Kind,
-    backing: Either<&'graph [u8], (&'cache gix_commitgraph::Graph, gix_commitgraph::Position)>,
+    backing: Either<&'graph [u8], (&'commit_graph gix_commitgraph::Graph, gix_commitgraph::Position)>,
 }
 
 enum Either<T, U> {

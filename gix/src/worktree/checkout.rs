@@ -13,6 +13,9 @@ impl Worktree<'_> {
     /// Main worktrees are rejected. Callers must prevent concurrent changes to the destination.
     /// The destination's sparse-checkout configuration and patterns are applied to a full index before checkout.
     ///
+    /// Before checking out files, this may create and remove a temporary symlink in the worktree to probe
+    /// symlink support; see [`crate::Repository::filesystem_options()`] for when this happens.
+    ///
     /// `progress` reports files checked out and bytes written through the `checkout` and `writing`
     /// child progress items, respectively. Set `should_interrupt` to `true` to request cancellation;
     /// it is checked before destination validation, or before and during checkout.

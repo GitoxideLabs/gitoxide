@@ -657,8 +657,7 @@ mod blocking_io {
         assert_eq!(
             referent
                 .remote_name(gix::remote::Direction::Fetch)
-                .expect("remote is set")
-                .as_ref(),
+                .expect("remote is set"),
             remote_name,
             "the remote branch information is fully configured"
         );
@@ -1510,6 +1509,51 @@ mod blocking_io {
         assert_remote_default_branch(&repo, "team/origin", "refs/tracking/default", "refs/heads/main")?;
         let persisted = gix::open_opts(repo.git_dir(), restricted())?;
         assert_remote_default_branch(&persisted, "team/origin", "refs/tracking/default", "refs/heads/main")?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn clone_preserves_the_remote_name_in_config_and_tracking_refs() -> TestResult {
+        use gix::bstr::ByteSlice;
+        use gix::remote::{Direction::Fetch, Name};
+
+        if gix_testtools::run_in_isolated_process()? {
+            return Ok(());
+        }
+        let tmp = gix_testtools::tempfile::TempDir::new()?;
+        // macOS filesystems can reject invalid UTF-8 in loose ref paths, even though Git config accepts it.
+        let (name, namespace) = if cfg!(target_os = "macos") {
+            ("team/遠隔".as_bytes(), "refs/remotes/team/遠隔/".as_bytes())
+        } else {
+            (&b"team/\xff"[..], &b"refs/remotes/team/\xff/"[..])
+        };
+        let name = name.as_bstr();
+        let qualified = |suffix: &[u8]| [namespace, suffix].concat();
+        let (repo, _) = gix::prepare_clone(remote::repo("base").path(), tmp.path())?
+            .with_remote_name(name.to_owned())?
+            .fetch_only(gix::progress::Discard, &AtomicBool::default())?;
+        let repo = gix::open_opts(repo.git_dir(), restricted())?;
+        let remote = repo.find_remote(name)?;
+        assert_eq!(remote.name().map(Name::as_bstr), Some(name));
+        assert!(
+            matches!(remote.configured_name(), Some(gix::remote::ConfiguredName::Symbolic(configured)) if configured.as_bstr() == name),
+            "the clone saves a validated symbolic subsection name"
+        );
+        let [spec] = remote.refspecs(Fetch) else {
+            panic!("clone should persist one default fetch refspec");
+        };
+        assert_eq!(spec.to_ref().destination(), Some(qualified(b"*").as_bstr()));
+        let tracking_head = repo.find_reference(qualified(b"HEAD").as_bstr())?;
+        assert_eq!(
+            tracking_head.target().try_name().map(gix::refs::FullNameRef::as_bstr),
+            Some(qualified(b"main").as_bstr()),
+            "the symbolic HEAD and fetched branch share the original remote namespace"
+        );
+        assert_eq!(
+            remote.default_branch()?.expect("tracking HEAD maps back to a branch"),
+            "refs/heads/main"
+        );
         Ok(())
     }
 

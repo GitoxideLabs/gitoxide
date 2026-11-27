@@ -140,7 +140,7 @@ pub enum PeelTo<'a> {
 pub enum SiblingBranch {
     /// The upstream branch as configured in `branch.<name>.remote` or `branch.<name>.merge`.
     Upstream,
-    /// The upstream branch to which we would push.
+    /// The upstream branch to which we would push, selected with `@{push}` or `@{p}`.
     Push,
 }
 
@@ -149,7 +149,7 @@ impl SiblingBranch {
     pub fn parse(input: &BStr) -> Option<Self> {
         if input.eq_ignore_ascii_case(b"u") || input.eq_ignore_ascii_case(b"upstream") {
             SiblingBranch::Upstream.into()
-        } else if input.eq_ignore_ascii_case(b"push") {
+        } else if input.eq_ignore_ascii_case(b"p") || input.eq_ignore_ascii_case(b"push") {
             SiblingBranch::Push.into()
         } else {
             None

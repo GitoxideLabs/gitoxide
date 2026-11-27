@@ -1,13 +1,12 @@
 use gix_error::Result;
 use std::{
-    io,
-    io::Write,
+    io::{self, Write},
     marker::PhantomData,
-    path::{Path, PathBuf},
+    path::Path,
     sync::{Arc, atomic::AtomicBool},
 };
 
-use gix_error::{ErrorExt, ResultExt, message};
+use gix_error::{ResultExt, bail, message};
 use gix_tempfile::{AutoRemove, ContainingDirectory};
 use gix_utils::interrupt;
 use gix_utils::progress;
@@ -17,11 +16,12 @@ use crate::data;
 
 use gix_utils::progress::prodash::DynNestedProgress;
 
+mod publish;
+pub use publish::{Prepared, Published};
+use publish::{StagedFiles, WriteOutcome};
 mod types;
-use types::{LockWriter, PassThrough};
+use types::{LockWriter, PassThrough, SharedTempFile};
 pub use types::{Options, Outcome};
-
-use crate::bundle::write::types::SharedTempFile;
 
 /// The progress ids used in [`write_to_directory()`][crate::Bundle::write_to_directory()].
 ///
@@ -50,6 +50,7 @@ impl crate::Bundle {
     ///
     /// In the latter case, the functionality provided here is more a kind of pack data stream validation.
     /// Missing destination directories are created according to `options.shared_repository_permissions`.
+    /// Use [`Self::prepare_to_directory()`] to inspect the bundle and require an exclusive marker before publishing it.
     ///
     /// * `progress` provides detailed progress information which can be discarded with [`gix_utils::progress::Discard`].
     /// * `should_interrupt` is checked regularly and when true, the whole operation will stop.
@@ -74,6 +75,62 @@ impl crate::Bundle {
         options: Options,
     ) -> Result<Outcome> {
         let _span = gix_trace::coarse!("gix_pack::Bundle::write_to_directory()");
+        Self::prepare_write(
+            pack,
+            directory,
+            progress,
+            should_interrupt,
+            thin_pack_base_object_lookup,
+            object_hash,
+            options,
+        )?
+        .publish_immediately()
+    }
+
+    /// Read and index a pack in temporary files in `directory` without publishing it.
+    ///
+    /// The returned [`Prepared`] bundle can be inspected before [publishing](Prepared::publish) it.
+    /// Dropping it discards the temporary files. An empty pack returns `None`.
+    /// Supply a reader scoped to the pack since this method can read ahead.
+    /// The `options.iteration_mode` must be [`data::input::Mode::Verify`] for safety, after all this is for staging
+    /// received pack on the server side.
+    /// Like [`Self::write_to_directory()`], this supports completing thin packs using a base object lookup.
+    pub fn prepare_to_directory(
+        pack: &mut dyn io::BufRead,
+        directory: &Path,
+        progress: &mut dyn DynNestedProgress,
+        should_interrupt: &AtomicBool,
+        thin_pack_base_object_lookup: Option<impl gix_object::Find>,
+        object_hash: gix_hash::Kind,
+        options: Options,
+    ) -> Result<Option<Prepared>> {
+        let _span = gix_trace::coarse!("gix_pack::Bundle::prepare_to_directory()");
+        if options.iteration_mode != data::input::Mode::Verify {
+            bail!(message("Preparing a pack for publication requires verifying the input stream").validation());
+        }
+        let directory = std::path::absolute(directory).or_raise(|| message("Could not resolve pack destination"))?;
+        let alloc_limit_bytes = options.alloc_limit_bytes;
+        Self::prepare_write(
+            pack,
+            Some(&directory),
+            progress,
+            should_interrupt,
+            thin_pack_base_object_lookup,
+            object_hash,
+            options,
+        )?
+        .into_prepared(alloc_limit_bytes)
+    }
+
+    fn prepare_write(
+        pack: &mut dyn io::BufRead,
+        directory: Option<&Path>,
+        progress: &mut dyn DynNestedProgress,
+        should_interrupt: &AtomicBool,
+        thin_pack_base_object_lookup: Option<impl gix_object::Find>,
+        object_hash: gix_hash::Kind,
+        options: Options,
+    ) -> Result<WriteOutcome> {
         let mut read_progress = progress.add_child_with_id("read pack".into(), ProgressId::ReadPackBytes.into());
         read_progress.init(None, progress::bytes());
         let pack = progress::Read {
@@ -142,12 +199,7 @@ impl crate::Bundle {
                     (Box::new(pack_entries_iter), pack_version)
                 }
             };
-        let WriteOutcome {
-            outcome,
-            data_path,
-            index_path,
-            keep_path,
-        } = crate::Bundle::inner_write(
+        Self::inner_write(
             directory,
             progress,
             object_hash,
@@ -156,16 +208,7 @@ impl crate::Bundle {
             pack_entries_iter,
             should_interrupt,
             pack_version,
-        )?;
-
-        Ok(Outcome {
-            index: outcome,
-            object_hash,
-            pack_version,
-            data_path,
-            index_path,
-            keep_path,
-        })
+        )
     }
 
     /// Equivalent to [`write_to_directory()`][crate::Bundle::write_to_directory()] but offloads reading of the pack into its own thread, hence the `Send + 'static'` bounds.
@@ -187,6 +230,7 @@ impl crate::Bundle {
         options: Options,
     ) -> Result<Outcome> {
         let _span = gix_trace::coarse!("gix_pack::Bundle::write_to_directory_eagerly()");
+        let directory = directory.as_ref().map(AsRef::as_ref);
         let mut read_progress = progress.add_child_with_id("read pack".into(), ProgressId::ReadPackBytes.into()); /* Bundle Write Read pack Bytes*/
         read_progress.init(pack_size.map(|s| s as usize), progress::bytes());
         let pack = progress::Read {
@@ -195,7 +239,7 @@ impl crate::Bundle {
         };
 
         let data_file = Arc::new(parking_lot::Mutex::new(io::BufWriter::new(match directory.as_ref() {
-            Some(directory) => new_pack_file(directory.as_ref(), options.shared_repository_permissions)
+            Some(directory) => new_pack_file(directory, options.shared_repository_permissions)
                 .or_raise(|| message("Could not create temporary pack file"))?,
             None => gix_tempfile::new(std::env::temp_dir(), ContainingDirectory::Exists, AutoRemove::Tempfile)
                 .or_raise(|| message("Could not create temporary pack file"))?,
@@ -247,12 +291,7 @@ impl crate::Bundle {
         let pack_entries_iter =
             gix_parallel::EagerIterIf::new(move || num_objects > 25_000, pack_entries_iter, 5_000, 5);
 
-        let WriteOutcome {
-            outcome,
-            data_path,
-            index_path,
-            keep_path,
-        } = crate::Bundle::inner_write(
+        Self::inner_write(
             directory,
             progress,
             object_hash,
@@ -261,21 +300,13 @@ impl crate::Bundle {
             Box::new(pack_entries_iter),
             should_interrupt,
             pack_version,
-        )?;
-
-        Ok(Outcome {
-            index: outcome,
-            object_hash,
-            pack_version,
-            data_path,
-            index_path,
-            keep_path,
-        })
+        )?
+        .publish_immediately()
     }
 
     #[expect(clippy::too_many_arguments)]
     fn inner_write<'a>(
-        directory: Option<impl AsRef<Path>>,
+        directory: Option<&Path>,
         progress: &mut dyn DynNestedProgress,
         object_hash: gix_hash::Kind,
         Options {
@@ -295,126 +326,49 @@ impl crate::Bundle {
             "create index file".into(),
             ProgressId::IndexingSteps(Default::default()).into(),
         );
-        Ok(match directory {
-            Some(directory) => {
-                let directory = directory.as_ref();
-                let mut index_file = new_pack_file(directory, shared_repository_permissions)
-                    .or_raise(|| message("Could not create temporary index file"))?;
-
-                let outcome = crate::index::write_data_iter_to_stream(
-                    index_kind,
-                    {
-                        let data_file = Arc::clone(&data_file);
-                        move || new_pack_file_resolver(data_file)
-                    },
-                    &mut pack_entries_iter,
-                    thread_limit,
-                    &mut indexing_progress,
-                    &mut index_file,
-                    should_interrupt,
-                    object_hash,
-                    alloc_limit_bytes,
-                    pack_version,
-                )?;
-                drop(pack_entries_iter);
-
-                if outcome.num_objects == 0 {
-                    WriteOutcome {
-                        outcome,
-                        data_path: None,
-                        index_path: None,
-                        keep_path: None,
-                    }
-                } else {
-                    let data_path = directory.join(format!("pack-{}.pack", outcome.data_hash.to_hex()));
-                    let index_path = data_path.with_extension("idx");
-                    index_file
-                        .with_mut(|file| {
-                            gix_fs::set_shared_repository_permissions(file.path(), shared_repository_permissions)
-                        })
-                        .and_then(|res| res)
-                        .or_raise(|| message("Could not set temporary pack index permissions"))?;
-                    let keep_path = if data_path.is_file() {
-                        // Avoid replacing a pack which might already be mapped, particularly on Windows.
-                        gix_fs::set_shared_repository_permissions(&data_path, shared_repository_permissions)
-                            .or_raise(|| message("Could not set pack file permissions"))?;
-                        None
-                    } else {
-                        let mut data_file = Arc::try_unwrap(data_file)
-                            .expect("only one handle left after pack was consumed")
-                            .into_inner()
-                            .into_inner()
-                            .or_error()?;
-                        data_file
-                            .with_mut(|file| {
-                                gix_fs::set_shared_repository_permissions(file.path(), shared_repository_permissions)
-                            })
-                            .and_then(|res| res)
-                            .or_raise(|| message("Could not set temporary pack file permissions"))?;
-                        let keep_path = create_keep_file(&data_path)?;
-                        data_file
-                            .persist(&data_path)
-                            .or_raise(|| message("Could not persist pack file"))?;
-                        keep_path
-                    };
-                    if !index_path.is_file() {
-                        index_file
-                            .persist(&index_path)
-                            .inspect_err(|_err| {
-                                gix_trace::warn!("pack file at \"{}\" is retained despite failing to move the index file into place. You can use plumbing to make it usable.",data_path.display());
-                            })
-                            .or_raise(|| message("Could not persist pack index"))?;
-                    } else {
-                        gix_fs::set_shared_repository_permissions(&index_path, shared_repository_permissions)
-                            .or_raise(|| message("Could not set pack index permissions"))?;
-                    }
-                    WriteOutcome {
-                        outcome,
-                        data_path: Some(data_path),
-                        index_path: Some(index_path),
-                        keep_path,
-                    }
-                }
-            }
-            None => WriteOutcome {
-                outcome: crate::index::write_data_iter_to_stream(
-                    index_kind,
-                    move || new_pack_file_resolver(data_file),
-                    &mut pack_entries_iter,
-                    thread_limit,
-                    &mut indexing_progress,
-                    &mut io::sink(),
-                    should_interrupt,
-                    object_hash,
-                    alloc_limit_bytes,
-                    pack_version,
-                )?,
-                data_path: None,
-                index_path: None,
-                keep_path: None,
-            },
+        let mut index_file = directory
+            .map(|directory| new_pack_file(directory, shared_repository_permissions))
+            .transpose()
+            .or_raise(|| message("Could not create temporary index file"))?;
+        let mut sink = io::sink();
+        let index_writer: &mut dyn Write = match index_file.as_mut() {
+            Some(file) => file,
+            None => &mut sink,
+        };
+        let index = crate::index::write_data_iter_to_stream(
+            index_kind,
+            || new_pack_file_resolver(Arc::clone(&data_file)),
+            &mut pack_entries_iter,
+            thread_limit,
+            &mut indexing_progress,
+            index_writer,
+            should_interrupt,
+            object_hash,
+            alloc_limit_bytes,
+            pack_version,
+        )?;
+        drop(pack_entries_iter);
+        let files = match (directory, index_file) {
+            (Some(directory), Some(index_file)) if index.num_objects != 0 => Some(StagedFiles {
+                data_path: directory.join(format!("pack-{}.pack", index.data_hash.to_hex())),
+                data_file: Arc::try_unwrap(data_file)
+                    .expect("only one handle left after pack was consumed")
+                    .into_inner()
+                    .into_inner()
+                    .or_error()?,
+                index_file,
+                shared_repository_permissions,
+            }),
+            _ => None,
+        };
+        Ok(WriteOutcome {
+            index,
+            object_hash,
+            pack_version,
+            files,
         })
     }
 }
-
-fn create_keep_file(data_path: &Path) -> Result<Option<PathBuf>> {
-    let keep_path = data_path.with_extension("keep");
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        // Git's keep markers are private, independently of core.sharedRepository.
-        options.mode(0o600);
-    }
-    match options.open(&keep_path) {
-        Ok(_) => Ok(Some(keep_path)),
-        // An existing marker belongs to another operation and must not be removed by our caller.
-        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => Ok(None),
-        Err(err) => Err(err.and_raise(message("Could not create pack keep file"))),
-    }
-}
-
 fn new_pack_file(
     directory: &Path,
     shared_repository_permissions: gix_fs::SharedPermissions,
@@ -449,11 +403,4 @@ fn new_pack_file_resolver(
     guard.flush()?;
     let mapped_file = crate::mmap::read_only(&guard.get_mut().with_mut(|f| f.path().to_owned())?)?;
     Ok((resolve_entry, mapped_file))
-}
-
-struct WriteOutcome {
-    outcome: crate::index::write::Outcome,
-    data_path: Option<PathBuf>,
-    index_path: Option<PathBuf>,
-    keep_path: Option<PathBuf>,
 }

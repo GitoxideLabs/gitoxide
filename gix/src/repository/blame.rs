@@ -16,7 +16,7 @@ impl Repository {
         suspect: impl Into<ObjectId>,
         options: blame_file::Options,
     ) -> Result<gix_blame::Outcome> {
-        let cache = self.commit_graph_if_enabled()?;
+        let mut graph = self.revision_graph()?;
         let mut resource_cache = self.diff_resource_cache_for_tree_diff()?;
 
         let blame_file::Options {
@@ -41,7 +41,7 @@ impl Repository {
         let outcome = gix_blame::file(
             &self.objects,
             Start::Commit(suspect.into()),
-            cache,
+            &mut graph,
             &mut resource_cache,
             file_path,
             options,

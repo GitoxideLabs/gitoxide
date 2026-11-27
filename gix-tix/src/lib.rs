@@ -5831,7 +5831,6 @@ fn active_branch_name(refs: &history::RefSnapshot) -> Option<BString> {
 fn push_remote_name(repository: &gix::Repository, branch: &BStr) -> BString {
     repository
         .branch_remote_name(branch, gix::remote::Direction::Push)
-        .map(|name| name.as_bstr().to_owned())
         .or_else(|| repository.remote_default_name(gix::remote::Direction::Push))
         .unwrap_or_else(|| "origin".into())
 }
@@ -8448,7 +8447,10 @@ fn update_worktree_changes(
             load_unstaged_changes_without_lines(repository, patterns)?,
             line_diff_pool,
         )?;
-        let ignore_case = repository.filesystem_options()?.ignore_case;
+        let ignore_case = repository
+            .config_snapshot()
+            .boolean("core.ignoreCase")
+            .unwrap_or_default();
         replace_cached_changes(repository, cached, unstaged, |change| {
             change.group == ChangeGroup::Unstaged
                 && scopes
@@ -10444,6 +10446,20 @@ mod tests {
         );
         drop(repository);
 
+        assert!(git(&["config", "branch.main.remote", "./direct.git"])?.success());
+        let repository = test_repository::open(fixture.path())?;
+        assert_eq!(
+            history::snapshot(&repository, &[], &[], false)?.fetch_remote,
+            Some(BString::from("./direct.git")),
+            "a direct destination takes precedence over the default named remote for fetch"
+        );
+        assert_eq!(
+            push_remote_name(&repository, b"main".as_bstr()),
+            "./direct.git",
+            "a direct destination takes precedence over the default named remote for push"
+        );
+        drop(repository);
+
         assert!(git(&["config", "--unset", "branch.main.remote"])?.success());
         let repository = test_repository::open(fixture.path())?;
         assert_eq!(
@@ -12222,6 +12238,38 @@ added
             )?;
             assert_eq!(cached, expected, "the event at {relative} preserves nested ignores");
         }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn incremental_worktree_status_does_not_write_to_the_worktree() -> gix_error::TestResult {
+        let (root, ()) = gix_testtools::scripted_fixture_read_only_with_post("history.sh", 2, |state| {
+            if let gix_testtools::FixtureState::Uninitialized(path) = state {
+                std::fs::File::open(path)?.set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1_000_000_000))?;
+            }
+            Ok(())
+        })?;
+        let repo = test_repository::open(&root)?;
+        let options = repo
+            .open_options()
+            .clone_without_trust()
+            .filter_config_section(|_| false);
+        let repo = gix::open_opts(&root, options)?;
+        let mut pool = LineDiffPool::new(&root, false, 1);
+        let mut cached = load_worktree_changes(&repo, &mut pool)?;
+        let parts = WorktreeStatusParts {
+            staged: false,
+            scopes: HashSet::from([BString::from("main")]),
+        };
+        let before = std::fs::metadata(&root)?.modified()?;
+        let full_refresh = update_worktree_changes(&repo, &mut cached, &parts, &mut pool)?;
+        assert!(!full_refresh, "the fixture exercises scoped status");
+        assert_eq!(
+            std::fs::metadata(&root)?.modified()?,
+            before,
+            "refreshing the changes pane must not create temporary entries that invalidate the monitor"
+        );
         Ok(())
     }
 

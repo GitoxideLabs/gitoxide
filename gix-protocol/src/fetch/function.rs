@@ -86,8 +86,14 @@ where
         }
         arguments.use_include_tag();
     }
-    let (shallow_commits, mut shallow_lock) =
-        add_shallow_args(&mut arguments, shallow, &shallow_file, shared_repository_permissions)?;
+    let object_hash = super::refmap::init::extract_object_hash(&handshake.capabilities)?;
+    let (shallow_commits, mut shallow_lock) = add_shallow_args(
+        &mut arguments,
+        shallow,
+        &shallow_file,
+        object_hash,
+        shared_repository_permissions,
+    )?;
 
     let negotiate_span = gix_trace::detail!(
         "negotiate",
@@ -279,6 +285,7 @@ fn add_shallow_args(
     args: &mut Arguments,
     shallow: &Shallow,
     shallow_file: &std::path::Path,
+    object_hash: gix_hash::Kind,
     shared_repository_permissions: SharedPermissions,
 ) -> Result<(Option<nonempty::NonEmpty<gix_hash::ObjectId>>, Option<gix_lock::File>)> {
     let expect_change = *shallow != Shallow::NoChange;
@@ -286,7 +293,7 @@ fn add_shallow_args(
         .then(|| acquire_shallow_lock(shallow_file, shared_repository_permissions))
         .transpose()?;
 
-    let shallow_commits = gix_shallow::read(shallow_file)
+    let shallow_commits = gix_shallow::read(shallow_file, object_hash)
         .or_raise(|| message("Could not read 'shallow' file to send current shallow boundary"))?;
     if (shallow_commits.is_some() || expect_change) && !args.can_use_shallow() {
         // NOTE: if this is an issue, we can always unshallow the repo ourselves.

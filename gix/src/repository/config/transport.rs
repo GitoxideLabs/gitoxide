@@ -6,8 +6,9 @@ use crate::{Result, bstr::BStr};
 impl crate::Repository {
     /// Produce configuration suitable for `url`, as differentiated by its protocol/scheme, to be passed to a transport instance via
     /// [configure()][gix_transport::client::TransportWithoutIO::configure()] (via `&**config` to pass the contained `Any` and not the `Box`).
-    /// `None` is returned if there is no known configuration. If `remote_name` is not `None`, the remote's name may contribute to
-    /// configuration overrides, typically for the HTTP transport.
+    /// `None` is returned if there is no known configuration.
+    /// If `remote_name` is `Some`, its bytes are used as the exact subsection name in `[remote "<name>"]`
+    /// when looking up transport overrides. Passing `None` skips remote-specific overrides.
     ///
     /// Note that the caller may cast the instance themselves to modify it before passing it on.
     ///
@@ -170,10 +171,7 @@ impl crate::Repository {
                             remote_name
                                 .and_then(|name| {
                                     config
-                                        .string_filter(
-                                            &format!("remote.{}.{}", name, Remote::PROXY.name),
-                                            &mut trusted_only,
-                                        )
+                                        .string_filter_by("remote", Some(name), Remote::PROXY.name, &mut trusted_only)
                                         .map(|v| (v, Some(name), &Remote::PROXY))
                                 })
                                 .or_else(|| {
@@ -228,8 +226,10 @@ impl crate::Repository {
                                     remote_name
                                         .and_then(|name| {
                                             config
-                                                .string_filter(
-                                                    &format!("remote.{name}.proxyAuthMethod"),
+                                                .string_filter_by(
+                                                    "remote",
+                                                    Some(name),
+                                                    Remote::PROXY_AUTH_METHOD.name,
                                                     &mut trusted_only,
                                                 )
                                                 .map(|v| (v, Some(name), &Remote::PROXY_AUTH_METHOD))
