@@ -274,15 +274,24 @@ mod shared {
             } else {
                 client::MessageKind::Flush
             };
+            // Follow the V1 grammar `want-list *shallow-line *1depth-request [filter-request]` as strict servers
+            // reject anything else. The sort is stable, so the first `want` keeps the capabilities.
+            self.args.sort_by_key(|arg| {
+                if arg.starts_with_str("want ") {
+                    0
+                } else if arg.starts_with_str("shallow ") {
+                    1
+                } else if arg.starts_with_str("filter ") {
+                    3
+                } else {
+                    2
+                }
+            });
             let retained_state = if transport_is_stateful {
                 None
             } else {
                 Some(self.args.clone())
             };
-
-            if let Some(first_arg_position) = self.args.iter().position(|l| l.starts_with_str("want ")) {
-                self.args.swap(first_arg_position, 0);
-            }
             Ok((on_into_read, retained_state))
         }
     }

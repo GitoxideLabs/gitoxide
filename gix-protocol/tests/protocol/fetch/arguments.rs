@@ -209,22 +209,25 @@ mod v1 {
     async fn haves_and_wants_for_clone() {
         let mut out = Vec::new();
         let mut t = transport(&mut out, true);
-        let mut arguments = arguments_v1(["feature-a", "feature-b"].iter().copied());
+        let mut arguments = arguments_v1(["feature-a", "feature-b", "shallow"].iter().copied());
         assert!(
             !arguments.can_use_include_tag(),
             "needs to be enabled by features in V1"
         );
 
+        arguments.deepen(1);
         arguments.want(id("7b333369de1221f9bfbbe03a3a13e9a09bc1c907"));
         arguments.want(id("ff333369de1221f9bfbbe03a3a13e9a09bc1ffff"));
         arguments.send(&mut t, true).await.expect("sending to buffer to work");
         assert_eq!(
             out.as_bstr(),
-            b"0046want 7b333369de1221f9bfbbe03a3a13e9a09bc1c907 feature-a feature-b
+            b"004ewant 7b333369de1221f9bfbbe03a3a13e9a09bc1c907 feature-a feature-b shallow
 0032want ff333369de1221f9bfbbe03a3a13e9a09bc1ffff
+000ddeepen 1
 00000009done
 "
-            .as_bstr()
+            .as_bstr(),
+            "all wants come first even if `deepen` was added before them"
         );
     }
 
@@ -234,11 +237,17 @@ mod v1 {
     async fn haves_and_wants_for_fetch_stateless() {
         let mut out = Vec::new();
         let mut t = transport(&mut out, false);
-        let mut arguments = arguments_v1(["feature-a", "shallow", "deepen-since", "deepen-not"].iter().copied());
+        let mut arguments = arguments_v1(
+            ["feature-a", "shallow", "deepen-since", "deepen-not", "filter"]
+                .iter()
+                .copied(),
+        );
 
+        arguments.filter("blob:none");
         arguments.deepen(1);
         arguments.shallow(id("7b333369de1221f9bfbbe03a3a13e9a09bc1c9ff"));
         arguments.want(id("7b333369de1221f9bfbbe03a3a13e9a09bc1c907"));
+        arguments.want(id("ff333369de1221f9bfbbe03a3a13e9a09bc1ffff"));
         arguments.deepen_since(12345);
         arguments.deepen_not("refs/heads/main".into());
         arguments.have(id("0000000000000000000000000000000000000000"));
@@ -248,21 +257,26 @@ mod v1 {
         arguments.send(&mut t, true).await.expect("sending to buffer to work");
         assert_eq!(
             out.as_bstr(),
-            b"005cwant 7b333369de1221f9bfbbe03a3a13e9a09bc1c907 feature-a shallow deepen-since deepen-not
+            b"0063want 7b333369de1221f9bfbbe03a3a13e9a09bc1c907 feature-a shallow deepen-since deepen-not filter
+0032want ff333369de1221f9bfbbe03a3a13e9a09bc1ffff
 0035shallow 7b333369de1221f9bfbbe03a3a13e9a09bc1c9ff
 000ddeepen 1
 0017deepen-since 12345
 001fdeepen-not refs/heads/main
+0015filter blob:none
 00000032have 0000000000000000000000000000000000000000
-0000005cwant 7b333369de1221f9bfbbe03a3a13e9a09bc1c907 feature-a shallow deepen-since deepen-not
+00000063want 7b333369de1221f9bfbbe03a3a13e9a09bc1c907 feature-a shallow deepen-since deepen-not filter
+0032want ff333369de1221f9bfbbe03a3a13e9a09bc1ffff
 0035shallow 7b333369de1221f9bfbbe03a3a13e9a09bc1c9ff
 000ddeepen 1
 0017deepen-since 12345
 001fdeepen-not refs/heads/main
+0015filter blob:none
 00000032have 1111111111111111111111111111111111111111
 0009done
 "
-            .as_bstr()
+            .as_bstr(),
+            "each stateless round sends wants, `shallow`, `deepen*` and `filter` lines in the order of the V1 grammar"
         );
     }
 
