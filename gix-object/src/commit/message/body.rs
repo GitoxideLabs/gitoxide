@@ -70,25 +70,21 @@ fn trim_line_ending(mut line: &[u8]) -> &[u8] {
     line
 }
 
-/// Split `input` into physical lines while keeping enough information to map
-/// parser decisions back to the original byte slice.
+/// Split `input` into physical lines, from last to first, while keeping enough
+/// information to map parser decisions back to the original byte slice.
 ///
 /// This is different from using plain `.lines()` because trailer block detection
 /// needs normalized line contents for parsing *and* exact byte offsets to slice
 /// the original body at the eventual trailer boundary.
-fn lines(input: &[u8]) -> Vec<Line<'_>> {
-    let mut start = 0;
-    input
-        .lines_with_terminator()
-        .map(|raw| {
-            let line = Line {
-                text: trim_line_ending(raw),
-                start,
-            };
-            start += raw.len();
-            line
-        })
-        .collect()
+fn lines_rev(input: &[u8]) -> impl Iterator<Item = Line<'_>> {
+    let mut end = input.len();
+    input.lines_with_terminator().rev().map(move |raw| {
+        end -= raw.len();
+        Line {
+            text: trim_line_ending(raw),
+            start: end,
+        }
+    })
 }
 
 /// Find the byte position of a Git trailer separator in `line`.
@@ -210,24 +206,21 @@ fn trailer_block_start(body: &[u8]) -> Option<usize> {
         (trailer_lines > 0 && non_trailer_lines == 0) || (recognized_prefix && trailer_lines * 3 >= non_trailer_lines)
     }
 
-    let lines = lines(body);
+    let mut lines = lines_rev(body).peekable();
     let mut recognized_prefix = false;
     let mut trailer_lines = 0usize;
     let mut non_trailer_lines = 0usize;
     let mut possible_continuation_lines = 0usize;
     let mut saw_non_blank_line = false;
 
-    for idx in (0..lines.len()).rev() {
-        let line = &lines[idx];
+    while let Some(line) = lines.next() {
         if is_blank_line(line.text) {
             if !saw_non_blank_line {
                 continue;
             }
             non_trailer_lines += possible_continuation_lines;
-            return accepts_as_trailer_block(recognized_prefix, trailer_lines, non_trailer_lines).then_some(
-                idx.checked_sub(1)
-                    .map_or(0, |prev| lines[prev].start + lines[prev].text.len()),
-            );
+            return accepts_as_trailer_block(recognized_prefix, trailer_lines, non_trailer_lines)
+                .then_some(lines.peek().map_or(0, |prev| prev.start + prev.text.len()));
         }
 
         saw_non_blank_line = true;
