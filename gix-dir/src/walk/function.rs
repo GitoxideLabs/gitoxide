@@ -5,7 +5,7 @@ use std::{
 };
 
 use bstr::{BStr, BString, ByteSlice};
-use gix_error::{OptionExt, ResultExt, bail};
+use gix_error::{OptionExt, ResultExt, bail, cancelled};
 
 use crate::{
     EntryRef, entry,
@@ -99,6 +99,9 @@ pub fn walk(
         if options.precompose_unicode {
             buf = gix_path::into_bstr(gix_utils::str::precompose_path(gix_path::from_bstr(buf)?))?.into_owned();
         }
+        if delegate.should_interrupt() {
+            bail!(cancelled("Interrupted"));
+        }
         let _ = emit_entry(
             Cow::Borrowed(buf.as_bstr()),
             root_info,
@@ -106,7 +109,10 @@ pub fn walk(
             options,
             &mut out,
             delegate,
-        );
+        )?;
+        if delegate.should_interrupt() {
+            bail!(cancelled("Interrupted"));
+        }
         return Ok((out, root.to_owned()));
     }
 
@@ -124,8 +130,11 @@ pub fn walk(
         &mut state,
     )?;
     if action.is_continue() {
-        state.emit_remaining(may_collapse, options, &mut out, delegate);
+        state.emit_remaining(may_collapse, options, &mut out, delegate)?;
         assert_eq!(state.on_hold.len(), 0, "BUG: after emission, on hold must be empty");
+    }
+    if delegate.should_interrupt() {
+        bail!(cancelled("Interrupted"));
     }
     gix_trace::debug!(statistics = ?out);
     Ok((out, root.to_owned()))
@@ -194,7 +203,7 @@ pub(super) fn emit_entry(
     }: Options<'_>,
     out: &mut Outcome,
     delegate: &mut dyn Delegate,
-) -> Action {
+) -> Result<Action> {
     out.seen_entries += 1;
 
     if (!emit_empty_directories && info.property == Some(entry::Property::EmptyDirectory)
@@ -203,9 +212,12 @@ pub(super) fn emit_entry(
         || !emit_pruned
             && (info.status.is_pruned() || info.pathspec_match.is_none_or(|m| m == entry::PathspecMatch::Excluded))
     {
-        return std::ops::ControlFlow::Continue(());
+        return Ok(std::ops::ControlFlow::Continue(()));
     }
 
+    if delegate.should_interrupt() {
+        bail!(cancelled("Interrupted"));
+    }
     out.returned_entries += 1;
-    delegate.emit(EntryRef::from_outcome(rela_path, info), dir_status)
+    Ok(delegate.emit(EntryRef::from_outcome(rela_path, info), dir_status))
 }

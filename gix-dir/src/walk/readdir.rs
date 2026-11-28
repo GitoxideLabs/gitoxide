@@ -41,7 +41,7 @@ pub(super) fn recursive(
     out: &mut Outcome,
     state: &mut State,
 ) -> Result<(Action, bool)> {
-    if ctx.should_interrupt.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+    if ctx.should_interrupt.is_some_and(|flag| flag.load(Ordering::Relaxed)) || delegate.should_interrupt() {
         bail!(cancelled("Interrupted"));
     }
     out.read_dir_calls += 1;
@@ -59,9 +59,12 @@ pub(super) fn recursive(
     let mut mark = state.mark(may_collapse);
     let mut prevent_collapse = false;
     for entry in entries {
+        if delegate.should_interrupt() {
+            bail!(cancelled("Interrupted"));
+        }
         let Some(entry) = read_dir_result(entry, current, opts.for_deletion, out)? else {
             // Preserve earlier entries without treating the unreadable directory as empty or collapsible.
-            return Ok((mark.emit_all_held(state, opts, out, delegate), true));
+            return Ok((mark.emit_all_held(state, opts, out, delegate)?, true));
         };
         // Important to count right away, otherwise the directory could be seen as empty even though it's not.
         // That is, this should be independent of the kind.
@@ -123,7 +126,7 @@ pub(super) fn recursive(
                 );
             }
             if !state.held_for_directory_collapse(current_bstr.as_bstr(), info, &opts) {
-                let action = emit_entry(Cow::Borrowed(current_bstr.as_bstr()), info, None, opts, out, delegate);
+                let action = emit_entry(Cow::Borrowed(current_bstr.as_bstr()), info, None, opts, out, delegate)?;
                 if action.is_break() {
                     return Ok((action, prevent_collapse));
                 }
@@ -144,7 +147,7 @@ pub(super) fn recursive(
         out,
         ctx,
         delegate,
-    );
+    )?;
     Ok((res, prevent_collapse))
 }
 
@@ -224,16 +227,13 @@ impl State {
         opts: Options<'_>,
         out: &mut walk::Outcome,
         delegate: &mut dyn walk::Delegate,
-    ) {
-        if self.on_hold.is_empty() {
-            return;
-        }
-
-        _ = Mark {
+    ) -> Result<()> {
+        Mark {
             start_index: 0,
             may_collapse,
         }
-        .emit_all_held(self, opts, out, delegate);
+        .emit_all_held(self, opts, out, delegate)
+        .map(|_| ())
     }
 }
 
@@ -256,7 +256,7 @@ impl Mark {
         out: &mut walk::Outcome,
         ctx: &mut Context<'_>,
         delegate: &mut dyn walk::Delegate,
-    ) -> walk::Action {
+    ) -> Result<Action> {
         if num_entries == 0 {
             let empty_info = classify::Outcome {
                 property: {
@@ -284,14 +284,14 @@ impl Mark {
                 state
                     .on_hold
                     .push(EntryRef::from_outcome(Cow::Borrowed(dir_rela_path), empty_info).into_owned());
-                std::ops::ControlFlow::Continue(())
+                Ok(std::ops::ControlFlow::Continue(()))
             } else {
                 emit_entry(Cow::Borrowed(dir_rela_path), empty_info, None, opts, out, delegate)
             }
         } else if *prevent_collapse {
             self.emit_all_held(state, opts, out, delegate)
-        } else if let Some(action) = self.try_collapse(dir_rela_path, dir_info, state, out, opts, ctx, delegate) {
-            action
+        } else if let Some(action) = self.try_collapse(dir_rela_path, dir_info, state, out, opts, ctx, delegate)? {
+            Ok(action)
         } else {
             *prevent_collapse = true;
             self.emit_all_held(state, opts, out, delegate)
@@ -304,15 +304,15 @@ impl Mark {
         opts: Options<'_>,
         out: &mut walk::Outcome,
         delegate: &mut dyn walk::Delegate,
-    ) -> Action {
+    ) -> Result<Action> {
         for entry in state.on_hold.drain(self.start_index..) {
             let info = classify::Outcome::from(&entry);
-            let action = emit_entry(Cow::Owned(entry.rela_path), info, None, opts, out, delegate);
+            let action = emit_entry(Cow::Owned(entry.rela_path), info, None, opts, out, delegate)?;
             if action.is_break() {
-                return action;
+                return Ok(action);
             }
         }
-        std::ops::ControlFlow::Continue(())
+        Ok(std::ops::ControlFlow::Continue(()))
     }
 
     #[expect(clippy::too_many_arguments)]
@@ -325,9 +325,9 @@ impl Mark {
         opts: Options<'_>,
         ctx: &mut Context<'_>,
         delegate: &mut dyn walk::Delegate,
-    ) -> Option<Action> {
+    ) -> Result<Option<Action>> {
         if !self.may_collapse {
-            return None;
+            return Ok(None);
         }
         let (mut expendable, mut precious, mut untracked, mut entries, mut matching_entries) = (0, 0, 0, 0, 0);
         for (kind, status, pathspec_match) in state.on_hold[self.start_index..]
@@ -336,10 +336,10 @@ impl Mark {
         {
             entries += 1;
             if kind == Some(entry::Kind::Repository) {
-                return None;
+                return Ok(None);
             }
             if pathspec_match.is_some_and(|m| matches!(m, PathspecMatch::Verbatim | PathspecMatch::Excluded)) {
-                return None;
+                return Ok(None);
             }
             matching_entries += usize::from(pathspec_match.is_some_and(|m| !m.should_ignore()));
             match status {
@@ -354,7 +354,7 @@ impl Mark {
         }
 
         if matching_entries != 0 && matching_entries != entries {
-            return None;
+            return Ok(None);
         }
 
         let dir_status = if opts.emit_untracked == CollapseDirectory
@@ -371,18 +371,18 @@ impl Mark {
             } else if precious != 0 && precious == entries {
                 entry::Status::Ignored(gix_ignore::Kind::Precious)
             } else {
-                return None;
+                return Ok(None);
             }
         } else {
-            return None;
+            return Ok(None);
         };
 
         if !matches!(dir_status, entry::Status::Untracked | entry::Status::Ignored(_)) {
-            return None;
+            return Ok(None);
         }
 
         if !ctx.pathspec.directory_matches_prefix(dir_rela_path, false) {
-            return None;
+            return Ok(None);
         }
 
         // Pathspecs affect the collapse of the next level, hence find the highest-value one.
@@ -423,7 +423,7 @@ impl Mark {
                 Some(mode) => {
                     if mode == CollapsedEntriesEmissionMode::All || entry.status != dir_status {
                         let info = classify::Outcome::from(&entry);
-                        action = emit_entry(Cow::Owned(entry.rela_path), info, Some(dir_status), opts, out, delegate);
+                        action = emit_entry(Cow::Owned(entry.rela_path), info, Some(dir_status), opts, out, delegate)?;
                     } else {
                         removed_without_emitting += 1;
                     }
@@ -445,7 +445,7 @@ impl Mark {
             )
             .into_owned(),
         );
-        Some(action)
+        Ok(Some(action))
     }
 }
 

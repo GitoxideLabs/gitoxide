@@ -162,6 +162,10 @@ struct Collect {
 }
 
 impl gix_dir::walk::Delegate for Collect {
+    fn should_interrupt(&self) -> bool {
+        false
+    }
+
     fn emit(
         &mut self,
         entry: gix_dir::EntryRef<'_>,

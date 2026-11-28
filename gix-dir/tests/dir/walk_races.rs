@@ -115,6 +115,10 @@ fn walk_with_directory_change(
     }
 
     impl<F: FnMut(&Path) -> io::Result<()>> walk::Delegate for ChangeDirectory<'_, F> {
+        fn should_interrupt(&self) -> bool {
+            self.collected.should_interrupt()
+        }
+
         fn emit(&mut self, entry: EntryRef<'_>, dir_status: Option<entry::Status>) -> walk::Action {
             self.collected.emit(entry, dir_status)
         }

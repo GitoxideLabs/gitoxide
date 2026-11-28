@@ -506,6 +506,128 @@ fn should_interrupt_works_even_in_empty_directories() {
 }
 
 #[test]
+fn delegate_can_interrupt_a_walk_before_or_during_emission() {
+    struct Interrupt {
+        recurse: bool,
+        interrupted: std::cell::Cell<bool>,
+    }
+
+    impl walk::Delegate for Interrupt {
+        fn should_interrupt(&self) -> bool {
+            self.interrupted.replace(true)
+        }
+
+        fn can_recurse(&mut self, _: EntryRef<'_>, _: Option<ForDeletionMode>, _: bool) -> bool {
+            self.recurse
+        }
+
+        fn emit(&mut self, _: EntryRef<'_>, _: Option<entry::Status>) -> walk::Action {
+            panic!("a cancelled walk must stop before emitting an entry")
+        }
+    }
+
+    let root = fixture("submodule");
+    for recurse in [true, false] {
+        let err = try_collect_filtered_opts(
+            &root,
+            None,
+            None,
+            None,
+            |delegate, ctx| walk(&root, ctx, options(), delegate),
+            None::<&str>,
+            &mut Interrupt {
+                recurse,
+                interrupted: (!recurse).into(),
+            },
+            Options::default(),
+        )
+        .expect_err("the delegate can cancel before an entry is emitted, even without recursion");
+        assert!(
+            err.is_cancelled(),
+            "the delegate requested cancellation (recurse={recurse})"
+        );
+    }
+
+    struct InterruptAfterFirst(usize);
+
+    impl walk::Delegate for InterruptAfterFirst {
+        fn should_interrupt(&self) -> bool {
+            self.0 != 0
+        }
+
+        fn emit(&mut self, _: EntryRef<'_>, _: Option<entry::Status>) -> walk::Action {
+            self.0 += 1;
+            std::ops::ControlFlow::Continue(())
+        }
+    }
+
+    let root = fixture("only-untracked");
+    for emit_untracked in [Matching, CollapseDirectory] {
+        let mut delegate = InterruptAfterFirst(0);
+        let result = try_collect_filtered_opts(
+            &root,
+            None,
+            None,
+            None,
+            |delegate, ctx| {
+                walk(
+                    &root,
+                    ctx,
+                    walk::Options {
+                        emit_untracked,
+                        ..options()
+                    },
+                    delegate,
+                )
+            },
+            ["a", "b"],
+            &mut delegate,
+            Options::default(),
+        );
+        assert_eq!(
+            delegate.0, 1,
+            "the delegate interrupts after the first entry ({emit_untracked:?})"
+        );
+        let err = result.expect_err("interruption during emission cancels the walk");
+        assert!(err.is_cancelled(), "the delegate requested cancellation");
+    }
+
+    struct InterruptOnTrackedDirectory(bool);
+
+    impl walk::Delegate for InterruptOnTrackedDirectory {
+        fn should_interrupt(&self) -> bool {
+            self.0
+        }
+
+        fn can_recurse(&mut self, entry: EntryRef<'_>, _: Option<ForDeletionMode>, _: bool) -> bool {
+            if entry.rela_path.as_ref() == "a/b" {
+                assert_eq!(entry.status, Tracked, "the last child is filtered as tracked");
+                self.0 = true;
+            }
+            !self.0
+        }
+
+        fn emit(&mut self, _: EntryRef<'_>, _: Option<entry::Status>) -> walk::Action {
+            panic!("the tracked child is filtered")
+        }
+    }
+
+    let root = fixture("uninitialized-submodules-with-files");
+    let err = try_collect_filtered_opts(
+        &root,
+        None,
+        Some(&root.join("a")),
+        None,
+        |delegate, ctx| walk(&root, ctx, options(), delegate),
+        None::<&str>,
+        &mut InterruptOnTrackedDirectory(false),
+        Options::default(),
+    )
+    .expect_err("cancellation is reported even when the last child is filtered");
+    assert!(err.is_cancelled(), "the delegate requested cancellation");
+}
+
+#[test]
 fn empty_root() -> TestResult {
     let root = fixture("empty");
     let ((out, _root), entries) = collect(&root, None, |keep, ctx| walk(&root, ctx, options(), keep));
@@ -3607,6 +3729,34 @@ fn root_that_is_untracked_file_is_returned() -> TestResult {
         [entry("dir/file", Untracked, File)],
         "an untracked file as root just returns that file (even though no iteration is possible)"
     );
+
+    #[derive(Default)]
+    struct CancelOnEmit(bool);
+
+    impl walk::Delegate for CancelOnEmit {
+        fn should_interrupt(&self) -> bool {
+            self.0
+        }
+
+        fn emit(&mut self, entry: EntryRef<'_>, _: Option<entry::Status>) -> walk::Action {
+            assert_eq!(entry.rela_path.as_ref(), "dir/file", "the walk emits its file root");
+            self.0 = true;
+            std::ops::ControlFlow::Continue(())
+        }
+    }
+
+    let err = try_collect_filtered_opts(
+        &root,
+        None,
+        Some(&troot),
+        None,
+        |delegate, ctx| walk(&root, ctx, options(), delegate),
+        None::<&str>,
+        &mut CancelOnEmit::default(),
+        Default::default(),
+    )
+    .expect_err("the walk reports cancellation requested while emitting its file root");
+    assert!(err.is_cancelled(), "the delegate requested cancellation");
     Ok(())
 }
 
@@ -3769,6 +3919,10 @@ fn cancel_with_collection_does_not_fail() -> TestResult {
     }
 
     impl gix_dir::walk::Delegate for CancelDelegate {
+        fn should_interrupt(&self) -> bool {
+            false
+        }
+
         fn emit(&mut self, _entry: EntryRef<'_>, _collapsed_directory_status: Option<entry::Status>) -> walk::Action {
             if self.emits_left_until_cancel == 0 {
                 std::ops::ControlFlow::Break(())

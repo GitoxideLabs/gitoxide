@@ -419,6 +419,10 @@ pub(super) mod function {
         }
 
         impl<T, U> gix_dir::walk::Delegate for Delegate<'_, '_, T, U> {
+            fn should_interrupt(&self) -> bool {
+                false
+            }
+
             fn emit(&mut self, entry: EntryRef<'_>, collapsed_directory_status: Option<Status>) -> Action {
                 // Status never shows untracked entries of untrackable type
                 if entry.disk_kind != Some(gix_dir::entry::Kind::Untrackable) {

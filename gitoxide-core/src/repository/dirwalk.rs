@@ -73,6 +73,10 @@ struct Count {
 }
 
 impl walk::Delegate for Count {
+    fn should_interrupt(&self) -> bool {
+        false
+    }
+
     fn emit(
         &mut self,
         _entry: EntryRef<'_>,

@@ -251,6 +251,10 @@ pub(super) struct Directories {
 }
 
 impl gix_dir::walk::Delegate for Directories {
+    fn should_interrupt(&self) -> bool {
+        false
+    }
+
     fn emit(&mut self, _: gix_dir::EntryRef<'_>, _: Option<gix_dir::entry::Status>) -> gix_dir::walk::Action {
         if self.error.is_some() {
             std::ops::ControlFlow::Break(())

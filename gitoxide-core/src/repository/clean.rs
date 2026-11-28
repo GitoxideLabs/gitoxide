@@ -391,6 +391,10 @@ pub(crate) mod function {
     }
 
     impl gix::dir::walk::Delegate for InterruptibleCollect {
+        fn should_interrupt(&self) -> bool {
+            self.inner.should_interrupt()
+        }
+
         fn emit(&mut self, entry: EntryRef<'_>, collapsed_directory_status: Option<Status>) -> walk::Action {
             let res = self.inner.emit(entry, collapsed_directory_status);
             if gix::interrupt::is_triggered() {
