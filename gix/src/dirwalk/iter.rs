@@ -2,6 +2,11 @@
 use gix_error::ResultExt;
 
 use std::path::PathBuf;
+#[cfg(feature = "parallel")]
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use super::Iter;
 use crate::{
@@ -57,13 +62,14 @@ impl Iter {
         {
             let repo = repo.clone().into_sync();
             let (tx, rx) = std::sync::mpsc::channel();
+            let stop_worker = Arc::new(AtomicBool::new(false));
             let handle = std::thread::Builder::new()
                 .name("gix::dirwalk::iter::producer".into())
                 .spawn(crate::trace::in_thread({
-                    let should_interrupt = should_interrupt.clone();
+                    let stop_worker = Arc::clone(&stop_worker);
                     move || -> Result<Outcome> {
                         let repo: Repository = repo.into();
-                        let mut collect = Collect { tx };
+                        let mut collect = Collect { tx, stop_worker };
                         let out = repo.dirwalk(&index, patterns, &should_interrupt, options, &mut collect)?;
                         Ok(Outcome {
                             index,
@@ -78,7 +84,7 @@ impl Iter {
 
             Ok(Iter {
                 rx_and_join: Some((rx, handle)),
-                should_interrupt,
+                stop_worker,
                 out: None,
             })
         }
@@ -145,32 +151,43 @@ impl Iterator for Iter {
 #[cfg(feature = "parallel")]
 impl Drop for Iter {
     fn drop(&mut self) {
-        crate::util::parallel_iter_drop(
-            self.rx_and_join
-                .take()
-                .map(|(rx, handle)| (rx, handle, None::<std::thread::JoinHandle<()>>)),
-            &self.should_interrupt,
-        );
+        if self.rx_and_join.is_some() {
+            self.stop_worker.store(true, Ordering::Relaxed);
+        }
     }
 }
 
 struct Collect {
     #[cfg(feature = "parallel")]
     tx: std::sync::mpsc::Sender<Item>,
+    #[cfg(feature = "parallel")]
+    stop_worker: Arc<AtomicBool>,
     #[cfg(not(feature = "parallel"))]
     items: Vec<Item>,
 }
 
 impl gix_dir::walk::Delegate for Collect {
+    fn should_interrupt(&self) -> bool {
+        #[cfg(feature = "parallel")]
+        {
+            self.stop_worker.load(Ordering::Relaxed)
+        }
+        #[cfg(not(feature = "parallel"))]
+        {
+            false
+        }
+    }
+
     fn emit(
         &mut self,
         entry: gix_dir::EntryRef<'_>,
         collapsed_directory_status: Option<gix_dir::entry::Status>,
     ) -> gix_dir::walk::Action {
-        // NOTE: we assume that the receiver triggers interruption so the operation will stop if the receiver is down.
         let item = Item::new(entry, collapsed_directory_status);
         #[cfg(feature = "parallel")]
-        self.tx.send(item).ok();
+        if self.tx.send(item).is_err() {
+            return std::ops::ControlFlow::Break(());
+        }
         #[cfg(not(feature = "parallel"))]
         self.items.push(item);
         std::ops::ControlFlow::Continue(())

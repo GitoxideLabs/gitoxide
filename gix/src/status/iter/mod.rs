@@ -1,6 +1,10 @@
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "parallel")]
+use std::{sync::Arc, time::Duration};
 
-use crate::error::{ResultExt, message};
+#[cfg(not(feature = "parallel"))]
+use crate::error::bail;
+use crate::error::{ErrorExt, ResultExt, cancelled, message};
 use gix_status::index_as_worktree::{Change, EntryStatus};
 
 use crate::{
@@ -24,6 +28,8 @@ where
     ///
     /// * `patterns`
     ///     - Optional patterns to use to limit the paths to look at. If empty, all paths are considered.
+    ///
+    /// See [`Iter`] for how cancellation is reported with and without the `parallel` feature.
     ///
     /// ### Important: Undefined ordering
     ///
@@ -65,18 +71,21 @@ where
             ))
             .with_lenient_default(self.repo.config.lenient_config)?
             .unwrap_or_default();
-        let should_interrupt = self.should_interrupt.clone().unwrap_or_default();
+        static NEVER_INTERRUPTED: AtomicBool = AtomicBool::new(false);
+        let should_interrupt = self.should_interrupt.unwrap_or_else(|| (&NEVER_INTERRUPTED).into());
         let submodule = BuiltinSubmoduleStatus::new(self.repo.clone().into_sync(), self.submodules)?;
         #[cfg(feature = "parallel")]
         {
             let (tx, rx) = std::sync::mpsc::channel();
+            let stop_workers = Arc::new(AtomicBool::new(false));
             let patterns: Vec<_> = patterns.into_iter().collect();
-            let join_tree_index = if let Some(tree_id) = obtain_tree_id()? {
+            let tree = if let Some(tree_id) = obtain_tree_id()? {
                 std::thread::Builder::new()
                     .name("gix::status::tree_index::producer".into())
                     .spawn(crate::trace::in_thread({
                         let repo = self.repo.clone().into_sync();
                         let should_interrupt = should_interrupt.clone();
+                        let stop_workers = Arc::clone(&stop_workers);
                         let tx = tx.clone();
                         let tree_index_renames = self.tree_index_renames;
                         let index = index.clone();
@@ -85,20 +94,24 @@ where
                             &index,
                             self.index_worktree_options.dirwalk_options.as_ref(),
                         )?;
-                        move || -> std::result::Result<_, _> {
+                        move || {
+                            if stop_workers.load(Ordering::Relaxed) {
+                                return;
+                            }
                             let repo = repo.to_thread_local();
                             let mut pathspec = crate::Pathspec {
                                 repo: &repo,
                                 stack,
                                 search,
                             };
-                            repo.tree_index_status(
+                            let result = repo.tree_index_status(
                                 &tree_id,
                                 &index,
                                 Some(&mut pathspec),
                                 tree_index_renames,
                                 |change, _, _| {
-                                    let action = if tx.send(change.into_owned().into()).is_err()
+                                    let action = if stop_workers.load(Ordering::Relaxed)
+                                        || tx.send(Event::Item(change.into_owned().into())).is_err()
                                         || should_interrupt.load(Ordering::Acquire)
                                     {
                                         std::ops::ControlFlow::Break(())
@@ -107,25 +120,28 @@ where
                                     };
                                     Ok(action)
                                 },
-                            )
+                            );
+                            tx.send(Event::TreeFinished(result)).ok();
                         }
                     }))
-                    .or_raise(|| message("Failed to spawn producer thread"))?
-                    .into()
-            } else {
+                    .or_raise(|| message("Failed to spawn producer thread"))?;
                 None
+            } else {
+                Some(Ok(None))
             };
-            let mut collect = Collect { tx };
-            let join_index_worktree = std::thread::Builder::new()
+            std::thread::Builder::new()
                 .name("gix::status::index_worktree::producer".into())
                 .spawn(crate::trace::in_thread({
                     let repo = self.repo.clone().into_sync();
                     let options = self.index_worktree_options;
                     let should_interrupt = should_interrupt.clone();
-                    let mut progress = self.progress;
-                    move || -> Result<_> {
+                    let stop_workers = Arc::clone(&stop_workers);
+                    let progress = self.progress;
+                    move || {
+                        let mut progress = progress;
+                        let mut collect = Collect { tx };
                         let repo = repo.to_thread_local();
-                        let out = repo.index_worktree_status(
+                        let out = repo.index_worktree_status_inner(
                             &index,
                             patterns,
                             &mut collect,
@@ -133,62 +149,74 @@ where
                             submodule,
                             &mut progress,
                             &should_interrupt,
+                            Some(&stop_workers),
                             options,
-                        )?;
-                        Ok(Outcome {
-                            index_worktree: out,
-                            tree_index: None,
-                            worktree_index: index,
-                            changes: None,
-                            skip_hash,
-                            shared_repository_permissions: repo.config.shared_repository_permissions,
-                        })
+                        );
+                        let result = out.map(|index_worktree| {
+                            Box::new(Outcome {
+                                index_worktree,
+                                tree_index: None,
+                                worktree_index: index,
+                                changes: None,
+                                skip_hash,
+                                shared_repository_permissions: repo.config.shared_repository_permissions,
+                            })
+                        });
+                        // Publish the result and drop the sender before user-provided progress cleanup.
+                        collect.tx.send(Event::WorktreeFinished(result)).ok();
                     }
                 }))
-                .or_raise(|| message("Failed to spawn producer thread"))?;
+                .or_raise(|| message("Failed to spawn producer thread"))
+                .inspect_err(|_| stop_workers.store(true, Ordering::Relaxed))?;
 
             Ok(Iter {
-                rx_and_join: Some((rx, join_index_worktree, join_tree_index)),
+                pending: Some(Pending {
+                    rx,
+                    tree,
+                    worktree: None,
+                }),
                 should_interrupt,
+                stop_workers,
                 index_changes: Vec::new(),
                 out: None,
             })
         }
         #[cfg(not(feature = "parallel"))]
         {
+            if should_interrupt.load(Ordering::SeqCst) {
+                bail!(cancelled("Interrupted"));
+            }
             let mut collect = Collect { items: Vec::new() };
 
             let repo = self.repo;
             let options = self.index_worktree_options;
             let mut progress = self.progress;
             let patterns: Vec<BString> = patterns.into_iter().collect();
-            let (mut items, tree_index) = match obtain_tree_id()? {
-                Some(tree_id) => {
-                    let mut pathspec = repo.index_worktree_status_pathspec(
-                        &patterns,
-                        &index,
-                        self.index_worktree_options.dirwalk_options.as_ref(),
-                    )?;
-                    let mut items = Vec::new();
-                    let tree_index = self.repo.tree_index_status(
-                        &tree_id,
-                        &index,
-                        Some(&mut pathspec),
-                        self.tree_index_renames,
-                        |change, _, _| {
-                            items.push(change.into_owned().into());
-                            let action = if should_interrupt.load(Ordering::Acquire) {
-                                std::ops::ControlFlow::Break(())
-                            } else {
-                                std::ops::ControlFlow::Continue(())
-                            };
-                            Ok(action)
-                        },
-                    )?;
-                    (items, Some(tree_index))
-                }
-                None => (Vec::new(), None),
-            };
+            let mut items = Vec::new();
+            let tree_status = obtain_tree_id().and_then(|tree_id| {
+                let Some(tree_id) = tree_id else {
+                    return Ok(None);
+                };
+                let mut pathspec =
+                    repo.index_worktree_status_pathspec(&patterns, &index, options.dirwalk_options.as_ref())?;
+                repo.tree_index_status(
+                    &tree_id,
+                    &index,
+                    Some(&mut pathspec),
+                    self.tree_index_renames,
+                    |change, _, _| {
+                        items.push(change.into_owned().into());
+                        let action = if should_interrupt.load(Ordering::Acquire) {
+                            std::ops::ControlFlow::Break(())
+                        } else {
+                            std::ops::ControlFlow::Continue(())
+                        };
+                        Ok(action)
+                    },
+                )
+                .map(Some)
+            });
+            let tree_index = check_serial_cancellation(tree_status, &should_interrupt)?;
             let out = repo.index_worktree_status(
                 &index,
                 patterns,
@@ -198,7 +226,8 @@ where
                 &mut progress,
                 &should_interrupt,
                 options,
-            )?;
+            );
+            let out = check_serial_cancellation(out, &should_interrupt)?;
             let mut iter = Iter {
                 items: Vec::new().into_iter(),
                 index_changes: Vec::new(),
@@ -226,49 +255,87 @@ where
     }
 }
 
+#[cfg(not(feature = "parallel"))]
+fn check_serial_cancellation<T>(result: Result<T>, should_interrupt: &AtomicBool) -> Result<T> {
+    if !should_interrupt.load(Ordering::SeqCst) {
+        return result;
+    }
+    let reason = cancelled("Interrupted");
+    Err(match result {
+        Ok(_) => reason.raise(),
+        Err(err) if err.is_cancelled() => err,
+        Err(err) => err.and_raise(reason),
+    })
+}
+
+#[cfg(feature = "parallel")]
+const INTERRUPT_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
+#[cfg(feature = "parallel")]
+enum Event {
+    Item(Item),
+    TreeFinished(Result<super::tree_index::Outcome>),
+    WorktreeFinished(Result<Box<Outcome>>),
+}
+
+#[cfg(feature = "parallel")]
+struct Pending {
+    rx: std::sync::mpsc::Receiver<Event>,
+    tree: Option<Result<Option<super::tree_index::Outcome>>>,
+    worktree: Option<Result<Box<Outcome>>>,
+}
+
 impl Iterator for Iter {
     type Item = Result<Item>;
 
     fn next(&mut self) -> Option<Self::Item> {
         #[cfg(feature = "parallel")]
         loop {
-            let (rx, _join_worktree, _join_tree) = self.rx_and_join.as_ref()?;
-            match rx.recv_timeout(std::time::Duration::from_millis(25)) {
-                Ok(item) => {
+            let pending = self.pending.as_mut()?;
+            if self.should_interrupt.load(Ordering::SeqCst) {
+                return Some(Err(self.cancel()));
+            }
+            // Poll for cancellation rather than waiting for operations that cannot yet be interrupted, such as index::from-tree.
+            let event = pending.rx.recv_timeout(INTERRUPT_POLL_INTERVAL);
+            if self.should_interrupt.load(Ordering::SeqCst) {
+                return Some(Err(self.cancel()));
+            }
+            match event {
+                Ok(Event::Item(item)) => {
                     if let Some(item) = self.maybe_keep_index_change(item) {
-                        break Some(Ok(item));
+                        return Some(Ok(item));
                     }
                     continue;
                 }
-                // NOTE: this isn't necessary when index::from-tree also supports interrupts. As it stands,
-                //       on big repositories it can go up to 500ms which aren't interruptible, so this is another
-                //       way to not wait for this. Once it can be interrupted, this won't be needed anymore.
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    if self.should_interrupt.load(Ordering::SeqCst) {
-                        return None;
-                    }
-                }
+                Ok(Event::TreeFinished(result)) => pending.tree = Some(result.map(Some)),
+                Ok(Event::WorktreeFinished(result)) => pending.worktree = Some(result),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                    let (_rx, worktree_handle, tree_handle) = self.rx_and_join.take()?;
-                    let tree_index = if let Some(handle) = tree_handle {
-                        match handle.join().expect("no panic") {
-                            Ok(out) => Some(out),
-                            Err(err) => break Some(Err(err)),
-                        }
-                    } else {
-                        None
-                    };
-                    break match worktree_handle.join().expect("no panic") {
-                        Ok(mut out) => {
-                            out.changes = Some(std::mem::take(&mut self.index_changes));
-                            out.tree_index = tree_index;
-                            self.out = Some(out);
-                            None
-                        }
-                        Err(err) => Some(Err(err)),
-                    };
+                    let err = pending
+                        .tree
+                        .take()
+                        .and_then(Result::err)
+                        .or_else(|| pending.worktree.take().and_then(Result::err))
+                        .unwrap_or_else(|| message("A status worker exited without reporting its result").raise());
+                    self.pending = None;
+                    return Some(Err(err));
                 }
             }
+            // Each producer sends its result after its last item, so both results mean the stream is drained.
+            let Some(tree) = pending.tree.take_if(|_| pending.worktree.is_some()) else {
+                continue;
+            };
+            let worktree = pending.worktree.take().expect("both producers reported their results");
+            self.pending = None;
+            return match (tree, worktree) {
+                (Err(err), _) | (_, Err(err)) => Some(Err(err)),
+                (Ok(tree), Ok(mut outcome)) => {
+                    outcome.tree_index = tree;
+                    outcome.changes = Some(std::mem::take(&mut self.index_changes));
+                    self.out = Some(*outcome);
+                    None
+                }
+            };
         }
         #[cfg(not(feature = "parallel"))]
         self.items.next().map(Ok)
@@ -277,19 +344,26 @@ impl Iterator for Iter {
 
 /// Access
 impl Iter {
-    /// Return the outcome of the iteration, or `None` if the iterator isn't fully consumed.
+    /// Return the scan outcome if available. With `parallel`, it is available once the iterator has drained the workers successfully.
+    /// If the scan was cancelled, no outcome is available. See [`Iter`] for details.
     pub fn outcome_mut(&mut self) -> Option<&mut Outcome> {
         self.out.as_mut()
     }
 
-    /// Turn the iterator into the iteration outcome, which is `None` on error or if the iteration
-    /// isn't complete.
+    /// Consume the iterator and return the scan outcome, if available as described in [`Self::outcome_mut()`].
     pub fn into_outcome(mut self) -> Option<Outcome> {
         self.out.take()
     }
 }
 
 impl Iter {
+    #[cfg(feature = "parallel")]
+    fn cancel(&mut self) -> crate::Error {
+        self.stop_workers.store(true, Ordering::Relaxed);
+        self.pending = None;
+        cancelled("Interrupted").raise()
+    }
+
     fn maybe_keep_index_change(&mut self, item: Item) -> Option<Item> {
         match item {
             Item::IndexWorktree(index_worktree::Item::Modification {
@@ -320,13 +394,15 @@ impl Iter {
 #[cfg(feature = "parallel")]
 impl Drop for Iter {
     fn drop(&mut self) {
-        crate::util::parallel_iter_drop(self.rx_and_join.take(), &self.should_interrupt);
+        if self.pending.is_some() {
+            self.stop_workers.store(true, Ordering::Relaxed);
+        }
     }
 }
 
 struct Collect {
     #[cfg(feature = "parallel")]
-    tx: std::sync::mpsc::Sender<Item>,
+    tx: std::sync::mpsc::Sender<Event>,
     #[cfg(not(feature = "parallel"))]
     items: Vec<Item>,
 }
@@ -343,7 +419,7 @@ impl<'index> gix_status::index_as_worktree_with_renames::VisitEntry<'index> for 
         // NOTE: we assume that the receiver triggers interruption so the operation will stop if the receiver is down.
         let item = Item::IndexWorktree(entry.into());
         #[cfg(feature = "parallel")]
-        self.tx.send(item).ok();
+        self.tx.send(Event::Item(item)).ok();
         #[cfg(not(feature = "parallel"))]
         self.items.push(item);
     }

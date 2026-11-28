@@ -1,10 +1,10 @@
 use std::{
     ops::ControlFlow,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use gix_error::ErrorExt;
-use gix_parallel::OwnShared;
 use gix_sec::Trust;
 
 use crate::{Repository, Result, bstr::BString};
@@ -123,8 +123,9 @@ pub struct Options {
     /// Callback that can change the opening options or skip a related repository open before its configuration is loaded.
     /// [`Self::clone_without_trust()`] retains it so the policy applies to subsequent related opens.
     /// Set it with [`Self::configure_related_repository()`].
-    configure_related_repository: Option<OwnShared<ConfigureRelatedRepository>>,
-    config_overrides_by_trust: Option<OwnShared<ConfigOverridesByTrust>>,
+    // Status requires these options to be Send even in serial builds.
+    configure_related_repository: Option<Arc<ConfigureRelatedRepository>>,
+    config_overrides_by_trust: Option<Arc<ConfigOverridesByTrust>>,
 }
 
 mod options;

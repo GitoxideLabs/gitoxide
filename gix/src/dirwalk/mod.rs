@@ -31,7 +31,7 @@ pub struct Iter {
         std::thread::JoinHandle<Result<iter::Outcome>>,
     )>,
     #[cfg(feature = "parallel")]
-    should_interrupt: crate::util::OwnedOrStaticAtomicBool,
+    stop_worker: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Without parallelization, the iterator has to buffer all changes in advance.
     #[cfg(not(feature = "parallel"))]
     items: std::vec::IntoIter<iter::Item>,

@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use bstr::ByteSlice;
 use gix_diff::{blob::pipeline::WorktreeRoots, rewrites::CopySource};
 use gix_status::{
@@ -250,6 +252,123 @@ fn changed_and_untracked() {
     );
 }
 
+#[test]
+fn cancelled_rewrite_scan_retains_tracked_file_error() -> gix_testtools::TestResult {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use gix_error::{bail, message};
+    use gix_status::index_as_worktree::traits::{CompareBlobs, ReadData};
+
+    #[derive(Clone)]
+    struct CancelAndFail<'a>(&'a AtomicBool);
+
+    impl CompareBlobs for CancelAndFail<'_> {
+        type Output = ();
+
+        fn compare_blobs<'a, 'b>(
+            &mut self,
+            _: &gix_index::Entry,
+            _: u64,
+            _: impl ReadData<'a>,
+            _: &mut Vec<u8>,
+        ) -> gix_error::Result<Option<()>> {
+            self.0.store(true, Ordering::Relaxed);
+            bail!(message("tracked file comparison failed"));
+        }
+    }
+
+    let err = with_sorted_fixture(
+        "status_many.sh",
+        "changed-and-untracked",
+        &["executable"],
+        Some(Default::default()),
+        None,
+        Fixture::ReadOnly,
+        |index, worktree, objects, context, options| {
+            let interrupt = AtomicBool::new(false);
+            index_as_worktree_with_renames(
+                index,
+                worktree,
+                &mut Recorder::default(),
+                CancelAndFail(&interrupt),
+                crate::index_as_worktree::SubmoduleStatusMock { dirty: false },
+                objects,
+                &mut gix_utils::progress::Discard,
+                Context {
+                    should_interrupt: &interrupt,
+                    ..context
+                },
+                options,
+            )
+        },
+    )
+    .expect_err("the tracked file comparison requested cancellation and failed");
+    assert!(err.is_cancelled(), "expected cancellation, got {err:?}");
+    assert!(
+        err.iter_errors()
+            .any(|cause| cause.to_string() == "tracked file comparison failed"),
+        "cancellation retains the tracked file worker error: {err:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn sorted_emission_honors_the_stop_flag() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct StopAfterFirst<'a> {
+        stop: &'a AtomicBool,
+        visited: usize,
+    }
+
+    impl<'index> index_as_worktree_with_renames::VisitEntry<'index> for StopAfterFirst<'_> {
+        type ContentChange = ();
+        type SubmoduleStatus = ();
+
+        fn visit_entry(&mut self, _: Entry<'index, (), ()>) {
+            self.visited += 1;
+            self.stop.store(true, Ordering::Relaxed);
+        }
+    }
+
+    for rewrites in [None, Some(Default::default())] {
+        with_sorted_fixture(
+            "status_many.sh",
+            "changed-and-untracked",
+            &[],
+            rewrites,
+            Some(Default::default()),
+            Fixture::ReadOnly,
+            |index, worktree, objects, context, options| {
+                let stop = AtomicBool::new(false);
+                let mut collector = StopAfterFirst {
+                    stop: &stop,
+                    visited: 0,
+                };
+                let result = index_as_worktree_with_renames::with_stop_flag(
+                    index,
+                    worktree,
+                    &mut collector,
+                    FastEq,
+                    crate::index_as_worktree::SubmoduleStatusMock { dirty: false },
+                    objects,
+                    &mut gix_utils::progress::Discard,
+                    context,
+                    Some(&stop),
+                    options,
+                );
+                assert_eq!(
+                    collector.visited,
+                    1,
+                    "shutdown stops sorted emission (rewrites={})",
+                    rewrites.is_some()
+                );
+                assert!(result.expect_err("the collector requested shutdown").is_cancelled());
+            },
+        );
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn unreadable_untracked() {
@@ -337,16 +456,51 @@ fn fixture_filtered_detailed(
     dirwalk: Option<gix_dir::walk::Options>,
     fixture: Fixture,
 ) -> Outcome {
-    fn cleanup(mut out: Outcome) -> Outcome {
-        out.tracked_file_modification.worktree_bytes = 0;
-        out.tracked_file_modification.worktree_files_read = 0;
-        out.tracked_file_modification.entries_to_update = 0;
-        out.tracked_file_modification.racy_clean = 0;
-        out
-    }
+    with_sorted_fixture(
+        script,
+        subdir,
+        pathspecs,
+        rewrites,
+        dirwalk,
+        fixture,
+        |index, worktree, objects, context, options| {
+            let mut recorder = Recorder::default();
+            let mut outcome = index_as_worktree_with_renames(
+                index,
+                worktree,
+                &mut recorder,
+                FastEq,
+                crate::index_as_worktree::SubmoduleStatusMock { dirty: false },
+                objects,
+                &mut gix_utils::progress::Discard,
+                context,
+                options,
+            )
+            .expect("the sorted fixture scan succeeds");
 
+            let actual = records_to_expectations(&recorder.records);
+            assert_eq!(actual, expected);
+            assert_summary(&recorder.records, expected);
+            outcome.tracked_file_modification.worktree_bytes = 0;
+            outcome.tracked_file_modification.worktree_files_read = 0;
+            outcome.tracked_file_modification.entries_to_update = 0;
+            outcome.tracked_file_modification.racy_clean = 0;
+            outcome
+        },
+    )
+}
+
+fn with_sorted_fixture<T>(
+    script: &str,
+    subdir: &str,
+    pathspecs: &[&str],
+    rewrites: Option<gix_diff::Rewrites>,
+    dirwalk: Option<gix_dir::walk::Options>,
+    fixture: Fixture,
+    run: impl FnOnce(&gix_index::State, &Path, gix_odb::HandleArc, Context<'_>, Options<'_>) -> T,
+) -> T {
     let mut filter_process = None;
-    let (worktree, _tmp) = match fixture {
+    let (worktree, tmp) = match fixture {
         Fixture::ReadOnly => {
             let dir = fixture_path(script).join(subdir);
             (dir, None::<gix_testtools::tempfile::TempDir>)
@@ -389,7 +543,11 @@ fn fixture_filtered_detailed(
         &index,
         index.path_backing(),
     );
-    let capabilities = gix_fs::Capabilities::probe(&git_dir);
+    let capabilities = if tmp.is_some() {
+        gix_fs::Capabilities::probe(&git_dir)
+    } else {
+        gix_fs::Capabilities::default()
+    };
     let mut filter = gix_filter::Pipeline::new(Default::default(), object_hash, Default::default());
     if let Some(process) = filter_process {
         filter.driver_state_mut().context.worktree_dir = Some(worktree.clone());
@@ -443,25 +601,13 @@ fn fixture_filtered_detailed(
         rewrites,
     };
 
-    let mut recorder = Recorder::default();
-    let objects = crate::odb_at(&git_dir, object_hash);
-    let outcome = index_as_worktree_with_renames(
+    run(
         &index,
         &worktree,
-        &mut recorder,
-        FastEq,
-        crate::index_as_worktree::SubmoduleStatusMock { dirty: false },
-        objects,
-        &mut gix_utils::progress::Discard,
+        crate::odb_at(&git_dir, object_hash),
         context,
         options,
     )
-    .unwrap();
-
-    let actual = records_to_expectations(&recorder.records);
-    assert_eq!(actual, expected);
-    assert_summary(&recorder.records, expected);
-    cleanup(outcome)
 }
 
 fn assert_summary(entries: &[Entry<(), ()>], expected: &[Expectation]) {

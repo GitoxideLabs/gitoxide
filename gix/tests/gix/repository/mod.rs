@@ -246,6 +246,23 @@ mod dirwalk {
     use gix_dir::{entry::Kind::*, walk::EmissionMode};
 
     #[test]
+    #[cfg(feature = "parallel")]
+    fn dropping_dirwalk_leaves_its_caller_flag_clear() -> TestResult {
+        use std::sync::atomic::Ordering;
+
+        let repo = crate::named_repo("make_basic_repo.sh")?;
+        let interrupt = gix::interrupt::OwnedOrStaticAtomicBool::default();
+        let mut iter = repo.dirwalk_iter(repo.index()?, None::<&str>, interrupt.clone(), repo.dirwalk_options()?)?;
+        assert!(iter.next().transpose()?.is_some(), "the walk yields an untracked entry");
+        drop(iter);
+        assert!(
+            !interrupt.load(Ordering::Relaxed),
+            "the caller can reuse even a clone of the default flag"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn basics() -> TestResult {
         let repo = crate::named_repo("make_basic_repo.sh")?;
         let untracked_only = repo.dirwalk_options()?.emit_untracked(EmissionMode::CollapseDirectory);

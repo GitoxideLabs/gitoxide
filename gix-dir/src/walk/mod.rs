@@ -34,6 +34,10 @@ pub mod delegate {
     }
 
     impl walk::Delegate for Collect {
+        fn should_interrupt(&self) -> bool {
+            false
+        }
+
         fn emit(&mut self, entry: EntryRef<'_>, dir_status: Option<entry::Status>) -> Action {
             self.unorded_entries.push((entry.to_owned(), dir_status));
             std::ops::ControlFlow::Continue(())
@@ -43,6 +47,11 @@ pub mod delegate {
 
 /// A way for the caller to control the traversal based on provided data.
 pub trait Delegate {
+    /// Return `true` to stop with a cancellation error, even when the walk is not emitting entries.
+    /// Return `false` if the delegate has no cancellation condition of its own.
+    /// The walk also checks [`Context::should_interrupt`].
+    fn should_interrupt(&self) -> bool;
+
     /// Called for each observed `entry` *inside* a directory, or the directory itself if the traversal is configured
     /// to simplify the result (i.e. if every file in a directory is ignored, emit the containing directory instead
     /// of each file), or if the root of the traversal passes through a directory that can't be traversed.
