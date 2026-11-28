@@ -44,7 +44,7 @@ where
     /// Set the interrupt flag to `should_interrupt`, which typically is an application-wide flag
     /// that is ultimately controlled by user interrupts.
     ///
-    /// If it is `true`, the iteration will stop immediately.
+    /// Setting the flag requests cancellation. See [`Iter`](super::Iter) for how cancellation is reported.
     /// Dropping the iterator leaves this flag under the caller's control.
     pub fn should_interrupt_shared(mut self, should_interrupt: &'static AtomicBool) -> Self {
         self.should_interrupt = Some(OwnedOrStaticAtomicBool::Shared(should_interrupt));
@@ -53,7 +53,7 @@ where
 
     /// Set the interrupt flag to `should_interrupt`, as controlled by the caller.
     ///
-    /// If it is `true`, the iteration will stop immediately.
+    /// Keep a clone of the flag to request cancellation. See [`Iter`](super::Iter) for how cancellation is reported.
     /// Dropping the iterator leaves this flag under the caller's control.
     pub fn should_interrupt_owned(mut self, should_interrupt: std::sync::Arc<AtomicBool>) -> Self {
         self.should_interrupt = Some(OwnedOrStaticAtomicBool::Owned {

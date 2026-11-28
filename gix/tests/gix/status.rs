@@ -919,6 +919,95 @@ mod into_iter {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn status_cancels_during_a_clean_filter() -> TestResult {
+        use std::{
+            sync::{
+                Arc,
+                atomic::{AtomicBool, Ordering},
+            },
+            thread,
+            time::{Duration, Instant},
+        };
+
+        let gate = gix_testtools::tempfile::tempdir()?;
+        let quoted = gix::quote::single(gix::path::into_bstr(gate.path())?.as_ref());
+        let finish = if cfg!(feature = "parallel") { "cat" } else { "exit 7" };
+        let clean = format!(
+            "gate={quoted}; : > \"$gate/started\"; \
+             while [ -d \"$gate\" ] && [ ! -f \"$gate/release\" ]; do sleep 0.001; done; {finish}"
+        );
+        let fixture = gix_testtools::scripted_fixture_read_only("status-cancel-during-filter.sh")?;
+        let repo = gix::open_opts(
+            fixture,
+            gix::open::Options::isolated()
+                .config_overrides([format!("filter.gate.clean={clean}"), "filter.gate.required=true".into()]),
+        )?;
+        let mut index = repo.open_index()?;
+        let file = index
+            .entry_index_by_path("file".into())
+            .expect("the fixture tracks file");
+        index.entries_mut()[file].stat = Default::default();
+        let interrupt = Arc::new(AtomicBool::new(false));
+        let scan = repo
+            .status(gix::progress::Discard)?
+            .index(gix::worktree::IndexPersistedOrInMemory::InMemory(index))
+            .untracked_files(gix::status::UntrackedFiles::None)
+            .should_interrupt_owned(Arc::clone(&interrupt));
+
+        let wait_for_start = || {
+            let started = gate.path().join("started");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !started.is_file() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(1));
+            }
+            started.is_file()
+        };
+        let cancel_filter = || -> std::io::Result<_> {
+            interrupt.store(true, Ordering::SeqCst);
+            std::fs::File::create(gate.path().join("release"))
+        };
+        #[cfg(not(feature = "parallel"))]
+        let err = thread::scope(|scope| -> TestResult<_> {
+            let cancel = scope.spawn(|| -> TestResult {
+                let filter_started = wait_for_start();
+                cancel_filter()?;
+                assert!(filter_started, "status must start the clean filter before cancellation");
+                Ok(())
+            });
+            let result = scan.into_index_worktree_iter(None);
+            cancel.join().expect("the canceller completed")?;
+            Ok(result.err().expect("the clean filter failed after cancellation"))
+        })?;
+        #[cfg(feature = "parallel")]
+        let err = thread::scope(|scope| -> TestResult<_> {
+            let mut iter = scan.into_index_worktree_iter(None)?;
+            assert!(wait_for_start(), "the filter is in flight before polling the iterator");
+            let cancel = scope.spawn(|| {
+                // Give next() time to wait for the item produced by this filter.
+                thread::sleep(Duration::from_millis(5));
+                cancel_filter()
+            });
+            let item = iter.next();
+            cancel.join().expect("the canceller completed")?;
+            let err = item
+                .expect("the iterator reports cancellation")
+                .expect_err("cancellation takes precedence over the in-flight change");
+            assert!(iter.next().is_none(), "cancellation is reported once");
+            assert!(iter.into_outcome().is_none(), "a cancelled scan has no outcome");
+            Ok(err)
+        })?;
+        assert!(err.is_cancelled(), "expected cancellation, got {err:?}");
+        #[cfg(not(feature = "parallel"))]
+        assert!(
+            err.iter_errors()
+                .any(|cause| cause.to_string().contains("Driver process failed")),
+            "the required filter failure must remain in the error chain: {err:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn error_during_tree_traversal_causes_failure() -> TestResult {
         let mut error_snapshots = Vec::new();
         let repo = repo("untracked-only")?;
@@ -953,12 +1042,66 @@ mod into_iter {
                 0: Expected object of kind tree but got blob at Oid(1),
         ]
         ");
+        #[cfg(not(feature = "parallel"))]
+        {
+            use std::sync::{
+                Arc,
+                atomic::{AtomicBool, Ordering},
+            };
+
+            let interrupt = Arc::new(AtomicBool::new(false));
+            let patterns = std::iter::from_fn(|| {
+                interrupt.store(true, Ordering::SeqCst);
+                None
+            });
+            let err = repo
+                .status(gix::progress::Discard)?
+                .head_tree(invalid_tree_id)
+                .should_interrupt_owned(Arc::clone(&interrupt))
+                .into_iter(patterns)
+                .err()
+                .expect("the tree scan fails after pattern collection requests cancellation");
+            assert!(err.is_cancelled(), "expected cancellation, got {err:?}");
+            assert!(
+                err.iter_errors()
+                    .any(|cause| cause.to_string().contains("Could not create index from tree")),
+                "cancellation retains the tree scan failure: {err:?}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn pre_interrupted_status_returns_cancellation() -> TestResult {
+        use std::sync::{Arc, atomic::AtomicBool};
+
+        let repo = repo("racy-git")?;
+        for untracked in [gix::status::UntrackedFiles::None, gix::status::UntrackedFiles::Files] {
+            let res = repo
+                .status(gix::progress::Discard)?
+                .untracked_files(untracked)
+                .should_interrupt_owned(Arc::new(AtomicBool::new(true)))
+                .into_iter(None);
+            let err = if cfg!(feature = "parallel") {
+                let mut iter = res?;
+                let err = iter
+                    .next()
+                    .expect("cancellation is reported before any status items")
+                    .expect_err("a pre-interrupted scan cannot yield status items");
+                assert!(iter.next().is_none(), "cancellation is reported only once");
+                assert!(iter.into_outcome().is_none(), "a cancelled scan has no outcome");
+                err
+            } else {
+                res.err().expect("serial status reports cancellation from into_iter()")
+            };
+            assert!(err.is_cancelled(), "expected cancellation, got {err:?}");
+        }
         Ok(())
     }
 
     #[test]
     #[cfg(feature = "parallel")]
-    fn dropping_status_stops_a_paused_scan_with_a_caller_flag() -> TestResult {
+    fn stopping_status_preserves_caller_flags() -> TestResult {
         use std::{
             sync::{
                 Arc, Mutex,
@@ -1016,10 +1159,23 @@ mod into_iter {
             }
         }
 
+        #[derive(Debug)]
+        enum Stop {
+            DropWithOwnedFlag,
+            DropWithSharedFlag,
+            InterruptWhilePaused,
+            InterruptBeforeDraining,
+        }
+
         static SHARED: AtomicBool = AtomicBool::new(false);
-        let owned = Arc::new(AtomicBool::new(false));
         let repo = repo("racy-git")?;
-        for shared in [false, true] {
+        for stop in [
+            Stop::DropWithOwnedFlag,
+            Stop::DropWithSharedFlag,
+            Stop::InterruptWhilePaused,
+            Stop::InterruptBeforeDraining,
+        ] {
+            let owned = Arc::new(AtomicBool::new(false));
             let (resume, paused) = mpsc::channel();
             let (finished, worker) = mpsc::channel();
             let count = StepShared::default();
@@ -1030,7 +1186,7 @@ mod into_iter {
                     count: Arc::clone(&count),
                 })?
                 .untracked_files(gix::status::UntrackedFiles::None);
-            let platform = if shared {
+            let platform = if matches!(stop, Stop::DropWithSharedFlag) {
                 platform.should_interrupt_shared(&SHARED)
             } else {
                 platform.should_interrupt_owned(Arc::clone(&owned))
@@ -1040,17 +1196,45 @@ mod into_iter {
                 matches!(iter.next().transpose()?, Some(Item::TreeIndex(_))),
                 "the staged change is available while the tracked-file worker is paused"
             );
-            drop(iter);
-            resume.send(())?;
-            worker.recv_timeout(Duration::from_secs(5))?;
+            let resume_and_wait = || -> TestResult {
+                resume.send(())?;
+                worker.recv_timeout(Duration::from_secs(5))?;
+                Ok(())
+            };
+            let interrupt = matches!(stop, Stop::InterruptWhilePaused | Stop::InterruptBeforeDraining);
+            let wait_before_draining = matches!(stop, Stop::InterruptBeforeDraining);
+            if interrupt {
+                owned.store(true, Ordering::SeqCst);
+                if wait_before_draining {
+                    // Let the caller's flag stop the scan before next() can request private shutdown.
+                    resume_and_wait()?;
+                }
+                let err = iter
+                    .next()
+                    .expect("cancellation is reported regardless of whether the worker has finished")
+                    .expect_err("the interrupted scan must not end successfully");
+                assert!(err.is_cancelled(), "expected cancellation, got {err:?}");
+                assert!(iter.next().is_none(), "cancellation is reported only once");
+                assert!(iter.into_outcome().is_none(), "a cancelled scan has no outcome");
+            } else {
+                drop(iter);
+            }
+            if !wait_before_draining {
+                resume_and_wait()?;
+            }
             assert_eq!(
                 count.load(Ordering::Relaxed),
                 0,
-                "the abandoned scan must stop before checking entries (shared={shared})"
+                "the scan stopped before checking tracked entries ({stop:?})"
             );
             assert!(
-                !SHARED.load(Ordering::Relaxed) && !owned.load(Ordering::Relaxed),
-                "caller flags stay clear after iterator drop"
+                !SHARED.load(Ordering::Relaxed),
+                "dropping the iterator leaves the shared flag clear"
+            );
+            assert_eq!(
+                owned.load(Ordering::Relaxed),
+                interrupt,
+                "the caller's flag indicates whether it requested interruption ({stop:?})"
             );
         }
         Ok(())
@@ -1140,6 +1324,55 @@ mod into_iter {
                 }
             });
         }
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(not(feature = "parallel"))]
+    fn serial_status_reports_cancellation_during_into_iter() -> TestResult {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+
+        let repo = repo("racy-git")?;
+        let interrupt = Arc::new(AtomicBool::new(false));
+        let res = repo
+            .status(gix::progress::Discard)?
+            .untracked_files(gix::status::UntrackedFiles::None)
+            .should_interrupt_owned(Arc::clone(&interrupt))
+            .into_iter(std::iter::once_with(|| {
+                interrupt.store(true, Ordering::SeqCst);
+                gix::bstr::BString::from(".")
+            }));
+        let err = res.err().expect("status must not return a partially computed scan");
+        assert!(err.is_cancelled(), "expected cancellation, got {err:?}");
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(not(feature = "parallel"))]
+    fn serial_status_preserves_results_when_interrupted_after_the_scan() -> TestResult {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+
+        let repo = repo("racy-git")?;
+        let interrupt = Arc::new(AtomicBool::new(false));
+        let mut iter = repo
+            .status(gix::progress::Discard)?
+            .untracked_files(gix::status::UntrackedFiles::None)
+            .should_interrupt_owned(Arc::clone(&interrupt))
+            .into_iter(None)?;
+        interrupt.store(true, Ordering::Relaxed);
+        let items: Vec<_> = iter.by_ref().collect::<gix::Result<_>>()?;
+        assert!(
+            matches!(items.as_slice(), [Item::TreeIndex(_), Item::IndexWorktree(_)]),
+            "the staged and unstaged changes were already computed"
+        );
+        let outcome = iter.into_outcome().expect("the completed scan has an outcome");
+        assert_eq!(outcome.index_worktree.tracked_file_modification.entries_processed, 1);
         Ok(())
     }
 }

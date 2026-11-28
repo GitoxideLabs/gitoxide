@@ -406,17 +406,7 @@ mod submodule_status {
 /// Changes to the index are collected and it's possible to write the index back using [Outcome::write_changes()](crate::status::Outcome).
 /// Note that these changes are not observable, they will always be kept.
 ///
-/// ### Parallel Operation
-///
-/// Note that without the `parallel` feature, the iterator becomes 'serial', which means all status will be computed in advance
-/// and it's non-interruptible, yielding worse performance for is-dirty checks for instance as interruptions won't happen.
-/// It's a crutch that is just there to make single-threaded applications possible at all, as it's not really an iterator
-/// anymore. If this matters, better run [Repository::index_worktree_status()] by hand as it provides all control one would need,
-/// just not as an iterator.
-///
-/// Also, even with `parallel` set, the first call to `next()` will block until there is an item available, without a chance
-/// to interrupt unless [`status::Platform::should_interrupt_*()`](crate::status::Platform::should_interrupt_shared()) was
-/// configured.
+/// See [`crate::status::Iter`] for how cancellation is reported.
 pub struct Iter {
     inner: crate::status::Iter,
 }
@@ -694,13 +684,12 @@ pub mod iter {
 
     /// Access
     impl super::Iter {
-        /// Return the outcome of the iteration, or `None` if the iterator isn't fully consumed.
+        /// Return the scan outcome if available. See [`crate::status::Iter::outcome_mut()`] for details.
         pub fn outcome_mut(&mut self) -> Option<&mut crate::status::Outcome> {
             self.inner.out.as_mut()
         }
 
-        /// Turn the iterator into the iteration outcome, which is `None` on error or if the iteration
-        /// isn't complete.
+        /// Consume the iterator and return the scan outcome, if available as described in [`Self::outcome_mut()`].
         pub fn into_outcome(mut self) -> Option<crate::status::Outcome> {
             self.inner.out.take()
         }

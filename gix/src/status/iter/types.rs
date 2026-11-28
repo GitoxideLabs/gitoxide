@@ -20,19 +20,20 @@ use crate::{
 /// Changes to the index are collected, and it's possible to write the index back using [Outcome::write_changes()].
 /// Note that these changes are not observable, they will always be kept.
 ///
-/// ### Parallel Operation
+/// ### Cancellation
 ///
-/// Note that without the `parallel` feature, the iterator becomes 'serial', which means all status will be computed in advance,
-/// and it's non-interruptible, yielding worse performance for is-dirty checks for instance as interruptions won't happen.
-/// It's a crutch that is just there to make single-threaded applications possible at all, as it's not really an iterator
-/// anymore. If this matters, better run [Repository::index_worktree_status()](crate::Repository::index_worktree_status) by hand
-/// as it provides all control one would need, just not as an iterator.
+/// To interrupt a scan, set the flag supplied through [`should_interrupt_shared()`](crate::status::Platform::should_interrupt_shared)
+/// or [`should_interrupt_owned()`](crate::status::Platform::should_interrupt_owned) and leave it set until cancellation is reported.
+/// A cancelled scan reports a cancellation error and produces no outcome.
 ///
-/// Also, even with `parallel` set, the first call to `next()` will block until there is an item available, without a chance
-/// to interrupt unless [`status::Platform::should_interrupt_*()`](crate::status::Platform::should_interrupt_shared()) was
-/// configured.
-/// Dropping the iterator requests cancellation of its own workers and returns while they wind down.
+/// With `parallel`, [`next()`](Iterator::next) reports the error once and then returns `None` on subsequent calls.
+/// Items already yielded before cancellation do not represent a complete scan. Dropping the iterator requests
+/// cancellation of its own workers without waiting for them to finish.
 /// The scan can finish while the workers are still cleaning up.
+///
+/// Without `parallel`, the scan runs in [`Platform::into_iter()`](crate::status::Platform::into_iter), which returns the
+/// error instead of an iterator. If a tree or worktree scan also fails, the cancellation error retains the failure as
+/// a cause. Setting the flag after `into_iter()` succeeds does not affect the already computed items or outcome.
 pub struct Iter {
     #[cfg(feature = "parallel")]
     pub(super) pending: Option<super::Pending>,
