@@ -31,6 +31,7 @@ use crate::{
 /// Also, even with `parallel` set, the first call to `next()` will block until there is an item available, without a chance
 /// to interrupt unless [`status::Platform::should_interrupt_*()`](crate::status::Platform::should_interrupt_shared()) was
 /// configured.
+/// Dropping the iterator requests cancellation of its own workers and returns while they wind down.
 pub struct Iter {
     #[cfg(feature = "parallel")]
     #[expect(clippy::type_complexity)]
@@ -41,6 +42,8 @@ pub struct Iter {
     )>,
     #[cfg(feature = "parallel")]
     pub(super) should_interrupt: crate::status::OwnedOrStaticAtomicBool,
+    #[cfg(feature = "parallel")]
+    pub(super) stop_workers: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Without parallelization, the iterator has to buffer all changes in advance.
     #[cfg(not(feature = "parallel"))]
     pub(super) items: std::vec::IntoIter<Item>,

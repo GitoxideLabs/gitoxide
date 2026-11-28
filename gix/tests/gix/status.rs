@@ -832,6 +832,106 @@ mod into_iter {
         ");
         Ok(())
     }
+
+    #[test]
+    #[cfg(feature = "parallel")]
+    fn dropping_status_stops_a_paused_scan_with_a_caller_flag() -> TestResult {
+        use std::{
+            sync::{
+                Arc, Mutex,
+                atomic::{AtomicBool, Ordering},
+                mpsc,
+            },
+            time::Duration,
+        };
+
+        use gix::progress::{Count, Id, MessageLevel, Progress, Step, StepShared, UNKNOWN, Unit};
+
+        struct PausedProgress {
+            resume: Mutex<mpsc::Receiver<()>>,
+            finished: mpsc::Sender<()>,
+            count: StepShared,
+        }
+
+        impl Progress for PausedProgress {
+            fn init(&mut self, max: Option<Step>, _unit: Option<Unit>) {
+                assert_eq!(max, Some(1), "the worker has one tracked entry to check");
+                self.resume
+                    .get_mut()
+                    .expect("the worker has exclusive access to progress")
+                    .recv_timeout(Duration::from_secs(5))
+                    .ok();
+            }
+            fn set_name(&mut self, _name: String) {}
+            fn name(&self) -> Option<String> {
+                None
+            }
+            fn id(&self) -> Id {
+                UNKNOWN
+            }
+            fn message(&self, _level: MessageLevel, _message: String) {}
+        }
+
+        impl Count for PausedProgress {
+            fn set(&self, step: Step) {
+                self.count.store(step, Ordering::Relaxed);
+            }
+            fn step(&self) -> Step {
+                self.count.load(Ordering::Relaxed)
+            }
+            fn inc_by(&self, step: Step) {
+                self.count.fetch_add(step, Ordering::Relaxed);
+            }
+            fn counter(&self) -> StepShared {
+                Arc::clone(&self.count)
+            }
+        }
+
+        impl Drop for PausedProgress {
+            fn drop(&mut self) {
+                self.finished.send(()).ok();
+            }
+        }
+
+        static SHARED: AtomicBool = AtomicBool::new(false);
+        let owned = Arc::new(AtomicBool::new(false));
+        let repo = repo("racy-git")?;
+        for shared in [false, true] {
+            let (resume, paused) = mpsc::channel();
+            let (finished, worker) = mpsc::channel();
+            let count = StepShared::default();
+            let platform = repo
+                .status(PausedProgress {
+                    resume: Mutex::new(paused),
+                    finished,
+                    count: Arc::clone(&count),
+                })?
+                .untracked_files(gix::status::UntrackedFiles::None);
+            let platform = if shared {
+                platform.should_interrupt_shared(&SHARED)
+            } else {
+                platform.should_interrupt_owned(Arc::clone(&owned))
+            };
+            let mut iter = platform.into_iter(None)?;
+            assert!(
+                matches!(iter.next().transpose()?, Some(Item::TreeIndex(_))),
+                "the staged change is available while the tracked-file worker is paused"
+            );
+            drop(iter);
+            resume.send(())?;
+            worker.recv_timeout(Duration::from_secs(5))?;
+            assert_eq!(
+                count.load(Ordering::Relaxed),
+                0,
+                "the abandoned scan must stop before checking entries (shared={shared})"
+            );
+            assert!(
+                !SHARED.load(Ordering::Relaxed) && !owned.load(Ordering::Relaxed),
+                "caller flags stay clear after iterator drop"
+            );
+        }
+        Ok(())
+    }
 }
 
 mod index_worktree {

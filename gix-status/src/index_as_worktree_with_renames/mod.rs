@@ -5,12 +5,19 @@ pub use types::{Context, DirwalkContext, Entry, Options, Outcome, RewriteSource,
 mod recorder;
 pub use recorder::Recorder;
 
+#[doc(hidden)]
+pub use function::with_stop_flag;
+
 pub(super) mod function {
     use gix_error::Result;
-    use std::{borrow::Cow, path::Path};
+    use std::{
+        borrow::Cow,
+        path::Path,
+        sync::atomic::{AtomicBool, Ordering},
+    };
 
     use bstr::ByteSlice;
-    use gix_error::{ResultExt, message};
+    use gix_error::{ResultExt, bail, cancelled, message};
     use gix_worktree::stack::State;
 
     use crate::{
@@ -54,7 +61,7 @@ pub(super) mod function {
         submodule: impl SubmoduleStatus<Output = U> + Send + Clone,
         objects: Find,
         progress: &mut dyn gix_utils::progress::Progress,
-        mut ctx: Context<'_>,
+        ctx: Context<'_>,
         options: Options<'_>,
     ) -> Result<Outcome>
     where
@@ -62,6 +69,31 @@ pub(super) mod function {
         U: Send + Clone,
         Find: gix_object::Find + gix_object::FindHeader + Send + Clone,
     {
+        with_stop_flag(
+            index, worktree, collector, compare, submodule, objects, progress, ctx, None, options,
+        )
+    }
+
+    /// Like [`index_as_worktree_with_renames()`], with an additional flag for iterator shutdown.
+    #[expect(clippy::too_many_arguments)]
+    pub fn with_stop_flag<'index, T, U, Find>(
+        index: &'index gix_index::State,
+        worktree: &Path,
+        collector: &mut impl VisitEntry<'index, ContentChange = T, SubmoduleStatus = U>,
+        compare: impl CompareBlobs<Output = T> + Send + Clone,
+        submodule: impl SubmoduleStatus<Output = U> + Send + Clone,
+        objects: Find,
+        progress: &mut dyn gix_utils::progress::Progress,
+        mut ctx: Context<'_>,
+        stop_workers: Option<&AtomicBool>,
+        options: Options<'_>,
+    ) -> Result<Outcome>
+    where
+        T: Send + Clone,
+        U: Send + Clone,
+        Find: gix_object::Find + gix_object::FindHeader + Send + Clone,
+    {
+        let stopped = || stop_workers.is_some_and(|flag| flag.load(Ordering::Relaxed));
         let mut tracked_file_modifications = options.tracked_file_modifications;
         tracked_file_modifications.fscache = options.fscache;
         let mut excludes = options
@@ -97,6 +129,7 @@ pub(super) mod function {
                                 let mut collect = dirwalk::Delegate {
                                     tx,
                                     should_interrupt: ctx.should_interrupt,
+                                    stop_workers,
                                 };
                                 let dirwalk_ctx = ctx.dirwalk;
                                 let objects = objects.clone();
@@ -160,7 +193,7 @@ pub(super) mod function {
                         let stack = ctx.resource_cache.attr_stack.clone();
                         let filter = ctx.resource_cache.filter.worktree_filter.clone();
                         move || {
-                            crate::index_as_worktree(
+                            crate::index_as_worktree::function::index_as_worktree_inner(
                                 index,
                                 worktree,
                                 &mut collect,
@@ -174,6 +207,7 @@ pub(super) mod function {
                                     filter,
                                     should_interrupt: ctx.should_interrupt,
                                 },
+                                stop_workers,
                                 tracked_file_modifications,
                             )
                         }
@@ -185,11 +219,14 @@ pub(super) mod function {
                 .rewrites
                 .map(gix_diff::rewrites::Tracker::<ModificationOrDirwalkEntry<'index, T, U>>::new)
                 .zip(filter);
-            let rewrite_outcome = match tracker {
+            let (rewrite_outcome, entries_for_sorting) = match tracker {
                 Some((mut tracker, (mut filter, mut attrs))) => {
                     let mut entries_for_sorting = options.sorting.map(|_| Vec::new());
                     let mut buf = Vec::new();
                     for event in rx {
+                        if stopped() {
+                            bail!(cancelled("Interrupted"));
+                        }
                         let (change, location) = match event {
                             Event::IndexEntry(record) => {
                                 let location = Cow::Borrowed(record.relative_path);
@@ -209,6 +246,7 @@ pub(super) mod function {
                                             &objects,
                                             &mut buf,
                                             ctx.should_interrupt,
+                                            stop_workers,
                                         )?,
                                         entry,
                                         collapsed_directory_status,
@@ -222,6 +260,10 @@ pub(super) mod function {
                         } else if let Some(change) = tracker.try_push_change(change, location.as_ref()) {
                             collector.visit_entry(rewrite::change_to_entry(change, entries));
                         }
+                    }
+
+                    if stopped() {
+                        bail!(cancelled("Interrupted"));
                     }
 
                     let mut entries_for_sorting = entries_for_sorting.map(|mut v| {
@@ -238,6 +280,9 @@ pub(super) mod function {
                     let outcome = tracker
                         .emit(
                             |dest, src| {
+                                if stopped() {
+                                    return std::ops::ControlFlow::Break(());
+                                }
                                 match src {
                                     None => {
                                         let entry = rewrite::change_to_entry(dest.change, entries);
@@ -310,17 +355,14 @@ pub(super) mod function {
                         )
                         .or_raise(|| message("Could not track worktree rewrites"))?;
 
-                    if let Some(mut v) = entries_for_sorting {
-                        v.sort_by(|a, b| a.destination_rela_path().cmp(b.destination_rela_path()));
-                        for entry in v {
-                            collector.visit_entry(entry);
-                        }
-                    }
-                    Some(outcome)
+                    (Some(outcome), entries_for_sorting)
                 }
                 None => {
                     let mut entries_for_sorting = options.sorting.map(|_| Vec::new());
                     for event in rx {
+                        if stopped() {
+                            bail!(cancelled("Interrupted"));
+                        }
                         let entry = match event {
                             Event::IndexEntry(record) => Entry::Modification {
                                 entries,
@@ -342,15 +384,22 @@ pub(super) mod function {
                         }
                     }
 
-                    if let Some(mut v) = entries_for_sorting {
-                        v.sort_by(|a, b| a.destination_rela_path().cmp(b.destination_rela_path()));
-                        for entry in v {
-                            collector.visit_entry(entry);
-                        }
-                    }
-                    None
+                    (None, entries_for_sorting)
                 }
             };
+
+            if stopped() {
+                bail!(cancelled("Interrupted"));
+            }
+            if let Some(mut entries) = entries_for_sorting {
+                entries.sort_by(|a, b| a.destination_rela_path().cmp(b.destination_rela_path()));
+                for entry in entries {
+                    if stopped() {
+                        bail!(cancelled("Interrupted"));
+                    }
+                    collector.visit_entry(entry);
+                }
+            }
 
             let walk_outcome = walk_outcome
                 .map(|handle| handle.join().expect("no panic"))
@@ -416,18 +465,25 @@ pub(super) mod function {
         pub(super) struct Delegate<'index, 'a, T, U> {
             pub(super) tx: std::sync::mpsc::Sender<Event<'index, T, U>>,
             pub(super) should_interrupt: &'a AtomicBool,
+            pub(super) stop_workers: Option<&'a AtomicBool>,
         }
 
         impl<T, U> gix_dir::walk::Delegate for Delegate<'_, '_, T, U> {
             fn should_interrupt(&self) -> bool {
-                false
+                self.stop_workers.is_some_and(|flag| flag.load(Ordering::Relaxed))
             }
 
             fn emit(&mut self, entry: EntryRef<'_>, collapsed_directory_status: Option<Status>) -> Action {
                 // Status never shows untracked entries of untrackable type
                 if entry.disk_kind != Some(gix_dir::entry::Kind::Untrackable) {
                     let entry = entry.to_owned();
-                    self.tx.send(Event::DirEntry(entry, collapsed_directory_status)).ok();
+                    if self
+                        .tx
+                        .send(Event::DirEntry(entry, collapsed_directory_status))
+                        .is_err()
+                    {
+                        return std::ops::ControlFlow::Break(());
+                    }
                 }
 
                 if self.should_interrupt.load(Ordering::Relaxed) {
@@ -533,6 +589,7 @@ pub(super) mod function {
             objects: &dyn gix_object::Find,
             buf: &mut Vec<u8>,
             should_interrupt: &std::sync::atomic::AtomicBool,
+            stop_workers: Option<&std::sync::atomic::AtomicBool>,
         ) -> Result<Option<gix_hash::ObjectId>> {
             let Some(kind) = disk_kind else {
                 return Ok(None);
@@ -590,10 +647,20 @@ pub(super) mod function {
                                     message!("Could not read metadata for worktree file \"{}\"", file_path.display())
                                 })?
                                 .len();
+                            let mut interruptible_file;
+                            let stream: &mut dyn Read = if let Some(stop_workers) = stop_workers {
+                                interruptible_file = gix_utils::interrupt::Read {
+                                    inner: file,
+                                    should_interrupt: stop_workers,
+                                };
+                                &mut interruptible_file
+                            } else {
+                                &mut file
+                            };
                             gix_object::compute_stream_hash(
                                 object_hash,
                                 gix_object::Kind::Blob,
-                                &mut file,
+                                stream,
                                 file_size,
                                 &mut gix_utils::progress::Discard,
                                 should_interrupt,

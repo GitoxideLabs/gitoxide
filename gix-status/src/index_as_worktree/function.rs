@@ -2,7 +2,7 @@ use gix_error::Result;
 use std::{
     path::Path,
     slice::Chunks,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use bstr::BStr;
@@ -61,12 +61,35 @@ pub fn index_as_worktree<'index, T, U, Find>(
     submodule: impl SubmoduleStatus<Output = U> + Send + Clone,
     objects: Find,
     progress: &mut dyn gix_utils::progress::Progress,
+    ctx: Context<'_>,
+    options: Options,
+) -> Result<Outcome>
+where
+    T: Send,
+    U: Send,
+    Find: gix_object::Find + Send + Clone,
+{
+    index_as_worktree_inner(
+        index, worktree, collector, compare, submodule, objects, progress, ctx, None, options,
+    )
+}
+
+#[expect(clippy::too_many_arguments)]
+pub(crate) fn index_as_worktree_inner<'index, T, U, Find>(
+    index: &'index gix_index::State,
+    worktree: &Path,
+    collector: &mut impl VisitEntry<'index, ContentChange = T, SubmoduleStatus = U>,
+    compare: impl CompareBlobs<Output = T> + Send + Clone,
+    submodule: impl SubmoduleStatus<Output = U> + Send + Clone,
+    objects: Find,
+    progress: &mut dyn gix_utils::progress::Progress,
     Context {
         pathspec,
         stack,
         filter,
         should_interrupt,
     }: Context<'_>,
+    stop_workers: Option<&AtomicBool>,
     options: Options,
 ) -> Result<Outcome>
 where
@@ -144,15 +167,15 @@ where
             )
         }
     };
+    let interrupted =
+        || should_interrupt.load(Ordering::Relaxed) || stop_workers.is_some_and(|flag| flag.load(Ordering::Relaxed));
     in_parallel_if(
         || true, // TODO: heuristic: when is parallelization not worth it? Git says 500 items per thread, but to 20 threads, we can be more fine-grained though.
-        gix_utils::interrupt::Iter::new(
-            OffsetIter {
-                inner: entries.chunks(chunk_size),
-                offset: entry_index_offset,
-            },
-            should_interrupt,
-        ),
+        OffsetIter {
+            inner: entries.chunks(chunk_size),
+            offset: entry_index_offset,
+        }
+        .take_while(|_| !interrupted()),
         thread_limit,
         new_state,
         |(entry_offset, chunk_entries), (state, blobdiff, submdule, objects, pathspec)| {
@@ -165,7 +188,7 @@ where
                 // `Repository::is_dirty`), stop promptly instead of finishing the whole chunk.
                 // Without this, an in-flight chunk would run to completion (~several hundred entries)
                 // even after another worker already found the first change.
-                if should_interrupt.load(Ordering::Relaxed) {
+                if interrupted() {
                     break;
                 }
                 let absolute_entry_index = entry_offset + idx;

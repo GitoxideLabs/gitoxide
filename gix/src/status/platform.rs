@@ -45,6 +45,7 @@ where
     /// that is ultimately controlled by user interrupts.
     ///
     /// If it is `true`, the iteration will stop immediately.
+    /// Dropping the iterator leaves this flag under the caller's control.
     pub fn should_interrupt_shared(mut self, should_interrupt: &'static AtomicBool) -> Self {
         self.should_interrupt = Some(OwnedOrStaticAtomicBool::Shared(should_interrupt));
         self
@@ -53,6 +54,7 @@ where
     /// Set the interrupt flag to `should_interrupt`, as controlled by the caller.
     ///
     /// If it is `true`, the iteration will stop immediately.
+    /// Dropping the iterator leaves this flag under the caller's control.
     pub fn should_interrupt_owned(mut self, should_interrupt: std::sync::Arc<AtomicBool>) -> Self {
         self.should_interrupt = Some(OwnedOrStaticAtomicBool::Owned {
             flag: should_interrupt,

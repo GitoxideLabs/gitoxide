@@ -1,5 +1,9 @@
-use std::sync::atomic::Ordering;
+#[cfg(feature = "parallel")]
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
+#[cfg(feature = "parallel")]
+use crate::error::{ErrorExt, cancelled};
 use crate::error::{ResultExt, message};
 use gix_status::index_as_worktree::{Change, EntryStatus};
 
@@ -65,11 +69,13 @@ where
             ))
             .with_lenient_default(self.repo.config.lenient_config)?
             .unwrap_or_default();
-        let should_interrupt = self.should_interrupt.clone().unwrap_or_default();
+        static NEVER_INTERRUPTED: AtomicBool = AtomicBool::new(false);
+        let should_interrupt = self.should_interrupt.unwrap_or_else(|| (&NEVER_INTERRUPTED).into());
         let submodule = BuiltinSubmoduleStatus::new(self.repo.clone().into_sync(), self.submodules)?;
         #[cfg(feature = "parallel")]
         {
             let (tx, rx) = std::sync::mpsc::channel();
+            let stop_workers = Arc::new(AtomicBool::new(false));
             let patterns: Vec<_> = patterns.into_iter().collect();
             let join_tree_index = if let Some(tree_id) = obtain_tree_id()? {
                 std::thread::Builder::new()
@@ -77,6 +83,7 @@ where
                     .spawn(crate::trace::in_thread({
                         let repo = self.repo.clone().into_sync();
                         let should_interrupt = should_interrupt.clone();
+                        let stop_workers = Arc::clone(&stop_workers);
                         let tx = tx.clone();
                         let tree_index_renames = self.tree_index_renames;
                         let index = index.clone();
@@ -85,7 +92,10 @@ where
                             &index,
                             self.index_worktree_options.dirwalk_options.as_ref(),
                         )?;
-                        move || -> std::result::Result<_, _> {
+                        move || -> Result<_> {
+                            if stop_workers.load(Ordering::Relaxed) {
+                                return Err(cancelled("Interrupted").raise());
+                            }
                             let repo = repo.to_thread_local();
                             let mut pathspec = crate::Pathspec {
                                 repo: &repo,
@@ -98,7 +108,8 @@ where
                                 Some(&mut pathspec),
                                 tree_index_renames,
                                 |change, _, _| {
-                                    let action = if tx.send(change.into_owned().into()).is_err()
+                                    let action = if stop_workers.load(Ordering::Relaxed)
+                                        || tx.send(change.into_owned().into()).is_err()
                                         || should_interrupt.load(Ordering::Acquire)
                                     {
                                         std::ops::ControlFlow::Break(())
@@ -122,10 +133,11 @@ where
                     let repo = self.repo.clone().into_sync();
                     let options = self.index_worktree_options;
                     let should_interrupt = should_interrupt.clone();
+                    let stop_workers = Arc::clone(&stop_workers);
                     let mut progress = self.progress;
                     move || -> Result<_> {
                         let repo = repo.to_thread_local();
-                        let out = repo.index_worktree_status(
+                        let out = repo.index_worktree_status_inner(
                             &index,
                             patterns,
                             &mut collect,
@@ -133,6 +145,7 @@ where
                             submodule,
                             &mut progress,
                             &should_interrupt,
+                            Some(&stop_workers),
                             options,
                         )?;
                         Ok(Outcome {
@@ -145,11 +158,13 @@ where
                         })
                     }
                 }))
-                .or_raise(|| message("Failed to spawn producer thread"))?;
+                .or_raise(|| message("Failed to spawn producer thread"))
+                .inspect_err(|_| stop_workers.store(true, Ordering::Relaxed))?;
 
             Ok(Iter {
                 rx_and_join: Some((rx, join_index_worktree, join_tree_index)),
                 should_interrupt,
+                stop_workers,
                 index_changes: Vec::new(),
                 out: None,
             })
@@ -320,7 +335,9 @@ impl Iter {
 #[cfg(feature = "parallel")]
 impl Drop for Iter {
     fn drop(&mut self) {
-        crate::util::parallel_iter_drop(self.rx_and_join.take(), &self.should_interrupt);
+        if self.rx_and_join.is_some() {
+            self.stop_workers.store(true, Ordering::Relaxed);
+        }
     }
 }
 

@@ -99,6 +99,40 @@ impl Repository {
         T: Send + Clone,
         U: Send + Clone,
     {
+        self.index_worktree_status_inner(
+            index,
+            patterns,
+            delegate,
+            compare,
+            submodule,
+            progress,
+            should_interrupt,
+            None,
+            options,
+        )
+    }
+
+    #[expect(clippy::too_many_arguments)]
+    pub(super) fn index_worktree_status_inner<'index, T, U>(
+        &self,
+        index: &'index gix_index::State,
+        patterns: impl IntoIterator<Item = impl AsRef<BStr>>,
+        delegate: &mut impl gix_status::index_as_worktree_with_renames::VisitEntry<
+            'index,
+            ContentChange = T,
+            SubmoduleStatus = U,
+        >,
+        compare: impl CompareBlobs<Output = T> + Send + Clone,
+        submodule: impl SubmoduleStatus<Output = U> + Send + Clone,
+        progress: &mut dyn gix_utils::progress::Progress,
+        should_interrupt: &AtomicBool,
+        stop_workers: Option<&AtomicBool>,
+        options: Options,
+    ) -> Result<gix_status::index_as_worktree_with_renames::Outcome>
+    where
+        T: Send + Clone,
+        U: Send + Clone,
+    {
         let _span = gix_trace::coarse!("gix::index_worktree_status");
         let workdir = self
             .workdir()
@@ -130,7 +164,7 @@ impl Repository {
             },
         )?;
 
-        let out = gix_status::index_as_worktree_with_renames(
+        let out = gix_status::index_as_worktree_with_renames::with_stop_flag(
             index,
             workdir,
             delegate,
@@ -148,6 +182,7 @@ impl Repository {
                     ignore_case_index_lookup: accelerate_lookup.as_ref(),
                 },
             },
+            stop_workers,
             gix_status::index_as_worktree_with_renames::Options {
                 sorting: options.sorting,
                 tracked_file_modifications: gix_status::index_as_worktree::Options {
