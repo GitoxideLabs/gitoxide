@@ -46,19 +46,31 @@ pub mod interpolate {
         )))]
         {
             let cname = std::ffi::CString::new(name).ok()?;
-            // SAFETY: calling this in a threaded program that modifies the pw database is not actually safe.
-            //         TODO: use the `*_r` version, but it's much harder to use.
-            #[expect(unsafe_code)]
-            let pwd = unsafe { libc::getpwnam(cname.as_ptr()) };
-            if pwd.is_null() {
-                None
-            } else {
-                use std::os::unix::ffi::OsStrExt;
-                // SAFETY: pw_dir is a cstr and it lives as long as… well, we hope nobody changes the pw database while we are at it
-                //         from another thread. Otherwise it lives long enough.
+            // `getpwnam_r` writes into buffers of ours: `getpwnam` returns a pointer into a buffer every
+            // caller shares, which another thread's lookup can overwrite, or on musl free, while we read it.
+            let mut buf = vec![0 as libc::c_char; 1024];
+            loop {
+                // SAFETY: `passwd` is plain old data, for which all zeroes is a valid value.
                 #[expect(unsafe_code)]
-                let cstr = unsafe { std::ffi::CStr::from_ptr((*pwd).pw_dir) };
-                Some(std::ffi::OsStr::from_bytes(cstr.to_bytes()).into())
+                let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
+                let mut result: *mut libc::passwd = std::ptr::null_mut();
+                // SAFETY: `cname` is NUL-terminated, and `pwd`, `buf` (of `buf.len()` bytes) and `result`
+                //         are valid for writes for the duration of the call.
+                #[expect(unsafe_code)]
+                let rc =
+                    unsafe { libc::getpwnam_r(cname.as_ptr(), &mut pwd, buf.as_mut_ptr(), buf.len(), &mut result) };
+                if rc == libc::ERANGE && buf.len() < 1024 * 1024 {
+                    buf.resize(buf.len() * 2, 0);
+                    continue;
+                }
+                if rc != 0 || result.is_null() {
+                    return None;
+                }
+                use std::os::unix::ffi::OsStrExt;
+                // SAFETY: on success, `pw_dir` points to a NUL-terminated string within `buf`, which outlives it.
+                #[expect(unsafe_code)]
+                let cstr = unsafe { std::ffi::CStr::from_ptr(pwd.pw_dir) };
+                return Some(std::ffi::OsStr::from_bytes(cstr.to_bytes()).into());
             }
         }
         #[cfg(any(
