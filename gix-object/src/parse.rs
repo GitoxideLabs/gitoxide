@@ -99,7 +99,8 @@ pub(crate) fn any_header_field<'a>(i: &mut &'a [u8]) -> Result<(&'a BStr, Header
 /// depending on `object_hash`. The entire input slice must be ASCII hex and
 /// match the expected object hash length.
 pub fn hex_hash(i: &[u8], hash_kind: gix_hash::Kind) -> Result<&BStr> {
-    if i.len() != hash_kind.len_in_hex() || !i.iter().all(u8::is_ascii_hexdigit) {
+    // Check all bytes without stopping early, which lets the compiler vectorize the loop.
+    if i.len() != hash_kind.len_in_hex() || !i.iter().fold(true, |all_hex, b| all_hex & b.is_ascii_hexdigit()) {
         bail!(crate::decode::empty_error());
     }
     Ok(i.as_bstr())
