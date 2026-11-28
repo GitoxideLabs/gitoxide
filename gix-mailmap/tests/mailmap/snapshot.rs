@@ -225,6 +225,11 @@ fn case_folding_with_non_utf8_keys_matches_git() -> gix_testtools::TestResult {
 }
 
 #[test]
+fn whitespace_git_keeps_in_names_matches_git() -> gix_testtools::TestResult {
+    assert_matches_git("whitespace-git-keeps-in-names").map_err(Into::into)
+}
+
+#[test]
 fn large_reverse_ordered_mailmaps() -> gix_testtools::TestResult {
     use std::fmt::Write;
 
