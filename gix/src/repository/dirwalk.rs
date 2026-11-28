@@ -124,6 +124,7 @@ impl Repository {
     ///
     /// `should_interrupt` should be set to `Default::default()` if it is supposed to be unused.
     /// Otherwise, it can be created by passing a `&'static AtomicBool`, `&Arc<AtomicBool>` or `Arc<AtomicBool>`.
+    /// Dropping the iterator leaves this flag under the caller's control.
     pub fn dirwalk_iter(
         &self,
         index: impl Into<IndexPersistedOrInMemory>,
