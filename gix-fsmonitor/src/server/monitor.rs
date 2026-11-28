@@ -125,6 +125,10 @@ impl<S: EventSource> Monitor<S> {
                         }
                     }
                 }
+                Err(gix_notify::SynchronizeError::TimedOut | gix_notify::SynchronizeError::Busy) => {
+                    // This query needs a full scan. A slow fence can leave coverage intact, so
+                    // the next query may try its own fence after processing any queued losses.
+                }
                 Err(_error) => {
                     gix_trace::warn!(error = %_error, "filesystem synchronization requires a full response");
                     self.state.healthy = false;

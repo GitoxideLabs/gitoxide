@@ -146,7 +146,8 @@ pub struct Options {
     /// Maximum wait for a native delivery fence or synchronization cookie. Defaults to one second.
     /// An incomplete fence requires a full scan.
     pub fence_timeout: Duration,
-    /// Delay before retrying failed watch registration or synchronization. Defaults to five seconds.
+    /// Delay before retrying failed watch registration or repairing coverage after synchronization
+    /// fails. Defaults to five seconds. A fence timeout or busy worker is retried on the next query.
     pub retry_interval: Duration,
     /// Maximum polling interval for synchronization cookies. Defaults to 20 milliseconds.
     /// IPC clients, source notifications, and shutdown requests wake the server directly.

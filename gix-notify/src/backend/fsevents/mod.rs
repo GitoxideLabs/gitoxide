@@ -1,5 +1,5 @@
-//! FSEvents ownership stays on one control thread. A private serial dispatch queue publishes
-//! complete native callbacks; native flushes never run on that queue.
+//! One control thread owns the FSEvents stream. Separate serial dispatch queues publish complete
+//! native callbacks and request native flushes.
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::{CStr, CString, OsString, c_void},
@@ -9,7 +9,10 @@ use std::{
     },
     path::{Path, PathBuf},
     ptr::NonNull,
-    sync::mpsc::{self, SyncSender},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, SyncSender},
+    },
     thread::JoinHandle,
     time::Instant,
 };
@@ -164,19 +167,13 @@ impl Backend {
                 mpsc::TrySendError::Full(_) => SynchronizeError::Busy,
                 mpsc::TrySendError::Disconnected(_) => SynchronizeError::Stopped,
             })?;
-        receive
-            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-            .map_err(|error| match error {
-                mpsc::RecvTimeoutError::Timeout => SynchronizeError::TimedOut,
-                mpsc::RecvTimeoutError::Disconnected => SynchronizeError::Stopped,
-            })?
+        super::wait_for_fence(&receive, deadline)
     }
 }
 
 impl Drop for Backend {
     fn drop(&mut self) {
-        // Closing the command channel stops the worker after any active native flush. FlushSync
-        // has no cancellation primitive; caller deadlines do not pretend to cancel it.
+        // Closing the command channel stops the worker and tears down the stream.
         self.commands = None;
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
@@ -226,11 +223,27 @@ struct Root {
 struct Stream {
     stream: NonNull<c_void>,
     callback_queue: DispatchRetained<DispatchQueue>,
+    flush_queue: DispatchRetained<DispatchQueue>,
+    flush_pending: OwnShared<AtomicBool>,
     context: OwnShared<Context>,
     roots: Vec<Root>,
     local: bool,
     started: bool,
     _paths: CfOwned,
+}
+
+struct FlushStream(NonNull<c_void>);
+
+// SAFETY: the handle is used only to flush on the serial flush queue. Stream::drop drains that
+// queue before stopping, invalidating, or releasing the native stream.
+unsafe impl Send for FlushStream {}
+
+impl FlushStream {
+    fn flush(self) {
+        // SAFETY: the control worker only schedules flushes on a started stream, and teardown
+        // waits for this operation while the callback queue remains able to deliver events.
+        unsafe { fs::FSEventStreamFlushSync(self.0.as_ptr()) };
+    }
 }
 
 impl Stream {
@@ -313,6 +326,8 @@ impl Stream {
         let mut out = Self {
             stream,
             callback_queue,
+            flush_queue: DispatchQueue::new("org.gitoxide.notify.flush", None),
+            flush_pending: OwnShared::new(AtomicBool::new(false)),
             context,
             roots,
             local,
@@ -377,29 +392,32 @@ impl Stream {
         // Close the file handle but keep its name present until observation (or timeout), so
         // native create/remove coalescing cannot erase the marker before it is delivered.
         let _cookie = cookie.into_temp_path();
-        unsafe {
-            // SAFETY: only the control worker calls this on a started stream. FlushSync reduces
-            // latency, but does NOT fence writes whose kernel events have not reached the service.
-            // The callback must actually observe our unique marker before returning a fence.
-            fs::FSEventStreamFlushSync(self.stream.as_ptr());
-        }
-        let result = receive
-            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-            .map_err(|error| match error {
-                mpsc::RecvTimeoutError::Timeout => SynchronizeError::TimedOut,
-                mpsc::RecvTimeoutError::Disconnected => SynchronizeError::Stopped,
-            });
+        // FlushSync nudges delivery. The ordered callback certifies the marker by publishing
+        // its complete batch, even when the flush is still waiting for other native work.
+        self.request_flush();
+        let result = super::wait_for_fence(&receive, deadline);
         lock(&self.context.pending).take();
-        let fence = result??;
-        if Instant::now() >= deadline {
-            return Err(SynchronizeError::TimedOut);
-        }
+        let fence = result?;
         if identity(&directory).ok() != Some(anchor_identity) {
             self.context.sender.publish(Vec::new(), Some(Loss::Rescan), None);
             return Err(SynchronizeError::CoverageLost);
         }
         self.context.sender.fence(generation)?;
         Ok(fence)
+    }
+
+    fn request_flush(&self) {
+        // Coalesce queued nudges, allowing at most one more flush behind an active one.
+        if self.flush_pending.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let pending = self.flush_pending.clone();
+        let stream = FlushStream(self.stream);
+        self.flush_queue.exec_async(move || {
+            if pending.swap(false, Ordering::Relaxed) {
+                stream.flush();
+            }
+        });
     }
 
     fn marker_error(&self, error: std::io::Error) -> SynchronizeError {
@@ -432,6 +450,9 @@ impl Stream {
 
 impl Drop for Stream {
     fn drop(&mut self) {
+        // Cancel any queued nudge and let an active FlushSync finish before native teardown.
+        self.flush_pending.store(false, Ordering::Relaxed);
+        self.flush_queue.exec_sync(|| {});
         unsafe {
             // SAFETY: only the control worker can tear down this live, scheduled stream.
             if self.started {

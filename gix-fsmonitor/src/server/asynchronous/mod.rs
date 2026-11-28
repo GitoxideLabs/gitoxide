@@ -214,6 +214,7 @@ impl Drop for Handle {
 
 /// Start a Tokio server, awaiting endpoint binding and complete native registration before returning.
 /// Cancelling this future requests cleanup, including when a native registration is still active.
+/// On Unix, startup cancelled while waiting for the native startup lock skips socket binding.
 pub async fn spawn(context: Context, options: Options) -> Result<Handle> {
     options.validate()?;
     let endpoint = context.endpoint.clone();
@@ -230,9 +231,13 @@ pub async fn spawn(context: Context, options: Options) -> Result<Handle> {
         })
         .await
         .or_raise(|| message("validating filesystem monitor context"))??;
-        let mut listener = Listener::bind(&context.endpoint)
-            .await
-            .or_raise(|| message("acquiring the native IPC endpoint"))?;
+        let mut listener = Listener::bind(
+            &context.endpoint,
+            #[cfg(unix)]
+            shutdown.clone(),
+        )
+        .await
+        .or_raise(|| message("acquiring the native IPC endpoint"))?;
         let result = async {
             let mut watcher = Watcher::new(Default::default())?;
             let source_wake = worker_wake.clone();
@@ -372,13 +377,15 @@ struct Listener {
 }
 
 impl Listener {
-    async fn bind(path: &Path) -> io::Result<Self> {
+    async fn bind(path: &Path, #[cfg(unix)] shutdown: OwnShared<AtomicBool>) -> io::Result<Self> {
         #[cfg(unix)]
         {
             let path = path.to_owned();
-            let owner = tokio::task::spawn_blocking(move || transport::Listener::bind(&path))
-                .await
-                .map_err(io::Error::other)??;
+            let owner = tokio::task::spawn_blocking(move || {
+                transport::Listener::bind_unless_cancelled(&path, || shutdown.load(Ordering::Relaxed))
+            })
+            .await
+            .map_err(io::Error::other)??;
             let socket = match owner.async_socket() {
                 Ok(socket) => socket,
                 Err(error) => {
