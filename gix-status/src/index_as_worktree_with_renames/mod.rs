@@ -17,7 +17,7 @@ pub(super) mod function {
     };
 
     use bstr::ByteSlice;
-    use gix_error::{ResultExt, bail, cancelled, message};
+    use gix_error::{ErrorExt, ResultExt, bail, cancelled, message};
     use gix_worktree::stack::State;
 
     use crate::{
@@ -221,11 +221,14 @@ pub(super) mod function {
                 .zip(filter);
             let (rewrite_outcome, entries_for_sorting) = match tracker {
                 Some((mut tracker, (mut filter, mut attrs))) => {
+                    let should_interrupt = || stopped() || ctx.should_interrupt.load(Ordering::Relaxed);
                     let mut entries_for_sorting = options.sorting.map(|_| Vec::new());
                     let mut buf = Vec::new();
+                    let mut interrupted = false;
                     for event in rx {
-                        if stopped() {
-                            bail!(cancelled("Interrupted"));
+                        if should_interrupt() {
+                            interrupted = true;
+                            break;
                         }
                         let (change, location) = match event {
                             Event::IndexEntry(record) => {
@@ -262,8 +265,18 @@ pub(super) mod function {
                         }
                     }
 
-                    if stopped() {
-                        bail!(cancelled("Interrupted"));
+                    if interrupted || should_interrupt() {
+                        let walk_error = walk_outcome.and_then(|handle| handle.join().expect("no panic").err());
+                        let tracked_error = tracked_modifications_outcome.join().expect("no panic").err();
+                        let reason = cancelled("Interrupted");
+                        return Err(match (walk_error, tracked_error) {
+                            (None, None) => reason.raise(),
+                            (Some(err), None) | (None, Some(err)) if err.is_cancelled() => err,
+                            (Some(err), None) | (None, Some(err)) => err.and_raise(reason),
+                            (Some(walk), Some(tracked)) => {
+                                reason.raise_all([walk.into_exn(), tracked.into_exn()]).into_error()
+                            }
+                        });
                     }
 
                     let mut entries_for_sorting = entries_for_sorting.map(|mut v| {

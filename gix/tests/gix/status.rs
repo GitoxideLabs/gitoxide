@@ -795,6 +795,130 @@ mod into_iter {
         Ok(())
     }
 
+    #[cfg(not(feature = "parallel"))]
+    mod progress_hook {
+        pub(super) enum Hook {
+            Init,
+            Drop,
+        }
+
+        pub(super) struct Progress(pub(super) Box<dyn FnMut(Hook) + Send + Sync>);
+
+        impl gix::progress::Count for Progress {
+            fn set(&self, _: usize) {}
+            fn step(&self) -> usize {
+                0
+            }
+            fn inc_by(&self, _: usize) {}
+            fn counter(&self) -> gix::progress::StepShared {
+                gix::progress::Discard.counter()
+            }
+        }
+
+        impl gix::progress::Progress for Progress {
+            fn init(&mut self, _: Option<usize>, _: Option<gix::progress::Unit>) {
+                (self.0)(Hook::Init);
+            }
+            fn set_name(&mut self, _: String) {}
+            fn name(&self) -> Option<String> {
+                None
+            }
+            fn id(&self) -> gix::progress::Id {
+                gix::progress::UNKNOWN
+            }
+            fn message(&self, _: gix::progress::MessageLevel, _: String) {}
+        }
+
+        impl Drop for Progress {
+            fn drop(&mut self) {
+                (self.0)(Hook::Drop);
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(not(feature = "parallel"))]
+    fn serial_status_cancels_before_filtering_queued_rewrites() -> TestResult {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+
+        // Other packages in a workspace test can still enable parallel plumbing through feature unification.
+        if gix::parallel::num_threads(Some(2)) != 1 {
+            return Ok(());
+        }
+        let fixture = gix_testtools::scripted_fixture_read_only("status-cancel-queued-rewrite.sh")?;
+        let repo = gix::open_opts(fixture, gix::open::Options::isolated())?;
+        let interrupt = Arc::new(AtomicBool::new(false));
+        let scan = |repo: &gix::Repository, progress| {
+            repo.status(progress)?
+                .untracked_files(gix::status::UntrackedFiles::Files)
+                .index_worktree_rewrites(Some(gix_diff::Rewrites::default()))
+                .should_interrupt_owned(Arc::clone(&interrupt))
+                .into_iter(None)
+        };
+        let filter_failed = |err: &gix::Error| {
+            err.iter_errors()
+                .any(|cause| cause.to_string().contains("Driver process failed"))
+        };
+        let err = scan(&repo, progress_hook::Progress(Box::new(|_| {})))
+            .err()
+            .expect("the queued candidate's required filter fails in an uninterrupted scan");
+        assert!(
+            filter_failed(&err),
+            "the fixture exercises the required filter: {err:?}"
+        );
+
+        let cancel_during_tracked_scan = || {
+            let interrupt = Arc::clone(&interrupt);
+            progress_hook::Progress(Box::new(move |hook| {
+                if matches!(hook, progress_hook::Hook::Init) {
+                    interrupt.store(true, Ordering::SeqCst);
+                }
+            }))
+        };
+        let err = scan(&repo, cancel_during_tracked_scan())
+            .err()
+            .expect("the tracked-file scan requested cancellation");
+        assert!(err.is_cancelled(), "expected cancellation, got {err:?}");
+        assert!(!filter_failed(&err), "the queued filter must be skipped: {err:?}");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let (fixture, ()) =
+                gix_testtools::scripted_fixture_read_only_with_post("status-cancel-queued-rewrite.sh", 1, |state| {
+                    if let gix_testtools::FixtureState::Uninitialized(path) = state {
+                        let ignore = path.join(".gitignore");
+                        std::fs::write(&ignore, "ignored\n")?;
+                        std::fs::set_permissions(ignore, std::fs::Permissions::from_mode(0o000))?;
+                    }
+                    Ok(())
+                })?;
+            // Privileged users can still read this fixture.
+            if let Err(err) = std::fs::File::open(fixture.join(".gitignore")) {
+                assert_eq!(
+                    err.kind(),
+                    std::io::ErrorKind::PermissionDenied,
+                    "the ignore file must fail with a permission error"
+                );
+                let repo = gix::open_opts(fixture, gix::open::Options::isolated())?;
+                interrupt.store(false, Ordering::SeqCst);
+                let err = scan(&repo, cancel_during_tracked_scan())
+                    .err()
+                    .expect("the directory walk fails before the tracked-file scan requests cancellation");
+                assert!(err.is_cancelled(), "expected cancellation, got {err:?}");
+                assert!(
+                    err.is_permission_denied(),
+                    "cancellation retains the directory-walk error: {err:?}"
+                );
+            }
+        }
+        Ok(())
+    }
+
     #[test]
     fn error_during_tree_traversal_causes_failure() -> TestResult {
         let mut error_snapshots = Vec::new();

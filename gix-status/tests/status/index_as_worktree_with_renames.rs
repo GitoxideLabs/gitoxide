@@ -253,6 +253,66 @@ fn changed_and_untracked() {
 }
 
 #[test]
+fn cancelled_rewrite_scan_retains_tracked_file_error() -> gix_testtools::TestResult {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use gix_error::{bail, message};
+    use gix_status::index_as_worktree::traits::{CompareBlobs, ReadData};
+
+    #[derive(Clone)]
+    struct CancelAndFail<'a>(&'a AtomicBool);
+
+    impl CompareBlobs for CancelAndFail<'_> {
+        type Output = ();
+
+        fn compare_blobs<'a, 'b>(
+            &mut self,
+            _: &gix_index::Entry,
+            _: u64,
+            _: impl ReadData<'a>,
+            _: &mut Vec<u8>,
+        ) -> gix_error::Result<Option<()>> {
+            self.0.store(true, Ordering::Relaxed);
+            bail!(message("tracked file comparison failed"));
+        }
+    }
+
+    let err = with_sorted_fixture(
+        "status_many.sh",
+        "changed-and-untracked",
+        &["executable"],
+        Some(Default::default()),
+        None,
+        Fixture::ReadOnly,
+        |index, worktree, objects, context, options| {
+            let interrupt = AtomicBool::new(false);
+            index_as_worktree_with_renames(
+                index,
+                worktree,
+                &mut Recorder::default(),
+                CancelAndFail(&interrupt),
+                crate::index_as_worktree::SubmoduleStatusMock { dirty: false },
+                objects,
+                &mut gix_utils::progress::Discard,
+                Context {
+                    should_interrupt: &interrupt,
+                    ..context
+                },
+                options,
+            )
+        },
+    )
+    .expect_err("the tracked file comparison requested cancellation and failed");
+    assert!(err.is_cancelled(), "expected cancellation, got {err:?}");
+    assert!(
+        err.iter_errors()
+            .any(|cause| cause.to_string() == "tracked file comparison failed"),
+        "cancellation retains the tracked file worker error: {err:?}"
+    );
+    Ok(())
+}
+
+#[test]
 fn sorted_emission_honors_the_stop_flag() {
     use std::sync::atomic::{AtomicBool, Ordering};
 

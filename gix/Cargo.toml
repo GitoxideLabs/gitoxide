@@ -523,7 +523,7 @@ gix-pack = { version = "^0.78.0", path = "../gix-pack", default-features = false
     "streaming-input",
 ] }
 pretty_assertions = "1.4.0"
-gix-testtools = { path = "../tests/tools", features = ["sha1", "sha256"] }
+gix-testtools = { path = "../tests/tools", default-features = false, features = ["repo-snapshot", "sha1", "sha256"] }
 is_ci = "1.1.1"
 serial_test = { version = "4.0.1", default-features = false }
 async-std = { version = "1.12.0", features = ["attributes"] }
@@ -672,6 +672,16 @@ checks = [
     ] },
 ]
 tests = [
+    # Keep the serial status regressions separate from workspace feature unification.
+    { args = [
+        "--no-default-features",
+        "--features",
+        "sha1,status",
+        "--test",
+        "gix",
+        "-E",
+        "test(/^status::into_iter::/)",
+    ] },
     { args = [
         "--no-default-features",
         "--features",
