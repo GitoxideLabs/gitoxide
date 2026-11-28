@@ -434,6 +434,42 @@ fn overlay_iter() -> gix_testtools::TestResult {
 }
 
 #[test]
+fn overlay_iter_survives_refs_packed_and_deleted_while_iterating() -> gix_testtools::TestResult {
+    use gix_ref::Target::*;
+
+    let (dir, store) = crate::file::store_writable("make_ref_repository.sh")?;
+    let main_id = store.find("main")?.target;
+    let platform = store.iter()?;
+    let mut iter = platform.prefixed(b"refs/heads/".try_into()?)?;
+    let first = iter.next().expect("refs/heads/ has loose refs")?;
+    assert_eq!(
+        first.name.as_bstr(),
+        "refs/heads/A",
+        "the first ref is read before its siblings are packed"
+    );
+
+    gix_testtools::git(dir.path(), "pack-refs --all --prune")?;
+    gix_testtools::git(dir.path(), "update-ref -d refs/heads/d1")?;
+
+    let rest = iter
+        .map(|r| r.map(|r| (r.name.as_bstr().to_owned(), r.target)))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    assert_eq!(
+        rest,
+        vec![
+            (b"refs/heads/dt1".as_bstr().to_owned(), main_id.clone()),
+            (b"refs/heads/main".into(), main_id),
+            (
+                "refs/heads/multi-link-target1".into(),
+                Symbolic("refs/tags/multi-link-target2".try_into()?),
+            ),
+        ],
+        "loose files listed before packing are read from the new packed-refs, and the deleted ref is skipped"
+    );
+    Ok(())
+}
+
+#[test]
 fn overlay_iter_reproduce_1850() -> gix_testtools::TestResult {
     let store = store_at("make_repo_for_1850_repro.sh")?;
     let ref_names = store

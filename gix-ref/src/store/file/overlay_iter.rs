@@ -29,6 +29,8 @@ pub struct LooseThenPacked<'p, 's> {
     iter_git_dir: SortedLoosePaths,
     iter_common_dir: Option<SortedLoosePaths>,
     buf: Vec<u8>,
+    /// The store whose `packed-refs` file is read afresh when a loose reference disappears after its directory was listed.
+    vanished_loose_refs_store: Option<&'s file::Store>,
 }
 
 enum IterKind {
@@ -44,7 +46,7 @@ pub struct Platform<'s> {
     packed: Option<file::packed::SharedBufferSnapshot>,
 }
 
-impl<'p> LooseThenPacked<'p, '_> {
+impl<'p, 's> LooseThenPacked<'p, 's> {
     fn strip_namespace(&self, mut r: Reference) -> Reference {
         if let Some(namespace) = &self.namespace {
             r.strip_namespace(namespace);
@@ -58,12 +60,14 @@ impl<'p> LooseThenPacked<'p, '_> {
 
     /// Read failures include [metadata](gix_error::Error::metadata()) `path` (native path), the loose reference being
     /// visited.
+    ///
+    /// Return `None` if the loose reference was deleted after its directory was listed.
     fn next_loose(
         &mut self,
         kind: IterKind,
         name_buf: &mut Vec<u8>,
         symbolic_target_buf: impl FnOnce() -> Vec<u8>,
-    ) -> Result<Reference> {
+    ) -> Result<Option<Reference>> {
         let iter = match kind {
             IterKind::GitAndConsumeCommon => {
                 drop(self.iter_common_dir.as_mut().and_then(SortedLoosePaths::take_peeked));
@@ -79,12 +83,24 @@ impl<'p> LooseThenPacked<'p, '_> {
         let buf = &mut self.buf;
         let git_dir = self.git_dir;
         let common_dir = self.common_dir;
-        std::fs::File::open(entry.path)
-            .and_then(|mut f| {
-                buf.clear();
-                f.read_to_end(buf)
-            })
-            .or_raise(|| file::find::read_reference_error(entry.path))?;
+        let read = std::fs::File::open(entry.path).and_then(|mut f| {
+            buf.clear();
+            f.read_to_end(buf)
+        });
+        match (read, self.vanished_loose_refs_store) {
+            (Err(err), Some(store)) if err.kind() == std::io::ErrorKind::NotFound => {
+                // `git pack-refs --prune` writes `packed-refs` before it removes loose files,
+                // so a fresh `packed-refs` has the reference unless it was deleted.
+                let Some(packed) = store.open_packed_buffer()? else {
+                    return Ok(None);
+                };
+                let reference = packed
+                    .try_find_full_name(entry.name)?
+                    .map(|packed_ref| packed_ref.into_reference(name_buf));
+                return Ok(reference.map(|reference| self.strip_namespace(reference)));
+            }
+            (read, _) => read.or_raise(|| file::find::read_reference_error(entry.path))?,
+        };
         let target = loose::Reference::decode_target(buf, self.object_hash, symbolic_target_buf).or_raise(|| {
             let relative_path = entry
                 .path
@@ -101,7 +117,12 @@ impl<'p> LooseThenPacked<'p, '_> {
             target,
             peeled: None,
         };
-        Ok(self.strip_namespace(reference))
+        Ok(Some(self.strip_namespace(reference)))
+    }
+
+    fn look_up_vanished_loose_refs_in(mut self, store: &'s file::Store) -> Self {
+        self.vanished_loose_refs_store = Some(store);
+        self
     }
 }
 
@@ -136,34 +157,36 @@ impl LooseThenPacked<'_, '_> {
                 None => git.map(|r| (r, IterKind::Git)),
             }
         }
-        match self.iter_packed.as_mut() {
-            Some(packed_iter) => match (
-                peek_loose(&mut self.iter_git_dir, self.iter_common_dir.as_mut()),
-                packed_iter.peek(),
-            ) {
-                (None, None) => None,
-                (None, Some(_)) | (Some(_), Some(Err(_))) => {
-                    let res = packed_iter.next().expect("peeked value exists");
-                    Some(self.convert_packed(res, name_buf))
-                }
-                (Some((_, kind)), None) | (Some((Err(_), kind)), Some(_)) => {
-                    Some(self.next_loose(kind, name_buf, symbolic_target_buf))
-                }
-                (Some((Ok(name), kind)), Some(Ok(packed))) => match name.cmp(packed.name) {
-                    Ordering::Less => Some(self.next_loose(kind, name_buf, symbolic_target_buf)),
-                    Ordering::Equal => {
-                        drop(packed_iter.next());
-                        Some(self.next_loose(kind, name_buf, symbolic_target_buf))
+        let mut symbolic_target_buf = Some(symbolic_target_buf);
+        loop {
+            let kind = match self.iter_packed.as_mut() {
+                Some(packed_iter) => match (
+                    peek_loose(&mut self.iter_git_dir, self.iter_common_dir.as_mut()),
+                    packed_iter.peek(),
+                ) {
+                    (None, None) => return None,
+                    (None, Some(_)) | (Some(_), Some(Err(_))) => {
+                        let res = packed_iter.next().expect("peeked value exists");
+                        return Some(self.convert_packed(res, name_buf));
                     }
-                    Ordering::Greater => {
-                        let res = packed_iter.next().expect("name retrieval configured");
-                        Some(self.convert_packed(res, name_buf))
-                    }
+                    (Some((_, kind)), None) | (Some((Err(_), kind)), Some(_)) => kind,
+                    (Some((Ok(name), kind)), Some(Ok(packed))) => match name.cmp(packed.name) {
+                        Ordering::Less => kind,
+                        Ordering::Equal => {
+                            drop(packed_iter.next());
+                            kind
+                        }
+                        Ordering::Greater => {
+                            let res = packed_iter.next().expect("name retrieval configured");
+                            return Some(self.convert_packed(res, name_buf));
+                        }
+                    },
                 },
-            },
-            None => {
-                let (_, kind) = peek_loose(&mut self.iter_git_dir, self.iter_common_dir.as_mut())?;
-                Some(self.next_loose(kind, name_buf, symbolic_target_buf))
+                None => peek_loose(&mut self.iter_git_dir, self.iter_common_dir.as_mut())?.1,
+            };
+            let symbolic_target_buf = || symbolic_target_buf.take().expect("taken only for a returned reference")();
+            if let Some(res) = self.next_loose(kind, name_buf, symbolic_target_buf).transpose() {
+                return Some(res);
             }
         }
     }
@@ -181,8 +204,13 @@ impl<'repo> Platform<'repo> {
     /// Return an iterator over all references, loose or packed, sorted by their name.
     ///
     /// Errors are returned similarly to what would happen when loose and packed refs were iterated by themselves.
+    ///
+    /// A loose reference whose file disappears after its directory was listed, as `git pack-refs --prune` or a
+    /// deletion does, is read from `packed-refs` afresh, and skipped if it isn't there either.
     pub fn all<'p>(&'p self) -> std::io::Result<LooseThenPacked<'p, 'repo>> {
-        self.store.iter_packed(self.packed.as_ref().map(|b| &***b))
+        self.store
+            .iter_packed(self.packed.as_ref().map(|b| &***b))
+            .map(|iter| iter.look_up_vanished_loose_refs_in(self.store))
     }
 
     /// As [`iter(…)`](file::Store::iter()), but filters by `prefix`, i.e. "refs/heads/" or
@@ -196,6 +224,7 @@ impl<'repo> Platform<'repo> {
     pub fn prefixed<'p>(&'p self, prefix: &RelativePath) -> std::io::Result<LooseThenPacked<'p, 'repo>> {
         self.store
             .iter_prefixed_packed(prefix, self.packed.as_ref().map(|b| &***b))
+            .map(|iter| iter.look_up_vanished_loose_refs_in(self.store))
     }
 
     /// Return an iterator over the pseudo references, like `HEAD` or `FETCH_HEAD`, or anything else suffixed with `HEAD`
@@ -440,6 +469,7 @@ impl file::Store {
             iter_common_dir: common_dir_info.map(IterInfo::into_iter),
             buf: Vec::new(),
             namespace: self.namespace.as_ref(),
+            vanished_loose_refs_store: None,
         })
     }
 }
