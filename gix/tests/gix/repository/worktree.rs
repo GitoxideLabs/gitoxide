@@ -2953,7 +2953,10 @@ fn worktree_listing_errors_preserve_io_errors() -> TestResult {
 fn configure_related_repository_applies_to_linked_and_main_opens() -> TestResult {
     use std::ops::ControlFlow::{Break, Continue};
 
-    use gix::open::RelatedRepositoryKind;
+    use gix::{
+        config::tree::{Core, Key},
+        open::RelatedRepositoryKind,
+    };
 
     let Some(dir) = gix_testtools::scripted_fixture_read_only_with_git_version("make_worktree_repo.sh", |version| {
         version >= (2, 31, 0)
@@ -2962,11 +2965,18 @@ fn configure_related_repository_applies_to_linked_and_main_opens() -> TestResult
         return Ok(());
     };
     let repo = crate::restricted()
+        .config_overrides_by_trust(|_, config| {
+            Ok(if config.integer("core.abbrev")? == Some(12) {
+                vec![Core::ABBREV.validated_assignment("14".into())?]
+            } else {
+                Vec::new()
+            })
+        })
         .configure_related_repository(|related, _| {
             assert!(related.git_dir.is_absolute(), "the target path can be used directly");
             match related.kind {
                 RelatedRepositoryKind::LinkedWorktree if related.git_dir.ends_with("wt-a") => Ok(Continue(
-                    gix::open::Options::isolated().config_overrides(["core.abbrev=12"]),
+                    gix::open::Options::isolated().config_overrides([Core::ABBREV.validated_assignment("12".into())?]),
                 )),
                 RelatedRepositoryKind::MainRepository => {
                     assert!(
@@ -2982,8 +2992,8 @@ fn configure_related_repository_applies_to_linked_and_main_opens() -> TestResult
     let linked = repo.worktree_proxy_by_id("wt-a")?.expect("worktree wt-a").into_repo()?;
     assert_eq!(
         linked.config_snapshot().integer("core.abbrev"),
-        Some(12),
-        "the linked worktree sees the override"
+        Some(14),
+        "the linked worktree runs the inherited policy even when it receives replacement options"
     );
     let err = linked
         .main_repo()

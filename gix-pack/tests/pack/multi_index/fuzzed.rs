@@ -8,7 +8,7 @@ fn unsupported_headers_are_classified() {
     for (offset, value) in [(4, 2), (5, 255)] {
         let mut data = valid_multi_index_with_index_name(b"pack.idx");
         data[offset] = value;
-        let err = gix_pack::multi_index::File::from_data(data, "unsupported.midx".into(), None)
+        let err = gix_pack::multi_index::File::from_data(data, "unsupported.midx".into())
             .err()
             .expect("the header requests an unsupported version or hash kind");
         assert!(err.is_unsupported(), "another multi-index implementation is required");
@@ -22,11 +22,7 @@ fn unsupported_headers_are_classified() {
 #[test]
 fn artifact_inputs_can_be_opened_without_panicking() {
     for path in crate::fuzz_artifact_paths("multi_index_file") {
-        _ = gix_pack::multi_index::File::from_data(
-            std::fs::read(&path).expect("artifact is readable"),
-            path,
-            Some(64 * 1024 * 1024),
-        );
+        _ = gix_pack::multi_index::File::from_data(std::fs::read(&path).expect("artifact is readable"), path);
     }
 }
 
@@ -38,7 +34,6 @@ fn malformed_fanout_is_reported_without_panicking() {
         match gix_pack::multi_index::File::from_data(
             malformed_multi_index_with_inconsistent_fanout(),
             PathBuf::from("fuzzed.midx"),
-            None,
         ) {
             Ok(index) => {
                 let _ = index.lookup(gix_hash::Kind::Sha1.null());
@@ -52,49 +47,15 @@ fn malformed_fanout_is_reported_without_panicking() {
     assert!(result.is_ok(), "malformed multi-index files must not panic");
 }
 
-/// Reproducer for the allocation-limit fuzz case: long user-controlled pack names in the `PNAM`
-/// chunk must be rejected as resource exhaustion when they exceed the configured allocation limit.
+/// Pack counts must fit into the available name data before reserving a `Vec<PathBuf>`.
 #[test]
-fn long_pack_names_over_alloc_limit_bytes_are_resource_exhaustion() -> gix_testtools::TestResult {
-    let long_name = format!("{}.idx", "a".repeat(65));
-    let index = gix_pack::multi_index::File::from_data(
-        valid_multi_index_with_index_name(long_name.as_bytes()),
-        PathBuf::from("fuzzed-long-name.midx"),
-        None,
-    )?;
-
-    assert_eq!(index.index_names(), [PathBuf::from(&long_name)]);
-
-    let err = gix_pack::multi_index::File::from_data(
-        valid_multi_index_with_index_name(long_name.as_bytes()),
-        PathBuf::from("fuzzed-long-name.midx"),
-        Some(0),
-    )
-    .err()
-    .expect("multi-index pack names larger than a zero allocation limit must be rejected");
-    assert_eq!(
-        err.classify().find_map(|classification| match classification.class() {
-            gix_error::Class::ResourceExhaustion(kind) => Some(kind),
-            _ => None,
-        }),
-        Some(gix_error::ResourceExhaustionKind::AllocationLimit),
-        "an application limit doesn't make otherwise valid input corrupt"
-    );
-    insta::assert_debug_snapshot!(err, "the error explains the allocation-limit failure", @"Pack names require more memory than allowed");
-    Ok(())
-}
-
-/// Reproducer for the fuzz target OOM case: the harness uses an allocation cap so attacker-controlled
-/// index counts must fail deterministically before reserving absurd `Vec<PathBuf>` capacities.
-#[test]
-fn absurd_pack_count_is_rejected_with_fuzz_alloc_limit() {
+fn impossible_pack_count_is_rejected_before_reserving() {
     let err = gix_pack::multi_index::File::from_data(
         multi_index_with_absurd_pack_count(),
         PathBuf::from("fuzzed-absurd-pack-count.midx"),
-        Some(0),
     )
     .err()
-    .expect("an absurd pack count must be rejected under a zero allocation limit");
+    .expect("an impossible pack count must be rejected before reserving");
     assert!(
         err.is_corrupted(),
         "a pack count which cannot fit in the available name data is corrupt input"
@@ -108,7 +69,6 @@ fn out_of_bounds_pack_indices_are_rejected_on_access() -> gix_testtools::TestRes
         let index = gix_pack::multi_index::File::from_data(
             multi_index_with_offset(b"a.idx", pack_index, 0, None),
             PathBuf::from("invalid-pack-index.midx"),
-            None,
         )?;
         assert_eq!(
             index.lookup(gix_hash::Kind::Sha1.null()),
@@ -140,7 +100,6 @@ fn out_of_bounds_large_offsets_are_rejected_on_access() -> gix_testtools::TestRe
         let index = gix_pack::multi_index::File::from_data(
             multi_index_with_offset(b"a.idx", 0, (1 << 31) | ordinal, Some(&[1 << 32])),
             PathBuf::from("invalid-large-offset.midx"),
-            None,
         )?;
         assert_eq!(
             index.lookup(gix_hash::Kind::Sha1.null()),
@@ -171,7 +130,6 @@ fn out_of_bounds_entry_indices_are_validation_errors() -> gix_testtools::TestRes
     let index = gix_pack::multi_index::File::from_data(
         valid_multi_index_with_index_name(b"a.idx"),
         PathBuf::from("valid.midx"),
-        None,
     )?;
     for entry_index in [index.num_objects(), u32::MAX] {
         let err = index
@@ -196,7 +154,7 @@ fn integrity_verification_rejects_corrupt_offset_references() -> gix_testtools::
         let mut hasher = gix_hash::hasher(gix_hash::Kind::Sha1);
         hasher.update(&data[..checksum_start]);
         data[checksum_start..].copy_from_slice(hasher.try_finalize()?.as_slice());
-        let index = gix_pack::multi_index::File::from_data(data, "invalid-reference.midx".into(), None)?;
+        let index = gix_pack::multi_index::File::from_data(data, "invalid-reference.midx".into())?;
         let err = index
             .verify_integrity_fast(
                 &mut gix_utils::progress::Discard,
@@ -224,7 +182,6 @@ fn high_bit_offsets_follow_the_presence_of_the_large_offset_chunk() -> gix_testt
         let index = gix_pack::multi_index::File::from_data(
             multi_index_with_offset(b"a.idx", 0, offset, large_offsets),
             PathBuf::from("valid-large-offset.midx"),
-            None,
         )?;
         assert_eq!(
             index.pack_id_and_pack_offset_at_index(0)?,

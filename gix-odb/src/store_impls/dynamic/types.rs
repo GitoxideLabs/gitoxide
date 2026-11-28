@@ -315,11 +315,7 @@ impl IndexAndPacks {
         }
     }
 
-    pub(crate) fn load_index(
-        &mut self,
-        object_hash: gix_hash::Kind,
-        alloc_limit_bytes: Option<usize>,
-    ) -> std::io::Result<()> {
+    pub(crate) fn load_index(&mut self, object_hash: gix_hash::Kind) -> std::io::Result<()> {
         match self {
             IndexAndPacks::Index(bundle) => bundle.index.load_strict(|path| {
                 gix_pack::index::File::at(path, object_hash)
@@ -328,7 +324,7 @@ impl IndexAndPacks {
             }),
             IndexAndPacks::MultiIndex(bundle) => {
                 bundle.multi_index.load_strict(|path| {
-                    gix_pack::multi_index::File::at(path, alloc_limit_bytes)
+                    gix_pack::multi_index::File::at(path)
                         .map(Arc::new)
                         .map_err(super::error_to_io)
                 })?;

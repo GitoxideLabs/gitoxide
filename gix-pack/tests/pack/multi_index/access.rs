@@ -10,7 +10,7 @@ fn multi_index_from_memory(object_hash: gix_hash::Kind) -> gix_pack::multi_index
             .expect("test fixture exists")
             .join(".git/objects/pack/multi-pack-index"),
     );
-    let file = gix_pack::multi_index::File::from_data(data, path, None).expect("valid multi-index");
+    let file = gix_pack::multi_index::File::from_data(data, path).expect("valid multi-index");
     assert_eq!(file.object_hash(), object_hash);
     file
 }

@@ -11,10 +11,6 @@ pub struct Options {
     pub slots: Slots,
     /// If false, no multi-pack indices will be used. If true, they will be used if their hash matches `object_hash`.
     pub use_multi_pack_index: bool,
-    /// The maximum size of a single allocation caused by user-controlled on-disk pack data.
-    ///
-    /// If `None`, no additional limit is enforced.
-    pub alloc_limit_bytes: Option<usize>,
     /// The current directory of the process at the time of instantiation.
     /// If unset, it will be retrieved using `gix_fs::current_dir(false)`.
     pub current_dir: Option<std::path::PathBuf>,
@@ -33,7 +29,6 @@ impl Default for Options {
         Options {
             slots: Default::default(),
             use_multi_pack_index: true,
-            alloc_limit_bytes: None,
             current_dir: None,
             loose_compression: gix_zlib::Compression::BEST_SPEED,
             shared_repository_permissions: gix_fs::SharedPermissions::Umask,
@@ -86,7 +81,6 @@ impl Store {
         Options {
             slots,
             use_multi_pack_index,
-            alloc_limit_bytes,
             current_dir,
             loose_compression,
             shared_repository_permissions,
@@ -112,10 +106,9 @@ impl Store {
                 let mut db_paths =
                     crate::alternate::resolve(objects_dir.clone(), &current_dir).map_err(super::error_to_io)?;
                 db_paths.insert(0, objects_dir.clone());
-                let num_slots =
-                    Store::collect_indices_and_mtime_sorted_by_size(db_paths, None, None, alloc_limit_bytes)
-                        .map_err(super::error_to_io)?
-                        .len();
+                let num_slots = Store::collect_indices_and_mtime_sorted_by_size(db_paths, None, None)
+                    .map_err(super::error_to_io)?
+                    .len();
 
                 let candidate = ((num_slots as f32 * multiplier) as usize).max(minimum);
                 if candidate > crate::store::types::PackId::max_indices() {
@@ -147,7 +140,6 @@ impl Store {
             }),
             use_multi_pack_index,
             object_hash,
-            alloc_limit_bytes,
             loose_compression,
             shared_repository_permissions,
             num_handles_stable: Default::default(),

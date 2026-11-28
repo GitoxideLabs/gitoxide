@@ -5,7 +5,7 @@ use std::{
     path::Path,
 };
 
-use gix_commitgraph::{Graph, Parent, Position as GraphPosition};
+use gix_commitgraph::{Graph, Position as GraphPosition};
 use gix_error::{ErrorExt, Message, Result, ResultExt, TestResult};
 use gix_testtools::scripted_fixture_read_only;
 
@@ -15,7 +15,7 @@ mod generation;
 #[test]
 fn missing_path_is_not_found() -> gix_testtools::TestResult {
     let dir = gix_testtools::tempfile::tempdir()?;
-    let err = gix_commitgraph::at(dir.path().join("missing"), gix_testtools::object_hash(), None)
+    let err = gix_commitgraph::at(dir.path().join("missing"), gix_testtools::object_hash())
         .err()
         .expect("a missing path cannot contain a commit-graph");
     insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&(err), &[(&(dir.path()).to_string_lossy(), "<tmp>")]), "callers can distinguish a missing optional commit-graph from other failures", @"
@@ -354,39 +354,6 @@ fn extra_edge_indices_cannot_overflow_or_run_past_the_chunk() -> TestResult {
 }
 
 #[test]
-fn parent_buffer_allocations_respect_the_limit() -> TestResult {
-    let repo = gix_testtools::scripted_fixture_writable("octopus_merges.sh")?;
-    let info = repo.path().join(".git/objects/info");
-    let data = std::fs::read(info.join("commit-graph"))?;
-    let parent_bytes = (chunk_range(&data, *b"EDGE")?.len() / 4 + 1) * 2 * std::mem::size_of::<Result<Parent>>();
-    for path in [&info, &info.join("commit-graph")] {
-        let err = Graph::at(path, gix_testtools::object_hash(), Some(1))
-            .err()
-            .expect("a tiny limit rejects EDGE-derived parent buffers");
-        assert!(
-            err.classify().any(|classification| classification.class()
-                == gix_error::Class::ResourceExhaustion(gix_error::ResourceExhaustionKind::AllocationLimit)),
-            "excessive parent data is a resource limit failure"
-        );
-        assert!(
-            Graph::at(path, gix_testtools::object_hash(), Some(parent_bytes - 1)).is_err(),
-            "a capacity estimate just above the limit is rejected"
-        );
-        assert!(
-            gix_commitgraph::at(path, gix_testtools::object_hash(), Some(1)).is_err(),
-            "the crate-level constructor forwards the allocation limit"
-        );
-        for limit in [None, Some(parent_bytes)] {
-            let graph = Graph::at(path, gix_testtools::object_hash(), limit)?;
-            graph.verify_integrity(|_| Ok::<_, Message>(()))?;
-            gix_commitgraph::at(path, gix_testtools::object_hash(), limit)?
-                .verify_integrity(|_| Ok::<_, Message>(()))?;
-        }
-    }
-    Ok(())
-}
-
-#[test]
 fn split_parents_cannot_point_into_later_files() -> TestResult {
     let data = fixture_commit_graph_bytes("single_commit.sh")?;
     let file = mapped_file(&data, "commit-graph")?;
@@ -487,13 +454,11 @@ fn graph_constructors_require_the_desired_hash_kind() -> TestResult {
     std::fs::write(graphs.join("commit-graph-chain"), format!("{hash}\n"))?;
 
     for path in [&info, &info.join("commit-graph"), &graphs, &graph_path] {
-        let graph = Graph::at(path, object_hash, None)?;
+        let graph = Graph::at(path, object_hash)?;
         assert_eq!(graph.object_hash(), object_hash, "the requested hash kind is accepted");
         for err in [
-            Graph::at(path, other_kind, None)
-                .err()
-                .expect("the hash kind does not match"),
-            gix_commitgraph::at(path, other_kind, None)
+            Graph::at(path, other_kind).err().expect("the hash kind does not match"),
+            gix_commitgraph::at(path, other_kind)
                 .err()
                 .expect("the crate-level constructor forwards the hash kind"),
         ] {
@@ -610,7 +575,7 @@ fn initialization_io_errors_keep_their_sources() -> TestResult {
     let missing = dir.path().join("missing");
     for err in [
         gix_commitgraph::File::at(&missing).expect_err("the graph file does not exist"),
-        Graph::at(&missing, gix_testtools::object_hash(), None)
+        Graph::at(&missing, gix_testtools::object_hash())
             .err()
             .expect("the graph path does not exist"),
         Graph::from_commit_graphs_dir(dir.path(), gix_testtools::object_hash())

@@ -356,7 +356,7 @@ fn corrupt_multi_index_reference(
     large_offset: bool,
 ) -> gix_error::TestResult {
     let original = std::fs::read(path)?;
-    let index = gix_pack::multi_index::File::from_data(original.clone(), path.to_owned(), None)?;
+    let index = gix_pack::multi_index::File::from_data(original.clone(), path.to_owned())?;
     let entry_index = index.lookup(object_id).expect("the object is indexed") as usize;
     let num_indices = index.num_indices();
     let object_hash = index.object_hash();
@@ -472,7 +472,7 @@ fn multi_index_corrupt_reference_is_fallible(large_offset: bool) -> gix_error::T
     let dir = crate::scripted_fixture_writable("make_repo_multi_index.sh")?;
     let objects = dir.path().join(".git/objects");
     let path = objects.join("pack/multi-pack-index");
-    let index = gix_pack::multi_index::File::at(&path, None)?;
+    let index = gix_pack::multi_index::File::at(&path)?;
     let object_id = index.oid_at_index(0).to_owned();
     let (pack_index, _) = index.pack_id_and_pack_offset_at_index(0)?;
     let valid_id = index
@@ -486,7 +486,7 @@ fn multi_index_corrupt_reference_is_fallible(large_offset: bool) -> gix_error::T
     corrupt_multi_index_reference(&path, &object_id, large_offset)?;
 
     // Loading must not reject the MIDX and silently fall back to the valid plain indices.
-    let index = gix_pack::multi_index::File::at(&path, None)?;
+    let index = gix_pack::multi_index::File::at(&path)?;
     assert_eq!(
         index.oid_at_index(0),
         object_id,
@@ -578,7 +578,7 @@ fn multi_index_pack_generation_is_fallible(large_offset: bool) -> gix_error::Tes
     let dir = crate::scripted_fixture_writable("make_repo_multi_index.sh")?;
     let objects = dir.path().join(".git/objects");
     let path = objects.join("pack/multi-pack-index");
-    let index = gix_pack::multi_index::File::at(&path, None)?;
+    let index = gix_pack::multi_index::File::at(&path)?;
     let entries = index.iter().collect::<gix_error::Result<Vec<_>>>()?;
     let (delta_id, base_id, unrelated_id) = 'packs: {
         for (pack_index, name) in index.index_names().iter().enumerate() {
@@ -734,10 +734,7 @@ fn pack_location_allocation_failures_are_resource_exhaustion() -> gix_testtools:
     use gix_pack::{Find as _, data};
     use std::io::Write as _;
 
-    for (size, limit, classification) in [
-        (8192, Some(4096), ResourceExhaustionKind::AllocationLimit),
-        (u64::MAX, None, ResourceExhaustionKind::AllocationFailure),
-    ] {
+    for (size, classification) in [(u64::MAX, ResourceExhaustionKind::AllocationFailure)] {
         let dir = gix_testtools::tempfile::tempdir()?;
         let pack_dir = dir.path().join("pack");
         std::fs::create_dir(&pack_dir)?;
@@ -774,10 +771,7 @@ fn pack_location_allocation_failures_are_resource_exhaustion() -> gix_testtools:
             dir.path(),
             object_hash,
             [],
-            gix_odb::store::init::Options {
-                alloc_limit_bytes: limit,
-                ..Default::default()
-            },
+            gix_odb::store::init::Options { ..Default::default() },
         )?;
         handle.prevent_pack_unload();
         let err = handle
@@ -788,7 +782,7 @@ fn pack_location_allocation_failures_are_resource_exhaustion() -> gix_testtools:
                 && err
                     .classify()
                     .all(|marker| marker.class() == Class::ResourceExhaustion(classification)),
-            "size conversion, reservation, and configured limits are classified only as resource exhaustion"
+            "size conversion and reservation are classified only as resource exhaustion"
         );
         assert!(
             !err.is_corrupted(),
@@ -804,13 +798,7 @@ fn pack_location_allocation_failures_are_resource_exhaustion() -> gix_testtools:
             .filter_map(|error| error.downcast_ref::<Message>())
             .find(|diagnostic| diagnostic.message.starts_with("Cannot store pack entry"))
             .expect("the failed allocation has a diagnostic");
-        if limit.is_some() {
-            assert_eq!(
-                err.to_string(),
-                "Cannot store pack entry in memory: allocation limit exceeded",
-                "allocation limits retain their diagnostic without metadata suffixes"
-            );
-        } else if usize::try_from(size).is_err() {
+        if usize::try_from(size).is_err() {
             assert_eq!(
                 diagnostic.message,
                 format!(
@@ -863,7 +851,7 @@ fn pack_location_preserves_native_load_errors() -> gix_testtools::TestResult {
 
     let dir = crate::scripted_fixture_writable("make_repo_multi_index.sh")?;
     let objects = dir.path().join(".git/objects");
-    let index = gix_pack::multi_index::File::at(objects.join("pack/multi-pack-index"), None)?;
+    let index = gix_pack::multi_index::File::at(objects.join("pack/multi-pack-index"))?;
     let object_id = index.oid_at_index(0).to_owned();
     let (pack_index, _) = index.pack_id_and_pack_offset_at_index(0)?;
     let pack_path = objects

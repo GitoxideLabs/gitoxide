@@ -29,11 +29,6 @@ pub struct Options<F> {
     pub thread_limit: Option<usize>,
     /// The kinds of safety checks to perform.
     pub check: SafetyCheck,
-    /// Limit decoded-object and delta buffers during delta-tree traversal to this many bytes. Sorted index entries and
-    /// each delta-tree item buffer may use up to 64 times this limit; speculative tree preallocation stays within it.
-    /// This is a defensive per-buffer heuristic, not a total memory budget; callers should tune it for their input.
-    /// Lookup traversal uses the pack's allocation limit. `Some(0)` rejects all non-empty allocations covered by this limit.
-    pub alloc_limit_bytes: Option<usize>,
     /// A function to create a pack cache
     pub make_pack_lookup_cache: F,
 }
@@ -44,7 +39,6 @@ impl Default for Options<fn() -> crate::cache::Never> {
             check: Default::default(),
             traversal: Default::default(),
             thread_limit: None,
-            alloc_limit_bytes: None,
             make_pack_lookup_cache: || crate::cache::Never,
         }
     }
@@ -93,7 +87,6 @@ where
             traversal,
             thread_limit,
             check,
-            alloc_limit_bytes,
             make_pack_lookup_cache,
         }: Options<F>,
     ) -> Result<Outcome>
@@ -120,11 +113,7 @@ where
                 processor,
                 progress,
                 should_interrupt,
-                with_index::Options {
-                    check,
-                    thread_limit,
-                    alloc_limit_bytes,
-                },
+                with_index::Options { check, thread_limit },
             ),
         }
     }

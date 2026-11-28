@@ -384,7 +384,6 @@ impl TryFrom<&super::Store> for super::Store {
             crate::store::init::Options {
                 slots: s.slots,
                 use_multi_pack_index: false,
-                alloc_limit_bytes: s.alloc_limit_bytes,
                 current_dir: s.current_dir.clone().into(),
                 loose_compression: s.loose_compression,
                 shared_repository_permissions: s.shared_repository_permissions,

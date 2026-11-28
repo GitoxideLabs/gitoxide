@@ -185,7 +185,6 @@ where
                         traversal,
                         thread_limit,
                         check: index::traverse::SafetyCheck::All,
-                        alloc_limit_bytes: pack.alloc_limit_bytes,
                         make_pack_lookup_cache,
                     },
                 )

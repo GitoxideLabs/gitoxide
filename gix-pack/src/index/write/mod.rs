@@ -91,9 +91,6 @@ pub(super) mod function {
     /// * `root_progress` is the top-level progress to stay informed about the progress of this potentially long-running
     ///   computation.
     /// * `object_hash` defines what kind of object hash we write into the index file.
-    /// * `alloc_limit_bytes` limits decoded-object and delta buffers while computing object IDs. Delta-tree item buffers
-    ///   may grow to 64 times this limit, while speculative preallocation stays within it. This is a defensive
-    ///   per-buffer heuristic to tune for the input, not a total memory budget. `None` disables the limit.
     /// * `pack_version` is the version of the underlying pack for which `entries` are read. It's used in case none of these objects are provided
     ///   to compute a pack-hash.
     ///
@@ -113,7 +110,6 @@ pub(super) mod function {
         out: &mut dyn io::Write,
         should_interrupt: &AtomicBool,
         object_hash: gix_hash::Kind,
-        alloc_limit_bytes: Option<usize>,
         pack_version: crate::data::Version,
     ) -> Result<Outcome>
     where
@@ -132,7 +128,7 @@ pub(super) mod function {
         let mut last_seen_trailer = None;
         let (anticipated_num_objects, upper_bound) = entries.size_hint();
         let worst_case_num_objects_after_thin_pack_resolution = upper_bound.unwrap_or(anticipated_num_objects);
-        let mut tree = Tree::with_capacity(worst_case_num_objects_after_thin_pack_resolution, alloc_limit_bytes)?;
+        let mut tree = Tree::with_capacity(worst_case_num_objects_after_thin_pack_resolution)?;
         let indexing_start = std::time::Instant::now();
 
         root_progress.init(Some(4), progress::steps());
@@ -237,7 +233,6 @@ pub(super) mod function {
                     thread_limit,
                     should_interrupt,
                     object_hash,
-                    alloc_limit_bytes,
                 },
             )?;
             root_progress.inc();

@@ -117,22 +117,10 @@ fn exact_vec<T>(capacity: usize) -> Vec<T> {
     v
 }
 
-/// Many small objects can require larger metadata buffers than any one decoded object.
-fn metadata_alloc_limit(alloc_limit_bytes: Option<usize>) -> Option<usize> {
-    // shortcut: a fixed multiplier still caps object count; use a separate budget if independent bounds are needed.
-    alloc_limit_bytes.map(|limit| limit.saturating_mul(64))
-}
-
-fn try_exact_vec<T>(capacity: usize, alloc_limit_bytes: Option<usize>) -> Result<Vec<T>> {
-    use gix_error::{OptionExt, ResourceExhaustionKind, ResultExt, bail, resource_exhaustion};
+fn try_exact_vec<T>(capacity: usize) -> Result<Vec<T>> {
+    use gix_error::{ResourceExhaustionKind, ResultExt, resource_exhaustion};
 
     let allocation_error = |kind| resource_exhaustion(kind, "Pack traversal metadata is too large to fit in memory");
-    let allocation_bytes = capacity
-        .checked_mul(std::mem::size_of::<T>())
-        .ok_or_raise(|| allocation_error(ResourceExhaustionKind::AllocationFailure))?;
-    if alloc_limit_bytes.is_some_and(|limit| allocation_bytes > limit) {
-        bail!(allocation_error(ResourceExhaustionKind::AllocationLimit));
-    }
     let mut v = Vec::new();
     v.try_reserve_exact(capacity)
         .or_raise(|| allocation_error(ResourceExhaustionKind::AllocationFailure))?;
@@ -148,8 +136,7 @@ fn fan_is_monotonically_increasing(fan: &[u32]) -> bool {
 mod tests {
     #[test]
     fn traversal_metadata_allocation_failure_is_reported() {
-        let err =
-            super::try_exact_vec::<u64>(usize::MAX, None).expect_err("metadata capacity multiplication overflows");
+        let err = super::try_exact_vec::<u64>(usize::MAX).expect_err("metadata capacity multiplication overflows");
         assert!(
             err.classify().any(|classification| {
                 classification.class()

@@ -279,11 +279,12 @@ fn enforced_full_trust_keeps_the_configured_checkout() -> TestResult {
 
 #[test]
 fn enforced_reduced_trust_survives_safe_directory_and_reload() -> TestResult {
-    use gix::sec::Trust;
+    use gix::{bstr::ByteSlice, config::tree::Diff, sec::Trust};
     let fixture = gix_testtools::scripted_fixture_read_only("make_repository_trust.sh")?;
     let path = fixture.join("promoted");
     let mut options = crate::restricted()
         .with_enforced_trust(Trust::Reduced)
+        .config_overrides([Diff::ALGORITHM.validated_assignment("minimal".into())?])
         .system_config_path(fixture.join("trusted-worktrees.config"));
     options.permissions.config.system = true;
     let mut repo = gix::open_opts(&path, options)?;
@@ -291,6 +292,19 @@ fn enforced_reduced_trust_survives_safe_directory_and_reload() -> TestResult {
         repo.git_dir_trust(),
         Trust::Reduced,
         "safe.directory cannot promote enforced trust"
+    );
+    assert!(
+        repo.config_snapshot()
+            .plumbing()
+            .to_bstring()
+            .contains_str("algorithm = histogram # Bound the search on repeated lines"),
+        "the serialized diff setting explains why Histogram was selected"
+    );
+    #[cfg(feature = "blob-diff")]
+    assert_eq!(
+        repo.diff_algorithm()?,
+        gix::diff::blob::Algorithm::Histogram,
+        "reduced trust selects Histogram over the configured algorithm"
     );
     assert_eq!(
         repo.workdir(),
@@ -312,15 +326,36 @@ fn enforced_reduced_trust_survives_safe_directory_and_reload() -> TestResult {
         Trust::Full,
         "clearing enforcement restores automatic trust"
     );
+    #[cfg(feature = "blob-diff")]
+    assert_eq!(
+        repo.diff_algorithm()?,
+        gix::diff::blob::Algorithm::MyersMinimal,
+        "full trust restores the configured diff algorithm"
+    );
     Ok(())
 }
 
 #[test]
 fn enforced_trust_is_local_to_the_opened_worktree() -> TestResult {
-    use gix::sec::Trust;
+    use gix::{config::tree::Core, sec::Trust};
     let fixture = gix_testtools::scripted_fixture_read_only("make_worktree_repo.sh")?;
-    let options = || crate::restricted().with_enforced_trust(Trust::Reduced);
+    let options = || {
+        crate::restricted()
+            .with_enforced_trust(Trust::Reduced)
+            .config_overrides_by_trust(|trust, _| {
+                let abbrev = match trust {
+                    Trust::Reduced => "12",
+                    Trust::Full => "14",
+                };
+                Ok(vec![Core::ABBREV.validated_assignment(abbrev.into())?])
+            })
+    };
     let mut main = gix::open_opts(fixture.join("repo"), options())?;
+    assert_eq!(
+        main.config_snapshot().integer("core.abbrev"),
+        Some(12),
+        "the main repository applies its own trust policy"
+    );
     let linked = main
         .worktree_proxy_by_id("wt-a")?
         .expect("the fixture has a registered worktree")
@@ -329,6 +364,11 @@ fn enforced_trust_is_local_to_the_opened_worktree() -> TestResult {
         linked.git_dir_trust(),
         Trust::Full,
         "a linked checkout determines its own trust"
+    );
+    assert_eq!(
+        linked.config_snapshot().integer("core.abbrev"),
+        Some(14),
+        "the linked checkout reruns the same callback with its own trust"
     );
     let linked = gix::open_opts(fixture.join("wt-a"), options())?;
     assert_eq!(
@@ -451,7 +491,170 @@ fn late_worktree_demotion_applies_to_local_and_worktree_configuration() -> TestR
             Some("refs/namespaces/system/".into()),
             "{system_config}: the reference store falls back to the trusted namespace"
         );
+        assert_eq!(
+            repo.config_snapshot()
+                .integer("gitoxide.core.defaultPackCacheMemoryLimit"),
+            Some(16 * 1024 * 1024),
+            "{system_config}: the cache policy uses final reduced trust"
+        );
     }
+    Ok(())
+}
+
+#[test]
+fn reduced_trust_caps_worker_counts() -> TestResult {
+    use gix::{
+        config::tree::{Checkout, Index, Pack},
+        sec::Trust,
+    };
+
+    let fixture = gix_testtools::scripted_fixture_read_only("make_basic_repo.sh")?;
+    let automatic = gix::parallel::num_threads(None).min(4) as i64;
+    for (overrides, expected) in [
+        (None, [automatic; 3]),
+        (
+            Some([
+                Pack::THREADS.validated_assignment("0".into())?,
+                Index::THREADS.validated_assignment("true".into())?,
+                Checkout::WORKERS.validated_assignment("-1".into())?,
+            ]),
+            [automatic; 3],
+        ),
+        (
+            Some([
+                Pack::THREADS.validated_assignment("2".into())?,
+                Index::THREADS.validated_assignment("false".into())?,
+                Checkout::WORKERS.validated_assignment("3".into())?,
+            ]),
+            [2, 1, 3],
+        ),
+        (
+            Some([
+                Pack::THREADS.validated_assignment("30".into())?,
+                Index::THREADS.validated_assignment("31".into())?,
+                Checkout::WORKERS.validated_assignment("32".into())?,
+            ]),
+            [4; 3],
+        ),
+    ] {
+        let repo = gix::open::Options::isolated()
+            .with_enforced_trust(Trust::Reduced)
+            .cli_overrides(overrides.into_iter().flatten())
+            .open(&fixture)?;
+        let snapshot = repo.config_snapshot();
+        let config = snapshot.plumbing();
+        assert_eq!(config.integer("pack.threads")?, Some(expected[0]), "cap pack workers");
+        assert_eq!(
+            config.integer("checkout.workers")?,
+            Some(expected[2]),
+            "cap checkout workers"
+        );
+        let index_threads = config.string("index.threads").expect("a configured index worker count");
+        assert_eq!(
+            Index::THREADS.try_into_index_threads(index_threads)? as i64,
+            expected[1],
+            "cap index decoding workers without changing an explicit false"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn config_overrides_by_trust_take_precedence_and_rerun_on_reload() -> TestResult {
+    use gix::{
+        bstr::ByteSlice,
+        config::tree::{Core, Pack, gitoxide},
+        error::ErrorExt,
+        sec::Trust,
+    };
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering::Relaxed},
+    };
+
+    if gix_testtools::run_in_isolated_process()? {
+        return Ok(());
+    }
+    let _environment = gix_testtools::Env::new().set("GIX_OBJECT_CACHE_MEMORY", "8m");
+    let fixture = gix_testtools::scripted_fixture_read_only("make_config_repos.sh")?;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut options = gix::open::Options::isolated()
+        .with_enforced_trust(Trust::Reduced)
+        .cli_overrides([Core::DELTA_BASE_CACHE_LIMIT.validated_assignment("4m".into())?])
+        .config_overrides([
+            gitoxide::Objects::CACHE_LIMIT.validated_assignment("6m".into())?,
+            Pack::THREADS.validated_assignment("32".into())?,
+        ])
+        .config_overrides_by_trust({
+            let calls = Arc::clone(&calls);
+            move |trust, config| {
+                calls.fetch_add(1, Relaxed);
+                assert_eq!(
+                    config.integer("core.deltaBaseCacheLimit")?,
+                    Some(4 * 1024 * 1024),
+                    "the callback can inspect command-line configuration"
+                );
+                assert_eq!(
+                    config.integer("gitoxide.objects.cacheLimit")?,
+                    Some(8 * 1024 * 1024),
+                    "the callback can inspect environment overrides"
+                );
+                Ok(match trust {
+                    Trust::Reduced => vec![gitoxide::Objects::CACHE_LIMIT.validated_assignment("0".into())?],
+                    Trust::Full => Vec::new(),
+                })
+            }
+        });
+    options.permissions.env.objects = gix::sec::Permission::Allow;
+    let mut repo = options.open(fixture.join("object-caches"))?;
+    let snapshot = repo.config_snapshot();
+    let (value, section) = snapshot
+        .plumbing()
+        .raw_value_with_section_filter("gitoxide.objects.cacheLimit", gix::config::section::is_trusted)?;
+    assert_eq!(
+        value, "0",
+        "the policy takes precedence over environment and API overrides"
+    );
+    assert_eq!(
+        section.meta().source,
+        gix::config::Source::Api,
+        "the override is API configuration"
+    );
+    assert!(
+        section
+            .to_bstring()
+            .contains_str("# Applied by the repository opening trust policy"),
+        "serialized overrides explain their origin"
+    );
+    assert!(
+        !repo.objects.has_object_cache(),
+        "the policy applies before opening the object store"
+    );
+    assert_eq!(
+        snapshot.integer("core.deltaBaseCacheLimit"),
+        Some(4 * 1024 * 1024),
+        "the caller's policy replaces the default policy"
+    );
+    assert_eq!(
+        snapshot.integer("pack.threads"),
+        Some(32),
+        "a custom policy also replaces the caps"
+    );
+    assert_eq!(calls.load(Relaxed), 1, "the policy runs once per open");
+
+    repo.reload_with(|options| options.with_enforced_trust(Trust::Full))?;
+    assert_eq!(
+        repo.config_snapshot().integer("gitoxide.objects.cacheLimit"),
+        Some(8 * 1024 * 1024),
+        "a no-op policy restores the underlying value on reload"
+    );
+    assert_eq!(calls.load(Relaxed), 2, "reload reruns the same callback");
+    let err = repo
+        .reload_with(|options| {
+            options.config_overrides_by_trust(|_, _| Err(gix::error::not_found("trust policy error").raise()))
+        })
+        .expect_err("a failing policy stops the open");
+    assert!(err.is_not_found(), "the policy error retains its classification");
     Ok(())
 }
 
@@ -1336,12 +1539,13 @@ mod submodules {
 mod object_caches {
 
     use crate::util::named_subrepo_opts;
+    use gix::config::tree::{Core, Key, gitoxide};
     use gix_testtools::TestResult;
 
     #[test]
     fn default_git_and_custom_caches() -> TestResult {
         let opts = gix::open::Options::isolated();
-        let repo = named_subrepo_opts("make_config_repos.sh", "object-caches", opts)?;
+        let mut repo = named_subrepo_opts("make_config_repos.sh", "object-caches", opts)?;
         assert_eq!(
             repo.objects.has_object_cache(),
             cfg!(feature = "max-performance"),
@@ -1352,6 +1556,81 @@ mod object_caches {
             cfg!(feature = "max-performance"),
             "configured pack caching requires the performance feature"
         );
+        let overrides = [
+            Core::DELTA_BASE_CACHE_LIMIT.validated_assignment("128m".into())?,
+            gitoxide::Core::DEFAULT_PACK_CACHE_MEMORY_LIMIT.validated_assignment("128m".into())?,
+            gitoxide::Objects::CACHE_LIMIT.validated_assignment("128m".into())?,
+        ];
+        repo.reload_with(|options| {
+            options
+                .with_enforced_trust(gix::sec::Trust::Reduced)
+                .config_overrides(overrides)
+        })?;
+        for key in [
+            "core.deltaBaseCacheLimit",
+            "gitoxide.core.defaultPackCacheMemoryLimit",
+            "gitoxide.objects.cacheLimit",
+        ] {
+            assert_eq!(repo.config_snapshot().integer(key), Some(16 * 1024 * 1024), "cap {key}");
+        }
+        assert_eq!(repo.objects.has_object_cache(), cfg!(feature = "max-performance"));
+        assert_eq!(repo.objects.has_pack_cache(), cfg!(feature = "max-performance"));
+
+        repo.reload_with(|options| options.with_enforced_trust(gix::sec::Trust::Full))?;
+        assert_eq!(
+            repo.config_snapshot().integer("core.deltaBaseCacheLimit"),
+            Some(128 * 1024 * 1024),
+            "reopening with full trust removes the cap"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn reduced_trust_preserves_small_and_disabled_caches() -> TestResult {
+        let fixture = gix_testtools::scripted_fixture_read_only("make_basic_repo.sh")?;
+        let options = || gix::open::Options::isolated().with_enforced_trust(gix::sec::Trust::Reduced);
+        let repo = options().open(&fixture)?;
+        let config = repo.config_snapshot();
+        assert_eq!(
+            config.integer("core.deltaBaseCacheLimit"),
+            None,
+            "keep the default pack cache selected"
+        );
+        assert_eq!(
+            config.integer("gitoxide.objects.cacheLimit"),
+            None,
+            "don't enable an object cache by default"
+        );
+        assert_eq!(repo.objects.has_pack_cache(), cfg!(feature = "max-performance"));
+        assert!(!repo.objects.has_object_cache(), "the object cache defaults to off");
+
+        let repo = options()
+            .config_overrides([
+                Core::DELTA_BASE_CACHE_LIMIT.validated_assignment("0".into())?,
+                gitoxide::Core::DEFAULT_PACK_CACHE_MEMORY_LIMIT.validated_assignment("1m".into())?,
+                gitoxide::Objects::CACHE_LIMIT.validated_assignment("2m".into())?,
+            ])
+            .open(&fixture)?;
+        let config = repo.config_snapshot();
+        assert_eq!(
+            config.integer("core.deltaBaseCacheLimit"),
+            Some(0),
+            "an explicit zero still disables the pack cache"
+        );
+        assert_eq!(
+            config.integer("gitoxide.core.defaultPackCacheMemoryLimit"),
+            Some(1024 * 1024),
+            "keep a lower pack cache budget"
+        );
+        assert_eq!(
+            config.integer("gitoxide.objects.cacheLimit"),
+            Some(2 * 1024 * 1024),
+            "keep a lower object cache budget"
+        );
+        assert!(
+            !repo.objects.has_pack_cache(),
+            "the delta cache setting takes precedence over the default pack cache limit"
+        );
         Ok(())
     }
 
@@ -1361,128 +1640,6 @@ mod object_caches {
         let repo = named_subrepo_opts("make_config_repos.sh", "disabled-object-caches", opts)?;
         assert!(!repo.objects.has_object_cache());
         assert!(!repo.objects.has_pack_cache());
-        Ok(())
-    }
-}
-
-mod pack_alloc_limit_bytes {
-    use gix_odb::HeaderExt;
-    use gix_odb::find::Header;
-    use gix_sec::Trust;
-    use gix_testtools::TestResult;
-
-    use crate::util::repo_opts;
-
-    #[test]
-    fn limits_packed_object_allocations() -> TestResult {
-        let repo = repo_opts("make_packed_and_loose.sh", crate::util::restricted())?.to_thread_local();
-        let packed_only_id = repo
-            .objects
-            .iter()?
-            .find_map(|id| {
-                let id = id.ok()?;
-                matches!(repo.objects.header(id).ok()?, Header::Packed(_)).then_some(id)
-            })
-            .expect("fixture contains packed-only objects");
-        assert!(
-            repo.find_object(packed_only_id).is_ok(),
-            "without a configured allocation limit packed objects are readable"
-        );
-
-        let limited = repo_opts(
-            "make_packed_and_loose.sh",
-            gix::open::Options::isolated().config_overrides(["gitoxide.objects.allocLimit=1"]),
-        )?
-        .to_thread_local();
-        assert!(
-            limited.find_object(packed_only_id).is_err(),
-            "a tiny allocation limit rejects packed object reads"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn limits_loose_object_allocations() -> TestResult {
-        let repo = repo_opts("make_packed_and_loose.sh", crate::util::restricted())?.to_thread_local();
-        let loose_only_blob_id = repo
-            .objects
-            .iter()?
-            .find_map(|id| {
-                let id = id.ok()?;
-                match repo.objects.header(id).ok()? {
-                    Header::Loose {
-                        kind: gix_object::Kind::Blob,
-                        size,
-                    } if size > 1 => Some(id),
-                    _ => None,
-                }
-            })
-            .expect("fixture contains loose-only blobs");
-        assert!(
-            repo.find_object(loose_only_blob_id).is_ok(),
-            "without a configured allocation limit loose objects are readable"
-        );
-
-        let limited = repo_opts(
-            "make_packed_and_loose.sh",
-            gix::open::Options::isolated().config_overrides(["gitoxide.objects.allocLimit=1"]),
-        )?
-        .to_thread_local();
-        assert!(
-            matches!(
-                limited.find_header(loose_only_blob_id)?,
-                Header::Loose {
-                    kind: gix_object::Kind::Blob,
-                    size,
-                } if size > 1
-            ),
-            "loose headers can always be found, independently of the allocation limit"
-        );
-        assert!(
-            limited.find_object(loose_only_blob_id).is_err(),
-            "a tiny allocation limit rejects loose object reads"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn reduced_trust_sets_a_default_limit_unless_disabled() -> TestResult {
-        let base = repo_opts("make_packed_and_loose.sh", crate::util::restricted())?.to_thread_local();
-        let packed_only_id = base
-            .objects
-            .iter()?
-            .map(std::result::Result::unwrap)
-            .next()
-            .expect("fixture contains packed-only objects");
-        assert!(
-            base.find_object(packed_only_id).is_ok(),
-            "trusted repositories keep reading packed objects without an implicit limit"
-        );
-
-        let reduced = repo_opts(
-            "make_packed_and_loose.sh",
-            crate::util::restricted()
-                .with_trust(Trust::Reduced)
-                .config_overrides(["gitoxide.objects.allocLimitIfReducedTrust=1"]),
-        )?
-        .to_thread_local();
-        assert!(
-            reduced.find_object(packed_only_id).is_err(),
-            "reduced trust applies the configured fallback allocation limit if none was configured"
-        );
-
-        let reduced_without_fallback = repo_opts(
-            "make_packed_and_loose.sh",
-            crate::util::restricted()
-                .with_trust(Trust::Reduced)
-                .config_overrides(["gitoxide.objects.allocLimitIfReducedTrust=0"]),
-        )?
-        .to_thread_local();
-        assert!(
-            reduced_without_fallback.find_object(packed_only_id).is_ok(),
-            "the reduced-trust fallback can be disabled explicitly"
-        );
-
         Ok(())
     }
 }

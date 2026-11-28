@@ -128,7 +128,7 @@ impl Cache {
         )?;
         #[cfg(feature = "revision")]
         let object_kind_hint = util::disambiguate_hint(&config, lenient_config)?;
-        let (static_pack_cache_limit_bytes, pack_cache_bytes, object_cache_bytes, alloc_limit_bytes) =
+        let (static_pack_cache_limit_bytes, pack_cache_bytes, object_cache_bytes) =
             util::parse_object_caches(&config, lenient_config, filter_config_section)?;
         let loose_compression = super::access::loose_compression(&config, lenient_config, filter_config_section)?;
         let shared_repository_permissions =
@@ -146,7 +146,6 @@ impl Cache {
             static_pack_cache_limit_bytes,
             pack_cache_bytes,
             object_cache_bytes,
-            alloc_limit_bytes,
             loose_compression,
             reflog,
             shared_repository_permissions,
@@ -225,7 +224,6 @@ impl Cache {
             self.static_pack_cache_limit_bytes,
             self.pack_cache_bytes,
             self.object_cache_bytes,
-            self.alloc_limit_bytes,
         ) = object_caches;
         self.loose_compression = loose_compression;
 
@@ -761,10 +759,6 @@ fn apply_environment_overrides(
                 },
                 {
                     let key = &gitoxide::Objects::CACHE_LIMIT;
-                    (env(key), key.name)
-                },
-                {
-                    let key = &gitoxide::Objects::ALLOC_LIMIT;
                     (env(key), key.name)
                 },
             ],

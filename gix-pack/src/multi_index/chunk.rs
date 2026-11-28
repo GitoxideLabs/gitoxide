@@ -16,12 +16,7 @@ pub mod index_names {
     /// `num_packs`
     ///: The number of index names expected to be present in `chunk`.
     ///
-    /// `alloc_limit_bytes`
-    ///: Limits allocations caused by attacker-controlled on-disk multi-index data.
-    ///  It is used to reject reserving the output `Vec<PathBuf>` if its capacity estimate exceeds the limit,
-    ///  and to reject any single path entry whose byte length exceeds the limit before turning it into a `PathBuf`.
-    ///  Use `None` to disable this limit.
-    pub fn from_bytes(mut chunk: &[u8], num_packs: u32, alloc_limit_bytes: Option<usize>) -> Result<Vec<PathBuf>> {
+    pub fn from_bytes(mut chunk: &[u8], num_packs: u32) -> Result<Vec<PathBuf>> {
         use gix_error::{OptionExt, ResourceExhaustionKind, ResultExt};
 
         let mut out = Vec::new();
@@ -34,20 +29,8 @@ pub mod index_names {
         if num_packs > chunk.len() {
             bail!(corruption("Pack count exceeds the available pack-name data"));
         }
-        let vec_allocation = num_packs.checked_mul(std::mem::size_of::<PathBuf>()).ok_or_raise(|| {
-            resource_exhaustion(
-                ResourceExhaustionKind::AllocationFailure,
-                "Pack names require more memory than can be represented",
-            )
-        })?;
-        if alloc_limit_bytes.is_some_and(|limit| vec_allocation > limit) {
-            bail!(resource_exhaustion(
-                ResourceExhaustionKind::AllocationLimit,
-                "Pack names require more memory than allowed",
-            ));
-        }
         out.try_reserve(num_packs)
-            .or_raise(|| gix_error::message("Pack names require more memory than can be reserved"))?;
+            .or_raise(|| gix_error::allocation_failure("Pack names require more memory than can be reserved"))?;
 
         for _ in 0..num_packs {
             let null_byte_pos = chunk
@@ -55,12 +38,6 @@ pub mod index_names {
                 .ok_or_raise(|| corruption("Each pack path name must be terminated with a null byte"))?;
 
             let path = &chunk[..null_byte_pos];
-            if alloc_limit_bytes.is_some_and(|limit| path.len() > limit) {
-                bail!(resource_exhaustion(
-                    ResourceExhaustionKind::AllocationLimit,
-                    "Pack path requires more memory than allowed",
-                ));
-            }
             let path = gix_path::from_byte_slice(path)
                 .or_raise(|| {
                     corruption(format!(

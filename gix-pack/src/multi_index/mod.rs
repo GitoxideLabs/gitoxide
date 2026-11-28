@@ -41,8 +41,6 @@ pub struct File<T = MMap> {
     /// The amount of pack files contained within
     num_indices: u32,
     num_objects: u32,
-    /// If `Some(limit)`, the maximum size of a single allocation caused by user-controlled on-disk pack data.
-    alloc_limit_bytes: Option<usize>,
 
     fan: [u32; 256],
     index_names: Vec<PathBuf>,

@@ -53,9 +53,6 @@ pub struct Options<'a, 's> {
     /// specifies what kind of hashes we expect to be stored in oid-delta entries, which is viable to decoding them
     /// with the correct size.
     pub object_hash: gix_hash::Kind,
-    /// If `Some`, rejects individual allocations above the given number of bytes while resolving decoded object and
-    /// delta result buffers. `Some(0)` rejects all non-empty allocations.
-    pub alloc_limit_bytes: Option<usize>,
 }
 
 /// The outcome of [`Tree::traverse()`]
@@ -103,7 +100,6 @@ where
             size_progress,
             should_interrupt,
             object_hash,
-            alloc_limit_bytes,
         }: Options<'_, '_>,
     ) -> Result<Outcome<T>>
     where
@@ -145,7 +141,6 @@ where
                 inspect_object,
                 ref_delta_children.clone(),
                 object_hash,
-                alloc_limit_bytes,
                 should_interrupt,
             )?;
         }

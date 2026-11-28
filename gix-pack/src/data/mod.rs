@@ -95,10 +95,6 @@ pub struct File<T = MMap> {
     /// The kind of hash contained within. This is entirely determined by the caller, and repositories have to know which hash to use
     /// based on their configuration.
     object_hash: gix_hash::Kind,
-    /// The maximum size of a single allocation caused by user-controlled on-disk pack data.
-    ///
-    /// If `None`, no additional limit is enforced.
-    pub alloc_limit_bytes: Option<usize>,
 }
 
 /// Information about the pack data file itself

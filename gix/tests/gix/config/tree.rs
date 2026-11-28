@@ -1685,28 +1685,6 @@ mod gitoxide {
             Ok(())
         }
     }
-    mod objects {
-        use gix::config::tree::{Key, gitoxide};
-        use gix_testtools::TestResult;
-
-        #[test]
-        fn alloc_limit() -> TestResult {
-            assert_eq!(
-                gitoxide::Objects::ALLOC_LIMIT.validated_assignment("16m".into())?,
-                "gitoxide.objects.allocLimit=16m"
-            );
-            Ok(())
-        }
-
-        #[test]
-        fn alloc_limit_if_reduced_trust() -> TestResult {
-            assert_eq!(
-                gitoxide::Objects::ALLOC_LIMIT_IF_REDUCED_TRUST.validated_assignment("16m".into())?,
-                "gitoxide.objects.allocLimitIfReducedTrust=16m"
-            );
-            Ok(())
-        }
-    }
 }
 
 #[cfg(any(

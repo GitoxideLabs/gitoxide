@@ -111,7 +111,6 @@ where
                         "collecting sorted index".into(),
                         ProgressId::CollectSortedIndexEntries.into(),
                     ),
-                    pack.alloc_limit_bytes,
                 )?;
 
                 let (chunk_size, thread_limit, available_cores) =

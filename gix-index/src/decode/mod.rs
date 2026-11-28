@@ -8,7 +8,7 @@ mod entries;
 ///
 pub mod header;
 
-use gix_error::{ResourceExhaustionKind, ResultExt, bail, corruption, message};
+use gix_error::{ResultExt, bail, corruption, message};
 use gix_parallel::InOrderIter;
 
 use crate::util::read_u32;
@@ -29,10 +29,6 @@ pub struct Options {
     ///
     /// We will abort reading this file if it doesn't match.
     pub expected_checksum: Option<gix_hash::ObjectId>,
-    /// Configure the maximum size of a single allocation caused by untrusted on-disk index data.
-    ///
-    /// Use `None` to disable the limit, which is also the default.
-    pub alloc_limit_bytes: Option<usize>,
 }
 
 impl State {
@@ -46,7 +42,6 @@ impl State {
             thread_limit,
             min_extension_block_in_bytes_for_threading,
             expected_checksum,
-            alloc_limit_bytes,
         }: Options,
     ) -> Result<(Self, Option<gix_hash::ObjectId>)> {
         let _span = gix_trace::detail!("gix_index::State::from_bytes()", options = ?_options);
@@ -66,14 +61,6 @@ impl State {
             object_hash,
             version,
         );
-        ensure_in_alloc_limit(
-            (num_entries as usize)
-                .checked_mul(std::mem::size_of::<Entry>())
-                .ok_or_else(|| allocation_error(ResourceExhaustionKind::AllocationFailure))?,
-            alloc_limit_bytes,
-        )?;
-        ensure_in_alloc_limit(path_backing_buffer_size, alloc_limit_bytes)?;
-
         let (entries, ext, data) = match start_of_extensions {
             Some(offset) if num_threads > 1 => {
                 let extensions_data = &data[offset..];
@@ -87,9 +74,7 @@ impl State {
                                     .name("gix-index.from_bytes.load-extensions".into())
                                     .spawn_scoped(
                                         scope,
-                                        gix_trace::in_thread(|| {
-                                            extension::decode::all(extensions_data, object_hash, alloc_limit_bytes)
-                                        }),
+                                        gix_trace::in_thread(|| extension::decode::all(extensions_data, object_hash)),
                                     )
                                     .expect("valid name")
                             }
@@ -190,7 +175,7 @@ impl State {
                         ),
                     };
                     let ext_res = extension_loading.map_or_else(
-                        || extension::decode::all(extensions_data, object_hash, alloc_limit_bytes),
+                        || extension::decode::all(extensions_data, object_hash),
                         |thread| thread.join().unwrap(),
                     );
                     (entries_res, ext_res)
@@ -206,7 +191,7 @@ impl State {
                     object_hash,
                     version,
                 )?;
-                let (ext, data) = extension::decode::all(data, object_hash, alloc_limit_bytes)?;
+                let (ext, data) = extension::decode::all(data, object_hash)?;
                 (entries, ext, data)
             }
         };
@@ -274,7 +259,7 @@ struct EntriesOutcome {
 fn vec_with_capacity<T>(capacity: usize) -> Result<Vec<T>> {
     let mut vec = Vec::new();
     vec.try_reserve(capacity)
-        .or_raise(|| message("Index data would require more memory than can be reserved"))?;
+        .or_raise(|| message("Index data would require more memory than can be reserved").allocation_failure())?;
     Ok(vec)
 }
 
@@ -335,15 +320,4 @@ pub(crate) fn stat(data: &[u8]) -> Option<(entry::Stat, &[u8])> {
         },
         data,
     ))
-}
-
-fn ensure_in_alloc_limit(size: usize, alloc_limit_bytes: Option<usize>) -> Result {
-    if alloc_limit_bytes.is_some_and(|limit| size > limit) {
-        return Err(allocation_error(ResourceExhaustionKind::AllocationLimit));
-    }
-    Ok(())
-}
-
-fn allocation_error(kind: ResourceExhaustionKind) -> Error {
-    message("Index data would require more memory than can be reserved").resource_exhaustion_error(kind)
 }

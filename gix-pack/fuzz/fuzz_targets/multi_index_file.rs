@@ -8,10 +8,8 @@ use gix_pack_fuzz::{empty_candidates, interrupt_flag, virtual_path};
 use libfuzzer_sys::fuzz_target;
 use std::hint::black_box;
 
-const ALLOC_LIMIT_BYTES: usize = 64 * 1024 * 1024;
-
 fn fuzz(input: &[u8]) -> Result<()> {
-    let index = match multi_index::File::from_data(input, virtual_path(".midx"), Some(ALLOC_LIMIT_BYTES)) {
+    let index = match multi_index::File::from_data(input, virtual_path(".midx")) {
         Ok(index) => index,
         Err(err) => {
             _ = black_box(err);

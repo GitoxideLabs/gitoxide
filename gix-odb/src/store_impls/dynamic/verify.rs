@@ -154,12 +154,10 @@ impl super::Store {
                         let data = match bundle.data.loaded() {
                             Some(pack) => pack.deref(),
                             None => {
-                                pack = pack::data::File::at(bundle.data.path(), self.object_hash)
-                                    .or_raise(|| {
-                                        Message::new("Could not open pack for verification")
-                                            .with("path", bundle.data.path())
-                                    })?
-                                    .with_alloc_limit_bytes(self.alloc_limit_bytes);
+                                pack = pack::data::File::at(bundle.data.path(), self.object_hash).or_raise(|| {
+                                    Message::new("Could not open pack for verification")
+                                        .with("path", bundle.data.path())
+                                })?;
                                 &pack
                             }
                         };
@@ -192,11 +190,10 @@ impl super::Store {
                         let index = match bundle.multi_index.loaded() {
                             Some(index) => index.deref(),
                             None => {
-                                index = pack::multi_index::File::at(bundle.multi_index.path(), self.alloc_limit_bytes)
-                                    .or_raise(|| {
-                                        Message::new("Could not open multi-pack index for verification")
-                                            .with("path", bundle.multi_index.path())
-                                    })?;
+                                index = pack::multi_index::File::at(bundle.multi_index.path()).or_raise(|| {
+                                    Message::new("Could not open multi-pack index for verification")
+                                        .with("path", bundle.multi_index.path())
+                                })?;
                                 &index
                             }
                         };

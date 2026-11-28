@@ -148,7 +148,7 @@ where
     ///
     /// Returns an error if any offset reference is corrupt or the offsets cannot be allocated.
     pub fn sorted_offsets(&self) -> Result<Vec<data::Offset>> {
-        let mut offsets = crate::try_exact_vec(self.num_objects as usize, None)?;
+        let mut offsets = crate::try_exact_vec(self.num_objects as usize)?;
         for index in 0..self.num_objects {
             offsets.push(self.pack_offset_at_index(index)?);
         }

@@ -7,11 +7,7 @@ pub(crate) fn header(data: &[u8]) -> (Signature, u32, &[u8]) {
     (signature.try_into().unwrap(), from_be_u32(size), data)
 }
 
-pub(crate) fn all(
-    maybe_beginning_of_extensions: &[u8],
-    object_hash: gix_hash::Kind,
-    alloc_limit_bytes: Option<usize>,
-) -> Result<(Outcome, &[u8])> {
+pub(crate) fn all(maybe_beginning_of_extensions: &[u8], object_hash: gix_hash::Kind) -> Result<(Outcome, &[u8])> {
     use gix_error::{ResultExt, message};
 
     let mut ext_iter = match extension::Iter::new_without_checksum(maybe_beginning_of_extensions, object_hash) {
@@ -23,13 +19,13 @@ pub(crate) fn all(
     for (signature, ext_data) in ext_iter.by_ref() {
         match signature {
             extension::tree::SIGNATURE => {
-                ext.tree = extension::tree::decode(ext_data, object_hash, alloc_limit_bytes);
+                ext.tree = extension::tree::decode(ext_data, object_hash);
             }
             extension::resolve_undo::SIGNATURE => {
                 ext.resolve_undo = extension::resolve_undo::decode(ext_data, object_hash);
             }
             extension::untracked_cache::SIGNATURE => {
-                ext.untracked = extension::untracked_cache::decode(ext_data, object_hash, alloc_limit_bytes);
+                ext.untracked = extension::untracked_cache::decode(ext_data, object_hash);
             }
             extension::fs_monitor::SIGNATURE => {
                 ext.fs_monitor = extension::fs_monitor::decode(ext_data);

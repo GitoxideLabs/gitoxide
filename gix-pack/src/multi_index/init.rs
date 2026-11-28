@@ -16,16 +16,15 @@ fn corrupt(message: impl Into<Cow<'static, str>>) -> gix_error::Error {
 impl File<crate::MMap> {
     /// Open the multi-index file at the given `path`.
     ///
-    /// `alloc_limit_bytes` bounds each allocation caused by user-controlled on-disk data, useful for untrusted input.
     /// Use `None` to disable the limit.
-    pub fn at(path: impl AsRef<Path>, alloc_limit_bytes: Option<usize>) -> Result<Self> {
-        Self::at_inner(path.as_ref(), alloc_limit_bytes)
+    pub fn at(path: impl AsRef<Path>) -> Result<Self> {
+        Self::at_inner(path.as_ref())
     }
 
-    fn at_inner(path: &Path, alloc_limit_bytes: Option<usize>) -> Result<Self> {
+    fn at_inner(path: &Path) -> Result<Self> {
         let data = crate::mmap::read_only(path)
             .or_raise(|| message!("Could not open multi-index file at \"{}\"", path.display()))?;
-        Self::from_data(data, path.to_owned(), alloc_limit_bytes)
+        Self::from_data(data, path.to_owned())
     }
 }
 
@@ -37,12 +36,11 @@ where
     ///
     /// Only the structure is validated here; per-object pack and large-offset references are checked on access.
     ///
-    /// `alloc_limit_bytes` bounds each allocation caused by untrusted on-disk multi-index data.
     /// Use `None` to disable the limit.
     ///
     ///  It is used to reject reserving the output `Vec<PathBuf>` if its capacity estimate exceeds the limit,
     ///  and to reject any single path entry whose byte length exceeds the limit before turning it into a `PathBuf`.
-    pub fn from_data(data: T, path: PathBuf, alloc_limit_bytes: Option<usize>) -> Result<Self> {
+    pub fn from_data(data: T, path: PathBuf) -> Result<Self> {
         const TRAILER_LEN: usize = gix_hash::Kind::shortest().len_in_bytes(); /* trailing hash */
         if data.len()
             < Self::HEADER_LEN
@@ -86,7 +84,7 @@ where
         let index_names = chunks
             .data_by_id(&data, chunk::index_names::ID)
             .or_raise(|| corruption("Could not read multi-index pack names"))?;
-        let index_names = chunk::index_names::from_bytes(index_names, num_indices, alloc_limit_bytes)?;
+        let index_names = chunk::index_names::from_bytes(index_names, num_indices)?;
 
         let fan = chunks
             .data_by_id(&data, chunk::fanout::ID)
@@ -137,7 +135,6 @@ where
             object_hash,
             fan,
             index_names,
-            alloc_limit_bytes,
             lookup_ofs: lookup.start,
             offsets_ofs: offsets.start,
             large_offsets,

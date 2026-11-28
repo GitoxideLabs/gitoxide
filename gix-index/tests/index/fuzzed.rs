@@ -1,5 +1,5 @@
 use filetime::FileTime;
-use gix_error::{Class, Result};
+use gix_error::Result;
 use std::path::PathBuf;
 
 fn decode_fuzzed(data: &[u8]) -> Result<(gix_index::State, Option<gix_hash::ObjectId>)> {
@@ -44,6 +44,18 @@ fn impossible_v4_entry_count_is_rejected_before_reserving() {
     .expect_err("fuzzed input must stay rejected");
 
     insta::assert_debug_snapshot!(err, "the entry count cannot fit into the available index bytes", @"Declared entry count exceeds possible entries for file size");
+}
+
+#[test]
+fn impossible_tree_child_count_is_ignored() {
+    let empty = gix_index::extension::tree::decode(b"\0-1 0\n", gix_hash::Kind::Sha1);
+    assert!(empty.is_some(), "an invalidated tree can have no children");
+
+    let data = format!("\0-1 {}\n", usize::MAX);
+    assert!(
+        gix_index::extension::tree::decode(data.as_bytes(), gix_hash::Kind::Sha1).is_none(),
+        "a child count which cannot fit into the extension must be ignored"
+    );
 }
 
 #[test]
@@ -143,30 +155,6 @@ fn malformed_entry_padding_with_untracked_cache_is_rejected_instead_of_panicking
 
     assert!(err.is_corrupted(), "invalid entries are corrupt index data");
     insta::assert_debug_snapshot!(err, "malformed index entries identify the failed parser", @"Could not parse entry at index 1");
-}
-
-#[test]
-fn alloc_limit_constructor_rejects_oversized_allocations() {
-    let bytes = std::fs::read(crate::fixture_index_path("v4_more_files_IEOT")).expect("fixture index readable");
-    let err = gix_index::State::from_bytes(
-        &bytes,
-        FileTime::from_unix_time(0, 0),
-        gix_hash::Kind::Sha1,
-        gix_index::decode::Options {
-            alloc_limit_bytes: Some(64),
-            ..Default::default()
-        },
-    )
-    .expect_err("fixture should exceed tiny allocation limit");
-
-    insta::assert_debug_snapshot!(err, "alloc limit constructor rejects oversized allocations", @"Index data would require more memory than can be reserved");
-    assert!(
-        err.classify().any(|classification| {
-            classification.class() == Class::ResourceExhaustion(gix_error::ResourceExhaustionKind::AllocationLimit)
-        }),
-        "configured limits are resource exhaustion, not malformed input"
-    );
-    assert!(!err.can_retry(), "configured limits can't be fixed by retrying");
 }
 
 fn artifact_paths(target: &str) -> Vec<PathBuf> {

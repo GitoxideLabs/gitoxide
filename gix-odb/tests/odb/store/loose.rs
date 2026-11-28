@@ -19,17 +19,6 @@ fn ldb_at_opts(path: impl Into<PathBuf>, object_hash: gix_hash::Kind) -> Store {
     Store::at(path, object_hash)
 }
 
-fn limited_ldb(limit: usize) -> Store {
-    Store::at_opts(
-        fixture_path("objects"),
-        gix_hash::Kind::Sha1,
-        Options {
-            alloc_limit_bytes: Some(limit),
-            ..Default::default()
-        },
-    )
-}
-
 pub fn object_ids() -> Vec<gix_hash::ObjectId> {
     vec![
         hex_to_id("37d4e6c5c48ba0d245164c4e10d5f41140cab980"), // blob
@@ -392,7 +381,7 @@ mod find {
 
     use crate::{
         hex_to_id, hex_to_id_for_hash,
-        store::loose::{ldb, ldb_at_opts, limited_ldb, locate_oid},
+        store::loose::{ldb, ldb_at_opts, locate_oid},
     };
 
     fn find<'a>(hex: &str, buf: &'a mut Vec<u8>) -> gix_object::Data<'a> {
@@ -630,78 +619,6 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
             o.data.len(),
             "erm, blobs are the same as raw data?"
         );
-        Ok(())
-    }
-
-    #[test]
-    fn blob_big_respects_alloc_limit_bytes() -> gix_testtools::TestResult {
-        let id = hex_to_id("a706d7cd20fc8ce71489f34b50cf01011c104193");
-        let db = limited_ldb(1);
-        let mut buf = Vec::new();
-
-        assert_eq!(
-            db.try_header(&id)?.expect("header present"),
-            (56915, Kind::Blob),
-            "header-only reads remain available"
-        );
-        let err = db
-            .try_find(&id, &mut buf)
-            .expect_err("the object exceeds the configured allocation limit");
-        let diagnostic = err
-            .iter_errors()
-            .filter_map(|error| error.downcast_ref::<Message>())
-            .find(|diagnostic| {
-                diagnostic.class == Some(Class::ResourceExhaustion(ResourceExhaustionKind::AllocationLimit))
-            })
-            .expect("the allocation limit has a diagnostic");
-        assert!(
-            diagnostic.values.is_empty(),
-            "allocation-limit diagnostics do not add size or limit metadata"
-        );
-        assert_eq!(
-            diagnostic.message,
-            "Cannot store loose object of 56915 bytes in memory: the object exceeds the configured allocation limit of 1 bytes",
-            "allocation limits retain the requested size and configured limit in prose"
-        );
-        assert_eq!(
-            diagnostic.class,
-            Some(Class::ResourceExhaustion(ResourceExhaustionKind::AllocationLimit)),
-            "the context itself supplies the allocation-limit class"
-        );
-        assert_eq!(
-            err.iter_errors().count(),
-            2,
-            "the allocation diagnostic and lookup context are the only nodes"
-        );
-        insta::assert_debug_snapshot!(gix_testtools::redact_debug_snapshot(&err, &[(&db.object_path(&id).to_string_lossy(), "<object-path>")]), "the allocation limit retains the lookup context and requested byte count", @r#"
-        Could not read loose object, path="<object-path>"
-
-        Caused by:
-            0: Cannot store loose object of 56915 bytes in memory: the object exceeds the configured allocation limit of 1 bytes
-        "#);
-        assert!(
-            err.probable_cause().is::<Message>(),
-            "no synthetic resource-exhaustion cause remains"
-        );
-        assert_eq!(
-            *err.metadata().next().expect("the lookup records its path"),
-            [("path".into(), MetadataValue::from(db.object_path(&id)))]
-                .into_iter()
-                .collect::<gix_error::Metadata>(),
-            "the lookup retains only the native object path"
-        );
-        assert_eq!(err.metadata().count(), 1, "only the lookup path carries metadata");
-        assert_eq!(
-            err.classify()
-                .map(|classification| classification.class())
-                .collect::<Vec<_>>(),
-            [gix_error::Class::ResourceExhaustion(
-                gix_error::ResourceExhaustionKind::AllocationLimit
-            )],
-            "configured limits are classified only as resource exhaustion"
-        );
-        assert!(!err.is_corrupted(), "an allocation limit does not establish corruption");
-        assert!(!err.can_retry(), "retrying does not change the configured limit");
         Ok(())
     }
 

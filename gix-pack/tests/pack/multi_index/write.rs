@@ -241,7 +241,7 @@ fn write_multi_index_from_pack_dir(pack_dir: &Path, object_hash: gix_hash::Kind)
         &AtomicBool::new(false),
         gix_pack::multi_index::write::Options { object_hash },
     )?;
-    let file = gix_pack::multi_index::File::at(output_path, None)?;
+    let file = gix_pack::multi_index::File::at(output_path)?;
 
     Ok(WrittenMultiIndex {
         file,

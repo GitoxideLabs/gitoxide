@@ -473,35 +473,26 @@ mod subsections {
 
     impl Objects {
         /// The `gitoxide.objects.cacheLimit` key.
+        ///
+        /// Sets the memory limit in bytes for caching fully decoded Git objects, separate from the
+        /// pack delta-base cache (`core.deltaBaseCacheLimit`). Git size suffixes are accepted, for
+        /// example `16m` for 16 MiB.
+        ///
+        /// The cache is disabled if this key is unset or set to `0`. Use `GIX_OBJECT_CACHE_MEMORY`
+        /// to override the configured value.
         pub const CACHE_LIMIT: keys::UnsignedInteger =
             keys::UnsignedInteger::new_unsigned_integer("cacheLimit", &Gitoxide::OBJECTS)
                 .with_note("If unset or 0, there is no object cache")
                 .with_environment_override("GIX_OBJECT_CACHE_MEMORY");
-        /// The `gitoxide.objects.allocLimit` key.
-        ///
-        /// Implemented for:
-        /// - packed object decoding in `gix-pack::data::File`
-        /// - delta-tree packed object traversal in `gix-pack::index`
-        /// - multi-pack-index name decoding in `gix-pack::multi_index::File`
-        /// - direct packed-object inflation in `gix-odb`
-        pub const ALLOC_LIMIT: keys::UnsignedInteger =
-            keys::UnsignedInteger::new_unsigned_integer("allocLimit", &Gitoxide::OBJECTS)
-                .with_environment_override("GIT_ALLOC_LIMIT")
-                .with_note("The maximum size of a single allocation caused by user-controlled on-disk object data. In fact, it's used for all untrusted data that causes allocations.");
-        /// The default `allocLimitIfReducedTrust` in bytes applied when a repository is opened with reduced trust
-        /// and no explicit [`ALLOC_LIMIT`][Self::ALLOC_LIMIT] exists.
-        pub const ALLOC_LIMIT_IF_REDUCED_TRUST_DEFAULT: usize = 16 * 1024 * 1024;
-        /// The `gitoxide.objects.allocLimitIfReducedTrust` key.
-        ///
-        /// If set, repositories opened with reduced trust receive [`ALLOC_LIMIT`][Self::ALLOC_LIMIT] set to this value
-        /// when no explicit allocation limit exists. A value of `0` disables this fallback.
-        pub const ALLOC_LIMIT_IF_REDUCED_TRUST: keys::UnsignedInteger =
-            keys::UnsignedInteger::new_unsigned_integer("allocLimitIfReducedTrust", &Gitoxide::OBJECTS).with_note(
-                "The default allocation limit used for reduced-trust repositories when no explicit allocLimit is configured; set to 0 to disable it",
-            );
-        /// The `gitoxide.objects.noReplace` key.
-        pub const NO_REPLACE: keys::Boolean = keys::Boolean::new_boolean("noReplace", &Gitoxide::OBJECTS);
+
         /// The `gitoxide.objects.replaceRefBase` key.
+        ///
+        /// The ref name prefix used to find replacement objects when opening a repository. The part
+        /// of the ref name after the prefix is the original object's hexadecimal ID, and the ref
+        /// points to the replacement object.
+        ///
+        /// Defaults to `refs/replace/` and can be overridden with `GIT_REPLACE_REF_BASE`. This key
+        /// is ignored when replacement refs are disabled.
         pub const REPLACE_REF_BASE: keys::Any = keys::Any::new("replaceRefBase", &Gitoxide::OBJECTS)
             .with_default(b"refs/replace/")
             .with_environment_override("GIT_REPLACE_REF_BASE");
@@ -513,12 +504,7 @@ mod subsections {
         }
 
         fn keys(&self) -> &[&dyn Key] {
-            &[
-                &Self::CACHE_LIMIT,
-                &Self::ALLOC_LIMIT,
-                &Self::ALLOC_LIMIT_IF_REDUCED_TRUST,
-                &Self::REPLACE_REF_BASE,
-            ]
+            &[&Self::CACHE_LIMIT, &Self::REPLACE_REF_BASE]
         }
 
         fn parent(&self) -> Option<&dyn Section> {

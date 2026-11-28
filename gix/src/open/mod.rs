@@ -1,13 +1,13 @@
 use std::{
     ops::ControlFlow,
     path::{Path, PathBuf},
-    sync::Arc,
 };
 
 use gix_error::ErrorExt;
+use gix_parallel::OwnShared;
 use gix_sec::Trust;
 
-use crate::{Repository, bstr::BString};
+use crate::{Repository, Result, bstr::BString};
 
 /// The relationship that led to opening another repository from an existing one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -41,6 +41,8 @@ pub struct RelatedRepository<'a> {
 
 type ConfigureRelatedRepository =
     dyn Fn(RelatedRepository<'_>, Options) -> crate::Result<ControlFlow<(), Options>> + Send + Sync;
+
+type ConfigOverridesByTrust = dyn Fn(Trust, &gix_config::File) -> Result<Vec<BString>> + Send + Sync;
 
 pub(crate) fn related_repository_skipped(git_dir: &Path) -> crate::Error {
     gix_error::message!(
@@ -81,13 +83,13 @@ pub struct Permissions {
 ///
 /// ### Replacement Objects for the object database
 ///
-/// The environment variables `GIT_REPLACE_REF_BASE` and `GIT_ALLOC_LIMIT` are mapped to
-/// `gitoxide.objects.replaceRefBase` and `gitoxide.objects.allocLimit` respectively.
+/// The environment variable `GIT_REPLACE_REF_BASE` is mapped to `gitoxide.objects.replaceRefBase`.
 /// The presence of `GIT_NO_REPLACE_OBJECTS` sets `core.useReplaceRefs=false`. Replacements are enabled by default.
 ///
 /// Use [Permissions] to control which environment variables can be read, and config-overrides to control these values programmatically.
 /// Use [`Repository::reload()`][crate::Repository::reload()] to reopen the same repository with its stored options.
 /// Copy options with [`clone_without_trust()`][Self::clone_without_trust()] when opening another repository.
+/// [`config_overrides_by_trust()`][Self::config_overrides_by_trust()] controls the configuration applied after trust is known.
 pub struct Options {
     pub(crate) object_store_slots: gix_odb::store::init::Slots,
     /// Define what is allowed while opening a repository.
@@ -121,7 +123,8 @@ pub struct Options {
     /// Callback that can change the opening options or skip a related repository open before its configuration is loaded.
     /// [`Self::clone_without_trust()`] retains it so the policy applies to subsequent related opens.
     /// Set it with [`Self::configure_related_repository()`].
-    configure_related_repository: Option<Arc<ConfigureRelatedRepository>>,
+    configure_related_repository: Option<OwnShared<ConfigureRelatedRepository>>,
+    config_overrides_by_trust: Option<OwnShared<ConfigOverridesByTrust>>,
 }
 
 mod options;

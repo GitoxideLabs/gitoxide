@@ -114,7 +114,7 @@ impl Store {
     }
 
     /// Decode failures retain [metadata](gix_error::Error::metadata()) `actual` and `expected` (unsigned inflated byte counts).
-    /// Allocation diagnostics include requested sizes and configured limits in their messages, not metadata.
+    /// Allocation diagnostics include requested sizes in their messages, not metadata.
     fn find_inner<'a>(&self, id: &gix_hash::oid, out: &'a mut Vec<u8>) -> Result<Option<gix_object::Data<'a>>> {
         let path = hash_path(id, self.path.clone());
         let map = match self.map_loose_object(&path)? {
@@ -130,7 +130,6 @@ impl Store {
         }
 
         let (kind, size, header_size) = gix_object::decode::loose_header(&header[..consumed_out])?;
-        self.ensure_in_alloc_limit(size)?;
         let size_usize = usize::try_from(size).or_raise(|| {
             message!(
                 "Cannot store loose object of {size} bytes in memory: the object size cannot be represented in memory"
@@ -171,17 +170,6 @@ impl Store {
             object_hash: id.kind(),
             data: out,
         }))
-    }
-
-    /// Allocation-limit diagnostics include the requested size and configured limit in their messages.
-    fn ensure_in_alloc_limit(&self, size: u64) -> Result {
-        if let Some(limit) = self.alloc_limit_bytes.filter(|limit| size > *limit as u64) {
-            bail!(
-                "Cannot store loose object of {size} bytes in memory: the object exceeds the configured allocation limit of {limit} bytes"
-                    .allocation_limit()
-            );
-        }
-        Ok(())
     }
 
     fn map_loose_object(&self, path: &std::path::Path) -> Result<Option<memmap2::Mmap>> {
