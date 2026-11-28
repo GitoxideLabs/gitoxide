@@ -3,14 +3,14 @@ use std::{cmp::Ordering, collections::HashSet};
 
 use gix_error::{Message, ResultExt, bail, corruption, message};
 
-use crate::store_impls::loose::{HEADER_MAX_SIZE, Store, hash_path};
+use crate::store_impls::loose::{HEADER_MAX_SIZE, Store};
 
 /// Object lookup
 impl Store {
     /// Returns true if the given id is contained in our repository.
     pub fn contains(&self, id: &gix_hash::oid) -> bool {
         debug_assert_eq!(self.object_hash, id.kind());
-        hash_path(id, self.path.clone()).is_file()
+        self.object_path(id).is_file()
     }
 
     /// Given a `prefix`, find an object that matches it uniquely within this loose object
@@ -91,7 +91,7 @@ impl Store {
     /// Returns `None` if `id` does not exist in the database.
     /// Failures include [metadata](gix_error::Error::metadata()) `path` (native path), the loose object file.
     pub fn try_header(&self, id: &gix_hash::oid) -> Result<Option<(u64, gix_object::Kind)>> {
-        let path = hash_path(id, self.path.clone());
+        let path = self.object_path(id);
         let context = || Message::new("Could not read loose object header").with("path", path.as_path());
         let map = match self.map_loose_object(&path).or_raise(context)? {
             Some(map) => map,
@@ -116,7 +116,7 @@ impl Store {
     /// Decode failures retain [metadata](gix_error::Error::metadata()) `actual` and `expected` (unsigned inflated byte counts).
     /// Allocation diagnostics include requested sizes in their messages, not metadata.
     fn find_inner<'a>(&self, id: &gix_hash::oid, out: &'a mut Vec<u8>) -> Result<Option<gix_object::Data<'a>>> {
-        let path = hash_path(id, self.path.clone());
+        let path = self.object_path(id);
         let map = match self.map_loose_object(&path)? {
             Some(map) => map,
             None => return Ok(None),

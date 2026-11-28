@@ -80,12 +80,14 @@ impl Store {
     }
 }
 
-fn hash_path(id: &gix_hash::oid, mut root: PathBuf) -> PathBuf {
+fn hash_path(id: &gix_hash::oid, root: &Path) -> PathBuf {
     let mut hex = gix_hash::Kind::hex_buf();
     let hex = id.hex_to_buf(hex.as_mut());
-    root.push(&hex[..2]);
-    root.push(&hex[2..]);
-    root
+    let mut path = PathBuf::with_capacity(root.as_os_str().len() + hex.len() + 2);
+    path.as_mut_os_string().push(root.as_os_str());
+    path.push(&hex[..2]);
+    path.push(&hex[2..]);
+    path
 }
 
 mod find;

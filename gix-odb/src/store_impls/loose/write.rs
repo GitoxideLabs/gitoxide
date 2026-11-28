@@ -132,7 +132,7 @@ impl Store {
     ///
     /// Note that is may not exist yet.
     pub fn object_path(&self, id: &gix_hash::oid) -> PathBuf {
-        loose::hash_path(id, self.path.clone())
+        loose::hash_path(id, &self.path)
     }
 }
 
@@ -183,7 +183,7 @@ impl Store {
         file: CompressedTempfile,
         shared_repository_permissions: gix_fs::SharedPermissions,
     ) -> Result<gix_hash::ObjectId> {
-        let object_path = loose::hash_path(&id, self.path.clone());
+        let object_path = self.object_path(&id);
         let object_dir = object_path
             .parent()
             .expect("each object path has a 1 hex-bytes directory");
