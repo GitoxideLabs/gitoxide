@@ -59,8 +59,12 @@ pub mod interpolate {
                 #[expect(unsafe_code)]
                 let rc =
                     unsafe { libc::getpwnam_r(cname.as_ptr(), &mut pwd, buf.as_mut_ptr(), buf.len(), &mut result) };
-                if rc == libc::ERANGE && buf.len() < 1024 * 1024 {
-                    buf.resize(buf.len() * 2, 0);
+                if rc == libc::ERANGE {
+                    // Grow until the record fits, as `getpwnam` would: only a size that overflows or can't be
+                    // allocated ends the lookup.
+                    let len = buf.len().checked_mul(2)?;
+                    buf.try_reserve_exact(len - buf.len()).ok()?;
+                    buf.resize(len, 0);
                     continue;
                 }
                 if rc != 0 || result.is_null() {
@@ -150,7 +154,7 @@ impl Path {
     ///    If it is required but not set, an error is produced.
     ///  - `~user` or `~user/` to the specified user’s home directory, e.g `~alice` might get expanded to `/home/alice` on linux, but requires
     ///    the `home_for_user` function to be provided.
-    ///    The default lookup uses `getpwnam` where available.
+    ///    The default lookup uses `getpwnam_r` where available.
     ///  - `%(prefix)/` is expanded to the location where `gitoxide` is installed.
     ///    This location is not known at compile time and therefore need to be
     ///    optionally provided by the caller through `git_install_dir`.
